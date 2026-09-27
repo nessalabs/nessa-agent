@@ -192,6 +192,10 @@ it("refuses a file part the draft does not hold rather than dropping it", async 
 function viewSaying(imageInput: boolean): ConversationEffects["read"] {
   return async (conversationId): Promise<ConversationView> => ({
     conversationId,
+    approvalMode: "ask",
+    approvalModes: [
+      { id: "ask", name: "Provider asks", description: "Provider asks where required." },
+    ],
     title: null,
     revision: `image-input-${imageInput}`,
     messages: [],

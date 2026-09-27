@@ -546,6 +546,12 @@ export interface ConversationView {
   title: string | null
   /** Questions the agent is waiting on, oldest first. */
   questions: ConversationQuestion[]
+  /** Last durably committed preset. */
+  approvalMode: ApprovalMode
+  /** Presets supported by this model. */
+  approvalModes: ApprovalModeChoice[]
+  /** Present while a change is in progress or recovery is required. */
+  approvalModeChange?: ApprovalModeChange
 }
 /** Idempotently create or reopen one named conversation. */
 export interface ConversationCreateParams {
@@ -555,6 +561,10 @@ export interface ConversationCreateParams {
   requestId: string
   /** Coding agent this conversation runs on for its whole life. Omitted takes the gateway's configured default. Ignored when the conversation already exists, which is reopened on the agent it was created with. */
   agent?: string
+  /** Catalog model identifier fixed at first creation; ignored on reopen. */
+  model?: string
+  /** Initial preset, default ask; ignored on reopen. */
+  approvalMode?: ApprovalMode
 }
 /** Conversation ready for read and admission. */
 export interface ConversationCreateResult {
@@ -726,6 +736,14 @@ export interface ConversationRuntime {
   provider: string
   /** Working directory on the gateway host, not the client filesystem. */
   workspace: string
+  /** Conversation agent identity. */
+  agent: string
+  /** Catalog display name. */
+  modelName: string
+  /** Catalog context-window ceiling. */
+  contextWindowTokens: number
+  /** Catalog reasoning capability. */
+  reasoning: boolean
 }
 /** One ordered observation fragment in a bounded execution projection; offsets may have gaps. */
 export interface ConversationPart {
@@ -746,6 +764,12 @@ export interface ConversationPart {
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   AgentUnsupported: "agent_unsupported",
+  ModelUnavailable: "model_unavailable",
+  ApprovalModeUnavailable: "approval_mode_unavailable",
+  ApprovalModeNotApplied: "approval_mode_not_applied",
+  ApprovalModeUncertain: "approval_mode_uncertain",
+  ApprovalRequestConflict: "approval_request_conflict",
+  TurnRunning: "turn_running",
   ConversationsNotConfigured: "conversations_not_configured",
   UnknownMethod: "unknown_method",
   InvalidRequest: "invalid_request",
@@ -832,6 +856,72 @@ export interface ConversationAnswerQuestionParams {
   /** What was chosen. Null declines the question, which is an answer the agent is told. */
   choices?: ConversationQuestionChoice[] | null
 }
+/** Nessa name of a binding-owned native approval preset. */
+export const ApprovalMode = { Ask: "ask", Auto: "auto", Full: "full" } as const
+export type ApprovalMode = (typeof ApprovalMode)[keyof typeof ApprovalMode]
+/** One preset the binding can honor for this model. */
+export interface ApprovalModeChoice {
+  /** Nessa identifier for this binding-owned native preset. */
+  id: ApprovalMode
+  /** Short user-facing mode name. */
+  name: string
+  /** Precise provider-specific behavior without a universal approval promise. */
+  description: string
+}
+/** One catalog model this configured agent can open. */
+export interface AgentModelOption {
+  /** Exact catalog model identifier. */
+  modelId: string
+  /** Catalog display name. */
+  displayName: string
+  /** Published context-window ceiling. */
+  maxContextWindowTokens: number
+  /** Catalog reasoning capability. */
+  reasoning: boolean
+  /** Catalog image-input capability. */
+  imageInput: boolean
+  /** Presets verified for this model. */
+  approvalModes: ApprovalModeChoice[]
+}
+/** One agent configured on this gateway. */
+export interface AgentOption {
+  /** Agent identity. */
+  agent: string
+  /** Default catalog model identifier. */
+  defaultModel: string
+  /** Models runnable by this agent. */
+  models: AgentModelOption[]
+}
+/** Configured agents and their model-specific choices. */
+export interface AgentsListResult {
+  /** Configured agents. */
+  agents: AgentOption[]
+}
+/** Change a conversation approval preset while no turn runs. */
+export interface ConversationSetApprovalModeParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Preset requested for this conversation. */
+  mode: ApprovalMode
+}
+/** Durably committed choice or typed refusal. */
+export interface ConversationSetApprovalModeResult {
+  /** Original action identifier. */
+  requestId: string
+  /** Preset durably committed by this command. */
+  mode: ApprovalMode
+}
+/** A change in progress or awaiting recovery; the committed mode remains separate. */
+export interface ApprovalModeChange {
+  /** Correlated action identifier. */
+  requestId: string
+  /** Requested preset, kept separate from the committed mode during recovery. */
+  requestedMode: ApprovalMode
+  /** Turn admission state. */
+  status: "changing" | "recovery_required"
+}
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
   maxImageBytes: 5242880,
@@ -870,5 +960,7 @@ export const ProductMethod = {
   ConversationDelete: "conversation.delete",
   ConversationReorder: "conversation.reorder",
   AttachmentBegin: "attachment.begin",
+  AgentsList: "agents.list",
+  ConversationSetApprovalMode: "conversation.setApprovalMode",
 } as const
 export const ProductEvent = { SessionChallenge: "session.challenge" } as const

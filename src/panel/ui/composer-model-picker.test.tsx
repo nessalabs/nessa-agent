@@ -3,7 +3,7 @@ import * as React from "react"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import type { ModelCatalog } from "../../conversation"
+import type { AgentsListResult } from "@nessa/client"
 import { ComposerModelPicker } from "./composer-model-picker"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -29,15 +29,14 @@ const model = (modelId: string, displayName: string, tokens: number) => ({
   maxContextWindowTokens: tokens,
   reasoning: true,
   imageInput: true,
+  approvalModes: [],
 })
 
-const catalog: ModelCatalog = {
-  defaultAgent: "claude",
+const catalog: AgentsListResult = {
   agents: [
     {
       agent: "claude",
       defaultModel: "claude-sonnet-5",
-      approvalModes: ["ask"],
       models: [
         model("claude-opus-5", "Opus 5", 1_000_000),
         model("claude-sonnet-5", "Sonnet 5", 1_000_000),
@@ -46,13 +45,11 @@ const catalog: ModelCatalog = {
     {
       agent: "codex",
       defaultModel: "gpt-5.6-terra",
-      approvalModes: ["ask"],
       models: [model("gpt-5.6-terra", "GPT-5.6 Terra", 1_050_000)],
     },
     {
       agent: "nova",
       defaultModel: "nova-1",
-      approvalModes: ["ask"],
       models: [model("nova-1", "Nova One", 512_000)],
     },
   ],

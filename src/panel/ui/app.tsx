@@ -31,8 +31,6 @@ import {
   Transcript,
   useConversation,
   toEditor,
-  effectiveModel,
-  approvalChoice,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
@@ -67,6 +65,11 @@ import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
 import { ComposerTray } from "./composer-tray"
 import { ComposerModelPicker } from "./composer-model-picker"
+import {
+  useBindCatalogFallback,
+  useConversationChoices,
+  type ConversationChoices,
+} from "./use-agent-choices"
 import { AttachmentDropZone } from "./attachment-drop-zone"
 import { AttachmentNotices, AttachmentReadingStatus } from "./attachment-notices"
 import { AttachmentTile } from "./attachment-tile"
@@ -109,6 +112,7 @@ export function App({
   digest,
   onSignOut,
   sessionError,
+  loadConversationChoices,
 }: {
   attachmentResources: AttachmentResources
   /**
@@ -127,12 +131,64 @@ export function App({
   digest: (bytes: Blob) => Promise<string>
   onSignOut?: () => void
   sessionError?: string
+  loadConversationChoices: () => Promise<ConversationChoices>
 }) {
   const scheme = useColorScheme()
   const ground = scheme === "dark" ? "ink" : "paper"
   const [surface, toggleSurface] = useSurface()
   const edge = useEdgeReveal()
   const chat = useConversation()
+  const choices = useConversationChoices(chat.gatewayAvailable, loadConversationChoices)
+  const selectedAgent =
+    choices?.catalog.agents.find(
+      (agent) => agent.agent === chat.active.selection?.agent,
+    ) ??
+    (!chat.active.selection && !chat.active.serverConversationId
+      ? (choices?.catalog.agents.find((agent) => agent.agent === choices.chosenAgent) ??
+        choices?.catalog.agents[0])
+      : undefined)
+  const selectedModel =
+    selectedAgent?.models.find(
+      (model) => model.modelId === chat.active.selection?.model,
+    ) ??
+    (!chat.active.selection
+      ? selectedAgent?.models.find(
+          (model) => model.modelId === selectedAgent.defaultModel,
+        )
+      : undefined)
+  useBindCatalogFallback({
+    id: chat.active.id,
+    selection: chat.active.selection,
+    serverConversationId: chat.active.serverConversationId,
+    agent: selectedAgent?.agent,
+    model: selectedModel?.modelId,
+    setSelection: chat.setSelection,
+  })
+  const selection = chat.active.selection
+  const modelValue = chat.active.remote?.runtime
+    ? {
+        agent: chat.active.remote.runtime.agent,
+        model: chat.active.remote.runtime.model,
+      }
+    : selection
+      ? { agent: selection.agent, model: selection.model }
+      : !chat.active.serverConversationId && selectedAgent && selectedModel
+        ? { agent: selectedAgent.agent, model: selectedModel.modelId }
+        : undefined
+  const selectedApprovalMode =
+    selection &&
+    selection.agent === selectedAgent?.agent &&
+    selection.model === selectedModel?.modelId
+      ? selection.approvalMode
+      : "ask"
+  const modeChange = chat.active.remote?.approvalModeChange
+  const requestedModeName =
+    chat.active.remote?.approvalModes?.find(
+      (choice) => choice.id === modeChange?.requestedMode,
+    )?.name ?? modeChange?.requestedMode
+  const modeStatus = modeChange
+    ? `${modeChange.status === "recovery_required" ? "Recovery required" : "Changing"}: ${requestedModeName}`
+    : undefined
   const [tabDetails, setTabDetails] = React.useState<{
     id: string
     rename: boolean
@@ -326,11 +382,6 @@ export function App({
   )
 
   const generating = chat.active.phase !== "idle"
-  // What the composer's model shows: nothing until the gateway's catalog loads.
-  const model = chat.catalog ? effectiveModel(chat.active, chat.catalog) : undefined
-  // The tray's approval row: offered while the conversation can still be
-  // created with a mode, from the modes its agent honours.
-  const approval = approvalChoice(chat.active, chat.catalog)
 
   const conversationTabs: ChatTabItem[] = chat.conversations.map((item) => ({
     id: item.id,
@@ -744,7 +795,36 @@ export function App({
                   disabled={attachments.reading}
                   onChoose={attachments.chooseFiles}
                   onSignOut={onSignOut}
-                  approval={approval && { ...approval, onChange: chat.chooseApproval }}
+                  approval={
+                    !chat.active.serverConversationId && selectedAgent && selectedModel
+                      ? {
+                          mode: selectedApprovalMode,
+                          modes: selectedModel.approvalModes,
+                          onChange: (approvalMode) =>
+                            chat.setSelection(chat.active.id, {
+                              agent: selectedAgent.agent,
+                              model: selectedModel.modelId,
+                              approvalMode,
+                            }),
+                        }
+                      : chat.active.serverConversationId &&
+                          chat.active.remote?.approvalMode &&
+                          chat.active.remote.approvalModes
+                        ? {
+                            mode: chat.active.remote.approvalMode,
+                            modes: chat.active.remote.approvalModes,
+                            disabled:
+                              chat.active.phase !== "idle" ||
+                              !!chat.active.controlPending ||
+                              !!chat.active.remote.approvalModeChange ||
+                              chat.active.remote.running ||
+                              chat.active.remote.pending.length > 0,
+                            status: modeStatus,
+                            onChange: (approvalMode) =>
+                              void chat.setApprovalMode(chat.active.id, approvalMode),
+                          }
+                        : undefined
+                  }
                 />
                 <ChatComposerMarkdownEditor
                   key={`${chat.active.id}:${chat.active.turns.filter((turn) => turn.from === "user").length}:${chat.active.draftReset ?? 0}`}
@@ -759,12 +839,14 @@ export function App({
                   aria-label="Message"
                   maxHeight={240}
                 />
-                {chat.catalog && model ? (
+                {choices && modelValue ? (
                   <ComposerModelPicker
-                    catalog={chat.catalog}
-                    value={model}
+                    catalog={choices.catalog}
+                    value={modelValue}
                     valueName={chat.active.remote?.runtime?.modelName}
-                    onChoose={chat.chooseModel}
+                    onChoose={({ agent, model }) =>
+                      showConversation(() => chat.chooseModel(agent, model))
+                    }
                   />
                 ) : null}
                 {/* Enter sends; Shift+Enter starts a new Markdown block.

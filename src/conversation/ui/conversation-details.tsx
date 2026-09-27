@@ -21,7 +21,6 @@ import {
 import { AGENT_CHOICES } from "../../onboarding/model/onboarding"
 import { AgentMark } from "../../onboarding/ui/agent-mark"
 import type { AgentFeatures, Conversation } from "../model"
-import { APPROVAL_MODE_TEXT } from "./approval-mode"
 
 type FeatureSupport = AgentFeatures[keyof AgentFeatures]
 
@@ -106,7 +105,7 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
         <div className="flex flex-col items-center gap-1 pt-2 text-center">
           <p className="m-0 inline-flex min-w-0 items-center gap-2 nessa-text-7 font-semibold tracking-tight text-foreground">
             {agent ? <AgentMark id={agent.id} name={agent.name} /> : null}
-            <span className="min-w-0 truncate">{runtime.modelName ?? runtime.model}</span>
+            <span className="min-w-0 truncate">{runtime.modelName}</span>
           </p>
           <p className="m-0 nessa-text-3 text-muted-foreground">
             {agent?.name ?? runtime.provider}
@@ -119,10 +118,10 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
       )}
       {remote ? (
         <FactGroup title="Model">
-          {runtime?.contextWindowTokens !== undefined ? (
+          {runtime ? (
             <Fact label="Context window" value={tokens(runtime.contextWindowTokens)} />
           ) : null}
-          {runtime?.reasoning !== undefined ? (
+          {runtime ? (
             <Fact label="Reasoning" value={runtime.reasoning ? "On" : "Off"} />
           ) : null}
           <Fact
@@ -133,12 +132,13 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
       ) : null}
       {remote ? (
         <FactGroup title="Approvals">
-          {remote.approvalMode ? (
-            <Fact
-              label="Tool calls"
-              value={APPROVAL_MODE_TEXT[remote.approvalMode].name}
-            />
-          ) : null}
+          <Fact
+            label="Tool calls"
+            value={
+              remote.approvalModes.find((choice) => choice.id === remote.approvalMode)
+                ?.name ?? remote.approvalMode
+            }
+          />
           {features ? (
             <>
               <Fact label="Deny a request" value={support(features.permissionDenial)} />

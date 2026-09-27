@@ -125,6 +125,18 @@ function nothingWasDone(
       return "This conversation was deleted, so nothing was done."
     case "conversation-capacity":
       return "The gateway has too many conversations open, so nothing was done. Close one and try again shortly."
+    case "model-unavailable":
+      return "This gateway cannot run this conversation's selected model, so nothing was done."
+    case "approval-mode-unavailable":
+      return "This model does not offer that approval preset, so nothing was changed."
+    case "approval-mode-not-applied":
+      return "The provider did not confirm the requested approval preset. Read the conversation before trying again."
+    case "approval-mode-uncertain":
+      return "Nessa could not confirm the provider's approval preset. This conversation is blocked until recovery finishes."
+    case "approval-request-conflict":
+      return "That request ID already names a different approval change. Use a new request ID."
+    case "turn-running":
+      return "Wait for this conversation's current work to finish before changing approval."
     case "not-connected":
       return "Nessa is not connected to the gateway, so nothing was done."
     // Nothing these add is worth a sentence to somebody who pressed a control:

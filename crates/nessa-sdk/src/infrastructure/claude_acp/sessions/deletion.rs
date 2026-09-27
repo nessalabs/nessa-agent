@@ -99,7 +99,10 @@ mod tests {
         let answer = acp_deletion::delete_session(
             factory,
             config,
-            &ClaudeProfile::new(None),
+            &ClaudeProfile::new(
+                None,
+                crate::application::agent_execution::providers::ApprovalMode::Ask,
+            ),
             &session,
             &cleanups,
         )

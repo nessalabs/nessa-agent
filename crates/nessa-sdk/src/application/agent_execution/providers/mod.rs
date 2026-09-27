@@ -21,6 +21,10 @@
 //! ProviderOperationCapabilities flows from the live backend into ProviderSession,
 //! which resolves the private effective OperationCapabilities read by Agent;
 //! immutable model capabilities remain a separate admission contract.
+//! ApprovalModeChoice is binding-owned catalog data. A live preset change goes
+//! through ProviderSessionBackend and is acknowledged only after that binding
+//! verifies the effective provider configuration; an uncertain generation is
+//! cleaned up before another one is attached.
 //! Admission reads one negotiated fact from it: an image message is refused when
 //! the agent is known not to take images, and admitted while that is not yet known.
 //! A backend's `validate_input` adds what it could never deliver, such as a
@@ -34,6 +38,7 @@
 //! that never resumes the session; each binding says what a successful delete
 //! means for its agent (ProviderSessionDeletion).
 
+mod approval;
 mod close;
 mod deletion;
 mod executable_use;
@@ -46,6 +51,7 @@ mod ports;
 mod reports;
 mod session;
 mod steering;
+pub use approval::{ApprovalMode, ApprovalModeChoice};
 pub use close::SessionCloseRequest;
 pub use deletion::{
     ProviderSessionDeleter, ProviderSessionDeletion, ProviderSessionDeletionFuture,

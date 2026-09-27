@@ -45,6 +45,7 @@ const panel = (
       attachmentResources={dependencies.attachments}
       canChoosePaths={dependencies.canChoosePaths}
       digest={dependencies.digest}
+      loadConversationChoices={dependencies.loadConversationChoices}
     />
     {dependencies.usesLocalSession && <SessionLifecycle dependencies={dependencies} />}
   </Provider>

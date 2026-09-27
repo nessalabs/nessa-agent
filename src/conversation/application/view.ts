@@ -1,5 +1,6 @@
 import type {
   ApprovalMode,
+  ApprovalModeChoice,
   ConversationCapabilities,
   ConversationRuntime,
   ImageReference,
@@ -9,8 +10,13 @@ import type { AgentPart } from "../model/types"
 /** Authorized bounded gateway projection. It does not own execution scheduling. */
 export type ConversationView = {
   runtime?: ConversationRuntime
-  approvalMode?: ApprovalMode
-  approvalModes?: ApprovalMode[]
+  approvalMode: ApprovalMode
+  approvalModes: ApprovalModeChoice[]
+  approvalModeChange?: {
+    requestId: string
+    requestedMode: ApprovalMode
+    status: string
+  }
   /**
    * What the gateway calls the conversation — the one title rule, the one the
    * Messages list shows — or null before anything was said in it.

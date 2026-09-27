@@ -79,6 +79,8 @@ fn audit_maps_attachment_and_admission_evidence_without_losing_correlation() {
     ));
     assert_eq!(admission["executionId"], "steering");
     assert_eq!(admission["mode"], "steering");
+    assert!(admission["approvalMode"].is_null());
+    assert!(admission["admissionGeneration"].is_null());
     assert_eq!(admission["before"], "unowned");
     assert_eq!(admission["after"], "owned");
     assert_eq!(admission["cause"], "submitted");

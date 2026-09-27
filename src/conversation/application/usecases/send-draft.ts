@@ -142,10 +142,17 @@ export function submissionRefusalMessage(reason: CommandFailure): string | undef
       return "Nessa cannot read this conversation's saved state, so the message was not sent. It is back in the draft; start a new conversation to send it."
     case "conversation-deleted":
       return "This conversation was deleted, so the message was not sent. It is back in the draft; start a new conversation to send it."
+    case "model-unavailable":
+      return "This gateway cannot run the model selected for this conversation. The message is back in the draft; choose an available model in a new conversation."
     case "agent-not-configured":
     case "agent-unsupported":
     case "conversations-not-configured":
     case "agent-startup-deadline":
+    case "approval-mode-unavailable":
+    case "approval-mode-not-applied":
+    case "approval-mode-uncertain":
+    case "approval-request-conflict":
+    case "turn-running":
     case "not-connected":
     case "invalid-request":
     case "attachment-cleanup-unavailable":

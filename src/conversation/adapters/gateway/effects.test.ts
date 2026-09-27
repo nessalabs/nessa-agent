@@ -40,6 +40,14 @@ function gatewayView(): ConversationView {
     conversationId: "server",
     title: null,
     revision: "capabilities",
+    approvalMode: "ask",
+    approvalModes: [
+      {
+        id: "ask",
+        name: "Provider asks",
+        description: "The provider asks where required.",
+      },
+    ],
     messages: [],
     pending: [],
     permissions: [],
@@ -111,6 +119,26 @@ it("joins concurrent creation and forwards exact stable submission IDs", async (
   expect(send).toHaveBeenCalledWith("server", "exact", [], [], {
     executionId: "execution",
     requestId: "action",
+  })
+})
+
+it("creates a draft with its exact selected agent, model and approval mode", async () => {
+  const create = vi.fn(async ({ conversationId }: { conversationId: string }) => ({
+    conversationId,
+  }))
+  const chosenAgent = vi.fn(async () => "claude")
+  const effects = gatewayEffects(
+    () => ({ conversation: { create } }) as unknown as NessaClient,
+    unexpectedWait,
+    chosenAgent,
+  )
+  await effects.create("server", { agent: "codex", model: "astra", approvalMode: "auto" })
+  expect(chosenAgent).not.toHaveBeenCalled()
+  expect(create).toHaveBeenCalledExactlyOnceWith({
+    conversationId: "server",
+    agent: "codex",
+    model: "astra",
+    approvalMode: "auto",
   })
 })
 it("serializes opaque-revision reads, including overlapping manual refreshes", async () => {

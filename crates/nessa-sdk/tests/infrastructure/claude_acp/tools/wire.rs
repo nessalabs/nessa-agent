@@ -284,6 +284,7 @@ fn execution_and_escaping_tools_are_denied_even_though_admission_is_open() {
         "CronCreate",
         "CronDelete",
         "CronList",
+        "ScheduleWakeup",
         "EnterWorktree",
         "ExitWorktree",
         "Artifact",

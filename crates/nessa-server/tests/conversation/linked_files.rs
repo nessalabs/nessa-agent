@@ -54,6 +54,8 @@ async fn conversation() -> (
             agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(InMemoryStorage::new()),
             metadata: Arc::new(MemoryRepository::default()),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: audit.clone(),
             attachments: None,
@@ -71,7 +73,11 @@ async fn conversation() -> (
     .unwrap();
     let id = new_id();
     service
-        .create(id.clone(), caller("panel", "create"), None)
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     (service, audit, id)
@@ -456,6 +462,8 @@ async fn a_second_attempt_at_one_submission_is_not_evidence_against_the_first() 
                 inner: Arc::new(InMemoryStorage::new()),
             }),
             metadata: Arc::new(MemoryRepository::default()),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             // The real sink: reconciling a repeat is its rule, and an
             // in-memory recorder would accept anything at all.
@@ -476,7 +484,11 @@ async fn a_second_attempt_at_one_submission_is_not_evidence_against_the_first() 
     .unwrap();
     let id = new_id();
     service
-        .create(id.clone(), caller("panel", "create"), None)
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
 

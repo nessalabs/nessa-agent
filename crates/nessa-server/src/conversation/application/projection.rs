@@ -1,6 +1,7 @@
 use super::view::{
-    ConversationAnswerOption, ConversationAsked, ConversationAttachment, ConversationCapabilities,
-    ConversationLifecycle, ConversationLifecyclePhase, ConversationLinkedFile, ConversationMessage,
+    ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationAsked,
+    ConversationAttachment, ConversationCapabilities, ConversationLifecycle,
+    ConversationLifecyclePhase, ConversationLinkedFile, ConversationMessage,
     ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
     ConversationPermission, ConversationPermissionOption, ConversationQuestion, ConversationTool,
     ConversationView,
@@ -17,6 +18,7 @@ use nessa_sdk::domain::agent_execution::{
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
 };
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use uuid::Uuid;
 
@@ -130,6 +132,8 @@ impl Projection {
             terminal_executions: HashSet::new(),
             live_here: HashSet::new(),
             view: ConversationView {
+                selection: None,
+                approval_mode_change: None,
                 conversation_id: id,
                 revision: String::new(),
                 messages: Vec::new(),
@@ -990,7 +994,24 @@ impl Projection {
         }
     }
     pub fn read(&self) -> ConversationView {
+        self.read_with_mode_change(None)
+    }
+    pub fn read_with_mode_change(
+        &self,
+        change: Option<ConversationApprovalModeChangeView>,
+    ) -> ConversationView {
         let mut view = self.view.clone();
+        if let Some(change) = change {
+            let digest = Sha256::digest(
+                format!(
+                    "{}:{}:{:?}",
+                    change.request_id, change.requested_mode, change.status
+                )
+                .as_bytes(),
+            );
+            view.revision = format!("{}:mode:{:x}", view.revision, digest);
+            view.approval_mode_change = Some(change);
+        }
         // A review or an ask is offered only while its execution is running:
         // nothing else is waiting on an answer, and the client refuses a view
         // that says otherwise — the whole conversation would fail to load.

@@ -22,7 +22,9 @@
     "conversation.unarchive": "ConversationArchiveParams",
     "conversation.delete": "ConversationDeleteParams",
     "conversation.reorder": "ConversationReorderParams",
-    "attachment.begin": "AttachmentBeginParams"
+    "attachment.begin": "AttachmentBeginParams",
+    "agents.list": null,
+    "conversation.setApprovalMode": "ConversationSetApprovalModeParams"
   },
   "events": {
     "session.challenge": "SessionChallenge"

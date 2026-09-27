@@ -25,4 +25,5 @@ export type {
 export type { NessaClientConnectOptions } from "../application/options.js"
 export type { AttachmentApi } from "./attachment-api.js"
 export type { ConversationApi } from "./conversation-api.js"
+export type { AgentsApi } from "./agents-api.js"
 export type { ServerApi } from "./server-api.js"

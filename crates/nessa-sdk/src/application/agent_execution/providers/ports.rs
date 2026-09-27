@@ -31,6 +31,17 @@ pub struct CloseOutcome {
 /// context before executing again, and fails explicitly if it cannot be restored.
 /// Dropping all handles requests shutdown; hosts must await close before exit.
 pub trait ProviderSessionBackend: Send + Sync {
+    /// Apply and verify one native approval preset on the current provider
+    /// generation. A failed or lost response must not authorize another turn
+    /// on that generation.
+    fn set_approval_mode(&self, _mode: super::ApprovalMode) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async {
+            Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("live approval mode change".into()),
+                ProviderSessionState::Usable,
+            ))
+        })
+    }
     /// Return currently established provider facts without I/O or restoration.
     /// Implementations should reset provider-derived facts before reconnecting and
     /// refresh them only after verification. [`ProviderSession`] resolves this raw
@@ -149,6 +160,13 @@ pub struct OpenedProviderSession {
 }
 /// Composition constructs a factory with an immutable model and execution profile.
 pub trait AgentProvider: Send + Sync {
+    /// Initial native approval choice for this immutable provider factory.
+    /// Bindings that offer product approval presets provide it so admission
+    /// evidence can name the committed choice; other SDK providers return
+    /// no such claim.
+    fn approval_mode(&self) -> Option<super::ApprovalMode> {
+        None
+    }
     /// Exact provider/model/context configuration used to validate restoration.
     fn identity(&self) -> ProviderIdentity;
     /// Immutable configured model and binding capabilities available before open.

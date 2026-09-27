@@ -1,16 +1,15 @@
 import {
-  contentText,
-  effectiveModel,
   type ApprovalMode,
+  contentText,
+  conversationSelectionOpen,
   MAX_SENT_PREVIEW_BYTES,
   messageFiles,
   messageImages,
   storedImages,
   type CommandFailure,
+  type ConversationSelection,
   type FileAttachment,
   type MessageContent,
-  type ModelCatalog,
-  type ModelChoice,
   type ReadFailure,
   type UploadFailure,
 } from "../../model"
@@ -168,7 +167,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     )
     let admissionAttempted = false
     try {
-      const created = await extra.conversation.create(serverId)
+      const created = await extra.conversation.create(serverId, conv.selection)
       if (created.conversationId !== serverId)
         throw new Error("Gateway returned a different conversation identity.")
       dispatch(conversationReady(id))
@@ -247,7 +246,7 @@ export const stageAttachment = createAsyncThunk<
     const serverId = current.serverConversationId ?? crypto.randomUUID()
     dispatch(bindConversation({ id: input.id, serverId }))
     try {
-      const created = await extra.conversation.create(serverId)
+      const created = await extra.conversation.create(serverId, current.selection)
       if (created.conversationId !== serverId)
         throw new Error("Gateway returned a different conversation identity.")
       dispatch(conversationReady(input.id))
@@ -343,6 +342,7 @@ export const refreshConversation = createAsyncThunk<void, string, ThunkConfig>(
 )
 
 export type Control =
+  | { kind: "setApprovalMode"; mode: ApprovalMode }
   | { kind: "close" }
   | { kind: "reorder"; executionIds: string[] }
   | { kind: "remove"; executionId: string }
@@ -369,11 +369,14 @@ export const controlConversation = createAsyncThunk<
   if (control.kind === "close")
     dispatch(cancellationChanged({ id, status: "cancelling" }))
   try {
-    const created = await extra.conversation.create(serverId)
+    const created = await extra.conversation.create(serverId, current.selection)
     if (created.conversationId !== serverId)
       throw new Error("Gateway returned a different conversation identity.")
     dispatch(conversationReady(id))
     switch (control.kind) {
+      case "setApprovalMode":
+        await extra.conversation.setApprovalMode(serverId, control.mode)
+        break
       case "close":
         await extra.conversation.close(serverId)
         dispatch(cancellationChanged({ id, status: "cancelled" }))
@@ -518,10 +521,8 @@ const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalTabs(),
   reducers: {
-    restoreConversations(state, action: PayloadAction<SavedConversationTabs>) {
-      // Tabs come back from what was saved; the catalog is the gateway's current
-      // answer, not saved with them, so it outlives the restore.
-      return { ...restoreConversationTabs(action.payload), catalog: state.catalog }
+    restoreConversations(_state, action: PayloadAction<SavedConversationTabs>) {
+      return restoreConversationTabs(action.payload)
     },
     cancellationChanged(
       state,
@@ -566,17 +567,20 @@ const conversationSlice = createSlice({
     setDraft(state, action: PayloadAction<{ draft: MessageContent; id?: string }>) {
       return gateway.setDraft(state, action.payload)
     },
+    setSelection(
+      state,
+      action: PayloadAction<{ id: string; selection: ConversationSelection }>,
+    ) {
+      const current = state.conversations.find((item) => item.id === action.payload.id)
+      if (current && conversationSelectionOpen(current)) {
+        current.selection = action.payload.selection
+      }
+    },
     openConversation(state) {
       return gateway.openConversation(state)
     },
-    chooseModel(state, action: PayloadAction<{ id: string; choice: ModelChoice }>) {
+    chooseModel(state, action: PayloadAction<ConversationSelection>) {
       return gateway.chooseModel(state, action.payload)
-    },
-    chooseApproval(state, action: PayloadAction<{ id: string; mode: ApprovalMode }>) {
-      return gateway.chooseApproval(state, action.payload)
-    },
-    catalogLoaded(state, action: PayloadAction<ModelCatalog>) {
-      state.catalog = action.payload
     },
     openListed(
       state,
@@ -589,13 +593,8 @@ const conversationSlice = createSlice({
     },
     bindConversation(state, action: PayloadAction<{ id: string; serverId: string }>) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
-      if (current && !current.serverConversationId) {
-        // Creation starts here, so the model it is created with is fixed here:
-        // the tab's choice while the catalog lists it, else the default. Read
-        // before binding, while the tab can still choose.
-        current.modelChoice = effectiveModel(current, state.catalog)
+      if (current && !current.serverConversationId)
         current.serverConversationId = action.payload.serverId
-      }
     },
     conversationReady(state, action: PayloadAction<string>) {
       const current = state.conversations.find((item) => item.id === action.payload)
@@ -724,10 +723,9 @@ export const {
   setActive,
   moveActive,
   setDraft,
+  setSelection,
   openConversation,
   chooseModel,
-  chooseApproval,
-  catalogLoaded,
   openListed,
   closeConversation,
   bindConversation,

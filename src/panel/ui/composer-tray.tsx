@@ -1,14 +1,16 @@
 import * as React from "react"
 import { Check, ChevronLeft, ChevronRight, Plus } from "lucide-react"
 import { ChatComposerAction } from "@nessa-ui/react/chat-composer"
-import { APPROVAL_MODES, APPROVAL_MODE_TEXT, type ApprovalMode } from "../../conversation"
+import type { ApprovalMode, ApprovalModeChoice } from "../../conversation"
 
 /** The approval row's data: this conversation's mode and the ones its agent honours. */
 export interface TrayApproval {
   mode: ApprovalMode
   /** What the gateway says this agent can honour. The tray offers nothing else. */
-  modes: readonly ApprovalMode[]
+  modes: readonly ApprovalModeChoice[]
   onChange: (mode: ApprovalMode) => void
+  disabled?: boolean
+  status?: string
 }
 
 type Page = "root" | "approval" | "confirm-full"
@@ -137,7 +139,7 @@ export function ComposerTray({
   const placement = useTrayPlacement(open, root, tray)
   // A page that needs approval falls back to the first page if approval goes
   // away while it shows, rather than leaving an empty tray.
-  const shown: Page = approval ? page : "root"
+  const shown: Page = approval && approval.modes.length > 1 ? page : "root"
 
   const go = React.useCallback((next: Page, focus?: string) => {
     setPage(next)
@@ -234,14 +236,22 @@ export function ComposerTray({
               >
                 <span className="flex-1">Add files</span>
               </button>
-              {approval ? (
+              {approval && approval.modes.length > 1 ? (
                 <button
                   type="button"
                   data-tray-focus="approval-row"
                   className={ROW}
+                  disabled={approval.disabled}
                   onClick={() => go("approval", `mode-${approval.mode}`)}
                 >
-                  <span className="flex-1">Tool approval</span>
+                  <span className="flex flex-1 flex-col">
+                    <span>Tool approval</span>
+                    {approval.status ? (
+                      <span className="nessa-text-2 text-muted-foreground">
+                        {approval.status}
+                      </span>
+                    ) : null}
+                  </span>
                   {/* Full access stays red wherever it is named. */}
                   <span
                     className={
@@ -250,7 +260,8 @@ export function ComposerTray({
                         : "text-muted-foreground"
                     }
                   >
-                    {APPROVAL_MODE_TEXT[approval.mode].name}
+                    {approval.modes.find((choice) => choice.id === approval.mode)?.name ??
+                      approval.mode}
                   </span>
                   <ChevronRight
                     aria-hidden="true"
@@ -314,47 +325,46 @@ export function ComposerTray({
                   radios[next]?.focus()
                 }}
               >
-                {APPROVAL_MODES.map((mode) => {
-                  const offered = approval.modes.includes(mode)
-                  const chosen = approval.mode === mode
+                {approval.modes.map((choice) => {
+                  const chosen = approval.mode === choice.id
                   return (
                     <button
-                      key={mode}
+                      key={choice.id}
                       type="button"
                       role="radio"
                       aria-checked={chosen}
-                      aria-labelledby={`${trayId}-${mode}-name`}
-                      aria-describedby={`${trayId}-${mode}-says`}
-                      data-tray-focus={`mode-${mode}`}
+                      aria-labelledby={`${trayId}-${choice.id}-name`}
+                      aria-describedby={`${trayId}-${choice.id}-says`}
+                      data-tray-focus={`mode-${choice.id}`}
                       // One stop in the tab order: the checked mode.
                       tabIndex={chosen ? 0 : -1}
-                      disabled={!offered}
+                      disabled={approval.disabled}
                       className={`${ROW} items-start`}
                       onClick={() => {
                         // Turning full access on asks first; every other
                         // choice, including leaving full access, does not.
-                        if (mode === "full" && !chosen) {
+                        if (choice.id === "full" && !chosen) {
                           go("confirm-full", "cancel")
                           return
                         }
                         go("root", "approval-row")
-                        if (!chosen) approval.onChange(mode)
+                        if (!chosen) approval.onChange(choice.id)
                       }}
                     >
                       <span className="flex flex-1 flex-col gap-0.5">
                         <span
-                          id={`${trayId}-${mode}-name`}
-                          className={mode === "full" ? "text-destructive" : undefined}
+                          id={`${trayId}-${choice.id}-name`}
+                          className={
+                            choice.id === "full" ? "text-destructive" : undefined
+                          }
                         >
-                          {APPROVAL_MODE_TEXT[mode].name}
+                          {choice.name}
                         </span>
                         <span
-                          id={`${trayId}-${mode}-says`}
+                          id={`${trayId}-${choice.id}-says`}
                           className="nessa-text-2 text-muted-foreground"
                         >
-                          {offered
-                            ? APPROVAL_MODE_TEXT[mode].says
-                            : "Not available for this agent."}
+                          {choice.description}
                         </span>
                       </span>
                       {chosen ? (

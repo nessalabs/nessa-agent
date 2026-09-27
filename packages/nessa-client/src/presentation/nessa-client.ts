@@ -9,6 +9,7 @@ import type {
 } from "../application/attachment-upload.js"
 import { createAttachmentApi, type AttachmentApi } from "./attachment-api.js"
 import { createConversationApi, type ConversationApi } from "./conversation-api.js"
+import { createAgentsApi, type AgentsApi } from "./agents-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
 import { createCredentialApi, type CredentialApi } from "./credential-api.js"
 import { createAuthApi, type AuthApi } from "./auth-api.js"
@@ -54,6 +55,8 @@ export class NessaClient {
   readonly server: ServerApi
   /** Authorized agent conversations, live views, and lifecycle controls. */
   readonly conversation: ConversationApi
+  /** Configured agents, models, and provider-specific approval choices. */
+  readonly agents: AgentsApi
   /** Stage files into a conversation so a message can refer to them by digest. */
   readonly attachments: AttachmentApi
   /** Issue, list, and revoke scoped product credentials, subject to server authorization. */
@@ -71,6 +74,7 @@ export class NessaClient {
   ) {
     this.server = createServerApi(wire)
     this.conversation = createConversationApi(wire, newRequestId)
+    this.agents = createAgentsApi(wire)
     this.attachments = createAttachmentApi(wire, upload, newRequestId, uploadTimer)
     this.credentials = createCredentialApi(wire, newRequestId)
     this.auth = createAuthApi(wire)

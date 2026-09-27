@@ -440,7 +440,7 @@ pub(super) fn launch_environment(agent: AgentId) -> BTreeMap<OsString, OsString>
 /// to it, so a catalog entry from another vendor is a model that agent cannot
 /// reach, and saying so at startup beats a provider refusing every prompt.
 #[cfg(unix)]
-fn catalog_provider(agent: AgentId) -> &'static str {
+pub(super) fn catalog_provider(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Claude => "anthropic",
         AgentId::Codex => "openai",
@@ -658,6 +658,7 @@ pub(super) fn providers(
             agent,
             config,
             runtime,
+            nessa_sdk::application::agent_execution::providers::ApprovalMode::Ask,
             &dependencies,
             credential_environment(agent),
             None,
@@ -728,9 +729,51 @@ pub(super) fn provider_for(
         agent,
         config,
         runtime,
+        nessa_sdk::application::agent_execution::providers::ApprovalMode::Ask,
         dependencies,
         credential_environment,
         Some(policy),
+    )?;
+    Ok(ConversationAgent {
+        provider,
+        execution_audit,
+        reserved_output_tokens: runtime.output_tokens,
+        readiness: None,
+    })
+}
+
+/// Build a fixed agent for one conversation's catalog model and approval
+/// preset. Its launch and credential inputs remain composition-owned.
+#[cfg(unix)]
+pub(super) fn provider_for_fixed(
+    agent: AgentId,
+    config: &AgentsConfig,
+    model: &str,
+    mode: nessa_sdk::application::agent_execution::providers::ApprovalMode,
+    dependencies: &ProviderDependencies,
+) -> Result<ConversationAgent, RunError> {
+    if agent == AgentId::Opencode {
+        return Err(RunError::Agent("OpenCode uses its current profile".into()));
+    }
+    let configured = config
+        .runtime(agent)
+        .ok_or_else(|| RunError::Agent("agent runtime missing".into()))?;
+    let runtime = AgentRuntime {
+        model: model.into(),
+        ..configured.clone()
+    };
+    let build::ProviderComposition {
+        provider,
+        execution_audit,
+        session_eraser: _,
+    } = build::provider(
+        agent,
+        config,
+        &runtime,
+        mode,
+        dependencies,
+        credential_environment(agent),
+        None,
     )?;
     Ok(ConversationAgent {
         provider,
@@ -756,6 +799,7 @@ pub(super) fn session_eraser_for(
         agent,
         config,
         runtime,
+        nessa_sdk::application::agent_execution::providers::ApprovalMode::Ask,
         dependencies,
         credential_environment,
         Some(policy),
@@ -815,7 +859,7 @@ mod build {
         application::agent_execution::{
             agents::AgentError,
             executions::ExecutionAudit,
-            providers::{AgentProvider, ProviderSessionDeleter, UserImageSource},
+            providers::{AgentProvider, ApprovalMode, ProviderSessionDeleter, UserImageSource},
         },
         domain::{
             agent_execution::{
@@ -945,6 +989,7 @@ mod build {
         agent: AgentId,
         config: &AgentsConfig,
         runtime: &AgentRuntime,
+        approval_mode: ApprovalMode,
         dependencies: &ProviderDependencies,
         credential_environment: BTreeMap<OsString, OsString>,
         validated_opencode: Option<&ValidatedOpenCodePolicy>,
@@ -1004,12 +1049,16 @@ mod build {
                         prompt,
                         dependencies.credentials.clone(),
                     )
+                    .map_err(failed)?
+                    .with_approval_mode(approval_mode)
                     .map_err(failed)?,
                 ),
                 AgentId::Codex => bound(
                     CodexAcpProvider::new(acp, &model, limits, audit.clone())
                         .map_err(failed)?
-                        .with_system_prompt(prompt),
+                        .with_system_prompt(prompt)
+                        .with_approval_mode(approval_mode)
+                        .map_err(failed)?,
                 ),
                 // No prompt, because there is nowhere to put one that Opencode can
                 // be shown to read: its binding offers no `with_system_prompt` for
@@ -1020,9 +1069,17 @@ mod build {
                 // only denies edits, but the permission policy its binding launches
                 // it with: reading and searching allowed, everything else denied,
                 // including this server's own MCP shell tool.
-                AgentId::Opencode => bound(
-                    OpencodeAcpProvider::new(acp, &model, limits, audit.clone()).map_err(failed)?,
-                ),
+                AgentId::Opencode => {
+                    if approval_mode != ApprovalMode::Ask {
+                        return Err(RunError::Agent(
+                            "OpenCode approval policy is fixed to ask".into(),
+                        ));
+                    }
+                    bound(
+                        OpencodeAcpProvider::new(acp, &model, limits, audit.clone())
+                            .map_err(failed)?,
+                    )
+                }
             };
         Ok(ProviderComposition {
             provider,

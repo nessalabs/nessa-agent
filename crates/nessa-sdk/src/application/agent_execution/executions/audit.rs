@@ -6,6 +6,7 @@ use crate::application::agent_execution::permissions::{
     ActionContext, CancellationOrigin, PermissionAnswerRecord, PermissionCancellation,
     QuestionAnswerRecord, QuestionRefusalRecord, ReviewDeclineRecord,
 };
+use crate::application::agent_execution::providers::ApprovalMode;
 use crate::domain::agent_execution::executions::{
     ExecutionId, InvocationKind, InvocationStage, QueueOrderChange, SchedulingCause,
     SchedulingInitiator, SchedulingTransition, SchedulingTransitionError, SubmissionMode,
@@ -329,6 +330,8 @@ pub struct QueueAdmissionRecord {
     before: AdmissionAuditStage,
     after: AdmissionAuditStage,
     cause: AdmissionAuditCause,
+    approval_mode: Option<ApprovalMode>,
+    admission_generation: Option<String>,
 }
 impl QueueAdmissionRecord {
     /// Describe caller-attributed ownership after the receipt has been installed.
@@ -346,7 +349,28 @@ impl QueueAdmissionRecord {
             before: AdmissionAuditStage::Unowned,
             after: AdmissionAuditStage::Owned,
             cause: AdmissionAuditCause::Submitted,
+            approval_mode: None,
+            admission_generation: None,
         }
+    }
+    /// Attach the provider preset and Agent-instance generation that governed
+    /// admission. Generation zero says attachment had not yet been verified.
+    pub(crate) fn with_approval_context(
+        mut self,
+        approval_mode: Option<ApprovalMode>,
+        admission_generation: String,
+    ) -> Self {
+        self.approval_mode = approval_mode;
+        self.admission_generation = Some(admission_generation);
+        self
+    }
+    /// Provider approval preset at admission, when the binding publishes one.
+    pub fn approval_mode(&self) -> Option<ApprovalMode> {
+        self.approval_mode
+    }
+    /// Agent-instance and provider-generation correlation at admission.
+    pub fn admission_generation(&self) -> Option<&str> {
+        self.admission_generation.as_deref()
     }
     /// Local session that owns the receipt.
     pub fn session_id(&self) -> &SessionId {

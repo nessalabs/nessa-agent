@@ -37,7 +37,7 @@ use crate::application::agent_execution::permissions::{
     RefusedAsk, ReviewDeclineRecord,
 };
 use crate::application::agent_execution::providers::{
-    CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
+    ApprovalMode, CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
     ProviderExecutionReply, ProviderOperationCapabilities, ProviderOperationFailure,
     ProviderOperationResult, ProviderSessionState, ResourceCleanup, SessionCloseRequest,
     SteeringOutcome,
@@ -1171,6 +1171,9 @@ impl<P: AcpProfile> Worker<P> {
                         ProviderSessionState::CleanupRequired,
                     )));
                 }
+                Command::SetApprovalMode(_, reply) => {
+                    let _ = reply.send(Err(AgentError::Closed));
+                }
             }
         }
         failure.map_or(Ok(()), Err)
@@ -1285,6 +1288,9 @@ impl<P: AcpProfile> Worker<P> {
         command: Command,
     ) -> Result<(), WorkerFailure> {
         match command {
+            Command::SetApprovalMode(mode, reply) => {
+                self.set_approval_mode(execution, mode, reply).await
+            }
             Command::ExecutionRequest(prompt, reply) => {
                 self.dispatch_execution(execution, prompt, reply).await
             }
@@ -1302,6 +1308,42 @@ impl<P: AcpProfile> Worker<P> {
                 self.answer_question(execution, answer, reply).await
             }
         }
+    }
+    async fn set_approval_mode(
+        &mut self,
+        execution: &mut ExecutionController,
+        mode: ApprovalMode,
+        reply: tokio::sync::oneshot::Sender<Result<(), AgentError>>,
+    ) -> Result<(), WorkerFailure> {
+        if self.active.is_some() || !self.permissions.is_empty() {
+            let _ = reply.send(Err(AgentError::Busy));
+            return Ok(());
+        }
+        let params = match self
+            .profile
+            .change_approval_mode(execution.id().as_str(), mode)
+        {
+            Ok(params) => params,
+            Err(error) => {
+                let _ = reply.send(Err(error));
+                return Ok(());
+            }
+        };
+        let deadline = self.config.clock.now() + super::steering::RESPONSE_TIMEOUT;
+        let result = self
+            .rpc(
+                "session/set_config_option",
+                params,
+                deadline,
+                Some(execution),
+            )
+            .await
+            .and_then(|result| {
+                self.profile
+                    .verify_session(&result, &self.capabilities, true)
+            });
+        let _ = reply.send(result.clone());
+        result.map_err(WorkerFailure::from)
     }
     /// Send one `session/prompt` for `prompt`, after applying provider evidence
     /// that is already readable. Every refusal reaches `reply` and writes

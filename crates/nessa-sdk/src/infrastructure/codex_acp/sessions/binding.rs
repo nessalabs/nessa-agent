@@ -1,10 +1,10 @@
 #![deny(missing_docs)]
 
-use super::profile::{CodexProfile, MODE};
+use super::profile::{native_mode, CodexProfile};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
-    AgentProvider, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
+    AgentProvider, ApprovalMode, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
 };
 use crate::domain::agent_execution::permissions::PermissionScope;
 use crate::domain::agent_execution::prompts::SystemPrompt;
@@ -28,11 +28,18 @@ pub struct CodexAcpProvider {
     config: AcpConfig,
     capabilities: EffectiveCapabilities,
     system_prompt: Option<SystemPrompt>,
+    approval_mode: ApprovalMode,
     audit: Arc<dyn ExecutionAudit>,
     /// Deletions this binding started that are still stopping their process.
     deletions: DeletionCleanups,
 }
 impl CodexAcpProvider {
+    /// Presets this binding has verified for an exact catalog model ID.
+    pub fn approval_modes(
+        model_id: &str,
+    ) -> &'static [crate::application::agent_execution::providers::ApprovalModeChoice] {
+        super::profile::approval_modes(model_id)
+    }
     /// Configure a Codex ACP execution factory without starting a process.
     ///
     /// `config` supplies the executable, isolated environment, workspace, permission
@@ -106,6 +113,7 @@ impl CodexAcpProvider {
             config,
             capabilities,
             system_prompt: None,
+            approval_mode: ApprovalMode::Ask,
             audit,
             deletions: DeletionCleanups::default(),
         })
@@ -115,6 +123,23 @@ impl CodexAcpProvider {
     pub fn with_system_prompt(mut self, prompt: SystemPrompt) -> Self {
         self.system_prompt = Some(prompt);
         self
+    }
+    /// Select one binding-verified native preset for every session this factory opens.
+    ///
+    /// # Errors
+    /// Returns [`AgentError::Unsupported`] when the exact model has not been
+    /// verified for this preset. The factory is unchanged on failure.
+    pub fn with_approval_mode(mut self, mode: ApprovalMode) -> Result<Self, AgentError> {
+        if !Self::approval_modes(self.capabilities.model().model_id())
+            .iter()
+            .any(|choice| choice.id == mode)
+        {
+            return Err(AgentError::Unsupported(
+                "Codex approval preset is unavailable for this model".into(),
+            ));
+        }
+        self.approval_mode = mode;
+        Ok(self)
     }
     /// Borrow the configured override and its contribution provenance, or None
     /// when opening should retain the harness default instructions.
@@ -147,7 +172,7 @@ impl CodexAcpProvider {
             // The preset every session is then explicitly selected into. Setting
             // it here as well means the session is never briefly open in a more
             // permissive one.
-            .env("INITIAL_AGENT_MODE", MODE)
+            .env("INITIAL_AGENT_MODE", native_mode(self.approval_mode))
             // A gateway process has no browser and nobody watching it. Signing in
             // is the desktop's business, done before an agent is offered at all.
             .env("NO_BROWSER", "1");
@@ -155,6 +180,9 @@ impl CodexAcpProvider {
     }
 }
 impl AgentProvider for CodexAcpProvider {
+    fn approval_mode(&self) -> Option<ApprovalMode> {
+        Some(self.approval_mode)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
             "codex-acp",
@@ -197,7 +225,7 @@ impl CodexAcpProvider {
     }
     /// The profile every connection this provider opens speaks.
     pub(super) fn profile(&self) -> CodexProfile {
-        CodexProfile::new(self.capabilities.model().model_id())
+        CodexProfile::new(self.capabilities.model().model_id(), self.approval_mode)
     }
     /// How every connection this provider opens is launched.
     pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {

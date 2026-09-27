@@ -2,7 +2,8 @@ use super::sessions::AcpConfig;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::providers::{
-    PermissionDenialCapability, ProviderOperationCapabilities, ProviderPermissionDeferralCapability,
+    ApprovalMode, PermissionDenialCapability, ProviderOperationCapabilities,
+    ProviderPermissionDeferralCapability,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
@@ -41,6 +42,17 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     /// session exists, in the order the provider must receive them. A profile
     /// that pins everything in its session parameters returns none.
     fn session_configuration(&self, session_id: &str) -> Vec<Value>;
+    /// Admit a live preset change into this profile before its RPC is sent, so
+    /// notifications preceding the reply are checked against the requested
+    /// state. The caller must retire this generation if application is not
+    /// verified; it cannot roll this profile back on an ambiguous error.
+    fn change_approval_mode(
+        &mut self,
+        _session_id: &str,
+        _mode: ApprovalMode,
+    ) -> Result<Value, AgentError> {
+        Err(AgentError::Unsupported("live approval mode change".into()))
+    }
     /// Check a session or configuration response against the configured context.
     ///
     /// `configured` is true only once every request from

@@ -58,7 +58,28 @@ function tray() {
 }
 
 function approval(overrides: Partial<TrayApproval> = {}): TrayApproval {
-  return { mode: "ask", modes: ["ask", "auto", "full"], onChange: vi.fn(), ...overrides }
+  return {
+    mode: "ask",
+    modes: [
+      {
+        id: "ask",
+        name: "Provider asks",
+        description: "The provider asks where required.",
+      },
+      {
+        id: "auto",
+        name: "Automatic review",
+        description: "The provider reviews actions.",
+      },
+      {
+        id: "full",
+        name: "Full access",
+        description: "The provider uses its full preset.",
+      },
+    ],
+    onChange: vi.fn(),
+    ...overrides,
+  }
 }
 
 it("opens a tray above the composer and closes it again from the same button", () => {
@@ -116,7 +137,7 @@ it("lets the approval row take the tray over and changes the mode", () => {
   const choice = approval()
   render({ approval: choice })
   click(plus())
-  expect(row("Tool approval").textContent).toBe("Tool approvalAsk first")
+  expect(row("Tool approval").textContent).toBe("Tool approvalProvider asks")
 
   click(row("Tool approval"))
   expect(tray()?.textContent).not.toContain("Add files")
@@ -127,9 +148,23 @@ it("lets the approval row take the tray over and changes the mode", () => {
     "false",
   ])
 
-  click(row("Automatic"))
+  click(row("Automatic review"))
   expect(choice.onChange).toHaveBeenCalledExactlyOnceWith("auto")
   expect(tray()?.textContent).toContain("Add files")
+})
+
+it("shows the committed mode and a pending recovery without allowing another change", () => {
+  const choice = approval({
+    disabled: true,
+    status: "Recovery required: Automatic review",
+  })
+  render({ approval: choice })
+  click(plus())
+  expect(row("Tool approval").disabled).toBe(true)
+  expect(row("Tool approval").textContent).toContain(
+    "Recovery required: Automatic review",
+  )
+  expect(row("Tool approval").textContent).toContain("Provider asks")
 })
 
 it("does not ask to change to the mode already in force", () => {
@@ -137,20 +172,17 @@ it("does not ask to change to the mode already in force", () => {
   render({ approval: choice })
   click(plus())
   click(row("Tool approval"))
-  click(row("Ask first"))
+  click(row("Provider asks"))
 
   expect(choice.onChange).not.toHaveBeenCalled()
 })
 
-it("offers only what the agent honours, and says why the rest are missing", () => {
-  const choice = approval({ modes: ["ask"] })
+it("hides the switch when the gateway offers only one fixed policy", () => {
+  const choice = approval({ modes: approval().modes.slice(0, 1) })
   render({ approval: choice })
   click(plus())
-  click(row("Tool approval"))
-
-  expect(row("Full access").disabled).toBe(true)
-  expect(row("Full access").textContent).toContain("Not available for this agent.")
-  expect(row("Ask first").disabled).toBe(false)
+  expect(tray()?.textContent).not.toContain("Tool approval")
+  expect(container.querySelectorAll("[role=radio]")).toHaveLength(0)
 })
 
 it("steps back one page on Escape, then closes and returns focus to +", () => {
@@ -273,7 +305,7 @@ it("does not ask when leaving full access for a safer mode", () => {
   render({ approval: choice })
   click(plus())
   click(row("Tool approval"))
-  click(row("Ask first"))
+  click(row("Provider asks"))
 
   expect(confirmPage()).toBeNull()
   expect(choice.onChange).toHaveBeenCalledExactlyOnceWith("ask")
@@ -339,7 +371,11 @@ it("puts focus where the person was on every page", () => {
 })
 
 it("moves between the offered modes with the arrow keys, one tab stop for the group", () => {
-  render({ approval: approval({ modes: ["ask", "full"] }) })
+  render({
+    approval: approval({
+      modes: approval().modes.filter((choice) => choice.id !== "auto"),
+    }),
+  })
   click(plus())
   click(row("Tool approval"))
   const group = container.querySelector<HTMLElement>("[role=radiogroup]")
@@ -355,12 +391,12 @@ it("moves between the offered modes with the arrow keys, one tab stop for the gr
     [...group.querySelectorAll("[role=radio]")].map((radio) =>
       radio.getAttribute("tabindex"),
     ),
-  ).toEqual(["0", "-1", "-1"])
+  ).toEqual(["0", "-1"])
   arrow("ArrowDown")
-  // Automatic is not offered, so the arrow skips it.
+  // The gateway did not offer Automatic, so it is not a radio.
   expect(document.activeElement?.textContent).toContain("Full access")
   arrow("ArrowDown")
-  expect(document.activeElement?.textContent).toContain("Ask first")
+  expect(document.activeElement?.textContent).toContain("Provider asks")
   arrow("End")
   expect(document.activeElement?.textContent).toContain("Full access")
 })

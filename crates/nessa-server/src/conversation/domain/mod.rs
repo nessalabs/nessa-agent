@@ -9,9 +9,9 @@ mod entities;
 mod value_objects;
 pub use entities::{Conversation, ConversationRefusal};
 pub use value_objects::{
-    ConversationDeletion, ConversationId, ConversationPreview, ConversationSummary,
-    ConversationTitle, DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
-    LATEST_TIME_MS,
+    ConversationApprovalMode, ConversationDeletion, ConversationId, ConversationModelId,
+    ConversationPreview, ConversationSummary, ConversationTitle, DeletionContradiction,
+    ProviderSessionErasure, ProviderSessionLink, LATEST_TIME_MS,
 };
 
 #[cfg(test)]

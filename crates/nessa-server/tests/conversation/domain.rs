@@ -234,6 +234,8 @@ fn owned() -> Conversation {
         "create".into(),
         1,
         AgentId::Claude,
+        crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+        crate::conversation::domain::ConversationApprovalMode::Ask,
     )
     .unwrap()
 }
@@ -593,6 +595,8 @@ fn a_record_created_past_the_latest_time_is_refused() {
             "create".into(),
             at,
             AgentId::Claude,
+            crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+            crate::conversation::domain::ConversationApprovalMode::Ask,
         )
     };
     assert!(created(LATEST_TIME_MS).is_ok());
