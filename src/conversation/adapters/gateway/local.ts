@@ -1,6 +1,7 @@
 import type { ConversationGateway } from "../../application/ports"
 import {
   attachFiles,
+  chooseModel,
   changeUpload,
   forgetStoredUploads,
   removeFile,
@@ -21,6 +22,7 @@ export const localConversationGateway: ConversationGateway = {
   forgetStoredUploads,
   removeFile,
   closeConversation,
+  chooseModel,
   setDraft,
   setActive,
   moveActive,

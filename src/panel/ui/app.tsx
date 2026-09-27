@@ -31,6 +31,7 @@ import {
   Transcript,
   useConversation,
   toEditor,
+  effectiveModel,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
@@ -64,6 +65,7 @@ import { useHostDrop } from "./use-host-drop"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
 import { ComposerTray } from "./composer-tray"
+import { ComposerModelPicker } from "./composer-model-picker"
 import { AttachmentDropZone } from "./attachment-drop-zone"
 import { AttachmentNotices, AttachmentReadingStatus } from "./attachment-notices"
 import { AttachmentTile } from "./attachment-tile"
@@ -323,6 +325,8 @@ export function App({
   )
 
   const generating = chat.active.phase !== "idle"
+  // What the composer's model shows: nothing until the gateway's catalog loads.
+  const model = chat.catalog ? effectiveModel(chat.active, chat.catalog) : undefined
 
   const conversationTabs: ChatTabItem[] = chat.conversations.map((item) => ({
     id: item.id,
@@ -750,6 +754,13 @@ export function App({
                   aria-label="Message"
                   maxHeight={240}
                 />
+                {chat.catalog && model ? (
+                  <ComposerModelPicker
+                    catalog={chat.catalog}
+                    value={model}
+                    onChoose={chat.chooseModel}
+                  />
+                ) : null}
                 {/* Enter sends; Shift+Enter starts a new Markdown block.
                   Voice stays visible while typing and remains inert until wired. */}
                 {generating ? (

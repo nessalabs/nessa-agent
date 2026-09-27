@@ -7,6 +7,8 @@ import {
   type CommandFailure,
   type FileAttachment,
   type MessageContent,
+  type ModelCatalog,
+  type ModelChoice,
   type ReadFailure,
   type UploadFailure,
 } from "../../model"
@@ -563,6 +565,12 @@ const conversationSlice = createSlice({
     openConversation(state) {
       return gateway.openConversation(state)
     },
+    chooseModel(state, action: PayloadAction<{ id: string; choice: ModelChoice }>) {
+      return gateway.chooseModel(state, action.payload)
+    },
+    catalogLoaded(state, action: PayloadAction<ModelCatalog>) {
+      state.catalog = action.payload
+    },
     openListed(
       state,
       action: PayloadAction<{ serverConversationId: string; title: string | null }>,
@@ -705,6 +713,8 @@ export const {
   moveActive,
   setDraft,
   openConversation,
+  chooseModel,
+  catalogLoaded,
   openListed,
   closeConversation,
   bindConversation,

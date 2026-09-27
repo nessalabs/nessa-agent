@@ -969,6 +969,15 @@ body {
   color: var(--accent-foreground);
 }
 
+/* The composer's model picker: its provider tabs take the same soft fill for
+   keyboard focus as the composer's controls, instead of an outer ring that
+   stays after a click. */
+.nessa-composer-model-content [role="tab"]:focus-visible {
+  outline: none;
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
 /* The + tray rises from the composer's corner; a page it switches to settles
    in from the side it came from. Both are skipped for reduced motion. */
 @keyframes nessa-composer-tray-rise {

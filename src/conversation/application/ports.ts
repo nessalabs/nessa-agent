@@ -9,6 +9,7 @@ import {
   type FileAttachment,
   type ImageReference,
   type MessageContent,
+  type ModelChoice,
   type ReadFailure,
   type UploadFailure,
 } from "../model"
@@ -26,6 +27,7 @@ export interface ConversationGateway {
     listed: { serverConversationId: string; title: string | null },
   ): LocalTabs
   closeConversation(tabs: LocalTabs, conversationId: string): LocalTabs
+  chooseModel(tabs: LocalTabs, input: { id: string; choice: ModelChoice }): LocalTabs
   setDraft(tabs: LocalTabs, input: { draft: MessageContent; id?: string }): LocalTabs
   moveActive(tabs: LocalTabs, direction: -1 | 1): LocalTabs
   setActive(tabs: LocalTabs, conversationId: string): LocalTabs
