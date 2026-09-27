@@ -75,8 +75,9 @@ radius minus that distance, so hover shapes are concentric with the pane. The
 titlebar's height derives from it (56px), and the native traffic lights are
 centred on the same row.
 With the left sidebar collapsed, resting the pointer on the window's left
-edge reveals it over the content, Dock-style, until the pointer has been away
-for a moment; Esc dismisses it. The rules are a pure state machine in
+edge slides it in over the content, Dock-style, until the pointer has been away
+for a moment; Esc dismisses it. It slides fully solid and never fades: opacity
+on its container would switch off the glass's blur mid-transition. The rules are a pure state machine in
 `model/edge-peek.ts`, with its state table and tests; `adapters/use-edge-peek.ts`
 runs it against the clock. The panel's maximize control lives inside the right
 pane, beside the titlebar's panel toggle, so it cannot sit outside a narrow pane.
@@ -103,7 +104,8 @@ workspace its minimum, then the open right panel its minimum, then the left what
 it asked for (narrowing, then closing below 200px), then grows the right with
 what remains. Opening the right panel in a narrow window therefore narrows or
 closes the left, and the right closes rather than shrinking under 200px. Both
-fit together from a 750px window up.
+fit together from a 750px window up. Asking for the left sidebar when there is
+no room beside the right panel closes the right to make room.
 It can use all remaining space, with no percentage cap. It defaults to 400px, leaving the remainder for
 the workspace; at a 1100px window with two 1px borders, that is 250px left,
 448px workspace, and 400px right. A window too narrow for 250px plus the

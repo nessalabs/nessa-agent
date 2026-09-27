@@ -292,6 +292,13 @@ body {
 
 /* The revealed sidebar floats over the content: more opaque than a docked
    pane, since there is content under it, and lifted with a deeper shadow. */
+/*
+ * It slides, fully solid, like the Dock; it never fades. Opacity below 1 on
+ * this container would make it the glass's backdrop root, switching the blur
+ * off mid-transition so the content behind shows through for a few frames.
+ * Hidden, it waits past the window edge with its shadow, and turns invisible
+ * only once it has slid out.
+ */
 .desktop-peek {
   position: absolute;
   z-index: 15;
@@ -300,17 +307,21 @@ body {
   left: 0;
   width: 250px; /* LEFT_DEFAULT_WIDTH */
   pointer-events: none;
-  opacity: 0;
-  transform: translateX(-16px);
+  visibility: hidden;
+  transform: translate3d(calc(-100% - 48px), 0, 0);
+  will-change: transform;
   transition:
-    opacity 220ms var(--desktop-ease),
-    transform 320ms var(--desktop-ease);
+    transform 220ms cubic-bezier(0.4, 0, 1, 1),
+    visibility 0s linear 220ms;
 }
 
 .desktop-peek[data-shown] {
   pointer-events: auto;
-  opacity: 1;
-  transform: none;
+  visibility: visible;
+  transform: translate3d(0, 0, 0);
+  transition:
+    transform 360ms var(--desktop-ease),
+    visibility 0s;
 }
 
 .desktop-peek .desktop-glass[data-slot="sidebar"] {

@@ -155,10 +155,20 @@ export function useSidebarLayout() {
             expanded.current[panel] = (current[panel] / 100) * availableWidth.current
         }
         const size = (expanded.current[side] / availableWidth.current) * 100
-        return constrain(
+        const fitted = constrain(
           { ...current, [side]: size, center: current.center - size },
           availableWidth.current,
         )
+        // The right panel has precedence, so asking for the left in a window
+        // with no room beside it would do nothing. The request is explicit:
+        // close the right to make room instead.
+        if (side === "left" && fitted.left === 0 && current.right > 0) {
+          return constrain(
+            { left: size, center: 100 - size, right: 0 },
+            availableWidth.current,
+          )
+        }
+        return fitted
       })
     },
     [constrain],
