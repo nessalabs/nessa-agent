@@ -64,8 +64,9 @@ view. The sidebar toggle sits at its leading edge (after the traffic lights on
 macOS) and the right-panel toggle at its trailing edge, and neither moves when a
 sidebar opens or closes. The lowercase nessaStudio wordmark in the sidebar
 footer is the only identity. Both sidebars are inset, rounded panes of
-translucent glass in the window's own base colour, so the ambient light carries
-through them and the window reads as one surface marked only by their rims; their content begins below the
+translucent glass: the middle's colour is the base everywhere, and a pane is
+that base lifted by a faint tint, so it sits on top while the ambient light
+still carries through and the window reads as one surface; their content begins below the
 titlebar row, and closing one fades and
 slides it toward its edge while the split view animates its width.
 Corner controls follow one geometry in `styles.css`: each sits the same
@@ -73,6 +74,12 @@ distance from its pane's top and side edges, and its corner radius is the pane's
 radius minus that distance, so hover shapes are concentric with the pane. The
 titlebar's height derives from it (56px), and the native traffic lights are
 centred on the same row.
+With the left sidebar collapsed, resting the pointer on the window's left
+edge reveals it over the content, Dock-style, until the pointer has been away
+for a moment; Esc dismisses it. The rules are a pure state machine in
+`model/edge-peek.ts`, with its state table and tests; `adapters/use-edge-peek.ts`
+runs it against the clock. The panel's maximize control lives inside the right
+pane, beside the titlebar's panel toggle, so it cannot sit outside a narrow pane.
 Maximizing the right panel makes it the window rather than a floating card: no
 inset, rim, or corners, and the history arrows step aside; Esc restores it
 wherever focus is. The resize glow runs only along the straight part of a

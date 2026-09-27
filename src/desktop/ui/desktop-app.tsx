@@ -24,7 +24,9 @@ import {
 } from "@nessa-ui/react/sidebar"
 import { SplitView, SplitViewPanel, SplitViewSeparator } from "@nessa-ui/react/split-view"
 import type { HostKind } from "../../host/features"
+import { useEdgePeek } from "../adapters/use-edge-peek"
 import { useThemePreference } from "../adapters/theme-preference"
+import type { DesktopThemeId } from "../model/theme"
 import { useSidebarLayout } from "../adapters/use-sidebar-layout"
 import { Home } from "./home"
 import { ThemeMenu } from "./theme-menu"
@@ -64,6 +66,8 @@ export function DesktopApp({
   const [theme, setTheme] = useThemePreference()
   const [rightMaximized, setRightMaximized] = useState(false)
   const rightShown = rightOpen || rightMaximized
+  const leftDocked = leftOpen && !rightMaximized
+  const peek = useEdgePeek(!leftOpen && !rightMaximized)
 
   const toggleRight = () => {
     setRightMaximized(false)
@@ -89,39 +93,38 @@ export function DesktopApp({
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [])
 
-  const leftLabel = `${leftOpen && !rightMaximized ? "Hide" : "Show"} Sidebar (${shortcut("⌘B")})`
+  const leftLabel = `${leftDocked ? "Hide" : "Show"} Sidebar (${shortcut("⌘B")})`
   const rightLabel = `${rightShown ? "Hide" : "Show"} Panel (${shortcut("⌥⌘B")})`
   const maximizeLabel = rightMaximized ? "Restore Panel (Esc)" : "Expand Panel"
 
-  const rightControls = (
-    <div className="flex items-center gap-0.5">
-      {rightShown ? (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="desktop-titlebar-button"
-          aria-label={maximizeLabel}
-          title={maximizeLabel}
-          aria-pressed={rightMaximized}
-          aria-controls="right"
-          onClick={() => setRightMaximized((value) => !value)}
-        >
-          {rightMaximized ? <Minimize2 /> : <Maximize2 />}
-        </Button>
-      ) : null}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="desktop-titlebar-button"
-        aria-label={rightLabel}
-        aria-expanded={rightShown}
-        aria-controls="right"
-        title={rightLabel}
-        onClick={toggleRight}
-      >
-        <PanelRight />
-      </Button>
-    </div>
+  const maximizeButton = (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="desktop-titlebar-button desktop-maximize"
+      aria-label={maximizeLabel}
+      title={maximizeLabel}
+      aria-pressed={rightMaximized}
+      aria-controls="right"
+      onClick={() => setRightMaximized((value) => !value)}
+    >
+      {rightMaximized ? <Minimize2 /> : <Maximize2 />}
+    </Button>
+  )
+
+  const rightToggle = (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="desktop-titlebar-button"
+      aria-label={rightLabel}
+      aria-expanded={rightShown}
+      aria-controls="right"
+      title={rightLabel}
+      onClick={toggleRight}
+    >
+      <PanelRight />
+    </Button>
   )
 
   return (
@@ -158,7 +161,7 @@ export function DesktopApp({
               className="desktop-titlebar-button"
               aria-label={leftLabel}
               title={leftLabel}
-              aria-expanded={leftOpen && !rightMaximized}
+              aria-expanded={leftDocked}
               aria-controls="left"
             >
               <PanelLeft />
@@ -168,8 +171,34 @@ export function DesktopApp({
             back: { label: "Go back", icon: <ArrowLeft />, disabled: true },
             forward: { label: "Go forward", icon: <ArrowRight />, disabled: true },
           }}
-          trailing={rightControls}
+          trailing={rightToggle}
         />
+        {/* Dock-style reveal: resting on the left edge while the sidebar is
+            collapsed slides it in over the content until the pointer leaves. */}
+        {!leftOpen && !rightMaximized ? (
+          <div
+            className="desktop-peek-edge"
+            aria-hidden="true"
+            onPointerEnter={peek.enter}
+            onPointerLeave={peek.leave}
+          />
+        ) : null}
+        <div
+          className="desktop-peek"
+          data-shown={peek.shown || undefined}
+          inert={!peek.shown}
+          aria-hidden={!peek.shown}
+          onPointerEnter={peek.enter}
+          onPointerLeave={peek.leave}
+        >
+          <Sidebar
+            aria-label="Main navigation"
+            collapsible="none"
+            className="desktop-sidebar desktop-glass"
+          >
+            <NavigationBody theme={theme} onThemeChange={setTheme} />
+          </Sidebar>
+        </div>
         <AppShellBody className="bg-transparent">
           <SplitView
             ref={groupRef}
@@ -192,31 +221,7 @@ export function DesktopApp({
                 collapsible="none"
                 className="desktop-sidebar desktop-glass"
               >
-                <SidebarContent>
-                  <SidebarMenu>
-                    <SidebarMenuItem asChild icon={<HomeIcon />} isActive>
-                      <a href="#home" aria-current="page">
-                        Home
-                      </a>
-                    </SidebarMenuItem>
-                  </SidebarMenu>
-                  <SidebarGroup className="mt-4">
-                    <SidebarGroupLabel>Recents</SidebarGroupLabel>
-                    <SidebarGroupContent>
-                      <p className="desktop-empty-note">
-                        Your conversations will appear here.
-                      </p>
-                    </SidebarGroupContent>
-                  </SidebarGroup>
-                </SidebarContent>
-                <SidebarFooter className="desktop-identity">
-                  <span aria-hidden="true" className="desktop-mark" />
-                  <span className="min-w-0 flex-1 truncate">
-                    <span className="font-semibold">nessa</span>
-                    <span className="font-normal text-muted-foreground">Studio</span>
-                  </span>
-                  <ThemeMenu theme={theme} onThemeChange={setTheme} />
-                </SidebarFooter>
+                <NavigationBody theme={theme} onThemeChange={setTheme} />
               </Sidebar>
             </SplitViewPanel>
             <SplitViewSeparator
@@ -277,6 +282,7 @@ export function DesktopApp({
                   collapsible="none"
                   className="desktop-sidebar desktop-glass"
                 >
+                  {maximizeButton}
                   <SidebarContent className="items-center justify-center">
                     <p className="desktop-empty-note text-center">Nothing open</p>
                   </SidebarContent>
@@ -287,5 +293,42 @@ export function DesktopApp({
         </AppShellBody>
       </AppShell>
     </SidebarProvider>
+  )
+}
+
+/** The left sidebar's contents, shared by the docked sidebar and its edge reveal. */
+function NavigationBody({
+  theme,
+  onThemeChange,
+}: {
+  theme: DesktopThemeId
+  onThemeChange: (theme: DesktopThemeId) => void
+}) {
+  return (
+    <>
+      <SidebarContent>
+        <SidebarMenu>
+          <SidebarMenuItem asChild icon={<HomeIcon />} isActive>
+            <a href="#home" aria-current="page">
+              Home
+            </a>
+          </SidebarMenuItem>
+        </SidebarMenu>
+        <SidebarGroup className="mt-4">
+          <SidebarGroupLabel>Recents</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <p className="desktop-empty-note">Your conversations will appear here.</p>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarFooter className="desktop-identity">
+        <span aria-hidden="true" className="desktop-mark" />
+        <span className="min-w-0 flex-1 truncate">
+          <span className="font-semibold">nessa</span>
+          <span className="font-normal text-muted-foreground">Studio</span>
+        </span>
+        <ThemeMenu theme={theme} onThemeChange={onThemeChange} />
+      </SidebarFooter>
+    </>
   )
 }
