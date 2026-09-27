@@ -47,8 +47,22 @@ or surface credentials. Platform preparation still runs before Tauri starts.
 `desktop.html` mounts `src/desktop/main.tsx`, which directly composes the design
 system's AppShell frame and Sidebar with a Home link, an empty Recents group,
 and `ui/home.tsx` in the main area: a time-of-day greeting (`model/greeting.ts`)
-and a composer that takes text but cannot send, and says so, until conversations
-are wired in. The app controls SidebarProvider from its shared layout; the
+and the composer (`ui/composer.tsx`), which takes text but cannot send, and says so on its send button, until conversations
+are wired in. Beneath the text sit the choices a turn will carry, in one
+row: on the left where and with what — a project chip, which will choose the
+folder a conversation works in (this window has no native folder picker yet,
+so its Open folder item is shown disabled), and the model, in the design
+system's ModelPicker, from the SDK's `crates/nessa-sdk/data/models.json`
+grouped by provider (`model/composer-options.ts`, read from that file rather
+than retyped), each provider marked on a glass tile by its agent's `AgentMark`
+from onboarding; on the right how — the design system's access mode, as its shield alone, and
+beside send the thinking level, as a brain icon whose slider names the level,
+offered only to a reasoning model, with the control's Fast toggle on models
+`fastModeFor` lists (the catalog does not record Fast yet) and a small bolt
+beside the brain while Fast is on. They rest as quiet
+text chips in one colour, open frosted menus, and hold no state beyond the page
+yet. In a narrow composer the project shows only its folder, so the model keeps
+its name. The app controls SidebarProvider from its shared layout; the
 provider supplies Cmd/Ctrl+B for the left sidebar and the app adds
 Cmd/Ctrl+Alt+B for the right one.
 The reusable `src/desktop/ui/window-titlebar.tsx` stays in this app. It accepts
