@@ -28,21 +28,26 @@ replacement views from the SDK Agent.
 
 ## Minimal desktop surface
 
-`pnpm desktop` launches a normal resizable window from
-`src-tauri/tauri.desktop.conf.json`. Its `desktop` window selects the desktop
-composition path in `main.rs`, leaving standard Tauri activation and close
-behavior in place. On macOS an overlay titlebar retains the native traffic lights;
+The desktop window is Nessa's main app window, in the same app and process as
+the menu bar panel (`pnpm app`). `tauri.conf.json` declares it hidden beside the
+panel, and `src-tauri/src/desktop_window.rs` opens and dismisses it. A launch
+after setup opens it; the tray menu's Open Nessa and a click on the Dock icon
+open it again. While it is on screen the app has a Dock icon, an app menu and a
+place in the app switcher; closing it hides the window and returns the app to
+the menu bar alone, the way Alfred's preferences window comes and goes
+(`Host::set_dock_presence`, Regular or Accessory on macOS). The panel behaves as
+it always has, and the tray's Show Panel still toggles it. Without a tray,
+closing the window really closes it. On macOS an overlay titlebar retains the native traffic lights;
 a fixed full-width WindowTitlebar places the sidebar toggle beside them, without
-a title label or divider. Native controls use `trafficLightPosition` (16, 23)
-and the 42px header places the icon center at 21px. The installed Tao implementation
-keeps each 14px native button at y=9 inside its 37px titlebar container, placing
-its center at the same 21px. This was measured in the running macOS window;
+a title label or divider. The desktop window's `trafficLightPosition` (16, 26)
+centres the native buttons 24px below the window's top, and the titlebar's
+controls sit on the same 24px centre. Both were measured in the running macOS
+window through the accessibility frames of the close button and the window;
 recheck native geometry when changing the Tauri/Tao version or macOS version.
 The inset is macOS-only; browser and other hosts use ordinary header padding.
 The surface uses the design system's dark theme. Back/forward controls are
 disabled because the single-view shell has no navigation history.
-Its drag region and double-click maximize have desktop-scoped capabilities. It does not initialize panel settings, tray, summon shortcuts,
-or surface credentials. Platform preparation still runs before Tauri starts.
+Its drag region and double-click maximize have desktop-scoped capabilities.
 
 `desktop.html` mounts `src/desktop/main.tsx`, which directly composes the design
 system's AppShell frame and Sidebar with a Home link, an empty Recents group,
@@ -96,7 +101,7 @@ slides it toward its edge while the split view animates its width.
 Corner controls follow one geometry in `styles.css`: each sits the same
 distance from its pane's top and side edges, and its corner radius is the pane's
 radius minus that distance, so hover shapes are concentric with the pane. The
-titlebar's height derives from it (56px), and the native traffic lights are
+titlebar's height derives from it (48px), and the native traffic lights are
 centred on the same row.
 With the left sidebar collapsed, resting the pointer on the window's left
 edge slides it in over the content, Dock-style, until the pointer has been away
@@ -173,20 +178,13 @@ The right toggle exits this mode and closes the panel.
 
 This surface mounts no product store, session lifecycle, or backend connection.
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
-entries. The existing panel launch remains `pnpm app`.
-
-From the repository root, use:
-
-```sh
-pnpm install --frozen-lockfile
-pnpm desktop
-```
+entries, and `pnpm app` runs both windows.
 
 Browser-only preview: `pnpm desktop:dev`, then open
 `http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
-it never terminates another worktree's server. `pnpm desktop:build` packages the
-same surface through Tauri. The native minimum width is 800px. No content features or layout
-persistence are implemented. Restart `pnpm desktop` after changing the Tauri
+it never terminates another worktree's server. `pnpm app:build` packages the
+window with the panel. The native minimum width is 800px. No content features or layout
+persistence are implemented. Restart `pnpm app` after changing the Tauri
 overlay configuration: the CLI watcher can retain the previous merged config.
 
 This follows Tauri's [window customization guide](https://v2.tauri.app/learn/window-customization/)
@@ -215,12 +213,13 @@ opinion rather than the product's.
 | `links.rs` | Where a clicked link goes. A pure `decide` allows the app's own origins (`tauri://localhost`, `http://tauri.localhost`, and the dev server in a `tauri dev` build alone), hands `http`, `https` and `mailto` to the OS, and refuses everything else — the panel has no address bar to come back from, and its webview is the one the host's commands are granted to. Applied by a Tauri plugin, because the panel window is declared in `tauri.conf.json`. The module header lists which ways out of a page the navigation policy does not see. |
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
-| `tray.rs` | The menu bar extra (macOS) or StatusNotifierItem (Linux), and the surface-toggle request. Creating it is survivable: a desktop with no tray still launches. |
+| `desktop_window.rs` | The desktop window, Nessa's main app window: opens it (at launch after setup, from the tray, from the Dock) and dismisses it on close, giving and taking the Dock icon through `Host::set_dock_presence`. |
+| `tray.rs` | The menu bar extra (macOS) or StatusNotifierItem (Linux): Open Nessa (the desktop window), Show Panel, and the surface-toggle request. Creating it is survivable: a desktop with no tray still launches. |
 | `shortcut.rs` | Registers / re-registers the global `panel.summon` accelerator from the shortcuts cache. |
 | `shortcuts.rs` | Stage-scoped `shortcuts.json` cache: seed from bundled protocol defaults. |
 | `settings.rs`, `settings/storage.rs` | The on-disk settings shape (panel geometry) and its defaults, over a `Storage` port that `shortcuts.rs` reads through too. Summon is not here — see `shortcuts.rs`. |
 | `platform/` | The OS host. `Host` is the contract — window shaping, and `open_externally` for a link leaving the app; `current()` injects one implementation for the compiled target. Commands `set_frosted` and `panel_size` live here too. |
-| `platform/macos/` | Accessory app, `/usr/bin/open` for links, `NSVisualEffectView` frost, WKWebView pin, AppKit live-resize notifications. The panel stays open when focus moves to another app and joins all desktop Spaces, with fullscreen auxiliary behavior enabled. |
+| `platform/macos/` | Accessory app, Regular while the desktop window is open, `/usr/bin/open` for links, `NSVisualEffectView` frost, WKWebView pin, AppKit live-resize notifications. The panel stays open when focus moves to another app and joins all desktop Spaces, with fullscreen auxiliary behavior enabled. |
 | `platform/linux/` | WebKit DMA-BUF prep, `xdg-open` for links, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
 | `platform/other/` | Webview fills the window; size events only. |
 

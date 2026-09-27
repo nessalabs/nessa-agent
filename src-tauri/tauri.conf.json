@@ -35,6 +35,29 @@
         "visibleOnAllWorkspaces": true,
         "skipTaskbar": true,
         "visible": false
+      },
+      {
+        "label": "desktop",
+        "url": "desktop.html",
+        "title": "Nessa",
+        "width": 1100,
+        "height": 760,
+        "minWidth": 800,
+        "minHeight": 480,
+        "center": true,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false,
+        "shadow": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 26
+        },
+        "theme": "Dark",
+        "backgroundColor": "#111111",
+        "visible": false
       }
     ]
   },

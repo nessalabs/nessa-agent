@@ -25,7 +25,7 @@ body {
    * and their corners are concentric with the pane's: inner radius is the
    * pane's radius minus that distance. Everything below derives from these.
    */
-  --desktop-control-inset: 6px;
+  --desktop-control-inset: 2px;
   --desktop-control-size: 28px;
   --desktop-control-radius: calc(var(--desktop-radius) - var(--desktop-control-inset));
   --desktop-control-edge: calc(var(--desktop-gutter) + var(--desktop-control-inset));
@@ -116,9 +116,11 @@ body {
   stroke-width: 1.6;
 }
 
-/* Native macOS window buttons remain host-owned and sit inside the sidebar. */
-/* Native macOS window buttons remain host-owned and sit inside the sidebar,
-   centred on the same row as the controls (see tauri.desktop.conf.json). */
+/*
+ * Native macOS window buttons remain host-owned and sit inside the sidebar,
+ * centred on the same row as the controls: 24px from the window's top, where
+ * the desktop window's `trafficLightPosition` in tauri.conf.json puts them.
+ */
 [data-host="macos"][data-surface="window"] {
   --desktop-window-controls-inset: 79px;
 }
