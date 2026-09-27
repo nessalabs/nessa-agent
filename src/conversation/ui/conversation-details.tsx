@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from "react"
+import { useState, type ReactElement, type ReactNode } from "react"
 import { Info, Pencil } from "lucide-react"
 import {
   ContextMenu,
@@ -6,11 +6,6 @@ import {
   ContextMenuContent,
   ContextMenuItem,
 } from "@nessa-ui/react/context-menu"
-import {
-  AgentDetails,
-  AgentDetailsSection,
-  AgentDetailsField,
-} from "@nessa-ui/react/agent-details"
 import {
   Sheet,
   SheetHandle,
@@ -20,23 +15,25 @@ import {
   SheetAction,
   SheetBody,
 } from "@nessa-ui/react/sheet"
+// Setup owns what an agent is called and how its mark is drawn. These two
+// modules are imported directly, not through the onboarding barrel, which also
+// carries the setup gate and with it the host.
+import { AGENT_CHOICES } from "../../onboarding/model/onboarding"
+import { AgentMark } from "../../onboarding/ui/agent-mark"
 import type { AgentFeatures, Conversation } from "../model"
+import { APPROVAL_MODE_TEXT } from "./approval-mode"
 
 type FeatureSupport = AgentFeatures[keyof AgentFeatures]
 
-function support(
-  value: FeatureSupport,
-  available: string,
-  unavailable = "Unavailable",
-  notImplemented = "Not implemented in Nessa",
-) {
+/** One capability in a word or two: whether it works here, not how. */
+function support(value: FeatureSupport) {
   switch (value) {
     case "unknown":
       return "Not verified"
     case "unsupported":
-      return unavailable
+      return "Not available"
     case "unsupported_not_implemented":
-      return notImplemented
+      return "Not yet in Nessa"
     case "supported_for_offered_permission_reviews":
     case "supported_for_user_configured_hooks":
     case "supported_with_invocation_correlation":
@@ -46,12 +43,114 @@ function support(
     case "supported_at_permission_gate":
     case "supported_for_current_invocation":
     case "supported_for_session":
-      return available
+      return "Supported"
     default: {
       const exhaustive: never = value
       return exhaustive
     }
   }
+}
+
+const tokenCount = new Intl.NumberFormat("en", { maximumFractionDigits: 1 })
+
+/** A context window in words: "1 million tokens", "200,000 tokens". */
+function tokens(count: number) {
+  return count >= 1_000_000 && count % 100_000 === 0
+    ? `${tokenCount.format(count / 1_000_000)} million tokens`
+    : `${tokenCount.format(count)} tokens`
+}
+
+/** A group of facts on a soft fill. Space separates the rows, not rules. */
+function FactGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section aria-label={title} className="flex flex-col gap-2">
+      <h4 className="m-0 px-4 nessa-text-2 font-medium text-muted-foreground">{title}</h4>
+      <div className="flex flex-col rounded-[18px] bg-muted/60 px-4 py-1.5">
+        {children}
+      </div>
+    </section>
+  )
+}
+
+function Fact({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 py-2.5">
+      <span className="shrink-0 nessa-text-4 text-foreground">{label}</span>
+      <span className="min-w-0 truncate text-end nessa-text-4 text-muted-foreground">
+        {value}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * What a conversation runs on and how its tools are approved. Read-only: the
+ * composer is where the model and the approval mode are chosen.
+ */
+function ConversationFacts({ conversation }: { conversation: Conversation }) {
+  const remote = conversation.remote
+  const runtime = remote?.runtime
+  const features = remote?.capabilities.agentFeatures
+  // Narrowed by asking setup's list, which owns what an agent is called.
+  const agent = AGENT_CHOICES.find((choice) => choice.id === runtime?.agent)
+  return (
+    <div className="flex flex-col gap-7 pb-4">
+      {runtime ? (
+        <div className="flex flex-col items-center gap-1 pt-2 text-center">
+          <p className="m-0 inline-flex min-w-0 items-center gap-2 nessa-text-7 font-semibold tracking-tight text-foreground">
+            {agent ? <AgentMark id={agent.id} name={agent.name} /> : null}
+            <span className="min-w-0 truncate">{runtime.modelName ?? runtime.model}</span>
+          </p>
+          <p className="m-0 nessa-text-3 text-muted-foreground">
+            {agent?.name ?? runtime.provider}
+          </p>
+        </div>
+      ) : (
+        <p className="m-0 pt-2 text-center nessa-text-3 text-muted-foreground">
+          Details appear once the agent has started.
+        </p>
+      )}
+      {remote ? (
+        <FactGroup title="Model">
+          {runtime?.contextWindowTokens !== undefined ? (
+            <Fact label="Context window" value={tokens(runtime.contextWindowTokens)} />
+          ) : null}
+          {runtime?.reasoning !== undefined ? (
+            <Fact label="Reasoning" value={runtime.reasoning ? "On" : "Off"} />
+          ) : null}
+          <Fact
+            label="Images"
+            value={remote.capabilities.imageInput ? "Supported" : "Not supported"}
+          />
+        </FactGroup>
+      ) : null}
+      {remote ? (
+        <FactGroup title="Approvals">
+          {remote.approvalMode ? (
+            <Fact
+              label="Tool calls"
+              value={APPROVAL_MODE_TEXT[remote.approvalMode].name}
+            />
+          ) : null}
+          {features ? (
+            <>
+              <Fact label="Deny a request" value={support(features.permissionDenial)} />
+              <Fact label="Answer later" value={support(features.permissionDeferral)} />
+            </>
+          ) : (
+            <Fact label="Deny a request" value="Not verified" />
+          )}
+        </FactGroup>
+      ) : null}
+      {runtime ? (
+        <FactGroup title="Workspace">
+          <div className="py-2.5 nessa-text-4 break-all text-foreground">
+            {runtime.workspace}
+          </div>
+        </FactGroup>
+      ) : null}
+    </div>
+  )
 }
 
 export function ConversationTabMenu({
@@ -91,8 +190,6 @@ export function ConversationDetails({
   onRename: (title: string) => void
 }) {
   const [title, setTitle] = useState(conversation.title)
-  const runtime = conversation.remote?.runtime
-  const features = conversation.remote?.capabilities.agentFeatures
   return (
     <Sheet
       className="nessa-detail-sheet"
@@ -136,97 +233,7 @@ export function ConversationDetails({
             </button>
           </form>
         ) : (
-          <AgentDetails title={conversation.title}>
-            <AgentDetailsSection title="Info">
-              {runtime ? (
-                <>
-                  <AgentDetailsField label="Runtime" value={runtime.provider} />
-                  <AgentDetailsField label="Model" value={runtime.model} />
-                  <AgentDetailsField
-                    label="Working directory"
-                    value={<span className="break-all">{runtime.workspace}</span>}
-                  />
-                </>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Runtime details are not available yet.
-                </p>
-              )}
-            </AgentDetailsSection>
-            <AgentDetailsSection title="Capabilities">
-              {features ? (
-                <>
-                  <AgentDetailsField
-                    label="Deny requested tool access"
-                    value={support(
-                      features.permissionDenial,
-                      "Available when the agent offers a deny choice",
-                    )}
-                  />
-                  <AgentDetailsField
-                    label="Isolate user hooks"
-                    value={support(
-                      features.nativeHookSuppression,
-                      "Verified for user-configured hooks",
-                    )}
-                  />
-                  <AgentDetailsField
-                    label="Report context compaction"
-                    value={support(
-                      features.compactionReporting,
-                      "Available with turn correlation",
-                    )}
-                  />
-                  <AgentDetailsField
-                    label="Report model changes"
-                    value={support(
-                      features.modelSwitchReporting,
-                      "Available after validation",
-                    )}
-                  />
-                  <AgentDetailsField
-                    label="Explicitly defer permission decisions"
-                    value={support(
-                      features.permissionDeferral,
-                      "Available with a later correlated answer",
-                      "Unavailable",
-                      "Explicit later-answer outcomes are not implemented in Nessa",
-                    )}
-                  />
-                  <AgentDetailsField
-                    label="Provider question forwarding"
-                    value={support(
-                      features.elicitationForwarding,
-                      "Available with a correlated reply",
-                    )}
-                  />
-                  <AgentDetailsField
-                    label="Apply policies before tools run"
-                    value={support(
-                      features.preToolPolicy,
-                      "Available for tools awaiting permission",
-                    )}
-                  />
-                  <AgentDetailsField
-                    label="End a turn from policy"
-                    value={support(features.policyEndTurn, "Available")}
-                  />
-                  <AgentDetailsField
-                    label="Close a session from policy"
-                    value={support(features.policyCloseSession, "Available")}
-                  />
-                  <AgentDetailsField
-                    label="Answer incoming questions in Nessa"
-                    value={support(features.incomingElicitation, "Available")}
-                  />
-                </>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Capability details are not available yet.
-                </p>
-              )}
-            </AgentDetailsSection>
-          </AgentDetails>
+          <ConversationFacts conversation={conversation} />
         )}
       </SheetBody>
     </Sheet>

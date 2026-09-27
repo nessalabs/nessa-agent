@@ -18,6 +18,33 @@ export type AgentFeatures = {
   incomingElicitation: "unknown" | "unsupported" | "supported_with_correlated_round_trip"
 }
 
+/**
+ * What a conversation runs on, as the gateway reports it.
+ *
+ * `agent`, `modelName`, `contextWindowTokens` and `reasoning` arrive with ADR 231
+ * (docs/adr/todo/231-model-and-approval-per-conversation.md). Until a gateway
+ * sends them, details name the model by its identifier and draw no mark.
+ */
+export type ConversationRuntime = {
+  model: string
+  provider: string
+  workspace: string
+  /** The conversation's agent id, e.g. `claude`, not the harness in `provider`. */
+  agent?: string
+  /** The catalog's display name for `model`. */
+  modelName?: string
+  /** The catalog's context window for `model`, in tokens. */
+  contextWindowTokens?: number
+  /** Whether the catalog says `model` reasons before answering. */
+  reasoning?: boolean
+}
+
+/**
+ * How much the agent may do without asking (ADR 231). The panel names these;
+ * which ones an agent honours is the gateway's answer, never the panel's.
+ */
+export type ApprovalMode = "ask" | "auto" | "full"
+
 export type ConversationCapabilities = {
   queue: boolean
   steer: boolean
@@ -214,7 +241,11 @@ type ConversationState = {
   cancellationStatus?: "cancelling" | "cancelled"
   controlPending?: boolean
   remote?: {
-    runtime?: { model: string; provider: string; workspace: string }
+    runtime?: ConversationRuntime
+    /** The approval mode this conversation runs under, once the gateway reports it. */
+    approvalMode?: ApprovalMode
+    /** The modes this conversation's agent can honour, as the gateway reports them. */
+    approvalModes?: ApprovalMode[]
     /** Last gateway view reports an invocation still running, even before its first chunk. */
     running: boolean
     permissions: {
