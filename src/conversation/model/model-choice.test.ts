@@ -6,6 +6,14 @@ import {
   type ModelCatalog,
 } from "./model-choice"
 
+const model = (modelId: string) => ({
+  modelId,
+  displayName: modelId,
+  maxContextWindowTokens: 1_000_000,
+  reasoning: true,
+  imageInput: true,
+})
+
 const catalog: ModelCatalog = {
   defaultAgent: "codex",
   agents: [
@@ -13,13 +21,13 @@ const catalog: ModelCatalog = {
       agent: "claude",
       defaultModel: "claude-sonnet-5",
       approvalModes: ["ask"],
-      models: [],
+      models: [model("claude-sonnet-5"), model("claude-opus-5")],
     },
     {
       agent: "codex",
       defaultModel: "gpt-5.6-terra",
       approvalModes: ["ask", "auto", "full"],
-      models: [],
+      models: [model("gpt-5.6-terra"), model("gpt-6-astra")],
     },
   ],
 }
@@ -70,24 +78,53 @@ describe("the model a conversation runs on or will be created with", () => {
     })
   })
 
-  it("is not named for a created conversation whose gateway does not say", () => {
+  it("is the choice a conversation was created with until the gateway names its agent", () => {
+    const created = {
+      ...sent,
+      modelChoice: { agent: "claude", model: "claude-opus-5" },
+      remote: { runtime: { model: "gpt-6-astra" } },
+    }
+    expect(effectiveModel(created, catalog)).toEqual({
+      agent: "claude",
+      model: "claude-opus-5",
+    })
+  })
+
+  it("is not named for a conversation this window did not create, until its view says", () => {
     expect(
-      effectiveModel(
-        {
-          ...sent,
-          modelChoice: { agent: "claude", model: "claude-opus-5" },
-          remote: { runtime: { model: "gpt-6-astra" } },
-        },
-        catalog,
-      ),
+      effectiveModel({ ...sent, remote: { runtime: { model: "gpt-6-astra" } } }, catalog),
     ).toBeUndefined()
   })
 
-  it("is not named before a catalog, or when the window's agent is not in it", () => {
+  it("is not named before a catalog", () => {
     expect(effectiveModel(fresh, undefined)).toBeUndefined()
-    expect(
-      effectiveModel(fresh, { ...catalog, defaultAgent: "opencode" }),
-    ).toBeUndefined()
+  })
+
+  it("is the first agent's default when the catalog does not list the window's agent", () => {
+    expect(effectiveModel(fresh, { ...catalog, defaultAgent: "opencode" })).toEqual({
+      agent: "claude",
+      model: "claude-sonnet-5",
+    })
+  })
+
+  it("drops a choice the catalog no longer lists while the tab can still choose", () => {
+    const stale = { ...fresh, modelChoice: { agent: "claude", model: "retired" } }
+    expect(effectiveModel(stale, catalog)).toEqual({
+      agent: "codex",
+      model: "gpt-5.6-terra",
+    })
+  })
+
+  it("keeps the choice a conversation was created with, listed or not", () => {
+    const creating = {
+      turns: [],
+      serverConversationId: "c0",
+      modelChoice: { agent: "claude", model: "retired" },
+    }
+    expect(effectiveModel(creating, catalog)).toEqual({
+      agent: "claude",
+      model: "retired",
+    })
   })
 })
 

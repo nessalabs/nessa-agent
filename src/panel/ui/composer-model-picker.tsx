@@ -1,3 +1,4 @@
+import * as React from "react"
 import { ModelPicker, type ModelPickerGroup } from "@nessa-ui/react/model-picker"
 import type { ModelCatalog, ModelChoice } from "../../conversation"
 import { AGENT_CHOICES } from "../../onboarding/model/onboarding"
@@ -10,22 +11,36 @@ function contextLabel(tokens: number) {
     : `${Math.round(tokens / 1_000)}K`
 }
 
+function agentMark(agent: string) {
+  const known = AGENT_CHOICES.find((choice) => choice.id === agent)
+  const name = known?.name ?? agent
+  const mark = known ? (
+    <AgentMark id={known.id} name={name} />
+  ) : (
+    <span aria-hidden="true" className="nessa-text-2 font-medium">
+      {name.slice(0, 1).toUpperCase()}
+    </span>
+  )
+  return { name, mark }
+}
+
 /**
  * One provider tab per agent the gateway runs, each listing that agent's
  * models. An agent setup does not list keeps its id as its name and a monogram
  * as its mark, rather than being dropped: the gateway said it runs it.
+ *
+ * The current model is always listed. One the catalog does not name — a
+ * conversation still running a model since retired — joins its agent's tab
+ * under its own name, so the trigger shows its mark rather than a blank, and
+ * the picker names what the conversation actually runs.
  */
-function groups(catalog: ModelCatalog): ModelPickerGroup[] {
-  return catalog.agents.map((entry) => {
-    const known = AGENT_CHOICES.find((choice) => choice.id === entry.agent)
-    const name = known?.name ?? entry.agent
-    const mark = known ? (
-      <AgentMark id={known.id} name={name} />
-    ) : (
-      <span aria-hidden="true" className="nessa-text-2 font-medium">
-        {name.slice(0, 1).toUpperCase()}
-      </span>
-    )
+function groups(
+  catalog: ModelCatalog,
+  value: ModelChoice,
+  valueName: string | undefined,
+): ModelPickerGroup[] {
+  const listed: ModelPickerGroup[] = catalog.agents.map((entry) => {
+    const { name, mark } = agentMark(entry.agent)
     return {
       id: entry.agent,
       label: name,
@@ -38,6 +53,20 @@ function groups(catalog: ModelCatalog): ModelPickerGroup[] {
       })),
     }
   })
+  const group = listed.find((item) => item.id === value.agent)
+  if (group?.models.some((model) => model.id === value.model)) return listed
+  const { name, mark } = agentMark(value.agent)
+  const unlisted = {
+    id: value.model,
+    label: valueName ?? value.model,
+    description: "Not in this gateway's list",
+    icon: mark,
+  }
+  return group
+    ? listed.map((item) =>
+        item === group ? { ...item, models: [...item.models, unlisted] } : item,
+      )
+    : [...listed, { id: value.agent, label: name, icon: mark, models: [unlisted] }]
 }
 
 /**
@@ -53,30 +82,54 @@ function groups(catalog: ModelCatalog): ModelPickerGroup[] {
 export function ComposerModelPicker({
   catalog,
   value,
+  valueName,
   onChoose,
 }: {
   catalog: ModelCatalog
   value: ModelChoice
+  /** What the gateway calls `value`, for a model the catalog does not list. */
+  valueName?: string
   onChoose: (choice: ModelChoice) => void
 }) {
-  const choices = groups(catalog)
+  // Built once per catalog and value, not on every streamed chunk that
+  // re-renders the composer.
+  const { agent, model } = value
+  const choices = React.useMemo(
+    () => groups(catalog, { agent, model }, valueName),
+    [catalog, agent, model, valueName],
+  )
   const current = choices
     .find((group) => group.id === value.agent)
     ?.models.find((model) => model.id === value.model)
-  const name = current ? current.label : "Choose model"
+  const name = current?.label ?? value.model
+  // Escape hides the hover label until the pointer or focus leaves, so it can
+  // be dismissed without moving away.
+  const [dismissed, setDismissed] = React.useState(false)
   return (
-    <span className="nessa-model-hint relative flex shrink-0">
+    <span
+      className="nessa-model-hint relative flex shrink-0"
+      data-dismissed={dismissed || undefined}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") setDismissed(true)
+      }}
+      onPointerLeave={() => setDismissed(false)}
+      onBlur={() => setDismissed(false)}
+    >
       <ModelPicker
         groups={choices}
         value={{ providerId: value.agent, modelId: value.model }}
-        onValueChange={(next) =>
+        onValueChange={(next) => {
+          // Picking the model already in use is not a choice: on a conversation
+          // that exists it would open a new tab for nothing.
+          if (next.providerId === value.agent && next.modelId === value.model) return
           onChoose({ agent: next.providerId, model: next.modelId })
-        }
+        }}
         side="top"
         align="end"
-        triggerLabel={current ? `Model: ${current.label}` : name}
+        triggerLabel={`Model: ${name}`}
         // Only the mark shows: the label is kept for assistive technology and the
         // chevron is dropped, so the control is the same size as its neighbours.
+        // Both rely on the trigger's child order, which a test pins.
         className="nessa-composer-control nessa-composer-model px-2.5 [&>span:nth-of-type(2)]:sr-only [&>svg:last-child]:hidden"
         contentClassName="nessa-composer-model-content"
       />

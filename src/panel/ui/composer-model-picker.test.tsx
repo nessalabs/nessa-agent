@@ -134,3 +134,64 @@ it("hands back the agent and model that were picked", () => {
     model: "claude-opus-5",
   })
 })
+
+function pick(label: string) {
+  const option = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')].find(
+    (item) => item.textContent?.startsWith(label),
+  )
+  if (!option) throw new Error(`no ${label} option`)
+  act(() => option.click())
+}
+
+it("does nothing when the model already in use is picked again", () => {
+  const onChoose = render()
+  open()
+  pick("Sonnet 5")
+
+  expect(onChoose).not.toHaveBeenCalled()
+})
+
+it("names a model the catalog does not list, with its agent's mark, instead of a blank", () => {
+  act(() => {
+    root.render(
+      <ComposerModelPicker
+        catalog={catalog}
+        value={{ agent: "claude", model: "claude-retired-4" }}
+        valueName="Retired 4"
+        onChoose={() => {}}
+      />,
+    )
+  })
+
+  expect(trigger().getAttribute("aria-label")).toBe("Model: Retired 4")
+  expect(trigger().querySelector("svg path")).not.toBeNull()
+  open()
+  expect(document.body.textContent).toContain("Retired 4Not in this gateway's list")
+})
+
+it("names a model by its id when neither the catalog nor the gateway names it", () => {
+  act(() => {
+    root.render(
+      <ComposerModelPicker
+        catalog={catalog}
+        value={{ agent: "someone", model: "their-model" }}
+        onChoose={() => {}}
+      />,
+    )
+  })
+
+  expect(trigger().getAttribute("aria-label")).toBe("Model: their-model")
+})
+
+it("relies on the trigger's order: mark, then label, then chevron", () => {
+  // The icon-only styling hides the second span and the last svg. If the
+  // design system reorders its trigger, this fails before the label shows.
+  render()
+  const children = [...trigger().children]
+  expect(children[0]?.tagName).toBe("SPAN")
+  expect(children[0]?.querySelector("svg")).not.toBeNull()
+  expect(children[1]?.tagName).toBe("SPAN")
+  expect(children[1]?.textContent).toBe("Sonnet 5")
+  expect(children.at(-1)?.tagName.toLowerCase()).toBe("svg")
+  expect(trigger().className).toContain("[&>span:nth-of-type(2)]:sr-only")
+})

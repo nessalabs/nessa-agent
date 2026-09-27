@@ -2,6 +2,7 @@ export { AGENT_HUES, AGENT_ICON_TONE, AGENT_ICON_WASH, AGENT_SEED } from "./iden
 export { conversationInTabs, emptyTabs, type ConversationTabs } from "./tabs"
 export {
   approvalChoice,
+  defaultModelChoice,
   effectiveModel,
   modelChoiceOpen,
   type CatalogAgent,

@@ -73,9 +73,22 @@ function show(item: ReturnType<typeof conversation>) {
 }
 
 function group(title: string) {
-  const section = document.body.querySelector(`section[aria-label="${title}"]`)
+  const section = [...document.body.querySelectorAll("section")].find(
+    (item) =>
+      document.getElementById(item.getAttribute("aria-labelledby") ?? "")?.textContent ===
+      title,
+  )
   return section?.textContent ?? null
 }
+
+it("names each group by an h3 under the sheet's h2", () => {
+  show(attached())
+  const headings = [...document.body.querySelectorAll("section > h3")].map(
+    (heading) => heading.textContent,
+  )
+  expect(headings).toEqual(["Model", "Approvals"])
+  expect(document.body.querySelector("section h4")).toBeNull()
+})
 
 it("says in a word whether approvals work here, without the capability jargon", () => {
   show(attached())

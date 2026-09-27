@@ -973,9 +973,22 @@ body {
    keyboard focus as the composer's controls, instead of an outer ring that
    stays after a click. */
 .nessa-composer-model-content [role="tab"]:focus-visible {
-  outline: none;
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
   background-color: var(--accent);
   color: var(--accent-foreground);
+}
+
+/* The picker is portalled to the page, which on a desktop host is larger than
+   the window, so its collision checks cannot keep it inside the panel. Its
+   size is held to the window instead: narrow enough to open leftwards from the
+   trigger near the panel's right edge without passing the panel's left, and
+   its list short enough to fit above the composer in a short window. */
+.nessa-composer-model-content {
+  width: min(24rem, calc(var(--nessa-window-width, 100vw) - 6rem));
+}
+.nessa-composer-model-content [role="listbox"] {
+  max-height: min(20rem, calc(var(--nessa-window-height, 100vh) - 12rem));
 }
 
 /* The model's name above its mark, at once on hover or keyboard focus, and
@@ -1002,11 +1015,19 @@ body {
     opacity 120ms ease-out,
     transform 120ms ease-out;
 }
-.nessa-model-hint:hover .nessa-model-hint-label,
+/* Hover only where there is a pointer that hovers: a touch screen's sticky
+   :hover would leave the label up after a tap. */
+@media (hover: hover) {
+  .nessa-model-hint:hover .nessa-model-hint-label {
+    opacity: 1;
+    transform: none;
+  }
+}
 .nessa-model-hint:has(:focus-visible) .nessa-model-hint-label {
   opacity: 1;
   transform: none;
 }
+.nessa-model-hint[data-dismissed] .nessa-model-hint-label,
 .nessa-model-hint:has([aria-expanded="true"]) .nessa-model-hint-label {
   opacity: 0;
 }
@@ -1042,6 +1063,21 @@ body {
   .nessa-composer-tray-page {
     animation: none;
   }
+}
+
+/* WebKitGTK's layout compositor paints transformed layers from the panel
+   origin (see the compositor rules above), so there the tray, its pages, the
+   + and the hover label appear and disappear without moving. The picker is
+   portalled outside the panel, so it is reached through the document. */
+.nessa-panel[data-compositor="layout"] .nessa-composer-tray,
+.nessa-panel[data-compositor="layout"] .nessa-composer-tray-page,
+html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
+  animation: none;
+}
+.nessa-panel[data-compositor="layout"] .nessa-model-hint-label,
+.nessa-panel[data-compositor="layout"] [data-slot="composer-tray-plus"] {
+  transform: none;
+  transition: opacity 120ms ease-out;
 }
 
 .nessa-browser-login {

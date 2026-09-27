@@ -763,6 +763,7 @@ export function App({
                   <ComposerModelPicker
                     catalog={chat.catalog}
                     value={model}
+                    valueName={chat.active.remote?.runtime?.modelName}
                     onChoose={chat.chooseModel}
                   />
                 ) : null}

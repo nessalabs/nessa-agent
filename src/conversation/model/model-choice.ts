@@ -79,10 +79,40 @@ export function approvalChoice(
   return { mode: chosen && modes.includes(chosen) ? chosen : "ask", modes }
 }
 
+/** Whether the catalog lists this agent and model. */
+function listed(catalog: ModelCatalog | undefined, choice: ModelChoice): boolean {
+  return Boolean(
+    catalog?.agents
+      .find((entry) => entry.agent === choice.agent)
+      ?.models.some((model) => model.modelId === choice.model),
+  )
+}
+
 /**
- * The model a conversation runs on, or will be created with: what the gateway
- * reports once it exists, else what was chosen, else the catalog's default.
- * Undefined when none of those can be named, such as before a catalog loads.
+ * What a conversation is created with when nobody chose: the window's agent's
+ * default model, or the first agent's when the catalog does not list the
+ * window's agent, so a catalog always offers something.
+ */
+export function defaultModelChoice(
+  catalog: ModelCatalog | undefined,
+): ModelChoice | undefined {
+  const entry =
+    catalog?.agents.find((item) => item.agent === catalog.defaultAgent) ??
+    catalog?.agents[0]
+  return entry ? { agent: entry.agent, model: entry.defaultModel } : undefined
+}
+
+/**
+ * The model a conversation runs on, or will be created with:
+ *
+ * 1. what the gateway reports, once it names the agent;
+ * 2. the tab's choice — while creation is open only if the catalog still lists
+ *    it, and after creation starts whatever it was, since that is what the
+ *    create carried (`bindConversation` freezes it);
+ * 3. while creation is open, the catalog's default.
+ *
+ * Undefined when none of those can be named: before a catalog loads, or a
+ * conversation this window did not create whose view has not named its agent.
  */
 export function effectiveModel(
   conversation: {
@@ -95,8 +125,8 @@ export function effectiveModel(
 ): ModelChoice | undefined {
   const runtime = conversation.remote?.runtime
   if (runtime?.agent) return { agent: runtime.agent, model: runtime.model }
-  if (!modelChoiceOpen(conversation)) return undefined
-  if (conversation.modelChoice) return conversation.modelChoice
-  const fallback = catalog?.agents.find((entry) => entry.agent === catalog.defaultAgent)
-  return fallback ? { agent: fallback.agent, model: fallback.defaultModel } : undefined
+  const open = modelChoiceOpen(conversation)
+  const choice = conversation.modelChoice
+  if (choice && (!open || listed(catalog, choice))) return choice
+  return open ? defaultModelChoice(catalog) : undefined
 }

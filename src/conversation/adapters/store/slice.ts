@@ -1,5 +1,6 @@
 import {
   contentText,
+  effectiveModel,
   type ApprovalMode,
   MAX_SENT_PREVIEW_BYTES,
   messageFiles,
@@ -517,8 +518,10 @@ const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalTabs(),
   reducers: {
-    restoreConversations(_state, action: PayloadAction<SavedConversationTabs>) {
-      return restoreConversationTabs(action.payload)
+    restoreConversations(state, action: PayloadAction<SavedConversationTabs>) {
+      // Tabs come back from what was saved; the catalog is the gateway's current
+      // answer, not saved with them, so it outlives the restore.
+      return { ...restoreConversationTabs(action.payload), catalog: state.catalog }
     },
     cancellationChanged(
       state,
@@ -586,8 +589,13 @@ const conversationSlice = createSlice({
     },
     bindConversation(state, action: PayloadAction<{ id: string; serverId: string }>) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
-      if (current && !current.serverConversationId)
+      if (current && !current.serverConversationId) {
+        // Creation starts here, so the model it is created with is fixed here:
+        // the tab's choice while the catalog lists it, else the default. Read
+        // before binding, while the tab can still choose.
+        current.modelChoice = effectiveModel(current, state.catalog)
         current.serverConversationId = action.payload.serverId
+      }
     },
     conversationReady(state, action: PayloadAction<string>) {
       const current = state.conversations.find((item) => item.id === action.payload)
