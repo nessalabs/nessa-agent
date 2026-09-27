@@ -42,8 +42,10 @@ function groups(catalog: ModelCatalog): ModelPickerGroup[] {
 
 /**
  * The composer's model: the agent's mark beside voice, opening one picker with
- * a tab per agent. The trigger shows only the mark, so its name is the tooltip
- * and the accessible label.
+ * a tab per agent. The trigger shows only the mark, so its name is the
+ * accessible label and a tooltip. The tooltip is drawn here, not left to
+ * `title`: a native tooltip waits about a second before it appears, which is
+ * too long for the one place the model is named.
  *
  * Choosing for a conversation that already exists opens a new tab with the
  * choice; the caller's `onChoose` owns that rule.
@@ -63,7 +65,7 @@ export function ComposerModelPicker({
     ?.models.find((model) => model.id === value.model)
   const name = current ? current.label : "Choose model"
   return (
-    <span className="flex shrink-0" title={name}>
+    <span className="nessa-model-hint relative flex shrink-0">
       <ModelPicker
         groups={choices}
         value={{ providerId: value.agent, modelId: value.model }}
@@ -78,6 +80,10 @@ export function ComposerModelPicker({
         className="nessa-composer-control nessa-composer-model px-2.5 [&>span:nth-of-type(2)]:sr-only [&>svg:last-child]:hidden"
         contentClassName="nessa-composer-model-content"
       />
+      {/* Hidden from readers: the trigger's label already says it. */}
+      <span aria-hidden="true" data-slot="model-hint" className="nessa-model-hint-label">
+        {name}
+      </span>
     </span>
   )
 }

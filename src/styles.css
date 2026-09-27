@@ -978,6 +978,40 @@ body {
   color: var(--accent-foreground);
 }
 
+/* The model's name above its mark, at once on hover or keyboard focus, and
+   not while the picker it opens is showing. */
+.nessa-model-hint-label {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 0 0 1px var(--border);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(2px);
+  transition:
+    opacity 120ms ease-out,
+    transform 120ms ease-out;
+}
+.nessa-model-hint:hover .nessa-model-hint-label,
+.nessa-model-hint:has(:focus-visible) .nessa-model-hint-label {
+  opacity: 1;
+  transform: none;
+}
+.nessa-model-hint:has([aria-expanded="true"]) .nessa-model-hint-label {
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nessa-model-hint-label {
+    transition: none;
+  }
+}
+
 /* The + tray rises from the composer's corner; a page it switches to settles
    in from the side it came from. Both are skipped for reduced motion. */
 @keyframes nessa-composer-tray-rise {
