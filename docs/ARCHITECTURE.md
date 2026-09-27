@@ -67,6 +67,12 @@ footer is the only identity. Both sidebars are inset, rounded panes of
 translucent glass over a faint ambient light; their content begins below the
 titlebar row (42px native macOS, 48px elsewhere), and closing one fades and
 slides it toward its edge while the split view animates its width.
+Maximizing the right panel makes it the window rather than a floating card: no
+inset, rim, or corners, and the history arrows step aside; Esc restores it
+wherever focus is. The resize glow runs only along the straight part of a
+pane's rim, stopping where its corners curve. The ambient light's colours are
+three custom properties in `styles.css`, under a fine grain that keeps its
+falloff from banding.
 Inline sidebars explicitly use z-index 0 at all widths so the design system
 mobile sidebar stacking level cannot cover the fixed header controls.
 

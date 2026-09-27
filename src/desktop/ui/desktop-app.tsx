@@ -67,15 +67,19 @@ export function DesktopApp({
     setOpen("right", rightMaximized ? false : !rightOpen)
   }
 
-  // ⌥⌘B mirrors the left sidebar's ⌘B for the panel on the other side.
-  const toggleRightRef = useRef(toggleRight)
-  toggleRightRef.current = toggleRight
+  // ⌥⌘B mirrors the left sidebar's ⌘B for the panel on the other side, and
+  // Esc leaves the maximized panel wherever focus happens to be.
+  const keysRef = useRef({ toggleRight, rightMaximized })
+  keysRef.current = { toggleRight, rightMaximized }
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const mod = isMac ? event.metaKey : event.ctrlKey
       if (mod && event.altKey && event.code === "KeyB") {
         event.preventDefault()
-        toggleRightRef.current()
+        keysRef.current.toggleRight()
+      } else if (event.key === "Escape" && keysRef.current.rightMaximized) {
+        event.preventDefault()
+        setRightMaximized(false)
       }
     }
     window.addEventListener("keydown", onKeyDown)
@@ -132,15 +136,11 @@ export function DesktopApp({
       <AppShell
         className="desktop-shell relative h-svh w-full min-w-[350px]"
         data-right-maximized={rightMaximized || undefined}
-        onKeyDownCapture={(event) => {
-          if (event.key === "Escape" && rightMaximized) {
-            event.preventDefault()
-            setRightMaximized(false)
-          }
-        }}
         maximizeShortcut={false}
       >
-        <div className="desktop-ambient" aria-hidden="true" />
+        <div className="desktop-ambient" aria-hidden="true">
+          <span className="desktop-grain" />
+        </div>
         {/* One titlebar for every surface, outside the split view, so no
             toggle moves when a sidebar opens or closes. */}
         <WindowTitlebar

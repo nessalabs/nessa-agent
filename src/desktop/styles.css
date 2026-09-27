@@ -23,6 +23,10 @@ body {
   --desktop-gutter: 8px;
   --desktop-radius: 14px;
   --desktop-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  /* Dusk: a violet light above, a low ember below. One place to retune. */
+  --desktop-light-high: oklch(0.52 0.15 295 / 42%);
+  --desktop-light-low: oklch(0.6 0.13 35 / 22%);
+  --desktop-light-edge: oklch(0.8 0.1 295);
 }
 
 /* Native macOS window buttons remain host-owned and sit inside the sidebar. */
@@ -45,6 +49,16 @@ body {
   pointer-events: none;
 }
 
+/* A fine grain over the light, so its falloff dithers instead of banding. */
+.desktop-grain {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  opacity: 0.06;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
 .desktop-ambient::before,
 .desktop-ambient::after {
   content: "";
@@ -60,13 +74,13 @@ body {
 .desktop-ambient::before {
   left: 10%;
   top: -35%;
-  background: radial-gradient(closest-side, oklch(0.42 0.09 265 / 45%), transparent);
+  background: radial-gradient(closest-side, var(--desktop-light-high), transparent);
 }
 
 .desktop-ambient::after {
   right: -20%;
   bottom: -45%;
-  background: radial-gradient(closest-side, oklch(0.45 0.08 200 / 30%), transparent);
+  background: radial-gradient(closest-side, var(--desktop-light-low), transparent);
   animation-duration: 36s;
   animation-direction: alternate-reverse;
 }
@@ -243,7 +257,7 @@ body {
 .desktop-composer:focus-within {
   box-shadow:
     inset 0 0 0 1px color-mix(in oklab, var(--foreground) 18%, transparent),
-    0 0 0 4px color-mix(in oklab, oklch(0.62 0.12 265) 18%, transparent),
+    0 0 0 4px color-mix(in oklab, var(--desktop-light-edge) 16%, transparent),
     0 20px 50px -24px rgb(0 0 0 / 70%);
 }
 
@@ -319,15 +333,20 @@ body {
 }
 
 /* Keep the hit target intact; this separate layer lights only near the pointer. */
+/*
+ * The glow runs along the straight part of a pane's rim only: it stops where
+ * the rounded corners begin, so it never draws a square edge past a curve.
+ */
 .desktop-sidebar-edge[data-slot="split-view-separator"]::before {
+  --edge-inset: calc(var(--desktop-gutter) + var(--desktop-radius));
   content: "";
   position: absolute;
-  inset: 0 -3px;
+  inset: var(--edge-inset) -3px;
   pointer-events: none;
   background: radial-gradient(
-    ellipse 5px 110px at 50% var(--edge-glow-y, 50%),
-    rgb(200 200 200 / 50%) 0%,
-    rgb(180 180 180 / 18%) 40%,
+    ellipse 3px 90px at 50% calc(var(--edge-glow-y, 50%) - var(--edge-inset)),
+    color-mix(in oklab, var(--desktop-light-edge) 55%, transparent) 0%,
+    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
     transparent 100%
   );
   opacity: 0;
@@ -351,7 +370,8 @@ body {
 
   .desktop-ambient::before,
   .desktop-ambient::after,
-  .desktop-home-inner {
+  .desktop-home-inner,
+  [data-right-maximized] .desktop-glass[data-slot="sidebar"] {
     animation: none;
   }
 }
@@ -369,4 +389,30 @@ body {
   position: fixed;
   inset: 0;
   z-index: 15;
+}
+
+/*
+ * Maximized, the panel becomes the window rather than a card floating in it:
+ * no inset, no rim, no corners, so nothing frames the titlebar controls. The
+ * history arrows have nothing to do here and step aside.
+ */
+[data-right-maximized] #right .desktop-glass[data-slot="sidebar"] {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: color-mix(in oklab, var(--sidebar) 45%, transparent);
+  animation: desktop-fill 300ms var(--desktop-ease);
+}
+
+@keyframes desktop-fill {
+  from {
+    opacity: 0.4;
+    transform: scale(0.985);
+  }
+}
+
+[data-right-maximized] [data-slot="app-shell-titlebar-navigation"] {
+  visibility: hidden;
 }
