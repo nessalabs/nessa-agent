@@ -305,7 +305,7 @@ body {
   top: 0;
   bottom: 0;
   left: 0;
-  width: 250px; /* LEFT_DEFAULT_WIDTH */
+  /* Its width is set inline to the sidebar's own, so a handoff lines up. */
   pointer-events: none;
   visibility: hidden;
   transform: translate3d(calc(-100% - 48px), 0, 0);
@@ -313,6 +313,11 @@ body {
   transition:
     transform 220ms cubic-bezier(0.4, 0, 1, 1),
     visibility 0s linear 220ms;
+}
+
+/* After a handoff the docked sidebar is already in place: vanish, don't slide. */
+.desktop-peek[data-handed-off] {
+  transition: none;
 }
 
 .desktop-peek[data-shown] {

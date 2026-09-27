@@ -77,7 +77,11 @@ centred on the same row.
 With the left sidebar collapsed, resting the pointer on the window's left
 edge slides it in over the content, Dock-style, until the pointer has been away
 for a moment; Esc dismisses it. It slides fully solid and never fades: opacity
-on its container would switch off the glass's blur mid-transition. The rules are a pure state machine in
+on its container would switch off the glass's blur mid-transition. Docking the
+sidebar (Cmd/Ctrl+B or the toggle) while it is revealed is a handoff: the
+revealed copy, sized to the sidebar's own width, stays in place while the
+docked sidebar opens beneath it, then goes without animating, so the sidebar
+appears simply to stay while the content slides over. The rules are a pure state machine in
 `model/edge-peek.ts`, with its state table and tests; `adapters/use-edge-peek.ts`
 runs it against the clock. The panel's maximize control lives inside the right
 pane, beside the titlebar's panel toggle, so it cannot sit outside a narrow pane.

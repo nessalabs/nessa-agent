@@ -69,6 +69,7 @@ export function DesktopApp({
     rightMinWidth,
     snapWorkspace,
     workspaceCollapsed,
+    leftWidth,
   } = useSidebarLayout()
   const [theme, setTheme] = useThemePreference()
   const [rightMaximized, setRightMaximized] = useState(false)
@@ -82,7 +83,7 @@ export function DesktopApp({
   }, [layout, settled])
   const rightShown = rightOpen || rightMaximized
   const leftDocked = leftOpen && !rightMaximized
-  const peek = useEdgePeek(!leftOpen && !rightMaximized)
+  const peek = useEdgePeek(!leftOpen && !rightMaximized, leftDocked)
 
   const toggleRight = () => {
     setRightMaximized(false)
@@ -201,8 +202,11 @@ export function DesktopApp({
         <div
           className="desktop-peek"
           data-shown={peek.shown || undefined}
-          inert={!peek.shown}
-          aria-hidden={!peek.shown}
+          data-handed-off={peek.handedOff || undefined}
+          style={{ width: leftWidth }}
+          // While handing off, the docked sidebar beneath is the real one.
+          inert={!peek.shown || peek.handingOff}
+          aria-hidden={!peek.shown || peek.handingOff}
           onPointerEnter={peek.enter}
           onPointerLeave={peek.leave}
         >

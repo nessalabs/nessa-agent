@@ -189,6 +189,11 @@ export function useSidebarLayout() {
     changeLayout,
     setOpen,
     leftOpen: layout?.left !== 0,
+    /** The left sidebar's width when open: its current width, or what it reopens at. */
+    leftWidth:
+      layout && layout.left > 0
+        ? (layout.left / 100) * availableWidth.current
+        : expanded.current.left,
     rightOpen: layout?.right !== 0,
   }
 }
