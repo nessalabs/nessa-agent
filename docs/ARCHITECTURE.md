@@ -159,6 +159,33 @@ A fine grain over the light keeps its falloff from banding.
 Inline sidebars explicitly use z-index 0 at all widths so the design system
 mobile sidebar stacking level cannot cover the fixed header controls.
 
+Settings (`ui/settings/`, a prototype) opens over the whole window from "nessa
+Studio" in the sidebar footer or Cmd/Ctrl+,, and Esc does not close it. A short
+glass sidebar lists categories — General, Appearance, Workspace, Models,
+Connections, Privacy & Permissions, About — and each category's page has a strip
+of tabs under its title (arrow keys, Home and End move between them; the tab last
+shown in each category is remembered while Settings is open). Every category,
+tab and setting, with its name, description and search keywords, is one typed
+table in `model/settings-catalogue.ts`, which also owns search: a match jumps
+to its category and tab and briefly lights the row. The sidebar toggle sits
+where the app's does and Cmd/Ctrl+B toggles it; with it hidden, a back chevron
+beside the toggle returns to the app, as "nessa Agent" at the sidebar's foot
+does. Theme, icons, tint and layout are real; the other settings are local
+state that shows their shape, and actions not wired up are shown disabled.
+
+The window's icons are semantic roles resolved through a provider
+(`ui/icons/`): `DesktopIconProvider`, `useDesktopIcon` and `<DesktopIcon
+name=… />` mirror the planned `NessaIconProvider` contract in nessa_ui's
+design-system contract, with its resolution order (the component's own icon,
+the nearest provider, its parents, the built-in family) and nested partial
+overrides, and are to be replaced by it once nessa_ui ships it. A family owns
+artwork and stroke; the consumer owns size, colour and accessibility. Two
+families draw every role: Nessa's own 20-unit drawings (the built-in default)
+and Lucide. Settings › Appearance chooses between them;
+`adapters/icon-family-preference.ts` remembers the choice the way the theme
+preference does, and `main.tsx` mounts the root provider. Brand marks (agents,
+providers) are not icon roles.
+
 `ui/desktop-app.tsx` composes two existing Sidebar components inside the design
 system's SplitView panels. SplitView owns pointer capture, accessible separators,
 keyboard resizing, and collapse snapping. The left sidebar opens at 250px,

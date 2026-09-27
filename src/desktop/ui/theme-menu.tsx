@@ -1,4 +1,3 @@
-import { Palette } from "lucide-react"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -7,6 +6,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@nessa-ui/react/dropdown-menu"
+import { DesktopIcon } from "./icons"
 import { desktopThemes, parseDesktopTheme, type DesktopThemeId } from "../model/theme"
 
 /** Lists the themes, each with a swatch painted from its own colours. */
@@ -26,10 +26,10 @@ export function ThemeMenu({
           aria-label="Appearance"
           title="Appearance"
         >
-          <Palette aria-hidden="true" />
+          <DesktopIcon name="appearance" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="end" className="min-w-40">
+      <DropdownMenuContent side="top" align="end" className="desktop-popover min-w-40">
         <DropdownMenuLabel>Light</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={theme}

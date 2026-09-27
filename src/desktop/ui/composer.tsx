@@ -1,5 +1,4 @@
 import { useLayoutEffect, useRef, useState } from "react"
-import { ArrowUp, Brain, ChevronDown, Folder, FolderPlus, Zap } from "lucide-react"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,6 +25,7 @@ import {
   type ComposerModel,
 } from "../model/composer-options"
 import { nextPageMode } from "../model/page-mode"
+import { DesktopIcon } from "./icons"
 
 /**
  * A provider's mark on a small glass tile, like an app icon: the agent's own
@@ -85,10 +85,21 @@ function draftLines(textarea: HTMLTextAreaElement): number {
 export function Composer({
   page,
   onPageChange,
+  initialModel,
+  onModelChange,
+  onSend,
+  placeholder = "What would you like to work on?",
 }: {
   /** Whether the composer shows as a full writing page rather than a card. */
   page: boolean
   onPageChange: (page: boolean) => void
+  /** The catalog model to start on, as `provider` and `modelId`; the default otherwise. */
+  initialModel?: { provider: string; modelId: string }
+  /** Told when the person picks another model. */
+  onModelChange?: (model: { provider: string; modelId: string }) => void
+  /** Sends a turn; without it nothing can be sent and the send button says so. */
+  onSend?: (text: string) => void
+  placeholder?: string
 }) {
   const [draft, setDraft] = useState("")
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -101,7 +112,20 @@ export function Composer({
     const next = nextPageMode(page, draftLines(textarea))
     if (next !== page) onPageChange(next)
   }, [draft, page, onPageChange])
-  const [model, setModel] = useState(() => defaultComposerModel(composerModels))
+  const send = () => {
+    const text = draft.trim()
+    if (!onSend || text === "") return
+    onSend(text)
+    setDraft("")
+  }
+  const [model, setModel] = useState(
+    () =>
+      composerModels.find(
+        (candidate) =>
+          candidate.provider === initialModel?.provider &&
+          candidate.modelId === initialModel.modelId,
+      ) ?? defaultComposerModel(composerModels),
+  )
   const [thinking, setThinking] = useState(defaultThinkingLevel)
   const [access, setAccess] = useState<ComposerAccessModeValue>("ask-approval")
 
@@ -111,7 +135,13 @@ export function Composer({
   const fastOn = fast && fastModeFor(model)
 
   return (
-    <form className="desktop-composer" onSubmit={(event) => event.preventDefault()}>
+    <form
+      className="desktop-composer"
+      onSubmit={(event) => {
+        event.preventDefault()
+        send()
+      }}
+    >
       <div
         className="desktop-composer-body"
         // The page's empty space below the text still places the caret.
@@ -124,10 +154,17 @@ export function Composer({
         <textarea
           ref={textareaRef}
           aria-label="Message"
-          placeholder="What would you like to work on?"
+          placeholder={placeholder}
           rows={2}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            // Return sends; Shift-Return, and Return while composing an IME word, do not.
+            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing)
+              return
+            event.preventDefault()
+            send()
+          }}
         />
       </div>
       <div className="desktop-composer-row">
@@ -138,7 +175,9 @@ export function Composer({
             value={model && { providerId: model.provider, modelId: model.modelId }}
             onValueChange={({ providerId, modelId }) => {
               const next = findComposerModel(providerId, modelId)
-              if (next) setModel(next)
+              if (!next) return
+              setModel(next)
+              onModelChange?.({ provider: next.provider, modelId: next.modelId })
             }}
             side="top"
             align="start"
@@ -168,8 +207,10 @@ export function Composer({
             }
             icon={
               <>
-                <Brain aria-hidden="true" />
-                {fastOn ? <Zap aria-hidden="true" className="desktop-fast-mark" /> : null}
+                <DesktopIcon name="thinking" />
+                {fastOn ? (
+                  <DesktopIcon name="fast" className="desktop-fast-mark" />
+                ) : null}
               </>
             }
           />
@@ -177,10 +218,10 @@ export function Composer({
             type="submit"
             className="desktop-send"
             aria-label="Send"
-            title="Chat isn’t connected yet"
-            disabled
+            title={onSend ? "Send" : "Chat isn’t connected yet"}
+            disabled={!onSend || draft.trim() === ""}
           >
-            <ArrowUp aria-hidden="true" />
+            <DesktopIcon name="send" />
           </button>
         </div>
       </div>
@@ -201,9 +242,9 @@ function ProjectMenu() {
           className="desktop-chip desktop-chip-project"
           aria-label="Project: none chosen"
         >
-          <Folder aria-hidden="true" />
+          <DesktopIcon name="folder" />
           <span>Project</span>
-          <ChevronDown aria-hidden="true" className="desktop-chip-chevron" />
+          <DesktopIcon name="chevronDown" className="desktop-chip-chevron" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -214,7 +255,7 @@ function ProjectMenu() {
       >
         <DropdownMenuLabel className="desktop-menu-label">Project</DropdownMenuLabel>
         <DropdownMenuItem disabled title="Needs the native folder picker">
-          <FolderPlus aria-hidden="true" />
+          <DesktopIcon name="folderAdd" />
           Open folder…
         </DropdownMenuItem>
       </DropdownMenuContent>

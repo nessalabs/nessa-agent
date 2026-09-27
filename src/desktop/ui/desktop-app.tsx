@@ -1,13 +1,4 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react"
-import {
-  ArrowLeft,
-  ArrowRight,
-  Home as HomeIcon,
-  Maximize2,
-  Minimize2,
-  PanelLeft,
-  PanelRight,
-} from "lucide-react"
 import { AppShell, AppShellBody, AppShellMain } from "@nessa-ui/react/app-shell"
 import { Button } from "@nessa-ui/react/button"
 import {
@@ -36,6 +27,8 @@ import {
 } from "../adapters/sidebar-sizing"
 import { useSidebarLayout } from "../adapters/use-sidebar-layout"
 import { Home } from "./home"
+import { DesktopIcon } from "./icons"
+import { openSettings } from "./settings/settings-view"
 import { ThemeMenu } from "./theme-menu"
 import { WindowTitlebar } from "./window-titlebar"
 
@@ -124,7 +117,7 @@ export function DesktopApp({
       aria-controls="right"
       onClick={() => setRightMaximized((value) => !value)}
     >
-      {rightMaximized ? <Minimize2 /> : <Maximize2 />}
+      <DesktopIcon name={rightMaximized ? "restore" : "maximize"} />
     </Button>
   )
 
@@ -139,7 +132,7 @@ export function DesktopApp({
       title={rightLabel}
       onClick={toggleRight}
     >
-      <PanelRight />
+      <DesktopIcon name="panelRight" />
     </Button>
   )
 
@@ -180,12 +173,16 @@ export function DesktopApp({
               aria-expanded={leftDocked}
               aria-controls="left"
             >
-              <PanelLeft />
+              <DesktopIcon name="sidebar" />
             </SidebarTrigger>
           }
           navigation={{
-            back: { label: "Go back", icon: <ArrowLeft />, disabled: true },
-            forward: { label: "Go forward", icon: <ArrowRight />, disabled: true },
+            back: { label: "Go back", icon: <DesktopIcon name="back" />, disabled: true },
+            forward: {
+              label: "Go forward",
+              icon: <DesktopIcon name="forward" />,
+              disabled: true,
+            },
           }}
           trailing={
             // Maximize sits beside the panel toggle, over the pane's corner.
@@ -334,7 +331,7 @@ function NavigationBody({
     <>
       <SidebarContent>
         <SidebarMenu>
-          <SidebarMenuItem asChild icon={<HomeIcon />} isActive>
+          <SidebarMenuItem asChild icon={<DesktopIcon name="home" />} isActive>
             <a href="#home" aria-current="page">
               Home
             </a>
@@ -349,10 +346,15 @@ function NavigationBody({
       </SidebarContent>
       <SidebarFooter className="desktop-identity">
         <span aria-hidden="true" className="desktop-mark" />
-        <span className="min-w-0 flex-1 truncate">
+        <button
+          type="button"
+          className="spike-identity-button min-w-0 flex-1 truncate"
+          onClick={openSettings}
+          title="Settings (⌘,)"
+        >
           <span className="font-semibold">nessa</span>
           <span className="font-normal text-muted-foreground">Studio</span>
-        </span>
+        </button>
         <ThemeMenu theme={theme} onThemeChange={onThemeChange} />
       </SidebarFooter>
     </>

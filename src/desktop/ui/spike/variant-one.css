@@ -1,0 +1,1864 @@
+/*
+ * Spike: workspace variation 1, "Mail/Finder three-column". Every class is
+ * prefixed spike-one- so it never collides with the other variation. Colours
+ * come from the app's own tokens and theme lights; the motion, radius and
+ * type scales below match variation 2's, so the two read as one product.
+ */
+
+.spike-one {
+  /* Motion: three durations and two curves, used everywhere below. */
+  --spike-one-fast: 120ms;
+  --spike-one-base: 180ms;
+  --spike-one-slow: 240ms;
+  --spike-one-out: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Settles with a barely-there overshoot, for things that appear. */
+  --spike-one-settle: cubic-bezier(0.3, 1.15, 0.5, 1);
+
+  /* One radius scale; icon buttons use the window's concentric control radius. */
+  --spike-one-r-xs: 6px;
+  --spike-one-r-sm: 8px;
+  --spike-one-r-md: 12px;
+  --spike-one-r-lg: 16px;
+  --spike-one-r-xl: 20px;
+
+  /* One type scale. */
+  --spike-one-caption: 11px;
+  --spike-one-footnote: 12px;
+  --spike-one-body: 13px;
+  --spike-one-read: 14.5px;
+  --spike-one-title: 17px;
+  --spike-one-display: 20px;
+
+  /* Ink and fills, from loud to quiet. */
+  --spike-one-ink: var(--foreground);
+  --spike-one-ink-2: color-mix(in oklab, var(--foreground) 82%, transparent);
+  --spike-one-muted: color-mix(in oklab, var(--foreground) 56%, transparent);
+  --spike-one-faint: color-mix(in oklab, var(--foreground) 40%, transparent);
+  --spike-one-hover: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --spike-one-selected: color-mix(in oklab, var(--foreground) 8.5%, transparent);
+  --spike-one-press: color-mix(in oklab, var(--foreground) 11%, transparent);
+  --spike-one-rim: color-mix(in oklab, var(--foreground) 7%, transparent);
+  --spike-one-focus: color-mix(in oklab, var(--desktop-light-edge) 42%, transparent);
+  --spike-one-needs: oklch(0.82 0.13 78);
+  --spike-one-run: var(--desktop-light-edge);
+  --spike-one-mono: "Geist Mono Variable", ui-monospace, monospace;
+
+  /* A lightly underdamped spring (ζ 0.8), overshooting by about 1.5%. */
+  --spike-one-spring: linear(
+    0,
+    0.0261,
+    0.0914,
+    0.1801,
+    0.2803,
+    0.3834,
+    0.4834,
+    0.5763,
+    0.66,
+    0.7333,
+    0.796,
+    0.8485,
+    0.8914,
+    0.9258,
+    0.9527,
+    0.9732,
+    0.9884,
+    0.9993,
+    1.0067,
+    1.0114,
+    1.014,
+    1.0151,
+    1.0151,
+    1.0143,
+    1.0131,
+    1.0117,
+    1.0101,
+    1.0086,
+    1.0071,
+    1.0057,
+    1.0046,
+    1.0035,
+    1
+  );
+
+  /* Column widths, as the stylesheet resolves them against the window. */
+  --spike-one-sidebar-w: min(var(--spike-one-sidebar), max(200px, 20vw));
+  --spike-one-list-w: min(var(--spike-one-list), max(260px, 26vw));
+  /* Clears the window controls and both titlebar buttons. */
+  --spike-one-controls-end: calc(
+    var(--desktop-window-controls-inset) + 2 * var(--desktop-control-size) + 2px
+  );
+  position: relative;
+  display: flex;
+  height: 100svh;
+  min-width: 480px;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--background);
+  color: var(--spike-one-ink);
+  font-family: var(--nessa-font-sans);
+  font-size: var(--spike-one-body);
+  letter-spacing: -0.006em;
+  -webkit-font-smoothing: antialiased;
+}
+
+html:not(.dark) .spike-one {
+  --spike-one-needs: oklch(0.62 0.15 60);
+  --spike-one-run: color-mix(
+    in oklab,
+    var(--desktop-light-edge) 45%,
+    oklch(0.45 0.08 250)
+  );
+  --spike-one-rim: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --spike-one-focus: color-mix(in oklab, var(--foreground) 24%, transparent);
+}
+
+.spike-one button {
+  font: inherit;
+  color: inherit;
+  cursor: default;
+}
+
+/* A quiet inset ring for the keyboard; text fields show their caret instead. */
+.spike-one :focus-visible {
+  outline: none;
+}
+
+.spike-one :focus-visible:not(textarea, input, .spike-one-edge),
+.spike-one .desktop-chip:focus-visible {
+  outline: 1.5px solid var(--spike-one-focus);
+  outline-offset: -1.5px;
+}
+
+.spike-one-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Chrome is read, not selected: a double-click on a label selects nothing. */
+.spike-one-titlebar,
+.spike-one-sidebar,
+.spike-one-list-head,
+.spike-one-group-label,
+.spike-one-pane-head,
+.spike-one-tool,
+.spike-one-working,
+.spike-one-approval-head,
+.spike-one-approval-actions,
+.spike-one-drop {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---------------------------------------------------------------- */
+/* Titlebar and icon buttons                                          */
+/* ---------------------------------------------------------------- */
+
+.spike-one-titlebar {
+  position: absolute;
+  z-index: 20;
+  top: 0;
+  left: 0;
+  display: flex;
+  height: var(--desktop-titlebar-height);
+  align-items: center;
+  gap: 2px;
+  padding-left: var(--desktop-window-controls-inset);
+  padding-right: 8px;
+}
+
+.spike-one-icon-button {
+  display: inline-flex;
+  width: var(--desktop-control-size);
+  height: var(--desktop-control-size);
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--desktop-control-radius);
+  background: transparent;
+  color: var(--spike-one-muted) !important;
+  transition:
+    color var(--spike-one-fast) ease,
+    background-color var(--spike-one-fast) ease;
+}
+
+.spike-one-icon-button:hover,
+.spike-one-icon-button[data-state="open"] {
+  color: var(--foreground) !important;
+  background: var(--spike-one-hover);
+}
+
+.spike-one-icon-button:active {
+  background: var(--spike-one-press);
+}
+
+.spike-one-icon-button svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
+}
+
+/* ---------------------------------------------------------------- */
+/* Column 1: the source list                                          */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Folding a column is transform only. A closed column leaves the flow at
+ * once, so the panes and the list take their new places in one layout and
+ * travel there by transform (see the FLIP in the component); the column
+ * itself slides out on its own, fully opaque so its glass keeps its blur,
+ * and hides once it is off-screen.
+ */
+.spike-one-sidebar {
+  position: relative;
+  user-select: none;
+  display: flex;
+  width: var(--spike-one-sidebar-w);
+  flex: none;
+  flex-direction: column;
+  margin: var(--desktop-gutter) 0 var(--desktop-gutter) var(--desktop-gutter);
+  padding-top: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
+  border-radius: var(--desktop-radius);
+  background: var(--desktop-pane-fill);
+  backdrop-filter: blur(28px) saturate(170%);
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  box-shadow:
+    inset 0 0 0 1px var(--spike-one-rim),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 6%, transparent),
+    0 12px 40px -12px rgb(0 0 0 / 55%);
+  overflow: hidden;
+  transition:
+    transform var(--spike-one-slow) var(--spike-one-out),
+    visibility 0s;
+}
+
+html:not(.dark) .spike-one-sidebar {
+  box-shadow:
+    inset 0 0 0 1px var(--spike-one-rim),
+    inset 0 1px 0 rgb(255 255 255 / 60%),
+    0 12px 32px -16px rgb(0 0 0 / 22%);
+}
+
+.spike-one[data-sidebar="closed"] .spike-one-sidebar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(calc(-100% - 2 * var(--desktop-gutter) - 48px));
+  visibility: hidden;
+  transition:
+    transform var(--spike-one-slow) var(--spike-one-out),
+    visibility 0s linear var(--spike-one-slow);
+}
+
+.spike-one[data-sidebar="closed"] .spike-one-sidebar-edge {
+  display: none;
+}
+
+.spike-one-sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  min-width: 200px;
+  overflow-y: auto;
+  padding: 4px 8px 12px;
+  scrollbar-width: none;
+}
+
+.spike-one-sidebar ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.spike-one-smart {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+}
+
+.spike-one-row {
+  display: flex;
+  width: 100%;
+  height: 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--spike-one-r-sm);
+  background: transparent;
+  color: var(--spike-one-ink-2) !important;
+  font-size: var(--spike-one-body);
+  text-align: left;
+  transition:
+    background-color var(--spike-one-fast) ease,
+    color var(--spike-one-fast) ease;
+}
+
+.spike-one-row:hover {
+  background: var(--spike-one-hover);
+}
+
+.spike-one-row:active {
+  background: var(--spike-one-press);
+}
+
+.spike-one-row[data-active] {
+  background: var(--spike-one-selected);
+  color: var(--foreground) !important;
+}
+
+/*
+ * Unread and active are both 600: a weight change between them would
+ * reflow the label, and the ellipsis with it, as a channel is chosen.
+ */
+.spike-one-row[data-active],
+.spike-one-row[data-unread] {
+  color: var(--foreground) !important;
+  font-weight: 600;
+}
+
+.spike-one-row-icon {
+  display: inline-flex;
+  width: 16px;
+  flex: none;
+  justify-content: center;
+  color: var(--spike-one-faint);
+}
+
+.spike-one-row[data-active] .spike-one-row-icon {
+  color: var(--spike-one-muted);
+}
+
+.spike-one-row-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.75;
+}
+
+.spike-one-row > .spike-one-truncate {
+  flex: 1;
+}
+
+.spike-one-badge {
+  display: inline-flex;
+  min-width: 18px;
+  height: 16px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--spike-one-selected);
+  color: var(--spike-one-muted);
+  font-size: var(--spike-one-caption);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.spike-one-badge[data-tone="needs"] {
+  background: color-mix(in oklab, var(--spike-one-needs) 18%, transparent);
+  color: var(--spike-one-needs);
+}
+
+/* Sections: the label is the toggle; its chevron and add button wait for hover. */
+.spike-one-section {
+  margin-top: 16px;
+}
+
+.spike-one-section-head {
+  display: flex;
+  height: 28px;
+  align-items: center;
+}
+
+.spike-one-section-toggle {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--spike-one-r-sm);
+  background: transparent;
+  color: var(--spike-one-faint) !important;
+  font-size: var(--spike-one-caption) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em;
+  text-align: left;
+  transition: color var(--spike-one-fast) ease;
+}
+
+.spike-one-section-toggle:hover {
+  color: var(--spike-one-muted) !important;
+}
+
+.spike-one-section-toggle > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spike-one-section-toggle svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  stroke-width: 2.25;
+  opacity: 0;
+  transform: rotate(90deg);
+  transition:
+    opacity var(--spike-one-fast) ease,
+    transform var(--spike-one-base) var(--spike-one-out);
+}
+
+.spike-one-section[data-collapsed] .spike-one-section-toggle svg {
+  transform: rotate(0deg);
+}
+
+.spike-one-section-add {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--spike-one-r-sm);
+  background: transparent;
+  color: var(--spike-one-faint) !important;
+  opacity: 0;
+  transition:
+    opacity var(--spike-one-fast) ease,
+    background-color var(--spike-one-fast) ease,
+    color var(--spike-one-fast) ease;
+}
+
+.spike-one-section-add:hover {
+  background: var(--spike-one-hover);
+  color: var(--foreground) !important;
+}
+
+.spike-one-section-add svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.75;
+}
+
+.spike-one-section-head:hover svg,
+.spike-one-section-head:focus-within svg,
+.spike-one-section-head:hover .spike-one-section-add,
+.spike-one-section-head:focus-within .spike-one-section-add,
+.spike-one-section[data-collapsed] .spike-one-section-toggle svg {
+  opacity: 1;
+}
+
+/*
+ * A section folds at once, its chevron turning; animating its height would
+ * lay out the whole sidebar on every frame.
+ */
+.spike-one-section-body > ul {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  padding-top: 2px;
+}
+
+.spike-one-section[data-collapsed] .spike-one-section-body {
+  display: none;
+}
+
+/* The active channel's pinned sessions hang beneath it on a faint thread. */
+.spike-one-pinned {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  margin: 2px 0 4px !important;
+  padding-left: 16px !important;
+  animation: spike-one-rise var(--spike-one-base) var(--spike-one-out) both;
+}
+
+.spike-one-pinned::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 15px;
+  width: 1px;
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+.spike-one-pinned-row {
+  display: flex;
+  width: 100%;
+  height: 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--spike-one-r-sm);
+  background: transparent;
+  color: var(--spike-one-muted) !important;
+  font-size: var(--spike-one-footnote);
+  text-align: left;
+  transition:
+    background-color var(--spike-one-fast) ease,
+    color var(--spike-one-fast) ease,
+    opacity var(--spike-one-base) ease;
+}
+
+.spike-one-pinned-row > .spike-one-truncate {
+  flex: 1;
+}
+
+.spike-one-pinned-row:hover {
+  background: var(--spike-one-hover);
+  color: var(--foreground) !important;
+}
+
+.spike-one-pinned-row:active {
+  background: var(--spike-one-press);
+}
+
+.spike-one-pinned-row[data-open] {
+  color: var(--foreground) !important;
+}
+
+.spike-one-identity {
+  display: flex;
+  min-width: 200px;
+  height: 48px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 16px;
+  font-size: var(--spike-one-body);
+  letter-spacing: -0.01em;
+}
+
+/* "nessa Studio" opens Settings, which puts "‹ nessa Agent" in this same place. */
+.spike-one-identity-name {
+  flex: 1;
+  height: 28px;
+  line-height: 28px;
+  border-radius: var(--spike-one-r-sm);
+}
+
+.spike-one-identity b {
+  font-weight: 600;
+}
+
+.spike-one-identity b + span {
+  color: var(--spike-one-muted);
+  transition: color var(--spike-one-fast) ease;
+}
+
+/* ---------------------------------------------------------------- */
+/* Resize edges                                                       */
+/* ---------------------------------------------------------------- */
+
+.spike-one-sidebar-edge,
+.spike-one-list-edge {
+  display: flex;
+  flex: none;
+}
+
+.spike-one-edge {
+  position: relative;
+  width: var(--desktop-gutter);
+  flex: none;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+/* A glow runs along the edge near the pointer, in the theme's edge light. */
+.spike-one-edge::before {
+  content: "";
+  position: absolute;
+  inset: calc(var(--desktop-gutter) + var(--desktop-radius)) 2.5px;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 3px 90px at 50%
+      calc(var(--spike-one-glow, 50%) - var(--desktop-gutter) - var(--desktop-radius)),
+    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
+    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
+    transparent 100%
+  );
+  opacity: 0;
+  transition: opacity var(--spike-one-fast) ease;
+}
+
+.spike-one-edge:hover::before,
+.spike-one-edge:focus-visible::before,
+.spike-one-edge:active::before {
+  opacity: 1;
+}
+
+html[data-spike-one-resizing],
+html[data-spike-one-resizing] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* ---------------------------------------------------------------- */
+/* Column 2: the session list                                         */
+/* ---------------------------------------------------------------- */
+
+/*
+ * The list folds like the sidebar: out of the flow at once, held at its full
+ * width where it stood, sliding a little and fading, so nothing rewraps.
+ */
+.spike-one-list {
+  position: relative;
+  display: flex;
+  width: var(--spike-one-list-w);
+  flex: none;
+  min-height: 0;
+  overflow: hidden;
+  transition:
+    opacity var(--spike-one-base) ease,
+    transform var(--spike-one-slow) var(--spike-one-out),
+    visibility 0s;
+}
+
+.spike-one-list-inner {
+  display: flex;
+  width: var(--spike-one-list-w);
+  flex: none;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.spike-one[data-list="closed"] .spike-one-list {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  opacity: 0;
+  transform: translateX(-16px);
+  visibility: hidden;
+  transition:
+    opacity var(--spike-one-base) ease,
+    transform var(--spike-one-slow) var(--spike-one-out),
+    visibility 0s linear var(--spike-one-slow);
+}
+
+.spike-one[data-sidebar="open"][data-list="closed"] .spike-one-list {
+  left: calc(2 * var(--desktop-gutter) + var(--spike-one-sidebar-w));
+}
+
+.spike-one-list-edge {
+  width: var(--desktop-gutter);
+}
+
+.spike-one[data-list="closed"] .spike-one-list-edge {
+  display: none;
+}
+
+.spike-one-list-head {
+  display: flex;
+  height: var(--desktop-titlebar-height);
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 var(--desktop-control-inset) 0 12px;
+}
+
+/* With the sidebar hidden, the list's title steps past the window controls. */
+.spike-one[data-sidebar="closed"] .spike-one-list-head {
+  padding-left: calc(var(--spike-one-controls-end) + 8px);
+}
+
+.spike-one-list-title {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.spike-one-list-title svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--spike-one-faint);
+  stroke-width: 2;
+}
+
+.spike-one-list-title h2 {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--spike-one-title);
+  font-weight: 650;
+  letter-spacing: -0.022em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spike-one-search {
+  display: flex;
+  height: 32px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin: 0 4px 8px;
+  padding: 0 8px 0 12px;
+  border-radius: var(--spike-one-r-md);
+  background: var(--spike-one-hover);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 4%, transparent);
+  color: var(--spike-one-faint);
+  transition: background-color var(--spike-one-fast) ease;
+}
+
+.spike-one-search:hover,
+.spike-one-search:focus-within {
+  background: var(--spike-one-selected);
+}
+
+.spike-one-search svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  stroke-width: 1.75;
+}
+
+.spike-one-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--spike-one-body);
+}
+
+.spike-one-search input::placeholder {
+  color: var(--spike-one-faint);
+}
+
+.spike-one-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.spike-one-search kbd {
+  flex: none;
+  font-family: inherit;
+  font-size: var(--spike-one-caption);
+  color: var(--spike-one-faint);
+}
+
+.spike-one-list-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0 72px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 14%, transparent) transparent;
+  mask-image: linear-gradient(to bottom, transparent, black 8px);
+}
+
+.spike-one-group-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 12px 0 4px;
+  padding: 0 12px;
+  color: var(--spike-one-faint);
+  font-size: var(--spike-one-caption);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.spike-one-group-label span {
+  font-weight: 500;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+[role="group"]:first-child > .spike-one-group-label {
+  margin-top: 4px;
+}
+
+.spike-one-session {
+  position: relative;
+  user-select: none;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 12px;
+  margin: 0 4px 2px;
+  padding: 12px 12px 12px 8px;
+  border-radius: var(--spike-one-r-md);
+  transition: background-color var(--spike-one-fast) ease;
+}
+
+.spike-one-session:hover {
+  background: var(--spike-one-hover);
+}
+
+.spike-one-session:active {
+  background: var(--spike-one-press);
+}
+
+.spike-one-session[data-selected] {
+  background: var(--spike-one-selected);
+}
+
+/* The row stays in place, quieter, while its pill is carried. */
+.spike-one-session[data-dragging],
+.spike-one-pinned-row[data-dragging] {
+  opacity: 0.45;
+  transition: opacity var(--spike-one-base) ease;
+}
+
+/* Hairlines between rows, hidden around the selected pill as in Mail. */
+.spike-one-session + .spike-one-session::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 42px;
+  right: 12px;
+  height: 1px;
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+  transition: opacity var(--spike-one-fast) ease;
+}
+
+.spike-one-session[data-selected]::before,
+.spike-one-session[data-selected] + .spike-one-session::before,
+.spike-one-session:hover::before,
+.spike-one-session:hover + .spike-one-session::before,
+.spike-one-session:focus-visible::before,
+.spike-one-session:focus-visible + .spike-one-session::before {
+  opacity: 0;
+}
+
+.spike-one-session > .spike-one-agent {
+  margin-top: 1px;
+}
+
+.spike-one-session-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 4px;
+}
+
+.spike-one-session-top {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.spike-one-session-title {
+  flex: 1;
+  font-size: var(--spike-one-body);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.spike-one-session[data-unread] .spike-one-session-title {
+  font-weight: 650;
+}
+
+.spike-one-unread {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--spike-one-run);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--spike-one-run) 60%, transparent);
+}
+
+.spike-one-session time {
+  flex: none;
+  color: var(--spike-one-faint);
+  font-size: var(--spike-one-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.spike-one-session-preview {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--spike-one-muted);
+  font-size: var(--spike-one-footnote);
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.spike-one-session-meta {
+  color: var(--spike-one-muted);
+  font-size: var(--spike-one-caption);
+}
+
+.spike-one-empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  margin: 32px 12px;
+  color: var(--spike-one-faint);
+  font-size: var(--spike-one-footnote);
+  text-align: center;
+}
+
+.spike-one-empty p {
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------- */
+/* Agent tiles and status dots                                         */
+/* ---------------------------------------------------------------- */
+
+.spike-one-agent {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 28%;
+  background: linear-gradient(
+    160deg,
+    color-mix(in oklab, var(--foreground) 12%, transparent),
+    color-mix(in oklab, var(--foreground) 4%, transparent)
+  );
+  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 16%, transparent);
+  color: var(--foreground);
+  font-weight: 650;
+  line-height: 1;
+}
+
+.spike-one-agent svg {
+  width: 64% !important;
+  height: 64% !important;
+}
+
+.spike-one-agent > span {
+  font-size: inherit !important;
+  line-height: 1;
+}
+
+/*
+ * A monogram, for an agent with no shipped mark: set small and light, like a
+ * letter embossed on the tile, so it sits beside the drawn marks rather than
+ * shouting over them.
+ */
+.spike-one-monogram {
+  color: color-mix(in oklab, var(--foreground) 62%, transparent);
+  font-size: 0.86em !important;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  transform: translateY(0.02em);
+}
+
+/* Every status glyph sits in the same 10px box, so rows line up whatever the state. */
+.spike-one-dot {
+  position: relative;
+  display: inline-flex;
+  width: 10px;
+  height: 10px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.spike-one-dot[data-status="needs"]::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--spike-one-needs);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--spike-one-needs) 55%, transparent);
+}
+
+/*
+ * Running is a small arc turning on a faint track, like a progress spinner:
+ * unmistakably activity, where a lit dot or bare ring could read as a caret.
+ * The arc turns on its own layer, around a whole-pixel centre, so it spins
+ * without wobbling.
+ */
+.spike-one-dot[data-status="running"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0 12%,
+    color-mix(in oklab, var(--spike-one-run) 30%, transparent) 30%,
+    var(--spike-one-run) 72%,
+    transparent 72%
+  );
+  -webkit-mask: radial-gradient(circle, transparent 3px, black 3.5px);
+  mask: radial-gradient(circle, transparent 3px, black 3.5px);
+  will-change: transform;
+  animation: spike-one-turn 1.1s linear infinite;
+}
+
+.spike-one-dot[data-status="running"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--spike-one-run) 16%, transparent);
+}
+
+@keyframes spike-one-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Column 3: split panes                                              */
+/* ---------------------------------------------------------------- */
+
+.spike-one-chat {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  padding: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter) 0;
+}
+
+/* With both columns hidden, the panes keep a gutter from the window's edge. */
+.spike-one[data-sidebar="closed"][data-list="closed"] .spike-one-chat {
+  padding-left: var(--desktop-gutter);
+}
+
+/*
+ * Panes are placed from the layout's fractions rather than nested flex boxes,
+ * so one keeps its identity when it moves. A change of layout lands at once;
+ * each pane then travels from where it was by transform alone (see flyPane
+ * in the component), so no frame of the motion reflows text.
+ */
+.spike-one-panes {
+  --g: var(--desktop-gutter);
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.spike-one-pane {
+  position: absolute;
+  left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g));
+  width: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cw));
+  top: calc((100% - (var(--rn) - 1) * var(--g)) * var(--ry) + var(--ri) * var(--g));
+  height: calc((100% - (var(--rn) - 1) * var(--g)) * var(--rh));
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  container: spike-one-pane / size;
+  border-radius: var(--desktop-radius);
+  background: var(--desktop-pane-fill);
+  box-shadow:
+    inset 0 0 0 1px var(--spike-one-rim),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent),
+    0 12px 40px -18px rgb(0 0 0 / 45%);
+  overflow: hidden;
+  animation: spike-one-pane-in var(--spike-one-slow) var(--spike-one-out) both;
+  transition:
+    box-shadow var(--spike-one-base) ease,
+    opacity var(--spike-one-base) ease,
+    background-color var(--spike-one-base) ease;
+}
+
+/*
+ * While panes travel, nothing inside them repaints expensively: the glass
+ * blur and deep shadows wait until they have landed.
+ */
+.spike-one-panes[data-flipping] .spike-one-pane,
+.spike-one-panes[data-flipping] .spike-one-pane > * {
+  will-change: transform;
+}
+
+.spike-one-panes[data-flipping] .spike-one-pane {
+  box-shadow: inset 0 0 0 1px var(--spike-one-rim);
+  transition: none;
+}
+
+.spike-one-panes[data-flipping] .desktop-composer {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+
+.spike-one-panes[data-flipping] > .spike-one-edge {
+  visibility: hidden;
+}
+
+html:not(.dark) .spike-one-pane {
+  background: color-mix(in oklab, var(--background) 60%, white);
+  box-shadow:
+    inset 0 0 0 1px var(--spike-one-rim),
+    0 12px 32px -18px rgb(0 0 0 / 18%);
+}
+
+/* With two or more panes, the one you're in carries a slightly brighter rim. */
+.spike-one-pane[data-focused] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 13%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 8%, transparent),
+    0 16px 48px -18px rgb(0 0 0 / 55%);
+}
+
+html:not(.dark) .spike-one-pane[data-focused] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 16%, transparent),
+    0 16px 40px -18px rgb(0 0 0 / 24%);
+}
+
+.spike-one-panes[data-multi] .spike-one-pane:not([data-focused]) {
+  background: color-mix(in oklab, var(--foreground) 2%, transparent);
+}
+
+html:not(.dark) .spike-one-panes[data-multi] .spike-one-pane:not([data-focused]) {
+  background: color-mix(in oklab, var(--background) 30%, white);
+}
+
+/* The pane being carried waits, quieter, where it was. */
+.spike-one-pane[data-lifted] {
+  opacity: 0.5;
+}
+
+@keyframes spike-one-pane-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+@keyframes spike-one-rise {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* Separators between panes: the gutter itself, lit near the pointer. */
+.spike-one-panes > .spike-one-edge {
+  position: absolute;
+}
+
+.spike-one-panes > .spike-one-edge[data-axis="x"] {
+  top: 0;
+  bottom: 0;
+  left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g));
+}
+
+.spike-one-panes > .spike-one-edge[data-axis="y"] {
+  left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g));
+  width: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cw));
+  top: calc((100% - (var(--rn) - 1) * var(--g)) * var(--ry) + var(--ri) * var(--g));
+  height: var(--g);
+  cursor: row-resize;
+}
+
+.spike-one-panes > .spike-one-edge[data-axis="x"]::before {
+  inset: var(--desktop-radius) 2.5px;
+  background: radial-gradient(
+    ellipse 3px 90px at 50% calc(var(--spike-one-glow, 50%) - var(--desktop-radius)),
+    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
+    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
+    transparent 100%
+  );
+}
+
+.spike-one-panes > .spike-one-edge[data-axis="y"]::before {
+  inset: 2.5px var(--desktop-radius);
+  background: radial-gradient(
+    ellipse 90px 3px at calc(var(--spike-one-glow, 50%) - var(--desktop-radius)) 50%,
+    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
+    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
+    transparent 100%
+  );
+}
+
+html[data-spike-one-resizing="y"],
+html[data-spike-one-resizing="y"] * {
+  cursor: row-resize !important;
+}
+
+/*
+ * The pane's title bar: the session's mark, title and state, and nothing
+ * else until the pointer is in the pane. At the top of a conversation the
+ * heading below already says all of it, so the bar stays empty until the
+ * heading scrolls away. Its row lines up with the window controls.
+ */
+.spike-one-pane-head {
+  display: flex;
+  height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: var(--desktop-control-inset) var(--desktop-control-inset)
+    var(--desktop-control-inset) 12px;
+  transition: opacity var(--spike-one-base) ease;
+}
+
+.spike-one-panes[data-multi] .spike-one-pane-head {
+  cursor: grab;
+}
+
+.spike-one-panes[data-multi] .spike-one-pane-head:active {
+  cursor: grabbing;
+}
+
+.spike-one[data-sidebar="closed"][data-list="closed"]
+  .spike-one-pane[data-corner]
+  .spike-one-pane-head {
+  padding-left: calc(var(--spike-one-controls-end) + 4px);
+}
+
+.spike-one-panes[data-multi] .spike-one-pane:not([data-focused]) .spike-one-pane-head {
+  opacity: 0.72;
+}
+
+.spike-one-pane-name {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  transform: translateY(3px);
+  transition:
+    opacity var(--spike-one-base) ease,
+    transform var(--spike-one-slow) var(--spike-one-out);
+}
+
+.spike-one-pane-name[data-shown] {
+  opacity: 1;
+  transform: none;
+}
+
+.spike-one-pane-title {
+  flex: 0 1 auto;
+  font-size: var(--spike-one-body);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.spike-one-spacer {
+  flex: 1;
+  align-self: stretch;
+}
+
+/*
+ * Pane actions wait for the pointer or keyboard focus, as in Safari's tabs.
+ * They only fade: their room is always kept, so revealing them moves nothing.
+ */
+.spike-one-pane-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  opacity: 0;
+  transition: opacity var(--spike-one-fast) ease;
+}
+
+.spike-one-pane:hover .spike-one-pane-actions,
+.spike-one-pane-head:focus-within .spike-one-pane-actions,
+.spike-one-pane-actions:has([data-state="open"]) {
+  opacity: 1;
+}
+
+.spike-one-panes[data-moving] .spike-one-pane-actions {
+  opacity: 0;
+}
+
+.spike-one-pane-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/*
+ * Drop targets: a half for a split, the middle to open in place. The fill
+ * keeps one size and changes zone by transform, and the label travels to the
+ * middle of the zone it names, so the target never lays itself out again.
+ */
+.spike-one-drop {
+  position: absolute;
+  z-index: 5;
+  inset: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  animation: spike-one-fade-in var(--spike-one-fast) ease both;
+}
+
+.spike-one-drop::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: calc(var(--desktop-radius) - 4px);
+  /* Denser than a tint, standing in for the blur a moving target can't afford. */
+  background: color-mix(in oklab, var(--desktop-light-edge) 14%, transparent);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklab, var(--desktop-light-edge) 38%, transparent);
+  transition: transform var(--spike-one-base) var(--spike-one-out);
+}
+
+.spike-one-drop[data-zone="left"]::before {
+  transform-origin: left center;
+  transform: scaleX(0.5);
+}
+
+.spike-one-drop[data-zone="right"]::before {
+  transform-origin: right center;
+  transform: scaleX(0.5);
+}
+
+.spike-one-drop[data-zone="top"]::before {
+  transform-origin: center top;
+  transform: scaleY(0.5);
+}
+
+.spike-one-drop[data-zone="bottom"]::before {
+  transform-origin: center bottom;
+  transform: scaleY(0.5);
+}
+
+.spike-one-drop span {
+  position: relative;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--background) 82%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent),
+    0 6px 20px -8px rgb(0 0 0 / 40%);
+  backdrop-filter: blur(12px);
+  font-size: var(--spike-one-footnote);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: transform var(--spike-one-base) var(--spike-one-out);
+}
+
+.spike-one-drop[data-zone="left"] span {
+  transform: translateX(-25cqw);
+}
+
+.spike-one-drop[data-zone="right"] span {
+  transform: translateX(25cqw);
+}
+
+.spike-one-drop[data-zone="top"] span {
+  transform: translateY(-25cqh);
+}
+
+.spike-one-drop[data-zone="bottom"] span {
+  transform: translateY(25cqh);
+}
+
+@keyframes spike-one-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The drag's own image: one compact pill with the session's mark and title. */
+.spike-one-ghost {
+  position: fixed;
+  z-index: -1;
+  top: -200px;
+  left: 0;
+  display: inline-flex;
+  max-width: 280px;
+  height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--background) 86%, var(--foreground));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 12%, transparent);
+  color: var(--foreground);
+  font-family: var(--nessa-font-sans);
+  font-size: var(--spike-one-footnote);
+  font-weight: 550;
+  letter-spacing: -0.006em;
+  white-space: nowrap;
+  -webkit-font-smoothing: antialiased;
+}
+
+.spike-one-ghost > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spike-one-ghost > .spike-one-agent {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+/* A new session's home fills the pane: scene, greeting and composer. */
+.spike-one-home {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.spike-one-home > .desktop-home {
+  flex: 1;
+  min-height: 0;
+  padding-top: 0;
+}
+
+/*
+ * Sending the first message: the home lifts away over the conversation that
+ * replaces it. Its composer is already travelling as the conversation's own.
+ */
+.spike-one-home[data-leaving] {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  pointer-events: none;
+}
+
+.spike-one-home[data-leaving] .desktop-composer {
+  visibility: hidden;
+}
+
+.spike-one-home[data-leaving] .desktop-header,
+.spike-one-home[data-leaving] .desktop-greeting {
+  animation: spike-one-lift-away var(--spike-one-slow) var(--spike-one-out) both;
+}
+
+.spike-one-home[data-leaving] .desktop-greeting {
+  animation-delay: 30ms;
+}
+
+@keyframes spike-one-lift-away {
+  to {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.985);
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Conversation                                                       */
+/* ---------------------------------------------------------------- */
+
+.spike-one-conversation {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/*
+ * The transcript fades out under the pane's bar and into the composer, and
+ * keeps its scrollbar's room whether or not it needs one, so text never
+ * shifts sideways as a reply grows past the fold.
+ */
+.spike-one-transcript {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 14%, transparent) transparent;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black 24px,
+    black calc(100% - 16px),
+    transparent
+  );
+}
+
+.spike-one-transcript-inner {
+  display: flex;
+  max-width: 720px;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0 auto;
+  padding: 8px 24px 24px;
+  animation: spike-one-fade-in var(--spike-one-base) ease both;
+}
+
+.spike-one-conversation[data-arriving] .spike-one-transcript-inner {
+  animation: none;
+}
+
+/*
+ * The conversation's heading: its title, and where and when it began, set
+ * lightly at the top of the transcript and scrolling away with it.
+ */
+.spike-one-heading {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 32px 0 16px;
+}
+
+.spike-one-heading h2 {
+  max-width: 100%;
+  margin: 0;
+  font-size: var(--spike-one-display);
+  font-weight: 620;
+  letter-spacing: -0.024em;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+  background: linear-gradient(
+    100deg,
+    color-mix(in oklab, var(--foreground) 92%, transparent) 0%,
+    color-mix(in oklab, var(--foreground) 58%, transparent) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.spike-one-heading h2::selection {
+  color: var(--foreground);
+  -webkit-text-fill-color: var(--foreground);
+}
+
+.spike-one-heading p {
+  max-width: 100%;
+  margin: 0;
+  user-select: none;
+  overflow-wrap: anywhere;
+  color: var(--spike-one-faint);
+  font-size: var(--spike-one-footnote);
+  letter-spacing: -0.003em;
+}
+
+/*
+ * A short, stacked pane keeps its room for the conversation: the heading
+ * tightens, and the composer starts a line shorter.
+ */
+@container spike-one-pane (max-height: 520px) {
+  .spike-one-heading {
+    gap: 4px;
+    padding: 8px 0 4px;
+  }
+
+  .spike-one-heading h2 {
+    font-size: var(--spike-one-title);
+  }
+
+  .spike-one-composer {
+    padding-bottom: 8px;
+  }
+
+  .spike-one-composer .desktop-composer {
+    padding-top: 12px;
+  }
+
+  .spike-one-composer .desktop-composer textarea {
+    min-height: 24px;
+  }
+}
+
+/* A narrow pane reads closer to its edges. */
+@container spike-one-pane (max-width: 420px) {
+  .spike-one-transcript-inner {
+    padding-inline: 16px;
+  }
+
+  .spike-one-composer {
+    padding-inline: 8px;
+  }
+}
+
+/* Turns that arrive while the conversation is open rise into place. */
+.spike-one-transcript-inner > [data-new] {
+  animation: spike-one-turn-in var(--spike-one-slow) var(--spike-one-out) both;
+}
+
+@keyframes spike-one-turn-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.spike-one-user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.spike-one-user p {
+  max-width: min(78%, 560px);
+  margin: 0;
+  padding: 8px 16px;
+  border-radius: 18px 18px 6px 18px;
+  background: var(--spike-one-selected);
+  font-size: var(--spike-one-read);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.spike-one-agent-turn {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.spike-one-agent-turn > .spike-one-agent {
+  margin-top: 3px;
+}
+
+.spike-one-agent-turn p {
+  margin: 0;
+  color: color-mix(in oklab, var(--foreground) 90%, transparent);
+  font-size: var(--spike-one-read);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.spike-one-tool {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin: -8px 0 -8px 32px;
+  color: var(--spike-one-faint);
+  font-size: var(--spike-one-footnote);
+}
+
+.spike-one-tool svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  stroke-width: 1.75;
+}
+
+.spike-one-tool code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--spike-one-muted);
+  font-family: var(--spike-one-mono);
+  font-size: var(--spike-one-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spike-one-approval {
+  display: grid;
+  gap: 8px;
+  margin-left: 32px;
+  padding: 12px;
+  border-radius: var(--spike-one-r-lg);
+  background: color-mix(in oklab, var(--spike-one-needs) 6%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--spike-one-needs) 22%, transparent);
+}
+
+.spike-one-approval-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--spike-one-needs);
+  font-size: var(--spike-one-footnote);
+  font-weight: 600;
+}
+
+.spike-one-approval-head svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  stroke-width: 1.75;
+}
+
+.spike-one-approval code {
+  padding: 8px 12px;
+  border-radius: var(--spike-one-r-sm);
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+  font-family: var(--spike-one-mono);
+  font-size: var(--spike-one-footnote);
+  overflow-wrap: anywhere;
+}
+
+.spike-one-approval p {
+  margin: 0;
+  color: var(--spike-one-muted);
+  font-size: var(--spike-one-footnote);
+}
+
+.spike-one-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.spike-one-button {
+  height: 28px;
+  flex: none;
+  white-space: nowrap;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--spike-one-selected);
+  font-size: var(--spike-one-footnote) !important;
+  font-weight: 500 !important;
+  transition:
+    background-color var(--spike-one-fast) ease,
+    transform var(--spike-one-fast) ease;
+}
+
+.spike-one-button:hover {
+  background: color-mix(in oklab, var(--foreground) 13%, transparent);
+}
+
+.spike-one-button[data-primary] {
+  background: var(--foreground);
+  color: var(--background) !important;
+}
+
+.spike-one-button[data-primary]:hover {
+  background: color-mix(in oklab, var(--foreground) 86%, var(--background));
+}
+
+.spike-one-button:active {
+  transform: scale(0.97);
+}
+
+/* Set like a turn, on the reply's own grid, so the reply replaces it in place. */
+.spike-one-working {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  color: var(--spike-one-muted);
+  font-size: var(--spike-one-body);
+  animation: spike-one-turn-in var(--spike-one-slow) var(--spike-one-out) 120ms both;
+}
+
+.spike-one-working > span:not(.spike-one-agent) {
+  justify-self: start;
+  background: linear-gradient(
+    90deg,
+    var(--spike-one-faint) 0%,
+    var(--foreground) 50%,
+    var(--spike-one-faint) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: spike-one-shimmer 2.4s linear infinite;
+}
+
+@keyframes spike-one-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* The composer sits at the foot of the pane, a little tighter than on home. */
+.spike-one-composer {
+  width: 100%;
+  max-width: 752px;
+  flex: none;
+  margin: 0 auto;
+  padding: 0 16px 16px;
+}
+
+.spike-one-composer .desktop-composer {
+  padding: 16px 12px 8px 16px;
+  border-radius: var(--spike-one-r-xl);
+}
+
+.spike-one-composer .desktop-composer textarea {
+  min-height: 44px;
+  font-size: var(--spike-one-read);
+}
+
+.spike-one-composer .desktop-composer-row {
+  margin-left: -8px;
+}
+
+/*
+ * In a narrow composer the choices become their icons: the model shows as
+ * its provider's mark, and the chevrons go. Each keeps its accessible name,
+ * and its menu still says everything.
+ */
+@container (max-width: 420px) {
+  .spike-one-pane .desktop-chip-model > span:not([aria-hidden]),
+  .spike-one-pane .desktop-chip > .desktop-chip-chevron,
+  .spike-one-pane .desktop-chip-model > svg:last-child {
+    display: none;
+  }
+
+  .spike-one-pane .desktop-chip {
+    padding: 0 8px;
+  }
+}
+
+/* A pane you are not in keeps its composer's choices, dimmed until you return. */
+.spike-one-composer .desktop-composer-row {
+  transition: opacity var(--spike-one-base) ease;
+}
+
+.spike-one-panes[data-multi] .spike-one-pane:not([data-focused]) .desktop-composer-row {
+  opacity: 0.55;
+}
+
+.spike-one-menu {
+  min-width: 220px;
+}
+
+/* A highlighted item takes a soft fill only: no ring, by pointer or by key. */
+.spike-one-menu [data-slot$="menu-item"],
+.spike-one-menu [data-slot$="menu-item"]:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.spike-one-menu [data-slot$="menu-item"][data-highlighted] {
+  background: var(
+    --spike-one-selected,
+    color-mix(in oklab, var(--foreground) 8%, transparent)
+  );
+  color: var(--foreground);
+}
+
+/* Menu items are words alone; the shortcut sits quietly at the right edge. */
+.spike-one-menu .spike-one-shortcut {
+  padding-left: 24px;
+  color: color-mix(in oklab, var(--foreground) 40%, transparent);
+  font-family: var(--nessa-font-sans);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Reduced motion: nothing travels. Colours and fades still change, but at
+ * once; the spinner holds still as an arc.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .spike-one {
+    --spike-one-base: 0ms;
+    --spike-one-slow: 0ms;
+  }
+
+  .spike-one-pane,
+  .spike-one-pinned,
+  .spike-one-transcript-inner,
+  .spike-one-transcript-inner > [data-new],
+  .spike-one-drop,
+  .spike-one-working,
+  .spike-one-working > span,
+  .spike-one-home[data-leaving] .desktop-header,
+  .spike-one-home[data-leaving] .desktop-greeting,
+  .spike-one-dot[data-status="running"]::before {
+    animation: none;
+  }
+}

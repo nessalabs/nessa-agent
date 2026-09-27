@@ -1,7 +1,8 @@
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { host } from "../host"
-import { DesktopApp } from "./ui/desktop-app"
+import { DesktopIconFamilyProvider } from "./ui/icons"
+import { VariantSwitcher } from "./ui/spike/variant-switcher"
 
 import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
@@ -12,6 +13,9 @@ if (!container) throw new Error("missing #root")
 
 createRoot(container).render(
   <React.StrictMode>
-    <DesktopApp hostKind={host.kind} browserSurface={host.kind === "browser"} />
+    {/* Every icon in the window resolves through the family chosen in Settings. */}
+    <DesktopIconFamilyProvider>
+      <VariantSwitcher hostKind={host.kind} browserSurface={host.kind === "browser"} />
+    </DesktopIconFamilyProvider>
   </React.StrictMode>,
 )

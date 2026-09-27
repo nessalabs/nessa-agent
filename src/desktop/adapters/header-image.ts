@@ -99,6 +99,7 @@ export function useHeaderFraming() {
   return [framing, keep] as const
 }
 
+const tintEvent = "nessa:tint-from-picture"
 const tintKey = "nessa.desktop.tint-from-picture"
 
 /**
@@ -106,13 +107,21 @@ const tintKey = "nessa.desktop.tint-from-picture"
  * this webview's storage; on unless the person turned it off.
  */
 export function useTintFromPicture() {
-  const [tint, setTint] = useState(() => {
+  const read = () => {
     try {
       return window.localStorage.getItem(tintKey) !== "off"
     } catch {
       return true
     }
-  })
+  }
+  const [tint, setTint] = useState(read)
+
+  // Settings and the header menu both change it; each follows the other.
+  useEffect(() => {
+    const follow = () => setTint(read())
+    window.addEventListener(tintEvent, follow)
+    return () => window.removeEventListener(tintEvent, follow)
+  }, [])
 
   const choose = useCallback((next: boolean) => {
     setTint(next)
@@ -120,7 +129,9 @@ export function useTintFromPicture() {
       window.localStorage.setItem(tintKey, next ? "on" : "off")
     } catch {
       // Not remembered; the choice still applies to this window.
+      return
     }
+    window.dispatchEvent(new Event(tintEvent))
   }, [])
 
   return [tint, choose] as const

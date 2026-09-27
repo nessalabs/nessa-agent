@@ -1,0 +1,908 @@
+/*
+ * Prototype Settings surface. It takes the whole window, on the same ambient
+ * light, with its own glass sidebar where the app's sidebar sits, so moving
+ * between the two feels like the sidebar changing its contents. It carries
+ * the window's `data-surface` and `data-host`, so the titlebar geometry in
+ * `styles.css` places its sidebar toggle exactly where the app's is.
+ */
+.settings {
+  --settings-muted: color-mix(in oklab, var(--foreground) 56%, transparent);
+  --settings-faint: color-mix(in oklab, var(--foreground) 40%, transparent);
+  --settings-hairline: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --settings-fill: color-mix(in oklab, var(--foreground) 3.5%, transparent);
+  --settings-hover: color-mix(in oklab, var(--foreground) 5.5%, transparent);
+  --settings-selected: color-mix(in oklab, var(--foreground) 8.5%, transparent);
+  /*
+   * The theme's edge colour, leaned toward the text colour so it holds on a
+   * light window too, where Graphite's near-white edge would vanish.
+   */
+  --settings-accent: color-mix(
+    in oklab,
+    var(--desktop-light-edge),
+    var(--foreground) 35%
+  );
+  --settings-sidebar-w: 248px;
+  --settings-column: 640px;
+  /* The app's ⌘B timing, so both sidebars move alike. */
+  --settings-slide: 240ms;
+  --settings-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --settings-fade: 160ms;
+
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  isolation: isolate;
+  display: flex;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+  outline: none;
+  animation: settings-in 180ms var(--settings-out);
+}
+
+@keyframes settings-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Keyboard focus is a faint halo in the theme's edge colour, never a hard ring. */
+.settings :focus-visible {
+  outline: none;
+}
+
+.settings button:focus-visible {
+  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--settings-accent) 45%, transparent);
+}
+
+/* Controls that already rest on a fill take focus as that fill, with no ring at all. */
+.settings .settings-titlebar-button:focus-visible,
+.settings .settings-nav-item:focus-visible,
+.settings .settings-tab:focus-visible {
+  box-shadow: none;
+  background: var(--settings-hover);
+}
+
+/* ——— Titlebar ——— */
+
+.settings-titlebar {
+  position: absolute;
+  z-index: 10;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: flex;
+  height: var(--desktop-titlebar-height);
+  align-items: center;
+  gap: 2px;
+  padding-left: var(--desktop-window-controls-inset);
+  pointer-events: none;
+}
+
+.settings-titlebar > * {
+  pointer-events: auto;
+}
+
+/* The app's corner control, to the pixel: same size, radius, icon, and tone. */
+.settings-titlebar-button {
+  display: inline-flex;
+  width: var(--desktop-control-size);
+  height: var(--desktop-control-size);
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--desktop-control-radius);
+  background: transparent;
+  color: var(--settings-muted);
+  cursor: default;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    opacity var(--settings-slide) var(--settings-out),
+    transform var(--settings-slide) var(--settings-out);
+}
+
+.settings-titlebar-button:hover {
+  color: var(--foreground);
+  background: var(--settings-hover);
+}
+
+.settings-titlebar-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* The way back while the sidebar, and its "nessa Agent", is away. */
+.settings[data-sidebar="open"] .settings-titlebar-back {
+  opacity: 0;
+  transform: translateX(-4px);
+  pointer-events: none;
+}
+
+/* ——— Sidebar ——— */
+
+.settings-sidebar {
+  position: relative;
+  width: var(--settings-sidebar-w);
+  flex: none;
+  transition: width var(--settings-slide) var(--settings-out);
+}
+
+.settings[data-sidebar="closed"] .settings-sidebar {
+  width: 0;
+}
+
+.settings-glass {
+  position: absolute;
+  top: var(--desktop-gutter);
+  bottom: var(--desktop-gutter);
+  left: var(--desktop-gutter);
+  display: flex;
+  width: calc(var(--settings-sidebar-w) - var(--desktop-gutter));
+  flex-direction: column;
+  padding-top: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
+  border-radius: var(--desktop-radius);
+  background: var(--desktop-pane-fill);
+  backdrop-filter: blur(28px) saturate(170%);
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 6%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent),
+    0 12px 40px -14px rgb(0 0 0 / 50%);
+  overflow: hidden;
+  transition:
+    transform var(--settings-slide) var(--settings-out),
+    opacity var(--settings-slide) var(--settings-out);
+}
+
+html:not(.dark) .settings-glass {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 7%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 60%),
+    0 12px 32px -16px rgb(0 0 0 / 20%);
+}
+
+.settings[data-sidebar="closed"] .settings-glass {
+  opacity: 0;
+  transform: translateX(calc(-1 * var(--settings-sidebar-w)));
+}
+
+/* A soft filled capsule; focus deepens the fill a little and adds no ring. */
+.settings-search {
+  display: flex;
+  height: 30px;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 10px 10px;
+  padding: 0 6px 0 10px;
+  border-radius: 999px;
+  background: var(--settings-fill);
+  color: var(--settings-faint);
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.settings-search:focus-within {
+  background: color-mix(in oklab, var(--foreground) 6.5%, transparent);
+  color: var(--settings-muted);
+}
+
+.settings-search > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.settings-search input {
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  outline: none;
+  box-shadow: none;
+  appearance: none;
+}
+
+.settings-search input::placeholder {
+  color: var(--settings-faint);
+}
+
+.settings-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.settings-search-clear {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--foreground) 12%, transparent);
+  color: var(--background);
+  cursor: default;
+}
+
+.settings-search-clear svg {
+  width: 11px;
+  height: 11px;
+}
+
+.settings-nav {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0 10px 8px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  list-style: none;
+}
+
+.settings-nav-item {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: color-mix(in oklab, var(--foreground) 78%, transparent);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+  user-select: none;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.settings-nav-item:hover {
+  background: var(--settings-hover);
+}
+
+/* The selected row carries the only fill; its icon lifts to full tone with it. */
+.settings-nav-item[aria-current] {
+  background: var(--settings-selected);
+  color: var(--foreground);
+}
+
+.settings-nav-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--settings-muted);
+  transition: color 120ms ease;
+}
+
+.settings-nav-item[aria-current] .settings-nav-icon {
+  color: var(--foreground);
+}
+
+.settings-result {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.settings-result-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.settings-result-text > span,
+.settings-result-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-result-text small {
+  color: var(--settings-faint);
+  font-size: 11.5px;
+}
+
+.settings-nav-empty {
+  padding: 8px 10px;
+  color: var(--settings-faint);
+}
+
+/* Sits exactly where "nessa Studio" sits in the app's sidebar. */
+.settings-identity {
+  display: flex;
+  height: 48px;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 16px 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+  user-select: none;
+}
+
+.settings-identity-back {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--settings-muted);
+  transition:
+    transform 160ms var(--settings-out),
+    color 120ms ease;
+}
+
+.settings-identity:hover .settings-identity-back {
+  transform: translateX(-2px);
+  color: var(--foreground);
+}
+
+.settings-identity-name strong {
+  font-weight: 600;
+}
+
+.settings-identity-name span {
+  margin-left: 3px;
+  color: var(--settings-muted);
+}
+
+.settings-identity:focus-visible {
+  box-shadow: none;
+}
+
+.settings-identity:focus-visible .settings-identity-name {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ——— Content ——— */
+
+.settings-content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+/* Page title and tabs over a column shared with the page, so both line up. */
+.settings-column {
+  width: min(var(--settings-column), 100% - 64px);
+  margin: 0 auto;
+}
+
+.settings-head {
+  flex: none;
+  padding-top: calc(var(--desktop-titlebar-height) + 12px);
+}
+
+.settings-head h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+  letter-spacing: -0.02em;
+  animation: settings-fade var(--settings-fade) ease-out;
+}
+
+.settings-tabs {
+  position: relative;
+  display: flex;
+  gap: 2px;
+  margin: 14px 0 0 -10px;
+}
+
+/* The pill under the selected tab, placed by measurement; it glides once placed. */
+.settings-tabs::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--settings-tab-w, 0);
+  height: 100%;
+  border-radius: 8px;
+  background: var(--settings-selected);
+  transform: translateX(var(--settings-tab-x, 0));
+}
+
+.settings-tabs[data-placed]::before {
+  transition:
+    transform 180ms var(--settings-out),
+    width 180ms var(--settings-out);
+}
+
+.settings-tab {
+  position: relative;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--settings-muted);
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+  transition: color 120ms ease;
+}
+
+.settings-tab:hover,
+.settings-tab[aria-selected="true"] {
+  color: var(--foreground);
+}
+
+/*
+ * The page scrolls under the fixed title and tabs. Its scrollbar gutter is
+ * reserved on both sides, so a tab tall enough to scroll neither shifts the
+ * column nor pulls it off centre from the title above.
+ */
+.settings-scroll {
+  min-height: 0;
+  flex: 1;
+  padding: 24px 0 56px;
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 16%, transparent) transparent;
+}
+
+.settings-panel {
+  animation: settings-fade var(--settings-fade) ease-out;
+}
+
+@keyframes settings-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.settings-group + .settings-group {
+  margin-top: 28px;
+}
+
+.settings-group h2 {
+  margin: 0 0 8px 14px;
+  color: var(--settings-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.settings-card {
+  border-radius: 12px;
+  background: var(--settings-fill);
+  box-shadow: inset 0 0 0 1px var(--settings-hairline);
+}
+
+.settings-footnote {
+  margin: 8px 14px 0;
+  color: var(--settings-faint);
+  font-size: 12px;
+}
+
+.settings-row {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 12px 9px 14px;
+  border-radius: 12px;
+  transition: background-color 600ms ease;
+}
+
+.settings-row + .settings-row {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  box-shadow: 0 -1px 0 var(--settings-hairline);
+}
+
+.settings-row:has(+ .settings-row) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* Where a search landed: a soft wash in the theme's light that fades away. */
+.settings-row[data-found],
+.settings-group[data-found] .settings-card {
+  animation: settings-found 1600ms ease-out;
+}
+
+@keyframes settings-found {
+  0%,
+  35% {
+    background-color: color-mix(in oklab, var(--settings-accent) 14%, transparent);
+  }
+}
+
+.settings-row-leading {
+  display: flex;
+  flex: none;
+}
+
+.settings-row-text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-row-text small {
+  color: var(--settings-faint);
+  font-size: 12px;
+}
+
+.settings-row-control {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.settings-value {
+  color: var(--settings-muted);
+}
+
+/* ——— Controls ——— */
+
+.settings-switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 14%, transparent);
+  cursor: default;
+  transition: background-color 180ms ease;
+}
+
+.settings-switch span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--foreground);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+  transition:
+    transform 200ms var(--desktop-spring),
+    background-color 180ms ease;
+}
+
+.settings-switch[aria-checked="true"] {
+  background: color-mix(in oklab, var(--settings-accent) 80%, transparent);
+}
+
+.settings-switch[aria-checked="true"] span {
+  transform: translateX(14px);
+  background: var(--background);
+}
+
+.settings-segmented {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--foreground) 5.5%, transparent);
+}
+
+.settings-segmented button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--settings-muted);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.settings-segmented button:hover {
+  color: var(--foreground);
+}
+
+.settings-segmented button[aria-checked="true"] {
+  background: color-mix(in oklab, var(--foreground) 11%, transparent);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 14%);
+}
+
+.settings-button {
+  height: 26px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+  transition: background-color 120ms ease;
+}
+
+.settings-button:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--foreground) 11%, transparent);
+}
+
+.settings-button:disabled {
+  color: var(--settings-faint);
+}
+
+.settings-kbd {
+  color: var(--settings-muted);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+/* A mark on a small glass tile, like an app icon: agents and providers. */
+.settings-tile {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+  color: var(--settings-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-tile svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 16px 24px;
+  color: var(--settings-faint);
+}
+
+.settings-empty > svg {
+  width: 20px;
+  height: 20px;
+}
+
+.settings-empty p {
+  margin: 0 0 4px;
+}
+
+/* ——— Cards picked by sight: themes, icon families, layouts ——— */
+
+.settings-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 14px;
+  padding: 14px;
+}
+
+.settings-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--settings-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: default;
+  transition: color 120ms ease;
+}
+
+.settings-choice[aria-checked="true"] {
+  color: var(--foreground);
+}
+
+/* The card itself carries the halo, not the whole button with its caption. */
+.settings-choice:focus-visible {
+  box-shadow: none;
+}
+
+.settings-choice:focus-visible .settings-choice-art {
+  box-shadow:
+    inset 0 0 0 1px var(--settings-hairline),
+    0 0 0 3px color-mix(in oklab, var(--desktop-light-edge), var(--foreground) 35%);
+}
+
+.settings-choice-art {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px var(--settings-hairline);
+  transition: box-shadow 180ms ease;
+}
+
+/* Chosen: a fine ring in the theme's edge colour and a small check, nothing louder. */
+.settings-choice[aria-checked="true"] .settings-choice-art {
+  /* Written out rather than read from --settings-accent: a theme card's ring is its own theme's edge. */
+  box-shadow: inset 0 0 0 1.5px
+    color-mix(
+      in oklab,
+      color-mix(in oklab, var(--desktop-light-edge), var(--foreground) 35%) 70%,
+      transparent
+    );
+}
+
+.settings-choice-check {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--desktop-light-edge), var(--foreground) 35%);
+  color: var(--background);
+  opacity: 0;
+  transform: scale(0.6);
+  transition:
+    opacity 160ms ease,
+    transform 200ms var(--desktop-spring);
+}
+
+.settings-choice-check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.settings-choice[aria-checked="true"] .settings-choice-check {
+  opacity: 1;
+  transform: none;
+}
+
+.settings-theme-preview {
+  background:
+    radial-gradient(80% 90% at 20% 10%, var(--desktop-light-high), transparent 70%),
+    radial-gradient(80% 90% at 90% 100%, var(--desktop-light-low), transparent 70%),
+    var(--background);
+}
+
+.settings-icon-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: color-mix(in oklab, var(--foreground) 3%, var(--background));
+  color: var(--settings-muted);
+}
+
+.settings-icon-preview > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-sketch {
+  display: flex;
+  gap: 3px;
+  padding: 5px;
+  background: color-mix(in oklab, var(--foreground) 3%, var(--background));
+}
+
+.settings-sketch > span:not(.settings-choice-check) {
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+
+.settings-sketch [data-kind="side"] {
+  width: 22%;
+  background: color-mix(in oklab, var(--foreground) 13%, transparent);
+}
+
+.settings-sketch [data-kind="list"] {
+  width: 26%;
+}
+
+.settings-sketch [data-kind="tree"] {
+  width: 32%;
+  background:
+    repeating-linear-gradient(
+        to bottom,
+        transparent 0 5px,
+        color-mix(in oklab, var(--foreground) 12%, transparent) 5px 7px,
+        transparent 7px 11px
+      )
+      8px 6px / calc(100% - 14px) calc(100% - 12px) no-repeat,
+    color-mix(in oklab, var(--foreground) 13%, transparent);
+}
+
+.settings-sketch [data-kind="panel"] {
+  width: 18%;
+}
+
+.settings-sketch [data-kind="main"] {
+  flex: 1;
+}
+
+.settings-about {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 28px 14px;
+}
+
+.settings-about-mark {
+  width: 14px;
+  height: 14px;
+  border-radius: 3.5px;
+}
+
+.settings-about strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-about span {
+  color: var(--settings-muted);
+  font-size: 15px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings,
+  .settings-head h1,
+  .settings-panel,
+  .settings-row[data-found],
+  .settings-group[data-found] .settings-card {
+    animation: none;
+  }
+
+  .settings-sidebar,
+  .settings-glass,
+  .settings-titlebar-button,
+  .settings-tabs[data-placed]::before,
+  .settings-choice-check {
+    transition: none;
+  }
+}
+
+/* "nessa Studio" in each layout's sidebar footer opens Settings. */
+.spike-identity-button {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.spike-identity-button:hover > :last-child {
+  color: var(--foreground);
+}
