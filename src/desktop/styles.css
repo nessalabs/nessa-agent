@@ -298,7 +298,7 @@ body {
   top: 0;
   bottom: 0;
   left: 0;
-  width: 248px;
+  width: 250px; /* LEFT_DEFAULT_WIDTH */
   pointer-events: none;
   opacity: 0;
   transform: translateX(-16px);

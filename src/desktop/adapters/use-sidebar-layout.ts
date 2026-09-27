@@ -1,4 +1,9 @@
-import { fitSidebarWidths } from "./sidebar-sizing"
+import {
+  fitSidebarWidths,
+  LEFT_DEFAULT_WIDTH,
+  LEFT_MAX_WIDTH,
+  LEFT_MIN_WIDTH,
+} from "./sidebar-sizing"
 import { useCallback, useLayoutEffect, useRef, useState, type PointerEvent } from "react"
 import {
   validatePanelGroupLayout,
@@ -11,7 +16,7 @@ export function useSidebarLayout() {
   const availableWidth = useRef(0)
   const [layout, setLayout] = useState<SplitViewLayout>()
   const resizingSide = useRef<"left" | "right">("left")
-  const expanded = useRef({ left: 200, right: 400 })
+  const expanded = useRef({ left: LEFT_DEFAULT_WIDTH, right: 400 })
 
   const constrain = useCallback((next: SplitViewLayout, width: number) => {
     const percent = (pixels: number) => (pixels / width) * 100
@@ -30,8 +35,8 @@ export function useSidebarLayout() {
       panelConstraints: [
         {
           panelId: "left",
-          minSize: percent(200),
-          maxSize: percent(450),
+          minSize: percent(LEFT_MIN_WIDTH),
+          maxSize: percent(LEFT_MAX_WIDTH),
           collapsible: true,
           collapsedSize: 0,
         },
@@ -69,7 +74,7 @@ export function useSidebarLayout() {
       const previousWidth = availableWidth.current
       availableWidth.current = width
       setLayout((current) => {
-        const left = current ? (current.left / 100) * previousWidth : 200
+        const left = current ? (current.left / 100) * previousWidth : LEFT_DEFAULT_WIDTH
         const right = current ? (current.right / 100) * previousWidth : 400
         return constrain(
           {

@@ -27,6 +27,11 @@ import type { HostKind } from "../../host/features"
 import { useEdgePeek } from "../adapters/use-edge-peek"
 import { useThemePreference } from "../adapters/theme-preference"
 import type { DesktopThemeId } from "../model/theme"
+import {
+  LEFT_DEFAULT_WIDTH,
+  LEFT_MAX_WIDTH,
+  LEFT_MIN_WIDTH,
+} from "../adapters/sidebar-sizing"
 import { useSidebarLayout } from "../adapters/use-sidebar-layout"
 import { Home } from "./home"
 import { ThemeMenu } from "./theme-menu"
@@ -208,9 +213,9 @@ export function DesktopApp({
           >
             <SplitViewPanel
               id="left"
-              minSize="200px"
-              defaultSize="200px"
-              maxSize="450px"
+              minSize={`${LEFT_MIN_WIDTH}px`}
+              defaultSize={`${LEFT_DEFAULT_WIDTH}px`}
+              maxSize={`${LEFT_MAX_WIDTH}px`}
               collapsible
               collapsedSize={0}
               inert={!leftOpen || rightMaximized}

@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest"
 import { fitSidebarWidths } from "./sidebar-sizing"
 
 describe("desktop pixel allocation", () => {
-  it("starts right at 400px and assigns the remainder to the workspace", () => {
-    expect(fitSidebarWidths(1100 - 2)).toEqual({ left: 200, center: 498, right: 400 })
+  it("starts left at 250px, right at 400px, and gives the remainder to the workspace", () => {
+    expect(fitSidebarWidths(1100 - 2)).toEqual({ left: 250, center: 448, right: 400 })
+  })
+  it("narrows the left to its 200px minimum before closing it", () => {
+    expect(fitSidebarWidths(560, 250, 0)).toEqual({ left: 200, center: 360, right: 0 })
+    expect(fitSidebarWidths(549, 250, 0)).toEqual({ left: 0, center: 549, right: 0 })
   })
   it("bounds the left and lets the right consume only workspace surplus", () => {
     expect(fitSidebarWidths(1098, 900, 900)).toEqual({
@@ -18,7 +22,7 @@ describe("desktop pixel allocation", () => {
     })
   })
   it("fits right to the available workspace surplus without collapsing left", () => {
-    expect(fitSidebarWidths(663)).toEqual({ left: 200, center: 350, right: 113 })
+    expect(fitSidebarWidths(663)).toEqual({ left: 250, center: 350, right: 63 })
   })
   it("preserves explicitly collapsed sidebars", () => {
     expect(fitSidebarWidths(1098, 0, 0)).toEqual({ left: 0, center: 1098, right: 0 })
