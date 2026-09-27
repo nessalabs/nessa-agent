@@ -1,0 +1,94 @@
+/* An approval: the one warm thing on the page. */
+.workspace-approval {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--desktop-radius-lg);
+  background:
+    radial-gradient(
+      120% 80% at 0% 0%,
+      color-mix(in oklab, var(--desktop-needs) 10%, transparent),
+      transparent 70%
+    ),
+    color-mix(in oklab, var(--foreground) 3%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--desktop-needs) 22%, transparent),
+    0 18px 44px -26px rgb(0 0 0 / 65%);
+  animation: workspace-message-in var(--desktop-slow) var(--desktop-out) both;
+}
+
+.workspace-approval-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--desktop-ink-2);
+  font-weight: 600;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.workspace-approval-head svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  stroke-width: 1.8;
+  color: var(--desktop-needs);
+}
+
+.workspace-approval-command {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--desktop-radius-sm);
+  background: color-mix(in oklab, var(--background) 55%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent);
+  color: color-mix(in oklab, var(--foreground) 90%, transparent);
+  font-family: var(--nessa-font-mono);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.workspace-approval-command > span {
+  color: var(--desktop-fainter);
+}
+
+.workspace-approval-reason,
+.workspace-approval-failure {
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.5;
+}
+
+.workspace-approval-failure {
+  color: var(--desktop-needs);
+}
+
+/* Deny on its own; the two ways to allow stay together, even when wrapped. */
+.workspace-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.workspace-approval-allow {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.workspace-approval .workspace-button:focus-visible {
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-approval {
+    animation: none;
+  }
+}

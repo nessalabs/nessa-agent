@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react"
-import { ImagePlus, Move, Moon, Paintbrush } from "lucide-react"
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -28,6 +27,7 @@ import {
   type PaletteColor,
 } from "../model/image-palette"
 import { HeaderPicture } from "./header-picture"
+import { DesktopIcon } from "./icons"
 import { NightScene } from "./night-scene"
 
 /** How long a refused file's reason stays on screen. */
@@ -153,7 +153,7 @@ export function HeaderArt() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button type="button" className="desktop-chip desktop-header-customize">
-              <Paintbrush aria-hidden="true" />
+              <DesktopIcon name="customize" />
               <span>Customize</span>
             </button>
           </DropdownMenuTrigger>
@@ -176,16 +176,16 @@ export function HeaderArt() {
               }}
               disabled={!image}
             >
-              <Moon aria-hidden="true" />
+              <DesktopIcon name="nightScene" />
               Night scene
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => input.current?.click()}>
-              <ImagePlus aria-hidden="true" />
+              <DesktopIcon name="chooseImage" />
               Choose image or GIF…
             </DropdownMenuItem>
             {image ? (
               <DropdownMenuItem onSelect={() => setDraft(framing)}>
-                <Move aria-hidden="true" />
+                <DesktopIcon name="adjustImage" />
                 Adjust position…
               </DropdownMenuItem>
             ) : null}

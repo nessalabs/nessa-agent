@@ -15,6 +15,7 @@ import { overlayPlacementViolations } from "./architecture/overlay-placement.mjs
 import { setupGatePlacementViolations } from "./architecture/setup-gate-placement.mjs"
 import { standDownPlacementViolations } from "./architecture/stand-down-placement.mjs"
 import { composerBudgetViolations } from "./architecture/composer-budget.mjs"
+import { wholeWorkspaceViolations } from "./architecture/whole-workspace.mjs"
 import {
   normalizedPath,
   rustBoundaryViolations,
@@ -137,8 +138,9 @@ for (const file of walk(src)) {
   // and `session`, so a feature that grew a `model/` or `application/` later —
   // `panel/` did — got no rules at all and its first React import passed. The
   // layer a file is in is what decides what it may import, whichever feature it
-  // belongs to.
-  const vertical = /^src\/([^/]+)\/(model|application)\//.exec(path)
+  // belongs to — a vertical nested in another, like `desktop/workspace/`,
+  // included: the feature is everything before the first layer folder.
+  const vertical = /^src\/(.+?)\/(model|application)\//.exec(path)
   const feature = vertical?.[1]
   const layer = vertical?.[2]
   const inLayerRules = Boolean(vertical) && !path.endsWith(".test.ts")
@@ -190,6 +192,10 @@ for (const file of walk(src)) {
     if (/redux/i.test(text)) {
       fail(file, `${feature} model/use cases must not import the store`)
     }
+  }
+
+  for (const violation of wholeWorkspaceViolations(path, text)) {
+    fail(file, violation)
   }
 
   if (

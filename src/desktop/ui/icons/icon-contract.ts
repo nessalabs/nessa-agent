@@ -67,6 +67,13 @@ const desktopRoles = [
   "fast",
   "access",
   "enter",
+  // The home header's picture
+  "customize",
+  "nightScene",
+  "chooseImage",
+  "adjustImage",
+  "zoomIn",
+  "zoomOut",
   // What an agent did
   "file",
   "edit",

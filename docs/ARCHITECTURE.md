@@ -49,9 +49,14 @@ The surface uses the design system's dark theme. Back/forward controls are
 disabled because the single-view shell has no navigation history.
 Its drag region and double-click maximize have desktop-scoped capabilities.
 
-`desktop.html` mounts `src/desktop/main.tsx`, which directly composes the design
-system's AppShell frame and Sidebar with a Home link, an empty Recents group,
-and `ui/home.tsx` in the main area: a night scene in text heading one stack
+`desktop.html` mounts `src/desktop/main.tsx`, which builds the window's
+dependencies (`dependencies.ts`) and store (`store.ts`) and renders
+`ui/desktop-window.tsx`: the workspace (below) in the layout chosen in
+Settings, or the classic shell. The classic shell, `ui/desktop-app.tsx`,
+composes the design system's AppShell frame and Sidebar with a Home link, an
+empty Recents group, and `ui/home.tsx` in the main area — the same home a new
+session's pane shows, its composer wired to that session through `Home`'s
+props: a night scene in text heading one stack
 from the top of the workspace with the greeting and composer (`model/night-scene.ts`, a dim and a lit
 layer of one grid, set one over the other by `ui/night-scene.tsx` as
 decoration hidden from assistive technology; its box's height comes from
@@ -159,14 +164,15 @@ A fine grain over the light keeps its falloff from banding.
 Inline sidebars explicitly use z-index 0 at all widths so the design system
 mobile sidebar stacking level cannot cover the fixed header controls.
 
-Settings (`ui/settings/`, a prototype) opens over the whole window from "nessa
+Settings (`settings/`, a prototype) opens over the whole window from "nessa
 Studio" in the sidebar footer or Cmd/Ctrl+,, and Esc does not close it. A short
 glass sidebar lists categories — General, Appearance, Workspace, Models,
 Connections, Privacy & Permissions, About — and each category's page has a strip
 of tabs under its title (arrow keys, Home and End move between them; the tab last
 shown in each category is remembered while Settings is open). Every category,
 tab and setting, with its name, description and search keywords, is one typed
-table in `model/settings-catalogue.ts`, which also owns search: a match jumps
+table in `settings/model/settings-catalogue.ts`, which also owns search, and
+`settings/ui/` renders it generically: a match jumps
 to its category and tab and briefly lights the row. The sidebar toggle sits
 where the app's does and Cmd/Ctrl+B toggles it; with it hidden, a back chevron
 beside the toggle returns to the app, as "nessa Agent" at the sidebar's foot
@@ -183,10 +189,83 @@ artwork and stroke; the consumer owns size, colour and accessibility. Two
 families draw every role: Nessa's own 20-unit drawings (the built-in default)
 and Lucide. Settings › Appearance chooses between them;
 `adapters/icon-family-preference.ts` remembers the choice the way the theme
-preference does, and `main.tsx` mounts the root provider. Brand marks (agents,
+preference does, and `main.tsx` mounts the root provider. The home header's
+Customize menu and picture toolbar draw through it too. The composer's access
+shield is the one icon the window does not resolve: nessa_ui's
+ComposerAccessMode has no icon slot, so `styles.css` still masks Lucide
+outlines over it. Theme, icon family, workspace layout and tint are each a
+`storedPreference` (`adapters/stored-preference.ts`): remembered in the
+webview's storage, applied at once to every reader in the window, falling
+back when storage refuses. Brand marks (agents,
 providers) are not icon roles.
 
-`ui/desktop-app.tsx` composes two existing Sidebar components inside the design
+The workspace (`src/desktop/workspace/`, [ADR 238](adr/todo/238-desktop-workspace-frontend.md))
+is the window's organisation and chat: sections hold channels, channels hold
+sessions, and sessions open in chat panes that split, stack, move and close.
+Two layouts, chosen in Settings › Workspace › Layout
+(`adapters/workspace-layout-preference.ts`; `classic` keeps the shell above),
+arrange the same parts. *Three columns* (`ui/layouts/three-columns.tsx`) is a
+sidebar of channels with "Needs you" and "Running" views, the chosen channel's
+session list (grouped Needs you, Running, Earlier; searchable; ⌥⌘S folds it),
+and the panes. *Sessions in sidebar* (`ui/layouts/sessions-in-sidebar.tsx`)
+is one sidebar where a channel discloses its newest sessions inline, with a
+quick switcher (⌘K; ⌘\ to open one beside). Both fold their side columns
+when the window grows too narrow for the panes (`model/window-fit.ts`).
+
+- `model/` is pure: the organisation's types; the pane layout
+  (`pane-layout.ts`), columns of stacked panes with one focused, whose
+  operations split, move, swap, nudge, close and even out, capped at four
+  panes and three columns; its pixel rules (`pane-sizing.ts`): placements as
+  fractions, whether a pane fits beside another at 300 by 220 pixels, and
+  edge drags held to those minimums; how a window fits them
+  (`window-fit.ts`); a session's conversation, its messages and steps
+  (`transcript.ts`); the revision rule every replacement follows
+  (`revision.ts`); session grouping, search and time labels; and the new
+  session's lifecycle, a draft never listed and let go once no pane shows it,
+  and a session the source never began going back to it when its last
+  refused message is discarded.
+- `application/` owns the `WorkspaceSource` port (`ports.ts`: organisation,
+  transcript, one stream of replacement updates, send, approve, deny, pin,
+  archive, mark read, with typed `WorkspaceSourceError` reasons) and the pure
+  use cases (`usecases/`) over the workspace's state. Every replacement carries
+  the source's revision, and the newer one wins in whatever order the stream
+  and the reads deliver them (`model/revision.ts`). A message the person
+  sends waits in an outbox, shown after the source's conversation, until that
+  conversation includes it, so no replacement can lose it; an answer to an
+  approval and a model chosen for the next turn wait beside the source's data
+  the same way. Pin and archive show when the source's update says so. An
+  answer, a pin, an archive and a message carry who asked — the person or an
+  agent; the source records the first three and what became of each, and a
+  message when it lets a waiting approval go; each command returns its
+  outcome to its caller. Every
+  call to the source settles; an adapter rejects on a timeout of its own.
+- `adapters/store/` is the Redux slice, which only names actions over those use
+  cases; `commands.ts`, the one list of commands a person or an agent
+  dispatches (plain actions, and thunks where an id, the time or the source is
+  needed); `effects.ts`, listener effects that read a shown session's
+  conversation and mark a shown one read, whoever caused the change — a
+  refused read waits for the pane's Try Again rather than being retried on
+  every update, and is forgotten when no pane shows the session;
+  `refusal.ts`, which tells the source's typed refusals from faults, logged as
+  such, for both; `hooks.ts`, the typed hooks; and `selectors.ts`, narrow per
+  pane and per row. `adapters/in-memory/` is the
+  only home of the sample organisation and the scripted, streamed replies,
+  on timers it owns and cancels. `adapters/dom/` holds what belongs to the
+  page: FLIP motion (`flip.tsx`, which measures in React's commit phase, so
+  any dispatch animates), drag and drop, pointer resizing, keys, the arrival of
+  a first message, and the clock's ticks.
+- `ui/` holds each component once — source list (two variants of one
+  component), session list, pane grid, pane, pane header, transcript, message,
+  tool steps, approval card, drop target, quick switcher, empty states — and
+  `layouts/` that only arrange them.
+
+A pane subscribes to its own session and a row to its own summary, so a
+streamed word renders one transcript (`ui/panes/pane-isolation.test.tsx`).
+Layout changes land at once and play back with FLIP, by transform only; while
+panes fly, their blur and deep shadows pause. A new pane fills in the frame
+after its shell. Reduced motion skips every flight.
+
+The classic shell, `ui/desktop-app.tsx`, composes two existing Sidebar components inside the design
 system's SplitView panels. SplitView owns pointer capture, accessible separators,
 keyboard resizing, and collapse snapping. The left sidebar opens at 250px,
 with a 200px minimum and 450px maximum (`adapters/sidebar-sizing.ts`). The main workspace has a 350px expanded minimum. The right panel has a 200px
@@ -232,14 +311,17 @@ underneath; restore (or Escape) reveals the previous widths and open states.
 Hidden workspace/navigation panels are inert and resize separators are hidden.
 The right toggle exits this mode and closes the panel.
 
-This surface mounts no product store, session lifecycle, or backend connection.
+The workspace layouts read the desktop store, a projection of the in-memory
+`WorkspaceSource` described above; the window has no backend connection yet,
+and the pane arrangement is not kept between launches (the chosen layout is,
+as a stored preference).
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
 entries, and `pnpm app` runs both windows.
 
 Browser-only preview: `pnpm desktop:dev`, then open
 `http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
 it never terminates another worktree's server. `pnpm app:build` packages the
-window with the panel. The native minimum width is 800px. No content features or layout
+window with the panel. The native minimum width is 800px. The workspace's content is sample data until the gateway implements its port, and no layout
 persistence are implemented. Restart `pnpm app` after changing the Tauri
 overlay configuration: the CLI watcher can retain the previous merged config.
 

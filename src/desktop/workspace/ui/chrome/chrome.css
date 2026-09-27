@@ -1,0 +1,427 @@
+/*
+ * The workspace's frame and the small pieces every part of it uses: icon
+ * buttons, agent tiles, status glyphs, resize edges, pill buttons and menus.
+ * Every value comes from the `--desktop-*` scales in `styles.css`.
+ */
+
+.workspace {
+  /* Clears the window controls and the two titlebar buttons beside them. */
+  --workspace-controls-end: calc(
+    var(--desktop-window-controls-inset) + 2 * var(--desktop-control-size) + 2px
+  );
+  position: relative;
+  display: flex;
+  height: 100svh;
+  min-width: 480px;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--nessa-font-sans);
+  font-size: var(--desktop-text-body);
+  letter-spacing: -0.006em;
+  -webkit-font-smoothing: antialiased;
+}
+
+.workspace button {
+  font: inherit;
+  color: inherit;
+  cursor: default;
+}
+
+/* A quiet inset ring for the keyboard; text fields show their caret instead. */
+.workspace :focus-visible {
+  outline: none;
+}
+
+.workspace :focus-visible:not(textarea, input, .workspace-edge),
+.workspace .desktop-chip:focus-visible {
+  outline: 1.5px solid var(--desktop-focus-ring);
+  outline-offset: -1.5px;
+}
+
+.workspace-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Chrome is read, not selected: a double-click on a label selects nothing. */
+.workspace-titlebar,
+.workspace-edge,
+.workspace-drag-image {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Shared by everything that simply appears. */
+@keyframes workspace-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ——— Titlebar and icon buttons ——— */
+
+.workspace-titlebar {
+  position: absolute;
+  z-index: 20;
+  top: 0;
+  left: 0;
+  display: flex;
+  height: var(--desktop-titlebar-height);
+  align-items: center;
+  gap: 2px;
+  padding-left: var(--desktop-window-controls-inset);
+  padding-right: 8px;
+}
+
+.workspace-icon-button {
+  display: inline-flex;
+  width: var(--desktop-control-size);
+  height: var(--desktop-control-size);
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--desktop-control-radius);
+  background: transparent;
+  color: var(--desktop-muted) !important;
+  transition:
+    color var(--desktop-fast) ease,
+    background-color var(--desktop-fast) ease,
+    opacity var(--desktop-base) ease;
+}
+
+.workspace-icon-button:hover,
+.workspace-icon-button[data-state="open"] {
+  color: var(--foreground) !important;
+  background: var(--desktop-hover);
+}
+
+.workspace-icon-button:active {
+  background: var(--desktop-press);
+}
+
+.workspace-icon-button svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
+}
+
+/* Holds its place when there is nothing for it to do, so its neighbours never move. */
+.workspace-icon-button[data-reserved] {
+  visibility: hidden;
+}
+
+/* ——— Agent tiles and status glyphs ——— */
+
+.workspace-agent-tile {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 28%;
+  background: linear-gradient(
+    160deg,
+    color-mix(in oklab, var(--foreground) 12%, transparent),
+    color-mix(in oklab, var(--foreground) 4%, transparent)
+  );
+  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 16%, transparent);
+  color: var(--foreground);
+  font-weight: 650;
+  line-height: 1;
+}
+
+.workspace-agent-tile svg {
+  width: 64% !important;
+  height: 64% !important;
+}
+
+/*
+ * A monogram, for an agent with no shipped mark: set small and light, like a
+ * letter embossed on the tile, so it sits beside the drawn marks rather than
+ * shouting over them.
+ */
+.workspace-agent-tile > span {
+  color: color-mix(in oklab, var(--foreground) 62%, transparent) !important;
+  font-size: 0.86em !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  transform: translateY(0.02em);
+}
+
+.workspace-status {
+  position: relative;
+  display: inline-flex;
+  width: 10px;
+  height: 10px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.workspace-status[data-status="idle"]::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--foreground) 24%, transparent);
+}
+
+.workspace-status[data-status="needs-you"]::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--desktop-needs);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--desktop-needs) 55%, transparent);
+}
+
+/*
+ * Running is a small arc turning on a faint track, like a progress spinner:
+ * unmistakably activity, where a lit dot or bare ring could read as a caret.
+ * The arc turns on its own layer, around a whole-pixel centre, so it spins
+ * without wobbling.
+ */
+.workspace-status[data-status="running"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0 12%,
+    color-mix(in oklab, var(--desktop-run) 30%, transparent) 30%,
+    var(--desktop-run) 72%,
+    transparent 72%
+  );
+  -webkit-mask: radial-gradient(circle, transparent 3px, black 3.5px);
+  mask: radial-gradient(circle, transparent 3px, black 3.5px);
+  will-change: transform;
+  animation: workspace-turn 1.1s linear infinite;
+}
+
+.workspace-status[data-status="running"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--desktop-run) 16%, transparent);
+}
+
+@keyframes workspace-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/* ——— Resize edges ——— */
+
+.workspace-edge {
+  position: relative;
+  width: var(--desktop-gutter);
+  flex: none;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+/* A glow runs along the edge near the pointer, in the theme's edge light. */
+.workspace-edge::before {
+  content: "";
+  position: absolute;
+  inset: calc(var(--desktop-gutter) + var(--desktop-radius)) 2.5px;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 3px 90px at 50%
+      calc(var(--workspace-glow, 50%) - var(--desktop-gutter) - var(--desktop-radius)),
+    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
+    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
+    transparent 100%
+  );
+  opacity: 0;
+  transition: opacity var(--desktop-fast) ease;
+}
+
+.workspace-edge:hover::before,
+.workspace-edge:focus-visible::before,
+.workspace-edge:active::before {
+  opacity: 1;
+}
+
+html[data-workspace-resizing],
+html[data-workspace-resizing] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+html[data-workspace-resizing="y"],
+html[data-workspace-resizing="y"] * {
+  cursor: row-resize !important;
+}
+
+/* ——— The sidebar's foot ——— */
+
+.workspace-identity {
+  display: flex;
+  min-width: 200px;
+  height: 48px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 16px;
+  font-size: var(--desktop-text-body);
+  letter-spacing: -0.01em;
+}
+
+/* "nessa Studio" opens Settings, which puts "‹ nessa Agent" in this same place. */
+.workspace-identity-name {
+  flex: 1;
+  height: 28px;
+  overflow: hidden;
+  border-radius: var(--desktop-radius-sm);
+  line-height: 28px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-identity b {
+  font-weight: 600;
+}
+
+.workspace-identity b + span {
+  color: var(--desktop-muted);
+  transition: color var(--desktop-fast) ease;
+}
+
+/* ——— Pill buttons ——— */
+
+.workspace-button {
+  height: 28px;
+  flex: none;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--desktop-selected);
+  color: var(--desktop-ink-2) !important;
+  font-size: var(--desktop-text-footnote) !important;
+  font-weight: 500 !important;
+  white-space: nowrap;
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease,
+    transform var(--desktop-fast) ease;
+}
+
+.workspace-button:hover {
+  background: color-mix(in oklab, var(--foreground) 13%, transparent);
+  color: var(--foreground) !important;
+}
+
+.workspace-button[data-primary] {
+  background: var(--foreground);
+  color: var(--background) !important;
+}
+
+.workspace-button[data-primary]:hover {
+  background: color-mix(in oklab, var(--foreground) 86%, var(--background));
+}
+
+.workspace-button:active {
+  transform: scale(0.97);
+}
+
+.workspace-button:disabled {
+  opacity: 0.5;
+}
+
+/* ——— Keys, as a tooltip or a footer writes them ——— */
+
+.workspace-kbd {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-radius: var(--desktop-radius-xs);
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+  color: var(--desktop-muted);
+  font: 500 var(--desktop-text-caption) / 1 var(--nessa-font-sans);
+  letter-spacing: 0.02em;
+}
+
+.workspace-kbd + .workspace-kbd {
+  margin-left: 4px;
+}
+
+/* ——— Menus ——— */
+
+.workspace-menu {
+  min-width: 220px;
+}
+
+/* A highlighted item takes a soft fill only: no ring, by pointer or by key. */
+.workspace-menu [data-slot$="menu-item"],
+.workspace-menu [data-slot$="menu-item"]:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.workspace-menu [data-slot$="menu-item"][data-highlighted] {
+  background: color-mix(in oklab, var(--foreground) 8.5%, transparent);
+  color: var(--foreground);
+}
+
+/* Menu items are words alone; the shortcut sits quietly at the right edge. */
+.workspace-menu [data-slot$="menu-shortcut"] {
+  padding-left: 24px;
+  color: color-mix(in oklab, var(--foreground) 40%, transparent);
+  font-family: var(--nessa-font-sans);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ——— The drag's own image: one compact pill with the session's mark and title ——— */
+
+.workspace-drag-image {
+  position: fixed;
+  z-index: -1;
+  top: -200px;
+  left: 0;
+  display: inline-flex;
+  max-width: 280px;
+  height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--background) 86%, var(--foreground));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 12%, transparent);
+  color: var(--foreground);
+  font-family: var(--nessa-font-sans);
+  font-size: var(--desktop-text-footnote);
+  font-weight: 550;
+  letter-spacing: -0.006em;
+  white-space: nowrap;
+  -webkit-font-smoothing: antialiased;
+}
+
+.workspace-drag-image > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-drag-image > .workspace-agent-tile {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-status[data-status="running"]::before {
+    animation: none;
+  }
+}

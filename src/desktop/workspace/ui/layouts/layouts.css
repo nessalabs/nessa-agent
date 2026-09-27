@@ -1,0 +1,14 @@
+/*
+ * What the sessions-in-sidebar layout adds to the shared parts: compose
+ * lives in the sidebar, and with the sidebar away it waits by the toggle.
+ */
+.workspace-titlebar-compose {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.workspace[data-sidebar="closed"] .workspace-titlebar-compose {
+  opacity: 1;
+  pointer-events: auto;
+  transition-delay: var(--desktop-fast);
+}

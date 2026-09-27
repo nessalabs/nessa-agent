@@ -28,7 +28,7 @@ import {
 import { useSidebarLayout } from "../adapters/use-sidebar-layout"
 import { Home } from "./home"
 import { DesktopIcon } from "./icons"
-import { openSettings } from "./settings/settings-view"
+import { openSettings } from "../settings/ui/settings-view"
 import { ThemeMenu } from "./theme-menu"
 import { WindowTitlebar } from "./window-titlebar"
 
@@ -348,7 +348,7 @@ function NavigationBody({
         <span aria-hidden="true" className="desktop-mark" />
         <button
           type="button"
-          className="spike-identity-button min-w-0 flex-1 truncate"
+          className="desktop-identity-button min-w-0 flex-1 truncate"
           onClick={openSettings}
           title="Settings (⌘,)"
         >

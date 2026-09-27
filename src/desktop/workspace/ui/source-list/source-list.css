@@ -1,0 +1,372 @@
+/*
+ * The source list: the sidebar's glass pane of sections and channels. Two
+ * variants share it — `channels`, where a channel is chosen for the session
+ * list beside it, and `tree`, where a channel discloses its sessions inline.
+ */
+
+/*
+ * Folding the sidebar is transform only. A closed sidebar leaves the flow at
+ * once, so what is beside it takes its new place in one layout and travels
+ * there by transform (FLIP, `adapters/dom/flip.tsx`); the sidebar itself
+ * slides out on its own, fully opaque so its glass keeps its blur, and hides
+ * once it is off-screen.
+ */
+.workspace-sidebar {
+  position: relative;
+  display: flex;
+  width: var(--workspace-sidebar-width);
+  flex: none;
+  flex-direction: column;
+  margin: var(--desktop-gutter) 0 var(--desktop-gutter) var(--desktop-gutter);
+  border-radius: var(--desktop-radius);
+  background: var(--desktop-pane-fill);
+  backdrop-filter: blur(28px) saturate(170%);
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  box-shadow:
+    inset 0 0 0 1px var(--desktop-rim),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 6%, transparent),
+    0 12px 40px -12px rgb(0 0 0 / 55%);
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  transition:
+    transform var(--desktop-slow) var(--desktop-out),
+    visibility 0s;
+}
+
+html:not(.dark) .workspace-sidebar {
+  box-shadow:
+    inset 0 0 0 1px var(--desktop-rim),
+    inset 0 1px 0 rgb(255 255 255 / 60%),
+    0 12px 32px -16px rgb(0 0 0 / 22%);
+}
+
+.workspace[data-sidebar="closed"] .workspace-sidebar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(calc(-100% - 2 * var(--desktop-gutter) - 48px));
+  visibility: hidden;
+  transition:
+    transform var(--desktop-slow) var(--desktop-out),
+    visibility 0s linear var(--desktop-slow);
+}
+
+/* The window's row, inside the glass: empty, or a control at its far end. */
+.workspace-sidebar-top {
+  display: flex;
+  height: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
+  flex: none;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: var(--desktop-control-inset);
+}
+
+.workspace-sidebar-scroll {
+  flex: 1;
+  min-width: 200px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 8px 12px;
+  scrollbar-width: none;
+}
+
+.workspace-sidebar-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.workspace-sidebar ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ——— Rows ——— */
+
+/* Every row shares one height, one radius and one set of states. */
+.workspace-row {
+  display: flex;
+  width: 100%;
+  height: 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: transparent;
+  color: var(--desktop-ink-2) !important;
+  font-size: var(--desktop-text-body);
+  text-align: left;
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease,
+    opacity var(--desktop-base) ease;
+}
+
+.workspace-row:hover {
+  background: var(--desktop-hover);
+}
+
+.workspace-row:active {
+  background: var(--desktop-press);
+}
+
+.workspace-row[data-active] {
+  background: var(--desktop-selected);
+}
+
+/*
+ * Unread and active are both 600: a weight change between them would reflow
+ * the label, and the ellipsis with it, as a channel is chosen.
+ */
+.workspace-row[data-active],
+.workspace-row[data-unread] {
+  color: var(--foreground) !important;
+  font-weight: 600;
+}
+
+.workspace-row > .workspace-truncate {
+  flex: 1;
+}
+
+.workspace-row-icon {
+  display: inline-flex;
+  width: 16px;
+  flex: none;
+  justify-content: center;
+  color: var(--desktop-faint);
+}
+
+.workspace-row[data-active] .workspace-row-icon {
+  color: var(--desktop-muted);
+}
+
+.workspace-row-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.75;
+}
+
+.workspace-badge {
+  display: inline-flex;
+  min-width: 18px;
+  height: 16px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--desktop-selected);
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-caption);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-badge[data-tone="needs"] {
+  background: color-mix(in oklab, var(--desktop-needs) 18%, transparent);
+  color: var(--desktop-needs);
+}
+
+.workspace-smart {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+}
+
+/* ——— Sections: the label is the toggle; its chevron and add button wait for hover ——— */
+
+.workspace-section {
+  margin-top: 16px;
+}
+
+.workspace-section-head {
+  display: flex;
+  height: 28px;
+  align-items: center;
+}
+
+.workspace-section-toggle {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: transparent;
+  color: var(--desktop-faint) !important;
+  font-size: var(--desktop-text-caption) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em;
+  text-align: left;
+  transition: color var(--desktop-fast) ease;
+}
+
+.workspace-section-toggle:hover {
+  color: var(--desktop-muted) !important;
+}
+
+.workspace-section-toggle > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-section-toggle svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  stroke-width: 2.25;
+  opacity: 0;
+  transform: rotate(90deg);
+  transition:
+    opacity var(--desktop-fast) ease,
+    transform var(--desktop-base) var(--desktop-out);
+}
+
+.workspace-section[data-collapsed] .workspace-section-toggle svg {
+  transform: rotate(0deg);
+}
+
+.workspace-section-add {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: transparent;
+  color: var(--desktop-faint) !important;
+  opacity: 0;
+  transition:
+    opacity var(--desktop-fast) ease,
+    background-color var(--desktop-fast) ease;
+}
+
+.workspace-section-add svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.75;
+}
+
+.workspace-section-head:hover svg,
+.workspace-section-head:focus-within svg,
+.workspace-section-head:hover .workspace-section-add,
+.workspace-section-head:focus-within .workspace-section-add,
+.workspace-section[data-collapsed] .workspace-section-toggle svg {
+  opacity: 1;
+}
+
+.workspace-section-add:disabled {
+  opacity: 0 !important;
+}
+
+.workspace-section-head:hover .workspace-section-add:disabled {
+  opacity: 0.5 !important;
+}
+
+/*
+ * A section folds at once, its chevron turning; what it holds rises into
+ * place when it opens. Animating the height would lay out the whole sidebar
+ * on every frame.
+ */
+.workspace-section-body > ul {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  padding-top: 2px;
+}
+
+.workspace-section[data-collapsed] .workspace-section-body {
+  display: none;
+}
+
+.workspace-rise {
+  animation: workspace-rise var(--desktop-base) var(--desktop-out) both;
+}
+
+@keyframes workspace-rise {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* ——— Channels, and the sessions hanging beneath one ——— */
+
+/* A channel's sessions hang beneath it on a faint thread. */
+.workspace-thread {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  margin: 2px 0 4px !important;
+  padding-left: 16px !important;
+}
+
+.workspace-thread::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 15px;
+  width: 1px;
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+.workspace-thread-row {
+  color: var(--desktop-muted) !important;
+  font-size: var(--desktop-text-footnote);
+}
+
+.workspace-thread-row:hover,
+.workspace-thread-row[data-open] {
+  color: var(--foreground) !important;
+}
+
+.workspace-thread-row[data-focused] {
+  background: var(--desktop-selected);
+  color: var(--foreground) !important;
+}
+
+.workspace-thread-row[data-unread] {
+  color: var(--foreground) !important;
+  font-weight: 560;
+}
+
+/* The row stays in place, quieter, while its pill is carried. */
+.workspace-sidebar [data-dragging] {
+  opacity: 0.45;
+}
+
+.workspace-time {
+  flex: none;
+  color: var(--desktop-fainter);
+  font-size: var(--desktop-text-caption);
+  font-weight: 450;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-more {
+  padding-left: 30px;
+  color: var(--desktop-faint) !important;
+  font-size: var(--desktop-text-footnote);
+  font-weight: 500;
+}
+
+.workspace-more:hover {
+  color: var(--desktop-ink-2) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-rise {
+    animation: none;
+  }
+}

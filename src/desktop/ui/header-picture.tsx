@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef } from "react"
-import { Minus, Plus } from "lucide-react"
 import {
   clampHeaderFraming,
   defaultHeaderFraming,
@@ -8,6 +7,7 @@ import {
   placeHeaderImage,
   type HeaderFraming,
 } from "../model/header-image"
+import { DesktopIcon } from "./icons"
 
 /** Pixels an arrow key moves the picture, and how much a key or button zooms. */
 const keyStep = 12
@@ -187,7 +187,7 @@ export function HeaderPicture({
             aria-label="Zoom out"
             onClick={() => zoomBy(-zoomStep)}
           >
-            <Minus aria-hidden="true" />
+            <DesktopIcon name="zoomOut" />
           </button>
           <input
             type="range"
@@ -207,7 +207,7 @@ export function HeaderPicture({
             aria-label="Zoom in"
             onClick={() => zoomBy(zoomStep)}
           >
-            <Plus aria-hidden="true" />
+            <DesktopIcon name="zoomIn" />
           </button>
           <span className="desktop-header-toolbar-divider" aria-hidden="true" />
           <button

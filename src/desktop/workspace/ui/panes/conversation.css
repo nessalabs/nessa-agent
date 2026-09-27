@@ -1,0 +1,129 @@
+/*
+ * What a pane shows: a new session's home, and a conversation with its
+ * composer docked at the foot.
+ */
+.workspace-pane-home {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.workspace-pane-home > .desktop-home {
+  flex: 1;
+  min-height: 0;
+  padding-top: 0;
+}
+
+/*
+ * Sending the first message: the home lifts away over the conversation that
+ * replaces it. Its composer is already travelling as the conversation's own.
+ */
+.workspace-pane-home[data-leaving] {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  pointer-events: none;
+}
+
+.workspace-pane-home[data-leaving] .desktop-composer {
+  visibility: hidden;
+}
+
+.workspace-pane-home[data-leaving] .desktop-header,
+.workspace-pane-home[data-leaving] .desktop-greeting {
+  animation: workspace-lift-away var(--desktop-slow) var(--desktop-out) both;
+}
+
+.workspace-pane-home[data-leaving] .desktop-greeting {
+  animation-delay: 30ms;
+}
+
+@keyframes workspace-lift-away {
+  to {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.985);
+  }
+}
+
+.workspace-conversation {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/* The composer sits at the foot of the pane, a little tighter than on home. */
+.workspace-dock {
+  width: 100%;
+  max-width: 752px;
+  flex: none;
+  margin: 0 auto;
+  padding: 0 16px 16px;
+}
+
+.workspace-dock .desktop-composer {
+  padding: 16px 12px 8px 16px;
+  border-radius: var(--desktop-radius-xl);
+}
+
+.workspace-dock .desktop-composer textarea {
+  min-height: 44px;
+  font-size: var(--desktop-text-read);
+}
+
+.workspace-dock .desktop-composer-row {
+  margin-left: -8px;
+  transition: opacity var(--desktop-base) ease;
+}
+
+/* A pane you are not in keeps its composer's choices, dimmed until you return. */
+.workspace-panes[data-multi] .workspace-pane:not([data-focused]) .desktop-composer-row {
+  opacity: 0.55;
+}
+
+/* A short, stacked pane keeps its room for the conversation: the composer starts a line shorter. */
+@container workspace-pane (max-height: 520px) {
+  .workspace-dock {
+    padding-bottom: 8px;
+  }
+
+  .workspace-dock .desktop-composer {
+    padding-top: 12px;
+  }
+
+  .workspace-dock .desktop-composer textarea {
+    min-height: 24px;
+  }
+}
+
+/* A narrow pane reads closer to its edges. */
+@container workspace-pane (max-width: 420px) {
+  .workspace-dock {
+    padding-inline: 8px;
+  }
+}
+
+/*
+ * In a narrow composer the choices become their icons: the model shows as
+ * its provider's mark, and the chevrons go. Each keeps its accessible name,
+ * and its menu still says everything.
+ */
+@container (max-width: 420px) {
+  .workspace-pane .desktop-chip-model > span:not([aria-hidden]),
+  .workspace-pane .desktop-chip > .desktop-chip-chevron,
+  .workspace-pane .desktop-chip-model > svg:last-child {
+    display: none;
+  }
+
+  .workspace-pane .desktop-chip {
+    padding: 0 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-pane-home[data-leaving] .desktop-header,
+  .workspace-pane-home[data-leaving] .desktop-greeting {
+    animation: none;
+  }
+}

@@ -4,6 +4,7 @@ import {
   parseHeaderFraming,
   type HeaderFraming,
 } from "../model/header-image"
+import { storedPreference } from "./stored-preference"
 
 const database = "nessa.desktop"
 const store = "header"
@@ -99,40 +100,16 @@ export function useHeaderFraming() {
   return [framing, keep] as const
 }
 
-const tintEvent = "nessa:tint-from-picture"
-const tintKey = "nessa.desktop.tint-from-picture"
-
 /**
  * Whether the window takes its theme from the header picture, remembered in
- * this webview's storage; on unless the person turned it off.
+ * this webview's storage; on unless the person turned it off. Settings and
+ * the header menu both change it, and each follows the other.
  */
-export function useTintFromPicture() {
-  const read = () => {
-    try {
-      return window.localStorage.getItem(tintKey) !== "off"
-    } catch {
-      return true
-    }
-  }
-  const [tint, setTint] = useState(read)
+const tintPreference = storedPreference({
+  key: "nessa.desktop.tint-from-picture",
+  event: "nessa:tint-from-picture",
+  parse: (stored) => stored !== "off",
+  serialize: (tint: boolean) => (tint ? "on" : "off"),
+})
 
-  // Settings and the header menu both change it; each follows the other.
-  useEffect(() => {
-    const follow = () => setTint(read())
-    window.addEventListener(tintEvent, follow)
-    return () => window.removeEventListener(tintEvent, follow)
-  }, [])
-
-  const choose = useCallback((next: boolean) => {
-    setTint(next)
-    try {
-      window.localStorage.setItem(tintKey, next ? "on" : "off")
-    } catch {
-      // Not remembered; the choice still applies to this window.
-      return
-    }
-    window.dispatchEvent(new Event(tintEvent))
-  }, [])
-
-  return [tint, choose] as const
-}
+export const useTintFromPicture = tintPreference.usePreference
