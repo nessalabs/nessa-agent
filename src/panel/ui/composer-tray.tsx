@@ -178,7 +178,14 @@ export function ComposerTray({
               {approval ? (
                 <button type="button" className={ROW} onClick={() => setPage("approval")}>
                   <span className="flex-1">Tool approval</span>
-                  <span className="text-muted-foreground">
+                  {/* Full access stays red wherever it is named. */}
+                  <span
+                    className={
+                      approval.mode === "full"
+                        ? "text-destructive"
+                        : "text-muted-foreground"
+                    }
+                  >
                     {APPROVAL_MODE_TEXT[approval.mode].name}
                   </span>
                   <ChevronRight

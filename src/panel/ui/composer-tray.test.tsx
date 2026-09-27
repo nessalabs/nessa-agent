@@ -278,3 +278,13 @@ it("does not ask when leaving full access for a safer mode", () => {
   expect(confirmPage()).toBeNull()
   expect(choice.onChange).toHaveBeenCalledExactlyOnceWith("ask")
 })
+
+it("names full access in red on the tray's own row too", () => {
+  render({ approval: approval({ mode: "full" }) })
+  click(plus())
+
+  const value = [...row("Tool approval").querySelectorAll("span")].find(
+    (span) => span.textContent === "Full access",
+  )
+  expect(value?.className).toContain("text-destructive")
+})
