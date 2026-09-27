@@ -248,6 +248,13 @@ body {
   margin: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter) 0;
 }
 
+/* The right panel's own sidebar provider paints an opaque wrapper; without
+   this the gutter behind the right pane is a flat third colour that hides the
+   light the middle shows. */
+.desktop-right-content[data-slot="sidebar-wrapper"] {
+  background: transparent;
+}
+
 /* The design system's inner layer paints a solid fill; the glass is the fill here. */
 .desktop-glass [data-slot="sidebar-inner"] {
   background: transparent;
