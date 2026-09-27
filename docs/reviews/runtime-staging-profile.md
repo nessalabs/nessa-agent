@@ -124,10 +124,20 @@ not an additive decomposition guaranteed to equal elapsed wall time.
 
 ## Reproduction
 
-The measurement harness is not on `main`. It lives on the unmerged branch
-[`codex/ws3-staging-20260922`](https://github.com/nessalabs/nessa-agent/tree/codex/ws3-staging-20260922),
-whose head is the recorded source head. Run from that branch with the packaged runtime installed at the path
-above and `CARGO_BUILD_JOBS=2` in the environment. The measurement binary
+The measurement harness is not on `main`. Check out the recorded source head,
+commit
+[`edea8fc4a2b6aea885aecc561a2713bad67fceb9`](https://github.com/nessalabs/nessa-agent/commit/edea8fc4a2b6aea885aecc561a2713bad67fceb9),
+not a branch name, so a later change to any branch cannot alter what is run:
+
+```sh
+git fetch origin edea8fc4a2b6aea885aecc561a2713bad67fceb9
+git checkout --detach edea8fc4a2b6aea885aecc561a2713bad67fceb9
+```
+
+The branch `codex/ws3-staging-20260922` is kept only so that commit stays
+reachable on the remote; do not delete it while this report cites it. Run with
+the packaged runtime installed at the path above and `CARGO_BUILD_JOBS=2` in
+the environment. The measurement binary
 embedded these exact `build_invocation` values:
 
 ```sh
