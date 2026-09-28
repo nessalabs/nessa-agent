@@ -172,7 +172,7 @@ describe("a pane renders for its own session only", () => {
     await act(async () => {
       if (target) store.dispatch(focusPane({ pane: target.key }))
     })
-    expect(rendered()).toEqual([target?.sessionId, was].sort())
+    expect(rendered()).toEqual([target?.item, was].sort())
     // The two panes render their headers; what they show is handed nothing new.
     expect([...contentRenders.keys()]).toEqual([])
   })

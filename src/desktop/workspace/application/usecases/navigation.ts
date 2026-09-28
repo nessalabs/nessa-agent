@@ -4,7 +4,7 @@
  * columns themselves.
  */
 import { byRecency } from "../../model/workspace-index"
-import type { WorkspaceRoom } from "../../../split-panes/model/pane-sizing"
+import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import { chosen, fitted } from "../../../model/side-column"
 import { mostPressing } from "../../model/session-groups"
 import {
@@ -78,7 +78,7 @@ export function openChannel(
     beside = false,
     draftId,
     room,
-  }: { channelId: string; beside?: boolean; draftId?: string; room?: WorkspaceRoom },
+  }: { channelId: string; beside?: boolean; draftId?: string; room?: PaneRoom },
 ): WorkspaceState {
   if (!channelOf(state, channelId)) return state
   const disclosed = setChannelOpen({ ...state, view: { channelId } }, channelId, true)

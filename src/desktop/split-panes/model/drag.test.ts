@@ -17,7 +17,7 @@ import type { Aim, Carried, PointerSample, Targets } from "./drop"
 import { restAfter } from "./drop"
 
 const pane: Carried = { kind: "pane", pane: 1 }
-const session: Carried = { kind: "session", sessionId: "s" }
+const item: Carried = { kind: "item", item: "s" }
 
 /** Two panes side by side in an 1100 × 800 grid; pane 2 is 546 × 800 from x 554. */
 const targets: Targets = {
@@ -342,10 +342,10 @@ describe("carrying", () => {
       expect(keyToDrag(key)).toBeNull()
   })
 
-  it("carries a session the same way", () => {
+  it("carries an item the same way", () => {
     expect(
-      run([press(session), ready, move(90, 40, 10), move(827, 400, 20), release()]),
-    ).toMatchObject({ kind: "dropping", carried: session, aim: { target: 2 } })
+      run([press(item), ready, move(90, 40, 10), move(827, 400, 20), release()]),
+    ).toMatchObject({ kind: "dropping", carried: item, aim: { target: 2 } })
   })
 })
 

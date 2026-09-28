@@ -1,17 +1,19 @@
 /**
- * Where conversations sit in the workspace: columns side by side, each a stack
- * of panes, one pane focused. A value: every operation returns a new layout
- * and leaves the one it was given alone, and returns that same layout when
- * nothing changes, so a caller can tell a refused operation by identity.
+ * Where panes sit: columns side by side, each a stack of panes, one pane
+ * focused. A value: every operation returns a new layout and leaves the one
+ * it was given alone, and returns that same layout when nothing changes, so a
+ * caller can tell a refused operation by identity.
  *
  * ```text
- *   columns ─▶ [ column { share, panes ─▶ [ pane { key, sessionId, share } ] } ]
+ *   columns ─▶ [ column { share, panes ─▶ [ pane { key, item, share } ] } ]
  * ```
  *
- * A share is a pane's (or column's) part of its parent's room, relative to its
- * siblings, so resizing the window keeps proportions. Pane keys are minted by
- * the layout itself and never reused within it; a key names a pane for as
- * long as it lives, whichever session it shows and wherever it moves.
+ * Each pane shows an item: an opaque id the host gives meaning to (the
+ * workspace's panes show sessions). A share is a pane's (or column's) part of
+ * its parent's room, relative to its siblings, so resizing the window keeps
+ * proportions. Pane keys are minted by the layout itself and never reused
+ * within it; a key names a pane for as long as it lives, whichever item it
+ * shows and wherever it moves.
  *
  * The limits — how many panes and columns, and the smallest readable pane —
  * are data in `paneLimits`; the rules that need measured pixels take them from
@@ -20,14 +22,14 @@
 
 export type PaneKey = number
 
-/** One pane: the session it shows and its share of its column's height. */
+/** One pane: the item it shows and its share of its column's height. */
 export interface Pane {
   readonly key: PaneKey
-  readonly sessionId: string
+  readonly item: string
   readonly share: number
 }
 
-/** One column: its share of the workspace's width and its panes, top to bottom. */
+/** One column: its share of the grid's width and its panes, top to bottom. */
 export interface Column {
   readonly key: number
   readonly share: number
@@ -63,10 +65,10 @@ export const paneLimits = {
 export const isHorizontal = (side: Side): side is "left" | "right" =>
   side === "left" || side === "right"
 
-/** A workspace of one pane, showing `sessionId`. */
-export function singlePane(sessionId: string): PaneLayout {
+/** A layout of one pane, showing `item`. */
+export function singlePane(item: string): PaneLayout {
   return {
-    columns: [{ key: 0, share: 1, panes: [{ key: 1, sessionId, share: 1 }] }],
+    columns: [{ key: 0, share: 1, panes: [{ key: 1, item, share: 1 }] }],
     focused: 1,
     nextKey: 2,
   }
@@ -81,7 +83,7 @@ export function paneCount(layout: PaneLayout): number {
   return layout.columns.reduce((count, column) => count + column.panes.length, 0)
 }
 
-/** Whether the workspace holds as many panes as it may: a new one has nowhere to go. */
+/** Whether the layout holds as many panes as it may: a new one has nowhere to go. */
 export function isFull(layout: PaneLayout): boolean {
   return paneCount(layout) >= paneLimits.maxPanes
 }
@@ -103,11 +105,11 @@ export function paneByKey(layout: PaneLayout, key: PaneKey): Pane | undefined {
 }
 
 /**
- * The pane showing a session, if one does: a session is never shown twice
+ * The pane showing an item, if one does: an item is never shown twice
  * (`showInPane` and `splitPane` hold that; `pane-layout.test.ts`).
  */
-export function paneShowing(layout: PaneLayout, sessionId: string): Pane | undefined {
-  return panesOf(layout).find((pane) => pane.sessionId === sessionId)
+export function paneShowing(layout: PaneLayout, item: string): Pane | undefined {
+  return panesOf(layout).find((pane) => pane.item === item)
 }
 
 /** The focused pane; a layout always has one. */
@@ -137,28 +139,22 @@ function mapPanes(layout: PaneLayout, change: (pane: Pane) => Pane): PaneLayout 
 }
 
 /**
- * Shows a session in a pane, in place of what it showed, and focuses it. A
- * session is never shown twice: one another pane shows already is focused
- * where it is instead, and `key` is left as it was.
+ * Shows an item in a pane, in place of what it showed, and focuses it. An
+ * item is never shown twice: one another pane shows already is focused where
+ * it is instead, and `key` is left as it was.
  */
-export function showInPane(
-  layout: PaneLayout,
-  key: PaneKey,
-  sessionId: string,
-): PaneLayout {
-  const existing = paneShowing(layout, sessionId)
+export function showInPane(layout: PaneLayout, key: PaneKey, item: string): PaneLayout {
+  const existing = paneShowing(layout, item)
   if (existing) return focusPane(layout, existing.key)
   if (!locate(layout, key)) return layout
-  const shown = mapPanes(layout, (pane) =>
-    pane.key === key ? { ...pane, sessionId } : pane,
-  )
+  const shown = mapPanes(layout, (pane) => (pane.key === key ? { ...pane, item } : pane))
   return focusPane(shown, key)
 }
 
 /**
  * Takes a pane out; the neighbour beside it takes its room, and focus moves
  * to the next pane in reading order, or the previous one. The last pane is
- * never removed: a workspace always shows something.
+ * never removed: a layout always shows something.
  */
 export function removePane(layout: PaneLayout, key: PaneKey): PaneLayout {
   const at = locate(layout, key)
@@ -206,7 +202,7 @@ function insertPane(
   layout: PaneLayout,
   target: PaneKey,
   side: Side,
-  pane: { key?: PaneKey; sessionId: string },
+  pane: { key?: PaneKey; item: string },
 ): PaneLayout {
   const at = locate(layout, target)
   if (!at) return layout
@@ -219,7 +215,7 @@ function insertPane(
     const column: Column = {
       key: nextKey++,
       share: half,
-      panes: [{ key, sessionId: pane.sessionId, share: 1 }],
+      panes: [{ key, item: pane.item, share: 1 }],
     }
     const halved = layout.columns.map((other, i) =>
       i === at.column ? { ...other, share: half } : other,
@@ -239,7 +235,7 @@ function insertPane(
   const index = side === "bottom" ? at.row + 1 : at.row
   const panes = [
     ...halved.slice(0, index),
-    { key, sessionId: pane.sessionId, share: half },
+    { key, item: pane.item, share: half },
     ...halved.slice(index),
   ]
   return {
@@ -251,15 +247,15 @@ function insertPane(
   }
 }
 
-/** Opens a new pane showing `sessionId` on `side` of `target`, and focuses it. */
+/** Opens a new pane showing `item` on `side` of `target`, and focuses it. */
 export function splitPane(
   layout: PaneLayout,
   target: PaneKey,
   side: Side,
-  sessionId: string,
+  item: string,
 ): PaneLayout {
-  if (paneShowing(layout, sessionId)) return layout
-  return insertPane(layout, target, side, { sessionId })
+  if (paneShowing(layout, item)) return layout
+  return insertPane(layout, target, side, { item })
 }
 
 /** Two panes trade places; each place keeps its size. */

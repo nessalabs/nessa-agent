@@ -28,8 +28,7 @@ const loaded = () =>
     read: "r",
   })
 
-const shown = (state: WorkspaceState) =>
-  panesOf(state.panes!).map((pane) => pane.sessionId)
+const shown = (state: WorkspaceState) => panesOf(state.panes!).map((pane) => pane.item)
 
 describe("choosing what the list shows", () => {
   it("shows a channel's sessions and leaves the panes alone while the list is open", () => {
@@ -80,7 +79,7 @@ describe("opening a channel from the sidebar", () => {
     const state = openChannel(loaded(), { channelId: "empty", draftId: "new" })
     expect(shown(state)).toEqual(["new"])
     expect(state.drafts.new.channelId).toBe("empty")
-    expect(focusedPane(state.panes!).sessionId).toBe("new")
+    expect(focusedPane(state.panes!).item).toBe("new")
   })
 })
 

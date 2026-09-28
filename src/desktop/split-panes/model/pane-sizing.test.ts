@@ -16,8 +16,7 @@ import {
   resizeEdge,
 } from "./pane-sizing"
 
-const keyOf = (layout: PaneLayout, sessionId: string) =>
-  paneShowing(layout, sessionId)!.key
+const keyOf = (layout: PaneLayout, item: string) => paneShowing(layout, item)!.key
 
 function threePanes(): PaneLayout {
   const one = singlePane("a")
@@ -26,7 +25,7 @@ function threePanes(): PaneLayout {
 }
 
 describe("placements", () => {
-  it("draws one pane over the whole workspace, in the corner", () => {
+  it("draws one pane over the whole grid, in the corner", () => {
     const { panes, edges } = placements(singlePane("a").columns)
     expect(panes).toEqual([
       {
@@ -81,7 +80,7 @@ describe("the one rule a change of layout is held to", () => {
   it("takes a split that leaves every pane readable", () => {
     expect(arrange(one, beside(one, "right"), roomy)).toEqual({
       layout: beside(one, "right"),
-      foldSidebar: false,
+      takesSpare: false,
     })
   })
 
@@ -101,10 +100,10 @@ describe("the one rule a change of layout is held to", () => {
     ).toBeNull()
   })
 
-  it("folds the sidebar when that is what makes a column fit, and says so", () => {
+  it("takes the host's spare room when that is what makes a column fit, and says so", () => {
     const room = { width: 500, height: 800, spare: 248 }
-    expect(arrange(one, beside(one, "right"), room)?.foldSidebar).toBe(true)
-    // Folding gives width, never height.
+    expect(arrange(one, beside(one, "right"), room)?.takesSpare).toBe(true)
+    // The spare room is width, never height.
     expect(arrange(one, beside(one, "bottom"), { ...room, height: 300 })).toBeNull()
   })
 

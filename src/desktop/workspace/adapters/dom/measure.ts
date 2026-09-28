@@ -12,9 +12,9 @@
  * is open is the room they have.
  */
 import { paneLimits } from "../../../split-panes/model/pane-layout"
-import type { WorkspaceRoom } from "../../../split-panes/model/pane-sizing"
+import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 
-export function measureWorkspace(page: ParentNode = document): WorkspaceRoom | undefined {
+export function measureWorkspace(page: ParentNode = document): PaneRoom | undefined {
   const grid = page.querySelector<HTMLElement>(".workspace-panes")
   if (!grid) return undefined
   const root = grid.closest<HTMLElement>("[data-workspace]")

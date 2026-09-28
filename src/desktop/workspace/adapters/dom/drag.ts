@@ -70,7 +70,7 @@ import { paneLimits } from "../../../split-panes/model/pane-layout"
 import {
   placements,
   type PanePlacement,
-  type WorkspaceRoom,
+  type PaneRoom,
 } from "../../../split-panes/model/pane-sizing"
 import { commitDrop, measureRoom, previewDrop } from "../store/commands"
 import { durationToken, motionToken } from "../../../adapters/motion"
@@ -317,7 +317,7 @@ interface Made {
   readonly size: Size
   readonly grid: Box
   /** The panes' room as the press found it: what the preview and the drop are held to. */
-  readonly room: WorkspaceRoom | undefined
+  readonly room: PaneRoom | undefined
   /** What the drag may aim at; `null` while no pane can be seen. */
   readonly targets: Targets | null
   /** Each pane's parts and where each sits in it: what a preview counter-scales. */
@@ -584,7 +584,7 @@ export function useWorkspaceDrag(
       if (!layout) return
       const { grid, room } = made
       const real = boxes(layout, grid)
-      const spare = outcome?.foldSidebar ? (room?.spare ?? 0) : 0
+      const spare = outcome?.takesSpare ? (room?.spare ?? 0) : 0
       const landing = outcome ? boxes(outcome.layout, landingGrid(grid, spare)) : null
       const corners = new Set(
         outcome
@@ -593,8 +593,8 @@ export function useWorkspaceDrag(
             )
           : [],
       )
-      if (scope.hasAttribute("data-drag-folds") !== Boolean(outcome?.foldSidebar))
-        scope.toggleAttribute("data-drag-folds", Boolean(outcome?.foldSidebar))
+      if (scope.hasAttribute("data-drag-folds") !== Boolean(outcome?.takesSpare))
+        scope.toggleAttribute("data-drag-folds", Boolean(outcome?.takesSpare))
       if (outcome && landing && !("dragReflow" in scope.dataset))
         scope.dataset.dragReflow = ""
       if (!reducedMotion())
@@ -843,7 +843,7 @@ export function useWorkspaceDrag(
       const heading = document.createElement("div")
       heading.className = "workspace-heading"
       const title = document.createElement("h2")
-      const sessionId = carried.kind === "session" ? carried.sessionId : ""
+      const sessionId = carried.kind === "item" ? carried.item : ""
       const state = store.getState().workspace
       const summary = Object.hasOwn(state.sessions, sessionId)
         ? state.sessions[sessionId]
@@ -1232,7 +1232,7 @@ export function useWorkspaceDrag(
       )
         return false
       const { carried: what } = phase
-      return what.kind !== "session" || Object.hasOwn(sessions, what.sessionId)
+      return what.kind !== "item" || Object.hasOwn(sessions, what.item)
     }
 
     const onPointerDown = (event: PointerEvent) => {
@@ -1251,7 +1251,7 @@ export function useWorkspaceDrag(
         pane !== undefined
           ? { kind: "pane", pane: Number(pane) }
           : session
-            ? { kind: "session", sessionId: session }
+            ? { kind: "item", item: session }
             : null
       if (!what) return
       const { panes, content, chrome } = store.getState().workspace

@@ -30,8 +30,7 @@ const loaded = () =>
     read: "r",
   })
 
-const shown = (state: WorkspaceState) =>
-  panesOf(state.panes!).map((pane) => pane.sessionId)
+const shown = (state: WorkspaceState) => panesOf(state.panes!).map((pane) => pane.item)
 
 const message = (id: string, text: string, at = 500): Message => ({
   id,

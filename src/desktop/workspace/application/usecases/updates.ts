@@ -390,7 +390,7 @@ export function transcriptRetried(
 function sessionsInPanes(state: WorkspaceState): SessionSummary[] {
   if (!state.panes) return []
   return panesOf(state.panes).flatMap((pane) => {
-    const session = sessionOf(state, pane.sessionId)
+    const session = sessionOf(state, pane.item)
     return session ? [session] : []
   })
 }

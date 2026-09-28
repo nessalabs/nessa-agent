@@ -1,5 +1,5 @@
 /**
- * A drag's life, as a value: what a press on a pane's header or a session's
+ * A drag's life, as a value: what a press on a pane's header or an item's
  * row becomes, event by event. The table is ADR 238 › _Drag and drop_; each
  * row is a case below and at least one test in `drag.test.ts`. The page —
  * the copy, the preview, the command — is the adapter's
@@ -108,8 +108,8 @@ export type DragEvent<Made = unknown> =
   | { readonly kind: "lost" }
   /**
    * Something the drag read changed, or is about to: a key that is a command,
-   * a resize, the panes, the content view or the side columns in the store,
-   * the carried session gone, the window going inert under Settings — or,
+   * a resize, the panes or anything else the host watches (the workspace's
+   * content view and side columns), the carried item gone, the window going inert under Settings — or,
    * pressed, nothing to carry on the page.
    */
   | { readonly kind: "changed" }

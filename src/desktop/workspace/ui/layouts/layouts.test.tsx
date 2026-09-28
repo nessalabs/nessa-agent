@@ -106,9 +106,7 @@ function outcome(store: ReturnType<typeof testStore>) {
     panes: state.panes ? layoutShape(state.panes) : "",
     focused: state.panes?.focused,
     shown: state.panes?.columns.flatMap((column) =>
-      column.panes.map((pane) =>
-        pane.sessionId.startsWith("id-") ? "new" : pane.sessionId,
-      ),
+      column.panes.map((pane) => (pane.item.startsWith("id-") ? "new" : pane.item)),
     ),
     sidebar: state.chrome.sidebar,
     content: state.content,

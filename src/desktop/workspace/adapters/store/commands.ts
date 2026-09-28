@@ -46,7 +46,7 @@ import {
 import {
   edgeSides as edgeSidesIn,
   type PaneEdge,
-  type WorkspaceRoom,
+  type PaneRoom,
 } from "../../../split-panes/model/pane-sizing"
 import { workspaceActions } from "./slice"
 
@@ -279,7 +279,7 @@ export function edgeSides(
 }
 
 /** The panes' room as the page measures it now: what a drag reads once, as its press begins. */
-export function measureRoom(): WorkspaceCommand<WorkspaceRoom | undefined> {
+export function measureRoom(): WorkspaceCommand<PaneRoom | undefined> {
   return (_dispatch, _getState, { measure }) => measure()
 }
 
@@ -298,7 +298,7 @@ export function previewDrop({
   carried: Carried
   target: PaneKey
   zone: Zone
-  room: WorkspaceRoom | undefined
+  room: PaneRoom | undefined
 }): WorkspaceCommand<DropOutcome | null> {
   return (_dispatch, getState) => {
     const panes = getState().workspace.panes
@@ -322,13 +322,13 @@ export function commitDrop({
   carried: Carried
   target: PaneKey
   zone: Zone
-  room: WorkspaceRoom | undefined
+  room: PaneRoom | undefined
 }): WorkspaceCommand {
   return (dispatch) => {
     dispatch(
       carried.kind === "pane"
         ? paneMoved({ pane: carried.pane, target, zone, room })
-        : sessionDropped({ sessionId: carried.sessionId, target, zone, room }),
+        : sessionDropped({ sessionId: carried.item, target, zone, room }),
     )
   }
 }

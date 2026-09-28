@@ -23,7 +23,7 @@ import {
 import { panesOf } from "../../../split-panes/model/pane-layout"
 import { fakeSource, settle, testStore } from "../../testing"
 import { restAfter } from "../../../split-panes/model/drop"
-import type { WorkspaceRoom } from "../../../split-panes/model/pane-sizing"
+import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import { measureWorkspace } from "./measure"
 import { saying, useWorkspaceDrag } from "./drag"
 
@@ -66,10 +66,10 @@ function Grid() {
           <article
             key={pane.key}
             data-pane-key={pane.key}
-            aria-label={`Session ${pane.sessionId}`}
+            aria-label={`Session ${pane.item}`}
           >
             <header className="workspace-pane-header" data-drag-pane={pane.key}>
-              {pane.sessionId}
+              {pane.item}
               <button type="button" aria-label="Close Pane" />
             </header>
             <div className="workspace-pane-body">
@@ -77,7 +77,7 @@ function Grid() {
                 <div className="workspace-transcript-inner">
                   {[0, 1, 2, 3, 4].map((part) => (
                     <p key={part} data-part={part}>
-                      {`${pane.sessionId} part ${part}`}
+                      {`${pane.item} part ${part}`}
                     </p>
                   ))}
                 </div>
@@ -140,7 +140,7 @@ const pointer = (
  * otherwise.
  */
 async function mounted(
-  measure: () => WorkspaceRoom | undefined = () => measureWorkspace(host),
+  measure: () => PaneRoom | undefined = () => measureWorkspace(host),
   source = fakeSource(),
 ) {
   const store = testStore(source, measure)
@@ -214,7 +214,7 @@ it("carries the copy under the pointer, gliding to its centre, and commits the z
   pointer("pointerup", 827, 400)
   await frames()
   const after = store.getState().workspace.panes
-  expect((after ? panesOf(after) : []).map((pane) => pane.sessionId)).toEqual(["c", "a"])
+  expect((after ? panesOf(after) : []).map((pane) => pane.item)).toEqual(["c", "a"])
   nothingLeft()
   await act(async () => root.unmount())
 })
@@ -303,10 +303,7 @@ it("reads the page only as the press begins: beginning, previewing, dropping and
     expect(reads).toBe(again)
     expect(measured).toBe(1)
     const after = store.getState().workspace.panes
-    expect((after ? panesOf(after) : []).map((pane) => pane.sessionId)).toEqual([
-      "c",
-      "a",
-    ])
+    expect((after ? panesOf(after) : []).map((pane) => pane.item)).toEqual(["c", "a"])
   } finally {
     window.getComputedStyle = style
     for (const [name, descriptor] of kept)
@@ -475,7 +472,7 @@ it("commits the zone on the page when let go in another before the frame drew it
   pointer("pointerup", 1090, 400)
   await frames()
   const after = store.getState().workspace.panes
-  expect((after ? panesOf(after) : []).map((pane) => pane.sessionId)).toEqual(["c", "a"])
+  expect((after ? panesOf(after) : []).map((pane) => pane.item)).toEqual(["c", "a"])
   nothingLeft()
   await act(async () => root.unmount())
 })
@@ -678,7 +675,7 @@ it("never takes Settings' Escape: under an inert window the keys are not the dra
 
 it("says each zone as a person would: above and below, left of and right of", () => {
   const outcome = (does: "move" | "split") =>
-    ({ does, lands: 1, layout: null, foldSidebar: false }) as unknown as Parameters<
+    ({ does, lands: 1, layout: null, takesSpare: false }) as unknown as Parameters<
       typeof saying
     >[0]
   expect(saying(outcome("split"), "top", "Notes")).toBe("Split above Notes")
@@ -865,7 +862,7 @@ it("draws the copy at the slot it would land in, and the panes at the rects the 
   pointer("pointerup", 827, 30)
   await frames()
   const after = store.getState().workspace.panes
-  expect((after ? panesOf(after) : []).map((each) => each.sessionId)).toEqual(["a", "c"])
+  expect((after ? panesOf(after) : []).map((each) => each.item)).toEqual(["a", "c"])
   for (const each of host.querySelectorAll<HTMLElement>("[data-pane-key]")) {
     expect([each.style.width, each.style.height]).toEqual(["", ""])
     expect(each.hasAttribute("data-drag-corner")).toBe(false)
@@ -957,9 +954,9 @@ it("ends at once on a change: a command key, a resize, the store, Settings", asy
     await frames()
     const sessions = () => {
       const panes = store.getState().workspace.panes
-      return panes ? panesOf(panes).map((pane) => pane.sessionId) : []
+      return panes ? panesOf(panes).map((pane) => pane.item) : []
     }
-    const was = before.panes ? panesOf(before.panes).map((pane) => pane.sessionId) : []
+    const was = before.panes ? panesOf(before.panes).map((pane) => pane.item) : []
     // What the change did, it did; the drop did nothing on top of it: the
     // panes as they were, or — closed by the change — the one left.
     expect(sessions(), name).toEqual(sessions().length === was.length ? was : ["a"])
@@ -985,7 +982,7 @@ it("keeps carrying when only focus moves: pressing a pane focuses it, and that i
   pointer("pointerup", 827, 400)
   await frames()
   const after = store.getState().workspace.panes
-  expect((after ? panesOf(after) : []).map((pane) => pane.sessionId)).toEqual(["c", "a"])
+  expect((after ? panesOf(after) : []).map((pane) => pane.item)).toEqual(["c", "a"])
   await act(async () => root.unmount())
 })
 

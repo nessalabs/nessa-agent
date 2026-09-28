@@ -3,16 +3,16 @@
  * a drag aims (`aimAt`, the pointer itself), the zone it is in, and the
  * layout the drop would leave — the one the
  * drag previews and the one the command commits, from this one function, so
- * the preview is never a guess at the drop (`usecases/panes.ts` calls it for
- * both `movePane` and `dropSession`).
+ * the preview is never a guess at the drop (the workspace's `usecases/panes.ts`
+ * calls it for both `movePane` and `dropSession`).
  *
  * | carried            | zone   | outcome                                          |
  * | ------------------ | ------ | ------------------------------------------------ |
  * | a pane             | middle | the two swap places                              |
  * | a pane             | side   | it moves there, if the room allows (`arrange`)   |
- * | a session          | middle | it takes the pane's place                        |
- * | a session          | side   | a new pane shows it there, if the room allows    |
- * | a session on screen| any    | its pane is focused where it is                  |
+ * | an item            | middle | it takes the pane's place                        |
+ * | an item            | side   | a new pane shows it there, if the room allows    |
+ * | an item on screen  | any    | its pane is focused where it is                  |
  * | anything           | —      | nothing, where the room refuses: no zone offered |
  */
 import {
@@ -26,12 +26,12 @@ import {
   type Side,
   type Zone,
 } from "./pane-layout"
-import { arrange, placements, type Arranged, type WorkspaceRoom } from "./pane-sizing"
+import { arrange, placements, type Arranged, type PaneRoom } from "./pane-sizing"
 
-/** What is carried: a pane by its header, or a session from a list. */
+/** What is carried: a pane by its header, or an item from outside the grid (a session from a list). */
 export type Carried =
   | { readonly kind: "pane"; readonly pane: PaneKey }
-  | { readonly kind: "session"; readonly sessionId: string }
+  | { readonly kind: "item"; readonly item: string }
 
 /**
  * Where on a pane a drop lands, in the pane's own pixels, as VS Code's
@@ -321,9 +321,9 @@ export interface Targets {
   readonly grid: Rect
   readonly panes: readonly (readonly [PaneKey, Rect])[]
   /**
-   * The side columns drawn as the press began — docked beside the grid, or
-   * revealed from the window's edge over it: never a target, whatever is
-   * under them.
+   * What the host draws over or beside the grid as the press began — the
+   * workspace's side columns, docked or revealed from the window's edge
+   * over it: never a target, whatever is under them.
    */
   readonly covered: readonly Rect[]
   /** Each pane's zones a drop would change nothing on, or the room refuses (`refusedZones`). */
@@ -399,7 +399,7 @@ export function aimAt(
 
 const noZones: ReadonlySet<Zone> = new Set()
 
-/** What a drop leaves: the layout, whether the sidebar folds for it, and the pane it lands in. */
+/** What a drop leaves: the layout, whether it takes the host's spare room, and the pane it lands in. */
 export interface DropOutcome extends Arranged {
   /** The pane that shows what was carried once it lands. */
   readonly lands: PaneKey
@@ -417,7 +417,7 @@ export function dropOutcome(
   carried: Carried,
   target: PaneKey,
   zone: Zone,
-  room: WorkspaceRoom | undefined,
+  room: PaneRoom | undefined,
 ): DropOutcome | null {
   if (carried.kind === "pane") {
     const placed = arrange(layout, movePane(layout, carried.pane, target, zone), room)
@@ -425,21 +425,21 @@ export function dropOutcome(
       ? { ...placed, lands: carried.pane, does: zone === "center" ? "swap" : "move" }
       : null
   }
-  const shown = paneShowing(layout, carried.sessionId)
+  const shown = paneShowing(layout, carried.item)
   if (shown)
     return {
       layout: focusPane(layout, shown.key),
-      foldSidebar: false,
+      takesSpare: false,
       lands: shown.key,
       does: "go-to",
     }
   if (zone === "center") {
-    const shownThere = showInPane(layout, target, carried.sessionId)
+    const shownThere = showInPane(layout, target, carried.item)
     return shownThere === layout
       ? null
-      : { layout: shownThere, foldSidebar: false, lands: target, does: "replace" }
+      : { layout: shownThere, takesSpare: false, lands: target, does: "replace" }
   }
-  const placed = arrange(layout, splitPane(layout, target, zone, carried.sessionId), room)
+  const placed = arrange(layout, splitPane(layout, target, zone, carried.item), room)
   // A new pane is minted the layout's next key.
   return placed ? { ...placed, lands: layout.nextKey, does: "split" } : null
 }
@@ -452,7 +452,7 @@ const zones: readonly Zone[] = ["left", "right", "top", "bottom", "center"]
  * itself. Focus aside, it would do nothing, so it is not offered.
  */
 function movesNothing(layout: PaneLayout, outcome: DropOutcome): boolean {
-  if ((outcome.does !== "move" && outcome.does !== "swap") || outcome.foldSidebar)
+  if ((outcome.does !== "move" && outcome.does !== "swap") || outcome.takesSpare)
     return false
   const before = placements(layout.columns).panes
   const after = new Map(
@@ -487,7 +487,7 @@ function movesNothing(layout: PaneLayout, outcome: DropOutcome): boolean {
 export function refusedZones(
   layout: PaneLayout,
   carried: Carried,
-  room: WorkspaceRoom | undefined,
+  room: PaneRoom | undefined,
 ): ReadonlyMap<PaneKey, ReadonlySet<Zone>> {
   return new Map(
     placements(layout.columns).panes.map(({ key }) => [

@@ -12,7 +12,7 @@ import type {
 } from "./application/ports"
 import { defaultFilter, type AgentsFilter } from "./model/overview/filter"
 import type { WorkspaceFailureReason } from "./model/failure"
-import type { WorkspaceRoom } from "../split-panes/model/pane-sizing"
+import type { PaneRoom } from "../split-panes/model/pane-sizing"
 import { WorkspaceSourceError } from "./application/ports"
 import type {
   WorkspaceIndex,
@@ -218,7 +218,7 @@ export function keptFilter(
 }
 
 /** A grid with room for three columns of two panes, and a sidebar that could fold. */
-export const roomyGrid: WorkspaceRoom = { width: 1100, height: 800, spare: 256 }
+export const roomyGrid: PaneRoom = { width: 1100, height: 800, spare: 256 }
 
 /**
  * A desktop store over `source`, with a clock at 1000, ids counting up, and
@@ -227,7 +227,7 @@ export const roomyGrid: WorkspaceRoom = { width: 1100, height: 800, spare: 256 }
  */
 export function testStore(
   source: WorkspaceSource = fakeSource(),
-  measure: () => WorkspaceRoom | undefined = () => roomyGrid,
+  measure: () => PaneRoom | undefined = () => roomyGrid,
   overviewFilter: RememberedFilter = keptFilter(),
 ) {
   let next = 0

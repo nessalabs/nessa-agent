@@ -68,7 +68,7 @@ function signature(store: DesktopStore): {
   const pane = focusedPane(panes)
   return {
     pane: String(pane.key),
-    rest: `${pane.sessionId}:${panes.columns.map((column) => column.panes.length).join(",")}`,
+    rest: `${pane.item}:${panes.columns.map((column) => column.panes.length).join(",")}`,
     panesShown,
   }
 }

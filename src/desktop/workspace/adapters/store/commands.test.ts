@@ -61,7 +61,7 @@ async function ready(source = fakeSource()) {
 }
 
 const shown = (store: ReturnType<typeof testStore>) =>
-  panesOf(store.getState().workspace.panes!).map((pane) => pane.sessionId)
+  panesOf(store.getState().workspace.panes!).map((pane) => pane.item)
 
 const outboxOf = (store: ReturnType<typeof testStore>, sessionId: string) =>
   store.getState().workspace.outbox[sessionId] ?? []

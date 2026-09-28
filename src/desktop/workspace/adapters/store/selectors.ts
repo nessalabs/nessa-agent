@@ -189,17 +189,15 @@ export const selectFocusedPaneKey = (state: Root): PaneKey | null =>
   state.workspace.panes ? focusedPane(state.workspace.panes).key : null
 
 export const selectFocusedSessionId = (state: Root): string | null =>
-  state.workspace.panes ? focusedPane(state.workspace.panes).sessionId : null
+  state.workspace.panes ? focusedPane(state.workspace.panes).item : null
 
 /** The session a pane shows. */
 export const selectPaneSession = (state: Root, pane: PaneKey): string | null =>
-  state.workspace.panes
-    ? (paneByKey(state.workspace.panes, pane)?.sessionId ?? null)
-    : null
+  state.workspace.panes ? (paneByKey(state.workspace.panes, pane)?.item ?? null) : null
 
 /** The sessions on screen, in reading order. */
 export const selectShownSessionIds = createSelector([selectPanes], (panes) =>
-  panes ? panesOf(panes).map((pane) => pane.sessionId) : [],
+  panes ? panesOf(panes).map((pane) => pane.item) : [],
 )
 
 export const selectStatusCounts = createSelector([listed], statusCounts)

@@ -30,7 +30,7 @@ import {
   resizeEdge,
   type Arranged,
   type PaneEdge,
-  type WorkspaceRoom,
+  type PaneRoom,
 } from "../../../split-panes/model/pane-sizing"
 import {
   channelOf,
@@ -70,14 +70,15 @@ function opened(state: WorkspaceState, sessionId: string): WorkspaceState {
 
 /**
  * A change of layout the room allowed (`arrange`): applied, the sidebar
- * folded for room when that is what made it fit — a fold the window lifts
- * once there is room again, not the person's choice.
+ * folded for room when taking the spare room it gives up (`PaneRoom.spare`)
+ * is what made it fit — a fold the window lifts once there is room again,
+ * not the person's choice.
  */
 function arranged(
   state: WorkspaceState,
-  { layout, foldSidebar }: Arranged,
+  { layout, takesSpare }: Arranged,
 ): WorkspaceState {
-  const sidebar = foldSidebar
+  const sidebar = takesSpare
     ? fittedColumn(state.chrome.sidebar, false)
     : state.chrome.sidebar
   const folded =
@@ -114,7 +115,7 @@ function besideIn(
   target: PaneKey,
   side: Side,
   sessionId: string,
-  room: WorkspaceRoom | undefined,
+  room: PaneRoom | undefined,
 ): Arranged | null {
   return arrange(panes, splitPane(panes, target, side, sessionId), room)
 }
@@ -139,7 +140,7 @@ export function openBeside(
     sessionId: string
     target?: PaneKey
     side?: Side
-    room: WorkspaceRoom | undefined
+    room: PaneRoom | undefined
     replace?: boolean
   },
 ): WorkspaceState {
@@ -163,11 +164,7 @@ export function openBeside(
  */
 export function canOpenBeside(
   state: WorkspaceState,
-  {
-    target,
-    side,
-    room,
-  }: { target?: PaneKey; side?: Side; room: WorkspaceRoom | undefined },
+  { target, side, room }: { target?: PaneKey; side?: Side; room: PaneRoom | undefined },
 ): boolean {
   const panes = state.panes
   if (!panes) return false
@@ -190,12 +187,12 @@ export function dropSession(
     target,
     zone,
     room,
-  }: { sessionId: string; target: PaneKey; zone: Zone; room: WorkspaceRoom | undefined },
+  }: { sessionId: string; target: PaneKey; zone: Zone; room: PaneRoom | undefined },
 ): WorkspaceState {
   if (!state.panes || !showable(state, sessionId)) return state
   const outcome = dropOutcome(
     state.panes,
-    { kind: "session", sessionId },
+    { kind: "item", item: sessionId },
     target,
     zone,
     room,
@@ -223,7 +220,7 @@ export function createDraft(
     model?: ModelRef
     beside?: Side
     target?: PaneKey
-    room?: WorkspaceRoom
+    room?: PaneRoom
   },
 ): WorkspaceState {
   const panes = state.panes
@@ -270,7 +267,7 @@ export function closePane(
   const panes = state.panes
   if (!panes || !locate(panes, pane)) return state
   if (paneCount(panes) > 1) return withPanes(state, removePane(panes, pane))
-  const shown = paneByKey(panes, pane)?.sessionId
+  const shown = paneByKey(panes, pane)?.item
   const session = shown ? sessionOf(state, shown) : undefined
   if (!session || !draftId) return state
   return createDraft(state, {
@@ -293,7 +290,7 @@ export function movePane(
     target,
     zone,
     room,
-  }: { pane: PaneKey; target: PaneKey; zone: Zone; room: WorkspaceRoom | undefined },
+  }: { pane: PaneKey; target: PaneKey; zone: Zone; room: PaneRoom | undefined },
 ): WorkspaceState {
   if (!state.panes) return state
   const outcome = dropOutcome(state.panes, { kind: "pane", pane }, target, zone, room)
@@ -311,7 +308,7 @@ export function nudgePane(
     pane,
     direction,
     room,
-  }: { pane: PaneKey; direction: Direction; room: WorkspaceRoom | undefined },
+  }: { pane: PaneKey; direction: Direction; room: PaneRoom | undefined },
 ): WorkspaceState {
   if (!state.panes) return state
   const placed = arrange(state.panes, nudgeLayoutPane(state.panes, pane, direction), room)
@@ -325,7 +322,7 @@ export function canNudge(
     pane,
     direction,
     room,
-  }: { pane: PaneKey; direction: Direction; room: WorkspaceRoom | undefined },
+  }: { pane: PaneKey; direction: Direction; room: PaneRoom | undefined },
 ): boolean {
   if (!state.panes) return false
   return (
