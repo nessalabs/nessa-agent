@@ -88,8 +88,9 @@ export function flyPane(
   // so mid-flight its controls would float inside the box, or be cut off at
   // its edge; it waits out of sight and comes back as the pane lands.
   const resized = Math.abs(sx - 1) > 0.02 || Math.abs(sy - 1) > 0.02
-  const header = children.find(({ element }) =>
-    element.classList.contains("workspace-pane-header"),
+  // The part held to the pane's top left (`data-split-keeps`): its header.
+  const header = children.find(
+    ({ element }) => element.dataset.splitKeeps === "top-left",
   )?.element
   const hiding =
     resized && header

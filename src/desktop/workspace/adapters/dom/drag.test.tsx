@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 /**
- * The pointer's drag, where jsdom can follow it: the page's side of
- * `model/drag.ts`. The copy is the pane itself, held under the pointer and
+ * The pointer's drag in the workspace, where jsdom can follow it: the split
+ * panes' drag (`useSplitPanesDrag`) wired to the workspace's store
+ * (`workspaceSplitPanes`) and page (`workspaceDragOptions`), as the window
+ * wires it — the page's side of `split-panes/model/drag.ts`. The copy is the pane itself, held under the pointer and
  * gliding to its centre; the zone under the pointer is said, a drop commits
  * what was shown, and Escape, a lost pointer or any change lets it all go.
  * What the drag reads of the page it reads as the press begins; after that it
  * only writes, and selects nothing.
  */
-import { act, useRef } from "react"
+import { act, useMemo, useRef } from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
@@ -25,7 +27,9 @@ import { fakeSource, settle, testStore } from "../../testing"
 import { restAfter } from "../../../split-panes/model/drop"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import { measureWorkspace } from "./measure"
-import { saying, useWorkspaceDrag } from "./drag"
+import { workspaceSplitPanes } from "../store/split-panes-source"
+import { saying, useSplitPanesDrag } from "./drag"
+import { workspaceDragOptions } from "./split-panes-drag"
 
 let host: HTMLDivElement
 /** Every animation asked for, and of what. */
@@ -55,25 +59,31 @@ afterEach(() => {
 function Grid() {
   const root = useRef<HTMLDivElement>(null)
   const store = useWorkspaceStore()
-  useWorkspaceDrag(store, root)
+  const source = useMemo(() => workspaceSplitPanes(store), [store])
+  const options = useMemo(() => workspaceDragOptions(store), [store])
+  useSplitPanesDrag(root, source, options)
   const panes = store.getState().workspace.panes
   return (
     <div ref={root} data-workspace data-sidebar="closed">
-      <div data-drag-session="d">Session d</div>
+      <div data-drag-item="d">Session d</div>
       <nav className="workspace-sidebar" />
-      <div className="workspace-panes">
+      <div className="workspace-panes" data-split-grid>
         {(panes ? panesOf(panes) : []).map((pane) => (
           <article
             key={pane.key}
             data-pane-key={pane.key}
             aria-label={`Session ${pane.item}`}
           >
-            <header className="workspace-pane-header" data-drag-pane={pane.key}>
+            <header
+              className="workspace-pane-header"
+              data-split-keeps="top-left"
+              data-drag-pane={pane.key}
+            >
               {pane.item}
               <button type="button" aria-label="Close Pane" />
             </header>
-            <div className="workspace-pane-body">
-              <div className="workspace-transcript">
+            <div className="workspace-pane-body" data-split-through>
+              <div className="workspace-transcript" data-split-scroll>
                 <div className="workspace-transcript-inner">
                   {[0, 1, 2, 3, 4].map((part) => (
                     <p key={part} data-part={part}>
@@ -570,7 +580,7 @@ it("never aims over a side column: the sidebar revealed over the panes is no zon
   host.querySelectorAll<HTMLElement>("[data-pane-key]").forEach((pane, index) => {
     pane.getBoundingClientRect = () => new DOMRect(index * 554, 0, 546, 800)
   })
-  const row = host.querySelector("[data-drag-session]")
+  const row = host.querySelector("[data-drag-item]")
   if (!row) throw new Error("no row")
   await press(10, 10, row)
   pointer("pointermove", 40, 40)
@@ -612,7 +622,7 @@ it("takes a peek still sliding in as covering where it slides to, not the part o
         key === "transform" ? "matrix(1, 0, 0, 1, -200, 0)" : Reflect.get(target, key),
     })
   })
-  const row = host.querySelector("[data-drag-session]")
+  const row = host.querySelector("[data-drag-item]")
   if (!row) throw new Error("no row")
   await press(10, 10, row)
   style.mockRestore()
@@ -634,7 +644,7 @@ it("ends at once when the carried session is no longer listed", async () => {
   const { store, root } = await mounted(undefined, source)
   const stop = store.dispatch(followWorkspace())
   const before = store.getState().workspace.panes
-  const row = host.querySelector("[data-drag-session]")
+  const row = host.querySelector("[data-drag-item]")
   if (!row) throw new Error("no row")
   await press(10, 10, row)
   pointer("pointermove", 40, 40)
@@ -990,7 +1000,7 @@ it("offers no zone while the overview covers the panes: a session carried there 
   const { store, root } = await mounted()
   store.dispatch(showContent({ content: "agents" }))
   const before = store.getState().workspace.panes
-  const row = host.querySelector("[data-drag-session]")
+  const row = host.querySelector("[data-drag-item]")
   if (!row) throw new Error("no row")
   await press(10, 10, row)
   pointer("pointermove", 830, 400)

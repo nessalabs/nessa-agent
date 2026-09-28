@@ -1,22 +1,24 @@
 /**
- * Drag and drop in the workspace, carried by the pointer rather than the
+ * Drag and drop between split panes, carried by the pointer rather than the
  * browser's own drag, so what is carried looks like the window it will be.
  * What a press becomes, event by event, is `model/drag.ts` (ADR 238 › _Drag
  * and drop_ has its table); this is the page's side of it — every event is
  * sent there, and each phase it answers with is drawn here:
  *
  * - **pressed**: nothing in the press's own frame; in a task once it has
- *   painted, the copy is made unseen — the pane itself, or for a session from
- *   a list its heading and latest words — and what the drag needs of the page
- *   is read, once: the grid and its room, each pane's box and parts, the side
- *   columns drawn. Until then a move does not lift it;
+ *   painted, the copy is made unseen — the pane itself, or for an item from
+ *   outside the grid what the host makes of it (`copyOf`) — and what the drag
+ *   needs of the page is read, once: the grid and its room, each pane's box
+ *   and parts, what the host covers (`covered`). Until then a move does not
+ *   lift it;
  * - **carrying**: the copy is shown under the pointer and glides so its
  *   centre comes under it, then stays there; the zone the pointer is in
  *   (`aimAt`) shows what dropping there would do — the panes take the rects
  *   the drop would give them and a placeholder marks the rect it takes, from
- *   the one outcome the drop commits (`previewDrop`), and the copy takes the
- *   placeholder's shape about the pointer (`copyShape`);
- * - **dropping**: released while a zone is shown, the drop commits what is
+ *   the one outcome the drop commits (`dropOutcome` of the layout the source
+ *   reads), and the copy takes the placeholder's shape about the pointer
+ *   (`copyShape`);
+ * - **dropping**: released while a zone is shown, the source commits what is
  *   shown (`commitDrop`) in the room the press read, and the copy flies into
  *   the placeholder's rect and hands over to the real pane;
  * - **cancelling**: the copy flies home as the panes go back — or, when the
@@ -24,8 +26,8 @@
  *   change plays as it would with no drag.
  *
  * Everything moves by transform, in animations the compositor runs; the
- * pointer is followed without rendering anything, and the store is asked
- * only when the zone changes. What changes shape grows or shrinks into it by
+ * pointer is followed without rendering anything, and the outcome is asked
+ * for only when the zone changes. What changes shape grows or shrinks into it by
  * a scale its content undoes step by step, so no text is ever drawn
  * stretched: a pane the preview resizes is cut to the shape it would take;
  * the copy is laid out once at it, as the zone changes. No frame of a drag
@@ -38,14 +40,15 @@
  * would land is outlined. The zone is said to assistive technology as it
  * changes.
  *
- * A component takes part by marking what can be carried: `data-drag-pane`
- * (a pane's key, on its header) or `data-drag-session` (a session's id, on a
- * row). The keyboard's own ways — the Move items, ⌃⌥ and an arrow — are
- * untouched.
+ * A host takes part by marking what can be carried: `data-drag-pane` (a
+ * pane's key, on its header) or `data-drag-item` (an item's id, on a row
+ * outside the grid), and by marking what each part of a pane keeps to as a
+ * preview reshapes it (`data-split-keeps`, `PanePart`). The keyboard's own
+ * ways — the workspace's Move items, ⌃⌥ and an arrow — are untouched.
  */
 import { useEffect, type RefObject } from "react"
 import { reducedMotion } from "../../../adapters/motion-preference"
-import type { DesktopStore } from "../../../store"
+import type { SplitPanesSource } from "../../../split-panes/application/ports"
 import {
   copyShape,
   idle,
@@ -57,6 +60,7 @@ import {
   type Size,
 } from "../../../split-panes/model/drag"
 import {
+  dropOutcome,
   refusedZones,
   restAfter,
   type Aim,
@@ -72,16 +76,15 @@ import {
   type PanePlacement,
   type PaneRoom,
 } from "../../../split-panes/model/pane-sizing"
-import { commitDrop, measureRoom, previewDrop } from "../store/commands"
 import { durationToken, motionToken } from "../../../adapters/motion"
 
 /** Marks the preview's own motion. */
 const dragPreview = "workspace-drag-preview"
 
-/** The preview's animations under each workspace root, so they can be let go without a search. */
+/** The preview's animations under each drag root, so they can be let go without a search. */
 const previews = new WeakMap<Element, Set<Animation>>()
 
-/** The panes a preview marked as resting in the window's corner, or leaving it, under each workspace root. */
+/** The panes a preview marked as resting in the window's corner, or leaving it, under each drag root. */
 const cornered = new WeakMap<Element, Set<HTMLElement>>()
 
 /** Whether `pane`'s header steps past the window's controls now. */
@@ -180,9 +183,6 @@ export function letGoOfDragPreview(root: Element): void {
   previews.delete(root)
 }
 
-/** How many of a session's latest messages its copy shows: a screen's worth. */
-const latestShown = 12
-
 interface Box {
   readonly left: number
   readonly top: number
@@ -198,10 +198,11 @@ const boxOf = (rect: DOMRect | Box): Box => ({
 })
 
 /**
- * Where a side column is once it has settled. A drawn column rests at no
- * transform, so one still sliding in — the peek, revealed just before the
- * press — is taken at the rect it is sliding to, its box less the
- * translation it is drawn at now, never the part of the way it has come.
+ * Where something the host covers the grid with is once it has settled. It
+ * rests at no transform, so one still sliding in — the workspace's peek,
+ * revealed just before the press — is taken at the rect it is sliding to,
+ * its box less the translation it is drawn at now, never the part of the way
+ * it has come.
  */
 function settledBox(column: Element): Box {
   const rect = column.getBoundingClientRect()
@@ -252,7 +253,7 @@ function between(from: Box, to: Box, opacity = 1): Drawn {
   }
 }
 
-/** The grid a drop would leave, the sidebar's room added when it folds. */
+/** The grid a drop would leave, the host's spare room added when it takes it. */
 const landingGrid = (grid: Box, spare: number): Box => ({
   ...grid,
   left: grid.left - spare,
@@ -306,7 +307,7 @@ interface Made {
   /** The copy's content, counter-scaled as its box changes shape. */
   readonly inner: HTMLElement
   /** What was pressed: marked while carried. */
-  readonly source: HTMLElement
+  readonly pressed: HTMLElement
   /** Over the page while carrying: the grabbing hand, and nothing under it selected. */
   readonly shield: HTMLElement
   /** Where the copy started, and flies back to. */
@@ -347,12 +348,13 @@ interface Made {
 
 /**
  * A part of a pane a preview draws at its own size, and what of the pane's
- * would-be box it keeps to, as a pane that shape would lay it out: the
- * header its top left, where it steps past the window's controls; the
- * composer its foot; a new session's home its middle; the rest its top.
- * Across, the rest keeps to the middle where the pane grows — a pane
- * centres its conversation — and to the left where it shrinks, so what is
- * cut is the end of its lines, never their start.
+ * would-be box it keeps to, as a pane that shape would lay it out — as the
+ * host marks it with `data-split-keeps`: `top-left` (the workspace's header,
+ * where it steps past the window's controls), `foot` (its composer),
+ * `middle` (a new session's home); unmarked, the top. Across, the top keeps
+ * to the middle where the pane grows — a pane centres its conversation —
+ * and to the left where it shrinks, so what is cut is the end of its lines,
+ * never their start.
  */
 interface PanePart {
   readonly element: HTMLElement
@@ -362,7 +364,24 @@ interface PanePart {
   readonly keeps: "top-left" | "top" | "foot" | "middle"
 }
 
-/** A pane's parts, read as the press begins: its conversation's transcript and composer apart. */
+/** What a part may be marked as keeping to (`data-split-keeps`); unmarked is the top. */
+const marks = ["top-left", "foot", "middle"] as const
+
+const isMark = (value: string | undefined): value is (typeof marks)[number] =>
+  marks.some((mark) => mark === value)
+
+/** What a part keeps to, as the host marked it; unmarked, or marked with anything else, the top. */
+function keepsOf(element: HTMLElement): PanePart["keeps"] {
+  const marked = element.dataset.splitKeeps
+  return isMark(marked) ? marked : "top"
+}
+
+/**
+ * A pane's parts, read as the press begins: its children, and the children
+ * of any the host marks `data-split-through` (a wrapper to look inside, as
+ * the workspace's body and conversation are), so a conversation's
+ * transcript and composer are parts apart.
+ */
 function partsOf(pane: HTMLElement): PanePart[] {
   // Laid out, not drawn: offsets, summed up to the pane, ignore any transform.
   const offset = (element: HTMLElement) => {
@@ -384,28 +403,66 @@ function partsOf(pane: HTMLElement): PanePart[] {
       element,
       left,
       top,
-      keeps: element.classList.contains("workspace-pane-header")
-        ? "top-left"
-        : element.classList.contains("workspace-dock")
-          ? "foot"
-          : element.classList.contains("workspace-pane-home")
-            ? "middle"
-            : "top",
+      keeps: keepsOf(element),
     }
   }
   const within = (element: Element): HTMLElement[] =>
     Array.from(element.children, (child) =>
-      child.classList.contains("workspace-pane-body") ||
-      child.classList.contains("workspace-conversation")
-        ? within(child)
-        : [child as HTMLElement],
+      child.hasAttribute("data-split-through") ? within(child) : [child as HTMLElement],
     ).flat()
   return within(pane).map(part)
 }
 
-export function useWorkspaceDrag(
-  store: DesktopStore,
+/** What the host adds to a drag of its own: what only it knows of its page. */
+export interface SplitPanesDragOptions {
+  /**
+   * The copy carried for an item pressed outside the grid (`data-drag-item`),
+   * built detached — never put on the page, and nothing on the page read
+   * after the press. `pressed` is what was pressed; `picture` copies an
+   * element as the drag copies a pane (ids, labels and the module's marks
+   * stripped); `focusedPane` is the focused pane's element, if drawn.
+   */
+  readonly copyOf: (
+    item: string,
+    context: {
+      readonly pressed: HTMLElement
+      readonly picture: (element: Element) => HTMLElement
+      readonly focusedPane: HTMLElement | null
+    },
+  ) => HTMLElement
+  /**
+   * What the host draws over or beside the grid under `root` as the press
+   * begins, never a target whatever is under it (the workspace's side
+   * columns, docked or revealed from the edge).
+   */
+  readonly covered: (root: HTMLElement) => readonly Element[]
+  /** Attributes of the host's a copy leaves out, beside the module's own. */
+  readonly stripped?: readonly string[]
+}
+
+/** What a copy leaves out of what it pictures: identity, focus and the drag's own marks. */
+const alwaysStripped = [
+  "id",
+  "tabindex",
+  "aria-label",
+  "aria-labelledby",
+  "aria-describedby",
+  "data-pane-key",
+  "data-flip",
+  "data-flip-id",
+  "data-drag-pane",
+  "data-lifted",
+]
+
+/**
+ * Drag and drop under `root`, which spans the host — items are picked up
+ * outside the grid and dropped on it. `source` and `options` are built once
+ * by the host: a new one ends any drag and starts again.
+ */
+export function useSplitPanesDrag(
   root: RefObject<HTMLElement | null>,
+  source: SplitPanesSource,
+  options: SplitPanesDragOptions,
 ): void {
   useEffect(() => {
     const scope = root.current
@@ -425,14 +482,17 @@ export function useWorkspaceDrag(
     /** The press's frame, then the task after it, that make what a drag needs. */
     let waiting: { frame: number; timer: number } | null = null
 
-    /** The workspace as the press found it: a change to any of it ends the press or the drag. */
-    let seen: { panes: unknown; content: unknown; chrome: unknown } = {
-      panes: null,
-      content: null,
-      chrome: null,
+    /**
+     * What the press found: the panes' arrangement — not which has focus:
+     * pressing a pane focuses it — and what the host watches. A change to any
+     * of it ends the press or the drag.
+     */
+    let seen: { columns: unknown; watched: readonly unknown[] } = {
+      columns: null,
+      watched: [],
     }
 
-    const layoutNow = () => store.getState().workspace.panes
+    const layoutNow = () => source.layout()
     const paneElement = (key: PaneKey) =>
       scope.querySelector<HTMLElement>(`[data-pane-key="${key}"]`)
 
@@ -593,8 +653,8 @@ export function useWorkspaceDrag(
             )
           : [],
       )
-      if (scope.hasAttribute("data-drag-folds") !== Boolean(outcome?.takesSpare))
-        scope.toggleAttribute("data-drag-folds", Boolean(outcome?.takesSpare))
+      if (scope.hasAttribute("data-drag-takes-spare") !== Boolean(outcome?.takesSpare))
+        scope.toggleAttribute("data-drag-takes-spare", Boolean(outcome?.takesSpare))
       if (outcome && landing && !("dragReflow" in scope.dataset))
         scope.dataset.dragReflow = ""
       if (!reducedMotion())
@@ -624,7 +684,11 @@ export function useWorkspaceDrag(
           : ""
     }
 
-    /** Brings what the page shows up to the phase's aim: asked of the store only when it changed. */
+    /**
+     * Brings what the page shows up to the phase's aim: the outcome asked for
+     * — of the layout the source holds, in the room the press read, the one
+     * the drop commits — only when it changed.
+     */
     const show = () => {
       if (phase.kind !== "carrying") return
       const { aim, carried: what, made } = phase
@@ -632,17 +696,10 @@ export function useWorkspaceDrag(
       drawing.frame = 0
       if (sameAim(aim, drawing.shown)) return
       drawing.shown = aim
+      const layout = layoutNow()
       // A pane over itself, or a zone the room refuses: nothing is offered.
-      const outcome = aim
-        ? store.dispatch(
-            previewDrop({
-              carried: what,
-              target: aim.target,
-              zone: aim.zone,
-              room: made.room,
-            }),
-          )
-        : null
+      const outcome =
+        aim && layout ? dropOutcome(layout, what, aim.target, aim.zone, made.room) : null
       if (outcome === drawing.outcome) return
       drawing.outcome = outcome
       preview(made, outcome, aim)
@@ -738,7 +795,7 @@ export function useWorkspaceDrag(
 
     const ghostFor = (
       carried: Carried,
-      source: HTMLElement,
+      pressed: HTMLElement,
       size: { width: number; height: number },
     ) => {
       const ghost = document.createElement("div")
@@ -753,6 +810,7 @@ export function useWorkspaceDrag(
       const inner = document.createElement("div")
       inner.className = "workspace-drag-ghost-inner"
       ghost.append(inner)
+      const stripped = [...alwaysStripped, ...(options.stripped ?? [])]
       const picture = (
         element: Element,
         prune?: (from: Element, copy: Element) => void,
@@ -760,37 +818,22 @@ export function useWorkspaceDrag(
         const clone = element.cloneNode(true) as HTMLElement
         prune?.(element, clone)
         for (const node of [clone, ...clone.querySelectorAll<HTMLElement>("*")]) {
-          for (const name of [
-            "id",
-            "tabindex",
-            "aria-label",
-            "aria-labelledby",
-            "aria-describedby",
-            "data-pane-key",
-            "data-flip",
-            "data-flip-id",
-            "data-drag-pane",
-            "data-tauri-drag-region",
-            "data-lifted",
-            "data-pane-focused",
-          ])
-            node.removeAttribute(name)
+          for (const name of stripped) node.removeAttribute(name)
         }
         return clone
       }
       /**
        * The conversation as it shows, and no more: the copy is a picture of
-       * one screen of it, so what is scrolled out of view above stands in as
-       * one spacer of its height and what is below is left out, and the copy
-       * is moved up by where it was scrolled to — a transform, never a scroll,
-       * which would lay the copy out at once.
+       * one screen of what the host marks `data-split-scroll` (its content
+       * the scroller's first child), so what is scrolled out of view above
+       * stands in as one spacer of its height and what is below is left out,
+       * and the copy is moved up by where it was scrolled to — a transform,
+       * never a scroll, which would lay the copy out at once.
        */
       const onScreenOnly = (from: Element, to: Element) => {
-        const scroller = from.querySelector<HTMLElement>(".workspace-transcript")
-        const content = scroller?.querySelector(":scope > .workspace-transcript-inner")
-        const copied = to.querySelector<HTMLElement>(
-          ".workspace-transcript > .workspace-transcript-inner",
-        )
+        const scroller = from.querySelector<HTMLElement>("[data-split-scroll]")
+        const content = scroller?.firstElementChild
+        const copied = to.querySelector<HTMLElement>("[data-split-scroll] > :first-child")
         if (!scroller || !content || !copied) return
         const view = scroller.getBoundingClientRect()
         const parts = Array.from(content.children, (child) =>
@@ -825,97 +868,36 @@ export function useWorkspaceDrag(
           return { ghost, inner }
         }
       }
-      // A session with no pane yet: its heading and latest words, as the window holds them.
-      const card = document.createElement("article")
-      card.className = "workspace-pane workspace-drag-ghost-pane"
-      const header = document.createElement("header")
-      header.className = "workspace-pane-header"
-      const tile = source.querySelector(".workspace-agent-tile")
-      if (tile) header.append(picture(tile))
-      const body = document.createElement("div")
-      body.className = "workspace-pane-body"
-      const transcript = document.createElement("div")
-      // Its latest words at the foot, as a conversation opens: set by the copy's
-      // own layout, not a scroll (`chrome.css`).
-      transcript.className = "workspace-transcript workspace-drag-ghost-latest"
-      const content = document.createElement("div")
-      content.className = "workspace-transcript-inner"
-      const heading = document.createElement("div")
-      heading.className = "workspace-heading"
-      const title = document.createElement("h2")
-      const sessionId = carried.kind === "item" ? carried.item : ""
-      const state = store.getState().workspace
-      const summary = Object.hasOwn(state.sessions, sessionId)
-        ? state.sessions[sessionId]
-        : undefined
-      title.textContent = summary?.title ?? source.textContent ?? ""
-      heading.append(title)
-      content.append(heading)
-      const held = Object.hasOwn(state.transcripts, sessionId)
-        ? state.transcripts[sessionId]
-        : undefined
-      // A screen's worth: the latest few, which is all the copy shows.
-      const messages = (held?.messages ?? []).slice(-latestShown)
-      if (messages.length === 0 && summary?.preview) {
-        const line = document.createElement("p")
-        line.className = "workspace-message"
-        line.textContent = summary.preview
-        content.append(line)
-      }
-      for (const message of messages) {
-        const row = document.createElement("div")
-        row.className = "workspace-message"
-        row.dataset.role = message.role
-        const text = message.parts
-          .map((part) =>
-            part.kind === "text" ? part.text : part.kind === "code" ? part.code : "",
-          )
-          .filter(Boolean)
-          .join("\n\n")
-        const block = document.createElement(message.role === "user" ? "div" : "p")
-        if (message.role === "user") block.className = "workspace-bubble"
-        block.textContent = text
-        row.append(block)
-        content.append(row)
-      }
-      transcript.append(content)
-      body.append(transcript)
-      // The composer it will have: the focused pane's, as it stands.
+      // An item with no pane yet: what the host makes of it.
       const layout = layoutNow()
-      const dock = layout
-        ? paneElement(layout.focused)?.querySelector(
-            ".workspace-dock, .workspace-pane-home .desktop-composer",
-          )
-        : null
-      if (dock) {
-        const composer = picture(dock)
-        composer.classList.add("workspace-dock")
-        composer.querySelectorAll("textarea").forEach((field) => (field.value = ""))
-        body.append(composer)
-      }
-      card.append(header, body)
-      inner.append(card)
+      const copy = options.copyOf(carried.kind === "item" ? carried.item : "", {
+        pressed,
+        picture,
+        focusedPane: layout ? paneElement(layout.focused) : null,
+      })
+      copy.classList.add("workspace-drag-ghost-pane")
+      inner.append(copy)
       return { ghost, inner }
     }
 
     /**
      * Everything a drag will need, read and made in a task after the press's
      * frame has painted — the copy put on the page unseen. The page is read
-     * here and nowhere after: the grid and the room it measures
-     * (`measureRoom`), each pane's box and parts, and the side columns drawn.
+     * here and nowhere after: the grid and the room the source measures,
+     * each pane's box and parts, and what the host covers.
      * A page something wrote to since that frame is laid out by these reads,
      * once (ADR 238 › _Drag and drop_ has the measured cost). A press that
      * never becomes a drag takes it all away again.
      */
     const prepare = (
       carried: Carried,
-      source: HTMLElement,
+      pressed: HTMLElement,
       x: number,
       y: number,
     ): Made | null => {
       const layout = layoutNow()
-      const panes = scope.querySelector<HTMLElement>(".workspace-panes")
-      const room = store.dispatch(measureRoom())
+      const panes = scope.querySelector<HTMLElement>("[data-split-grid]")
+      const room = source.measure()
       if (!layout || !panes || !room) return null
       const rect = panes.getBoundingClientRect()
       const grid: Box = {
@@ -937,15 +919,8 @@ export function useWorkspaceDrag(
         carried.kind === "pane" && from
           ? boxOf(from)
           : { left: x - size.width / 2, top: y - 20, ...size }
-      // The side columns drawn — docked, or revealed from the edge over the
-      // panes — are never targets.
-      const { sidebar, list } = scope.dataset
-      const covered = [
-        sidebar === "open" || "peek" in scope.dataset
-          ? scope.querySelector(".workspace-sidebar")
-          : null,
-        list === "open" ? scope.querySelector(".workspace-list") : null,
-      ].flatMap((column) => (column ? [settledBox(column)] : []))
+      // What the host covers the grid with is never a target.
+      const covered = options.covered(scope).map(settledBox)
       const parts = new Map(
         Array.from(scope.querySelectorAll<HTMLElement>("[data-pane-key]"), (pane) => [
           pane,
@@ -956,17 +931,16 @@ export function useWorkspaceDrag(
         duration: durationToken(scope, "--desktop-base"),
         easing: motionToken(scope, "--desktop-ease") ?? "ease",
       }
-      // Only panes a person can see are aimed at: none under the Agents overview.
-      const targets: Targets | null =
-        store.getState().workspace.content === "panes"
-          ? {
-              grid,
-              panes: [...boxes(layout, grid)],
-              covered,
-              refused: refusedZones(layout, carried, room),
-            }
-          : null
-      const { ghost, inner } = ghostFor(carried, source, size)
+      // Only panes a person can see are aimed at: none under what covers them all.
+      const targets: Targets | null = source.targetable()
+        ? {
+            grid,
+            panes: [...boxes(layout, grid)],
+            covered,
+            refused: refusedZones(layout, carried, room),
+          }
+        : null
+      const { ghost, inner } = ghostFor(carried, pressed, size)
       const grab = { x: x - home.left, y: y - home.top }
       const layer = document.createElement("div")
       layer.className = "workspace-drag-layer"
@@ -993,7 +967,7 @@ export function useWorkspaceDrag(
         glider,
         ghost,
         inner,
-        source,
+        pressed,
         shield,
         home,
         grab,
@@ -1020,7 +994,7 @@ export function useWorkspaceDrag(
 
     /** The press became a drag: the copy is shown under the pointer, and glides to its centre. */
     const begin = (made: Made, what: Carried, pointerId: number, at: PointerSample) => {
-      const { carrier, glider, ghost, grab, size, shield, source, drawing } = made
+      const { carrier, glider, ghost, grab, size, shield, pressed, drawing } = made
       drawing.pointer = { x: at.x, y: at.y }
       shield.addEventListener("lostpointercapture", onLost)
       window.getSelection()?.removeAllRanges()
@@ -1038,7 +1012,7 @@ export function useWorkspaceDrag(
       )
       scope.append(shield)
       scope.dataset.dragging = what.kind
-      source.dataset.dragging = ""
+      pressed.dataset.dragging = ""
       if (what.kind === "pane") paneElement(what.pane)?.setAttribute("data-lifted", "")
       try {
         // The shield holds the pointer: its hand shows wherever the pointer goes.
@@ -1073,7 +1047,7 @@ export function useWorkspaceDrag(
      * Whatever a drag left selected goes with it.
      */
     const tidy = (made: Made, later = false) => {
-      const { drawing, source, shield } = made
+      const { drawing, pressed, shield } = made
       cancelAnimationFrame(drawing.frame)
       window.clearTimeout(drawing.still)
       shield.remove()
@@ -1082,7 +1056,7 @@ export function useWorkspaceDrag(
       const unmark = () => {
         outline?.remove()
         delete scope.dataset.dragging
-        delete source.dataset.dragging
+        delete pressed.dataset.dragging
         scope
           .querySelectorAll("[data-lifted]")
           .forEach((pane) => pane.removeAttribute("data-lifted"))
@@ -1113,7 +1087,7 @@ export function useWorkspaceDrag(
         made.drawing.shape.motion?.cancel()
         made.drawing.shape.counter?.cancel()
         ;[...previewed.keys()].forEach(letGo)
-        scope.removeAttribute("data-drag-folds")
+        scope.removeAttribute("data-drag-takes-spare")
         tidy(made)
         landed(made)
         return
@@ -1121,7 +1095,7 @@ export function useWorkspaceDrag(
       preview(made, null, null)
       const back = flyTo(made, made.home, true)
       const panes = [...previewed.keys()]
-      scope.removeAttribute("data-drag-folds")
+      scope.removeAttribute("data-drag-takes-spare")
       tidy(made)
       void back.finished
         .catch(() => undefined)
@@ -1138,9 +1112,7 @@ export function useWorkspaceDrag(
       const { ghost, room, drawing } = made
       // The drop first, in the room the preview was drawn for — nothing of
       // the page is read — then the copy's flight and the tidying.
-      store.dispatch(
-        commitDrop({ carried: what, target: aim.target, zone: aim.zone, room }),
-      )
+      source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
       // Now it snaps: the copy flies from the pointer into the place it takes.
       const flight = drawing.landing ? flyTo(made, drawing.landing, false) : null
       tidy(made, true)
@@ -1148,8 +1120,8 @@ export function useWorkspaceDrag(
       // arrangement — lets go a frame on.
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
-          // The side columns' preview of a fold, measured through by the commit, goes now.
-          scope.removeAttribute("data-drag-folds")
+          // The host's preview of taking its spare room, measured through by the commit, goes now.
+          scope.removeAttribute("data-drag-takes-spare")
           letGoOfDragPreview(scope)
           previewed.clear()
         }),
@@ -1220,19 +1192,18 @@ export function useWorkspaceDrag(
       t: event.timeStamp,
     })
 
-    /** Whether what the drag read still holds: the panes, the view and the side columns as the press found them. */
+    /** Whether what the drag read still holds: the panes and what the host watches, as the press found them, and the item carried. */
     const unchanged = () => {
       if (phase.kind !== "pressed" && phase.kind !== "carrying") return true
-      const { panes, content, chrome, sessions } = store.getState().workspace
-      // The panes' arrangement, not which has focus: pressing a pane focuses it.
+      const watched = source.watched()
       if (
-        panes?.columns !== seen.panes ||
-        content !== seen.content ||
-        chrome !== seen.chrome
+        layoutNow()?.columns !== seen.columns ||
+        watched.length !== seen.watched.length ||
+        watched.some((value, index) => value !== seen.watched[index])
       )
         return false
       const { carried: what } = phase
-      return what.kind !== "item" || Object.hasOwn(sessions, what.item)
+      return what.kind !== "item" || source.holds(what.item)
     }
 
     const onPointerDown = (event: PointerEvent) => {
@@ -1240,22 +1211,21 @@ export function useWorkspaceDrag(
       // (a chord), never a press; a press of another pointer is not the drag's.
       if (event.button !== 0 || phase.kind !== "idle") return
       const target = event.target as Element
-      const source = target.closest<HTMLElement>("[data-drag-pane], [data-drag-session]")
-      if (!source || !scope.contains(source)) return
+      const pressed = target.closest<HTMLElement>("[data-drag-pane], [data-drag-item]")
+      if (!pressed || !scope.contains(pressed)) return
       // A control inside what is carried keeps its own press.
       const control = target.closest("button, input, textarea, a, [role='menuitem']")
-      if (control && control !== source && source.contains(control)) return
-      const pane = source.dataset.dragPane
-      const session = source.dataset.dragSession
+      if (control && control !== pressed && pressed.contains(control)) return
+      const pane = pressed.dataset.dragPane
+      const item = pressed.dataset.dragItem
       const what: Carried | null =
         pane !== undefined
           ? { kind: "pane", pane: Number(pane) }
-          : session
-            ? { kind: "item", item: session }
+          : item
+            ? { kind: "item", item }
             : null
       if (!what) return
-      const { panes, content, chrome } = store.getState().workspace
-      seen = { panes: panes?.columns, content, chrome }
+      seen = { columns: layoutNow()?.columns, watched: source.watched() }
       const { clientX: x, clientY: y } = event
       send({
         kind: "press",
@@ -1278,7 +1248,7 @@ export function useWorkspaceDrag(
           if (waiting !== pending) return
           waiting = null
           if (phase.kind !== "pressed" || phase.made) return
-          const made = prepare(what, source, x, y)
+          const made = prepare(what, pressed, x, y)
           // Nothing to carry on this page (no panes laid out): the press ends.
           send(made ? { kind: "ready", made } : { kind: "changed" })
         }, 0)
@@ -1359,7 +1329,7 @@ export function useWorkspaceDrag(
     const onStore = () => {
       if (!unchanged()) onChange()
     }
-    const unsubscribe = store.subscribe(onStore)
+    const unsubscribe = source.subscribe(onStore)
 
     scope.addEventListener("pointerdown", onPointerDown)
     window.addEventListener("pointermove", onPointerMove)
@@ -1388,5 +1358,5 @@ export function useWorkspaceDrag(
       phase = idle
       announcer.remove()
     }
-  }, [store, root])
+  }, [root, source, options])
 }

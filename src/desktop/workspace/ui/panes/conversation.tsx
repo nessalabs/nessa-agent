@@ -105,7 +105,8 @@ export const Conversation = memo(function Conversation({
   }, [])
 
   return (
-    <div className="workspace-conversation">
+    // Its transcript and its composer are each a part of the pane to a drag's preview.
+    <div className="workspace-conversation" data-split-through>
       <Transcript
         sessionId={sessionId}
         arriving={arrived !== null}
@@ -113,7 +114,7 @@ export const Conversation = memo(function Conversation({
         headingRef={headingRef}
         onHeadingVisible={onHeadingVisible}
       />
-      <div className="workspace-dock" ref={dockRef}>
+      <div className="workspace-dock" ref={dockRef} data-split-keeps="foot">
         <DockComposer sessionId={sessionId} />
       </div>
     </div>

@@ -54,6 +54,7 @@ export const PaneGrid = memo(function PaneGrid() {
     <main className="workspace-chat" aria-label="Conversations">
       <div
         className="workspace-panes"
+        data-split-grid
         ref={gridRef}
         data-multi={multi || undefined}
         onKeyDown={tabOrder}

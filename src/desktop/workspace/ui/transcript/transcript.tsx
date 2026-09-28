@@ -138,7 +138,14 @@ export const Transcript = memo(function Transcript({
   }, [count, scrollRef])
 
   return (
-    <div className="workspace-transcript" ref={scrollRef} tabIndex={-1} data-pane-focus>
+    <div
+      className="workspace-transcript"
+      ref={scrollRef}
+      tabIndex={-1}
+      data-pane-focus
+      // One screen of it is what a drag's copy of the pane shows.
+      data-split-scroll
+    >
       <div className="workspace-transcript-inner" data-arriving={arriving || undefined}>
         <TranscriptHeading ref={headingRef} sessionId={sessionId} titleRef={titleRef} />
         {failure && !loaded ? (

@@ -539,16 +539,16 @@ html[data-workspace-resizing="y"] * {
 }
 
 /*
- * A drop that folds the sidebar for room shows it before it happens: the
- * sidebar slides away and the session list follows, as the fold would move
- * them. Only while the sidebar is still open — the moment the drop folds it,
+ * A drop that folds the sidebar for room — taking the spare room it gives
+ * (`data-drag-takes-spare`) — shows it before it happens: the sidebar slides
+ * away and the session list follows, as the fold would move them. Only while the sidebar is still open — the moment the drop folds it,
  * its own closed look takes over, so the commit measures where things are.
  */
-.workspace[data-drag-folds][data-sidebar="open"] .workspace-sidebar {
+.workspace[data-drag-takes-spare][data-sidebar="open"] .workspace-sidebar {
   transform: translateX(calc(-100% - 2 * var(--desktop-gutter) - 48px));
 }
 
-.workspace[data-drag-folds][data-sidebar="open"] .workspace-list {
+.workspace[data-drag-takes-spare][data-sidebar="open"] .workspace-list {
   transform: translateX(
     calc(-1 * (var(--workspace-sidebar-width) + var(--desktop-gutter)))
   );

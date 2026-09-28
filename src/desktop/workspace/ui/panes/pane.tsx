@@ -159,12 +159,13 @@ export const Pane = memo(function Pane({
         multi={multi}
         titleShown={listed && !headingVisible}
       />
-      <div className="workspace-pane-body">
+      <div className="workspace-pane-body" data-split-through>
         {!filled ? null : showHome ? (
           <div
             key={`home-${sessionId}`}
             ref={homeRef}
             className="workspace-pane-home"
+            data-split-keeps="middle"
             data-leaving={(!draft && arrival !== null) || undefined}
           >
             <PaneHome sessionId={sessionId} onSend={sendFromHome} />

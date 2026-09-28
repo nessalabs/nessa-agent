@@ -27,7 +27,8 @@ import { useWindowWidth } from "../../../adapters/window-width"
 import { draggedEdge } from "../../../model/side-column"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../../ui/history-buttons"
-import { useWorkspaceDrag } from "../../adapters/dom/drag"
+import { useSplitPanesDrag } from "../../adapters/dom/drag"
+import { workspaceDragOptions } from "../../adapters/dom/split-panes-drag"
 import { FlipScope } from "../../adapters/dom/flip"
 import { useFocusFollowsPane } from "../../adapters/dom/focus"
 import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortcuts"
@@ -65,6 +66,7 @@ import {
   selectSidebarOpen,
   selectView,
 } from "../../adapters/store/selectors"
+import { workspaceSplitPanes } from "../../adapters/store/split-panes-source"
 import {
   layoutShape,
   panesOf,
@@ -293,7 +295,10 @@ export function WorkspaceShell({
     switcher !== null,
   )
   useFocusFollowsPane(store, root)
-  useWorkspaceDrag(store, root)
+  // The panes' drag spans the window: sessions are picked up from its lists.
+  const splitPanes = useMemo(() => workspaceSplitPanes(store), [store])
+  const dragOptions = useMemo(() => workspaceDragOptions(store), [store])
+  useSplitPanesDrag(root, splitPanes, dragOptions)
   const peek = useEdgePeek(!sidebarOpen, sidebarOpen)
   // What fills the content region: the panes, or the Agents overview over them.
   const overviewShown = useWorkspaceSelector(selectOverviewOpen)

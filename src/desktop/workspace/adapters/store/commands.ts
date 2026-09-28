@@ -38,11 +38,7 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import * as panesUseCases from "../../application/usecases/panes"
-import {
-  dropOutcome,
-  type Carried,
-  type DropOutcome,
-} from "../../../split-panes/model/drop"
+import type { Carried } from "../../../split-panes/model/drop"
 import {
   edgeSides as edgeSidesIn,
   type PaneEdge,
@@ -278,40 +274,20 @@ export function edgeSides(
   }
 }
 
-/** The panes' room as the page measures it now: what a drag reads once, as its press begins. */
+/**
+ * The panes' room as the page measures it now: what the split panes' drag
+ * reads once, as its press begins (`split-panes-source.ts`).
+ */
 export function measureRoom(): WorkspaceCommand<PaneRoom | undefined> {
   return (_dispatch, _getState, { measure }) => measure()
 }
 
 /**
- * What dropping what is carried on `zone` of `target` would leave, in `room`
- * (`measureRoom`, read as the drag's press began): the outcome a drag
- * previews, which `commitDrop` then commits in the same room (`dropOutcome`,
- * one function for both). The drag's own, as `commitDrop` is.
- */
-export function previewDrop({
-  carried,
-  target,
-  zone,
-  room,
-}: {
-  carried: Carried
-  target: PaneKey
-  zone: Zone
-  room: PaneRoom | undefined
-}): WorkspaceCommand<DropOutcome | null> {
-  return (_dispatch, getState) => {
-    const panes = getState().workspace.panes
-    return panes ? dropOutcome(panes, carried, target, zone, room) : null
-  }
-}
-
-/**
- * The drag's drop: commits what `previewDrop` showed for the same zone, in
- * the same room — the one read as the press began, so the drop reads nothing
- * of the page (`dropOutcome`, one function for both). The drag's own; an
- * agent moves a pane with `movePane` or opens a session with `dropSession`,
- * which measure the room as they run.
+ * The drag's drop: commits what the drag previewed for the same zone
+ * (`dropOutcome` of the same panes), in the same room — the one read as the
+ * press began, so the drop reads nothing of the page. The drag's own,
+ * through the split panes' source; an agent moves a pane with `movePane` or
+ * opens a session with `dropSession`, which measure the room as they run.
  */
 export function commitDrop({
   carried,

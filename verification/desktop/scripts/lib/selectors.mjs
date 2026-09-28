@@ -46,7 +46,7 @@ export const css = {
   // Side columns
   sidebar: ".workspace-sidebar", // class
   sessionList: ".workspace-list", // class
-  sessionRow: "[data-drag-session]",
+  sessionRow: "[data-drag-item]", // a session a drag can carry to a pane
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
 
   // Approval card (arranged by its own width)
