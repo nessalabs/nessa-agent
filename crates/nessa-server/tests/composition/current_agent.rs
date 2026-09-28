@@ -1757,6 +1757,8 @@ async fn managed_model_and_mode_refusals_match_fixed_provider_semantics() {
         );
         let mut runtime = source.config.runtime(AgentId::Claude).unwrap().clone();
         runtime.model = model.into();
+        runtime.tools_enabled = agent == AgentId::Codex;
+        std::fs::write(runtime.command.executable(), "adapter fixture").unwrap();
         source.config.runtimes.insert(agent.name().into(), runtime);
         source.managed_adapters.insert(agent);
         assert!(source
