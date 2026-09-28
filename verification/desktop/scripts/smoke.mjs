@@ -9,7 +9,16 @@ import { attempt } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { content, css, keys } from "./lib/selectors.mjs"
-import { focusComposer, leaveSettings, paneCount, state } from "./lib/workspace.mjs"
+import {
+  contentIs,
+  focusComposer,
+  leaveSettings,
+  paneCount,
+  paneCountIs,
+  settled,
+  state,
+  until,
+} from "./lib/workspace.mjs"
 
 const meta = {
   name: "smoke",
@@ -47,7 +56,7 @@ await main(meta, async ({ options, rep, url }) => {
       await attempt(rep, { ...base, name: "draft-unlisted" }, async () => {
         const before = await rows()
         await page.keyboard.press(keys.newSession)
-        await page.waitForTimeout(600)
+        await settled(page)
         const after = await rows()
         return {
           rows: { before, after },
@@ -60,13 +69,19 @@ await main(meta, async ({ options, rep, url }) => {
 
       await attempt(rep, { ...base, name: "send" }, async () => {
         const words = `smoke ${Date.now().toString(36)}`
-        const focused = page.locator(`${css.focusedPane} textarea`)
-        await need(page, `${css.focusedPane} textarea`, "the focused pane's composer")
-        await focused.click()
+        const composer = `${css.focusedPane} ${css.field}`
+        await need(page, composer, "the focused pane's composer")
+        await page.locator(composer).click()
         await page.keyboard.type(words, { delay: 10 })
-        await page.keyboard.press("Enter")
-        await page.waitForTimeout(1200)
-        const shown = await page.locator(css.pane).filter({ hasText: words }).count()
+        await page.keyboard.press(keys.enter)
+        const shown = await until(
+          page,
+          ([pane, text]) =>
+            [...document.querySelectorAll(pane)].some((p) =>
+              p.textContent.includes(text),
+            ),
+          [css.pane, words],
+        )
         return {
           failures: shown ? [] : [`"${words}" did not appear in any pane after Enter`],
         }
@@ -75,7 +90,7 @@ await main(meta, async ({ options, rep, url }) => {
       await attempt(rep, { ...base, name: "split" }, async () => {
         const before = await paneCount(page)
         await page.keyboard.press(keys.newSessionBeside)
-        await page.waitForTimeout(900)
+        await paneCountIs(page, before + 1)
         const after = await paneCount(page)
         return {
           panes: { before, after },
@@ -89,25 +104,21 @@ await main(meta, async ({ options, rep, url }) => {
       await attempt(rep, { ...base, name: "settings" }, async () => {
         const failures = []
         await page.keyboard.press(keys.settings)
-        await page.waitForTimeout(800)
-        if (
-          !(await page
-            .locator(css.settings)
-            .first()
-            .isVisible()
-            .catch(() => false))
-        )
-          failures.push(`Settings (${css.settings}) not visible after ⌘,`)
+        const shown = await page
+          .locator(css.settings)
+          .first()
+          .waitFor({ state: "visible", timeout: 3000 })
+          .then(() => true)
+          .catch(() => false)
+        if (!shown) failures.push(`Settings (${css.settings}) not visible after ⌘,`)
         await leaveSettings(page)
-        await page.waitForTimeout(800)
-        if (
-          await page
-            .locator(css.settings)
-            .first()
-            .isVisible()
-            .catch(() => false)
-        )
-          failures.push("Settings still visible after its Back button")
+        const gone = await page
+          .locator(css.settings)
+          .first()
+          .waitFor({ state: "hidden", timeout: 3000 })
+          .then(() => true)
+          .catch(() => false)
+        if (!gone) failures.push("Settings still visible after its Back button")
         if (!(await paneCount(page))) failures.push("no panes after leaving Settings")
         return { failures }
       })
@@ -116,14 +127,14 @@ await main(meta, async ({ options, rep, url }) => {
         const failures = []
         await focusComposer(page)
         await page.keyboard.press(keys.overview)
-        await page.waitForTimeout(900)
+        await contentIs(page, content.overview)
         const open = await state(page)
         if (open.content !== content.overview)
           failures.push(
             `content is ${open.content} after ⌘0, expected ${content.overview}`,
           )
-        await page.keyboard.press("Escape")
-        await page.waitForTimeout(900)
+        await page.keyboard.press(keys.escape)
+        await contentIs(page, content.panes)
         const left = await state(page)
         if (left.content !== content.panes)
           failures.push(

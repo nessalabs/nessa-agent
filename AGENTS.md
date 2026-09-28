@@ -56,9 +56,9 @@ examples.
 - [Machine-readable command output](CODING_STANDARDS.md#machine-readable-command-output)
   — data on stdout, tracing diagnostics on stderr.
 - [Browser verification for UI](CODING_STANDARDS.md#browser-verification-for-ui)
-  — any change to what the person sees or does in a UI adds or extends a
-  script under `verification/` that drives real browsers and measures it, and
-  runs it before handing off. The `desktop-verification` skill says how.
+  — any change to what a person sees or does in a UI, and
+  [gate 17](CODING_STANDARDS.md#gates). The `desktop-verification` skill is
+  how to run it.
 - [Adding a check to CI](CODING_STANDARDS.md#adding-a-check-to-ci) — before you
   add a job.
 

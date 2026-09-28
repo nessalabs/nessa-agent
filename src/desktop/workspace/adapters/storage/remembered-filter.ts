@@ -11,7 +11,7 @@
 import type { RememberedFilter } from "../../application/ports"
 import { parseFilter, serializeFilter } from "../../model/overview/filter"
 
-const key = "nessa.desktop.experiments.agents-overview.filter"
+const key = "nessa.desktop.workspace.overview-filter"
 
 export function rememberedFilter(
   storage: () => Pick<Storage, "getItem" | "setItem"> = () => window.localStorage,

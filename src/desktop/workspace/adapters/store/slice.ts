@@ -13,7 +13,11 @@ import type { Direction, PaneKey, Side, Zone } from "../../model/pane-layout"
 import type { PaneEdge, WorkspaceRoom } from "../../model/pane-sizing"
 import type { AttentionStatus } from "../../model/session-groups"
 import type { Message, Transcript } from "../../model/transcript"
-import type { WorkspaceDependencies, WorkspaceUpdate } from "../../application/ports"
+import type {
+  Initiator,
+  WorkspaceDependencies,
+  WorkspaceUpdate,
+} from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import {
   initialWorkspace,
@@ -112,6 +116,8 @@ const workspaceSlice = createSlice({
       navigation.showContent(state, payload),
     selectInOverview: (state, { payload }: Payload<{ sessionId: string }>) =>
       overview.selectInOverview(state, payload),
+    overviewChoiceKept: (state, { payload }: Payload<{ now: number }>) =>
+      overview.keepOverviewChoice(state, payload),
     filterOverview: (state, { payload }: Payload<{ filter: AgentsFilter }>) =>
       overview.filterOverview(state, payload),
     selectChannel: (state, { payload }: Payload<{ channelId: string }>) =>
@@ -153,13 +159,19 @@ const workspaceSlice = createSlice({
     ) => navigation.fitToWindow(state, payload),
 
     // Sessions
+    // Each read of the index is named (`read`), so what follows its answer —
+    // the resync's cutoff (`effects.ts`) — is paired with the read that asked,
+    // whatever order the answers arrive in.
     indexLoaded: (
       state,
-      { payload }: Payload<{ index: WorkspaceIndex; draftId: string }>,
+      { payload }: Payload<{ index: WorkspaceIndex; draftId: string; read: string }>,
     ) => updates.indexLoaded(state, payload),
-    indexRequested: (state) => updates.indexRequested(state),
-    indexFailed: (state, { payload }: Payload<{ reason: WorkspaceFailureReason }>) =>
-      updates.indexFailed(state, payload),
+    indexRequested: (state, _action: Payload<{ read: string }>) =>
+      updates.indexRequested(state),
+    indexFailed: (
+      state,
+      { payload }: Payload<{ reason: WorkspaceFailureReason; read: string }>,
+    ) => updates.indexFailed(state, payload),
     updateReceived: (
       state,
       {
@@ -180,8 +192,10 @@ const workspaceSlice = createSlice({
     ) => updates.transcriptFailed(state, payload),
     transcriptRetried: (state, { payload }: Payload<{ sessionId: string }>) =>
       updates.transcriptRetried(state, payload),
-    messageSent: (state, { payload }: Payload<{ sessionId: string; message: Message }>) =>
-      sessions.messageSent(state, payload),
+    messageSent: (
+      state,
+      { payload }: Payload<{ sessionId: string; message: Message; initiator: Initiator }>,
+    ) => sessions.messageSent(state, payload),
     messageDelivered: (
       state,
       { payload }: Payload<{ sessionId: string; messageId: string }>,
@@ -242,12 +256,11 @@ export function initialWorkspaceFrom({
 
 /**
  * The actions that go somewhere — a session, a channel, a status view, a new
- * session, another pane — and those that change the panes a person asked
- * to change: closing, moving, evening them out. Each leaves the Agents
- * overview for the panes (`navigated`), whoever dispatched it — the sidebar,
- * the switcher, a key, the overview's own Open, or an agent — so no pane
- * changes unseen beneath it. Fitting the panes to the window is not asked
- * by anyone, and leaves the view as it is.
+ * session, another pane (or the focused one, asked for by name). Each leaves
+ * the Agents overview for the panes (`navigated`), whoever dispatched it —
+ * the sidebar, the switcher, a key, the overview's own Open, or an agent —
+ * even when it finds the window already there: going to a place is going
+ * there.
  */
 const goesSomewhere: ReadonlySet<string> = new Set(
   [
@@ -255,11 +268,6 @@ const goesSomewhere: ReadonlySet<string> = new Set(
     workspaceActions.openSession,
     workspaceActions.openedBeside,
     workspaceActions.sessionDropped,
-    workspaceActions.paneMoved,
-    workspaceActions.paneNudged,
-    workspaceActions.paneClosed,
-    workspaceActions.equalizePanes,
-    workspaceActions.resizePanes,
     workspaceActions.draftCreated,
     workspaceActions.selectChannel,
     workspaceActions.selectStatusView,
@@ -267,7 +275,28 @@ const goesSomewhere: ReadonlySet<string> = new Set(
   ].map((action) => action.type),
 )
 
+/**
+ * The actions that change the panes a person asked to change: closing,
+ * moving, evening them out, resizing. Each leaves the overview only when it
+ * changed them, so no pane changes unseen beneath it; one that changes
+ * nothing — a move at the edge, a close of no pane — leaves the view as it
+ * is. Fitting the panes to the window is not asked by anyone, and leaves the
+ * view as it is.
+ */
+const changesPanes: ReadonlySet<string> = new Set(
+  [
+    workspaceActions.paneMoved,
+    workspaceActions.paneNudged,
+    workspaceActions.paneClosed,
+    workspaceActions.equalizePanes,
+    workspaceActions.resizePanes,
+  ].map((action) => action.type),
+)
+
 export const workspaceReducer: typeof workspaceSlice.reducer = (state, action) => {
   const next = workspaceSlice.reducer(state, action)
-  return goesSomewhere.has(action.type) ? navigation.navigated(next) : next
+  if (goesSomewhere.has(action.type)) return navigation.navigated(next)
+  if (changesPanes.has(action.type) && next.panes !== state?.panes)
+    return navigation.navigated(next)
+  return next
 }

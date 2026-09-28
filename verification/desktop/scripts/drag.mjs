@@ -1,88 +1,65 @@
 #!/usr/bin/env node
 /**
- * Pane drag and drop (ADR 238, "Drag and drop"), sampled frame by frame in
- * Chrome and WebKit:
+ * Pane drag and drop (ADR 238, "Drag and drop" — its table is the contract),
+ * sampled frame by frame in Chrome and WebKit, in both layouts, at 1440 × 900
+ * and 1000 × 700:
  *
- *   follows-pointer   the carried copy's corner is the pointer less the grab offset
- *   inside-grid       no pane (previewing where the drop would put it) leaves the grid
- *   one-way           between zone changes, each pane moves one way (no back-and-forth)
- *   sideways-top      a sideways sweep near a tall pane's top reaches its side, never above/below
- *   boundary-jitter   ±6px on a zone boundary does not flicker the zone
- *   escape-cancels    Escape mid-drag flies the copy home; the drop after changes nothing
- *   outside-cancels   a drop outside the window changes nothing and leaves nothing lifted
- *   no-selection      no text selection during or after a drag (WebKit selected text before)
+ *   sweep-across-zones   the copy's centre stays on the pointer once lifted
+ *                        (follows-pointer); no pane leaves the grid or the
+ *                        window (inside-grid); each pane moves one way between
+ *                        zone changes (one-way); nothing is selected
+ *   sideways-top         a sideways sweep near a tall pane's top reaches its side, never above/below
+ *   boundary-jitter      ±6px on a zone boundary does not flicker the zone
+ *   rest-settles         approached fast, then still for 300 ms: a 1px nudge changes no zone
+ *   swap-in-tall-pane    the middle of a tall pane offers Swap
+ *   escape-cancels       Escape mid-drag flies the copy home; the release after changes nothing
+ *   outside-cancels      a release outside the window changes nothing and leaves nothing lifted
+ *   lost-capture-then-move  the page losing the pointer ends the drag; a move and a release
+ *                        over a zone after it start nothing and drop nothing
+ *   resize-mid-drag      a resize while carrying ends the drag at once: nothing left lifted,
+ *                        every pane inside the window every frame, nothing under the controls
+ *   command-mid-drag     ⌘W and ⌘0 while carrying end the drag first, then run: the same
+ *   overview-session-drop  (sessions in the sidebar) a session carried while the overview
+ *                        covers the panes offers no zone and no placeholder; the release changes nothing
  */
-import { attempt, CannotRun } from "./lib/cli.mjs"
+import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { css, zoneSaid } from "./lib/selectors.mjs"
+import { safeArea, safeAreaInit, summarize } from "./lib/safe-area.mjs"
+import { content, css, keys, zoneSaid } from "./lib/selectors.mjs"
 import {
+  dragResidue,
+  frames,
   hideColumns,
   lift,
   openPanes,
   order,
   panes,
+  recordFrames,
   recordZones,
+  residueFailures,
+  settled,
+  state,
+  zoneSays,
 } from "./lib/workspace.mjs"
 
-/** Starts a per-frame recording of the ghost, the panes, the grid and the zone. */
-function startFrames(page) {
-  return page.evaluate((sel) => {
-    window.__dragFrames = []
-    window.__dragOn = true
-    const rect = (e) => {
-      const r = e.getBoundingClientRect()
-      return { x: r.left, y: r.top, w: r.width, h: r.height }
-    }
-    const tick = () => {
-      const ghost = document.querySelector(sel.dragGhost)
-      const grid = document.querySelector(sel.paneGrid)
-      window.__dragFrames.push({
-        t: performance.now(),
-        pointer: window.__verifyPointer ?? null,
-        ghost: ghost && ghost.checkVisibility() ? rect(ghost) : null,
-        grid: grid ? rect(grid) : null,
-        panes: [...document.querySelectorAll(sel.pane)]
-          .filter((e) => !e.closest(sel.dragGhost))
-          .map((e) => ({ key: e.dataset.paneKey, ...rect(e) })),
-        zone: document.querySelector(sel.dropAnnouncer)?.textContent ?? "",
-        selection: String(getSelection() ?? "")
-          .trim()
-          .slice(0, 40),
-      })
-      if (window.__dragOn) requestAnimationFrame(tick)
-    }
-    addEventListener(
-      "pointermove",
-      (e) => (window.__verifyPointer = { x: e.clientX, y: e.clientY }),
-      { capture: true },
-    )
-    requestAnimationFrame(tick)
-  }, css)
-}
-const stopFrames = (page) =>
-  page.evaluate(() => {
-    window.__dragOn = false
-    return window.__dragFrames
-  })
-
 const tolerance = 2
+/** How long the copy's glide to its centre may take: `--desktop-base` and a frame. */
+const glideMs = 180 + 40
 
-function followsPointer(frames) {
-  const carried = frames.filter((f) => f.ghost && f.pointer)
+function followsPointer(frames, liftedAt) {
+  const carried = frames.filter(
+    (f) => f.ghost && f.pointer && f.t - liftedAt > glideMs && f.pointer.t > liftedAt,
+  )
   if (carried.length < 5) return [`only ${carried.length} frames carried the copy`]
-  const first = carried[0]
-  const grab = { x: first.pointer.x - first.ghost.x, y: first.pointer.y - first.ghost.y }
   const off = carried.filter(
     (f) =>
-      Math.abs(f.pointer.x - grab.x - f.ghost.x) > tolerance ||
-      Math.abs(f.pointer.y - grab.y - f.ghost.y) > tolerance,
+      Math.abs(f.pointer.x - (f.ghost.x + f.ghost.w / 2)) > tolerance ||
+      Math.abs(f.pointer.y - (f.ghost.y + f.ghost.h / 2)) > tolerance,
   )
-  // The drop's snap and the flight home are allowed to leave the pointer; only frames while the pointer moves count.
-  const moving = off.filter((f, i) => i < off.length - 3)
-  return moving.length
+  return off.length
     ? [
-        `copy left the pointer in ${moving.length}/${carried.length} frames (e.g. Δ ${Math.round(moving[0].pointer.x - grab.x - moving[0].ghost.x)},${Math.round(moving[0].pointer.y - grab.y - moving[0].ghost.y)})`,
+        `the copy's centre left the pointer in ${off.length}/${carried.length} frames (e.g. Δ ${Math.round(off[0].pointer.x - off[0].ghost.x - off[0].ghost.w / 2)},${Math.round(off[0].pointer.y - off[0].ghost.y - off[0].ghost.h / 2)})`,
       ]
     : []
 }
@@ -103,6 +80,24 @@ function insideGrid(frames) {
         )
   }
   return out.length ? [`${out.length} pane-frames outside the grid, e.g. ${out[0]}`] : []
+}
+
+function insideWindow(frames) {
+  const out = []
+  for (const f of frames)
+    for (const p of f.panes)
+      if (
+        p.x < -tolerance ||
+        p.y < -tolerance ||
+        p.x + p.w > f.viewport.w + tolerance ||
+        p.y + p.h > f.viewport.h + tolerance
+      )
+        out.push(
+          `pane ${p.key} at ${Math.round(p.x)},${Math.round(p.y)} ${Math.round(p.w)}×${Math.round(p.h)} in ${f.viewport.w}×${f.viewport.h}`,
+        )
+  return out.length
+    ? [`${out.length} pane-frames outside the window, e.g. ${out[0]}`]
+    : []
 }
 
 function oneWay(frames) {
@@ -158,12 +153,66 @@ async function threeColumns(page, layout) {
   return list.sort((a, b) => a.x - b.x)
 }
 
+/** Lets go and waits for the copy's flight to end. */
+async function letGo(page, { escape = false } = {}) {
+  if (escape) await page.keyboard.press(keys.escape)
+  await page.mouse.up()
+  await settled(page)
+}
+
+const liftedNow = (page) => page.evaluate(() => performance.now())
+
+/**
+ * A change mid-drag (`act`): the drag ends at once — nothing lifted right
+ * after — every pane stays inside the window in every frame, nothing is
+ * painted under the window's controls, and the release after drops nothing.
+ */
+async function changeMidDrag(page, layout, name, act, expectAfter) {
+  const list = await threeColumns(page, layout)
+  const target = list[2]
+  const sampler = safeArea(page)
+  const before = await order(page)
+  await lift(page, 0)
+  await page.mouse.move(target.x + target.w * 0.5, target.y + target.h * 0.5, {
+    steps: 10,
+  })
+  if (!(await zoneSays(page, zoneSaid.any)))
+    throw new CannotRun(
+      `${name}: no zone was offered over the far pane before the change`,
+    )
+  const recorder = await recordFrames(page)
+  const failures = []
+  await sampler.watch(
+    name,
+    async () => {
+      await act()
+      // Ended at once: by the next frames nothing of the drag is on the page.
+      await frames(page, 2)
+      const residue = await dragResidue(page)
+      for (const key of ["copies", "placeholders", "shields", "lifted", "dragging"])
+        if (residue[key]) failures.push(`${name}: ${residue[key]} ${key} right after it`)
+      await page.mouse.move(target.x + target.w * 0.5 + 3, target.y + target.h * 0.5 + 3)
+      await page.mouse.up()
+      await settled(page)
+    },
+    2000,
+  )
+  const recorded = await recorder.stop()
+  failures.push(...insideWindow(recorded).map((f) => `${name}: ${f}`))
+  failures.push(...summarize(await sampler.take()).map((f) => `${name} safe-area: ${f}`))
+  failures.push(...residueFailures(await dragResidue(page)).map((f) => `${name}: ${f}`))
+  const problem = expectAfter(before, await order(page), await state(page))
+  if (problem) failures.push(`${name}: ${problem}`)
+  return failures
+}
+
 const checks = {
   "sweep-across-zones": async (page, layout) => {
     const list = await fourPanes(page, layout)
     const grid = await page.locator(css.paneGrid).first().boundingBox()
-    await startFrames(page)
+    const recorder = await recordFrames(page)
     await lift(page, 0)
+    const liftedAt = await liftedNow(page)
     for (const [fx, fy] of [
       [0.9, 0.25],
       [0.75, 0.75],
@@ -174,18 +223,18 @@ const checks = {
       await page.mouse.move(grid.x + grid.width * fx, grid.y + grid.height * fy, {
         steps: 20,
       })
+      // Resting on each point: pacing the drag, not a wait for state.
       await page.waitForTimeout(250)
     }
-    const during = await stopFrames(page)
-    await page.keyboard.press("Escape")
-    await page.mouse.up()
-    await page.waitForTimeout(600)
+    const during = await recorder.stop()
+    await letGo(page, { escape: true })
     return {
       panes: list.length,
       frames: during.length,
       failures: [
-        ...followsPointer(during).map((f) => `follows-pointer: ${f}`),
+        ...followsPointer(during, liftedAt).map((f) => `follows-pointer: ${f}`),
         ...insideGrid(during).map((f) => `inside-grid: ${f}`),
+        ...insideWindow(during).map((f) => `inside-window: ${f}`),
         ...oneWay(during).map((f) => `one-way: ${f}`),
         ...(during.some((f) => f.selection)
           ? [
@@ -203,7 +252,7 @@ const checks = {
       await page.mouse.move(middle.x + middle.w + 30, middle.y + dy, { steps: 10 })
       const zones = await recordZones(page)
       await page.mouse.move(middle.x + middle.w * 0.45, middle.y + dy, { steps: 30 })
-      await page.waitForTimeout(50)
+      await frames(page, 2)
       const said = await zones.take()
       if (!said.length)
         failures.push(`sweeping left at top+${dy}px announced no zone at all`)
@@ -211,29 +260,27 @@ const checks = {
         failures.push(
           `sweeping left at top+${dy}px picked a vertical zone: ${said.join(" → ")}`,
         )
-      await page.keyboard.press("Escape")
-      await page.mouse.up()
-      await page.waitForTimeout(500)
+      await letGo(page, { escape: true })
     }
     return { failures }
   },
   "boundary-jitter": async (page, layout) => {
     const list = await fourPanes(page, layout)
     const target = list[1]
-    const inset = Math.min(Math.max(0.28 * Math.min(target.w, target.h), 48), 120)
+    // The left side's reach at rest: a third of the pane, held to 90–300px.
+    const inset = Math.min(Math.max(target.w / 3, 90), 300, target.w / 2)
     const x = target.x + inset
     await lift(page, 0)
     await page.mouse.move(x, target.y + target.h / 2, { steps: 10 })
+    // At rest on the boundary before the jitter: pacing (`restAfter` is 150 ms).
     await page.waitForTimeout(200)
     const zones = await recordZones(page)
     for (let i = 0; i < 40; i++)
       await page.mouse.move(x + (i % 2 ? 6 : -6), target.y + target.h / 2)
-    await page.waitForTimeout(100)
+    await frames(page, 2)
     const said = await zones.take()
-    // Holding one zone says nothing new; confirm there is a zone at all.
     const current = await page.locator(css.dropAnnouncer).first().textContent()
-    await page.keyboard.press("Escape")
-    await page.mouse.up()
+    await letGo(page, { escape: true })
     if (!said.length && !current)
       return { failures: ["no zone is announced at the boundary"] }
     return {
@@ -243,35 +290,70 @@ const checks = {
           : [],
     }
   },
+  "rest-settles": async (page, layout) => {
+    const list = await threeColumns(page, layout)
+    const target = list[2]
+    const failures = []
+    // Three places: near the top, off-centre, the middle — each approached fast.
+    for (const [fx, fy] of [
+      [0.5, 0.2],
+      [0.6, 0.2],
+      [0.5, 0.5],
+    ]) {
+      await lift(page, 0)
+      const x = target.x + target.w * fx
+      const y = target.y + target.h * fy
+      await page.mouse.move(x, y, { steps: 4 })
+      // Still for twice `restAfter`: the check's own condition, not a wait for state.
+      await page.waitForTimeout(300)
+      const rested = await page.locator(css.dropAnnouncer).first().textContent()
+      await page.mouse.move(x + 1, y)
+      // After the nudge, as long again: a zone change would show within it.
+      await page.waitForTimeout(200)
+      const nudged = await page.locator(css.dropAnnouncer).first().textContent()
+      if (!rested) failures.push(`${fx},${fy}: no zone after resting 300 ms`)
+      if (nudged !== rested)
+        failures.push(
+          `${fx},${fy}: a 1px nudge after resting changed "${rested}" → "${nudged}"`,
+        )
+      await letGo(page, { escape: true })
+    }
+    return { failures }
+  },
+  "swap-in-tall-pane": async (page, layout) => {
+    const list = await threeColumns(page, layout)
+    const target = list[2]
+    await lift(page, 0)
+    await page.mouse.move(target.x + target.w / 2, target.y + target.h / 2, { steps: 15 })
+    const swap = await zoneSays(page, zoneSaid.swap)
+    const said = await page.locator(css.dropAnnouncer).first().textContent()
+    await letGo(page, { escape: true })
+    return {
+      pane: `${Math.round(target.w)}×${Math.round(target.h)}`,
+      failures: swap ? [] : [`the middle of a tall pane offers "${said}", not a swap`],
+    }
+  },
   "escape-cancels": async (page, layout) => {
     const list = await fourPanes(page, layout)
     const before = (await order(page)).join(",")
     await lift(page, 0)
     await page.mouse.move(list[2].x + 30, list[2].y + list[2].h / 2, { steps: 10 })
-    await page.keyboard.press("Escape")
-    await page.waitForTimeout(600)
-    const ghostAfterEscape = await page.locator(css.dragGhost).count()
+    await page.keyboard.press(keys.escape)
+    await settled(page)
+    const residue = await dragResidue(page)
     await page.mouse.move(list[3].x + 30, list[3].y + list[3].h / 2, { steps: 5 })
     await page.mouse.up()
-    await page.waitForTimeout(600)
+    await settled(page)
     const after = (await order(page)).join(",")
-    const failures = []
-    if (ghostAfterEscape) failures.push("the copy is still on the page after Escape")
+    const failures = residueFailures(residue).map((f) => `after Escape: ${f}`)
     if (after !== before)
-      failures.push(`layout changed after Escape then drop: ${before} → ${after}`)
+      failures.push(`layout changed after Escape then release: ${before} → ${after}`)
     return { failures }
   },
   "outside-cancels": async (page, layout) => {
     const list = await fourPanes(page, layout)
     const size = page.viewportSize()
     const before = (await order(page)).join(",")
-    const restingTransforms = await page.evaluate(
-      (pane) =>
-        [...document.querySelectorAll(pane)]
-          .map((e) => getComputedStyle(e).transform)
-          .join("|"),
-      css.pane,
-    )
     await lift(page, 0)
     await page.mouse.move(list[1].x + 30, list[1].y + list[1].h / 2, { steps: 8 })
     await page.evaluate(() =>
@@ -285,80 +367,208 @@ const checks = {
     await page.mouse.move(size.width + 60, size.height + 50, { steps: 3 })
     const last = await page.evaluate(() => window.__verifyLast)
     if (!last || (last.x < size.width && last.y < size.height)) {
-      await page.keyboard.press("Escape")
-      await page.mouse.up()
+      await letGo(page, { escape: true })
       throw new CannotRun(
         `this engine delivered no pointer event outside the viewport (last at ${last?.x},${last?.y}); ` +
-          "check a drop outside the window by hand in the app",
+          "check a release outside the window by hand in the app",
       )
     }
     await page.mouse.up()
-    await page.waitForTimeout(800)
-    const after = await page.evaluate(
-      ([pane, ghost]) => ({
-        ghost: document.querySelectorAll(ghost).length,
-        transforms: [...document.querySelectorAll(pane)]
-          .map((e) => getComputedStyle(e).transform)
-          .join("|"),
-        selection: String(getSelection() ?? "")
-          .trim()
-          .slice(0, 40),
-      }),
-      [css.pane, css.dragGhost],
-    )
-    const failures = []
+    await settled(page)
+    const failures = residueFailures(await dragResidue(page))
+    const selection = await page.evaluate(() => String(getSelection() ?? "").trim())
     const now = (await order(page)).join(",")
     if (now !== before)
-      failures.push(`layout changed after a drop outside: ${before} → ${now}`)
-    if (after.ghost) failures.push("the copy is still on the page")
-    if (after.transforms !== restingTransforms)
-      failures.push(
-        `panes did not return to rest: ${restingTransforms} → ${after.transforms}`,
-      )
-    if (after.selection)
-      failures.push(`no-selection: "${after.selection}" selected after the drag`)
+      failures.push(`layout changed after a release outside: ${before} → ${now}`)
+    if (selection)
+      failures.push(`no-selection: "${selection.slice(0, 40)}" selected after the drag`)
     return { failures }
+  },
+  "lost-capture-then-move": async (page, layout) => {
+    const list = await threeColumns(page, layout)
+    const target = list[2]
+    const before = (await order(page)).join(",")
+    await lift(page, 0)
+    await page.mouse.move(target.x + target.w / 2, target.y + target.h / 2, { steps: 10 })
+    if (!(await zoneSays(page, zoneSaid.any)))
+      throw new CannotRun("no zone was offered before the pointer was lost")
+    const lost = await page.evaluate((shield) => {
+      const element = document.querySelector(shield)
+      element?.dispatchEvent(new PointerEvent("lostpointercapture"))
+      return !!element
+    }, css.dragShield)
+    if (!lost)
+      throw new CannotRun(`no drag shield (${css.dragShield}) to lose the pointer from`)
+    await settled(page)
+    // The reviewer's order: the pointer moves on, then is released over a zone.
+    await page.mouse.move(target.x + target.w / 2 + 20, target.y + target.h / 2, {
+      steps: 5,
+    })
+    const resumed = await dragResidue(page)
+    await page.mouse.up()
+    await settled(page)
+    const failures = []
+    if (resumed.copies || resumed.dragging)
+      failures.push("a move after the pointer was lost started the drag again")
+    failures.push(...residueFailures(await dragResidue(page)))
+    const after = (await order(page)).join(",")
+    if (after !== before)
+      failures.push(`the release after the loss dropped: ${before} → ${after}`)
+    return { failures }
+  },
+  "resize-mid-drag": async (page, layout) => {
+    const size = page.viewportSize()
+    const failures = await changeMidDrag(
+      page,
+      layout,
+      "resize",
+      () => page.setViewportSize({ width: size.width - 200, height: size.height - 100 }),
+      (before, after) =>
+        after.length <= before.length && after.every((key) => before.includes(key))
+          ? null
+          : `the release after a resize dropped: ${before} → ${after}`,
+    )
+    await page.setViewportSize(size)
+    return { failures }
+  },
+  "command-mid-drag": async (page, layout, fresh) => {
+    const failures = [
+      ...(await changeMidDrag(
+        page,
+        layout,
+        "⌘W",
+        () => page.keyboard.press(keys.closePane),
+        (b, a) =>
+          a.length === b.length - 1
+            ? null
+            : `⌘W mid-drag: panes ${b} → ${a}, expected one fewer and no drop`,
+      )),
+    ]
+    const next = await fresh()
+    failures.push(
+      ...(await changeMidDrag(
+        next,
+        layout,
+        "⌘0",
+        () => next.keyboard.press(keys.overview),
+        (b, a, s) =>
+          s.content === content.overview && a.join(",") === b.join(",")
+            ? null
+            : `⌘0 mid-drag: content ${s.content}, panes ${b} → ${a}; expected the overview and no drop`,
+      )),
+    )
+    return { failures }
+  },
+  "overview-session-drop": {
+    layouts: ["sidebar"],
+    run: async (page) => {
+      await openPanes(page, 2)
+      await page.keyboard.press(keys.overview)
+      await page.waitForFunction(
+        ([sel, value]) => document.querySelector(sel)?.dataset.content === value,
+        [css.workspace, content.overview],
+      )
+      const before = (await order(page)).join(",")
+      const row = page.locator(`${css.sidebar} ${css.sessionRow}`).nth(3)
+      const box = await row.boundingBox()
+      if (!box) throw new CannotRun(`no session row in the sidebar (${css.sessionRow})`)
+      await page.mouse.move(box.x + 40, box.y + box.height / 2)
+      await page.mouse.down()
+      for (let i = 1; i <= 6; i++)
+        await page.mouse.move(box.x + 40 + i * 5, box.y + box.height / 2 + i * 2)
+      const grid = await page.locator(css.paneGrid).first().boundingBox()
+      const zones = await recordZones(page)
+      await page.mouse.move(grid.x + grid.width * 0.7, grid.y + grid.height / 2, {
+        steps: 20,
+      })
+      // Past `restAfter`, so a zone would have settled if one were offered.
+      await page.waitForTimeout(300)
+      const said = await zones.take()
+      const placeholders = await page.locator(css.dragPlaceholder).count()
+      await letGo(page)
+      const failures = []
+      if (said.length)
+        failures.push(`a zone was offered under the overview: ${said.join(" → ")}`)
+      if (placeholders) failures.push("a placeholder was drawn under the overview")
+      const after = (await order(page)).join(",")
+      if (after !== before)
+        failures.push(
+          `the release under the overview changed the panes: ${before} → ${after}`,
+        )
+      failures.push(...residueFailures(await dragResidue(page)))
+      return { failures }
+    },
   },
 }
 
 const meta = {
   name: "drag",
   summary:
-    "pane drag: copy follows the pointer, previews stay in the grid, direction-aware zones, cancels",
-  defaults: { engine: "chromium,webkit", layout: "columns" },
-  options: { only: { type: "string" } },
+    "pane drag: the copy's centre on the pointer, previews in the grid, zones that settle, every cancel",
+  defaults: { engine: "chromium,webkit", layout: "columns,sidebar" },
+  options: {
+    only: { type: "string" },
+    sizes: { type: "string", default: "1440x900,1000x700" },
+  },
   help: `
 Usage: node verification/desktop/scripts/drag.mjs [options]
 
-  --only <list>   Checks, comma-separated. Available:
-                  ${Object.keys(checks).join(", ")}
+  --only <list>    Checks, comma-separated. Available:
+                   ${Object.keys(checks).join(", ")}
+  --sizes <list>   Window sizes (default 1440x900,1000x700).
 
-sweep-across-zones covers follows-pointer, inside-grid, one-way and
-no-selection in one recorded drag. Side columns are hidden first so four
-panes fit at 1440 × 900.`,
+sweep-across-zones covers follows-pointer, inside-grid, inside-window, one-way
+and no-selection in one recorded drag. Side columns are hidden first so the
+panes have the room. A check made for one layout runs only there.`,
 }
 
 await main(meta, async ({ options, rep, url }) => {
-  const only = options.only ? options.list(options.only) : null
+  const only = options.only
+    ? chosen(options.only, Object.keys(checks), options.list)
+    : null
+  const sizes = options.choices("sizes").map((size) => {
+    const [width, height] = size.split("x").map(Number)
+    if (!width || !height) throw new CannotRun(`--sizes: ${size} is not WIDTHxHEIGHT`)
+    return { width, height }
+  })
   await withEngines(options, rep, async (engine, browser) => {
     for (const layout of options.layouts)
-      for (const [name, check] of Object.entries(checks)) {
-        if (only && !only.includes(name)) continue
-        await attempt(rep, { name, engine, layout }, async () => {
-          const opened = await openPage(browser, {
-            url,
-            layout,
-            width: 1440,
-            height: 900,
-          })
-          try {
-            await need(opened.page, css.paneHeader, "a pane header")
-            const result = await check(opened.page, layout)
-            return { ...result, failures: [...(result.failures ?? []), ...opened.errors] }
-          } finally {
-            await opened.close()
-          }
-        })
-      }
+      for (const { width, height } of sizes)
+        for (const [name, check] of Object.entries(checks)) {
+          if (only && !only.includes(name)) continue
+          const run = typeof check === "function" ? check : check.run
+          if (check.layouts && !check.layouts.includes(layout)) continue
+          await attempt(
+            rep,
+            { name, engine, layout, width: `${width}x${height}` },
+            async () => {
+              const pages = []
+              const fresh = async () => {
+                const opened = await openPage(browser, {
+                  url,
+                  layout,
+                  width,
+                  height,
+                  initScripts: [safeAreaInit],
+                })
+                pages.push(opened)
+                await need(opened.page, css.paneHeader, "a pane header")
+                return opened.page
+              }
+              try {
+                const result = await run(await fresh(), layout, fresh)
+                return {
+                  ...result,
+                  failures: [
+                    ...(result.failures ?? []),
+                    ...pages.flatMap((o) => o.errors),
+                  ],
+                }
+              } finally {
+                for (const opened of pages) await opened.close()
+              }
+            },
+          )
+        }
   })
 })

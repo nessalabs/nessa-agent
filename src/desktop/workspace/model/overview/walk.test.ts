@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { afterAnswer, stepFrom } from "./walk"
+import { afterAnswer, answerPause, stepFrom, takesAnswerKey } from "./walk"
 
 describe("stepFrom", () => {
   const order = ["a", "b", "c"]
@@ -50,5 +50,21 @@ describe("afterAnswer", () => {
 
   it("takes the first open request when the answered one is not listed", () => {
     expect(afterAnswer(["a", "b"], "gone", new Set(["a"]))).toBe("b")
+  })
+})
+
+describe("takesAnswerKey", () => {
+  it("never takes a held key's repeat: one press answers one request", () => {
+    expect(takesAnswerKey({ repeat: true, at: 10_000 }, null)).toBe(false)
+    expect(takesAnswerKey({ repeat: false, at: 10_000 }, null)).toBe(true)
+  })
+
+  it("waits a moment after the keyboard moves on by answering before a press answers again", () => {
+    expect(takesAnswerKey({ repeat: false, at: 1080 }, 1000)).toBe(false)
+    expect(takesAnswerKey({ repeat: false, at: 1000 + answerPause - 1 }, 1000)).toBe(
+      false,
+    )
+    expect(takesAnswerKey({ repeat: false, at: 1000 + answerPause }, 1000)).toBe(true)
+    expect(takesAnswerKey({ repeat: true, at: 5000 }, 1000)).toBe(false)
   })
 })

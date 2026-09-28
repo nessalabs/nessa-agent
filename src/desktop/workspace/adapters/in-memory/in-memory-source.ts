@@ -74,12 +74,6 @@ export interface AuditEntry {
 export interface InMemorySource extends WorkspaceSource {
   /** Every consequential call, in order — answers, pins, archives — refused ones included. */
   audit(): readonly AuditEntry[]
-  /**
-   * Tells every listener its stream may have lost updates, as a source that
-   * reconnected would (`resync`). This one loses none; it is how a test, or a
-   * developer, has the window catch up.
-   */
-  resync(): void
   /** Stops every scripted reply and refuses every later call; nothing is emitted afterwards. */
   dispose(): void
 }
@@ -452,7 +446,6 @@ export function inMemorySource(
         if (session.unread) putSession({ ...session, unread: false })
       }),
     audit: () => entries,
-    resync: () => emit({ kind: "resync" }),
     dispose() {
       disposed = true
       for (const sessionId of [...scripts.keys()]) stopScript(sessionId)

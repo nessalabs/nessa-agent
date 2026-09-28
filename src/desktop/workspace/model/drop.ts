@@ -1,6 +1,7 @@
 /**
- * What a drop on a pane does, as a value, before anything is dropped: the
- * zone the pointer is in, and the layout the drop would leave — the one the
+ * What a drop on a pane does, as a value, before anything is dropped: where
+ * a drag aims (`aimAt`, the pointer itself), the zone it is in, and the
+ * layout the drop would leave — the one the
  * drag previews and the one the command commits, from this one function, so
  * the preview is never a guess at the drop (`usecases/panes.ts` calls it for
  * both `movePane` and `dropSession`).
@@ -56,7 +57,7 @@ export type Carried =
  * | ---------------------------- | ----------------------------- | ----------------------------------- |
  * | mostly toward a side         | reaches `headingReach` times further, so moving down a pane from its middle is "below" by two-thirds of the way | as at rest                          |
  * | plainly along one axis       | as above                      | only within `edgeHug` of their edge, unless already in one |
- * | resting                      | as at rest                    | as at rest                          |
+ * | resting, or still for `restAfter` | as at rest               | as at rest                          |
  *
  * so a sideways drag near a tall narrow pane's top moves beside it, never
  * above, and a drag down a tall pane splits below well before its foot. The
@@ -72,7 +73,7 @@ export interface Pointer {
 }
 
 /** A side's reach into the pane: its share of the pane across it, held to a floor and a cap. */
-export const edgeShare = 0.35
+export const edgeShare = 1 / 3
 export const edgeFloor = 90
 export const edgeCap = 300
 
@@ -178,32 +179,9 @@ export interface Rect {
 }
 
 /**
- * How far from the pointer toward the carried copy's centre a drag aims, 0
- * to 1. A pane is carried at full size, grabbed by its header: the eye
- * follows the copy's body as much as the hand, so the drag aims between the
- * two — halfway — rather than at the pointer near the copy's top corner.
- */
-export const aimBlend = 0.5
-
-/** Where a drag aims: between the pointer and the centre of the copy it carries (`aimBlend`). */
-export function aimPoint(
-  pointer: { readonly x: number; readonly y: number },
-  copy: Rect,
-): { x: number; y: number } {
-  const centre = { x: copy.left + copy.width / 2, y: copy.top + copy.height / 2 }
-  return {
-    x: pointer.x + (centre.x - pointer.x) * aimBlend,
-    y: pointer.y + (centre.y - pointer.y) * aimBlend,
-  }
-}
-
-/**
- * The pane a drag aims at, and where on it: the pane the point is over; else
- * — the point in a gutter between panes, or past the grid's edge, the copy
- * run off the window — the nearest pane, the point held to its edge. So
- * every place a drag can aim resolves to a pane and a zone, and aiming past
- * the grid's right or foot reaches its last column's side or its lowest
- * pane's foot. `null` only with no panes.
+ * The pane a point in the grid is over, and where on it: the pane the point
+ * is in; else — the point in a gutter between panes — the nearest pane, the
+ * point held to its edge. `null` only with no panes.
  */
 export function paneAt(
   point: { readonly x: number; readonly y: number },
@@ -231,21 +209,79 @@ export interface PointerSample {
 export const headingWindow = 100
 
 /**
- * How the pointer is moving, in pixels per millisecond: from the oldest
- * sample within `headingWindow` of the newest to the newest. Fewer than two
- * samples, or none apart in time, is resting.
+ * How long the pointer may stay where it is, in milliseconds, before its
+ * heading ages out and the zone is decided as at rest.
  */
-export function pointerVelocity(samples: readonly PointerSample[]): {
-  x: number
-  y: number
-} {
+export const restAfter = 150
+
+/**
+ * How the pointer is moving at `now`, in pixels per millisecond: from the
+ * oldest sample within `headingWindow` of the newest to the newest. Fewer than
+ * two samples, none apart in time, or no move for `restAfter` is resting.
+ */
+export function pointerVelocity(
+  samples: readonly PointerSample[],
+  now: number,
+): { x: number; y: number } {
   const last = samples.at(-1)
-  if (!last) return { x: 0, y: 0 }
+  if (!last || now - last.t >= restAfter) return { x: 0, y: 0 }
   const first = samples.find((sample) => last.t - sample.t <= headingWindow) ?? last
   const span = last.t - first.t
   return span > 0
     ? { x: (last.x - first.x) / span, y: (last.y - first.y) / span }
     : { x: 0, y: 0 }
+}
+
+/**
+ * What a drag may aim at: the grid and every pane in it, as laid out when the
+ * press began — or `null` while no pane can be seen (the Agents overview or
+ * Settings over them).
+ */
+export interface Targets {
+  readonly grid: Rect
+  readonly panes: readonly (readonly [PaneKey, Rect])[]
+}
+
+/** The pane and zone a drag aims at. */
+export interface Aim {
+  readonly target: PaneKey
+  readonly zone: Zone
+}
+
+/**
+ * Where a drag aims: the pointer, and nothing else — what the eye follows
+ * (the copy's centre, `model/drag.ts`) and what aims are one point. Off the
+ * grid, or with no pane in sight, nothing; in a gutter, the nearest pane
+ * (`paneAt`); on a pane, its zone (`zoneAt`), weighed by where the pointer
+ * heads at `now` (`pointerVelocity`) and held while it stays on the pane it
+ * was aiming at (`was`).
+ */
+export function aimAt(
+  path: readonly PointerSample[],
+  now: number,
+  was: Aim | null,
+  targets: Targets | null,
+): Aim | null {
+  const pointer = path.at(-1)
+  if (!pointer || !targets) return null
+  const { grid } = targets
+  if (
+    pointer.x < grid.left ||
+    pointer.x > grid.left + grid.width ||
+    pointer.y < grid.top ||
+    pointer.y > grid.top + grid.height
+  )
+    return null
+  const over = paneAt(pointer, targets.panes)
+  if (!over) return null
+  return {
+    target: over.key,
+    zone: zoneAt(
+      { x: over.x, y: over.y, velocity: pointerVelocity(path, now) },
+      over.box,
+      was?.target === over.key ? was.zone : null,
+    ),
+  }
 }
 
 /** What a drop leaves: the layout, whether the sidebar folds for it, and the pane it lands in. */

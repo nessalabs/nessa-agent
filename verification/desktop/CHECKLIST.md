@@ -66,24 +66,43 @@ controls — text, icons, images, code, or decorative art — in any frame.
 
 ## Drag and drop
 
-_ADR 238 › Drag and drop_.
+_ADR 238 › Drag and drop_ — its table (every phase, every event) and its
+zone table are the contract; these are the rules a script holds, in Chrome
+and WebKit, both layouts, 1440 × 900 and 1000 × 700:
 
-- [ ] **The copy follows the pointer one to one** — its corner is the pointer
-  less the grab offset, no pull toward a target. _Check:_ `drag.mjs` (`sweep-across-zones`).
-- [ ] **Every preview stays inside the grid.** _Check:_ `drag.mjs` (`sweep-across-zones`).
-- [ ] **Panes move one way between zone changes** (no back-and-forth within a
-  zone). _Check:_ `drag.mjs` (`sweep-across-zones`).
-- [ ] **Zones are direction-aware**: sweeping sideways near a tall, narrow
+- [ ] **One aim point: the pointer.** Once lifted, the copy glides until its
+  centre is under the pointer and stays there; what the eye tracks is what
+  aims. _Check:_ `drag.mjs` (`sweep-across-zones`, follows-pointer).
+- [ ] **Every preview stays inside the grid and the window, every frame.**
+  _Check:_ `drag.mjs` (`sweep-across-zones`, inside-grid and inside-window).
+- [ ] **Panes move one way between zone changes.** _Check:_ `drag.mjs`
+  (`sweep-across-zones`, one-way).
+- [ ] **Zones are direction-aware**: a sideways sweep near a tall, narrow
   pane's top reaches its side, never above or below. _Check:_ `drag.mjs` (`sideways-top`).
 - [ ] **A zone holds at its boundary** (another must win by 12px): ±6px
   jitter does not flicker it. _Check:_ `drag.mjs` (`boundary-jitter`).
-- [ ] **Escape, or a drop outside the window, cancels**: the copy flies home,
-  the layout is unchanged, no pane is left transformed.
+- [ ] **The zone settles at rest**: approached fast, then still for 300 ms, a
+  1px nudge changes nothing; a release after a pause drops on the zone at
+  rest. _Check:_ `drag.mjs` (`rest-settles`); unit tests `model/drag.test.ts`.
+- [ ] **The middle of a tall pane offers Swap.** _Check:_ `drag.mjs` (`swap-in-tall-pane`).
+- [ ] **Escape, or a release outside the window, cancels**: the copy flies
+  home, the layout is unchanged, nothing is left lifted or transformed.
   _Check:_ `drag.mjs` (`escape-cancels`, `outside-cancels`). If an engine
   delivers no pointer event outside the viewport, the script says it could
-  not run — check that drop by hand in the app.
-- [ ] **No text selection is left behind**, during or after a drag (WebKit
-  selected transcript text before). _Check:_ `drag.mjs`.
+  not run — check that release by hand in the app.
+- [ ] **A lost pointer ends the press and the drag**: a move and a release
+  over a zone after it start and drop nothing. _Check:_ `drag.mjs` (`lost-capture-then-move`).
+- [ ] **Any change while carrying cancels at once** — a resize, ⌘W, ⌘0 (and
+  every other command key, the store changing, Settings): nothing is left
+  lifted right after, every pane stays inside the window every frame, nothing
+  is painted under the controls, and the release drops nothing. _Check:_
+  `drag.mjs` (`resize-mid-drag`, `command-mid-drag`); the rest in unit tests
+  (`adapters/dom/drag.test.tsx`).
+- [ ] **Only panes a person can see are targets**: a session carried while
+  the overview covers the panes offers no zone and no placeholder, and its
+  release changes nothing. _Check:_ `drag.mjs` (`overview-session-drop`, sessions in the sidebar).
+- [ ] **No text selection is left behind**, during or after a drag. _Check:_
+  `drag.mjs` (`sweep-across-zones`, `outside-cancels`).
 - [ ] **Preview equals commit** — the placeholder marks exactly the rect the
   drop takes. _Check:_ unit test `panes.test.ts`; by eye with `--headed`.
 - [ ] **A zone the fit rule refuses offers nothing; a session already on
@@ -122,6 +141,11 @@ _ADR 238 › Focus follows the focused pane_; keys in
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
 - [ ] **A burst of keys leaves a working window**: no error, a focused pane.
   _Check:_ `focus.mjs` (`focus-mash`).
+- [ ] **A pane command from the overview**: one that is a navigation leaves
+  it even when it changes nothing (⌘ and the focused pane's number, ⇧⌘[ at
+  the first pane) and the caret lands in the focused pane's composer; one
+  that changes nothing and is not a navigation (⌃⌥← at the edge) leaves the
+  overview where it is. _Check:_ `focus.mjs` (`focus-overview`).
 - [ ] **Both layouts answer the same keys with the same parts.** _Check:_
   unit test `layouts.test.tsx`; every script runs both layouts.
 - _Harmless:_ in dev, StrictMode runs effects twice; if focus looks wrong only
@@ -135,7 +159,15 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   _Check:_ `focus.mjs` (`focus-overview`), `smoke.mjs` (`overview`).
 - [ ] **The keyboard walks its items; ⌘↩ allows, ⌘⌫ denies, ⌘R replies**, and
   the caret stays in the overview after an answer. _Check:_ `focus.mjs`
-  (walk); `perf-budget.mjs --only overview-answer` (answer lands); ⌘⌫ and ⌘R by hand.
+  (`focus-overview`, the walk); `perf-budget.mjs --only overview-answer` (answer lands); ⌘⌫ and ⌘R by hand.
+- [ ] **One press answers one request** (_ADR 238 › What fills the content
+  region_): a held ⌘↩ answers one; two presses 80ms apart answer one; a held ↩
+  on a pane card's Allow Once answers one and sends nothing typed; a double
+  click on Deny or Always Allow answers one. _Check:_ `focus.mjs`
+  (`focus-answers-overview`, `focus-answers-card`); unit tests `walk.test.ts`,
+  `overview.test.tsx`, `approval-request.test.tsx`, `composer.test.tsx`.
+- [ ] **Turning the preview off gives the region back**, in this window and
+  in another beside it. _Check:_ unit test `overview.test.tsx`; by hand with two windows.
 - [ ] **Escape, or anywhere else chosen, goes back to the panes** with the
   caret in the focused pane's composer. _Check:_ `focus.mjs` (`focus-overview`).
 - [ ] **The sidebar marks what is shown**: Agents while the overview is, a
@@ -168,19 +200,11 @@ _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds 
 
 ## Menus and tooltips
 
-_Standing design preferences_ (the user's; hold them in review):
+_ADR 238 › Interaction and visual rules_ holds the rules; check each by hand,
+in both themes, and screenshot what a rule is about (a highlighted item, a
+menu near the window's right edge, a pane header on hover).
 
-- [ ] **No ring or border on a selected row or a highlighted menu item** —
-  the highlight is a fill. _Check:_ manual, in both themes; screenshot a
-  highlighted item.
-- [ ] **No leading icons in a menu unless every item has one.** _Check:_ manual.
-- [ ] **Shortcuts are right-aligned** in menus and tooltips, and named only
-  where they work (`shortcuts.ts` labels them). _Check:_ manual.
-- [ ] **A pane's actions are "…" then "×", shown on hover.** _Check:_ manual (hover a pane header).
-- [ ] **A submenu opens beside its item, fully visible, not clipped by an
-  ancestor**, and takes the pointer. _Check:_ manual near the window's right edge.
-- [ ] **One tooltip for the whole window, in the window's glass.**
-  _ADR 238 › Decision_ (`use-window-tooltips.ts`). _Check:_ manual.
+- [ ] **Every rule in _Interaction and visual rules_ holds.** _Check:_ manual.
 
 ## Motion and reduced motion
 
@@ -191,8 +215,8 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   layout-inducing properties in the animation; `perf-budget.mjs` attribution
   shows forced layout per script.
 - [ ] **Calm, no jitter**: nothing moves one way then the other within a
-  transition. _Check:_ `drag.mjs` (`one-way`); by eye with `--headed` and a
-  slowed animation for the rest.
+  transition. _Check:_ `drag.mjs` (`sweep-across-zones`, one-way); by eye
+  with `--headed` and a slowed animation for the rest.
 - [ ] **Reduced motion sets durations to zero** (Settings › Motion, or the
   system's), and script motion follows. _Check:_ `safe-area.mjs --reduced-motion`
   and by hand; with less motion, a drag moves only the copy.

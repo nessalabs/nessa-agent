@@ -59,6 +59,7 @@
     "auth:measure": "cargo build -p nessa-server && tsx scripts/measure-auth.mjs",
     "desktop:dev": "vite --host 127.0.0.1 --port 1438 --strictPort",
     "verify:desktop": "node verification/desktop/scripts/run-all.mjs",
+    "verify:desktop:test": "node --test verification/desktop/scripts/lib/*.test.mjs",
     "verify:desktop:smoke": "node verification/desktop/scripts/smoke.mjs",
     "verify:desktop:perf": "node verification/desktop/scripts/perf-budget.mjs",
     "verify:desktop:safe-area": "node verification/desktop/scripts/safe-area.mjs",

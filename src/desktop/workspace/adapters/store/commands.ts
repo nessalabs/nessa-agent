@@ -103,7 +103,8 @@ export type WorkspaceCommand<Result = void> = ThunkAction<
  */
 export function loadWorkspace(): WorkspaceCommand<Promise<void>> {
   return async (dispatch, _getState, { workspace, newId }) => {
-    dispatch(indexRequested())
+    const read = newId()
+    dispatch(indexRequested({ read }))
     try {
       const index = await workspace.index()
       const unusable = index.sessions.filter((session) => !fromSource(session))
@@ -113,9 +114,9 @@ export function loadWorkspace(): WorkspaceCommand<Promise<void>> {
           "The index listed sessions at a revision the source could not have sent",
           unusable.map((session) => session.id),
         )
-      dispatch(indexLoaded({ index, draftId: newId() }))
+      dispatch(indexLoaded({ index, draftId: newId(), read }))
     } catch (error) {
-      dispatch(indexFailed({ reason: failureReason(error) }))
+      dispatch(indexFailed({ reason: failureReason(error), read }))
     }
   }
 }
@@ -416,7 +417,7 @@ export function sendMessage({
       parts: [{ kind: "text", text: content }],
       delivery: { state: "sending" },
     }
-    dispatch(messageSent({ sessionId, message }))
+    dispatch(messageSent({ sessionId, message, initiator }))
     return dispatch(deliver(sessionId, message, model, initiator))
   }
 }

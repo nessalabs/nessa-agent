@@ -101,15 +101,10 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
     built only after its owner agrees it is worth the states it adds, and the
     agreement is recorded in the ADR. Precision nobody asked for is where the
     edge cases live.
-17. **A user-facing feature is measured in a real browser.** A substantial UI
-    feature — a new surface, interaction, layout, animation, or timing budget —
-    merges only with [browser verification](#browser-verification-for-ui)
-    scripts that reproduce it in Chromium and WebKit, its contracts listed in the
-    verification checklist, and their numbers in the PR: frame times against the
-    budget (max and median over several throttled runs), and the measured
-    geometry, focus, and error counts each contract claims. A number that does
-    not meet its contract is a failed gate, not a note. A review finding that a
-    script could have caught becomes a script in the same PR.
+17. **A user-facing change is measured in a real browser.** A change in the
+    scope of [browser verification](#browser-verification-for-ui) merges only
+    with the scripts that section requires and their numbers in the PR. A number
+    that does not meet its contract is a failed gate, not a note.
 
 If a gate fails, fix it in the same PR.
 
@@ -783,8 +778,11 @@ WKWebView, so Chrome alone is not evidence.
   [`verification/desktop/CHECKLIST.md`](verification/desktop/CHECKLIST.md) with a
   pointer to the rule it enforces. A reviewer's reproduction that found a real
   bug becomes one of these scripts, so the bug cannot come back unnoticed.
-- **Run the scripts that cover the change before handing off**, and report their
-  output as evidence under [evidence and closure](#evidence-and-closure). A fix
+- **Run the scripts that cover the change before handing off**, and put their
+  numbers in the PR as evidence under [evidence and closure](#evidence-and-closure):
+  frame times against the budget, and the measured geometry, focus and error
+  counts each contract claims. A review finding a script could have caught
+  becomes a script in the same PR. A fix
   that a script cannot tell apart from the bug is not verified. They are not a
   CI gate: they need a display, a dev server, and minutes, so they run when the
   change is UI, not on every push ([adding a check to CI](#adding-a-check-to-ci)).

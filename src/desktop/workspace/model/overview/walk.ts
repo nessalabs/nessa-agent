@@ -47,3 +47,23 @@ export function afterAnswer(
     null
   )
 }
+
+/**
+ * How long after the keyboard moves on by answering that a key which answers
+ * or opens is not taken, in milliseconds: a press made before the person
+ * could see where the keyboard went is not a choice about the next request.
+ */
+export const answerPause = 250
+
+/**
+ * Whether a key press may answer (or open) the request it lands on: never a
+ * held key's repeat — one press answers one request — and not within
+ * `answerPause` of the keyboard moving on by answering (`movedAt`, on the
+ * same clock as `at`).
+ */
+export function takesAnswerKey(
+  press: { readonly repeat: boolean; readonly at: number },
+  movedAt: number | null,
+): boolean {
+  return !press.repeat && (movedAt === null || press.at - movedAt >= answerPause)
+}

@@ -12,7 +12,16 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { cli, log, table, verbose } from "./lib/cli.mjs"
+import {
+  chosen,
+  cli,
+  log,
+  overallStatus,
+  table,
+  UsageError,
+  verbose,
+  verdictOf,
+} from "./lib/cli.mjs"
 import { target } from "./lib/server.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -29,14 +38,18 @@ const options = cli({
   help: `
 Usage: node verification/desktop/scripts/run-all.mjs [options]
 
-  --only <list>    Checks to run (default: ${[...functional, "perf-budget"].join(", ")}).
+  --only <list>    Checks to run (default: ${[...functional, "perf-budget"].join(", ")});
+                   a name not among them is refused (exit 2).
   --skip-perf      Leave out perf-budget (the production build and its runs).
   --runs <n>       Passed to perf-budget.
 
 --url / --mode apply to the functional checks; perf-budget always measures a
 production build unless --url is given. --engine and --layout, when given,
 are passed to every check; otherwise each uses its own default. Each
-check's JSON is collected into one document on stdout (or --out).`,
+check's JSON is collected into one document on stdout (or --out).
+
+Exit: 0 every check held; 1 any check failed (whatever else could not run);
+2 nothing failed but a check could not run.`,
 })
 
 const passThrough = () => {
@@ -52,12 +65,20 @@ const passThrough = () => {
   return args
 }
 
+/** Runs one check; resolves with its exit code (null for a signal) and time, never rejects. */
 function run(check, args) {
   return new Promise((ok) => {
     const started = Date.now()
-    const proc = spawn(process.execPath, [join(here, `${check}.mjs`), ...args], {
-      stdio: ["ignore", "ignore", "pipe"],
-    })
+    const seconds = () => Math.round((Date.now() - started) / 1000)
+    let proc
+    try {
+      proc = spawn(process.execPath, [join(here, `${check}.mjs`), ...args], {
+        stdio: ["ignore", "ignore", "pipe"],
+      })
+    } catch (error) {
+      log(`[${check}] did not start: ${error.message}`)
+      return ok({ code: null, seconds: seconds() })
+    }
     let partial = ""
     proc.stderr.on("data", (chunk) => {
       const lines = (partial + chunk.toString()).split("\n")
@@ -68,22 +89,42 @@ function run(check, args) {
       "end",
       () => partial && process.stderr.write(`[${check}] ${partial}\n`),
     )
-    proc.on("exit", (code) =>
-      ok({ code, seconds: Math.round((Date.now() - started) / 1000) }),
-    )
+    proc.on("error", (error) => {
+      log(`[${check}] did not start: ${error.message}`)
+      ok({ code: null, seconds: seconds() })
+    })
+    proc.on("exit", (code) => ok({ code, seconds: seconds() }))
   })
 }
 
-const chosen = options.only
-  ? options.list(options.only)
-  : [...functional, ...(options["skip-perf"] ? [] : ["perf-budget"])]
+const all = [...functional, "perf-budget"]
+let checks
+try {
+  checks = options.only
+    ? chosen(options.only, all, options.list)
+    : [...functional, ...(options["skip-perf"] ? [] : ["perf-budget"])]
+} catch (error) {
+  if (!(error instanceof UsageError)) throw error
+  log(`run-all: ${error.message}`)
+  process.exit(2)
+}
 const dir = mkdtempSync(join(tmpdir(), "nessa-desktop-verify-all-"))
 const summary = []
 const documents = {}
 let page
 try {
-  if (chosen.some((c) => functional.includes(c))) page = await target(options)
-  for (const check of chosen) {
+  if (checks.some((c) => functional.includes(c))) {
+    try {
+      page = await target(options)
+    } catch (error) {
+      // No page to test: every functional check could not run; perf builds its own.
+      log(`run-all: could not start the page: ${error.message}`)
+      for (const check of checks.filter((c) => functional.includes(c)))
+        summary.push({ check, status: "COULD NOT RUN", held: "0/0", seconds: 0 })
+    }
+  }
+  for (const check of checks) {
+    if (functional.includes(check) && !page) continue
     const out = join(dir, `${check}.json`)
     const args = [...passThrough(), "--out", out]
     if (check === "perf-budget") {
@@ -103,7 +144,7 @@ try {
     const results = document?.results ?? []
     summary.push({
       check,
-      status: code === 0 ? "held" : code === 1 ? "FAILED" : "COULD NOT RUN",
+      status: verdictOf(code),
       held: `${results.filter((r) => r.ok).length}/${results.length}`,
       seconds,
     })
@@ -121,16 +162,17 @@ for (const [check, document] of Object.entries(documents))
         `  ${check} › ${r.name} [${[r.engine, r.layout, r.width].filter(Boolean).join(" ")}]: ${r.error ?? r.failures.join("; ")}`,
       )
 
-const all = {
+const status = overallStatus(summary.map((s) => s.status))
+const document = {
   check: "run-all",
-  ok: summary.every((s) => s.status === "held"),
+  ok: status === 0,
   summary,
   checks: documents,
 }
-const json = `${JSON.stringify(all, null, 2)}\n`
+const json = `${JSON.stringify(document, null, 2)}\n`
 if (options.out) {
   mkdirSync(dirname(resolve(options.out)), { recursive: true })
   writeFileSync(resolve(options.out), json)
   log(`wrote ${resolve(options.out)}`)
 } else process.stdout.write(json)
-process.exit(summary.some((s) => s.status === "COULD NOT RUN") ? 2 : all.ok ? 0 : 1)
+process.exit(status)

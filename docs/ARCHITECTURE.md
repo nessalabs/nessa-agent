@@ -258,7 +258,8 @@ not reading the session, which stays unread.
   panes and three columns, a session never shown twice; its pixel rules
   (`pane-sizing.ts`): placements as fractions, the one fit rule every change
   of layout and every resize is held to (each pane at least 300 by 220
-  pixels), and edge drags held to it; what a drop does (`drop.ts`); how a
+  pixels), and edge drags held to it; where a drag aims and what a drop
+  does (`drop.ts`); what a press becomes, event by event (`drag.ts`); how a
   window fits the side columns (`window-fit.ts`); why the source refused
   (`failure.ts`); what is kept of what no pane shows (`retention.ts`); a session's conversation, its messages and steps
   (`transcript.ts`); the revision rule every replacement follows
@@ -300,7 +301,8 @@ not reading the session, which stays unread.
   preview (`drag.ts`), pointer resizing, keys and Tab order, focus following
   the focused pane (`focus.ts`), the page's measure of the panes' room
   (`measure.ts`, injected into the commands), the arrival of a first message,
-  and the clock's ticks.
+  and the clock's ticks. `adapters/storage/` keeps the Agents overview's
+  filter between launches (`remembered-filter.ts`).
 - `ui/` holds each component once — source list (two variants of one
   component), session list, pane grid, pane, pane header, transcript, message,
   tool steps, approval card, quick switcher, empty states, the Agents

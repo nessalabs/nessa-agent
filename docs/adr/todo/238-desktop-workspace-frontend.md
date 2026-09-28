@@ -55,8 +55,9 @@ laid out feature-first with roles below, like `src/conversation/`.
     out, focus — and the limits of four panes and three columns;
     `pane-sizing.ts` holds the rules that need measured pixels: placements,
     the **one fit rule** (`arrange`, `fitted`: every pane at least 300 × 220)
-    and edge drags held to it; `drop.ts` holds what a drop on a pane's zone
-    does, the one outcome a drag previews and the command commits;
+    and edge drags held to it; `drop.ts` holds where a drag aims and what a
+    drop on a pane's zone does, the one outcome a drag previews and the
+    command commits; `drag.ts`, what a press becomes, event by event;
   - why the source refused (`failure.ts`, a typed reason — the sentence a
     person reads is the UI's, `ui/failure-copy.ts`), and what the window
     keeps of what it does not show (`retention.ts`);
@@ -79,7 +80,9 @@ laid out feature-first with roles below, like `src/conversation/`.
   - `dom/`: what belongs to the page, not the product — FLIP motion, drag and
     drop (`drag.ts`), pointer resizing, keys and Tab order, focus following the
     focused pane (`focus.ts`), the page's measure of the panes' room
-    (`measure.ts`), a first message's arrival, the clock's ticks.
+    (`measure.ts`), a first message's arrival, the clock's ticks;
+  - `storage/`: the overview's filter kept between launches
+    (`remembered-filter.ts`, `RememberedFilter`).
 - **`ui/`** holds each component once:
   - source list (both sidebars as variants of one component), session list,
     pane grid, pane, pane header, transcript, transcript heading, message, tool
@@ -119,7 +122,7 @@ one asked before may predate what was lost. **The source says when to
 resync**: it sends `{ kind: "resync" }` on its stream when it reconnects or
 finds a gap, and `followWorkspace` reads the index again; a source that cannot
 tell never sends one, and the window then resyncs only when it opens or the
-person asks (Try Again). The in-memory source sends one on `resync()`. The one exception is a
+person asks (Try Again). The in-memory source loses nothing, and never sends one. The one exception is a
 session the stream brought while the read was on its way, which the read may
 predate: it stays, until a later read says otherwise. A session the source
 has not spoken of (revision 0) is the window's own and stays. A pane is never
@@ -186,24 +189,35 @@ and Settings; the pointer or keyboard focus inside it keeps it shown.
 or the Agents overview), so an agent can move it too. The overview is part of
 the workspace (`ui/overview/`, `model/overview/`): its selection and filter
 are slice state (`selectInOverview`, `filterOverview`; a session not listed is
-not selected), and the filter is kept between launches by composition
+not selected, and while the open overview lists any, one is chosen — the first
+it lists, on opening or once the chosen one is gone, `keepOverviewChoice` — so
+the session its peek shows is the one the window reads for it), and the filter
+is kept between launches by composition
 (`RememberedFilter`, read once into the store's first state and written by an
 effect on each change — storage never speaks for it while the window is
 open). Settings › General › Experimental decides only whether the window
-offers a way in — the sidebar's "Agents" entry and ⌘0; turned off, an open
-overview gives the region back. The entry and ⌘0 are a place like a channel:
-choosing it again keeps it, and Escape in it leaves; and every action that
-goes somewhere — a session, a channel, a status view, a new session, another
-pane — or changes the panes a person asked to change — closing, moving,
-evening them out — goes back to the panes by one rule (`navigated`, applied by
-the slice to each), so no pane changes unseen beneath the overview. The
+offers a way in — the sidebar's "Agents" entry and ⌘0; turned off, from
+Settings in this window or another beside it (the storage event), an open
+overview gives the region back (`OverviewLayer`, the one place that says so). The entry and ⌘0 are a place like a channel:
+choosing it again keeps it, and Escape in it leaves; every action that goes
+somewhere — a session, a channel, a status view, a new session, another pane,
+or the focused pane asked for by name — goes back to the panes, even when it
+finds the window already there; and one that changes the panes a person asked
+to change — closing, moving, evening them out, resizing — goes back only when
+it changed them, so no pane changes unseen beneath the overview and a move at
+the edge leaves it where it is (`navigated`, applied by the slice). The
 overview is drawn in a layer over the session list and the panes, which stay
 laid out beneath it, unseen and out of reach: the room a pane command
 measures is the panes' own whether the overview is open or not, and the
 layer's width — whether the peek fits beside the list — is known before it
 opens, so its first frame is laid out once. Opened, the keyboard lands on the
-current row; left, it goes back to the focused pane's composer; an answer
-given in it — by key or click — moves it to the next request. The sidebar
+current row; left — by Escape, or by any command that brings the panes back,
+one that changed nothing else included — it goes back to the focused pane's
+composer; an answer given in it — by key or click — moves it to the next
+request. **One press answers one request**: a held key's repeats answer and
+open nothing, in a row or on an answer's button, and a press within 250ms of
+the keyboard moving on by answering is not taken (`takesAnswerKey`); a held
+Return in a composer sends once. The sidebar
 marks what is shown: Agents while the overview is, a channel or session only
 while the panes are.
 
@@ -218,67 +232,86 @@ peek is not reading the session: only a pane marks it read.
 
 **Focus follows the focused pane** (`adapters/dom/focus.ts`, one mechanism):
 whenever another pane takes focus — a split, ⌘N, ⌘W, ⌘1–4, ⇧⌘[ ⇧⌘], a pick in
-⌘K, an agent's dispatch — the caret lands in its composer; when what held the
+⌘K, an agent's dispatch, or the panes coming back from under the Agents
+overview — the caret lands in its composer; when what held the
 caret went away (an answered approval), it lands there too. Focus in a dialog
 or a menu, or in a list walked with the arrow keys, is left alone. Closing ⌘K
 without a pick, or Settings, gives focus back to what opened it.
 
 **Drag and drop** is carried by the pointer (`adapters/dom/drag.ts`), not the
 browser's drag, and a pane's header carries the pane, never the window (no
-drag region in it). What is carried is a translucent copy of the pane itself,
-made once the press's frame has painted (or as it becomes a drag, if sooner) and shown once it becomes a drag — one screen of its
-conversation, moved to where it was scrolled by transform, its composer and
-chips, in a box of its own size (`contain: strict`); a session from a list is
-drawn from what the window holds of it. What a drag needs of the page — the
-grid, each pane's parts, the sidebar's room — is read then, on a laid-out page, and where
-a preview has drawn a pane is known from the preview's own motion, so
-beginning, previewing, dropping and letting go only write. A press on what
-can be carried, and the drag it becomes, select nothing (`selectstart`), and
-leave nothing selected; while carrying, one element over the page holds the
-grabbing hand, so beginning a drag restyles it alone. **While dragging, the copy belongs to the pointer**: it
-keeps its size and grab offset and follows one to one, with no pull toward a
-target. **The zone is the drag's aim, in pixels** (`model/drop.ts`). A pane is
-carried at full size, grabbed by its header, and the eye follows the copy's
-body as much as the hand, so the drag aims halfway from the pointer to the
-copy's centre (`aimPoint`); an aim in a gutter, past the grid's edge, or with
-the copy run off the window reads as the pane nearest it, held to its edge
-(`paneAt`), so past the grid's right is its last column's side and past its
-foot the lowest pane's foot; aimed at the carried pane's own place, nothing is
-offered, and let go there it goes back. With the pointer itself off the grid —
-over a side column, or out of the window — nothing is offered either, and a
-release there, or the page losing the pointer, is as Escape; the zone
-committed is the one under the release, read then. On that pane (`zoneAt`), each side
-reaches a third of the way in, held to 90–300px and never past the middle
-(`edgeReach`), the middle is what the sides leave, and where two reaches meet
-the diagonal between them decides. The pointer's heading over the last tenth
-of a second (`pointerVelocity`) reads intent early and alike in every
-direction: heading mostly toward a side makes it reach 1.4 times further — a
-drag down a tall pane is "below" by two-thirds of the way — and a heading
-plainly along one axis leaves the sides across it reachable only within 16px
-of their edge — one the pointer is already in holds — so a sideways drag
-near a tall narrow pane's top moves beside
-it, never above. The zone it is in holds until another wins by 12px, so it
-does not flicker at a boundary. **The result is
-shown by the layout**: over a zone, the real panes
-move to where the drop would put them, only when the zone changes, and a
-calm placeholder marks exactly the rect the drop will take — from
-`dropOutcome`, the same outcome the drop's command commits, so nothing jumps
-(`panes.test.ts` holds preview == commit for every zone; every preview rect
-is held inside the grid). **On the drop, it snaps**: the copy flies from the
-pointer into the placeholder's rect and hands over to the real pane. A zone
-the fit rule refuses offers nothing; a session already on screen offers "Go
-to Pane". Escape, or a drop elsewhere, flies the copy home as the panes go
-back. Only transforms move; the zone is announced in a polite live region;
-with less motion, nothing but the copy moves. Chrome and WebKit are checked
-frame by frame: the copy's corner is the pointer less the grab offset, no
-pane leaves the grid, and panes move one way between zone changes.
+drag region in it). What a press becomes is one pure state machine,
+`model/drag.ts` (`stepDrag`); the adapter sends it every event and draws the
+phase it answers with. Its rules were patched through three review rounds and
+then redesigned to fewer: **one aim point, the pointer**; **nothing is read
+again while carrying — a change ends the drag instead**; **only panes a
+person can see are targets**; and **the zone settles at rest**.
+
+| phase | event | next | what the window does |
+| --- | --- | --- | --- |
+| idle | press (primary button) on a pane's header or a session's row, not on a control inside it | pressed | nothing in the press's own frame; once it has painted, the copy is made unseen and the page read once — the grid, each pane's box and parts, the sidebar's room, and whether panes can be seen at all |
+| pressed | move under 4px (`liftDistance`) | pressed | — |
+| pressed | move 4px or more | carrying (aim: none yet) | the copy is shown under the pointer — once made, so a drag begun before the press's frame painted shows a frame later rather than read the page in the event — full size, and glides (`--desktop-base`, transform only) until its centre is under the pointer, where it stays; the zone waits for the next frame |
+| pressed | release | idle | a click; what was made goes |
+| pressed | Escape; any other key but a lone modifier; the pointer lost (`lostpointercapture`, `pointercancel`, the window's blur); a change (below) | idle | the press is let go: no later move can start a drag |
+| carrying | move | carrying | the copy moves with the pointer, one to one; the zone is decided from the pointer (below); the panes and the placeholder change only when the zone does, a frame later |
+| carrying | no move for 150ms (`restAfter`, `still`) | carrying | the pointer's heading has aged out: the zone is decided again as at rest |
+| carrying | release, with a zone that offers something (`dropOutcome`) | dropping | the zone under the release point — at rest if the pointer paused — is committed: the command (`movePane`, `dropSession`) gives what was previewed, and the copy flies into its rect |
+| carrying | release with no zone, or one that offers nothing (off the grid, the carried pane's own place, a side the room refuses, no pane in sight) | cancelling (home) | the copy flies home as the panes go back |
+| carrying | Escape | cancelling (home) | as above; Escape goes no further |
+| carrying | the pointer lost (`lostpointercapture`, `pointercancel`, the window's blur) | cancelling (home) | as above; with the press let go, a later move starts nothing |
+| carrying | a change: any key but Escape or a lone modifier (a command — ⌘W, ⌘0, ⌘B, ⌘,, ⌘K, an arrow — ends the drag before it runs); a resize; the panes, the content view or the side columns changing in the store (an agent's dispatch, a session removed); the carried session no longer listed; the window going inert under Settings. A layout switch unmounts the shell, and the drag with it, taking everything it drew | cancelling (at once) | the copy and the preview go at once, nothing read again, and the change plays as it would with no drag |
+| dropping | the drop's own change to the panes | dropping | (it is the drop) |
+| dropping, cancelling | the copy's flight ends (`landed`) | idle | — |
+| dropping, cancelling | anything else, a press included | unchanged | a press while the copy still flies starts nothing |
+
+Where the pointer is decides the zone (`aimAt`, `model/drop.ts`):
+
+| the pointer | zone |
+| --- | --- |
+| anywhere, while the Agents overview (or Settings) covers the panes | none: no zone, no placeholder, a release changes nothing |
+| off the grid — over a side column, or out of the window | none |
+| in a gutter between panes | the nearest pane's, the pointer held to its edge (`paneAt`) |
+| over a pane | each side reaches a third of the way in, held to 90–300px and never past the middle (`edgeReach`); the middle is what the sides leave, and where two reaches meet the diagonal between them decides (`zoneAt`) |
+| over a pane, heading mostly toward a side (the last tenth of a second, `pointerVelocity`) | that side reaches 1.4 times further, so a drag down a tall pane is "below" by two-thirds of the way |
+| over a pane, heading plainly along one axis | the sides across it are reached only within 16px of their edge — unless the pointer is already in one — so a sideways drag near a tall narrow pane's top moves beside it, never above |
+| over a pane, still for 150ms | as at rest: the heading has aged out |
+| over the zone it is already in | it holds until another wins by 12px, so it does not flicker at a boundary |
+| over the carried pane's own place | its zone, offering nothing: let go there, it goes home |
+
+The pointer is the aim because the copy's centre is under it: what the eye
+tracks and what aims are one point, so the middle of a tall pane — Swap — is
+where the copy's middle is. **The result is shown by the layout**: over a
+zone, the real panes move to where the drop would put them, and a calm
+placeholder marks exactly the rect the drop will take — from `dropOutcome`,
+the same outcome the drop's command commits, so nothing jumps
+(`panes.test.ts` holds preview == commit for every zone; every preview rect is
+held inside the grid). A zone the fit rule refuses offers nothing; a session
+already on screen offers "Go to Pane". What is carried is a translucent copy
+of the pane itself — one screen of its conversation, moved to where it was
+scrolled by transform, its composer and chips, in a box of its own size
+(`contain: strict`); a session from a list is drawn from what the window holds
+of it. Nothing of the page is read after the press's frame: where a preview
+has drawn a pane is known from the preview's own motion, so beginning,
+previewing, dropping and letting go only write. A press on what can be
+carried, and the drag it becomes, select nothing (`selectstart`) and leave
+nothing selected; while carrying, one element over the page holds the
+grabbing hand. Only transforms move; the zone is announced in a polite live
+region; with less motion, nothing but the copy moves. `model/drag.test.ts`
+has a test for each row above; `verification/desktop/scripts/drag.mjs` checks
+the rest in Chrome and WebKit, frame by frame — the copy's centre stays on the
+pointer, no pane leaves the grid or the window, panes move one way between
+zone changes, the zone settles at rest, nothing is a target under the
+overview, a resize or a command mid-drag leaves nothing lifted, and a lost
+pointer starts nothing again.
 
 **What is typed and not sent** is product state: `composerText` in the
 workspace slice, by session or new session, written by the composer (and by an
 agent, `setComposerText`), so it survives a change of layout, Settings, or a
-pane showing another session, and goes with its session. Sent, it goes by the
-command's own rule (`messageSent`), whoever sent it; nothing sent
-(`not-asked`), it stays.
+pane showing another session, and goes with its session. Sent by the person
+(`sendMessage` with the initiator `"person"`), it goes — it is what was sent
+(`messageSent`); a message an agent sends is its own, and what the person is
+typing stays; nothing sent (`not-asked`), it stays.
 
 The desktop gets its own store and composition root: `src/desktop/store.ts`,
 with `src/desktop/dependencies.ts` building its dependencies and
@@ -401,6 +434,26 @@ motion — chosen in Settings, or the system's — sets the durations to zero
 there under the root's `data-motion`, and script motion follows with no
 check of its own.
 
+### Interaction and visual rules
+
+The person's standing design choices for the window, held in review and
+checked by hand (`verification/desktop/CHECKLIST.md` › _Menus and tooltips_
+links here):
+
+- **A selection is a fill.** No ring or border on a selected row or a
+  highlighted menu item, in either theme.
+- **Menus lead with icons only when every item has one.**
+- **Shortcuts are right-aligned** in menus and tooltips, and named only where
+  they work (`ui/layouts/shortcuts.ts` labels them).
+- **A pane's actions are "…" then "×"**, shown on hover.
+- **A submenu opens beside its item**, fully visible, never clipped by an
+  ancestor, and takes the pointer.
+- **One tooltip for the whole window**, in the window's own glass
+  (`use-window-tooltips.ts`).
+- **What moves is carried, not chased.** A dragged pane's copy is centred on
+  the pointer, the one point that aims; nothing moves one way and then the
+  other within a transition; only transform and opacity animate.
+
 ### Commands in flight
 
 What each command shows at once, and what each of the source's answers does
@@ -466,7 +519,7 @@ leave a read or a send hanging. The one mark the window clears itself is
 | `sendMessage` to a session | the message in the outbox, "sending", with the model chosen for the next turn | mark cleared; an approval still waiting is let go, on the source's record with who sent the message | "Not sent. …", with Send Again (`resendMessage`) and Discard (`discardUnsent`); the session as the source last said | any conversation without it — a read of the history, a reply still streaming — leaves it where it is |
 | `approve` / `deny` (with the initiator: `"person"` from the card, `"agent"` from an agent) | the approval's buttons at rest | the conversation that no longer asks, delivered first, lets the answer go; the source has recorded the decision and who made it | asks again, saying why; answerable again | a conversation no longer asking lets the answer go |
 | an answer to an approval the window does not hold — moved on, or its session in no pane | nothing; the command returns `not-asked` | — | — | — |
-| `approve` / `deny` for a session the open overview shows (waiting, or chosen), in no pane | the row's and the peek's answers at rest; the row settles in place | as for a pane: the conversation that no longer asks, delivered first, lets the answer go; the row says what became of it, then leaves | asks again, saying why, in the row and its peek; `unknown` (no answer came) the same, as a pane's card does | the session moves to Working; the row leaves once its settle has played |
+| `approve` / `deny` for a session the open overview shows (waiting, or chosen), in no pane | the row's and the peek's answers at rest; answered in the overview, the row settles in place (the view's own hold on the row) | as for a pane: the conversation that no longer asks, delivered first, lets the answer go; answered in the overview, the row says what became of it, then leaves; answered from a pane or by an agent, the row leaves as the session moves on, with no settle | asks again, saying why, in the row and its peek; `unknown` (no answer came) the same, as a pane's card does | the session moves to Working; a row answered in the overview leaves once its settle has played |
 | `approve` / `deny` for a session neither a pane nor the open overview shows (closed, or its filter leaves it out) | nothing; `not-asked` | — | — | — |
 | the overview closes while an answer is on its way | nothing | the answer is kept, as for a pane showing another session | its reason is kept for when it is shown again | as above |
 | `sendMessage` from the peek's reply pill while an approval waits | the message in the outbox, "sending"; the pill says replying sets the request aside | the approval is let go, on the source's record with who sent it | "Not sent" under the pill; Send Again in the pane | as for a pane |
@@ -476,7 +529,7 @@ leave a read or a send hanging. The one mark the window clears itself is
 | a session is shown | marked read, and the source told | nothing more | the mark stays cleared | marked unread again while shown: read again |
 | a shown session's transcript is read | the heading | the conversation, unless a newer one arrived meanwhile | the pane says why, and is not read again until "Try Again" (`retryTranscript`); a failure no pane shows any more is not kept, so the session is read afresh when shown again | the newer of it and the read's answer is kept, in either order |
 | the index is read | nothing yet | the workspace opens on its first session; summaries the stream already brought, if newer, are kept | the workspace says why, with "Try Again" | a removal that arrived first keeps the session out |
-| the index is read again (the resync) | nothing | a session it does not list, or lists in a channel it does not list, is taken out at the revision held — its pane closes, or the last starts over; every conversation on screen is read again, a read asked before the index set aside and its answer let go | an open workspace stays open, as it was | a summary the stream brought while the read was on its way stays |
+| the index is read again (the resync) | nothing | a session it does not list, or lists in a channel it does not list, is taken out at the revision held — its pane closes, or the last starts over; every conversation on screen is read again, a read asked before that read of the index set aside and its answer let go — each answer paired with the read that asked it (`read`, on `indexRequested`, `indexLoaded`, `indexFailed`), in whatever order they arrive | an open workspace stays open, as it was | a summary the stream brought while the read was on its way stays |
 | the source sends `resync` (it reconnected, or found a gap) | nothing | the index is read again, as above | as above | as above |
 | a shown session's transcript read is answered with one the window cannot use (another session's, revision 0) | — | a fault, logged; the pane says why, with "Try Again" | — | — |
 | an update at a revision the source could not have sent | — | let go, logged where received | — | — |
@@ -509,8 +562,14 @@ the source holds, at a glance — and is used nowhere else; the port method is
   the wrapper, and an agent's dispatch would not animate. Measuring in the
   commit phase needs neither.
 - **Drag state in the store.** What the pointer carries lives only as long as
-  the pointer holds it and no agent asks for it; it stays in the drag adapter,
-  which asks the store only when the zone changes.
+  the pointer holds it and no agent asks for it; its phase is a pure value
+  (`model/drag.ts`) the drag adapter holds, asking the store only when the
+  zone changes.
+- **Keep patching the drag.** Three review rounds each found new cases in it
+  (a blended aim point the eye did not follow, a zone that did not settle, a
+  lost pointer that restarted the drag, previews re-read after the room
+  changed); the redesign above removes behaviour instead — one aim point, no
+  re-reading while carrying — and writes the machine down first.
 - **The browser's own drag and drop.** Its drag image cannot be full size or
   move, so the carried pane could not become the window it will be; a pointer
   drag can.

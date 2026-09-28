@@ -82,6 +82,43 @@ it("hands the caret to the composer once it is on the page", async () => {
   await act(async () => root.unmount())
 })
 
+it("lets go of its watch for a press once the caret has landed", async () => {
+  const added: EventListenerOrEventListenerObject[] = []
+  const removed: EventListenerOrEventListenerObject[] = []
+  const add = window.addEventListener.bind(window)
+  const remove = window.removeEventListener.bind(window)
+  window.addEventListener = ((
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: unknown,
+  ) => {
+    if (type === "pointerdown") added.push(listener)
+    add(type, listener, options as AddEventListenerOptions)
+  }) as typeof window.addEventListener
+  window.removeEventListener = ((
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: unknown,
+  ) => {
+    if (type === "pointerdown") removed.push(listener)
+    remove(type, listener, options as EventListenerOptions)
+  }) as typeof window.removeEventListener
+  try {
+    const root = await pickAndClose()
+    const pane = composerLater()
+    host.append(pane)
+    await frames(3)
+    expect(document.activeElement).toBe(pane.querySelector("textarea"))
+    // Every press watch it added, it took away once the caret landed.
+    expect(added.length).toBeGreaterThan(0)
+    expect(added.every((listener) => removed.includes(listener))).toBe(true)
+    await act(async () => root.unmount())
+  } finally {
+    window.addEventListener = add
+    window.removeEventListener = remove
+  }
+})
+
 it("calls the hand-off off when the person presses somewhere else first", async () => {
   const root = await pickAndClose()
   await frames(2)

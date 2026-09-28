@@ -150,8 +150,14 @@ export function parseFilter(stored: unknown): AgentsFilter {
   return {
     scope: scopes.find((each) => each === scope) ?? defaultFilter.scope,
     range: ranges.find((each) => each === range) ?? defaultFilter.range,
+    // Only tags sessions can carry (`sessionTags`, none yet): a kept tag
+    // this build does not know would hide every session behind a menu that
+    // cannot show it.
     tags: Array.isArray(tags)
-      ? tags.filter((tag): tag is string => typeof tag === "string")
+      ? tags.filter(
+          (tag): tag is string =>
+            typeof tag === "string" && sessionTags.some((known) => known.id === tag),
+        )
       : [],
   }
 }

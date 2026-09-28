@@ -10,6 +10,9 @@
  * changes, it moves focus that was lost, or left in another pane: a list
  * walked with the arrow keys, the sidebar, is the person's, and keeps it.
  *
+ * Coming back from the Agents overview is another pane taking focus, even
+ * when the command that brought the panes back changed nothing else.
+ *
  * This is the one place focus follows the store; the pane's own focus
  * handler is the other direction (a click or Tab into a pane focuses it).
  */
@@ -29,26 +32,45 @@ function composerField(scope: ParentNode): HTMLElement | null {
 
 /**
  * Puts the caret in the focused pane's composer, trying for a few frames
- * while a new pane fills in. Returns a function that stops trying.
+ * while a new pane fills in; `done` is told once it has landed, or given up.
+ * Returns a function that stops trying.
  */
-export function focusComposer(scope: ParentNode = document): () => void {
+export function focusComposer(
+  scope: ParentNode = document,
+  done: () => void = () => {},
+): () => void {
   let frame = 0
   let tries = 0
   const attempt = () => {
     const field = composerField(scope)
-    if (field) field.focus({ preventScroll: true })
-    else if (tries++ < 30) frame = requestAnimationFrame(attempt)
+    if (field) {
+      field.focus({ preventScroll: true })
+      done()
+    } else if (tries++ < 30) frame = requestAnimationFrame(attempt)
+    else done()
   }
   frame = requestAnimationFrame(attempt)
   return () => cancelAnimationFrame(frame)
 }
 
-/** What moving the caret depends on: which pane is focused, what it shows, how many there are. */
-function signature(store: DesktopStore): string {
-  const panes = store.getState().workspace.panes
-  if (!panes) return ""
+/**
+ * What moving the caret depends on: which pane is focused, what it shows, how
+ * many there are, and whether the panes are what the content region shows.
+ */
+function signature(store: DesktopStore): {
+  pane: string
+  rest: string
+  panesShown: boolean
+} {
+  const { panes, content } = store.getState().workspace
+  const panesShown = content === "panes"
+  if (!panes) return { pane: "", rest: "", panesShown }
   const pane = focusedPane(panes)
-  return `${pane.key}:${pane.sessionId}:${panes.columns.map((column) => column.panes.length).join(",")}`
+  return {
+    pane: String(pane.key),
+    rest: `${pane.sessionId}:${panes.columns.map((column) => column.panes.length).join(",")}`,
+    panesShown,
+  }
 }
 
 export function useFocusFollowsPane(
@@ -86,9 +108,15 @@ export function useFocusFollowsPane(
     let seen = signature(store)
     const unsubscribe = store.subscribe(() => {
       const next = signature(store)
-      if (next === seen) return
-      const moved = next.split(":")[0] !== seen.split(":")[0]
+      const was = seen
       seen = next
+      // The Agents overview over the panes keeps the keyboard itself.
+      if (!next.panesShown) return
+      const back = !was.panesShown
+      if (!back && next.pane === was.pane && next.rest === was.rest) return
+      // Another pane took focus, or the panes came back from under the
+      // overview — by a command that changed nothing else, too.
+      const moved = back || next.pane !== was.pane
       // After the change reaches the page.
       requestAnimationFrame(() => settle(moved))
     })

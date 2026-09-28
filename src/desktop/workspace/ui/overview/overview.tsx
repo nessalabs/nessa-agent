@@ -35,7 +35,12 @@ import {
   type Held,
 } from "../../model/overview/agents-glance"
 import type { AgentsFilter } from "../../model/overview/filter"
-import { afterAnswer, stepFrom, type Step } from "../../model/overview/walk"
+import {
+  afterAnswer,
+  stepFrom,
+  takesAnswerKey,
+  type Step,
+} from "../../model/overview/walk"
 import { AllClear } from "./all-clear"
 import { FilterMenu } from "./filter-menu"
 import { overviewKeys } from "./overview-keys"
@@ -97,8 +102,8 @@ export function AgentsOverview({
     sameGlance,
   )
   const order = useMemo(() => readingOrder(glance), [glance])
-  const current =
-    selected !== null && order.includes(selected) ? selected : (order[0] ?? null)
+  // The workspace keeps a listed session chosen while it lists one (`keepOverviewChoice`).
+  const current = selected !== null && order.includes(selected) ? selected : null
   const choose = useCallback(
     (sessionId: string) => dispatch(selectInOverview({ sessionId })),
     [dispatch],
@@ -178,6 +183,15 @@ export function AgentsOverview({
     timers.current.add(timer)
   }, [])
 
+  // When the keyboard last moved on by answering: a press before the person
+  // could see where it went is not taken (`takesAnswerKey`).
+  const movedAt = useRef<number | null>(null)
+  const takesKey = useCallback(
+    (event: KeyboardEvent) =>
+      takesAnswerKey({ repeat: event.repeat, at: performance.now() }, movedAt.current),
+    [],
+  )
+
   const latest = useRef({ glance, settling })
   latest.current = { glance, settling }
 
@@ -219,7 +233,10 @@ export function AgentsOverview({
         ...all,
         { sessionId: summary.id, summary, approval, choice, phase: "answering" },
       ])
-      if (here) focusItem(next)
+      if (here) {
+        focusItem(next)
+        movedAt.current = performance.now()
+      }
       const asked =
         choice === "deny"
           ? deny({ sessionId: summary.id, approvalId: approval.id, initiator: "person" })
@@ -381,6 +398,7 @@ export function AgentsOverview({
                 onOpen={open}
                 onAnswer={answer}
                 onLeaveReply={leaveReply}
+                takesKey={takesKey}
                 onShowAll={
                   filter.scope === "all"
                     ? undefined
@@ -426,6 +444,7 @@ function Groups({
   onOpen,
   onAnswer,
   onLeaveReply,
+  takesKey,
   onShowAll,
 }: {
   glance: AgentsGlance
@@ -438,6 +457,7 @@ function Groups({
   onOpen: (sessionId: string) => void
   onAnswer: OnAnswer
   onLeaveReply: () => void
+  takesKey: (event: KeyboardEvent) => boolean
   /** Widens the filter to every session; absent when it already lists them all. */
   onShowAll: (() => void) | undefined
 }) {
@@ -465,6 +485,7 @@ function Groups({
                 key={sessionId}
                 {...row(sessionId)}
                 settling={settlingOf.get(sessionId)}
+                takesKey={takesKey}
               />
             ))}
           </ul>

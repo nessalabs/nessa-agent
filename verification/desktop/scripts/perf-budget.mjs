@@ -10,7 +10,7 @@
  * checks that the interaction did what it is named for (a split adds a pane,
  * a move reorders), so a no-op cannot pass as fast.
  */
-import { attempt, CannotRun, log, table } from "./lib/cli.mjs"
+import { attempt, CannotRun, chosen, log, table } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import {
   budgetMs,
@@ -23,7 +23,16 @@ import {
 } from "./lib/perf.mjs"
 import { main } from "./lib/run.mjs"
 import { content, css, keys } from "./lib/selectors.mjs"
-import { focusComposer, openPanes, order, paneCount, state } from "./lib/workspace.mjs"
+import {
+  contentIs,
+  focusComposer,
+  frames,
+  openPanes,
+  order,
+  paneCount,
+  settled,
+  state,
+} from "./lib/workspace.mjs"
 
 const snapshot = async (page) => ({
   panes: await paneCount(page),
@@ -57,16 +66,18 @@ async function dragAcross(page, { cancel }) {
     await page.mouse.move(grid.x + grid.width * fx, grid.y + grid.height * fy, {
       steps: 12,
     })
+    // Resting on each point long enough to settle its zone: pacing the drag, not a wait for state.
     await page.waitForTimeout(250)
   }
-  if (cancel) await page.keyboard.press("Escape")
+  if (cancel) await page.keyboard.press(keys.escape)
   await page.mouse.up()
 }
 
 async function openOverview(page) {
   await focusComposer(page)
   await page.keyboard.press(keys.overview)
-  await page.waitForTimeout(900)
+  await contentIs(page, content.overview)
+  await settled(page)
   if ((await state(page)).content !== content.overview)
     throw new CannotRun(
       `⌘0 did not show the Agents overview (data-content ≠ ${content.overview})`,
@@ -108,11 +119,11 @@ const scenarios = {
   "send-home": {
     setup: async (p) => {
       await p.keyboard.press(keys.newSession)
-      await p.waitForTimeout(700)
+      await settled(p)
       await focusComposer(p)
       await p.keyboard.type("hello from home", { delay: 20 })
     },
-    act: (p) => p.keyboard.press("Enter"),
+    act: (p) => p.keyboard.press(keys.enter),
     settle: 1500,
   },
   typing: {
@@ -125,7 +136,7 @@ const scenarios = {
       await focusComposer(p)
       await p.keyboard.type("go", { delay: 20 })
     },
-    act: (p) => p.keyboard.press("Enter"),
+    act: (p) => p.keyboard.press(keys.enter),
     settle: 6000,
   },
   "drag-drop": {
@@ -156,7 +167,8 @@ const scenarios = {
     setup: openOverview,
     act: async (p) => {
       for (let i = 0; i < 3; i++) {
-        await p.keyboard.press("ArrowDown")
+        await p.keyboard.press(keys.down)
+        // A person's pace between steps: pacing the measured act, not a wait for state.
         await p.waitForTimeout(200)
       }
     },
@@ -168,8 +180,8 @@ const scenarios = {
   "overview-answer": {
     setup: async (p) => {
       await openOverview(p)
-      await p.keyboard.press("Home")
-      await p.waitForTimeout(300)
+      await p.keyboard.press(keys.home)
+      await frames(p, 3)
     },
     act: (p) => p.keyboard.press(keys.allow),
     settle: 1500,
@@ -180,7 +192,7 @@ const scenarios = {
   },
   "overview-leave": {
     setup: openOverview,
-    act: (p) => p.keyboard.press("Escape"),
+    act: (p) => p.keyboard.press(keys.escape),
     expect: (b, a) =>
       a.content === content.panes
         ? null
@@ -231,9 +243,9 @@ await main(meta, async ({ options, rep, url, mode }) => {
     log("note: --mode dev — StrictMode and unminified code; numbers are not the budget's")
   const runs = Number(options.runs)
   const rate = Number(options.throttle)
-  const only = options.only ? options.list(options.only) : null
-  const unknown = (only ?? []).filter((n) => !scenarios[n])
-  if (unknown.length) throw new CannotRun(`unknown interaction(s): ${unknown.join(", ")}`)
+  const only = options.only
+    ? chosen(options.only, Object.keys(scenarios), options.list)
+    : null
   const viewport = { width: Number(options.width), height: Number(options.height) }
   const rows = []
 
@@ -281,8 +293,9 @@ await main(meta, async ({ options, rep, url, mode }) => {
               const { context, page } = opened
               await need(page, css.pane, "a pane")
               await s.setup?.(page, layout)
-              await page.waitForTimeout(800)
+              await settled(page)
               await throttle(context, page, rate)
+              // A quiet moment under throttling before the clock starts: pacing, not a wait for state.
               await page.waitForTimeout(400)
               const before = await snapshot(page)
               const m = await measure(page, () => s.act(page), s.settle ?? 1000)

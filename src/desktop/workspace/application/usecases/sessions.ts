@@ -8,6 +8,7 @@
  * showing a session is reading it. Pinning and archiving are the source's to
  * show; a session the source has not spoken of cannot be either yet.
  */
+import type { Initiator } from "../ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import { paneShowing } from "../../model/pane-layout"
 import { knownToSource } from "../../model/revision"
@@ -45,7 +46,11 @@ function startingRun(state: WorkspaceState, sessionId: string): WorkspaceState {
  */
 export function messageSent(
   state: WorkspaceState,
-  { sessionId, message }: { sessionId: string; message: Message },
+  {
+    sessionId,
+    message,
+    initiator,
+  }: { sessionId: string; message: Message; initiator: Initiator },
 ): WorkspaceState {
   const draft = draftOf(state, sessionId)
   if (!draft && !sessionOf(state, sessionId)) return state
@@ -63,8 +68,12 @@ export function messageSent(
     : startingRun(state, sessionId)
   return {
     ...started,
-    // Sent, what was typed goes, whoever sent it: the composer's owner is this state.
-    composerText: without(started.composerText, sessionId),
+    // What the person typed goes when the person sent it — it is what was
+    // sent. An agent's message is its own: what the person is typing stays.
+    composerText:
+      initiator === "person"
+        ? without(started.composerText, sessionId)
+        : started.composerText,
     outbox: {
       ...started.outbox,
       [sessionId]: [...(entry(started.outbox, sessionId) ?? []), message],

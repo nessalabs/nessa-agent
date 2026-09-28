@@ -44,6 +44,7 @@ describe("sending", () => {
   it("starts a draft with its first message: titled, listed at revision 0, running, keeping its id", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
     const sent = messageSent(drafted, {
+      initiator: "person",
       sessionId: "new",
       message: message("m1", "fix the rain. then the steam"),
     })
@@ -64,6 +65,7 @@ describe("sending", () => {
       transcript: { ...emptyTranscript("c"), revision: 1 },
     })
     const sent = messageSent(withC, {
+      initiator: "person",
       sessionId: "c",
       message: message("m1", "again", 700),
     })
@@ -74,7 +76,11 @@ describe("sending", () => {
 
   it("keeps a sent message through any replacement until the source's conversation holds it", () => {
     const shownC = openSession(loaded(), { sessionId: "c" })
-    const sent = messageSent(shownC, { sessionId: "c", message: message("m1", "hi") })
+    const sent = messageSent(shownC, {
+      initiator: "person",
+      sessionId: "c",
+      message: message("m1", "hi"),
+    })
     const read = transcriptLoaded(sent, {
       transcript: { ...emptyTranscript("c"), revision: 5 },
     })
@@ -95,13 +101,21 @@ describe("sending", () => {
 
   it("ignores a message to a session it does not have", () => {
     const state = loaded()
-    expect(messageSent(state, { sessionId: "missing", message: message("m", "x") })).toBe(
-      state,
-    )
+    expect(
+      messageSent(state, {
+        initiator: "person",
+        sessionId: "missing",
+        message: message("m", "x"),
+      }),
+    ).toBe(state)
   })
 
   it("clears the sending mark once delivered, and only a sending one", () => {
-    const sent = messageSent(loaded(), { sessionId: "c", message: message("m1", "hi") })
+    const sent = messageSent(loaded(), {
+      initiator: "person",
+      sessionId: "c",
+      message: message("m1", "hi"),
+    })
     const delivered = messageDelivered(sent, { sessionId: "c", messageId: "m1" })
     expect(delivered.outbox.c[0].delivery).toBeUndefined()
     expect(messageDelivered(delivered, { sessionId: "c", messageId: "m1" })).toBe(
@@ -113,7 +127,11 @@ describe("sending", () => {
   })
 
   it("marks a refused message not sent, with the reason, leaving the source's session as it said", () => {
-    const sent = messageSent(loaded(), { sessionId: "c", message: message("m1", "hi") })
+    const sent = messageSent(loaded(), {
+      initiator: "person",
+      sessionId: "c",
+      message: message("m1", "hi"),
+    })
     const failed = sendFailed(sent, {
       sessionId: "c",
       messageId: "m1",
@@ -128,7 +146,11 @@ describe("sending", () => {
 
   it("puts a session the source never began at rest when its first message is refused", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
-    const sent = messageSent(drafted, { sessionId: "new", message: message("m1", "hi") })
+    const sent = messageSent(drafted, {
+      initiator: "person",
+      sessionId: "new",
+      message: message("m1", "hi"),
+    })
     const failed = sendFailed(sent, {
       sessionId: "new",
       messageId: "m1",
@@ -139,7 +161,11 @@ describe("sending", () => {
 
   it("shows a session the source never began running while a message that starts it is on its way", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
-    const sent = messageSent(drafted, { sessionId: "new", message: message("m1", "hi") })
+    const sent = messageSent(drafted, {
+      initiator: "person",
+      sessionId: "new",
+      message: message("m1", "hi"),
+    })
     const refused = sendFailed(sent, {
       sessionId: "new",
       messageId: "m1",
@@ -147,6 +173,7 @@ describe("sending", () => {
     })
     expect(refused.sessions.new.status).toBe("idle")
     const again = messageSent(refused, {
+      initiator: "person",
       sessionId: "new",
       message: message("m2", "again"),
     })
@@ -159,11 +186,13 @@ describe("sending", () => {
   it("keeps a session the source never began running while another message may still begin it", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
     const first = messageSent(drafted, {
+      initiator: "person",
       sessionId: "new",
       message: message("m1", "one"),
     })
     const delivered = messageDelivered(first, { sessionId: "new", messageId: "m1" })
     const second = messageSent(delivered, {
+      initiator: "person",
       sessionId: "new",
       message: message("m2", "two"),
     })
@@ -174,10 +203,12 @@ describe("sending", () => {
     })
     expect(refused.sessions.new.status).toBe("running")
     const sending = messageSent(drafted, {
+      initiator: "person",
       sessionId: "new",
       message: message("m1", "one"),
     })
     const alsoSent = messageSent(sending, {
+      initiator: "person",
       sessionId: "new",
       message: message("m2", "two"),
     })
@@ -188,8 +219,16 @@ describe("sending", () => {
   })
 
   it("sends a refused message again in its place, and only a refused one", () => {
-    const one = messageSent(loaded(), { sessionId: "c", message: message("m1", "one") })
-    const two = messageSent(one, { sessionId: "c", message: message("m2", "two") })
+    const one = messageSent(loaded(), {
+      initiator: "person",
+      sessionId: "c",
+      message: message("m1", "one"),
+    })
+    const two = messageSent(one, {
+      initiator: "person",
+      sessionId: "c",
+      message: message("m2", "two"),
+    })
     const refused = sendFailed(two, {
       sessionId: "c",
       messageId: "m1",
@@ -204,7 +243,11 @@ describe("sending", () => {
   })
 
   it("lets a refused message go, and only a refused one", () => {
-    const sent = messageSent(loaded(), { sessionId: "c", message: message("m1", "hi") })
+    const sent = messageSent(loaded(), {
+      initiator: "person",
+      sessionId: "c",
+      message: message("m1", "hi"),
+    })
     expect(unsentDiscarded(sent, { sessionId: "c", messageId: "m1" })).toBe(sent)
     const failed = sendFailed(sent, {
       sessionId: "c",
@@ -217,7 +260,11 @@ describe("sending", () => {
   })
 
   it("keeps a refused message when a newer conversation arrives without it", () => {
-    const sent = messageSent(loaded(), { sessionId: "c", message: message("m1", "hi") })
+    const sent = messageSent(loaded(), {
+      initiator: "person",
+      sessionId: "c",
+      message: message("m1", "hi"),
+    })
     const failed = sendFailed(sent, {
       sessionId: "c",
       messageId: "m1",
@@ -353,7 +400,11 @@ describe("what the person changes", () => {
 
   it("takes a session the source never began back to a new session's home when its last refused message goes", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
-    const sent = messageSent(drafted, { sessionId: "new", message: message("m1", "hi") })
+    const sent = messageSent(drafted, {
+      initiator: "person",
+      sessionId: "new",
+      message: message("m1", "hi"),
+    })
     const refused = sendFailed(sent, {
       sessionId: "new",
       messageId: "m1",
@@ -373,7 +424,11 @@ describe("what the person changes", () => {
 
   it("lets a session the source never began go from the lists when no pane shows it", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
-    const sent = messageSent(drafted, { sessionId: "new", message: message("m1", "hi") })
+    const sent = messageSent(drafted, {
+      initiator: "person",
+      sessionId: "new",
+      message: message("m1", "hi"),
+    })
     const refused = sendFailed(sent, {
       sessionId: "new",
       messageId: "m1",
@@ -386,7 +441,11 @@ describe("what the person changes", () => {
   })
 
   it("keeps a session the source has spoken of listed when its refused message goes", () => {
-    const sent = messageSent(loaded(), { sessionId: "c", message: message("m1", "hi") })
+    const sent = messageSent(loaded(), {
+      initiator: "person",
+      sessionId: "c",
+      message: message("m1", "hi"),
+    })
     const refused = sendFailed(sent, {
       sessionId: "c",
       messageId: "m1",
@@ -423,6 +482,25 @@ describe("what is typed and not sent", () => {
     expect(composerTextChanged(state, { sessionId: "constructor", text: "x" })).toBe(
       state,
     )
+  })
+
+  it("goes when the person sends it, and stays when an agent sends a message of its own", () => {
+    const typed = composerTextChanged(loadedState(), {
+      sessionId: "a",
+      text: "half a thought",
+    })
+    const byAgent = messageSent(typed, {
+      initiator: "agent",
+      sessionId: "a",
+      message: message("m1", "the agent's words"),
+    })
+    expect(byAgent.composerText.a).toBe("half a thought")
+    const byPerson = messageSent(typed, {
+      initiator: "person",
+      sessionId: "a",
+      message: message("m2", "half a thought"),
+    })
+    expect(byPerson.composerText.a).toBeUndefined()
   })
 
   it("goes with its session: removed, or a new session no pane shows any more", () => {

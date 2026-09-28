@@ -255,6 +255,7 @@ describe("what goes with a session", () => {
       model: astra,
     })
     const sent = messageSent(drafted, {
+      initiator: "person",
       sessionId: "new",
       message: { id: "m1", role: "user", at: 1, parts: [{ kind: "text", text: "hi" }] },
     })
@@ -570,6 +571,7 @@ describe("the index read again: the resync", () => {
   it("keeps a session the source has not spoken of yet: it is the window's own", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
     const started = messageSent(drafted, {
+      initiator: "person",
       sessionId: "new",
       message: { id: "m1", role: "user", at: 1, parts: [{ kind: "text", text: "hi" }] },
     })

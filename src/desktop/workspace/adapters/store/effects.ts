@@ -5,8 +5,8 @@
  * once (a refused read waits for `retryTranscript`); the index read again —
  * the resync — reads every conversation on screen again, setting aside any
  * read already on its way, which may predate what the stream lost; a
- * session shown in a pane is marked read, here and at the source; and the
- * overview's filter is remembered.
+ * session shown in a pane is marked read, here and at the source; the open
+ * overview keeps a session chosen; and its filter is remembered.
  * Commands stay plain actions because these run beside the reducer rather
  * than inside each command.
  */
@@ -35,8 +35,8 @@ export function workspaceEffects(
   // the index was (which may predate what the stream lost) from one after.
   const reading = new Map<string, { readonly token: symbol; readonly asked: number }>()
   let asked = 0
-  // For each read of the index on its way, oldest first: the last read asked before it.
-  const indexAsked: number[] = []
+  // For each read of the index on its way, by its name: the last read asked before it.
+  const indexAsked = new Map<string, number>()
 
   /**
    * Reads a shown session's conversation, unless a read of it is on its way
@@ -114,22 +114,36 @@ export function workspaceEffects(
   // held is kept (`transcriptLoaded`).
   listener.startListening({
     actionCreator: workspaceActions.indexRequested,
-    effect: () => {
-      indexAsked.push(asked)
+    effect: ({ payload }) => {
+      indexAsked.set(payload.read, asked)
     },
   })
   listener.startListening({
     actionCreator: workspaceActions.indexFailed,
-    effect: () => {
-      indexAsked.shift()
+    effect: ({ payload }) => {
+      indexAsked.delete(payload.read)
     },
   })
   listener.startListening({
     actionCreator: workspaceActions.indexLoaded,
-    effect: (_action, api) => {
-      const since = indexAsked.shift() ?? asked
+    effect: ({ payload }, api) => {
+      const since = indexAsked.get(payload.read) ?? asked
+      indexAsked.delete(payload.read)
       for (const sessionId of shownSessionIds(api.getState().workspace))
         read(sessionId, api.dispatch, since)
+    },
+  })
+
+  // The open overview always has a session chosen while it lists one: on
+  // opening, and once the chosen one is gone (`keepOverviewChoice`).
+  listener.startListening({
+    predicate: (_action: UnknownAction, current, previous) =>
+      current.workspace.content === "agents" &&
+      (current.workspace.content !== previous.workspace.content ||
+        current.workspace.overview !== previous.workspace.overview ||
+        current.workspace.sessions !== previous.workspace.sessions),
+    effect: (_action, api) => {
+      api.dispatch(workspaceActions.overviewChoiceKept({ now: dependencies.now() }))
     },
   })
 

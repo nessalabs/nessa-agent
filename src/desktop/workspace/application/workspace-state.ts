@@ -101,8 +101,8 @@ export interface WorkspaceState {
    * What the person has typed in a session's composer and not sent, by
    * session or new session: the window's own, kept here so it survives a
    * change of layout or a pane showing another session, and so an agent can
-   * write it (`setComposerText`). Sent (`messageSent`, whoever sent it), or its
-   * session let go, it goes.
+   * write it (`setComposerText`). Sent by the person (`messageSent`), or its
+   * session let go, it goes; an agent's message leaves it as it is.
    */
   readonly composerText: Readonly<Record<string, string>>
   /** Where conversations sit; none until the index arrives. */

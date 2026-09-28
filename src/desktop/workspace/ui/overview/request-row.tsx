@@ -43,6 +43,7 @@ export const RequestRow = memo(function RequestRow({
   onOpen,
   onAnswer,
   onLeaveReply,
+  takesKey,
 }: {
   sessionId: string
   /** The one the keyboard is on, or lands on when the list is entered. */
@@ -58,16 +59,18 @@ export const RequestRow = memo(function RequestRow({
   onOpen: (sessionId: string) => void
   onAnswer: OnAnswer
   onLeaveReply: () => void
+  /** Whether a key press may answer or open (`takesAnswerKey`). */
+  takesKey: (event: KeyboardEvent) => boolean
 }) {
   const live = useWorkspaceSelector((state) => selectSession(state, sessionId))
   const summary = settling?.summary ?? live
   const transcript = useWorkspaceSelector((state) => selectTranscript(state, sessionId))
-  const unread = useWorkspaceSelector((state) =>
+  const readFailure = useWorkspaceSelector((state) =>
     selectTranscriptFailure(state, sessionId),
   )
   const request: Request = settling
     ? { kind: "approval", approval: settling.approval }
-    : requestOf(transcript, unread)
+    : requestOf(transcript, readFailure)
   const approval = request.kind === "approval" ? request.approval : null
   // The workspace's answer to it: on its way (from here or a pane), or refused with why.
   const answer = useWorkspaceSelector((state) =>
@@ -93,6 +96,19 @@ export const RequestRow = memo(function RequestRow({
       return
     }
     const command = binding.command
+    if (
+      command === "open" ||
+      command === "once" ||
+      command === "always" ||
+      command === "deny"
+    ) {
+      // Only a fresh press, made after the keyboard came here, answers or opens.
+      if (!takesKey(event.nativeEvent)) {
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+    }
     if (command === "open") {
       // On a button, ↩ presses it; on the row itself, it opens the session.
       if (event.target !== event.currentTarget) return

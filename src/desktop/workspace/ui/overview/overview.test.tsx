@@ -25,6 +25,7 @@ import { selectFocusedSessionId } from "../../adapters/store/selectors"
 import { fakeSource, keptFilter, settle, summary, testStore } from "../../testing"
 import type { WorkspaceIndex } from "../../model/workspace-index"
 import { OverviewRow } from "../source-list/overview-row"
+import { answerPause } from "../../model/overview/walk"
 import { OverviewLayer } from "./overview-layer"
 
 let root: Root
@@ -149,7 +150,7 @@ async function open() {
 async function press(
   target: HTMLElement,
   code: string,
-  modifiers: { command?: boolean; alt?: boolean } = {},
+  modifiers: { command?: boolean; alt?: boolean; repeat?: boolean } = {},
 ) {
   await act(async () => {
     target.dispatchEvent(
@@ -158,6 +159,7 @@ async function press(
         key: code,
         ctrlKey: modifiers.command ?? false,
         altKey: modifiers.alt ?? false,
+        repeat: modifiers.repeat ?? false,
         bubbles: true,
         cancelable: true,
       }),
@@ -198,8 +200,54 @@ describe("the agents overview", () => {
     expect(document.activeElement).toBe(card("second"))
     // Held in place while it settles, saying what became of it.
     expect(card("first")?.dataset.phase).toBe("settled")
+    // A new press, once the person can see where the keyboard went.
+    await act(async () => new Promise((done) => setTimeout(done, answerPause)))
     await press(card("second") as HTMLElement, "Backspace", { command: true })
     expect(source.calls).toContainEqual(["deny", "second", "second-ask", "person"])
+  })
+
+  it("answers one request per press: a held key's repeats, or a press straight after, answer nothing more", async () => {
+    const { source } = await mount()
+    await open()
+    await press(card("first") as HTMLElement, "Enter", { command: true })
+    expect(document.activeElement).toBe(card("second"))
+    // The same key held: its repeats land on the next request and answer nothing.
+    for (let repeat = 0; repeat < 4; repeat++)
+      await press(document.activeElement as HTMLElement, "Enter", {
+        command: true,
+        repeat: true,
+      })
+    // A second press 80ms after the first: before the person could see where the keyboard went.
+    await act(async () => new Promise((done) => setTimeout(done, 80)))
+    await press(document.activeElement as HTMLElement, "Enter", { command: true })
+    // Nor does Return open it.
+    await press(document.activeElement as HTMLElement, "Enter")
+    const answers = source.calls.filter(
+      (call) => call[0] === "approve" || call[0] === "deny",
+    )
+    expect(answers).toEqual([["approve", "first", "first-ask", "once", "person"]])
+    expect(document.activeElement).toBe(card("second"))
+    expect(host.querySelector('[data-content="panes"]')).toBeNull()
+  })
+
+  it("gives the region back when the preview is turned off, in this window or another", async () => {
+    const { store } = await mount()
+    // Turned on in this window, as Settings does.
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("nessa:desktop-experiments-agents-overview", { detail: "on" }),
+      )
+    })
+    await open()
+    expect(store.getState().workspace.content).toBe("agents")
+    // Another window beside this one turns it off: the storage event says so
+    // (nothing is stored here, which reads as off).
+    await act(async () => {
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "nessa.desktop.experiments.agents-overview" }),
+      )
+    })
+    expect(store.getState().workspace.content).toBe("panes")
   })
 
   it("allows always with ⌥⌘↩", async () => {
@@ -369,6 +417,7 @@ describe("the agents overview", () => {
     await mount()
     await open()
     await press(card("first") as HTMLElement, "Enter", { command: true })
+    await act(async () => new Promise((done) => setTimeout(done, answerPause)))
     await press(card("second") as HTMLElement, "Enter", { command: true })
     expect(document.activeElement?.classList.contains("agents-overview-column")).toBe(
       true,

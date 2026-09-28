@@ -36,11 +36,16 @@ verification/
         safe-area.mjs       the per-frame safe-area sampler
         perf.mjs            rAF gaps, Long Animation Frames, long tasks, throttling, calibration
         run.mjs             the main every check shares
+        cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
 ```
 
-When the UI moves, edit `lib/selectors.mjs` — nothing else should name a class,
-a label, or a key. A script that cannot find what it needs stops with
-"could not run" (exit 2) and names the selector, rather than guessing.
+When the UI moves, edit `lib/selectors.mjs` — nothing else names a class, a
+label, a key or a storage key. A script that cannot find what a step needs to
+begin says "could not run" for that step and names the selector, rather than
+guessing; a step that began and then waited in vain for the product has
+failed. Steps wait on conditions (`until`, `settled`, `contentIs`,
+`paneCountIs` in `lib/workspace.mjs`), not on fixed times; where a check
+asserts that something does not happen, its window is named and explained.
 
 ## Prerequisites
 
@@ -83,7 +88,11 @@ ends each step once its motion has, not after a fixed wait.
 - **stdout**: one JSON document — `{ check, ok, target, results: [{ name, engine, layout, ok, failures, … }] }`
   — or written to `--out`.
 - **stderr**: progress, `ok` / `FAIL` / `ERROR` per result, and tables.
-- **exit**: `0` every assertion held; `1` an assertion failed; `2` could not
-  run (a selector not found, a browser missing, the server did not start).
+- **exit** (`statusOf`, `lib/cli.mjs`): `0` every assertion held; `1` an
+  assertion failed — whatever else could not run; `2` nothing failed but
+  something could not run (the server did not start, a browser is missing,
+  what a step needs to begin was not on the page, an option or `--only` name
+  the check does not have). `run-all` sums its checks by the same rule.
+- **the scripts' own tests**: `pnpm verify:desktop:test` (no browser).
 
 Per [machine-readable command output](../CODING_STANDARDS.md#machine-readable-command-output).

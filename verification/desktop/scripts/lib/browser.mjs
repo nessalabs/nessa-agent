@@ -39,7 +39,7 @@ export async function launch(engine, options) {
  * Seeds localStorage once per context (a reload keeps what the page changed)
  * and marks every surface as the macOS window.
  */
-function seed([prefs, mac]) {
+function seed([prefs, mac, surface]) {
   try {
     if (!sessionStorage.getItem("__verify_seeded")) {
       for (const [key, value] of Object.entries(prefs)) localStorage.setItem(key, value)
@@ -50,7 +50,7 @@ function seed([prefs, mac]) {
   }
   if (mac) {
     const mark = () =>
-      document.querySelectorAll("[data-surface]").forEach((e) => {
+      document.querySelectorAll(surface).forEach((e) => {
         if (e.getAttribute("data-host") !== "macos") e.setAttribute("data-host", "macos")
         if (e.getAttribute("data-surface") !== "window")
           e.setAttribute("data-surface", "window")
@@ -89,7 +89,7 @@ export async function openPage(browser, o) {
     ...(o.overview === false ? {} : { [storage.agentsOverview]: "on" }),
     ...(o.prefs ?? {}),
   }
-  await context.addInitScript(seed, [prefs, o.mac !== false])
+  await context.addInitScript(seed, [prefs, o.mac !== false, css.surface])
   for (const script of o.initScripts ?? []) {
     if (Array.isArray(script)) await context.addInitScript(script[0], script[1])
     else await context.addInitScript(script)

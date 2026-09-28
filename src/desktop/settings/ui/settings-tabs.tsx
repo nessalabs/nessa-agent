@@ -23,7 +23,6 @@ import {
   chordLabel,
   selectSessionListChosen,
   shortcutNames,
-  showContent,
   toggleSessionList,
   workspaceShortcuts,
   useWorkspaceDispatch,
@@ -167,17 +166,14 @@ function UpdatesTab() {
  * gives the content region back to the panes.
  */
 function ExperimentalTab() {
-  const dispatch = useWorkspaceDispatch()
   const [overview, setOverview] = useAgentsOverviewPreference()
   return (
     <Group footnote="Experiments may change or go away in a later version.">
       <Row id="agents-overview">
         <Toggle
           checked={overview === "on"}
-          onChange={(on) => {
-            setOverview(on ? "on" : "off")
-            if (!on) dispatch(showContent({ content: "panes" }))
-          }}
+          // Turned off, an open overview gives the region back (`OverviewLayer`).
+          onChange={(on) => setOverview(on ? "on" : "off")}
         />
       </Row>
     </Group>

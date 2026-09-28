@@ -14,6 +14,7 @@ import {
   loadWorkspace,
   newSession,
   openSession,
+  showContent,
 } from "../store/commands"
 import { shallowEqual } from "react-redux"
 import { useWorkspaceSelector, useWorkspaceStore } from "../store/hooks"
@@ -163,4 +164,21 @@ it("leaves the caret in a dialog", async () => {
   await frames()
   expect(document.activeElement).toBe(field)
   dialog.remove()
+})
+
+it("puts the caret in the focused pane's composer when the panes come back from the overview, by a command that changes nothing else", async () => {
+  const store = await page()
+  const focused = store.getState().workspace.panes?.focused
+  await act(async () => void store.dispatch(showContent({ content: "agents" })))
+  await frames()
+  // In the overview, the keyboard is its own: nothing here takes it.
+  const row = host.querySelector<HTMLElement>("[data-list-row]")
+  row?.focus()
+  row?.remove()
+  expect(document.activeElement).toBe(document.body)
+  // ⌘ and the focused pane's number: it goes to the pane it is already on.
+  await act(async () => void store.dispatch(focusPane({ pane: focused ?? 1 })))
+  await frames()
+  expect(store.getState().workspace.content).toBe("panes")
+  expect(caretIn()).toBe(`Message ${focused}`)
 })

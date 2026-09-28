@@ -175,7 +175,9 @@ export function Composer({
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing)
               return
             event.preventDefault()
-            send()
+            // A held Return sends once: its repeats — carried in from an
+            // approval answered by the same press, say — send nothing.
+            if (!event.repeat) send()
           }}
         />
       </div>

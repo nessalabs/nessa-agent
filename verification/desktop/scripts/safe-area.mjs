@@ -5,12 +5,12 @@
  * under the window's controls — text, icons, images, code, decorative art —
  * in Chrome and WebKit, at 1440 × 900 and 1000 × 700.
  */
-import { attempt } from "./lib/cli.mjs"
+import { attempt, chosen } from "./lib/cli.mjs"
 import { launch, need, openPage } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { safeArea, safeAreaInit, summarize } from "./lib/safe-area.mjs"
 import { css, keys, storage } from "./lib/selectors.mjs"
-import { hideColumns, leaveSettings, switchLayout } from "./lib/workspace.mjs"
+import { hideColumns, leaveSettings, settled, switchLayout } from "./lib/workspace.mjs"
 
 /**
  * Each scenario gets `{ page, watch, layout, size }` and drives the
@@ -35,7 +35,7 @@ const scenarios = {
   },
   "edge-peek": async ({ page, watch, size }) => {
     await page.keyboard.press(keys.toggleSidebar)
-    await page.waitForTimeout(700)
+    await settled(page)
     await watch("peek in", () => page.mouse.move(3, size.height / 2))
     await watch("peek out", () => page.mouse.move(size.width - 100, size.height / 2))
   },
@@ -78,7 +78,7 @@ const scenarios = {
   },
   "settings-sidebar-return": async ({ page, watch }) => {
     await page.keyboard.press(keys.toggleSidebar)
-    await page.waitForTimeout(700)
+    await settled(page)
     await watch("open Settings, sidebar hidden", () => page.keyboard.press(keys.settings))
     await watch("leave Settings, sidebar hidden", () => leaveSettings(page))
   },
@@ -112,7 +112,7 @@ const scenarios = {
     await watch("⌘0 open", () => page.keyboard.press(keys.overview), 1000)
     await watch("⌘B in overview", () => page.keyboard.press(keys.toggleSidebar))
     await watch("⌘B in overview", () => page.keyboard.press(keys.toggleSidebar))
-    await watch("Esc leave", () => page.keyboard.press("Escape"), 1000)
+    await watch("Esc leave", () => page.keyboard.press(keys.escape), 1000)
   },
 }
 
@@ -161,7 +161,9 @@ async function pool(items, jobs, work) {
 }
 
 await main(meta, async ({ options, rep, url }) => {
-  const only = options.only ? options.list(options.only) : null
+  const only = options.only
+    ? chosen(options.only, Object.keys(scenarios), options.list)
+    : null
   const sizes = options.choices("sizes").map((s) => {
     const [width, height] = s.split("x").map(Number)
     return { width, height }
@@ -275,7 +277,7 @@ await main(meta, async ({ options, rep, url }) => {
                 )
                 await page.reload({ waitUntil: "domcontentloaded" })
                 await need(page, css.anyReady, "the desktop page", 30_000)
-                await page.waitForTimeout(500)
+                await settled(page)
               }
               held.fresh = false
               const errorsBefore = opened.errors.length

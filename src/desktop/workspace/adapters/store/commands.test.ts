@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest"
 import { WorkspaceSourceError } from "../../application/ports"
 import { panesOf } from "../../model/pane-layout"
 import { emptyTranscript } from "../../model/transcript"
+import type { WorkspaceIndex } from "../../model/workspace-index"
 import {
   astra,
   fakeSource,
@@ -1178,25 +1179,45 @@ describe("the Agents overview is a place in the sidebar, left by going anywhere 
     "a session beside": openBeside({ sessionId: "c" }),
     "a channel from the tree": openChannel({ channelId: "gateway" }),
     "a new session": newSession(),
-    "the focused pane": focusPane({ pane: 0 }),
+    "another pane": focusPane({ pane: 1 }),
     "closing a pane": closePane(),
-    "moving a pane": nudgePane({ pane: 0, direction: "right" }),
+    "moving a pane": nudgePane({ pane: 1, direction: "right" }),
     "evening the panes out": equalizePanes(),
     "resizing panes": resizePanes({
       edge: { axis: "x", column: 0 },
-      fraction: 0.5,
+      fraction: 0.6,
       pair: 1,
     }),
   }
   for (const [way, action] of Object.entries(ways))
     it(`goes back to the panes on ${way}`, async () => {
       const { store } = await ready()
+      // Two panes, unevenly: every change to them changes something.
+      store.dispatch(openBeside({ sessionId: "c", side: "right" }))
+      store.dispatch(
+        resizePanes({ edge: { axis: "x", column: 0 }, fraction: 0.4, pair: 1 }),
+      )
       store.dispatch(showContent({ content: "agents" }))
       store.dispatch(showContent({ content: "agents" }))
       expect(store.getState().workspace.content).toBe("agents")
       store.dispatch(action as Parameters<typeof store.dispatch>[0])
       expect(store.getState().workspace.content).toBe("panes")
     })
+
+  it("stays when a change to the panes changes nothing: a move at the edge, a close of no pane", async () => {
+    const { store } = await ready()
+    const panes = store.getState().workspace.panes
+    if (!panes) throw new Error("no panes")
+    store.dispatch(showContent({ content: "agents" }))
+    const edge = panesOf(panes)[0].key
+    store.dispatch(nudgePane({ pane: edge, direction: "left" }))
+    store.dispatch(closePane({ pane: 999 }))
+    expect(store.getState().workspace.panes).toBe(panes)
+    expect(store.getState().workspace.content).toBe("agents")
+    // Going to the pane already focused is still going there.
+    store.dispatch(focusPane({ pane: panes.focused }))
+    expect(store.getState().workspace.content).toBe("panes")
+  })
 
   it("stays over what only rearranges the window", async () => {
     const { store } = await ready()
@@ -1260,10 +1281,11 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
   it("says an approval was not asked when neither a pane nor the open overview shows it", async () => {
     const { store, source } = await ready(waitingOn())
     // Open, but listing only sessions under a tag this one does not carry.
-    store.dispatch(showContent({ content: "agents" }))
     store.dispatch(
       filterOverview({ filter: { scope: "all", range: "any", tags: ["ui"] } }),
     )
+    store.dispatch(showContent({ content: "agents" }))
+    expect(store.getState().workspace.overview.selected).not.toBe("b")
     await settle()
     expect(
       await store.dispatch(
@@ -1361,6 +1383,30 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
     expect(store.getState().workspace.overview.selected).toBe("d")
     store.dispatch(followWorkspace())
     await store.dispatch(archiveSession({ sessionId: "d", initiator: "person" }))
+    // Gone, it is not chosen: the first the overview lists is, and is read.
+    const chosen = store.getState().workspace.overview.selected
+    expect(chosen).not.toBe("d")
+    expect(chosen).not.toBeNull()
+    await settle()
+    expect(source.calls).toContainEqual(["transcript", chosen])
+  })
+
+  it("chooses the first it lists on opening, so what the peek shows is what the window reads", async () => {
+    const { store, source } = await ready()
+    expect(store.getState().workspace.overview.selected).toBeNull()
+    store.dispatch(showContent({ content: "agents" }))
+    const chosen = store.getState().workspace.overview.selected
+    expect(chosen).not.toBeNull()
+    await settle()
+    expect(source.calls).toContainEqual(["transcript", chosen])
+  })
+
+  it("chooses nothing while it lists nothing", async () => {
+    const { store } = await ready()
+    store.dispatch(
+      filterOverview({ filter: { scope: "all", range: "any", tags: ["nowhere"] } }),
+    )
+    store.dispatch(showContent({ content: "agents" }))
     expect(store.getState().workspace.overview.selected).toBeNull()
   })
 
@@ -1422,13 +1468,13 @@ describe("the overview's filter is the store's, kept between launches", () => {
   })
 })
 
-describe("what is typed goes when it is sent, whoever sends it", () => {
-  it("empties the composer on send, and keeps it when there is nothing to send it with", async () => {
+describe("what is typed goes when the person sends it", () => {
+  it("empties the composer on the person's send, and keeps it when there is nothing to send it with", async () => {
     const { store } = await ready()
     store.dispatch(setComposerText({ sessionId: "a", text: "Run it." }))
     expect(
       await store.dispatch(
-        sendMessage({ sessionId: "a", text: "Run it.", initiator: "agent" }),
+        sendMessage({ sessionId: "a", text: "Run it.", initiator: "person" }),
       ),
     ).toBe("sent")
     expect(store.getState().workspace.composerText.a).toBeUndefined()
@@ -1439,6 +1485,17 @@ describe("what is typed goes when it is sent, whoever sends it", () => {
       ),
     ).toBe("not-asked")
     expect(store.getState().workspace.composerText.a).toBe("  ")
+  })
+
+  it("keeps what the person is typing when an agent sends a message of its own", async () => {
+    const { store } = await ready()
+    store.dispatch(setComposerText({ sessionId: "a", text: "person half-typed" }))
+    expect(
+      await store.dispatch(
+        sendMessage({ sessionId: "a", text: "agent says", initiator: "agent" }),
+      ),
+    ).toBe("sent")
+    expect(store.getState().workspace.composerText.a).toBe("person half-typed")
   })
 })
 
@@ -1476,6 +1533,41 @@ describe("the source's resync", () => {
     await source.release("transcript")
     await settle()
     expect(store.getState().workspace.transcripts.a?.revision).toBe(4)
+  })
+
+  it("pairs each index answer with the read that asked it, answered in either order", async () => {
+    const source = fakeSource()
+    const store = testStore(source)
+    store.dispatch(followWorkspace())
+    await store.dispatch(loadWorkspace())
+    await settle()
+    const answers: {
+      resolve: (index: WorkspaceIndex) => void
+      reject: (error: unknown) => void
+    }[] = []
+    source.index = () => {
+      source.calls.push(["index"])
+      return new Promise((resolve, reject) => answers.push({ resolve, reject }))
+    }
+    const readsOf = (id: string) =>
+      source.calls.filter((call) => call[0] === "transcript" && call[1] === id).length
+    source.emit({ kind: "resync" }) // the first read of the index
+    await settle()
+    // Opened between the two reads, c is read; the second read is asked after it.
+    source.hold("transcript")
+    store.dispatch(openBeside({ sessionId: "c" }))
+    await settle()
+    const before = readsOf("c")
+    source.emit({ kind: "resync" }) // the second
+    await settle()
+    // The second answers first: c's read was asked before it, so it is set aside and asked again.
+    answers[1].resolve(testIndex())
+    await settle(10)
+    expect(readsOf("c")).toBe(before + 1)
+    // The first then fails: it changes nothing more.
+    answers[0].reject(new WorkspaceSourceError("unavailable"))
+    await settle(10)
+    expect(readsOf("c")).toBe(before + 1)
   })
 
   it("does not read twice what it reads as it first opens", async () => {

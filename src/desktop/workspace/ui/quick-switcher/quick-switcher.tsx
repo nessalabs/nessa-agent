@@ -56,11 +56,15 @@ let stopHanding: () => void = () => {}
 
 function handToComposer() {
   stopHanding()
-  const stop = focusComposer()
-  const callOff = () => {
-    stop()
+  const finish = () => {
     window.removeEventListener("pointerdown", callOff, true)
     stopHanding = () => {}
+  }
+  // Landed (or given up), there is nothing left to call off: the listener goes.
+  const stop = focusComposer(document, finish)
+  const callOff = () => {
+    stop()
+    finish()
   }
   window.addEventListener("pointerdown", callOff, true)
   stopHanding = callOff

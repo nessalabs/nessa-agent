@@ -2,9 +2,10 @@
  * Command-line plumbing shared by every check: options, diagnostics on
  * stderr, the JSON result on stdout (or `--out`), and the exit status.
  *
- * Exit status: 0 every assertion held; 1 an assertion failed (the result
- * says which); 2 the check could not run (the page was not what the script
- * expects — often the UI mid-change — or the server did not start).
+ * Exit status (`statusOf`): 0 every assertion held; 1 an assertion failed
+ * (the result says which), whatever else could not run; 2 nothing failed but
+ * something could not run — the server did not start, a browser is missing,
+ * or what a step needs to begin was not on the page.
  */
 import { mkdirSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
@@ -46,25 +47,26 @@ Common options:
   -h, --help           This help.
 
 Output: JSON on stdout (or --out); progress and tables on stderr.
-Exit: 0 held, 1 an assertion failed, 2 could not run (page not as expected / server).`
+Exit: 0 held; 1 an assertion failed (whatever else could not run); 2 nothing
+failed but something could not run (server down, browser missing, what a step
+needs to begin not on the page).`
 
-/** Parses argv against the common options plus the check's own. */
-export function cli({ name, summary, options = {}, help = "", defaults = {} }) {
+/**
+ * Parses `argv` (without node and the script) against the common options
+ * plus the check's own. Pure: returns the options, `{ help: true, ... }` when
+ * help was asked for, or throws a `UsageError`.
+ */
+export function parseOptions({ options = {}, defaults = {} }, argv) {
   const spec = { ...commonOptions, ...options }
   for (const [key, value] of Object.entries(defaults))
     spec[key] = { ...spec[key], default: value }
+  // `pnpm <script> -- --flag` forwards the `--` itself; drop it.
+  const args = argv.filter((arg, i) => !(i === 0 && arg === "--"))
   let values
   try {
-    // `pnpm <script> -- --flag` forwards the `--` itself; drop it.
-    const args = process.argv.slice(2).filter((arg, i) => !(i === 0 && arg === "--"))
     ;({ values } = parseArgs({ args, options: spec, allowPositionals: false }))
   } catch (error) {
-    process.stderr.write(`${name}: ${error.message}\nRun with --help.\n`)
-    process.exit(2)
-  }
-  if (values.help) {
-    process.stdout.write(`${name} — ${summary}\n${help}\n${commonHelp}\n`)
-    process.exit(0)
+    throw new UsageError(error.message)
   }
   const list = (value) =>
     String(value ?? "")
@@ -72,9 +74,7 @@ export function cli({ name, summary, options = {}, help = "", defaults = {} }) {
       .map((s) => s.trim())
       .filter(Boolean)
   // `--quick` narrows what was not asked for by name to the first of each.
-  const given = new Set(
-    process.argv.slice(2).map((arg) => arg.replace(/^--(no-)?/, "").split("=")[0]),
-  )
+  const given = new Set(args.map((arg) => arg.replace(/^--(no-)?/, "").split("=")[0]))
   const narrowed = (key) => {
     const all = list(values[key])
     return values.quick && !given.has(key) ? all.slice(0, 1) : all
@@ -86,7 +86,59 @@ export function cli({ name, summary, options = {}, help = "", defaults = {} }) {
     /** A list option of the check's own, narrowed by `--quick` as the common ones are. */
     choices: narrowed,
     list,
+    /** Whether an option was given on the command line rather than defaulted. */
+    given: (key) => given.has(key),
   }
+}
+
+/** Parses the process's arguments; prints help or a usage error and exits (0, or 2). */
+export function cli(meta) {
+  let options
+  try {
+    options = parseOptions(meta, process.argv.slice(2))
+  } catch (error) {
+    if (!(error instanceof UsageError)) throw error
+    process.stderr.write(`${meta.name}: ${error.message}\nRun with --help.\n`)
+    process.exit(2)
+  }
+  if (options.help) {
+    process.stdout.write(
+      `${meta.name} — ${meta.summary}\n${meta.help ?? ""}\n${commonHelp}\n`,
+    )
+    process.exit(0)
+  }
+  return options
+}
+
+/**
+ * The exit status a set of results earns: `1` when any contract broke — a
+ * failure, or an error that was not "could not run" — whatever else could
+ * not run; else `2` when anything could not run, or nothing ran at all; else
+ * `0`. A product failure is never reported as "could not run".
+ */
+export function statusOf(results) {
+  const broke = results.some(
+    (r) => !r.cannotRun && ((r.failures ?? []).length > 0 || Boolean(r.error)),
+  )
+  if (broke) return 1
+  if (results.length === 0 || results.some((r) => r.cannotRun)) return 2
+  return 0
+}
+
+/**
+ * What a check's exit code says, for `run-all`'s summary: 0 held, 1 failed,
+ * 2 could not run; anything else — a crash, a signal — failed, since it did
+ * not say it could not run.
+ */
+export function verdictOf(code) {
+  return code === 0 ? "held" : code === 2 ? "COULD NOT RUN" : "FAILED"
+}
+
+/** `run-all`'s exit status from its checks' verdicts, by the same rule as `statusOf`. */
+export function overallStatus(verdicts) {
+  if (verdicts.some((v) => v === "FAILED")) return 1
+  if (verdicts.length === 0 || verdicts.some((v) => v === "COULD NOT RUN")) return 2
+  return 0
 }
 
 /** Diagnostics: stderr only, so stdout stays data. */
@@ -101,6 +153,29 @@ export class CannotRun extends Error {
     super(message)
     this.name = "CannotRun"
   }
+}
+
+/** Arguments a check was not written for: it could not run, and says why. */
+export class UsageError extends CannotRun {
+  constructor(message) {
+    super(message)
+    this.name = "UsageError"
+  }
+}
+
+/**
+ * The names `--only` chose among `available`, in the order given, or all of
+ * them. A name that is not one of them is a `UsageError`, not a silent skip.
+ */
+export function chosen(only, available, list) {
+  if (!only) return [...available]
+  const names = list(only)
+  const unknown = names.filter((name) => !available.includes(name))
+  if (unknown.length > 0)
+    throw new UsageError(
+      `--only: no check named ${unknown.join(", ")} (available: ${available.join(", ")})`,
+    )
+  return names
 }
 
 /**
@@ -126,7 +201,8 @@ export function report(check, options) {
     },
     finish(extra = {}) {
       const cannotRun = results.some((r) => r.cannotRun)
-      const ok = results.length > 0 && results.every((r) => r.ok)
+      const status = statusOf(results)
+      const ok = status === 0
       const document = {
         check,
         ok,
@@ -149,25 +225,31 @@ export function report(check, options) {
       log(
         `${check}: ${passed}/${results.length} held${cannotRun ? " (some could not run)" : ""}`,
       )
-      return cannotRun ? 2 : ok ? 0 : 1
+      return status
     },
   }
 }
 
-/** Runs one named step, turning a thrown error into a result instead of a crash. */
+/**
+ * Runs one named step, turning a thrown error into a result instead of a
+ * crash. Only a `CannotRun` — the page, browser or server not what the step
+ * needs to begin — is "could not run"; anything else thrown, a timeout
+ * waiting for the product to do something included, is the step failing.
+ */
 export async function attempt(rep, base, body) {
   try {
     const result = await body()
     return rep.add({ ...base, ...result })
   } catch (error) {
-    const cannotRun =
-      error instanceof CannotRun || /Timeout .*exceeded|waiting for/i.test(error.message)
-    return rep.add({
-      ...base,
-      cannotRun,
-      error: `${cannotRun ? "could not run: " : ""}${error.message.split("\n")[0]}`,
-    })
+    return rep.add(resultOfThrown(base, error))
   }
+}
+
+/** The result a step that threw earns (`attempt`). */
+export function resultOfThrown(base, error) {
+  const cannotRun = error instanceof CannotRun
+  const message = String(error?.message ?? error).split("\n")[0]
+  return { ...base, cannotRun, error: `${cannotRun ? "could not run: " : ""}${message}` }
 }
 
 /** Formats rows as an aligned text table for stderr. */

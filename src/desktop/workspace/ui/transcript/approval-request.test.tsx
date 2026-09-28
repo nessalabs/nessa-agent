@@ -134,3 +134,27 @@ it("takes the keyboard where a word is wider than the card, so the arrows scroll
   await act(async () => root.unmount())
   Object.assign(globalThis, { ResizeObserver: was })
 })
+
+it("presses an answer once for a held key: its repeats press nothing", async () => {
+  const root = createRoot(host)
+  await act(async () =>
+    root.render(<ApprovalActions disabled={false} onAnswer={() => {}} />),
+  )
+  const allow = host.querySelector<HTMLButtonElement>(".workspace-approval-once")
+  if (!allow) throw new Error("no Allow Once")
+  const key = (repeat: boolean) => {
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      repeat,
+      bubbles: true,
+      cancelable: true,
+    })
+    allow.dispatchEvent(event)
+    return event.defaultPrevented
+  }
+  // The first press presses it, as the browser does; each repeat is stopped.
+  expect(key(false)).toBe(false)
+  expect(key(true)).toBe(true)
+  await act(async () => root.unmount())
+})

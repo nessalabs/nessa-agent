@@ -66,7 +66,8 @@ export function ApprovalCommand({ command }: { command: string }) {
       aria-label="Command"
       onKeyDown={(event) => {
         // The arrows scroll it, as they would any scrolling block, in both engines.
-        const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key]
+        const steps: Readonly<Record<string, number>> = { ArrowLeft: -1, ArrowRight: 1 }
+        const step = Object.hasOwn(steps, event.key) ? steps[event.key] : 0
         if (!step || event.metaKey || event.ctrlKey || event.altKey) return
         const element = event.currentTarget
         if (element.scrollWidth - element.clientWidth <= 1) return
@@ -102,7 +103,14 @@ export function ApprovalActions({
   tips?: Partial<Record<ApprovalChoice, TooltipAttributes>>
 }) {
   return (
-    <div className="workspace-approval-answers">
+    <div
+      className="workspace-approval-answers"
+      onKeyDown={(event) => {
+        // A held key answers once: its repeats press nothing more — not these
+        // buttons, nor whatever the keyboard lands on once they go.
+        if (event.repeat) event.preventDefault()
+      }}
+    >
       <div className="workspace-approval-actions">
         <button
           type="button"

@@ -25,10 +25,19 @@ export const css = {
   paneGrid: ".workspace-chat", // class: the grid the panes are laid out in
   paneHeader: ".workspace-pane-header", // class: a pane's header, which carries the drag
   paneDragHandle: "[data-drag-pane]",
+  paneTitle: "[data-drag-pane] .workspace-pane-title", // class: where a pane is grabbed by its title
   composer: "[data-pane-key] textarea",
   transcript: ".workspace-transcript", // class
   dragGhost: ".workspace-drag-ghost", // class: the translucent copy the pointer carries
+  dragCarrier: ".workspace-drag-carrier", // class: holds the copy at the pointer
+  dragPlaceholder: ".workspace-drag-placeholder", // class: where a drop would land
+  dragShield: ".workspace-drag-shield", // class: holds the pointer while carrying
+  lifted: "[data-lifted]",
+  dragging: "[data-workspace][data-dragging]",
   dropAnnouncer: '[data-workspace] [role="status"][aria-live="polite"]',
+
+  // Quick switcher (⌘K, ⌘\\)
+  switcherField: '[role="dialog"] input', // the switcher's search field
 
   // Side columns
   sidebar: ".workspace-sidebar", // class
@@ -57,6 +66,11 @@ export const css = {
   // Settings (data-sidebar is "open" | "closed"; --settings-sidebar-w its width)
   settings: ".settings", // class
   settingsTitlebar: ".settings-titlebar", // class
+
+  // Elements by kind, inside a part found by one of the above
+  field: "textarea",
+  button: "button",
+  heading: "h1, h2, h3",
 
   // Menus and tooltips
   menu: '[role="menu"]',
@@ -111,6 +125,11 @@ export const layouts = ["columns", "sidebar"]
  * (`src/desktop/workspace/ui/layouts/shortcuts.ts` is their owner).
  */
 export const keys = {
+  escape: "Escape",
+  enter: "Enter",
+  down: "ArrowDown",
+  up: "ArrowUp",
+  home: "Home",
   toggleSidebar: "Meta+KeyB",
   toggleSessionList: "Meta+Alt+KeyS",
   newSession: "Meta+KeyN",
@@ -127,6 +146,8 @@ export const keys = {
   overview: "Meta+Digit0",
   settings: "Meta+Comma",
   allow: "Meta+Enter",
+  /** ⌘↩ as its two keys, for holding it down (`keyboard.down` repeats). */
+  command: "Meta",
   deny: "Meta+Backspace",
   reply: "Meta+KeyR",
 }
@@ -137,6 +158,8 @@ export const keys = {
  * "below", a side zone "left of" or "right of".
  */
 export const zoneSaid = {
+  any: /./,
+  swap: /^Swap with /,
   vertical: /^(Move|Split) (above|below) /,
   side: /^(Move|Split) (left|right) of /,
 }
@@ -148,6 +171,10 @@ export const names = {
   leaveSettings: "Back to nessa Agent",
   /** A sample session (in-memory source) that waits on an approval. */
   approvalSession: "Release build signing",
+  /** Sample sessions (in-memory source) that each wait on one approval. */
+  approvalSessions: ["Release build signing", "Notarize the macOS", "Reconnect storm"],
+  denyOnce: "Deny",
+  alwaysAllow: "Always Allow",
 }
 
 /** Console noise that is known to be harmless (see CHECKLIST.md, "Console errors"). */

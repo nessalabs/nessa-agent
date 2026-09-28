@@ -17,8 +17,8 @@
  *
  * An arrow points the way data flows. `adapters/dom/` holds what belongs to
  * the page rather than the product — motion, drag and drop, resizing, keys,
- * the clock's ticks, where the overview's filter is kept between launches —
- * as hooks and adapters beside the tree, never as state. The Agents overview
+ * the clock's ticks — as hooks and adapters beside the tree, never as state;
+ * `adapters/storage/` keeps the overview's filter between launches. The Agents overview
  * is part of the workspace: its rules in `model/overview/`, its state in the
  * slice, its views in `ui/overview/`, answering and reading through the same
  * commands and effects as a pane.
@@ -36,7 +36,7 @@ export { measureWorkspace } from "./adapters/dom/measure"
 export { inMemorySource } from "./adapters/in-memory/in-memory-source"
 export { workspaceEffects } from "./adapters/store/effects"
 export { initialWorkspaceFrom, workspaceReducer } from "./adapters/store/slice"
-export { rememberedFilter } from "./adapters/dom/remembered-filter"
+export { rememberedFilter } from "./adapters/storage/remembered-filter"
 export * from "./adapters/store/commands"
 export { useWorkspaceDispatch, useWorkspaceSelector } from "./adapters/store/hooks"
 export { selectSessionListChosen } from "./adapters/store/selectors"

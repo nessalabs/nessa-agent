@@ -7,6 +7,7 @@ import {
   parseFilter,
   rangeStart,
   serializeFilter,
+  sessionTags,
   type AgentsFilter,
 } from "./filter"
 
@@ -106,7 +107,7 @@ describe("rangeStart", () => {
 
 describe("parseFilter", () => {
   it("reads back what it wrote", () => {
-    const filter: AgentsFilter = { scope: "all", range: "week", tags: ["ui"] }
+    const filter: AgentsFilter = { scope: "all", range: "week", tags: [] }
     expect(parseFilter(serializeFilter(filter))).toEqual(filter)
   })
 
@@ -118,7 +119,10 @@ describe("parseFilter", () => {
       ...defaultFilter,
       scope: "all",
     })
-    expect(parseFilter(JSON.stringify({ tags: ["ui", 3, null] })).tags).toEqual(["ui"])
+    // Only tags a session can carry are kept — none yet — so a kept tag this
+    // build does not know hides nothing.
+    expect(sessionTags).toEqual([])
+    expect(parseFilter(JSON.stringify({ tags: ["ui", 3, null] })).tags).toEqual([])
   })
 
   it("reads only what the stored object itself holds", () => {

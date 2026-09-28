@@ -18,11 +18,11 @@
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 
-import { attempt, CannotRun } from "./lib/cli.mjs"
+import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, names } from "./lib/selectors.mjs"
-import { hideColumns, openPanes } from "./lib/workspace.mjs"
+import { frames, hideColumns, openPanes, settled } from "./lib/workspace.mjs"
 
 const longTail =
   " --config=/Users/nessa/Library/Application-Support/nessa/releases/very/deep/path/release-signing-configuration.json"
@@ -42,7 +42,7 @@ const checks = {
       throw new CannotRun(`no session row "${names.approvalSession}" in the list`)
     await row.click()
     await need(page, css.approvalCard, "the approval card")
-    await page.waitForTimeout(600)
+    await settled(page)
     const failures = []
     const seen = []
     for (const long of [false, true])
@@ -67,7 +67,8 @@ const checks = {
           },
           [css, width, long, longTail],
         )
-        await page.waitForTimeout(200)
+        // The container queries apply in the next frames' style and layout.
+        await frames(page, 2)
         const r = await page.evaluate((sel) => {
           const card = document.querySelector(sel.approvalCard)
           const buttons = [...card.querySelectorAll(sel.approvalActions)].filter((b) =>
@@ -117,18 +118,20 @@ const checks = {
     const seen = []
     for (const width of [1440, 1200, 1000, 900, 800, 720, 660, 600]) {
       await page.setViewportSize({ width, height: 900 })
-      await page.waitForTimeout(400)
-      const overlaps = await page.evaluate((pane) => {
+      // The resize reaches the page a frame or two later; then its motion runs out.
+      await frames(page, 2)
+      await settled(page)
+      const overlaps = await page.evaluate((sel) => {
         const out = []
-        for (const p of document.querySelectorAll(pane)) {
-          const textarea = p.querySelector("textarea")
+        for (const p of document.querySelectorAll(sel.pane)) {
+          const textarea = p.querySelector(sel.field)
           let bar = textarea
           for (let i = 0; i < 6 && bar; i++) {
             bar = bar.parentElement
-            if (bar && bar.querySelectorAll("button").length >= 3) break
+            if (bar && bar.querySelectorAll(sel.button).length >= 3) break
           }
           if (!bar) continue
-          const buttons = [...bar.querySelectorAll("button")].filter((b) =>
+          const buttons = [...bar.querySelectorAll(sel.button)].filter((b) =>
             b.checkVisibility({ checkOpacity: true }),
           )
           const boxes = buttons.map((b) => [b, b.getBoundingClientRect()])
@@ -149,7 +152,7 @@ const checks = {
             }
         }
         return out
-      }, css.pane)
+      }, css)
       seen.push({ width, overlaps: overlaps.length })
       for (const o of overlaps) failures.push(`${width}px window: ${o}`)
       await shot(options, page, `composer-${engine}-${layout}-${width}`)
@@ -162,7 +165,9 @@ const checks = {
     const seen = []
     for (const width of [1440, 1200, 1000, 900, 800, 700]) {
       await page.setViewportSize({ width, height: 900 })
-      await page.waitForTimeout(500)
+      // The resize reaches the page a frame or two later; then its motion runs out.
+      await frames(page, 2)
+      await settled(page)
       const r = await page.evaluate((sel) => {
         const titles = [...document.querySelectorAll(sel.columnTitle)].filter((t) =>
           t.checkVisibility(),
@@ -171,7 +176,7 @@ const checks = {
           b.checkVisibility({ checkOpacity: true }),
         )
         return titles.map((t) => {
-          const heading = t.querySelector("h1, h2, h3") ?? t
+          const heading = t.querySelector(sel.heading) ?? t
           const range = document.createRange()
           range.selectNodeContents(heading)
           const tr = range.getBoundingClientRect()
@@ -208,12 +213,14 @@ const checks = {
   "settings-fold": async ({ page, engine, options }) => {
     await page.keyboard.press(keys.settings)
     await need(page, css.settings, "Settings")
-    await page.waitForTimeout(600)
+    await settled(page)
     const failures = []
     const seen = []
     for (const width of [1200, 1000, 800, 700, 640, 600, 560]) {
       await page.setViewportSize({ width, height: 800 })
-      await page.waitForTimeout(500)
+      // The resize reaches the page a frame or two later; then its motion runs out.
+      await frames(page, 2)
+      await settled(page)
       const r = await page.evaluate((sel) => {
         const s = document.querySelector(sel.settings)
         const sidebar =
@@ -246,7 +253,9 @@ Usage: node verification/desktop/scripts/responsive.mjs [options] [--shots <dir>
 }
 
 await main(meta, async ({ options, rep, url }) => {
-  const only = options.only ? options.list(options.only) : null
+  const only = options.only
+    ? chosen(options.only, Object.keys(checks), options.list)
+    : null
   await withEngines(options, rep, async (engine, browser) => {
     for (const layout of options.layouts)
       for (const [name, check] of Object.entries(checks)) {

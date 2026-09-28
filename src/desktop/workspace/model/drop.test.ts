@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest"
 import {
-  aimBlend,
-  aimPoint,
+  aimAt,
   dropOutcome,
   edgeHug,
   edgeReach,
   paneAt,
   headingWindow,
   pointerVelocity,
+  restAfter,
   zoneAt,
   zoneHold,
 } from "./drop"
@@ -44,7 +44,7 @@ describe("where on a pane a drop lands", () => {
   })
 
   it("reaches a third of the way in from each side, held to 90–300px and never past the middle", () => {
-    expect(edgeReach({ width: 600, height: 600 }, "left")).toBeCloseTo(210)
+    expect(edgeReach({ width: 600, height: 600 }, "left")).toBeCloseTo(200)
     expect(edgeReach({ width: 2000, height: 1400 }, "left")).toBe(300)
     expect(edgeReach({ width: 2000, height: 1400 }, "top")).toBe(300)
     expect(edgeReach({ width: 200, height: 200 }, "top")).toBe(90)
@@ -193,76 +193,70 @@ describe("where on a pane a drop lands", () => {
     expect(zoneAt(at(300, reach + zoneHold + 1), square, "top")).toBe("center")
   })
 
-  it("reads the pointer's heading from the last tenth of a second", () => {
-    expect(pointerVelocity([])).toEqual({ x: 0, y: 0 })
-    expect(pointerVelocity([{ x: 5, y: 5, t: 10 }])).toEqual({ x: 0, y: 0 })
+  it("reads the pointer's heading from the last tenth of a second, and none once it has rested", () => {
+    expect(pointerVelocity([], 0)).toEqual({ x: 0, y: 0 })
+    expect(pointerVelocity([{ x: 5, y: 5, t: 10 }], 10)).toEqual({ x: 0, y: 0 })
+    const path = [
+      { x: 0, y: 900, t: 0 },
+      { x: 100, y: 100, t: 400 },
+      { x: 140, y: 100, t: 450 },
+      { x: 180, y: 100, t: 500 },
+    ]
     // An old sample, long before the window, says nothing of where it heads now.
-    expect(
-      pointerVelocity([
-        { x: 0, y: 900, t: 0 },
-        { x: 100, y: 100, t: 400 },
-        { x: 140, y: 100, t: 450 },
-        { x: 180, y: 100, t: 500 },
-      ]),
-    ).toEqual({ x: 0.8, y: 0 })
+    expect(pointerVelocity(path, 500)).toEqual({ x: 0.8, y: 0 })
+    expect(pointerVelocity(path, 500 + restAfter - 1)).toEqual({ x: 0.8, y: 0 })
+    // Still for `restAfter`, it heads nowhere.
+    expect(pointerVelocity(path, 500 + restAfter)).toEqual({ x: 0, y: 0 })
     expect(headingWindow).toBeGreaterThanOrEqual(80)
     expect(headingWindow).toBeLessThanOrEqual(120)
   })
 })
 
 describe("where a drag aims", () => {
-  it("aims between the pointer and the centre of the copy it carries", () => {
-    // Grabbed by its header 60, 16 from its corner, a 1000 by 800 copy.
-    const aim = aimPoint(
-      { x: 500, y: 300 },
-      { left: 440, top: 284, width: 1000, height: 800 },
-    )
-    expect(aimBlend).toBe(0.5)
-    expect(aim).toEqual({ x: 500 + (940 - 500) / 2, y: 300 + (684 - 300) / 2 })
-  })
-
   // Two columns: a on the left, b over c on the right, in a 2000 by 1300 grid.
   const grid: [number, { left: number; top: number; width: number; height: number }][] = [
     [1, { left: 0, top: 0, width: 996, height: 1300 }],
     [2, { left: 1004, top: 0, width: 996, height: 646 }],
     [3, { left: 1004, top: 654, width: 996, height: 646 }],
   ]
+  const targets = { grid: { left: 0, top: 0, width: 2000, height: 1300 }, panes: grid }
 
-  it("reads a gutter, or a place past the grid, as the pane nearest it, held to its edge", () => {
+  it("reads a gutter as the pane nearest it, held to its edge", () => {
     expect(paneAt({ x: 1001, y: 300 }, grid)).toMatchObject({ key: 2, x: 0, y: 300 })
-    expect(paneAt({ x: 2300, y: 1000 }, grid)).toMatchObject({ key: 3, x: 996, y: 346 })
-    expect(paneAt({ x: 1500, y: 1900 }, grid)).toMatchObject({ key: 3, x: 496, y: 646 })
     expect(paneAt({ x: 1500, y: 650 }, grid)?.key).toBe(2)
     expect(paneAt({ x: 10, y: 10 }, [])).toBeNull()
   })
 
-  it("moves the left pane below the lower right one when its copy is carried to the lower right", () => {
-    // The person's drag: pane a by its header, the pointer at 1250, 920, the
-    // copy's body running off the window's right and foot.
-    const aim = aimPoint(
-      { x: 1250, y: 920 },
-      { left: 1190, top: 904, width: 996, height: 1300 },
-    )
-    const over = paneAt(aim, grid)
-    expect(over?.key).toBe(3)
-    const zone = zoneAt({ x: over?.x ?? 0, y: over?.y ?? 0, velocity: still }, over!.box)
-    expect(zone).toBe("bottom")
-    const layout = splitPane(
-      splitPane(singlePane("a"), 1, "right", "b"),
-      2,
-      "bottom",
-      "c",
-    )
-    // In this layout a is pane 1 and c pane 4.
-    const outcome = dropOutcome(layout, { kind: "pane", pane: 1 }, 4, zone, {
-      width: 2000,
-      height: 1300,
-      spare: 0,
+  it("aims at the pointer: the pane and zone under it, nothing off the grid or with no pane in sight", () => {
+    const still = (x: number, y: number) => [{ x, y, t: 0 }]
+    // The middle of a tall pane is its middle: the copy's centre is the pointer.
+    expect(aimAt(still(498, 650), 0, null, targets)).toEqual({
+      target: 1,
+      zone: "center",
     })
-    expect(outcome?.does).toBe("move")
-    expect(
-      outcome?.layout.columns.map((column) => column.panes.map((pane) => pane.sessionId)),
-    ).toEqual([["b", "c", "a"]])
+    expect(aimAt(still(1500, 1250), 0, null, targets)).toEqual({
+      target: 3,
+      zone: "bottom",
+    })
+    expect(aimAt(still(1001, 300), 0, null, targets)).toMatchObject({ target: 2 })
+    expect(aimAt(still(2100, 300), 0, null, targets)).toBeNull()
+    expect(aimAt(still(1500, -5), 0, null, targets)).toBeNull()
+    expect(aimAt(still(498, 650), 0, null, null)).toBeNull()
+    expect(aimAt([], 0, null, targets)).toBeNull()
+  })
+
+  it("holds the zone it had only on the same pane", () => {
+    // 200px in from pane 1's left, at rest, is its middle — unless it was its left.
+    const path = [{ x: 305, y: 650, t: 0 }]
+    expect(aimAt(path, 0, null, targets)).toEqual({ target: 1, zone: "center" })
+    expect(aimAt(path, 0, { target: 1, zone: "left" }, targets)).toEqual({
+      target: 1,
+      zone: "left",
+    })
+    expect(aimAt(path, 0, { target: 2, zone: "left" }, targets)).toEqual({
+      target: 1,
+      zone: "center",
+    })
   })
 })
 

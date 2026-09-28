@@ -42,7 +42,16 @@ src-tauri/src/
     application/          use cases + ports (traits) the use case needs
     adapters/             storage, OS, IPC command handlers, clock
     contracts/            what other contexts and the frontend may see
+verification/             scripts that drive real browsers against the running app
+  desktop/                the desktop window: CHECKLIST.md, scripts/, scripts/lib/
 ```
+
+`verification/` is not product code and not a CI gate: its scripts measure
+what a person sees in Chromium and WebKit (frames, rects, focus, what is
+painted under the window's controls), and hold the contracts listed in
+`verification/desktop/CHECKLIST.md`. The rule for when a UI change needs them
+is [browser verification for UI](../CODING_STANDARDS.md#browser-verification-for-ui);
+how the folder is laid out and run is [`verification/README.md`](../verification/README.md).
 
 The Tauri command layer is an **adapter**, not a home for logic. A
 `#[tauri::command]` function should read like: deserialise, call one use case,
