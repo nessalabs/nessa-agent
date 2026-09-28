@@ -2,7 +2,7 @@
  * Sideways slides, as the page plays them, and holding something still on
  * screen while what it sits in slides.
  *
- * The workspace's FLIP (`workspace/adapters/dom/flip.tsx`) slides a column
+ * The workspace's FLIP (`split-panes/adapters/dom/flip.tsx`) slides a column
  * that moved by `translateX`, from where it was to its place, and names each
  * of those animations `slideAnimation`. An element that appears inside a
  * column mid-slide — a title that changed rows because the column's room

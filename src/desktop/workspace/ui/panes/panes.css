@@ -2,8 +2,8 @@
  * The chat area and its panes. Panes are placed from the layout's fractions
  * (`--cx`, `--cw`, … set by the pane), so one keeps its identity when it
  * moves. A change of layout lands at once; each pane then travels from where
- * it was by transform alone (`adapters/dom/flip.tsx`), so no frame of the
- * motion reflows text.
+ * it was by transform alone (`split-panes/adapters/dom/flip.tsx`), so no
+ * frame of the motion reflows text.
  */
 .workspace-chat {
   display: flex;
@@ -227,7 +227,8 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
 /*
  * In the window's corner, with nothing beside it, the header steps past the
  * window controls — and so it does where a drag's preview would put it
- * (`data-drag-corner`, `adapters/dom/drag.ts`), and not where it would leave.
+ * (`data-drag-corner`, `split-panes/adapters/dom/drag.ts`), and not where it
+ * would leave.
  */
 .workspace[data-panes-alone]
   .workspace-pane:is([data-corner]:not([data-drag-corner="no"]), [data-drag-corner="yes"])

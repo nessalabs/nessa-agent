@@ -5,7 +5,7 @@
  * workspace's own commands, which hold it to the room the page measures and
  * fold the sidebar where that is what makes it fit.
  */
-import type { SplitPanesSource } from "../../../split-panes/application/ports"
+import type { SplitPanesSource } from "../../../split-panes"
 import type { DesktopStore } from "../../../store"
 import { commitDrop, equalizePanes, fitPanes, measureRoom, resizePanes } from "./commands"
 

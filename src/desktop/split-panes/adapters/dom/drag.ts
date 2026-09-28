@@ -48,7 +48,7 @@
  */
 import { useEffect, type RefObject } from "react"
 import { reducedMotion } from "../../../adapters/motion-preference"
-import type { SplitPanesSource } from "../../../split-panes/application/ports"
+import type { SplitPanesSource } from "../../application/ports"
 import {
   copyShape,
   idle,
@@ -58,7 +58,7 @@ import {
   type DragEvent,
   type DragPhase,
   type Size,
-} from "../../../split-panes/model/drag"
+} from "../../model/drag"
 import {
   dropOutcome,
   refusedZones,
@@ -68,14 +68,10 @@ import {
   type DropOutcome,
   type PointerSample,
   type Targets,
-} from "../../../split-panes/model/drop"
-import type { PaneKey, PaneLayout, Zone } from "../../../split-panes/model/pane-layout"
-import { paneLimits } from "../../../split-panes/model/pane-layout"
-import {
-  placements,
-  type PanePlacement,
-  type PaneRoom,
-} from "../../../split-panes/model/pane-sizing"
+} from "../../model/drop"
+import type { PaneKey, PaneLayout, Zone } from "../../model/pane-layout"
+import { paneLimits } from "../../model/pane-layout"
+import { placements, type PanePlacement, type PaneRoom } from "../../model/pane-sizing"
 import { durationToken, motionToken } from "../../../adapters/motion"
 
 /** Marks the preview's own motion. */

@@ -6,7 +6,7 @@
  * docked or revealed from the edge, are never targets (`sideColumns`); and a
  * copy leaves out the window's drag regions and the focused pane's mark.
  */
-import type { SplitPanesDragOptions } from "./drag"
+import type { SplitPanesDragOptions } from "../../../split-panes"
 import type { DesktopStore } from "../../../store"
 import { focusedPaneAttribute } from "./focus"
 

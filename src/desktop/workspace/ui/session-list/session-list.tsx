@@ -189,7 +189,7 @@ const SessionRow = memo(function SessionRow({
           data-selected={selected || undefined}
           data-open={open || undefined}
           data-unread={session.unread || undefined}
-          // Carried by the pointer to a pane (`adapters/dom/drag.ts`).
+          // Carried by the pointer to a pane (`split-panes/adapters/dom/drag.ts`).
           data-drag-item={session.id}
           onClick={(event) => actions.activate(event, session.id)}
           onKeyDown={(event) => {

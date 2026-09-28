@@ -9,8 +9,8 @@ const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8")
 
 /**
  * A pane in the window's corner — or where a drag's preview would put it
- * there (`data-drag-corner`, `adapters/dom/drag.ts`), and not where it would
- * leave — as the stylesheets select it.
+ * there (`data-drag-corner`, `split-panes/adapters/dom/drag.ts`), and not
+ * where it would leave — as the stylesheets select it.
  */
 const cornered = `.workspace[data-panes-alone]
   .workspace-pane:is([data-corner]:not([data-drag-corner="no"]), [data-drag-corner="yes"])

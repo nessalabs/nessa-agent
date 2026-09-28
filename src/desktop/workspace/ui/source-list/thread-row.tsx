@@ -58,7 +58,7 @@ export const ThreadRow = memo(function ThreadRow({
             data-focused={(kind === "branch" && focused) || undefined}
             data-unread={(kind === "branch" && session.unread) || undefined}
             aria-current={focused ? "page" : undefined}
-            // Carried by the pointer to a pane (`adapters/dom/drag.ts`).
+            // Carried by the pointer to a pane (`split-panes/adapters/dom/drag.ts`).
             data-drag-item={session.id}
             onClick={(event) => actions.activate(event, session.id)}
             {...tooltip(

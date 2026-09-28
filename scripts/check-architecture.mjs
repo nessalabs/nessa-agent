@@ -241,6 +241,22 @@ for (const file of walk(src)) {
     }
   }
 
+  // Split panes are wrapped, not reached into (ADR 253): a host takes the
+  // barrel — what React renders, the drag, the port it implements — and its
+  // own model and use cases, which may not import React, take the pure model
+  // by its files. Nothing else of the module is anyone else's to import.
+  if (!path.startsWith("src/desktop/split-panes/")) {
+    for (const item of imports) {
+      if (!/(?:^|\/)split-panes(?:\/|$)/.test(item)) continue
+      if (/(?:^|\/)split-panes(?:\/index)?$/.test(item)) continue
+      if (/(?:^|\/)split-panes\/model\/[^/]+$/.test(item)) continue
+      fail(
+        file,
+        "other modules import the split-panes barrel or its model, not its internals",
+      )
+    }
+  }
+
   if (!path.startsWith("src/session/") && !path.endsWith(".test.ts")) {
     for (const item of imports) {
       if (!/(?:^|\/)session(?:\/|$)/.test(item) && !item.endsWith("/session")) continue

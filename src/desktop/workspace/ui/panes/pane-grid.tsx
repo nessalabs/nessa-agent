@@ -15,9 +15,8 @@ import {
   selectPanes,
   selectPlacements,
 } from "../../adapters/store/selectors"
-import { paneTabOrder } from "../../../split-panes/adapters/dom/tab-order"
+import { paneTabOrder, ResizeEdge } from "../../../split-panes"
 import type { EdgePlacement, PanePlacement } from "../../../split-panes/model/pane-sizing"
-import { ResizeEdge } from "../../../split-panes/ui/resize-edge"
 import { EmptyWorkspace } from "./empty-state"
 import { Pane } from "./pane"
 import "./panes.css"

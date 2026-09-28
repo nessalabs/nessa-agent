@@ -3,11 +3,13 @@
  * The pointer's drag in the workspace, where jsdom can follow it: the split
  * panes' drag (`useSplitPanesDrag`) wired to the workspace's store
  * (`workspaceSplitPanes`) and page (`workspaceDragOptions`), as the window
- * wires it — the page's side of `split-panes/model/drag.ts`. The copy is the pane itself, held under the pointer and
- * gliding to its centre; the zone under the pointer is said, a drop commits
- * what was shown, and Escape, a lost pointer or any change lets it all go.
- * What the drag reads of the page it reads as the press begins; after that it
- * only writes, and selects nothing.
+ * wires it — the page's side of `split-panes/model/drag.ts`. The copy is the
+ * pane itself, held under the pointer and gliding to its centre; the zone
+ * under the pointer is said, a drop commits what was shown, and Escape, a
+ * lost pointer or any change lets it all go. What the drag reads of the page
+ * it reads as the press begins; after that it only writes, and selects
+ * nothing. What the drag asks of any host is held on a fake one beside the
+ * drag (`split-panes/adapters/dom/drag.test.tsx`).
  */
 import { act, useMemo, useRef } from "react"
 import { createRoot } from "react-dom/client"
@@ -21,6 +23,7 @@ import {
   loadWorkspace,
   openBeside,
   showContent,
+  toggleSidebar,
 } from "../store/commands"
 import { panesOf } from "../../../split-panes/model/pane-layout"
 import { fakeSource, settle, testStore } from "../../testing"
@@ -28,7 +31,7 @@ import { restAfter } from "../../../split-panes/model/drop"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import { measureWorkspace } from "./measure"
 import { workspaceSplitPanes } from "../store/split-panes-source"
-import { saying, useSplitPanesDrag } from "./drag"
+import { useSplitPanesDrag } from "../../../split-panes"
 import { workspaceDragOptions } from "./split-panes-drag"
 
 let host: HTMLDivElement
@@ -67,6 +70,7 @@ function Grid() {
     <div ref={root} data-workspace data-sidebar="closed">
       <div data-drag-item="d">Session d</div>
       <nav className="workspace-sidebar" />
+      <section className="workspace-list" />
       <div className="workspace-panes" data-split-grid>
         {(panes ? panesOf(panes) : []).map((pane) => (
           <article
@@ -372,8 +376,13 @@ it("copies one screen of the conversation, what is scrolled above standing in as
   pane.querySelectorAll<HTMLElement>("[data-part]").forEach((part, index) => {
     part.getBoundingClientRect = () => new DOMRect(0, index * 200, 546, 200)
   })
+  // The window's drag region and the focused pane's mark are no part of a copy.
+  header(1).setAttribute("data-tauri-drag-region", "")
+  pane.setAttribute("data-pane-focused", "")
   await press(60, 16, header(1))
   pointer("pointermove", 90, 40)
+  const ghost = host.querySelector(".workspace-drag-ghost")
+  expect(ghost?.querySelector("[data-tauri-drag-region], [data-pane-focused]")).toBeNull()
   const copied = host.querySelector(".workspace-drag-ghost .workspace-transcript-inner")
   const parts = [...(copied?.querySelectorAll("[data-part]") ?? [])]
   expect(parts.map((part) => part.textContent)).toEqual([
@@ -639,6 +648,37 @@ it("takes a peek still sliding in as covering where it slides to, not the part o
   await act(async () => root.unmount())
 })
 
+it("never aims over the session list docked beside the panes", async () => {
+  const { store, root } = await mounted()
+  const before = store.getState().workspace.panes
+  const scope = host.querySelector<HTMLElement>("[data-workspace]")
+  const list = host.querySelector<HTMLElement>(".workspace-list")
+  if (!scope || !list) throw new Error("no list")
+  // Docked over pane c's left, 554–854.
+  scope.dataset.list = "open"
+  list.getBoundingClientRect = () => new DOMRect(554, 0, 300, 800)
+  const row = host.querySelector("[data-drag-item]")
+  if (!row) throw new Error("no row")
+  await press(10, 10, row)
+  pointer("pointermove", 40, 40)
+  pointer("pointermove", 700, 400)
+  await act(async () => new Promise((resolve) => setTimeout(resolve, restAfter + 30)))
+  await frames()
+  expect(said()).toBe("")
+  // Past it, pane c is a target as ever.
+  pointer("pointermove", 950, 400)
+  await frames()
+  expect(said()).toMatch(/Session c$/)
+  pointer("pointermove", 700, 400)
+  await frames()
+  expect(said()).toBe("")
+  pointer("pointerup", 700, 400)
+  await frames()
+  expect(store.getState().workspace.panes).toBe(before)
+  nothingLeft()
+  await act(async () => root.unmount())
+})
+
 it("ends at once when the carried session is no longer listed", async () => {
   const source = fakeSource()
   const { store, root } = await mounted(undefined, source)
@@ -681,18 +721,6 @@ it("never takes Settings' Escape: under an inert window the keys are not the dra
   host.removeAttribute("inert")
   pointer("pointerup", 827, 400)
   await act(async () => root.unmount())
-})
-
-it("says each zone as a person would: above and below, left of and right of", () => {
-  const outcome = (does: "move" | "split") =>
-    ({ does, lands: 1, layout: null, takesSpare: false }) as unknown as Parameters<
-      typeof saying
-    >[0]
-  expect(saying(outcome("split"), "top", "Notes")).toBe("Split above Notes")
-  expect(saying(outcome("split"), "bottom", "Notes")).toBe("Split below Notes")
-  expect(saying(outcome("split"), "left", "Notes")).toBe("Split left of Notes")
-  expect(saying(outcome("move"), "top", "Notes")).toBe("Move above Notes")
-  expect(saying(outcome("move"), "right", "Notes")).toBe("Move right of Notes")
 })
 
 it("takes the zone the pointer heads for: sideways near the top is the side, upward the top", async () => {
@@ -943,6 +971,7 @@ it("ends at once on a change: a command key, a resize, the store, Settings", asy
     ["a resize", () => window.dispatchEvent(new Event("resize"))],
     ["an agent's close", () => void store.dispatch(closePane({ pane: 2 }))],
     ["the overview", () => void store.dispatch(showContent({ content: "agents" }))],
+    ["an agent's fold of the sidebar", () => void store.dispatch(toggleSidebar())],
     ["Settings", () => host.setAttribute("inert", "")],
   ]
   for (const [name, change] of changes) {

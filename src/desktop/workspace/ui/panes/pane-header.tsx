@@ -52,7 +52,8 @@ export const PaneHeader = memo(function PaneHeader({
           // Held to the pane's top left as a drag's preview reshapes it.
           data-split-keeps="top-left"
           data-tauri-drag-region={multi ? undefined : true}
-          // With more than one pane, the bar carries the pane (`adapters/dom/drag.ts`).
+          // With more than one pane, the bar carries the pane
+          // (`split-panes/adapters/dom/drag.ts`).
           data-drag-pane={multi ? pane : undefined}
         >
           <div

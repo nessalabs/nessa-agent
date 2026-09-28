@@ -48,10 +48,10 @@ function placementStyle(placement: PanePlacement): CSSProperties {
  * session's own content is read further down, so a reply streaming here
  * renders this pane's transcript and nothing else.
  *
- * A session or another pane carried over it (`adapters/dom/drag.ts`) lands
- * by zone: a side splits, the middle opens in place or swaps. Sending a new
- * session's first message measures its home first, so the composer can glide
- * into the conversation.
+ * A session or another pane carried over it (`split-panes/adapters/dom/drag.ts`)
+ * lands by zone: a side splits, the middle opens in place or swaps. Sending a
+ * new session's first message measures its home first, so the composer can
+ * glide into the conversation.
  */
 export const Pane = memo(function Pane({
   placement,

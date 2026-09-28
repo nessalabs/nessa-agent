@@ -393,7 +393,7 @@ html[data-workspace-resizing="y"] * {
   margin-left: 4px;
 }
 
-/* ——— Carrying a pane or a session (`adapters/dom/drag.ts`) ——— */
+/* ——— Carrying a pane or a session (`split-panes/adapters/dom/drag.ts`) ——— */
 
 /*
  * The copy carried: the pane itself, cloned once, at its own size. The
