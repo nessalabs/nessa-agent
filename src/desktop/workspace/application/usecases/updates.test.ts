@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { panesOf, paneShowing } from "../../model/pane-layout"
+import { retention } from "../../model/retention"
 import { emptyTranscript, type Transcript } from "../../model/transcript"
-import { astra, summary, testOrganisation } from "../../testing"
+import { astra, roomyGrid as roomy, summary, testOverview } from "../../testing"
 import {
   initialWorkspace,
   modelForNextTurn,
@@ -10,9 +11,10 @@ import {
 import { closePane, createDraft, openBeside } from "./panes"
 import { chooseModel, messageSent } from "./sessions"
 import {
-  organisationFailed,
-  organisationLoaded,
-  organisationRequested,
+  overviewFailed,
+  overviewLoaded,
+  overviewRequested,
+  sessionRemoved,
   shownSessionIds,
   transcriptFailed,
   transcriptLoaded,
@@ -22,8 +24,8 @@ import {
 } from "./updates"
 
 const loaded = () =>
-  organisationLoaded(initialWorkspace, {
-    organisation: testOrganisation(),
+  overviewLoaded(initialWorkspace, {
+    overview: testOverview(),
     draftId: "unused",
   })
 
@@ -42,7 +44,7 @@ const transcript = (
   ],
 })
 
-describe("the organisation arriving", () => {
+describe("the overview arriving", () => {
   it("opens on the first channel's newest session and discloses what waits", () => {
     const state = loaded()
     expect(state.status).toBe("ready")
@@ -52,8 +54,8 @@ describe("the organisation arriving", () => {
   })
 
   it("opens on a new session's home when there are no sessions", () => {
-    const state = organisationLoaded(initialWorkspace, {
-      organisation: { ...testOrganisation(), sessions: [] },
+    const state = overviewLoaded(initialWorkspace, {
+      overview: { ...testOverview(), sessions: [] },
       draftId: "first",
     })
     expect(shown(state)).toEqual(["first"])
@@ -61,27 +63,27 @@ describe("the organisation arriving", () => {
   })
 
   it("shows nothing at all with no channels to start in", () => {
-    const state = organisationLoaded(initialWorkspace, {
-      organisation: { sections: [], channels: [], sessions: [] },
+    const state = overviewLoaded(initialWorkspace, {
+      overview: { sections: [], channels: [], sessions: [] },
       draftId: "first",
     })
     expect(state.panes).toBeNull()
     expect(state.status).toBe("ready")
   })
 
-  it("keeps the panes it has when the organisation is read again", () => {
-    const two = openBeside(loaded(), { sessionId: "c" })
-    const again = organisationLoaded(two, {
-      organisation: testOrganisation(),
+  it("keeps the panes it has when the overview is read again", () => {
+    const two = openBeside(loaded(), { sessionId: "c", room: roomy })
+    const again = overviewLoaded(two, {
+      overview: testOverview(),
       draftId: "x",
     })
     expect(again.panes).toBe(two.panes)
   })
 
   it("says why it could not be read", () => {
-    const state = organisationFailed(initialWorkspace, { reason: "unavailable" })
+    const state = overviewFailed(initialWorkspace, { reason: "unavailable" })
     expect(state.status).toBe("failed")
-    expect(state.failure).toMatch(/couldn’t reach/)
+    expect(state.failure).toBe("unavailable")
   })
 })
 
@@ -129,32 +131,35 @@ describe("updates from the source", () => {
           },
         }),
       ).toBe(state)
-      expect(
-        updateReceived(state, {
-          update: { kind: "session-removed", sessionId: "a", revision },
-        }),
-      ).toBe(state)
+      expect(sessionRemoved(state, { sessionId: "a", revision, draftId: "fresh" })).toBe(
+        state,
+      )
     }
   })
 
-  it("closes the pane of a removed session, and leaves the last pane showing what is left", () => {
-    const two = openBeside(loaded(), { sessionId: "c" })
-    const removed = updateReceived(two, {
-      update: { kind: "session-removed", sessionId: "c", revision: 2 },
-    })
+  it("closes the pane of a removed session, and starts the last pane over: no pane shows a session that is not there", () => {
+    const two = openBeside(loaded(), { sessionId: "c", room: roomy })
+    const removed = sessionRemoved(two, { sessionId: "c", revision: 2, draftId: "fresh" })
     expect(shown(removed)).toEqual(["a"])
     expect(Object.keys(removed.sessions)).not.toContain("c")
-    const last = updateReceived(loaded(), {
-      update: { kind: "session-removed", sessionId: "a", revision: 2 },
+    // The only legal outcome for the last pane: a new session's home in the same channel.
+    const last = sessionRemoved(loaded(), {
+      sessionId: "a",
+      revision: 2,
+      draftId: "fresh",
     })
-    expect(shown(last)).toEqual(["a"])
+    expect(shown(last)).toEqual(["fresh"])
+    expect(last.drafts.fresh.channelId).toBe("desktop")
+    expect(last.sessions.a).toBeUndefined()
     // A removal of a session not yet listed is remembered, in case an older read lists it.
     const unknown = loaded()
-    const remembered = updateReceived(unknown, {
-      update: { kind: "session-removed", sessionId: "missing", revision: 1 },
+    const remembered = sessionRemoved(unknown, {
+      sessionId: "missing",
+      revision: 1,
+      draftId: "fresh",
     })
     expect(remembered.sessions).toBe(unknown.sessions)
-    expect(remembered.removed).toEqual({ missing: 1 })
+    expect(remembered.removed).toEqual([{ sessionId: "missing", revision: 1 }])
   })
 
   it("remembers why a conversation could not be read, until it is", () => {
@@ -162,13 +167,17 @@ describe("updates from the source", () => {
       sessionId: "a",
       reason: "unknown-session",
     })
-    expect(failed.transcriptFailures.a).toMatch(/no longer there/)
+    expect(failed.transcriptFailures.a).toBe("unknown-session")
     const read = transcriptLoaded(failed, { transcript: emptyTranscript("a") })
     expect(read.transcriptFailures).toEqual({})
   })
 
   it("lists only the shown sessions the source has, drafts never among them", () => {
-    const drafted = createDraft(loaded(), { draftId: "new", beside: "right" })
+    const drafted = createDraft(loaded(), {
+      draftId: "new",
+      beside: "right",
+      room: roomy,
+    })
     expect(shownSessionIds(drafted)).toEqual(["a"])
     expect(shownSessionIds(initialWorkspace)).toEqual([])
   })
@@ -176,11 +185,11 @@ describe("updates from the source", () => {
 
 describe("what goes with a session", () => {
   it("names the shown sessions still marked unread, the one the workspace opens on included", () => {
-    const organisation = testOrganisation()
-    const state = organisationLoaded(initialWorkspace, {
-      organisation: {
-        ...organisation,
-        sessions: organisation.sessions.map((session) =>
+    const overview = testOverview()
+    const state = overviewLoaded(initialWorkspace, {
+      overview: {
+        ...overview,
+        sessions: overview.sessions.map((session) =>
           session.id === "a" ? { ...session, unread: true } : session,
         ),
       },
@@ -216,7 +225,7 @@ describe("what goes with a session", () => {
   it("records no failed read for a session no pane shows, and forgets one when its pane closes", () => {
     const state = loaded()
     expect(transcriptFailed(state, { sessionId: "c", reason: "unavailable" })).toBe(state)
-    const two = openBeside(state, { sessionId: "c" })
+    const two = openBeside(state, { sessionId: "c", room: roomy })
     const failed = transcriptFailed(two, { sessionId: "c", reason: "unavailable" })
     expect(failed.transcriptFailures.c).toBeDefined()
     const closed = closePane(failed, { pane: paneShowing(failed.panes!, "c")!.key })
@@ -256,11 +265,11 @@ describe("what goes with a session", () => {
     expect(modelForNextTurn(listed, "new")).toEqual(astra)
   })
 
-  it("lists a summary the same way whether the organisation read or the stream brings it", () => {
+  it("lists a summary the same way whether the overview read or the stream brings it", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
-    const reread = organisationLoaded(drafted, {
-      organisation: {
-        ...testOrganisation(),
+    const reread = overviewLoaded(drafted, {
+      overview: {
+        ...testOverview(),
         sessions: [summary("new", "desktop", 900, "running")],
       },
       draftId: "unused",
@@ -278,33 +287,25 @@ describe("what goes with a session", () => {
   })
 
   it("closes the pane showing a removed session, and starts the last over under the id given", () => {
-    const two = openBeside(loaded(), { sessionId: "c" })
-    const closed = updateReceived(two, {
-      update: { kind: "session-removed", sessionId: "c", revision: 3 },
-      draftId: "x",
-    })
+    const two = openBeside(loaded(), { sessionId: "c", room: roomy })
+    const closed = sessionRemoved(two, { sessionId: "c", revision: 3, draftId: "x" })
     expect(panesOf(closed.panes!).map((pane) => pane.sessionId)).toEqual(["a"])
-    const last = updateReceived(loaded(), {
-      update: { kind: "session-removed", sessionId: "a", revision: 3 },
+    const last = sessionRemoved(loaded(), {
+      sessionId: "a",
+      revision: 3,
       draftId: "fresh",
     })
     expect(panesOf(last.panes!).map((pane) => pane.sessionId)).toEqual(["fresh"])
     expect(last.drafts.fresh.channelId).toBe("desktop")
-    const chosen = updateReceived(
+    const chosen = sessionRemoved(
       { ...loaded(), chosenModels: { a: astra } },
-      {
-        update: { kind: "session-removed", sessionId: "a", revision: 3 },
-        draftId: "fresh",
-      },
+      { sessionId: "a", revision: 3, draftId: "fresh" },
     )
     // The model the person chose for its next turn carries over to the new home.
     expect(chosen.drafts.fresh.model).toEqual(astra)
-    const waiting = updateReceived(
+    const waiting = sessionRemoved(
       { ...loaded(), view: { kind: "status", status: "running" } },
-      {
-        update: { kind: "session-removed", sessionId: "a", revision: 3 },
-        draftId: "fresh",
-      },
+      { sessionId: "a", revision: 3, draftId: "fresh" },
     )
     expect(waiting.view).toEqual({ kind: "status", status: "running" })
   })
@@ -313,10 +314,12 @@ describe("what goes with a session", () => {
     const state = {
       ...loaded(),
       answers: { c: { approvalId: "ap", token: "t1" } },
-      chosenModels: { c: testOrganisation().sessions[3].model },
+      chosenModels: { c: testOverview().sessions[3].model },
     }
-    const removed = updateReceived(state, {
-      update: { kind: "session-removed", sessionId: "c", revision: 3 },
+    const removed = sessionRemoved(state, {
+      sessionId: "c",
+      revision: 3,
+      draftId: "fresh",
     })
     expect(removed.answers).toEqual({})
     expect(removed.chosenModels).toEqual({})
@@ -325,27 +328,33 @@ describe("what goes with a session", () => {
   it("drops a removed session's conversation, failure and outbox, and a read that outlived it", () => {
     const failed = transcriptFailed(loaded(), { sessionId: "c", reason: "unavailable" })
     const state = { ...failed, transcripts: { c: transcript("c", 2) } }
-    const removed = updateReceived(state, {
-      update: { kind: "session-removed", sessionId: "c", revision: 3 },
+    const removed = sessionRemoved(state, {
+      sessionId: "c",
+      revision: 3,
+      draftId: "fresh",
     })
     expect(removed.transcripts.c).toBeUndefined()
     expect(removed.transcriptFailures.c).toBeUndefined()
     expect(transcriptLoaded(removed, { transcript: transcript("c", 4) })).toBe(removed)
   })
 
-  it("keeps an open workspace open when a later read of the organisation fails", () => {
+  it("keeps an open workspace open when a later read of the overview fails", () => {
     const state = loaded()
-    expect(organisationFailed(state, { reason: "unavailable" })).toBe(state)
+    expect(overviewFailed(state, { reason: "unavailable" })).toBe(state)
   })
 
-  it("says nothing while the organisation is read again after a failure", () => {
-    const failed = organisationFailed(initialWorkspace, { reason: "unavailable" })
-    expect(organisationRequested(failed)).toMatchObject({
+  it("says nothing while the overview is read again after a failure", () => {
+    const failed = overviewFailed(initialWorkspace, { reason: "unavailable" })
+    expect(overviewRequested(failed)).toMatchObject({
       status: "loading",
       failure: null,
     })
     const ready = loaded()
-    expect(organisationRequested(ready)).toBe(ready)
+    expect(overviewRequested(ready)).toMatchObject({
+      status: "ready",
+      failure: null,
+      reading: { reads: 1, heard: [] },
+    })
   })
 
   it("does not read a session the source has not spoken of yet", () => {
@@ -388,27 +397,29 @@ describe("replacements out of order", () => {
     expect(twice.transcripts.a).toEqual(once.transcripts.a)
   })
 
-  it("keeps summaries the stream brought before an older organisation read", () => {
+  it("keeps summaries the stream brought before an older overview read", () => {
     const early = updateReceived(initialWorkspace, {
       update: {
         kind: "session",
         session: summary("a", "desktop", 999, "idle", { revision: 7 }),
       },
     })
-    const state = organisationLoaded(early, {
-      organisation: testOrganisation(),
+    const state = overviewLoaded(early, {
+      overview: testOverview(),
       draftId: "x",
     })
     expect(state.sessions.a).toMatchObject({ status: "idle", revision: 7 })
     expect(state.sessions.b.revision).toBe(1)
   })
 
-  it("does not bring back a session removed before an older organisation read", () => {
-    const removed = updateReceived(initialWorkspace, {
-      update: { kind: "session-removed", sessionId: "b", revision: 2 },
+  it("does not bring back a session removed before an older overview read", () => {
+    const removed = sessionRemoved(initialWorkspace, {
+      sessionId: "b",
+      revision: 2,
+      draftId: "fresh",
     })
-    const state = organisationLoaded(removed, {
-      organisation: testOrganisation(),
+    const state = overviewLoaded(removed, {
+      overview: testOverview(),
       draftId: "x",
     })
     expect(state.sessions.b).toBeUndefined()
@@ -421,12 +432,12 @@ describe("replacements out of order", () => {
         session: summary("b", "desktop", 1, "idle", { revision: 9 }),
       },
     })
-    const stale = updateReceived(newer, {
-      update: { kind: "session-removed", sessionId: "b", revision: 4 },
-    })
+    const stale = sessionRemoved(newer, { sessionId: "b", revision: 4, draftId: "fresh" })
     expect(stale).toBe(newer)
-    const removed = updateReceived(loaded(), {
-      update: { kind: "session-removed", sessionId: "c", revision: 6 },
+    const removed = sessionRemoved(loaded(), {
+      sessionId: "c",
+      revision: 6,
+      draftId: "fresh",
     })
     const older = updateReceived(removed, {
       update: {
@@ -442,24 +453,24 @@ describe("replacements out of order", () => {
       },
     })
     expect(relisted.sessions.c.revision).toBe(7)
-    expect(relisted.removed).toEqual({})
+    expect(relisted.removed).toEqual([])
   })
 
   it("applies a removal the source repeats once", () => {
-    const removed = updateReceived(loaded(), {
-      update: { kind: "session-removed", sessionId: "c", revision: 2 },
+    const removed = sessionRemoved(loaded(), {
+      sessionId: "c",
+      revision: 2,
+      draftId: "fresh",
     })
     expect(
-      updateReceived(removed, {
-        update: { kind: "session-removed", sessionId: "c", revision: 2 },
-      }).sessions,
+      sessionRemoved(removed, { sessionId: "c", revision: 2, draftId: "fresh" }).sessions,
     ).toBe(removed.sessions)
   })
 
-  it("keeps the view it has when the organisation is read again", () => {
+  it("keeps the view it has when the overview is read again", () => {
     const viewing = { ...loaded(), view: { kind: "status", status: "running" } as const }
-    const again = organisationLoaded(viewing, {
-      organisation: testOrganisation(),
+    const again = overviewLoaded(viewing, {
+      overview: testOverview(),
       draftId: "x",
     })
     expect(again.view).toEqual(viewing.view)
@@ -470,5 +481,176 @@ describe("replacements out of order", () => {
     expect(transcriptRetried(failed, { sessionId: "a" }).transcriptFailures).toEqual({})
     const state = loaded()
     expect(transcriptRetried(state, { sessionId: "a" })).toBe(state)
+  })
+})
+
+describe("the overview read again: the resync", () => {
+  const without = (...ids: string[]) => ({
+    ...testOverview(),
+    sessions: testOverview().sessions.filter((session) => !ids.includes(session.id)),
+  })
+
+  it("takes out a session it no longer lists, closing its pane, and keeps it out", () => {
+    const two = openBeside(loaded(), { sessionId: "c", room: roomy })
+    const resynced = overviewLoaded(overviewRequested(two), {
+      overview: without("c"),
+      draftId: "x",
+    })
+    expect(resynced.sessions.c).toBeUndefined()
+    expect(shown(resynced)).toEqual(["a"])
+    // Taken out at the revision held: an older summary stays out, a newer one lists it again.
+    expect(resynced.removed).toEqual([{ sessionId: "c", revision: 1 }])
+    const stale = updateReceived(resynced, {
+      update: { kind: "session", session: summary("c", "desktop", 1) },
+    })
+    expect(stale.sessions.c).toBeUndefined()
+    const relisted = updateReceived(resynced, {
+      update: {
+        kind: "session",
+        session: summary("c", "desktop", 1, "idle", { revision: 2 }),
+      },
+    })
+    expect(relisted.sessions.c.revision).toBe(2)
+  })
+
+  it("starts the last pane over when the session it shows is no longer listed", () => {
+    const resynced = overviewLoaded(overviewRequested(loaded()), {
+      overview: without("a"),
+      draftId: "fresh",
+    })
+    expect(shown(resynced)).toEqual(["fresh"])
+    expect(resynced.drafts.fresh.channelId).toBe("desktop")
+  })
+
+  it("takes out a session listed in a channel the overview no longer lists", () => {
+    const overview = testOverview()
+    const resynced = overviewLoaded(overviewRequested(loaded()), {
+      overview: {
+        ...overview,
+        channels: overview.channels.filter((channel) => channel.id !== "gateway"),
+      },
+      draftId: "x",
+    })
+    expect(resynced.sessions.d).toBeUndefined()
+    expect(Object.keys(resynced.sessions).sort()).toEqual(["a", "b", "c"])
+  })
+
+  it("keeps a session the stream brought while the read was on its way", () => {
+    const asked = overviewRequested(loaded())
+    const brought = updateReceived(asked, {
+      update: { kind: "session", session: summary("z", "gateway", 900) },
+    })
+    const resynced = overviewLoaded(brought, { overview: testOverview(), draftId: "x" })
+    expect(resynced.sessions.z).toBeDefined()
+    expect(resynced.reading).toBeNull()
+    // Heard before the read was asked, it is not: the read is the newer word.
+    const early = updateReceived(loaded(), {
+      update: { kind: "session", session: summary("z", "gateway", 900) },
+    })
+    const reread = overviewLoaded(overviewRequested(early), {
+      overview: testOverview(),
+      draftId: "x",
+    })
+    expect(reread.sessions.z).toBeUndefined()
+  })
+
+  it("keeps what the stream brought until the last of two reads on their way answers", () => {
+    const twice = overviewRequested(overviewRequested(loaded()))
+    const brought = updateReceived(twice, {
+      update: { kind: "session", session: summary("z", "gateway", 900) },
+    })
+    const first = overviewLoaded(brought, { overview: testOverview(), draftId: "x" })
+    expect(first.sessions.z).toBeDefined()
+    expect(first.reading).toEqual({ reads: 1, heard: ["z"] })
+    const second = overviewLoaded(first, { overview: testOverview(), draftId: "y" })
+    expect(second.sessions.z).toBeDefined()
+    expect(second.reading).toBeNull()
+  })
+
+  it("keeps a session the source has not spoken of yet: it is the window's own", () => {
+    const drafted = createDraft(loaded(), { draftId: "new" })
+    const started = messageSent(drafted, {
+      sessionId: "new",
+      message: { id: "m1", role: "user", at: 1, parts: [{ kind: "text", text: "hi" }] },
+    })
+    const resynced = overviewLoaded(overviewRequested(started), {
+      overview: testOverview(),
+      draftId: "x",
+    })
+    expect(resynced.sessions.new.revision).toBe(0)
+  })
+
+  it("looks at another channel when the one looked at is no longer listed", () => {
+    const overview = testOverview()
+    const resynced = overviewLoaded(overviewRequested(loaded()), {
+      overview: {
+        ...overview,
+        channels: overview.channels.filter((channel) => channel.id !== "desktop"),
+        sessions: overview.sessions.filter((session) => session.channelId !== "desktop"),
+      },
+      draftId: "x",
+    })
+    expect(resynced.view).toEqual({ kind: "channel", channelId: "empty" })
+  })
+})
+
+describe("a removal's revision", () => {
+  it("is counted against the summary's revision, never the conversation's", () => {
+    // The summary is at 1 and the conversation at 5: a removal at 2 outranks the summary.
+    const held = transcriptLoaded(loaded(), { transcript: transcript("a", 5) })
+    const removed = sessionRemoved(held, { sessionId: "a", revision: 2, draftId: "x" })
+    expect(removed.sessions.a).toBeUndefined()
+    // The summary is at 3 and the conversation at 1: a removal at 2 is older than it.
+    const newer = updateReceived(loaded(), {
+      update: {
+        kind: "session",
+        session: summary("c", "desktop", 1, "idle", { revision: 3 }),
+      },
+    })
+    expect(sessionRemoved(newer, { sessionId: "c", revision: 2, draftId: "x" })).toBe(
+      newer,
+    )
+  })
+})
+
+describe("what is kept of sessions no pane shows", () => {
+  it("keeps every shown conversation, and the most recently active few of the rest", () => {
+    const sessions = Array.from({ length: retention.unshownConversations + 2 }, (_, i) =>
+      summary(`s${i}`, "gateway", 1000 + i),
+    )
+    const state = overviewLoaded(initialWorkspace, {
+      overview: {
+        ...testOverview(),
+        sessions: [...testOverview().sessions, ...sessions],
+      },
+      draftId: "x",
+    })
+    const held = sessions.reduce(
+      (current, session) =>
+        updateReceived(current, {
+          update: { kind: "transcript", transcript: transcript(session.id, 2) },
+        }),
+      updateReceived(state, {
+        update: { kind: "transcript", transcript: transcript("a", 2) },
+      }),
+    )
+    const kept = Object.keys(held.transcripts)
+    // "a" is shown, and the eight newest of the ten others stay.
+    expect(kept).toContain("a")
+    expect(kept).toHaveLength(retention.unshownConversations + 1)
+    expect(kept).not.toContain("s0")
+    expect(kept).not.toContain("s1")
+    expect(kept).toContain("s2")
+  })
+
+  it("remembers the newest removals, up to its limit", () => {
+    const removed = Array.from({ length: retention.removals + 1 }, (_, i) => i).reduce(
+      (state, i) =>
+        sessionRemoved(state, { sessionId: `gone-${i}`, revision: 1, draftId: "x" }),
+      loaded(),
+    )
+    expect(removed.removed).toHaveLength(retention.removals)
+    expect(removed.removed[0].sessionId).toBe("gone-1")
+    expect(removed.removed.at(-1)?.sessionId).toBe(`gone-${retention.removals}`)
   })
 })

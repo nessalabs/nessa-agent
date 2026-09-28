@@ -1,11 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "@nessa-ui/react/dropdown-menu"
+import { useLayoutEffect, useRef, useState, type CSSProperties } from "react"
 import { ModelPicker, type ModelPickerGroup } from "@nessa-ui/react/model-picker"
 import {
   ComposerAccessMode,
@@ -21,11 +14,20 @@ import {
   defaultComposerModel,
   defaultThinkingLevel,
   fastModeFor,
+  shortModelName,
   thinkingLevelsFor,
   type ComposerModel,
 } from "../model/composer-options"
 import { nextPageMode } from "../model/page-mode"
 import { DesktopIcon } from "./icons"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  MenuItem,
+  MenuLabel,
+} from "./menu"
+import { tooltip } from "./tooltip"
 
 /**
  * A provider's mark on a small glass tile, like an app icon: the agent's own
@@ -88,6 +90,8 @@ export function Composer({
   initialModel,
   onModelChange,
   onSend,
+  text,
+  onTextChange,
   placeholder = "What would you like to work on?",
 }: {
   /** Whether the composer shows as a full writing page rather than a card. */
@@ -99,9 +103,16 @@ export function Composer({
   onModelChange?: (model: { provider: string; modelId: string }) => void
   /** Sends a turn; without it nothing can be sent and the send button says so. */
   onSend?: (text: string) => void
+  /**
+   * What is typed and not sent, held by whoever owns it — the workspace keeps
+   * a session's in its state, so it outlives a change of layout — and told of
+   * every change. Sending empties it.
+   */
+  text: string
+  onTextChange: (text: string) => void
   placeholder?: string
 }) {
-  const [draft, setDraft] = useState("")
+  const draft = text
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // Measured after each edit, before paint, so the layout changes with the
@@ -113,10 +124,10 @@ export function Composer({
     if (next !== page) onPageChange(next)
   }, [draft, page, onPageChange])
   const send = () => {
-    const text = draft.trim()
-    if (!onSend || text === "") return
-    onSend(text)
-    setDraft("")
+    const message = draft.trim()
+    if (!onSend || message === "") return
+    onSend(message)
+    onTextChange("")
   }
   const [model, setModel] = useState(
     () =>
@@ -157,7 +168,7 @@ export function Composer({
           placeholder={placeholder}
           rows={2}
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => onTextChange(event.target.value)}
           onKeyDown={(event) => {
             // Return sends; Shift-Return, and Return while composing an IME word, do not.
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing)
@@ -170,22 +181,35 @@ export function Composer({
       <div className="desktop-composer-row">
         <div className="desktop-composer-controls">
           <ProjectMenu />
-          <ModelPicker
-            groups={pickerGroups}
-            value={model && { providerId: model.provider, modelId: model.modelId }}
-            onValueChange={({ providerId, modelId }) => {
-              const next = findComposerModel(providerId, modelId)
-              if (!next) return
-              setModel(next)
-              onModelChange?.({ provider: next.provider, modelId: next.modelId })
-            }}
-            side="top"
-            align="start"
-            sideOffset={10}
-            placeholder="Choose model"
-            className="desktop-chip desktop-chip-model"
-            contentClassName="desktop-popover desktop-model-picker"
-          />
+          <span
+            className="desktop-tip-anchor"
+            // In a narrow composer the chip shows this, in place of the whole name.
+            style={
+              {
+                "--desktop-model-short": JSON.stringify(
+                  model ? shortModelName(model) : "",
+                ),
+              } as CSSProperties
+            }
+            {...tooltip("Model", { side: "above" })}
+          >
+            <ModelPicker
+              groups={pickerGroups}
+              value={model && { providerId: model.provider, modelId: model.modelId }}
+              onValueChange={({ providerId, modelId }) => {
+                const next = findComposerModel(providerId, modelId)
+                if (!next) return
+                setModel(next)
+                onModelChange?.({ provider: next.provider, modelId: next.modelId })
+              }}
+              side="top"
+              align="start"
+              sideOffset={10}
+              placeholder="Choose model"
+              className="desktop-chip desktop-chip-model"
+              contentClassName="desktop-popover desktop-model-picker"
+            />
+          </span>
         </div>
         <div className="desktop-composer-controls">
           <ComposerAccessMode
@@ -193,32 +217,45 @@ export function Composer({
             onValueChange={setAccess}
             className="desktop-chip"
             contentClassName="desktop-popover"
+            // The window's own tooltip names it; no second, system one.
+            title=""
+            {...tooltip("Access", { side: "above" })}
           />
-          <ModelThinkingControl
-            levels={levels}
-            value={thinking}
-            onValueChange={setThinking}
-            className="desktop-chip"
-            contentClassName="desktop-popover"
-            sliderLabel="Thinking"
-            align="end"
-            fastMode={
-              fastModeFor(model) ? { pressed: fast, onPressedChange: setFast } : undefined
-            }
-            icon={
-              <>
-                <DesktopIcon name="thinking" />
-                {fastOn ? (
-                  <DesktopIcon name="fast" className="desktop-fast-mark" />
-                ) : null}
-              </>
-            }
-          />
+          <span
+            className="desktop-tip-anchor"
+            {...tooltip("Thinking", { side: "above" })}
+          >
+            <ModelThinkingControl
+              levels={levels}
+              value={thinking}
+              onValueChange={setThinking}
+              className="desktop-chip"
+              contentClassName="desktop-popover"
+              sliderLabel="Thinking"
+              align="end"
+              fastMode={
+                fastModeFor(model)
+                  ? { pressed: fast, onPressedChange: setFast }
+                  : undefined
+              }
+              icon={
+                <>
+                  <DesktopIcon name="thinking" />
+                  {fastOn ? (
+                    <DesktopIcon name="fast" className="desktop-fast-mark" />
+                  ) : null}
+                </>
+              }
+            />
+          </span>
           <button
             type="submit"
             className="desktop-send"
             aria-label="Send"
-            title={onSend ? "Send" : "Chat isn’t connected yet"}
+            {...tooltip(onSend ? "Send" : "Chat isn’t connected yet", {
+              shortcut: onSend ? "↩" : undefined,
+              side: "above",
+            })}
             disabled={!onSend || draft.trim() === ""}
           >
             <DesktopIcon name="send" />
@@ -241,23 +278,19 @@ function ProjectMenu() {
           type="button"
           className="desktop-chip desktop-chip-project"
           aria-label="Project: none chosen"
+          {...tooltip("Project", { side: "above" })}
         >
           <DesktopIcon name="folder" />
           <span>Project</span>
           <DesktopIcon name="chevronDown" className="desktop-chip-chevron" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent
-        side="top"
-        align="start"
-        sideOffset={10}
-        className="desktop-popover desktop-project-menu"
-      >
-        <DropdownMenuLabel className="desktop-menu-label">Project</DropdownMenuLabel>
-        <DropdownMenuItem disabled title="Needs the native folder picker">
+      <DropdownMenuContent side="top" align="start" sideOffset={10}>
+        <MenuLabel>Project</MenuLabel>
+        <MenuItem disabled {...tooltip("Needs the native folder picker")}>
           <DesktopIcon name="folderAdd" />
           Open folder…
-        </DropdownMenuItem>
+        </MenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

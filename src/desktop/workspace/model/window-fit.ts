@@ -5,6 +5,7 @@
  * this module computes; it does not clamp them again.
  */
 import { paneLimits } from "./pane-layout"
+import { columnsFit } from "./pane-sizing"
 
 export interface ColumnLimits {
   readonly min: number
@@ -49,9 +50,10 @@ export interface SideColumns {
 }
 
 /**
- * Folds the side columns a window `windowWidth` wide cannot afford beside
- * `columns` columns of panes: the sidebar first, then the session list, as
- * Mail does. Returns the same value when nothing folds.
+ * Which side columns a window `windowWidth` wide can draw beside `columns`
+ * columns of panes, each at the readable width (`columnsFit`, the same rule
+ * the panes are fitted by): the sidebar folds first, then the session list,
+ * as Mail does. Returns the same value when nothing folds.
  */
 export function foldToFit(
   side: SideColumns,
@@ -59,12 +61,12 @@ export function foldToFit(
   columns: number,
 ): SideColumns {
   const gutter = paneLimits.gutter
-  const need = columns * paneLimits.minWidth + (columns - 1) * gutter
   const outside = 2 * gutter
   const sidebar = side.sidebarOpen ? side.sidebarWidth + gutter : 0
   const list = side.sessionListOpen ? side.sessionListWidth + gutter : 0
-  if (windowWidth - outside - sidebar - list >= need) return side
-  const sessionListOpen = side.sessionListOpen && windowWidth - outside - list >= need
+  if (columnsFit(columns, windowWidth - outside - sidebar - list)) return side
+  const sessionListOpen =
+    side.sessionListOpen && columnsFit(columns, windowWidth - outside - list)
   if (!side.sidebarOpen && sessionListOpen === side.sessionListOpen) return side
   return { ...side, sidebarOpen: false, sessionListOpen }
 }

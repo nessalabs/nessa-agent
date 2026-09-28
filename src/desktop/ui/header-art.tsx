@@ -1,14 +1,5 @@
 import { useEffect, useRef, useState } from "react"
 import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@nessa-ui/react/dropdown-menu"
-import {
   useHeaderFraming,
   useHeaderImage,
   useTintFromPicture,
@@ -28,6 +19,15 @@ import {
 } from "../model/image-palette"
 import { HeaderPicture } from "./header-picture"
 import { DesktopIcon } from "./icons"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  MenuCheckboxItem,
+  MenuItem,
+  MenuLabel,
+  MenuSeparator,
+} from "./menu"
 import { NightScene } from "./night-scene"
 
 /** How long a refused file's reason stays on screen. */
@@ -161,40 +161,32 @@ export function HeaderArt() {
             side="bottom"
             align="end"
             sideOffset={8}
-            className="desktop-popover desktop-project-menu"
             // Adjusting takes focus to the picture; the menu must not take it back.
             onCloseAutoFocus={(event) => {
               if (adjustingRef.current) event.preventDefault()
             }}
           >
-            <DropdownMenuLabel className="desktop-menu-label">Header</DropdownMenuLabel>
+            <MenuLabel>Header</MenuLabel>
             {/* Choosing the scene again forgets the picture. */}
-            <DropdownMenuItem
+            <MenuItem
               onSelect={() => {
                 setDraft(null)
                 clear()
               }}
               disabled={!image}
             >
-              <DesktopIcon name="nightScene" />
               Night scene
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => input.current?.click()}>
-              <DesktopIcon name="chooseImage" />
+            </MenuItem>
+            <MenuItem onSelect={() => input.current?.click()}>
               Choose image or GIF…
-            </DropdownMenuItem>
+            </MenuItem>
             {image ? (
-              <DropdownMenuItem onSelect={() => setDraft(framing)}>
-                <DesktopIcon name="adjustImage" />
-                Adjust position…
-              </DropdownMenuItem>
+              <MenuItem onSelect={() => setDraft(framing)}>Adjust position…</MenuItem>
             ) : null}
             {image && palette.length > 0 ? (
               <>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel className="desktop-menu-label">
-                  Colors from your picture
-                </DropdownMenuLabel>
+                <MenuSeparator />
+                <MenuLabel>Colors from your picture</MenuLabel>
                 <div className="desktop-palette" aria-hidden="true">
                   {palette.map((entry) => (
                     <span
@@ -207,13 +199,13 @@ export function HeaderArt() {
                     />
                   ))}
                 </div>
-                <DropdownMenuCheckboxItem
+                <MenuCheckboxItem
                   checked={tint}
                   onCheckedChange={(checked) => setTint(checked === true)}
                   onSelect={(event) => event.preventDefault()}
                 >
                   Tint app from picture
-                </DropdownMenuCheckboxItem>
+                </MenuCheckboxItem>
               </>
             ) : null}
           </DropdownMenuContent>

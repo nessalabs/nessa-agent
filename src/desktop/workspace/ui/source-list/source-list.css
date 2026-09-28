@@ -53,14 +53,28 @@ html:not(.dark) .workspace-sidebar {
     visibility 0s linear var(--desktop-slow);
 }
 
-/* The window's row, inside the glass: empty, or a control at its far end. */
-.workspace-sidebar-top {
-  display: flex;
-  height: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
-  flex: none;
-  align-items: flex-start;
-  justify-content: flex-end;
-  padding: var(--desktop-control-inset);
+/*
+ * Revealed from the window's edge while folded (`useEdgePeek`, the same
+ * reveal as the classic shell and Settings): it slides in over the panes,
+ * more opaque than when docked since there is content under it, and lifted
+ * with a deeper shadow. It never fades, so its glass keeps its blur.
+ */
+.workspace[data-sidebar="closed"][data-peek] .workspace-sidebar {
+  z-index: 30;
+  visibility: visible;
+  transform: translate3d(0, 0, 0);
+  background: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--background) 94%, var(--foreground)) 86%,
+    transparent
+  );
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 9%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 7%, transparent),
+    0 24px 60px -12px rgb(0 0 0 / 60%);
+  transition:
+    transform 360ms var(--desktop-ease),
+    visibility 0s;
 }
 
 .workspace-sidebar-scroll {
@@ -365,8 +379,7 @@ html:not(.dark) .workspace-sidebar {
   color: var(--desktop-ink-2) !important;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .workspace-rise {
-    animation: none;
-  }
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .workspace-rise {
+  animation: none;
 }

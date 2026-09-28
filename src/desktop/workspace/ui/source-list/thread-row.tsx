@@ -1,9 +1,4 @@
 import { memo } from "react"
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuTrigger,
-} from "@nessa-ui/react/context-menu"
 import { shallowEqual } from "react-redux"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
@@ -11,13 +6,14 @@ import {
   selectSession,
   selectShownSessionIds,
 } from "../../adapters/store/selectors"
-import { useSessionDrag } from "../../adapters/dom/drag"
 import { useNow } from "../../adapters/dom/clock"
 import { commandLabel } from "../../adapters/dom/shortcuts"
 import { sessionTime } from "../../model/time-labels"
 import { AgentTile } from "../chrome/agent-tile"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { SessionMenuItems, useOpenFromRow } from "../session-actions"
+import { tooltip } from "../../../ui/tooltip"
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "../../../ui/menu"
 
 /**
  * A session hanging beneath its channel in the sidebar. `pinned`: one of the
@@ -42,7 +38,6 @@ export const ThreadRow = memo(function ThreadRow({
     shallowEqual,
   )
   const actions = useOpenFromRow()
-  const startDrag = useSessionDrag()
   if (!session) return null
   return (
     <li>
@@ -58,14 +53,14 @@ export const ThreadRow = memo(function ThreadRow({
             data-focused={(kind === "branch" && focused) || undefined}
             data-unread={(kind === "branch" && session.unread) || undefined}
             aria-current={focused ? "page" : undefined}
-            draggable
-            onDragStart={(event) => startDrag(event, session.id, session.title)}
-            onClick={(event) => actions.click(event, session.id)}
-            title={
-              kind === "branch"
+            // Carried by the pointer to a pane (`adapters/dom/drag.ts`).
+            data-drag-session={session.id}
+            onClick={(event) => actions.activate(event, session.id)}
+            {...tooltip(
+              kind === "branch" && actions.besideKey.on
                 ? `${session.title} — ${commandLabel}-click to open beside`
-                : session.title
-            }
+                : session.title,
+            )}
           >
             {kind === "pinned" ? (
               <>
@@ -82,7 +77,7 @@ export const ThreadRow = memo(function ThreadRow({
             )}
           </button>
         </ContextMenuTrigger>
-        <ContextMenuContent className="desktop-popover workspace-menu">
+        <ContextMenuContent>
           <SessionMenuItems sessionId={session.id} />
         </ContextMenuContent>
       </ContextMenu>

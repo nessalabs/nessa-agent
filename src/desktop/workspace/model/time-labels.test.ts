@@ -33,10 +33,10 @@ describe("a session's time", () => {
 
 describe("when a conversation started", () => {
   it("reads as a phrase, capitalised when it leads", () => {
-    expect(startedLabel(now, now)).toBe("started just now")
-    expect(startedLabel(at(27, 20, 38), now, true)).toBe("Started 22m ago")
-    expect(startedLabel(at(26, 8), now)).toBe("started yesterday")
-    expect(startedLabel(at(21, 10), now)).toBe("started Mon")
+    expect(startedLabel(now, now)).toBe("Started just now")
+    expect(startedLabel(at(27, 20, 38), now)).toBe("Started 22m ago")
+    expect(startedLabel(at(26, 8), now)).toBe("Started yesterday")
+    expect(startedLabel(at(21, 10), now)).toBe("Started Mon")
   })
 })
 

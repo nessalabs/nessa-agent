@@ -11,17 +11,24 @@
  * ```
  */
 import type { ThunkAction, UnknownAction } from "@reduxjs/toolkit"
-import { paneShowing, type PaneKey, type Side } from "../../model/pane-layout"
-import type { PaneRoom } from "../../model/pane-sizing"
+import {
+  paneShowing,
+  type Direction,
+  type PaneKey,
+  type Side,
+  type Zone,
+} from "../../model/pane-layout"
 import { messageText, type Message } from "../../model/transcript"
-import type {
-  ApprovalScope,
-  Initiator,
-  WorkspaceDependencies,
-  WorkspaceFailureReason,
+import {
+  failureReason,
+  type ApprovalScope,
+  type Initiator,
+  type WorkspaceDependencies,
+  type WorkspaceUpdate,
 } from "../../application/ports"
-import type { ModelRef } from "../../model/organisation"
-import { knownToSource } from "../../model/revision"
+import type { WorkspaceFailureReason } from "../../model/failure"
+import type { ModelRef } from "../../model/overview"
+import { fromSource, knownToSource } from "../../model/revision"
 import {
   answering,
   draftOf,
@@ -30,16 +37,14 @@ import {
   sessionOf,
   type WorkspaceState,
 } from "../../application/workspace-state"
-import { refusal } from "./refusal"
+import * as panesUseCases from "../../application/usecases/panes"
+import { dropOutcome, type Carried, type DropOutcome } from "../../model/drop"
+import { edgeSides as edgeSidesIn, type PaneEdge } from "../../model/pane-sizing"
 import { workspaceActions } from "./slice"
 
 export const {
   focusPane,
   openSession,
-  openBeside,
-  dropSession,
-  movePane,
-  nudgePane,
   resizePanes,
   equalizePanes,
   selectChannel,
@@ -54,14 +59,21 @@ export const {
   resizeSessionList,
   fitToWindow,
   chooseModel,
+  setComposerText,
   transcriptRetried: retryTranscript,
   unsentDiscarded: discardUnsent,
 } = workspaceActions
 
 const {
-  organisationLoaded,
-  organisationFailed,
+  openedBeside,
+  sessionDropped,
+  paneMoved,
+  paneNudged,
+  panesFitted,
+  overviewLoaded,
+  overviewFailed,
   updateReceived,
+  sessionRemoved,
   draftCreated,
   paneClosed,
   channelOpened,
@@ -71,7 +83,7 @@ const {
   sendFailed,
   approvalAnswering,
   approvalFailed,
-  organisationRequested,
+  overviewRequested,
 } = workspaceActions
 
 export type WorkspaceCommand<Result = void> = ThunkAction<
@@ -81,49 +93,211 @@ export type WorkspaceCommand<Result = void> = ThunkAction<
   UnknownAction
 >
 
-/** Reads the organisation and opens the workspace on it. */
+/**
+ * Reads the overview and opens the workspace on it. Open already, it is the
+ * resync for whatever the stream lost: a session the overview no longer lists
+ * is taken out, and the conversations the panes show are read again.
+ */
 export function loadWorkspace(): WorkspaceCommand<Promise<void>> {
   return async (dispatch, _getState, { workspace, newId }) => {
-    dispatch(organisationRequested())
+    dispatch(overviewRequested())
     try {
-      const organisation = await workspace.organisation()
-      dispatch(organisationLoaded({ organisation, draftId: newId() }))
+      const overview = await workspace.overview()
+      const unusable = overview.sessions.filter((session) => !fromSource(session))
+      // Let go by the reducer; said here, where the source's answer is still at hand.
+      if (unusable.length > 0)
+        console.warn(
+          "The overview listed sessions at a revision the source could not have sent",
+          unusable.map((session) => session.id),
+        )
+      dispatch(overviewLoaded({ overview, draftId: newId() }))
     } catch (error) {
-      dispatch(organisationFailed({ reason: refusal(error) }))
+      dispatch(overviewFailed({ reason: failureReason(error) }))
     }
   }
 }
 
-/** Follows the source's changes until the returned function is called. */
+/** The revision an update carries, whichever it is. */
+function revisionOf(update: WorkspaceUpdate): number {
+  switch (update.kind) {
+    case "session":
+      return update.session.revision
+    case "session-removed":
+      return update.revision
+    case "transcript":
+      return update.transcript.revision
+  }
+}
+
+/**
+ * Follows the source's changes until the returned function is called. An
+ * update at a revision the source could not have sent is let go, and said.
+ */
 export function followWorkspace(): WorkspaceCommand<() => void> {
   return (dispatch, _getState, { workspace, newId }) =>
-    workspace.subscribe((update) =>
+    workspace.subscribe((update) => {
+      if (!fromSource({ revision: revisionOf(update) })) {
+        console.warn("The workspace source sent an update it could not have sent", update)
+        return
+      }
       dispatch(
-        updateReceived({
-          update,
-          // A removal may empty the last pane, which then starts over.
-          draftId: update.kind === "session-removed" ? newId() : undefined,
-        }),
-      ),
-    )
+        update.kind === "session-removed"
+          ? // A removal may empty the last pane, which then starts over.
+            sessionRemoved({
+              sessionId: update.sessionId,
+              revision: update.revision,
+              draftId: newId(),
+            })
+          : updateReceived({ update }),
+      )
+    })
+}
+
+/**
+ * Opens a session beside a pane — the focused one unless `target` is named —
+ * on `side`, or, with none named, to the right, else below; only where the
+ * room the page measures allows (`arrange`). Where it will not fit, the
+ * session takes the target's place, unless `replace` is false. A session on
+ * screen already is focused where it is.
+ */
+export function openBeside(options: {
+  sessionId: string
+  target?: PaneKey
+  side?: Side
+  replace?: boolean
+}): WorkspaceCommand {
+  return (dispatch, _getState, { measure }) => {
+    dispatch(openedBeside({ ...options, room: measure() }))
+  }
+}
+
+/**
+ * A session dropped on a pane's zone: the middle opens it there, a side
+ * beside it there if the room allows, else nothing.
+ */
+export function dropSession(options: {
+  sessionId: string
+  target: PaneKey
+  zone: Zone
+}): WorkspaceCommand {
+  return (dispatch, _getState, { measure }) => {
+    dispatch(sessionDropped({ ...options, room: measure() }))
+  }
+}
+
+/**
+ * Moves a pane to a zone of another: the middle swaps them; a side only where
+ * the room allows.
+ */
+export function movePane(options: {
+  pane: PaneKey
+  target: PaneKey
+  zone: Zone
+}): WorkspaceCommand {
+  return (dispatch, _getState, { measure }) => {
+    dispatch(paneMoved({ ...options, room: measure() }))
+  }
+}
+
+/**
+ * The keyboard's move: a swap with the pane that way, or a column of its own
+ * where the room allows.
+ */
+export function nudgePane(options: {
+  pane: PaneKey
+  direction: Direction
+}): WorkspaceCommand {
+  return (dispatch, _getState, { measure }) => {
+    dispatch(paneNudged({ ...options, room: measure() }))
+  }
+}
+
+/**
+ * Holds every pane to the readable size in the room the page measures now —
+ * after the window or a side column changed it — rebalancing where it must.
+ */
+export function fitPanes(): WorkspaceCommand {
+  return (dispatch, _getState, { measure }) => {
+    const room = measure()
+    if (room) dispatch(panesFitted({ room }))
+  }
+}
+
+/**
+ * The two sides of an edge between panes, in pixels, as the room the page
+ * measures lays them out — where a drag of it starts from, whatever a flight
+ * of motion draws meanwhile.
+ */
+export function edgeSides(
+  edge: PaneEdge,
+): WorkspaceCommand<{ before: number; after: number } | null> {
+  return (_dispatch, getState, { measure }) => {
+    const panes = getState().workspace.panes
+    const room = measure()
+    return panes && room ? edgeSidesIn(panes, edge, room) : null
+  }
+}
+
+/**
+ * What dropping what is carried on `zone` of `target` would leave, in the
+ * room the page measures now: the outcome a drag previews, which the drop's
+ * command then commits (`dropOutcome`, one function for both).
+ */
+export function previewDrop({
+  carried,
+  target,
+  zone,
+}: {
+  carried: Carried
+  target: PaneKey
+  zone: Zone
+}): WorkspaceCommand<DropOutcome | null> {
+  return (_dispatch, getState, { measure }) => {
+    const panes = getState().workspace.panes
+    return panes ? dropOutcome(panes, carried, target, zone, measure()) : null
+  }
+}
+
+/**
+ * Whether a session could open beside `target` (the focused pane) on `side`,
+ * or on either when none is named, without taking its place. What a menu or
+ * the switcher asks before it offers "beside", so it never promises what the
+ * command will not do.
+ */
+export function canOpenBeside(
+  options: { target?: PaneKey; side?: Side } = {},
+): WorkspaceCommand<boolean> {
+  return (_dispatch, getState, { measure }) =>
+    panesUseCases.canOpenBeside(getState().workspace, { ...options, room: measure() })
+}
+
+/** Whether a pane can be moved that way: what the Move items ask before they offer it. */
+export function canNudge(options: {
+  pane: PaneKey
+  direction: Direction
+}): WorkspaceCommand<boolean> {
+  return (_dispatch, getState, { measure }) =>
+    panesUseCases.canNudge(getState().workspace, { ...options, room: measure() })
 }
 
 /**
  * Starts a new session as a draft: in the focused pane (or `target`), or
- * beside it on `beside`, in the channel being looked at unless one is named.
- * Returns the draft's id, or nothing when no pane took it.
+ * beside it on `beside` where the room allows, in the channel being looked
+ * at unless one is named. Returns the draft's id, or nothing when no pane
+ * took it.
  */
 export function newSession(
   options: {
     beside?: Side
     target?: PaneKey
     channelId?: string
-    room?: PaneRoom
   } = {},
 ): WorkspaceCommand<string | undefined> {
-  return (dispatch, getState, { newId }) => {
+  return (dispatch, getState, { newId, measure }) => {
     const draftId = newId()
-    dispatch(draftCreated({ draftId, ...options }))
+    dispatch(
+      draftCreated({ draftId, ...options, room: options.beside ? measure() : undefined }),
+    )
     return draftOf(getState().workspace, draftId) ? draftId : undefined
   }
 }
@@ -140,19 +314,26 @@ export function closePane({ pane }: { pane?: PaneKey } = {}): WorkspaceCommand {
   }
 }
 
-/** Opens a channel's newest session, in place or beside, or a new session when it has none. */
+/**
+ * Opens a channel's newest session, in place or beside, or a new session
+ * when it has none.
+ */
 export function openChannel({
   channelId,
   beside = false,
-  room,
 }: {
   channelId: string
   beside?: boolean
-  /** The focused pane's room, when opening beside it. */
-  room?: PaneRoom
 }): WorkspaceCommand {
-  return (dispatch, _getState, { newId }) => {
-    dispatch(channelOpened({ channelId, beside, draftId: newId(), room }))
+  return (dispatch, _getState, { newId, measure }) => {
+    dispatch(
+      channelOpened({
+        channelId,
+        beside,
+        draftId: newId(),
+        room: beside ? measure() : undefined,
+      }),
+    )
   }
 }
 
@@ -185,7 +366,7 @@ function deliver(
       dispatch(messageDelivered({ sessionId, messageId: message.id }))
       return "sent"
     } catch (error) {
-      const reason = refusal(error)
+      const reason = failureReason(error)
       dispatch(sendFailed({ sessionId, messageId: message.id, reason }))
       return outcomeOf(reason)
     }
@@ -301,7 +482,7 @@ function answer(
       await send(dependencies)
       return "sent"
     } catch (error) {
-      const reason = refusal(error)
+      const reason = failureReason(error)
       dispatch(approvalFailed({ sessionId, approvalId: approval.id, token, reason }))
       return outcomeOf(reason)
     }
@@ -347,7 +528,8 @@ export function deny({
 /**
  * What became of a pin or an archive asked of the source: `sent` and taken;
  * `refused` (logged); `unknown` when no answer came (`outcomeOf`); or
- * `not-asked` — nothing to change, or a session the source has not spoken of. Each call answers for itself: of two archives of
+ * `not-asked` — nothing to change, or a session the source has not spoken
+ * of. Each call answers for itself: of two archives of
  * one session asked at once, the second is `refused` as `unknown-session`
  * once the first has taken it; two pins asked at once are both `sent`, and
  * both on the source's record.
@@ -376,7 +558,7 @@ export function pinSession({
       await workspace.setPinned(sessionId, pinned, initiator)
       return "sent"
     } catch (error) {
-      const reason = refusal(error)
+      const reason = failureReason(error)
       console.warn("Could not pin a session", sessionId, reason)
       return outcomeOf(reason)
     }
@@ -404,7 +586,7 @@ export function archiveSession({
       await workspace.archive(sessionId, initiator)
       return "sent"
     } catch (error) {
-      const reason = refusal(error)
+      const reason = failureReason(error)
       console.warn("Could not archive a session", sessionId, reason)
       return outcomeOf(reason)
     }

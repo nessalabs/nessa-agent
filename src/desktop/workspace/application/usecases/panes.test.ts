@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest"
+import { dropOutcome } from "../../model/drop"
 import { focusedPane, paneCount, panesOf, paneLimits } from "../../model/pane-layout"
-import { astra, summary, testOrganisation } from "../../testing"
+import { astra, roomyGrid, summary, testOverview } from "../../testing"
 import { initialWorkspace, type WorkspaceState } from "../workspace-state"
 import {
+  canOpenBeside,
   closePane,
   createDraft,
   dropSession,
@@ -14,11 +16,11 @@ import {
   openSession,
   resizePanes,
 } from "./panes"
-import { organisationLoaded } from "./updates"
+import { overviewLoaded } from "./updates"
 
 const loaded = () =>
-  organisationLoaded(initialWorkspace, {
-    organisation: testOrganisation(),
+  overviewLoaded(initialWorkspace, {
+    overview: testOverview(),
     draftId: "unused",
   })
 
@@ -29,7 +31,7 @@ const drawn = (state: WorkspaceState) =>
 const keyOf = (state: WorkspaceState, sessionId: string) =>
   panesOf(state.panes!).find((pane) => pane.sessionId === sessionId)!.key
 
-const roomy = { width: 1100, height: 800, spare: 0 }
+const roomy = roomyGrid
 
 describe("opening a session", () => {
   it("shows it in the focused pane, leaving its read mark to the effect that owns it", () => {
@@ -58,9 +60,11 @@ describe("opening a session", () => {
     expect(openSession(state, { sessionId: "a", pane: 999 })).toBe(state)
   })
 
-  it("does nothing before the organisation arrives", () => {
+  it("does nothing before the overview arrives", () => {
     expect(openSession(initialWorkspace, { sessionId: "a" })).toBe(initialWorkspace)
-    expect(openBeside(initialWorkspace, { sessionId: "a" })).toBe(initialWorkspace)
+    expect(openBeside(initialWorkspace, { sessionId: "a", room: roomy })).toBe(
+      initialWorkspace,
+    )
   })
 })
 
@@ -85,7 +89,9 @@ describe("opening beside", () => {
       room: { width: 500, height: 800, spare: 240 },
     })
     expect(drawn(state)).toEqual([["a"], ["c"]])
-    expect(state.chrome.sidebarOpen).toBe(false)
+    // Folded for room, not by the person: their choice stands, and the fold lifts with room.
+    expect(state.chrome.sidebar.folded).toBe(true)
+    expect(state.chrome.sidebar.open).toBe(true)
   })
 
   it("takes the target's place when nothing fits, unless told not to", () => {
@@ -96,24 +102,27 @@ describe("opening beside", () => {
   })
 
   it("replaces the target in a full workspace, and starts no draft beside one", () => {
-    const organisation = testOrganisation()
-    let state = organisationLoaded(initialWorkspace, {
-      organisation: {
-        ...organisation,
-        sessions: [...organisation.sessions, summary("e", "gateway", 50)],
+    const overview = testOverview()
+    let state = overviewLoaded(initialWorkspace, {
+      overview: {
+        ...overview,
+        sessions: [...overview.sessions, summary("e", "gateway", 50)],
       },
       draftId: "unused",
     })
-    state = openBeside(state, { sessionId: "b" })
-    state = openBeside(state, { sessionId: "c", side: "bottom" })
+    state = openBeside(state, { sessionId: "b", room: roomy })
+    state = openBeside(state, { sessionId: "c", side: "bottom", room: roomy })
     state = openBeside(state, {
       sessionId: "d",
       target: keyOf(state, "a"),
       side: "bottom",
+      room: roomy,
     })
     expect(paneCount(state.panes!)).toBe(paneLimits.maxPanes)
-    expect(createDraft(state, { draftId: "new", beside: "right" })).toBe(state)
-    const replaced = openBeside(state, { sessionId: "e" })
+    expect(createDraft(state, { draftId: "new", beside: "right", room: roomy })).toBe(
+      state,
+    )
+    const replaced = openBeside(state, { sessionId: "e", room: roomy })
     expect(paneCount(replaced.panes!)).toBe(paneLimits.maxPanes)
     expect(focusedPane(replaced.panes!).sessionId).toBe("e")
     expect(panesOf(replaced.panes!).map((pane) => pane.sessionId)).not.toContain("d")
@@ -124,9 +133,9 @@ describe("dropping a session on a pane", () => {
   it("opens it in place in the middle, and beside on a side", () => {
     const state = loaded()
     const target = keyOf(state, "a")
-    expect(drawn(dropSession(state, { sessionId: "c", target, zone: "center" }))).toEqual(
-      [["c"]],
-    )
+    expect(
+      drawn(dropSession(state, { sessionId: "c", target, zone: "center", room: roomy })),
+    ).toEqual([["c"]])
     expect(
       drawn(dropSession(state, { sessionId: "c", target, zone: "left", room: roomy })),
     ).toEqual([["c"], ["a"]])
@@ -136,11 +145,12 @@ describe("dropping a session on a pane", () => {
   })
 
   it("focuses a session already on screen instead of moving it", () => {
-    const two = openBeside(loaded(), { sessionId: "c" })
+    const two = openBeside(loaded(), { sessionId: "c", room: roomy })
     const dropped = dropSession(two, {
       sessionId: "c",
       target: keyOf(two, "a"),
       zone: "center",
+      room: roomy,
     })
     expect(drawn(dropped)).toEqual([["a"], ["c"]])
     expect(focusedPane(dropped.panes!).sessionId).toBe("c")
@@ -156,7 +166,7 @@ describe("new sessions", () => {
   })
 
   it("starts one beside, without covering a conversation when the workspace is full", () => {
-    const state = createDraft(loaded(), { draftId: "new", beside: "right" })
+    const state = createDraft(loaded(), { draftId: "new", beside: "right", room: roomy })
     expect(drawn(state)).toEqual([["a"], ["new"]])
   })
 
@@ -164,7 +174,7 @@ describe("new sessions", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
     const replaced = openSession(drafted, { sessionId: "c" })
     expect(replaced.drafts).toEqual({})
-    const beside = createDraft(loaded(), { draftId: "new", beside: "right" })
+    const beside = createDraft(loaded(), { draftId: "new", beside: "right", room: roomy })
     const closed = closePane(beside, { pane: keyOf(beside, "new") })
     expect(closed.drafts).toEqual({})
   })
@@ -183,7 +193,7 @@ describe("new sessions", () => {
 
 describe("closing panes", () => {
   it("closes a pane and gives its room to its neighbour", () => {
-    const two = openBeside(loaded(), { sessionId: "c" })
+    const two = openBeside(loaded(), { sessionId: "c", room: roomy })
     expect(drawn(closePane(two, { pane: keyOf(two, "c") }))).toEqual([["a"]])
   })
 
@@ -211,17 +221,18 @@ describe("closing panes", () => {
 
 describe("moving, nudging, resizing", () => {
   it("moves a pane and focuses it", () => {
-    const two = openBeside(loaded(), { sessionId: "c" })
+    const two = openBeside(loaded(), { sessionId: "c", room: roomy })
     const moved = movePane(two, {
       pane: keyOf(two, "c"),
       target: keyOf(two, "a"),
       zone: "top",
+      room: roomy,
     })
     expect(drawn(moved)).toEqual([["c", "a"]])
   })
 
   it("asks the sidebar to step aside for a moved pane's new column", () => {
-    const stacked = openBeside(loaded(), { sessionId: "c", side: "bottom" })
+    const stacked = openBeside(loaded(), { sessionId: "c", side: "bottom", room: roomy })
     const moved = movePane(stacked, {
       pane: keyOf(stacked, "c"),
       target: keyOf(stacked, "a"),
@@ -229,11 +240,11 @@ describe("moving, nudging, resizing", () => {
       room: { width: 500, height: 400, spare: 240 },
     })
     expect(drawn(moved)).toEqual([["a"], ["c"]])
-    expect(moved.chrome.sidebarOpen).toBe(false)
+    expect(moved.chrome.sidebar.folded).toBe(true)
   })
 
   it("refuses a move that would leave a pane unreadable, whoever asks", () => {
-    const stacked = openBeside(loaded(), { sessionId: "c", side: "bottom" })
+    const stacked = openBeside(loaded(), { sessionId: "c", side: "bottom", room: roomy })
     const narrow = { width: 500, height: 400, spare: 0 }
     const refused = movePane(stacked, {
       pane: keyOf(stacked, "c"),
@@ -243,7 +254,7 @@ describe("moving, nudging, resizing", () => {
     })
     expect(refused).toBe(stacked)
     const short = { width: 900, height: 300, spare: 0 }
-    const two = openBeside(loaded(), { sessionId: "c" })
+    const two = openBeside(loaded(), { sessionId: "c", room: roomy })
     expect(
       movePane(two, {
         pane: keyOf(two, "c"),
@@ -257,15 +268,16 @@ describe("moving, nudging, resizing", () => {
   it("does nothing for a pane dropped on itself", () => {
     const state = loaded()
     const key = keyOf(state, "a")
-    expect(movePane(state, { pane: key, target: key, zone: "left" })).toBe(state)
+    expect(movePane(state, { pane: key, target: key, zone: "left", room: roomy })).toBe(
+      state,
+    )
   })
 
   it("nudges, resizes and evens out through the layout's rules", () => {
-    const two = openBeside(loaded(), { sessionId: "c" })
-    expect(drawn(nudgePane(two, { pane: keyOf(two, "c"), direction: "left" }))).toEqual([
-      ["c"],
-      ["a"],
-    ])
+    const two = openBeside(loaded(), { sessionId: "c", room: roomy })
+    expect(
+      drawn(nudgePane(two, { pane: keyOf(two, "c"), direction: "left", room: roomy })),
+    ).toEqual([["c"], ["a"]])
     const resized = resizePanes(two, {
       edge: { axis: "x", column: 0 },
       fraction: 0.7,
@@ -275,5 +287,64 @@ describe("moving, nudging, resizing", () => {
     expect(equalizePanes(resized).panes!.columns.map((column) => column.share)).toEqual([
       1, 1,
     ])
+  })
+})
+
+describe("what a split promises", () => {
+  it("splits right only to the right: where no column fits, nothing, never a silent split down", () => {
+    const narrow = { width: 500, height: 800, spare: 0 }
+    const state = loaded()
+    expect(createDraft(state, { draftId: "new", beside: "right", room: narrow })).toBe(
+      state,
+    )
+    expect(canOpenBeside(state, { side: "right", room: narrow })).toBe(false)
+    // Asked for no side, "beside" may stack: a row fits.
+    expect(canOpenBeside(state, { room: narrow })).toBe(true)
+  })
+
+  it("offers beside nowhere in a full workspace, so no menu promises it", () => {
+    let state = loaded()
+    for (const [sessionId, side] of [
+      ["b", "right"],
+      ["c", "bottom"],
+      ["d", "bottom"],
+    ] as const)
+      state = openBeside(state, { sessionId, side, room: roomy })
+    expect(paneCount(state.panes!)).toBe(paneLimits.maxPanes)
+    expect(canOpenBeside(state, { room: roomy })).toBe(false)
+  })
+})
+
+describe("a drop commits what its drag previewed", () => {
+  const zones = ["left", "right", "top", "bottom", "center"] as const
+
+  it("leaves exactly the previewed layout, for every zone, pane or session", () => {
+    const two = openBeside(loaded(), { sessionId: "c", side: "right", room: roomy })
+    const [first, second] = panesOf(two.panes!).map((pane) => pane.key)
+    for (const zone of zones) {
+      const preview = dropOutcome(
+        two.panes!,
+        { kind: "pane", pane: second },
+        first,
+        zone,
+        roomy,
+      )
+      const moved = movePane(two, { pane: second, target: first, zone, room: roomy })
+      expect(moved.panes).toEqual(preview ? preview.layout : two.panes)
+      const shown = dropOutcome(
+        two.panes!,
+        { kind: "session", sessionId: "d" },
+        first,
+        zone,
+        roomy,
+      )
+      const dropped = dropSession(two, {
+        sessionId: "d",
+        target: first,
+        zone,
+        room: roomy,
+      })
+      expect(dropped.panes).toEqual(shown ? shown.layout : two.panes)
+    }
   })
 })

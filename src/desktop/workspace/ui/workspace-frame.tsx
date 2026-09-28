@@ -1,14 +1,12 @@
 /**
  * What a layout lends the components it arranges: the chords it binds (for
- * menu labels), how to measure a pane's room before a split, its quick
- * switcher if it has one, and which channel its session list shows, so a
+ * menu labels), its quick switcher if it has one, and which channel its session list shows, so a
  * conversation's heading need not repeat it. The frame's functions keep
  * their identity for the layout's life; the listed channel is its own
  * context, so a change of view renders only the headings.
  */
 import { createContext, useContext } from "react"
-import type { PaneKey } from "../model/pane-layout"
-import type { PaneRoom } from "../model/pane-sizing"
+import type { EdgePeekControls } from "../../adapters/use-edge-peek"
 
 /** Everything a key or a menu can ask of a layout. */
 export type ShortcutCommand =
@@ -36,17 +34,15 @@ export type ShortcutCommand =
 export interface WorkspaceFrame {
   /** The chord bound to a command in this layout, written out; none when it has none. */
   shortcut(command: ShortcutCommand): string | undefined
-  /** A pane's room for a split, the sidebar's included; nothing when it is not on screen. */
-  roomOf(pane: PaneKey): PaneRoom | undefined
-  /** Opens this layout's quick switcher; absent in a layout without one. */
-  openSwitcher?: (mode: "open" | "split") => void
+  /** Opens the window's quick switcher: to jump, or to pick what opens beside. */
+  openSwitcher: (mode: "open" | "split") => void
   /** Brings a session's row into view and focus, once a reveal has opened its channel. */
   showRow(sessionId: string): void
 }
 
 const FrameContext = createContext<WorkspaceFrame>({
   shortcut: () => undefined,
-  roomOf: () => undefined,
+  openSwitcher: () => undefined,
   showRow: () => undefined,
 })
 
@@ -57,3 +53,11 @@ export const useWorkspaceFrame = () => useContext(FrameContext)
 const ListedChannelContext = createContext<string | null>(null)
 export const ListedChannelProvider = ListedChannelContext.Provider
 export const useListedChannel = () => useContext(ListedChannelContext)
+
+/**
+ * The folded sidebar's Dock-style reveal (`useEdgePeek`), for the sidebar to
+ * take part in: shown over the panes while the pointer or focus is in it.
+ */
+const SidebarPeekContext = createContext<EdgePeekControls | null>(null)
+export const SidebarPeekProvider = SidebarPeekContext.Provider
+export const useSidebarPeek = () => useContext(SidebarPeekContext)

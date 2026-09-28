@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { panesOf } from "../../model/pane-layout"
 import type { Message } from "../../model/transcript"
 import { emptyTranscript } from "../../model/transcript"
-import { astra, summary, testOrganisation } from "../../testing"
+import { astra, summary, testOverview } from "../../testing"
 import {
   initialWorkspace,
   modelForNextTurn,
@@ -13,6 +13,7 @@ import {
   approvalAnswering,
   approvalFailed,
   chooseModel,
+  composerTextChanged,
   messageDelivered,
   messageResent,
   messageSent,
@@ -20,11 +21,16 @@ import {
   sessionRead,
   unsentDiscarded,
 } from "./sessions"
-import { organisationLoaded, transcriptLoaded, updateReceived } from "./updates"
+import {
+  overviewLoaded,
+  sessionRemoved,
+  transcriptLoaded,
+  updateReceived,
+} from "./updates"
 
 const loaded = () =>
-  organisationLoaded(initialWorkspace, {
-    organisation: testOrganisation(),
+  overviewLoaded(initialWorkspace, {
+    overview: testOverview(),
     draftId: "unused",
   })
 
@@ -120,7 +126,7 @@ describe("sending", () => {
     })
     expect(failed.outbox.c[0].delivery).toEqual({
       state: "failed",
-      reason: "Nessa couldn’t reach your sessions.",
+      reason: "unavailable",
     })
     expect(failed.sessions.c).toBe(sent.sessions.c)
   })
@@ -282,7 +288,7 @@ describe("what the person changes", () => {
     expect(failed.answers.b).toEqual({
       approvalId: "ap",
       token: "t1",
-      failure: "This was already answered.",
+      failure: "not-waiting",
     })
     // An earlier answer's late refusal says nothing of the one on its way.
     expect(
@@ -394,5 +400,50 @@ describe("what the person changes", () => {
     const discarded = unsentDiscarded(refused, { sessionId: "c", messageId: "m1" })
     expect(discarded.sessions.c).toBe(refused.sessions.c)
     expect(discarded.drafts).toEqual({})
+  })
+})
+
+describe("what is typed and not sent", () => {
+  const loadedState = () =>
+    overviewLoaded(initialWorkspace, { overview: testOverview(), draftId: "unused" })
+
+  it("is kept beside the session, whoever writes it, and outlives the pane showing another", () => {
+    const typed = composerTextChanged(loadedState(), {
+      sessionId: "a",
+      text: "half a thought",
+    })
+    const elsewhere = openSession(typed, { sessionId: "c" })
+    expect(elsewhere.composerText.a).toBe("half a thought")
+    const back = openSession(elsewhere, { sessionId: "a" })
+    expect(back.composerText.a).toBe("half a thought")
+  })
+
+  it("keeps nothing for an empty field, or for a session the window does not hold", () => {
+    const state = loadedState()
+    const typed = composerTextChanged(state, { sessionId: "a", text: "x" })
+    expect(composerTextChanged(typed, { sessionId: "a", text: "" }).composerText).toEqual(
+      {},
+    )
+    expect(composerTextChanged(state, { sessionId: "missing", text: "x" })).toBe(state)
+    expect(composerTextChanged(state, { sessionId: "constructor", text: "x" })).toBe(
+      state,
+    )
+  })
+
+  it("goes with its session: removed, or a new session no pane shows any more", () => {
+    const typed = composerTextChanged(loadedState(), { sessionId: "a", text: "x" })
+    const removed = sessionRemoved(typed, {
+      sessionId: "a",
+      revision: 2,
+      draftId: "fresh",
+    })
+    expect(removed.composerText).toEqual({})
+    const drafted = composerTextChanged(createDraft(loadedState(), { draftId: "new" }), {
+      sessionId: "new",
+      text: "y",
+    })
+    expect(drafted.composerText.new).toBe("y")
+    const replaced = openSession(drafted, { sessionId: "c" })
+    expect(replaced.composerText.new).toBeUndefined()
   })
 })

@@ -9,8 +9,19 @@
  * window for every change.
  */
 import { createSelector } from "@reduxjs/toolkit"
-import type { Channel, ModelRef, SessionSummary } from "../../model/organisation"
-import { focusedPane, paneCount, panesOf, type PaneKey } from "../../model/pane-layout"
+import {
+  byRecency,
+  type Channel,
+  type ModelRef,
+  type SessionSummary,
+} from "../../model/overview"
+import {
+  focusedPane,
+  paneByKey,
+  paneCount,
+  panesOf,
+  type PaneKey,
+} from "../../model/pane-layout"
 import {
   placements,
   type EdgePlacement,
@@ -26,9 +37,12 @@ import {
   type ChannelActivity,
   type SessionView,
 } from "../../model/session-groups"
+import type { WorkspaceFailureReason } from "../../model/failure"
 import type { Draft } from "../../model/session-lifecycle"
 import type { Message, Transcript } from "../../model/transcript"
 import {
+  channelOf,
+  drawnColumns,
   entry,
   modelForNextTurn,
   focusedChannel,
@@ -39,12 +53,20 @@ import {
 
 type Root = { workspace: WorkspaceState }
 
-export const selectStatus = (state: Root) => state.workspace.status
 export const selectFailure = (state: Root) => state.workspace.failure
 export const selectChrome = (state: Root): Chrome => state.workspace.chrome
-export const selectSidebarOpen = (state: Root) => state.workspace.chrome.sidebarOpen
+/** Whether the sidebar is drawn: the person's choice, unless the window folded it for room. */
+export const selectSidebarOpen = (state: Root) =>
+  drawnColumns(state.workspace.chrome).sidebar
+/** Whether the session list is drawn, as `selectSidebarOpen` says of the sidebar. */
 export const selectSessionListOpen = (state: Root) =>
-  state.workspace.chrome.sessionListOpen
+  drawnColumns(state.workspace.chrome).sessionList
+/** Whether the person has the session list open, drawn or folded for room: Settings shows their choice. */
+export const selectSessionListChosen = (state: Root) =>
+  state.workspace.chrome.sessionList.open
+/** How many columns of panes there are; the side columns are fitted around them. */
+export const selectColumnCount = (state: Root) =>
+  state.workspace.panes?.columns.length ?? 1
 export const selectView = (state: Root): SessionView => state.workspace.view
 export const selectPanes = (state: Root) => state.workspace.panes
 export const selectSections = (state: Root) => state.workspace.sections
@@ -67,6 +89,10 @@ const nothingSent: readonly Message[] = []
 export const selectOutbox = (state: Root, sessionId: string): readonly Message[] =>
   entry(state.workspace.outbox, sessionId) ?? nothingSent
 
+/** What is typed in a session's composer and not sent. */
+export const selectComposerText = (state: Root, sessionId: string): string =>
+  entry(state.workspace.composerText, sessionId) ?? ""
+
 /** The model a session's next message is sent with: chosen in its composer, else its own. */
 export const selectNextModel = (state: Root, sessionId: string): ModelRef | undefined =>
   modelForNextTurn(state.workspace, sessionId)
@@ -84,9 +110,10 @@ export const selectAnswer = (
 export const selectTranscriptFailure = (
   state: Root,
   sessionId: string,
-): string | undefined => entry(state.workspace.transcriptFailures, sessionId)
+): WorkspaceFailureReason | undefined =>
+  entry(state.workspace.transcriptFailures, sessionId)
 export const selectChannel = (state: Root, channelId: string): Channel | undefined =>
-  state.workspace.channels.find((channel) => channel.id === channelId)
+  channelOf(state.workspace, channelId)
 
 const listed = createSelector([selectSessions], (sessions) => Object.values(sessions))
 
@@ -102,7 +129,7 @@ const channelIdsBySection = createSelector([selectChannels], (channels) => {
 
 const noIds: readonly string[] = []
 
-/** A section's channels, as ids, in the organisation's order. */
+/** A section's channels, as ids, in the overview's order. */
 export const selectChannelIdsIn = (state: Root, sectionId: string): readonly string[] =>
   channelIdsBySection(state).get(sectionId) ?? noIds
 
@@ -134,18 +161,13 @@ export const selectFocusedSessionId = (state: Root): string | null =>
 /** The session a pane shows. */
 export const selectPaneSession = (state: Root, pane: PaneKey): string | null =>
   state.workspace.panes
-    ? (panesOf(state.workspace.panes).find((candidate) => candidate.key === pane)
-        ?.sessionId ?? null)
+    ? (paneByKey(state.workspace.panes, pane)?.sessionId ?? null)
     : null
 
 /** The sessions on screen, in reading order. */
 export const selectShownSessionIds = createSelector([selectPanes], (panes) =>
   panes ? panesOf(panes).map((pane) => pane.sessionId) : [],
 )
-
-/** Which pane, counting from one in reading order, shows a session; zero when none does. */
-export const selectPaneNumber = (state: Root, sessionId: string): number =>
-  selectShownSessionIds(state).indexOf(sessionId) + 1
 
 export const selectStatusCounts = createSelector([listed], statusCounts)
 
@@ -209,20 +231,29 @@ export const selectSectionCollapsed = (state: Root, sectionId: string) =>
   state.workspace.tree.collapsedSections.includes(sectionId)
 
 export interface ListGroup {
-  readonly status: SessionSummary["status"]
+  readonly id: string
   readonly label: string
   readonly ids: readonly string[]
 }
 
-/** The session list's groups for the current view and a search, as ids. */
-export function selectListGroups(state: Root, query: string): ListGroup[] {
+/**
+ * The session list's groups for the current view and a search, as ids;
+ * running sessions kept in a group above the rest unless `runningFirst` is
+ * off.
+ */
+export function selectListGroups(
+  state: Root,
+  query: string,
+  runningFirst = true,
+): ListGroup[] {
   const view = state.workspace.view
   return groupByStatus(
     listed(state).filter(
       (session) => inView(session, view) && matchesSearch(session, query),
     ),
+    { runningFirst },
   ).map((group) => ({
-    status: group.status,
+    id: group.id,
     label: group.label,
     ids: group.sessions.map((session) => session.id),
   }))
@@ -237,7 +268,8 @@ export function sameListGroups(
     a.length === b.length &&
     a.every(
       (group, index) =>
-        group.status === b[index].status &&
+        group.id === b[index].id &&
+        group.label === b[index].label &&
         group.ids.length === b[index].ids.length &&
         group.ids.every((id, row) => id === b[index].ids[row]),
     )
@@ -251,6 +283,6 @@ export const selectListedSessions = listed
 export const selectWaitingIds = createSelector([listed], (sessions) =>
   sessions
     .filter((session) => session.status === "needs-you")
-    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .sort(byRecency)
     .map((session) => session.id),
 )

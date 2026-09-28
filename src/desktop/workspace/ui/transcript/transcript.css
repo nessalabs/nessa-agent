@@ -380,16 +380,14 @@ html:not(.dark) .workspace-diff del {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .workspace-transcript-inner,
-  .workspace-transcript-inner > [data-new],
-  .workspace-live {
-    animation: none;
-  }
-
-  .workspace-shimmer {
-    animation: none;
-    background: none;
-    color: var(--desktop-muted);
-  }
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .workspace-transcript-inner,
+:root[data-motion="reduced"] .workspace-transcript-inner > [data-new],
+:root[data-motion="reduced"] .workspace-live {
+  animation: none;
+}
+:root[data-motion="reduced"] .workspace-shimmer {
+  animation: none;
+  background: none;
+  color: var(--desktop-muted);
 }

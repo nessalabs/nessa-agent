@@ -3,9 +3,10 @@
  * from the sidebar, folding and unfolding the sidebar's parts, and the side
  * columns themselves.
  */
-import { byRecency } from "../../model/organisation"
-import type { PaneRoom } from "../../model/pane-sizing"
-import { mostPressing } from "../../model/session-groups"
+import { byRecency } from "../../model/overview"
+import type { WorkspaceRoom } from "../../model/pane-sizing"
+import { chosen, fitted } from "../../../model/side-column"
+import { mostPressing, type AttentionStatus } from "../../model/session-groups"
 import {
   clampColumn,
   foldToFit,
@@ -14,6 +15,7 @@ import {
 } from "../../model/window-fit"
 import {
   channelOf,
+  drawnColumns,
   listedSessions,
   sessionOf,
   toggled,
@@ -32,7 +34,7 @@ export function selectChannel(
 ): WorkspaceState {
   if (!channelOf(state, channelId)) return state
   const viewed: WorkspaceState = { ...state, view: { kind: "channel", channelId } }
-  if (state.chrome.sessionListOpen) return viewed
+  if (drawnColumns(state.chrome).sessionList) return viewed
   const pick = mostPressing(
     listedSessions(state).filter((session) => session.channelId === channelId),
   )
@@ -42,7 +44,7 @@ export function selectChannel(
 /** Shows every session waiting on the person, or every one running. */
 export function selectStatusView(
   state: WorkspaceState,
-  { status }: { status: "needs-you" | "running" },
+  { status }: { status: AttentionStatus },
 ): WorkspaceState {
   return { ...state, view: { kind: "status", status } }
 }
@@ -58,7 +60,7 @@ export function openChannel(
     beside = false,
     draftId,
     room,
-  }: { channelId: string; beside?: boolean; draftId?: string; room?: PaneRoom },
+  }: { channelId: string; beside?: boolean; draftId?: string; room?: WorkspaceRoom },
 ): WorkspaceState {
   if (!channelOf(state, channelId)) return state
   const disclosed = setChannelOpen(
@@ -92,9 +94,8 @@ export function revealSession(
   if (!session || !channel) return state
   return setChannelOpen(
     {
-      ...state,
+      ...toggleSidebar(state, { open: true }),
       view: { kind: "channel", channelId: channel.id },
-      chrome: { ...state.chrome, sidebarOpen: true },
       tree: {
         ...state.tree,
         collapsedSections: toggled(
@@ -159,22 +160,27 @@ export function toggleShowAll(
   }
 }
 
+/**
+ * The person shows or hides the sidebar — `open`, else the other of what is
+ * drawn. Their choice, so a fold the window made for room lifts with it.
+ */
 export function toggleSidebar(
   state: WorkspaceState,
   { open }: { open?: boolean } = {},
 ): WorkspaceState {
-  const next = open ?? !state.chrome.sidebarOpen
-  if (next === state.chrome.sidebarOpen) return state
-  return { ...state, chrome: { ...state.chrome, sidebarOpen: next } }
+  const sidebar = chosen(state.chrome.sidebar, open)
+  if (sidebar === state.chrome.sidebar) return state
+  return { ...state, chrome: { ...state.chrome, sidebar } }
 }
 
+/** The person shows or hides the session list, as `toggleSidebar` does the sidebar. */
 export function toggleSessionList(
   state: WorkspaceState,
   { open }: { open?: boolean } = {},
 ): WorkspaceState {
-  const next = open ?? !state.chrome.sessionListOpen
-  if (next === state.chrome.sessionListOpen) return state
-  return { ...state, chrome: { ...state.chrome, sessionListOpen: next } }
+  const sessionList = chosen(state.chrome.sessionList, open)
+  if (sessionList === state.chrome.sessionList) return state
+  return { ...state, chrome: { ...state.chrome, sessionList } }
 }
 
 export function resizeSidebar(
@@ -196,9 +202,12 @@ export function resizeSessionList(
 }
 
 /**
- * Folds the side columns a window this wide cannot afford beside the panes.
- * The widths are the ones drawn, which the layout measured; a layout without
- * a session list passes zero for it.
+ * Folds, for room, the side columns the person has open that a window this
+ * wide cannot afford beside the panes — and lifts a fold once the room is
+ * back, so a column the window folded returns on its own. What the person
+ * chose is left as it is. Run when the window's width or the number of pane
+ * columns changes. The widths are the ones drawn, which the layout
+ * measured; a layout without a session list passes zero for it.
  */
 export function fitToWindow(
   state: WorkspaceState,
@@ -210,20 +219,23 @@ export function fitToWindow(
 ): WorkspaceState {
   const columns = state.panes?.columns.length ?? 1
   const hasList = sessionListWidth > 0
-  const side = {
-    sidebarOpen: state.chrome.sidebarOpen,
-    sessionListOpen: hasList && state.chrome.sessionListOpen,
-    sidebarWidth,
-    sessionListWidth,
-  }
-  const fitted = foldToFit(side, windowWidth, columns)
-  if (fitted === side) return state
-  return {
-    ...state,
-    chrome: {
-      ...state.chrome,
-      sidebarOpen: fitted.sidebarOpen,
-      sessionListOpen: hasList ? fitted.sessionListOpen : state.chrome.sessionListOpen,
+  // What fits is asked of the columns the person has open.
+  const room = foldToFit(
+    {
+      sidebarOpen: state.chrome.sidebar.open,
+      sessionListOpen: hasList && state.chrome.sessionList.open,
+      sidebarWidth,
+      sessionListWidth,
     },
-  }
+    windowWidth,
+    columns,
+  )
+  const sidebar = fitted(state.chrome.sidebar, room.sidebarOpen)
+  // A layout without the list leaves its fold as it was.
+  const sessionList = hasList
+    ? fitted(state.chrome.sessionList, room.sessionListOpen)
+    : state.chrome.sessionList
+  if (sidebar === state.chrome.sidebar && sessionList === state.chrome.sessionList)
+    return state
+  return { ...state, chrome: { ...state.chrome, sidebar, sessionList } }
 }

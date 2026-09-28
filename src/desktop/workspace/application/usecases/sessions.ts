@@ -8,12 +8,12 @@
  * showing a session is reading it. Pinning and archiving are the source's to
  * show; a session the source has not spoken of cannot be either yet.
  */
+import type { WorkspaceFailureReason } from "../../model/failure"
 import { paneShowing } from "../../model/pane-layout"
 import { knownToSource } from "../../model/revision"
-import type { ModelRef } from "../../model/organisation"
+import type { ModelRef } from "../../model/overview"
 import { startSession } from "../../model/session-lifecycle"
 import { messageText, type Message } from "../../model/transcript"
-import { failureText, type WorkspaceFailureReason } from "../ports"
 import {
   draftOf,
   entry,
@@ -122,7 +122,7 @@ export function sendFailed(
 ): WorkspaceState {
   const marked = withSent(state, sessionId, messageId, (message) => ({
     ...message,
-    delivery: { state: "failed", reason: failureText(reason) },
+    delivery: { state: "failed", reason },
   }))
   const session = sessionOf(marked, sessionId)
   return session &&
@@ -244,7 +244,7 @@ export function approvalFailed(
     ...state,
     answers: {
       ...state.answers,
-      [sessionId]: { ...given, failure: failureText(reason) },
+      [sessionId]: { ...given, failure: reason },
     },
   }
 }
@@ -260,4 +260,23 @@ export function sessionRead(
 ): WorkspaceState {
   const session = sessionOf(state, sessionId)
   return session?.unread ? withSession(state, { ...session, unread: false }) : state
+}
+
+/**
+ * What is typed in a session's composer and not sent — by the person, or an
+ * agent writing it for them. The window's own, kept beside the session so it
+ * outlives a change of layout or a pane showing something else; empty, it
+ * is not kept. A session or new session the window does not hold keeps none.
+ */
+export function composerTextChanged(
+  state: WorkspaceState,
+  { sessionId, text }: { sessionId: string; text: string },
+): WorkspaceState {
+  if (!draftOf(state, sessionId) && !sessionOf(state, sessionId)) return state
+  if (text === "") {
+    const composerText = without(state.composerText, sessionId)
+    return composerText === state.composerText ? state : { ...state, composerText }
+  }
+  if (entry(state.composerText, sessionId) === text) return state
+  return { ...state, composerText: { ...state.composerText, [sessionId]: text } }
 }

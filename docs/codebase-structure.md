@@ -203,19 +203,27 @@ writing the full defaults on first launch is buying.
   stay in adapters. See
   [adr/0002-conversation-vertical-and-gateway.md](adr/done/0002-conversation-vertical-and-gateway.md).
 - The desktop window's workspace is its own vertical, nested in the window:
-  `src/desktop/workspace/` with `model/` (organisation, conversations,
-  revisions, pane layout, session groups, the new-session lifecycle), `application/` (the `WorkspaceSource`
+  `src/desktop/workspace/` with `model/` (overview, conversations,
+  revisions, pane layout and sizing, drops, failures, retention, session
+  groups, the new-session lifecycle), `application/` (the `WorkspaceSource`
   port and pure use cases over the workspace's state), `adapters/` (the Redux
-  slice, commands, effects, refusals, typed hooks and selectors in `store/`; the in-memory source in
-  `in-memory/`; motion, drag and drop, resizing, keys and the clock in `dom/`)
-  and `ui/` (each component once, and `layouts/` that only arrange them), with
+  slice, commands, effects, typed hooks and selectors in `store/`; the
+  in-memory source in `in-memory/`; motion, drag and drop, focus, the panes'
+  room, resizing, keys and the clock in `dom/`) and `ui/` (each component
+  once, and `layouts/` that only arrange them), with
   `testing.ts` the fake source and store its tests share. The
   window has its own store (`src/desktop/store.ts`) and composition
   (`src/desktop/dependencies.ts`). Views select what they show — a pane its own
   session, a row its own summary — and the architecture check refuses a view
-  that selects the whole workspace. Settings is `src/desktop/settings/`, a
-  typed catalogue (`model/`) rendered generically (`ui/`). See
+  that selects the whole workspace. Settings is `src/desktop/settings/`
+  (its map is `index.ts`), a typed catalogue (`model/`) rendered generically
+  (`ui/`). See
   [adr/todo/238-desktop-workspace-frontend.md](adr/todo/238-desktop-workspace-frontend.md).
+- Previews behind Settings › General › Experimental live in
+  `src/desktop/experiments/`, one folder each with its own `model/`,
+  `adapters/` and `ui/` and its map in `index.ts`, off until turned on. The
+  agents overview (`experiments/agents-overview/`) reads the workspace only
+  through its `adapters/workspace-bridge.ts`.
 - Design-system components are consumed, not wrapped "just in case". A wrapper
   with no behaviour is a layer that only forwards.
 - Decisions live in `model/` and `application/` and are tested as plain
@@ -243,7 +251,8 @@ writing the full defaults on first launch is buying.
 Use the [typed DI foundation](design/dependency-injection.md). TypeScript constructs
 one dependency scope in `main.tsx`, injects effects into Redux thunks, and shares
 its session handle with the lifecycle. The desktop window does the same in
-`src/desktop/main.tsx`, from `src/desktop/dependencies.ts`, for its own store. Rust composes `RuntimeDependencies` into
+`src/desktop/main.tsx`, from `src/desktop/dependencies.ts`, for its own store.
+Rust composes `RuntimeDependencies` into
 `AppState`; application-owned traits define replaceable effects. Extend these
 patterns for actual backend integrations without adding a service locator.
 

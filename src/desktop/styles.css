@@ -7,6 +7,29 @@ body,
   height: 100%;
 }
 
+/*
+ * Back and Forward while there is no history to walk (`ui/history-buttons.tsx`):
+ * shown, quiet, and taking no hover; their tooltips still say what they are.
+ */
+[data-history][aria-disabled] {
+  opacity: 0.38;
+  cursor: default;
+}
+
+/* The classic titlebar lays its controls out without a gap; the others keep 2px. */
+[data-slot="app-shell-titlebar"] [data-history] {
+  margin-left: 2px;
+}
+
+[data-history][aria-disabled]:hover {
+  background: transparent;
+}
+
+/* What lies under Settings: only there to be made inert, it draws nothing of its own. */
+.desktop-window-under {
+  display: contents;
+}
+
 body {
   margin: 0;
   overflow: hidden;
@@ -33,6 +56,17 @@ body {
     2 * var(--desktop-control-edge) + var(--desktop-control-size)
   );
   --desktop-window-controls-inset: var(--desktop-control-edge);
+  /*
+   * The titlebar's safe area: where the window's own controls end — the
+   * host's (the traffic lights, `--desktop-window-controls-inset`) and ours
+   * (the sidebar toggle, Back, Forward and one more: four controls). Every
+   * titlebar-row element starts at or after it; nothing draws beneath the
+   * window controls (ADR 238, `titlebar.test.ts`).
+   */
+  --desktop-titlebar-cluster: calc(4 * var(--desktop-control-size) + 3 * 2px);
+  --desktop-titlebar-safe-start: calc(
+    var(--desktop-window-controls-inset) + var(--desktop-titlebar-cluster) + 8px
+  );
   --desktop-pane-fill: color-mix(in oklab, var(--foreground) 3.5%, transparent);
   --desktop-ease: cubic-bezier(0.32, 0.72, 0, 1);
   /* Settles with a slight overshoot, like a spring, for things that appear. */
@@ -56,40 +90,42 @@ body {
   --desktop-out: cubic-bezier(0.22, 1, 0.36, 1);
   /* A barely-there overshoot, for things that appear. */
   --desktop-settle: cubic-bezier(0.3, 1.15, 0.5, 1);
-  /* A lightly underdamped spring (ζ 0.8), overshooting by about 1.5%. */
+  /*
+   * A critically damped spring (ζ 1): a quick start and a soft landing, with
+   * no overshoot, so a composer that glides into place never passes it.
+   */
   --desktop-glide: linear(
     0,
-    0.0261,
-    0.0914,
-    0.1801,
-    0.2803,
-    0.3834,
-    0.4834,
-    0.5763,
-    0.66,
-    0.7333,
-    0.796,
-    0.8485,
-    0.8914,
-    0.9258,
-    0.9527,
-    0.9732,
-    0.9884,
-    0.9993,
-    1.0067,
-    1.0114,
-    1.014,
-    1.0151,
-    1.0151,
-    1.0143,
-    1.0131,
-    1.0117,
-    1.0101,
-    1.0086,
-    1.0071,
-    1.0057,
-    1.0046,
-    1.0035,
+    0.0282,
+    0.0954,
+    0.1825,
+    0.2769,
+    0.3709,
+    0.4596,
+    0.5407,
+    0.613,
+    0.6764,
+    0.7311,
+    0.7778,
+    0.8173,
+    0.8505,
+    0.8782,
+    0.9012,
+    0.9202,
+    0.9358,
+    0.9486,
+    0.9591,
+    0.9676,
+    0.9745,
+    0.9801,
+    0.9846,
+    0.9883,
+    0.9912,
+    0.9936,
+    0.9955,
+    0.997,
+    0.9982,
+    0.9992,
     1
   );
 
@@ -132,14 +168,13 @@ html:not(.dark) [data-surface] {
 }
 
 /* Reduced motion: nothing travels. Colours and fades still change, at once. */
-@media (prefers-reduced-motion: reduce) {
-  [data-surface] {
-    --desktop-base: 0ms;
-    --desktop-slow: 0ms;
-    --desktop-flight: 0ms;
-    --desktop-arrival: 0ms;
-    --desktop-stagger: 0ms;
-  }
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] [data-surface] {
+  --desktop-base: 0ms;
+  --desktop-slow: 0ms;
+  --desktop-flight: 0ms;
+  --desktop-arrival: 0ms;
+  --desktop-stagger: 0ms;
 }
 
 /*
@@ -189,6 +224,11 @@ html:not(.dark) [data-surface] {
     linear-gradient(135deg, var(--desktop-light-high), var(--desktop-light-low)),
     var(--background);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+
+/* In a menu row the row's own gap spaces it from its words. */
+.desktop-popover[role="menu"] .desktop-swatch {
+  margin-right: 0;
 }
 
 .desktop-footer-button {
@@ -280,6 +320,12 @@ html:not(.dark) [data-surface] {
   background: radial-gradient(closest-side, var(--desktop-light-low), transparent);
   animation-duration: 36s;
   animation-direction: alternate-reverse;
+}
+
+/* The drifting light turned off in Settings › Appearance › Motion: it stays where it is. */
+:root[data-drift="still"] .desktop-ambient::before,
+:root[data-drift="still"] .desktop-ambient::after {
+  animation: none;
 }
 
 @keyframes desktop-drift {
@@ -946,15 +992,13 @@ html:not(.dark) [data-surface] {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .desktop-night-scene-steam > span {
-    animation: none;
-  }
-
-  .desktop-night-scene-rain > span {
-    animation: none;
-    transform: translateY(calc(var(--night-scene-rain-rows) * -1em));
-  }
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .desktop-night-scene-steam > span {
+  animation: none;
+}
+:root[data-motion="reduced"] .desktop-night-scene-rain > span {
+  animation: none;
+  transform: translateY(calc(var(--night-scene-rain-rows) * -1em));
 }
 
 .desktop-night-scene-layers > [data-lit] {
@@ -1021,6 +1065,9 @@ html:not(.dark) [data-surface] {
 
 .desktop-greeting {
   margin: 0 0 28px 22px;
+  /* A caption, not text to select: a double-click in the home selects nothing. */
+  -webkit-user-select: none;
+  user-select: none;
   font-size: 30px;
   font-weight: 600;
   letter-spacing: -0.03em;
@@ -1341,32 +1388,48 @@ html:not(.dark) [data-surface] {
   opacity: 0.55;
 }
 
-.desktop-project-menu {
-  min-width: 220px;
-  padding: 6px;
+/*
+ * The window's floating glass, defined once: the fill, the blur behind it,
+ * the hairline inner edge, and the soft fill a highlighted row takes on it.
+ * Menus, pickers and the tooltip all draw with these. The highlight is the
+ * theme's edge light leaned toward the text colour, so it holds on a light
+ * window too, where Graphite's near-white edge would vanish. Layers that
+ * portal to the body find the theme on the document
+ * (`adapters/use-document-theme.ts`).
+ */
+.desktop-popover,
+.desktop-tooltip {
+  --desktop-material-fill: color-mix(in oklab, var(--popover) 78%, transparent);
+  --desktop-material-filter: blur(28px) saturate(180%);
+  --desktop-material-rim: inset 0 0 0 0.5px
+    color-mix(in oklab, var(--foreground) 14%, transparent);
+  --desktop-material-highlight: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--desktop-light-edge), var(--foreground) 35%) 18%,
+    transparent
+  );
 }
 
-.desktop-menu-label {
-  padding: 6px 8px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: color-mix(in oklab, var(--foreground) 42%, transparent);
+html:not(.dark) :is(.desktop-popover, .desktop-tooltip) {
+  --desktop-material-highlight: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--desktop-light-edge), var(--foreground) 55%) 16%,
+    transparent
+  );
 }
 
 /*
- * Menus opened from the composer are frosted glass rather than solid cards,
- * and rise into place. They portal to the body, outside the themed surface,
- * so they use only the design system's own tokens.
+ * Menus and pickers are frosted glass rather than solid cards. Pickers rise
+ * into place; menus (`ui/menu/menu.css`) appear at once, as macOS's do.
  */
 .desktop-popover {
   border: 0;
   border-radius: 14px;
-  background: color-mix(in oklab, var(--popover) 78%, transparent);
-  backdrop-filter: blur(28px) saturate(180%);
-  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  background: var(--desktop-material-fill);
+  backdrop-filter: var(--desktop-material-filter);
+  -webkit-backdrop-filter: var(--desktop-material-filter);
   box-shadow:
-    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 14%, transparent),
+    var(--desktop-material-rim),
     0 24px 60px -18px rgb(0 0 0 / 65%),
     0 4px 14px -6px rgb(0 0 0 / 40%);
   transform-origin: var(--radix-popper-transform-origin);
@@ -1380,6 +1443,83 @@ html:not(.dark) [data-surface] {
   from {
     opacity: 0;
     transform: scale(0.96) translateY(4px);
+  }
+}
+
+/*
+ * The window's tooltip (`adapters/use-window-tooltips.ts`): a small pill of
+ * the same frosted glass as the menus — translucent fill, blur, a hairline
+ * inner edge and a soft shadow — in the theme of the surface it is drawn in.
+ * The chord follows the words on the same line, quieter. Placed by
+ * transform, so showing it lays nothing out; it fades in, sliding 2px out of
+ * the control it names.
+ */
+.desktop-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1000;
+  display: flex;
+  max-width: min(320px, calc(100vw - 16px));
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 8px;
+  border-radius: var(--desktop-radius-sm);
+  background: var(--desktop-material-fill);
+  backdrop-filter: var(--desktop-material-filter);
+  -webkit-backdrop-filter: var(--desktop-material-filter);
+  box-shadow:
+    var(--desktop-material-rim),
+    0 8px 24px -10px rgb(0 0 0 / 50%),
+    0 2px 6px -3px rgb(0 0 0 / 30%);
+  color: var(--foreground);
+  font: 500 var(--desktop-text-footnote) / 16px var(--nessa-font-sans);
+  letter-spacing: 0;
+  white-space: nowrap;
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+html:not(.dark) .desktop-tooltip {
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 12%, transparent),
+    0 8px 22px -10px rgb(0 0 0 / 22%),
+    0 1px 4px -2px rgb(0 0 0 / 16%);
+}
+
+/* A wrapper that only lends a chip its tooltip; the chip itself is what is drawn. */
+.desktop-tip-anchor {
+  display: contents;
+}
+
+.desktop-tooltip[hidden],
+.desktop-tooltip-shortcut[hidden] {
+  display: none;
+}
+
+.desktop-tooltip-shortcut {
+  color: var(--desktop-muted);
+  font-feature-settings: "tnum";
+}
+
+.desktop-tooltip[data-shown] {
+  animation: desktop-tooltip-in var(--desktop-fast) var(--desktop-out);
+}
+
+.desktop-tooltip[data-side="above"] {
+  --desktop-tooltip-from: 2px;
+}
+
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .desktop-tooltip[data-shown] {
+  animation: none;
+}
+
+@keyframes desktop-tooltip-in {
+  from {
+    opacity: 0;
+    translate: 0 var(--desktop-tooltip-from, -2px);
   }
 }
 
@@ -1419,9 +1559,11 @@ html:not(.dark) [data-surface] {
   transition: background-color 120ms ease;
 }
 
+/* Highlighted as a menu's rows are: the material's soft fill, no ring. */
 .desktop-model-picker [data-slot="searchable-listbox-option"][data-highlighted="true"],
 .desktop-model-picker [data-slot="searchable-listbox-option"]:focus-visible {
-  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+  background: var(--desktop-material-highlight);
+  outline: none;
 }
 
 .desktop-model-picker [data-slot="searchable-listbox-option"][data-selected="true"] {
@@ -1594,21 +1736,22 @@ html:not(.dark) [data-surface] {
   opacity: 1;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .desktop-split[data-settled] > [data-slot="split-view-panel"],
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"]
+  .desktop-split[data-settled]
+  > [data-slot="split-view-panel"],
+:root[data-motion="reduced"]
   .desktop-sidebar-edge[data-slot="split-view-separator"]::before,
-  .desktop-glass[data-slot="sidebar"],
-  .desktop-peek {
-    transition: none;
-  }
-
-  .desktop-ambient::before,
-  .desktop-ambient::after,
-  .desktop-home-inner,
-  .desktop-popover[data-state="open"],
-  [data-right-maximized] .desktop-glass[data-slot="sidebar"] {
-    animation: none;
-  }
+:root[data-motion="reduced"] .desktop-glass[data-slot="sidebar"],
+:root[data-motion="reduced"] .desktop-peek {
+  transition: none;
+}
+:root[data-motion="reduced"] .desktop-ambient::before,
+:root[data-motion="reduced"] .desktop-ambient::after,
+:root[data-motion="reduced"] .desktop-home-inner,
+:root[data-motion="reduced"] .desktop-popover[data-state="open"],
+:root[data-motion="reduced"] [data-right-maximized] .desktop-glass[data-slot="sidebar"] {
+  animation: none;
 }
 
 /* Fill the window without changing measured panel widths or saved layout. */

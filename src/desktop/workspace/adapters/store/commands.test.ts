@@ -12,24 +12,29 @@ import {
   fakeSource,
   settle,
   summary,
-  testOrganisation,
+  testOverview,
   testStore,
 } from "../../testing"
 import {
   approve,
   archiveSession,
+  canNudge,
+  canOpenBeside,
   chooseModel,
   closePane,
   deny,
   discardUnsent,
+  fitPanes,
   followWorkspace,
   loadWorkspace,
   newSession,
+  nudgePane,
   openBeside,
   openChannel,
   openSession,
   pinSession,
   resendMessage,
+  resizePanes,
   retryTranscript,
   sendMessage,
 } from "./commands"
@@ -48,7 +53,7 @@ const outboxOf = (store: ReturnType<typeof testStore>, sessionId: string) =>
   store.getState().workspace.outbox[sessionId] ?? []
 
 describe("loading", () => {
-  it("opens on the organisation, and reads the conversation the pane shows", async () => {
+  it("opens on the overview, and reads the conversation the pane shows", async () => {
     const { store, source } = await ready()
     expect(shown(store)).toEqual(["a"])
     expect(source.calls).toContainEqual(["transcript", "a"])
@@ -58,19 +63,19 @@ describe("loading", () => {
     })
   })
 
-  it("says why when the organisation cannot be read", async () => {
+  it("says why when the overview cannot be read", async () => {
     const source = fakeSource()
-    source.refuse("organisation", "unavailable")
+    source.refuse("overview", "unavailable")
     const { store } = await ready(source)
     expect(store.getState().workspace.status).toBe("failed")
-    expect(store.getState().workspace.failure).toMatch(/couldn’t reach/)
+    expect(store.getState().workspace.failure).toBe("unavailable")
   })
 
   it("says why a shown conversation cannot be read", async () => {
     const source = fakeSource()
     source.refuse("transcript", "unknown-session")
     const { store } = await ready(source)
-    expect(store.getState().workspace.transcriptFailures.a).toMatch(/no longer there/)
+    expect(store.getState().workspace.transcriptFailures.a).toBe("unknown-session")
   })
 
   it("reads a conversation once however often the panes change while it is read", async () => {
@@ -156,7 +161,7 @@ describe("reads that fail or are overtaken", () => {
       return read(sessionId)
     }
     const { store } = await ready(source)
-    expect(store.getState().workspace.transcriptFailures.a).toMatch(/couldn’t reach/)
+    expect(store.getState().workspace.transcriptFailures.a).toBe("unavailable")
   })
 
   it("logs a failed read mark that is anything but the source's typed refusal", async () => {
@@ -188,7 +193,7 @@ describe("reads that fail or are overtaken", () => {
     console.error = (...args: unknown[]) => void logged.push(args)
     try {
       const { store } = await ready(source)
-      expect(store.getState().workspace.transcriptFailures.a).toMatch(/couldn’t reach/)
+      expect(store.getState().workspace.transcriptFailures.a).toBe("unavailable")
     } finally {
       console.error = error
     }
@@ -203,7 +208,7 @@ describe("reads that fail or are overtaken", () => {
     console.error = (...args: unknown[]) => void logged.push(args)
     try {
       const { store } = await ready(source)
-      expect(store.getState().workspace.transcriptFailures.a).toMatch(/couldn’t reach/)
+      expect(store.getState().workspace.transcriptFailures.a).toBe("unavailable")
     } finally {
       console.error = error
     }
@@ -256,9 +261,9 @@ describe("reads that fail or are overtaken", () => {
     })
   })
 
-  it("keeps what the stream said before the organisation was read", async () => {
+  it("keeps what the stream said before the overview was read", async () => {
     const source = fakeSource()
-    source.hold("organisation")
+    source.hold("overview")
     const store = testStore(source)
     store.dispatch(followWorkspace())
     const loading = store.dispatch(loadWorkspace())
@@ -267,7 +272,7 @@ describe("reads that fail or are overtaken", () => {
       kind: "session",
       session: summary("a", "desktop", 999, "idle", { revision: 4 }),
     })
-    await source.release("organisation")
+    await source.release("overview")
     await loading
     const workspace = store.getState().workspace
     expect(workspace.sessions.c).toBeUndefined()
@@ -310,12 +315,12 @@ describe("marking read", () => {
     const { store, source } = await ready()
     store.dispatch(openBeside({ sessionId: "c" }))
     await settle()
-    const organisation = testOrganisation()
-    // One read of the organisation marks both shown sessions unread at once.
-    source.organisation = () =>
+    const overview = testOverview()
+    // One read of the overview marks both shown sessions unread at once.
+    source.overview = () =>
       Promise.resolve({
-        ...organisation,
-        sessions: organisation.sessions.map((session) =>
+        ...overview,
+        sessions: overview.sessions.map((session) =>
           session.id === "a" || session.id === "c"
             ? { ...session, unread: true, revision: 2 }
             : session,
@@ -330,10 +335,10 @@ describe("marking read", () => {
   })
 
   it("marks the session the workspace opens on read, here and at the source", async () => {
-    const organisation = testOrganisation()
+    const overview = testOverview()
     const source = fakeSource({
-      ...organisation,
-      sessions: organisation.sessions.map((session) =>
+      ...overview,
+      sessions: overview.sessions.map((session) =>
         session.id === "a" ? { ...session, unread: true } : session,
       ),
     })
@@ -555,7 +560,7 @@ describe("sending", () => {
     await store.dispatch(sendMessage({ initiator: "person", sessionId: "a", text: "hi" }))
     expect(outboxOf(store, "a").at(-1)?.delivery).toEqual({
       state: "failed",
-      reason: "This session is no longer there.",
+      reason: "unknown-session",
     })
     expect(store.getState().workspace.sessions.a).toBe(before)
   })
@@ -674,7 +679,7 @@ describe("approvals", () => {
     ).toBe("refused")
     expect(store.getState().workspace.answers.b).toMatchObject({
       approvalId: "ap",
-      failure: "This was already answered.",
+      failure: "not-waiting",
     })
     source.refuse("deny", undefined)
     await store.dispatch(deny({ sessionId: "b", approvalId: "ap", initiator: "person" }))
@@ -992,5 +997,165 @@ describe("pinning and archiving", () => {
     store.dispatch(discardUnsent({ sessionId: draftId, messageId: refused.id }))
     expect(store.getState().workspace.sessions[draftId]).toBeUndefined()
     expect(store.getState().workspace.drafts[draftId]).toBeDefined()
+  })
+})
+
+describe("the overview read again", () => {
+  it("takes out what it no longer lists and reads every shown conversation again", async () => {
+    const { store, source } = await ready()
+    store.dispatch(openBeside({ sessionId: "c" }))
+    await settle()
+    const reads = () => source.calls.filter((call) => call[0] === "transcript").length
+    const before = reads()
+    const overview = testOverview()
+    // The stream lost c's removal; the next read of the overview does not list it.
+    source.overview = () =>
+      Promise.resolve({
+        ...overview,
+        sessions: overview.sessions.filter((session) => session.id !== "c"),
+      })
+    await store.dispatch(loadWorkspace())
+    await settle()
+    expect(store.getState().workspace.sessions.c).toBeUndefined()
+    expect(shown(store)).toEqual(["a"])
+    // The one shown conversation, read again although it was held.
+    expect(reads()).toBe(before + 1)
+    expect(source.calls.at(-1)).toEqual(["transcript", "a"])
+  })
+
+  it("lets an update the source could not have sent go, and says so", async () => {
+    const source = fakeSource()
+    const store = testStore(source)
+    store.dispatch(followWorkspace())
+    await store.dispatch(loadWorkspace())
+    await settle()
+    const warn = console.warn
+    const logged: unknown[][] = []
+    console.warn = (...args: unknown[]) => void logged.push(args)
+    const before = store.getState().workspace
+    try {
+      source.emit({ kind: "session-removed", sessionId: "a", revision: 0 })
+      source.emit({
+        kind: "session",
+        session: summary("a", "desktop", 1, "idle", { revision: -1 }),
+      })
+    } finally {
+      console.warn = warn
+    }
+    expect(store.getState().workspace).toBe(before)
+    expect(logged).toHaveLength(2)
+  })
+
+  it("says so when the overview lists a session at a revision the source could not have sent", async () => {
+    const source = fakeSource()
+    const overview = testOverview()
+    source.overview = () =>
+      Promise.resolve({
+        ...overview,
+        sessions: [
+          ...overview.sessions,
+          summary("z", "desktop", 1, "idle", { revision: 0 }),
+        ],
+      })
+    const warn = console.warn
+    const logged: unknown[][] = []
+    console.warn = (...args: unknown[]) => void logged.push(args)
+    try {
+      const { store } = await ready(source)
+      expect(store.getState().workspace.sessions.z).toBeUndefined()
+    } finally {
+      console.warn = warn
+    }
+    expect(logged).toEqual([
+      [
+        "The overview listed sessions at a revision the source could not have sent",
+        ["z"],
+      ],
+    ])
+  })
+})
+
+describe("the room every change of layout is held to", () => {
+  const widths = (store: ReturnType<typeof testStore>, gridWidth: number) => {
+    const columns = store.getState().workspace.panes!.columns
+    const total = columns.reduce((sum, column) => sum + column.share, 0)
+    return columns.map(
+      (column) => ((gridWidth - (columns.length - 1) * 8) * column.share) / total,
+    )
+  }
+
+  it("holds an agent's split to the room the page measures, as it does a key's", async () => {
+    const narrow = { width: 500, height: 800, spare: 0 }
+    const store = testStore(fakeSource(), () => narrow)
+    await store.dispatch(loadWorkspace())
+    await settle()
+    // No column fits: a split to the right is refused, whoever asks.
+    expect(store.dispatch(newSession({ beside: "right" }))).toBeUndefined()
+    expect(shown(store)).toEqual(["a"])
+    // "Beside" with no side named stacks, where a row fits.
+    store.dispatch(openBeside({ sessionId: "c" }))
+    expect(store.getState().workspace.panes!.columns.map((c) => c.panes.length)).toEqual([
+      2,
+    ])
+  })
+
+  it("places nothing new when nothing was measured", async () => {
+    const store = testStore(fakeSource(), () => undefined)
+    await store.dispatch(loadWorkspace())
+    await settle()
+    expect(store.dispatch(newSession({ beside: "right" }))).toBeUndefined()
+    expect(store.dispatch(canOpenBeside())).toBe(false)
+    // Opening beside with no room takes the focused pane's place, as it says.
+    store.dispatch(openBeside({ sessionId: "c" }))
+    expect(shown(store)).toEqual(["c"])
+  })
+
+  it("moves a pane out into a column of its own only where every pane stays readable", async () => {
+    // Two columns of two, as a 1440 × 900 window with both side columns lays them out.
+    const room = { width: 840, height: 850, spare: 256 }
+    const store = testStore(fakeSource(), () => room)
+    await store.dispatch(loadWorkspace())
+    await settle()
+    store.dispatch(newSession({ beside: "bottom" }))
+    store.dispatch(openBeside({ sessionId: "c", side: "right" }))
+    store.dispatch(newSession({ beside: "bottom" }))
+    const first = store.getState().workspace.panes!.columns[0].panes[0].key
+    expect(store.dispatch(canNudge({ pane: first, direction: "left" }))).toBe(true)
+    store.dispatch(nudgePane({ pane: first, direction: "left" }))
+    // Three columns fit only with the sidebar folded, and none is under 300.
+    expect(store.getState().workspace.panes!.columns).toHaveLength(3)
+    expect(store.getState().workspace.chrome.sidebar.folded).toBe(true)
+    expect(Math.min(...widths(store, room.width + room.spare))).toBeGreaterThanOrEqual(
+      299.5,
+    )
+  })
+
+  it("refuses the move, and says so before it is asked, when no fold makes room", async () => {
+    const room = { width: 840, height: 850, spare: 0 }
+    const store = testStore(fakeSource(), () => room)
+    await store.dispatch(loadWorkspace())
+    await settle()
+    store.dispatch(newSession({ beside: "bottom" }))
+    store.dispatch(openBeside({ sessionId: "c", side: "right" }))
+    store.dispatch(newSession({ beside: "bottom" }))
+    const before = store.getState().workspace.panes
+    const first = before!.columns[0].panes[0].key
+    expect(store.dispatch(canNudge({ pane: first, direction: "left" }))).toBe(false)
+    store.dispatch(nudgePane({ pane: first, direction: "left" }))
+    expect(store.getState().workspace.panes).toBe(before)
+  })
+
+  it("fits the panes again when their room shrinks, rebalancing where it must", async () => {
+    let room = { width: 1100, height: 800, spare: 0 }
+    const store = testStore(fakeSource(), () => room)
+    await store.dispatch(loadWorkspace())
+    await settle()
+    store.dispatch(openBeside({ sessionId: "c", side: "right" }))
+    store.dispatch(
+      resizePanes({ edge: { axis: "x", column: 0 }, fraction: 0.72, pair: 1092 }),
+    )
+    room = { width: 700, height: 800, spare: 0 }
+    store.dispatch(fitPanes())
+    expect(Math.min(...widths(store, room.width))).toBeGreaterThanOrEqual(299.5)
   })
 })

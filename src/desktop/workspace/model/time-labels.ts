@@ -1,6 +1,6 @@
 /**
  * Times as the workspace says them: "now", "4m", "3h", "Yesterday", "Mon",
- * "Sep 19" beside a session; "started 22m ago" under a heading; "39s" beside
+ * "Sep 19" beside a session; "Started 22m ago" under a heading; "39s" beside
  * what an agent is doing. `now` is always passed in: nothing here reads a clock.
  */
 
@@ -29,8 +29,11 @@ export function sessionTime(at: number, now: number): string {
   return monthDay.format(at)
 }
 
-/** Under a conversation's heading: when it began. `lead` capitalises it when nothing comes before it. */
-export function startedLabel(at: number, now: number, lead = false): string {
+/**
+ * Under a conversation's heading: when it began. One casing in every layout —
+ * a segment of its own, whether or not a channel comes before it.
+ */
+export function startedLabel(at: number, now: number): string {
   const when = sessionTime(at, now)
   const phrase =
     when === "now"
@@ -40,7 +43,7 @@ export function startedLabel(at: number, now: number, lead = false): string {
         : when === "Yesterday"
           ? "yesterday"
           : when
-  return `${lead ? "Started" : "started"} ${phrase}`
+  return `Started ${phrase}`
 }
 
 /** Beside what an agent is doing: how long it has been at it. */

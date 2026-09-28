@@ -5,6 +5,7 @@ import { revealSession } from "../../adapters/store/commands"
 import { useNow } from "../../adapters/dom/clock"
 import { startedLabel } from "../../model/time-labels"
 import { useListedChannel, useWorkspaceFrame } from "../workspace-frame"
+import { tooltip } from "../../../ui/tooltip"
 
 /**
  * A conversation's heading: its title, and where and when it began, set
@@ -35,7 +36,7 @@ export const TranscriptHeading = forwardRef<
             <button
               type="button"
               className="workspace-heading-channel"
-              title="Show in Sidebar"
+              {...tooltip("Show in Sidebar")}
               onClick={() => {
                 dispatch(revealSession({ sessionId }))
                 frame.showRow(sessionId)
@@ -46,7 +47,7 @@ export const TranscriptHeading = forwardRef<
             <span aria-hidden="true"> · </span>
           </>
         ) : null}
-        {startedLabel(session.startedAt, now, !showChannel)}
+        {startedLabel(session.startedAt, now)}
       </p>
     </div>
   )

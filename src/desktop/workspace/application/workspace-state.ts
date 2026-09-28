@@ -1,5 +1,5 @@
 /**
- * The workspace as the window holds it: the source's organisation and the
+ * The workspace as the window holds it: the source's overview and the
  * transcripts it has loaded, the new sessions not yet started, where each
  * conversation sits, and the window's own arrangement — which columns are
  * open, what the session list shows, which parts of the sidebar are folded.
@@ -8,8 +8,11 @@
  * window decides. Use cases in `usecases/` are pure functions over it, and
  * the store in `adapters/store/` applies them.
  */
-import type { Channel, ModelRef, Section, SessionSummary } from "../model/organisation"
+import type { WorkspaceFailureReason } from "../model/failure"
+import type { Channel, ModelRef, Section, SessionSummary } from "../model/overview"
 import { focusedPane, panesOf, type PaneLayout } from "../model/pane-layout"
+import { keptConversations, type Removal } from "../model/retention"
+import { drawn, type SideColumn } from "../../model/side-column"
 import type { SessionView } from "../model/session-groups"
 import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
 import { unconfirmed, type Message, type Transcript } from "../model/transcript"
@@ -19,15 +22,25 @@ export interface Answer {
   readonly approvalId: string
   /** This answer's own, so only its refusal — not an earlier one's — sets it aside. */
   readonly token: string
-  readonly failure?: string
+  readonly failure?: WorkspaceFailureReason
 }
 
+/**
+ * The side columns, each shown or hidden by the person's choice and folded
+ * for room by the window (`SideColumn`), so a fold lifts on its own once
+ * there is room again (`usecases/navigation.ts`).
+ */
 export interface Chrome {
-  readonly sidebarOpen: boolean
-  readonly sessionListOpen: boolean
+  readonly sidebar: SideColumn
+  readonly sessionList: SideColumn
   /** A width the person dragged the sidebar to; each layout has its own until then. */
   readonly sidebarWidth: number | null
   readonly sessionListWidth: number
+}
+
+/** Which side columns are drawn: open by the person's choice, and not folded for room. */
+export function drawnColumns(chrome: Chrome): { sidebar: boolean; sessionList: boolean } {
+  return { sidebar: drawn(chrome.sidebar), sessionList: drawn(chrome.sessionList) }
 }
 
 /** What is folded in the sidebar. */
@@ -43,13 +56,23 @@ export type LoadStatus = "loading" | "ready" | "failed"
 
 export interface WorkspaceState {
   readonly status: LoadStatus
-  /** Why the organisation could not be read, when it could not. */
-  readonly failure: string | null
+  /** Why the overview could not be read, when it could not. */
+  readonly failure: WorkspaceFailureReason | null
+  /**
+   * While a read of the overview is on its way: how many, and the sessions
+   * the stream brought meanwhile, which the read may predate — a session it
+   * does not list is taken out unless it is one of these. `null` when no read
+   * is on its way.
+   */
+  readonly reading: { readonly reads: number; readonly heard: readonly string[] } | null
   readonly sections: readonly Section[]
   readonly channels: readonly Channel[]
   readonly sessions: Readonly<Record<string, SessionSummary>>
   readonly drafts: Readonly<Record<string, Draft>>
-  /** The conversations as the source last gave them, by session. */
+  /**
+   * The conversations as the source last gave them, by session: every one a
+   * pane shows, and a few others (`model/retention.ts`).
+   */
   readonly transcripts: Readonly<Record<string, Transcript>>
   /**
    * Messages the person sent that the source's conversation does not hold yet,
@@ -58,13 +81,13 @@ export interface WorkspaceState {
    */
   readonly outbox: Readonly<Record<string, readonly Message[]>>
   /** Why a conversation a pane shows could not be read, by session. */
-  readonly transcriptFailures: Readonly<Record<string, string>>
+  readonly transcriptFailures: Readonly<Record<string, WorkspaceFailureReason>>
   /**
-   * Sessions the source removed, with the revision it removed them at, so an
-   * older summary — an organisation read before the removal, say — cannot
-   * bring one back.
+   * Sessions the source removed, newest last, with the summary revision it
+   * removed them at, so an older summary — an overview read before the
+   * removal, say — cannot bring one back. Bounded (`model/retention.ts`).
    */
-  readonly removed: Readonly<Record<string, number>>
+  readonly removed: readonly Removal[]
   /**
    * The person's answer to a session's approval, by session: on its way, or
    * refused with a reason. It concerns only the approval it names; once the
@@ -73,23 +96,24 @@ export interface WorkspaceState {
   readonly answers: Readonly<Record<string, Answer>>
   /** The model the person chose for a session's next message, by session. */
   readonly chosenModels: Readonly<Record<string, ModelRef>>
-  /** Where conversations sit; none until the organisation arrives. */
+  /**
+   * What the person has typed in a session's composer and not sent, by
+   * session or new session: the window's own, kept here so it survives a
+   * change of layout or a pane showing another session, and so an agent can
+   * write it (`setComposerText`). Sent, or its session let go, it goes.
+   */
+  readonly composerText: Readonly<Record<string, string>>
+  /** Where conversations sit; none until the overview arrives. */
   readonly panes: PaneLayout | null
   readonly view: SessionView
   readonly chrome: Chrome
   readonly tree: Tree
 }
 
-export const initialChrome: Chrome = {
-  sidebarOpen: true,
-  sessionListOpen: true,
-  sidebarWidth: null,
-  sessionListWidth: 312,
-}
-
 export const initialWorkspace: WorkspaceState = {
   status: "loading",
   failure: null,
+  reading: null,
   sections: [],
   channels: [],
   sessions: {},
@@ -97,12 +121,18 @@ export const initialWorkspace: WorkspaceState = {
   transcripts: {},
   outbox: {},
   transcriptFailures: {},
-  removed: {},
+  removed: [],
   answers: {},
   chosenModels: {},
+  composerText: {},
   panes: null,
   view: { kind: "channel", channelId: "" },
-  chrome: initialChrome,
+  chrome: {
+    sidebar: { open: true, folded: false },
+    sessionList: { open: true, folded: false },
+    sidebarWidth: null,
+    sessionListWidth: 312,
+  },
   tree: { collapsedSections: [], expandedChannels: [], showAllChannels: [] },
 }
 
@@ -145,10 +175,16 @@ export function withSession(
   return { ...state, sessions: { ...state.sessions, [session.id]: session } }
 }
 
+/** The sessions the panes show, drafts among them. */
+function shownIds(state: WorkspaceState): Set<string> {
+  return new Set(state.panes ? panesOf(state.panes).map((pane) => pane.sessionId) : [])
+}
+
 /**
  * Holds the source's conversation for a session, retiring from the outbox
  * every message it now includes, and any answer to an approval it no longer
- * asks.
+ * asks. Past what is kept of sessions no pane shows, the least recently
+ * active of those is let go (`model/retention.ts`).
  */
 export function withTranscript(
   state: WorkspaceState,
@@ -159,9 +195,14 @@ export function withTranscript(
   const sent = entry(state.outbox, id) ?? []
   const waiting = unconfirmed(sent, transcript)
   const answer = entry(state.answers, id)
+  const transcripts = keptConversations(
+    { ...state.transcripts, [id]: transcript },
+    shownIds(state),
+    (sessionId) => sessionOf(state, sessionId)?.updatedAt ?? 0,
+  )
   return {
     ...state,
-    transcripts: { ...state.transcripts, [id]: transcript },
+    transcripts,
     // Held now, so a read that failed before no longer matters.
     transcriptFailures: without(state.transcriptFailures, id),
     outbox:
@@ -203,12 +244,15 @@ export function withPanes(state: WorkspaceState, panes: PaneLayout): WorkspaceSt
     : Object.fromEntries(
         Object.entries(state.transcriptFailures).filter(([id]) => shown.has(id)),
       )
-  return {
-    ...state,
-    panes,
-    drafts: keepShownDrafts(state.drafts, shown),
-    transcriptFailures,
-  }
+  const drafts = keepShownDrafts(state.drafts, shown)
+  // A new session's typing goes with it; a listed session's stays until it is let go.
+  const composerText =
+    drafts === state.drafts
+      ? state.composerText
+      : Object.keys(state.drafts)
+          .filter((id) => !Object.hasOwn(drafts, id))
+          .reduce(without, state.composerText)
+  return { ...state, panes, drafts, transcriptFailures, composerText }
 }
 
 /** Adds `id` to a list of ids, or takes it out; the same list when nothing changes. */
@@ -254,6 +298,7 @@ export function forgetSession(state: WorkspaceState, sessionId: string): Workspa
     outbox: without(state.outbox, sessionId),
     answers: without(state.answers, sessionId),
     chosenModels: without(state.chosenModels, sessionId),
+    composerText: without(state.composerText, sessionId),
   }
 }
 

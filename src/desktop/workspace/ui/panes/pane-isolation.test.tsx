@@ -8,7 +8,7 @@
 import { act, StrictMode, Profiler, useRef, type ReactNode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { focusPane, loadWorkspace, openBeside } from "../../adapters/store/commands"
 import {
   selectFocusedSessionId,
@@ -17,10 +17,34 @@ import {
 } from "../../adapters/store/selectors"
 import { workspaceActions } from "../../adapters/store/slice"
 import { ClockProvider } from "../../adapters/dom/clock"
-import { DragProvider } from "../../adapters/dom/drag"
 import { emptyTranscript } from "../../model/transcript"
 import { fakeSource, settle, summary, testStore } from "../../testing"
 import { Pane } from "./pane"
+
+/**
+ * What a pane's content renders: the home and the conversation it hands its
+ * callbacks to, counted by session. Wrapped in `memo` exactly as the real
+ * ones are, so a count only rises when the pane hands them something new.
+ */
+const contentRenders = vi.hoisted(() => new Map<string, number>())
+vi.mock("./conversation", async (load) => {
+  const { memo, createElement } = await import("react")
+  const real = await load<typeof import("./conversation")>()
+  const counted = <P extends { sessionId: string }>(
+    name: string,
+    Inner: (props: P) => ReturnType<typeof createElement>,
+  ) =>
+    memo(function Counted(props: P) {
+      const key = `${name}:${props.sessionId}`
+      contentRenders.set(key, (contentRenders.get(key) ?? 0) + 1)
+      return createElement(Inner as never, props as never)
+    })
+  return {
+    ...real,
+    Conversation: counted("Conversation", real.Conversation as never),
+    PaneHome: counted("PaneHome", real.PaneHome as never),
+  }
+})
 
 class Observer {
   observe() {}
@@ -34,11 +58,7 @@ const renders = new Map<string, number>()
 
 function Frame({ children }: { children: ReactNode }) {
   const workspace = useRef<HTMLDivElement>(null)
-  return (
-    <DragProvider root={workspace}>
-      <div ref={workspace}>{children}</div>
-    </DragProvider>
-  )
+  return <div ref={workspace}>{children}</div>
 }
 
 beforeEach(() => {
@@ -96,6 +116,7 @@ async function fourPanes() {
   // Each pane fills in a frame after its shell; let every one land.
   await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
   renders.clear()
+  contentRenders.clear()
   return { store, source }
 }
 
@@ -152,6 +173,8 @@ describe("a pane renders for its own session only", () => {
       if (target) store.dispatch(focusPane({ pane: target.key }))
     })
     expect(rendered()).toEqual([target?.sessionId, was].sort())
+    // The two panes render their headers; what they show is handed nothing new.
+    expect([...contentRenders.keys()]).toEqual([])
   })
 
   it("keeps the placements, which the grid renders from, when content changes", async () => {
@@ -187,5 +210,18 @@ describe("a pane renders for its own session only", () => {
     const owner = [...renders.keys()]
     expect(owner).toHaveLength(1)
     expect(pane?.getAttribute("aria-label")).toBe(`Session ${owner[0]}`)
+  })
+})
+
+describe("a pane's header among several", () => {
+  it("carries the pane, and nothing in it moves the window", async () => {
+    await fourPanes()
+    const headers = [...host.querySelectorAll(".workspace-pane-header")]
+    expect(headers).toHaveLength(4)
+    for (const header of headers) {
+      expect(header.hasAttribute("data-drag-pane")).toBe(true)
+      expect(header.closest("[data-tauri-drag-region]")).toBeNull()
+      expect(header.querySelector("[data-tauri-drag-region]")).toBeNull()
+    }
   })
 })

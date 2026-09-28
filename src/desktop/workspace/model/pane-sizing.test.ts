@@ -7,9 +7,11 @@ import {
   type PaneLayout,
 } from "./pane-layout"
 import {
-  canPlace,
-  needsSidebarRoom,
-  placeBeside,
+  arrange,
+  columnsFit,
+  edgeSides,
+  fits,
+  fitted,
   placements,
   resizeEdge,
 } from "./pane-sizing"
@@ -69,64 +71,116 @@ describe("placements", () => {
   })
 })
 
-describe("whether a pane fits", () => {
+describe("the one rule a change of layout is held to", () => {
   const roomy = { width: 1000, height: 800, spare: 0 }
+  const { minWidth, minHeight, gutter } = paneLimits
+  const one = singlePane("a")
+  const beside = (layout: PaneLayout, side: "right" | "bottom") =>
+    splitPane(layout, layout.focused, side, "x")
 
-  it("fits anywhere within the limits when nothing was measured", () => {
-    const one = singlePane("a")
-    expect(canPlace(one, "right", 1)).toBe(true)
-    expect(canPlace(one, "bottom", 1)).toBe(true)
+  it("takes a split that leaves every pane readable", () => {
+    expect(arrange(one, beside(one, "right"), roomy)).toEqual({
+      layout: beside(one, "right"),
+      foldSidebar: false,
+    })
   })
 
-  it("does not fit beside a pane that is not there", () => {
-    expect(canPlace(singlePane("a"), "right", 999, roomy)).toBe(false)
+  it("holds columns to the readable width, the gutter counted, to the pixel", () => {
+    const exact = { width: 2 * minWidth + gutter, height: 800, spare: 0 }
+    expect(arrange(one, beside(one, "right"), exact)).not.toBeNull()
+    expect(
+      arrange(one, beside(one, "right"), { ...exact, width: exact.width - 1 }),
+    ).toBeNull()
   })
 
-  it("needs half the target's width to be readable for a column", () => {
-    const one = singlePane("a")
-    const narrow = { width: 2 * paneLimits.minWidth - 1, height: 800, spare: 0 }
-    expect(canPlace(one, "right", 1, narrow)).toBe(false)
-    expect(canPlace(one, "right", 1, { ...narrow, width: 2 * paneLimits.minWidth })).toBe(
-      true,
-    )
+  it("holds rows to the readable height, the gutter counted, to the pixel", () => {
+    const exact = { width: 1000, height: 2 * minHeight + gutter, spare: 0 }
+    expect(arrange(one, beside(one, "bottom"), exact)).not.toBeNull()
+    expect(
+      arrange(one, beside(one, "bottom"), { ...exact, height: exact.height - 1 }),
+    ).toBeNull()
   })
 
-  it("counts the width the sidebar would give up", () => {
-    const one = singlePane("a")
+  it("folds the sidebar when that is what makes a column fit, and says so", () => {
     const room = { width: 500, height: 800, spare: 248 }
-    expect(canPlace(one, "right", 1, room)).toBe(true)
-    expect(needsSidebarRoom("right", room)).toBe(true)
-    expect(needsSidebarRoom("bottom", room)).toBe(false)
-    expect(needsSidebarRoom("right", roomy)).toBe(false)
-    expect(needsSidebarRoom("right", undefined)).toBe(false)
+    expect(arrange(one, beside(one, "right"), room)?.foldSidebar).toBe(true)
+    // Folding gives width, never height.
+    expect(arrange(one, beside(one, "bottom"), { ...room, height: 300 })).toBeNull()
   })
 
-  it("needs half the target's height to be readable for a row", () => {
-    const one = singlePane("a")
-    expect(
-      canPlace(one, "bottom", 1, { ...roomy, height: 2 * paneLimits.minHeight - 1 }),
-    ).toBe(false)
-    expect(
-      canPlace(one, "bottom", 1, { ...roomy, height: 2 * paneLimits.minHeight }),
-    ).toBe(true)
+  it("rebalances a new column rather than leave one unreadable", () => {
+    // Two columns, the second stacked: a third column beside the first halves it to 25%.
+    const two = beside(one, "right")
+    const stacked = splitPane(two, two.focused, "bottom", "y")
+    const third = splitPane(stacked, 1, "left", "z")
+    const room = { width: 1000, height: 800, spare: 0 }
+    const placed = arrange(stacked, third, room)
+    expect(placed).not.toBeNull()
+    const shares = placed!.layout.columns.map((column) => column.share)
+    const total = shares.reduce((sum, share) => sum + share, 0)
+    const widths = shares.map((share) => ((room.width - 2 * gutter) * share) / total)
+    expect(Math.min(...widths)).toBeGreaterThanOrEqual(minWidth - 0.5)
   })
 
-  it("lets a pane move within a full grid", () => {
-    const three = threePanes()
-    const grid = splitPane(three, keyOf(three, "a"), "bottom", "d")
-    expect(canPlace(grid, "bottom", keyOf(grid, "c"), roomy)).toBe(false)
-    expect(canPlace(grid, "bottom", keyOf(grid, "c"), roomy, keyOf(grid, "d"))).toBe(true)
+  it("always takes a swap, which keeps every size", () => {
+    const two = beside(one, "right")
+    const swapped = { ...two, columns: [...two.columns].reverse() }
+    expect(arrange(two, swapped, undefined)?.layout).toBe(swapped)
   })
 
-  it("falls back to the other axis, and to nowhere", () => {
-    const one = singlePane("a")
-    const narrow = { width: 400, height: 800, spare: 0 }
-    expect(placeBeside(one, 1, "right", narrow)).toBe("bottom")
-    expect(placeBeside(one, 1, "bottom", { width: 800, height: 300, spare: 0 })).toBe(
-      "right",
+  it("places nothing new with nothing measured: no room is not room", () => {
+    expect(arrange(one, beside(one, "right"), undefined)).toBeNull()
+  })
+
+  it("refuses a change that changes nothing", () => {
+    expect(arrange(one, one, roomy)).toBeNull()
+  })
+})
+
+describe("fitting the panes to their room", () => {
+  const { minWidth, minHeight, gutter } = paneLimits
+
+  it("leaves a layout that fits as it is", () => {
+    const two = splitPane(singlePane("a"), 1, "right", "b")
+    expect(fitted(two, { width: 1000, height: 800 })).toBe(two)
+    expect(fits(two, { width: 1000, height: 800 })).toBe(true)
+  })
+
+  it("raises a pane below the minimum to it, the room coming from the others", () => {
+    const two = splitPane(singlePane("a"), 1, "right", "b")
+    const lopsided = resizeEdge(two, { axis: "x", column: 0 }, 0.8, 10_000)
+    const room = { width: 2 * minWidth + gutter + 100, height: 800 }
+    const fit = fitted(lopsided, room)!
+    const available = room.width - gutter
+    const widths = fit.columns.map(
+      (column) =>
+        (available * column.share) /
+        fit.columns.reduce((sum, each) => sum + each.share, 0),
     )
-    expect(placeBeside(one, 1, "right", { width: 400, height: 300, spare: 0 })).toBeNull()
-    expect(placeBeside(one, 1, "right", roomy)).toBe("right")
+    expect(widths[1]).toBeCloseTo(minWidth)
+    expect(widths[0]).toBeCloseTo(minWidth + 100)
+  })
+
+  it("cannot fit what even the minimum will not hold", () => {
+    const stacked = splitPane(singlePane("a"), 1, "bottom", "b")
+    expect(
+      fitted(stacked, { width: 1000, height: 2 * minHeight + gutter - 1 }),
+    ).toBeNull()
+    expect(columnsFit(3, 3 * minWidth + 2 * gutter)).toBe(true)
+    expect(columnsFit(3, 3 * minWidth + 2 * gutter - 1)).toBe(false)
+  })
+
+  it("measures an edge's two sides from the room, not from what is drawn", () => {
+    const two = splitPane(singlePane("a"), 1, "right", "b")
+    expect(
+      edgeSides(two, { axis: "x", column: 0 }, { width: 1008, height: 800 }),
+    ).toEqual({
+      before: 500,
+      after: 500,
+    })
+    expect(
+      edgeSides(two, { axis: "x", column: 5 }, { width: 1008, height: 800 }),
+    ).toBeNull()
   })
 })
 

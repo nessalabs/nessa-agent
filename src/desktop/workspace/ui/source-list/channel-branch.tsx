@@ -17,13 +17,13 @@ import {
   selectFocusedChannel,
   selectShowAll,
 } from "../../adapters/store/selectors"
-import { commandKey } from "../../adapters/dom/shortcuts"
+import { useBesideKey } from "../session-actions"
 import { branchCap } from "../../model/session-groups"
 import { IconButton } from "../chrome/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
-import { useFocusedRoom } from "../session-actions"
 import { ThreadRow } from "./thread-row"
 import "./channel-branch.css"
+import { tooltip } from "../../../ui/tooltip"
 
 /**
  * A channel in the sidebar that lists sessions inline. Choosing it opens its
@@ -37,8 +37,8 @@ export const ChannelBranch = memo(function ChannelBranch({
 }: {
   channelId: string
 }) {
+  const besideKey = useBesideKey()
   const dispatch = useWorkspaceDispatch()
-  const room = useFocusedRoom()
   const channel = useWorkspaceSelector((state) => selectChannel(state, channelId))
   const expanded = useWorkspaceSelector((state) =>
     selectChannelExpanded(state, channelId),
@@ -63,14 +63,13 @@ export const ChannelBranch = memo(function ChannelBranch({
           data-current={current || undefined}
           data-unread={activity.unread || undefined}
           aria-expanded={expanded}
-          title={channel.topic}
+          {...tooltip(channel.topic)}
           onClick={(event) => {
-            const beside = commandKey(event)
+            const beside = besideKey.asks(event)
             dispatch(
               openChannel({
                 channelId: channel.id,
                 beside,
-                room: beside ? room() : undefined,
               }),
             )
           }}

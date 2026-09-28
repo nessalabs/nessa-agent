@@ -3,7 +3,7 @@
 ## Purpose
 
 Turn the desktop window's workspace spike into production frontend code:
-organisation (sections → channels → sessions), chat panes that split and move,
+the workspace's overview (sections → channels → sessions), chat panes that split and move,
 two selectable layouts, Settings, and themeable icons. It extends
 [0001](../done/0001-redux-toolkit-for-product-state.md)'s product state and
 [0002](../done/0002-conversation-vertical-and-gateway.md)'s gateway seam to the
@@ -45,13 +45,19 @@ The desktop window gets a `workspace` vertical in `src/desktop/workspace/`,
 laid out feature-first with roles below, like `src/conversation/`.
 
 - **`model/`** holds pure values and rules:
-  - the organisation's types (`Section`, `Channel`, `SessionSummary`, the
-    session's model from the SDK catalogue);
+  - the **overview**'s types (`model/overview.ts`: `Section`, `Channel`,
+    `SessionSummary`, the session's model from the SDK catalogue) — see
+    _Naming the overview_ below;
   - a **pane layout** (`pane-layout.ts`) of columns of stacked panes, one
     focused, with tested operations — split, move, swap, nudge, close, even
     out, focus — and the limits of four panes and three columns;
     `pane-sizing.ts` holds the rules that need measured pixels: placements,
-    whether a pane still fits (300 × 220), and edge drags held to that;
+    the **one fit rule** (`arrange`, `fitted`: every pane at least 300 × 220)
+    and edge drags held to it; `drop.ts` holds what a drop on a pane's zone
+    does, the one outcome a drag previews and the command commits;
+  - why the source refused (`failure.ts`, a typed reason — the sentence a
+    person reads is the UI's, `ui/failure-copy.ts`), and what the window
+    keeps of what it does not show (`retention.ts`);
   - session grouping ("Needs you", "Running", "Earlier"), search, and the
     new-session lifecycle, where a draft is never listed and is let go once no
     pane shows it.
@@ -60,45 +66,138 @@ laid out feature-first with roles below, like `src/conversation/`.
 - **`adapters/`** holds:
   - `store/`: the Redux slice, which only names actions over the use cases;
     `commands.ts`, the one list of commands; `effects.ts`, listener effects;
-    `refusal.ts`, which tells the source's typed refusals from faults for
-    both; `hooks.ts`, the store's typed hooks; and memoised selectors per pane
+    `hooks.ts`, the store's typed hooks; and memoised selectors per pane
     and per sidebar row;
   - `in-memory/`: an **in-memory `WorkspaceSource`**, the only home of sample
     data and the scripted, streamed replies, on timers it owns and cancels;
   - `dom/`: what belongs to the page, not the product — FLIP motion, drag and
-    drop, pointer resizing, keys, a first message's arrival, the clock's ticks.
+    drop (`drag.ts`), pointer resizing, keys and Tab order, focus following the
+    focused pane (`focus.ts`), the page's measure of the panes' room
+    (`measure.ts`), a first message's arrival, the clock's ticks.
 - **`ui/`** holds each component once:
   - source list (both sidebars as variants of one component), session list,
     pane grid, pane, pane header, transcript, transcript heading, message, tool
     steps, approval card, pane home (the window's own `Home`, given the
-    composer's props), drop target, quick switcher and empty states;
-  - **two layout compositions** in `ui/layouts/` that only arrange those.
+    composer's props), quick switcher and empty states;
+  - **one workspace shell** (`ui/layouts/workspace-shell.tsx`) and two
+    layouts that are only a `SidebarRegion` each — see _Layouts_.
 
-The port is narrow and speaks the workspace's own types: the organisation, a
+The port is narrow and speaks the workspace's own types: the overview, a
 session's transcript, **one stream of replacement updates** (a summary, a
 transcript, a removal), send, approve and deny, and the three things the lists
 let a person change: pin, archive, mark read. Refusals are a typed
 `WorkspaceSourceError` with a reason; anything else a call throws is a fault,
-logged as one. Every replacement carries the source's **revision** of it
-(`model/revision.ts`), and the newer revision wins whichever channel brought it
-and whenever it arrived, so an update that overtakes a read, a read answered
-late, or an organisation read while updates already flow cannot undo anything.
-A removal is remembered with its revision, so an older read cannot bring the
-session back.
+logged as one (`failureReason`, the one place that tells them apart). State
+holds the reason, never a sentence. Every replacement carries the source's
+**revision** of it (`model/revision.ts`), and the newer revision wins whichever
+channel brought it and whenever it arrived, so an update that overtakes a read,
+a read answered late, or an overview read while updates already flow cannot
+undo anything. A session has two counters — its summary's and its
+conversation's — never compared with each other; **a removal is counted with
+the summary** (it is the summary's next revision), and is remembered with that
+revision, so an older read cannot bring the session back. An update at a
+revision the source could not have sent is let go, and logged where it is
+received (`followWorkspace`, `loadWorkspace`); the reducers stay pure.
+
+**The stream may lose updates; the overview is the resync.** The port does
+not ask the source to replay what a dropped connection or a late listener
+missed. A read of the overview is instead the source's whole list when it
+answered, and so authoritative: dispatched again (`loadWorkspace`), a session
+it does not list — or lists in a channel it does not list — is taken out by
+the same removal path the stream's removals take, at the revision held, and
+the conversation of every shown session is read again. The one exception is a
+session the stream brought while the read was on its way, which the read may
+predate: it stays, until a later read says otherwise. A session the source
+has not spoken of (revision 0) is the window's own and stays. A pane is never
+left showing a session that is not there: a removal closes the pane showing
+it, and the last pane starts over as a new session's home in the same channel.
+
+**What is kept of what is not shown** (`model/retention.ts`, as data): every
+conversation a pane shows, and the eight most recently active of the rest; the
+newest 256 removals. Anything let go is read again when a pane shows it; a read
+older than 256 removals is corrected by the next overview read.
 
 **Commands.** Everything a person or an agent does is dispatched from
 `adapters/store/commands.ts`: plain actions where the state alone decides
-(`openBeside`, `movePane`, `toggleSidebar`, …), thunks where a fresh id, the
-time or the source is needed (`newSession`, `closePane`, `sendMessage`,
-`approve`, `deny`, …), taking them from the store's thunk extra argument
-following [dependency injection](../../design/dependency-injection.md). The
+(`openSession`, `focusPane`, `toggleSidebar`, …), thunks where a fresh id, the
+time, the source or the page's measure of the panes' room is needed
+(`newSession`, `openBeside`, `movePane`, `nudgePane`, `closePane`,
+`sendMessage`, `approve`, `deny`, …), taking them from the store's thunk extra
+argument following [dependency injection](../../design/dependency-injection.md):
+`WorkspaceDependencies` carries `measure(): WorkspaceRoom | undefined`,
+composed in `src/desktop/dependencies.ts` from `adapters/dom/measure.ts`. The
 thunks live beside the slice rather than in `application/`, because the
 architecture check keeps Redux out of `application/`, as it does for the
 conversation vertical. What follows from a change whoever caused it — reading
 a newly shown session's transcript, marking a shown one read — is a listener
 effect, so a plain action from an agent gets it too. "Shown means read" has
-that one owner: opening a session, the organisation's first session, and a
+that one owner: opening a session, the overview's first session, and a
 shown session the source marks unread again all reach it.
+
+**One fit rule for every change of layout.** Split, open beside, drop, move
+and the keyboard's nudge all go through `arrange` in `model/pane-sizing.ts`:
+the new layout is taken if every pane is readable (300 × 220) in the room the
+page measures — the grid's laid-out size, never a flight's transformed box —
+rebalancing shares where it must; else if it is once the sidebar folds; else
+not at all. A named side is that side or nothing (Split Right never silently
+splits down); "beside" with no side named — ⌘-click — is to the right, else
+below, else in the focused pane's place. With nothing measured, nothing new is
+placed: no room is not room. Menus and the switcher ask the same rule before
+they offer anything (`canOpenBeside`, `canNudge`, `previewDrop`), so an item is
+disabled, or says what it will do ("Open Here…", "Go to Pane"), rather than
+promise what it will not. When the panes' room changes (a resize, a side column
+opening), `fitPanes` holds them to the same minimum; the side columns fold
+first (`model/window-fit.ts`, asking the same `columnsFit`); where even that
+cannot fit them, each pane's composer takes a compact, one-line form rather
+than be clipped.
+
+**Side columns: chosen, or folded for room** (`src/desktop/model/side-column.ts`,
+shared by the workspace's sidebar and session list and by Settings' sidebar):
+
+| column | event | next |
+| --- | --- | --- |
+| any | the person shows it | open, not folded (drawn at once, at any width) |
+| any | the person hides it | closed, not folded |
+| open | no room (window width, pane columns, a split needing it) | open, folded |
+| open, folded | room again | drawn |
+| closed | room or none | closed |
+
+A folded sidebar can be revealed from the window's left edge by the one
+edge-peek reveal (`useEdgePeek`) in the classic shell, both workspace layouts
+and Settings; the pointer or keyboard focus inside it keeps it shown.
+
+**Focus follows the focused pane** (`adapters/dom/focus.ts`, one mechanism):
+whenever another pane takes focus — a split, ⌘N, ⌘W, ⌘1–4, ⇧⌘[ ⇧⌘], a pick in
+⌘K, an agent's dispatch — the caret lands in its composer; when what held the
+caret went away (an answered approval), it lands there too. Focus in a dialog
+or a menu, or in a list walked with the arrow keys, is left alone. Closing ⌘K
+without a pick, or Settings, gives focus back to what opened it.
+
+**Drag and drop** is carried by the pointer (`adapters/dom/drag.ts`), not the
+browser's drag, and a pane's header carries the pane, never the window (no
+drag region in it). What is carried is a translucent copy of the pane itself,
+cloned once when the drag begins — its conversation where it was scrolled
+to, its composer and chips; a session from a list is drawn from what the
+window holds of it. **While dragging, the copy belongs to the pointer**: it
+keeps its size and grab offset and follows one to one, with no pull toward a
+target. **The result is shown by the layout**: over a zone, the real panes
+move to where the drop would put them, only when the zone changes, and a
+calm placeholder marks exactly the rect the drop will take — from
+`dropOutcome`, the same outcome the drop's command commits, so nothing jumps
+(`panes.test.ts` holds preview == commit for every zone; every preview rect
+is held inside the grid). **On the drop, it snaps**: the copy flies from the
+pointer into the placeholder's rect and hands over to the real pane. A zone
+the fit rule refuses offers nothing; a session already on screen offers "Go
+to Pane". Escape, or a drop elsewhere, flies the copy home as the panes go
+back. Only transforms move; the zone is announced in a polite live region;
+with less motion, nothing but the copy moves. Chrome and WebKit are checked
+frame by frame: the copy's corner is the pointer less the grab offset, no
+pane leaves the grid, and panes move one way between zone changes.
+
+**What is typed and not sent** is product state: `composerText` in the
+workspace slice, by session or new session, written by the composer (and by an
+agent, `setComposerText`), so it survives a change of layout, Settings, or a
+pane showing another session, and goes with its session.
 
 The desktop gets its own store and composition root: `src/desktop/store.ts`,
 with `src/desktop/dependencies.ts` building its dependencies and
@@ -107,10 +206,16 @@ A pane subscribes only to its own session, so streaming into one pane renders
 one pane; `ui/panes/pane-isolation.test.tsx` holds that.
 
 **Layouts.** Settings › Workspace › Layout chooses _three columns_, _sessions
-in the sidebar_, or _classic_. Both workspace layouts share the pane grid and
-everything in a pane; they differ in the sidebar (channels beside a session
-list, or channels that disclose sessions), the session list, and the quick
-switcher, which only the second has. Where the spike's two copies of a pane
+in the sidebar_, or _classic_. **The only difference between the two
+workspace layouts is how the sidebar region is composed**: which sidebar
+(channels to choose from, or channels that disclose their sessions) and
+whether a session list stands beside it — a `SidebarRegion`, which is all a
+layout file holds. Everything else is the workspace shell's, once: the quick
+switcher (⌘K, and ⌘\ to pick what opens beside, in both), one keyboard map
+(`workspaceShortcuts`; ⌘F searches the list where there is one), the pane
+grid and all pane behaviour, focus, drag and drop, the titlebar's controls,
+the edge reveal, and fitting the side columns (`layouts.test.tsx` holds that
+both layouts answer the same keys with the same parts). Where the spike's two copies of a pane
 differed, one design was kept for both: the three-column pane chrome and grid
 (which also gives the second layout split down and moving panes), the
 second's richer transcript (step groups with diff counts, code, lists, the
@@ -121,11 +226,56 @@ and removing it is a product decision this work does not make.
 
 Settings is a typed catalogue: categories → tabs → settings, with the search
 index derived from it, in `src/desktop/settings/model/`, rendered generically
-by `src/desktop/settings/ui/`. Preferences stay host-side adapters that notify
-other readers in the same window — theme, icon family, workspace layout and
-tint are each a `storedPreference` (`src/desktop/adapters/stored-preference.ts`).
-They are not Redux state, because an agent does not dispatch "tint from
-picture".
+by `src/desktop/settings/ui/` (`src/desktop/settings/index.ts` is its map).
+Preferences stay host-side adapters that notify other readers in the same
+window — theme, icon family, workspace layout, tint, greeting, motion
+(System/Full/Reduced, carried on the root as `data-motion`, which every
+duration token and script motion reads), drifting light, ⌘-click opens
+beside, running sessions first — each a `storedPreference`
+(`src/desktop/adapters/stored-preference.ts`). They are not Redux state,
+because an agent does not dispatch "tint from picture". "Show session list"
+is the workspace's own column choice, the same as ⌥⌘S. Settings is modal: the
+window under it is inert while it is open, and focus goes back to what opened
+it; its sidebar folds for room below a page's 420px, as the side columns do.
+
+Every surface's titlebar — classic, both layouts, Settings — carries the
+sidebar toggle, then Back and Forward (`src/desktop/ui/history-buttons.tsx`),
+in one place whether the sidebar is drawn, revealed or hidden. The window has
+no history yet: the two rest, and their props are the one seam history will
+attach to; ⌘[ and ⌘] are reserved for them. Controls name themselves in one
+tooltip for the whole window, in the window's own glass
+(`src/desktop/adapters/use-window-tooltips.ts`).
+
+**The titlebar's safe area.** Titlebar content starts at the safe area;
+nothing draws under the window's controls. `--desktop-titlebar-safe-start`
+is defined once, from the host's inset for its traffic lights and the width
+of our control cluster (sidebar toggle, Back, Forward, and the session list's
+toggle or New Session), and every titlebar-row element derives its start from
+it (`styles.test.ts` holds the rules to it). A column's title never shares the
+titlebar row: every side column's head is one component
+(`ui/chrome/column-header.tsx`) — the titlebar row holding only the column's
+own action at its far end, then the title on a row of its own, then its
+search — so no title ever sits under the controls or moves when a sidebar
+folds. A column's titlebar-row action hides at once as the column folds and
+shows once it has slid in; a pane's header is hidden while its pane flies and
+changes size. A frame-sampled check over every transition that moves titlebar
+content (⌘B, ⌥⌘S, the edge reveal, a resize that folds, a split, Settings,
+a change of layout), in Chrome and WebKit at 1440 × 900 and 1000 × 700, finds
+nothing that reads or takes a press under the controls in any frame.
+
+**A column's edge dragged past its narrowest folds it** (`draggedEdge`, in
+`src/desktop/model/side-column.ts`): it resists at its minimum, folds once
+dragged 40px past it, and opens again when dragged 40px back out from where
+it folded (the window's left edge, for the sidebar) — the person's own
+choice, as a toggle is, moving as a toggle does.
+
+**Settings pending the backend.** What lives outside the window is shown,
+marked `pending` in the catalogue, its control disabled and its row saying
+"Not available yet": open at login, show in menu bar, open to, the three
+notifications, update checks and channel, keep finished sessions, default
+model, thinking and fast mode, providers, agents, Nessa account, GitHub, MCP
+servers, default access, remember approvals, crash reports, session history.
+No control may look as if it works when it does not (`settings-view.test.tsx`).
 
 Icons resolve through a provider that mirrors nessa_ui's `NessaIconProvider`
 contract. It has semantic roles, nested partial overrides, and the resolution
@@ -144,7 +294,8 @@ panes' arrangement changes, never while an edge is dragged. Blur and large
 shadows pause while panes fly; a new pane's content fills in the frame after
 its shell, in a transition. Durations and curves are `--desktop-*` tokens
 defined once in `styles.css` and read by script and stylesheet alike; reduced
-motion sets the durations to zero there, and script motion follows with no
+motion — chosen in Settings, or the system's — sets the durations to zero
+there under the root's `data-motion`, and script motion follows with no
 check of its own.
 
 ### Commands in flight
@@ -177,7 +328,7 @@ pinned nor archived. Discarding its last refused message takes a shown one
 back to the new session's home it came from, under the same id, and lets an
 unshown one go; either way the window forgets all it held of it, and a summary
 from the source listed later under that id replaces the home, keeping the
-model chosen there. A summary is listed by one rule whether the organisation
+model chosen there. A summary is listed by one rule whether the overview
 read or the stream brings it. A read that fails after a conversation arrived
 another way changes nothing, and a read begun before its session was removed
 is let go whenever it answers. Starting over, a home keeps the model chosen
@@ -216,7 +367,21 @@ leave a read or a send hanging. The one mark the window clears itself is
 | `archiveSession` | nothing; a session at revision 0 is not archived (Archive is disabled) | its removal, delivered first, takes it out of the lists with everything the source said up to it; its pane closes, or the last starts over | left where it is | a summary the removal outranks stays out, whenever it arrives |
 | a session is shown | marked read, and the source told | nothing more | the mark stays cleared | marked unread again while shown: read again |
 | a shown session's transcript is read | the heading | the conversation, unless a newer one arrived meanwhile | the pane says why, and is not read again until "Try Again" (`retryTranscript`); a failure no pane shows any more is not kept, so the session is read afresh when shown again | the newer of it and the read's answer is kept, in either order |
-| the organisation is read | nothing yet | the workspace opens on its first session; summaries the stream already brought, if newer, are kept | the workspace says why, with "Try Again" | a removal that arrived first keeps the session out |
+| the overview is read | nothing yet | the workspace opens on its first session; summaries the stream already brought, if newer, are kept | the workspace says why, with "Try Again" | a removal that arrived first keeps the session out |
+| the overview is read again (the resync) | nothing | a session it does not list, or lists in a channel it does not list, is taken out at the revision held — its pane closes, or the last starts over; every shown conversation is read again | an open workspace stays open, as it was | a summary the stream brought while the read was on its way stays |
+| a shown session's transcript read is answered with one the window cannot use (another session's, revision 0) | — | a fault, logged; the pane says why, with "Try Again" | — | — |
+| an update at a revision the source could not have sent | — | let go, logged where received | — | — |
+
+### Naming the overview
+
+The workspace's sections → channels → sessions was first "organisation",
+which collides with the wire's tenant `organization`. "Directory" collides
+too: a session runs in a working directory (`ConversationRuntime.workspace`,
+"Working directory" in the conversation details), and the panel handles
+dropped directories. "Listing" collides with the backend's
+`ConversationListing` port. **Overview** names what the read is — everything
+the source holds, at a glance — and is used nowhere else; the port method is
+`overview()`.
 
 ## Alternatives considered
 
@@ -235,8 +400,11 @@ leave a read or a send hanging. The one mark the window clears itself is
   the wrapper, and an agent's dispatch would not animate. Measuring in the
   commit phase needs neither.
 - **Drag state in the store.** What the pointer carries lives only as long as
-  the pointer holds it and no agent asks for it; a small store beside the tree
-  lets a pane subscribe to "am I lifted?" without a Redux round trip.
+  the pointer holds it and no agent asks for it; it stays in the drag adapter,
+  which asks the store only when the zone changes.
+- **The browser's own drag and drop.** Its drag image cannot be full size or
+  move, so the carried pane could not become the window it will be; a pointer
+  drag can.
 - **Build the icon provider in nessa_ui now.** It is the right home, but
   nessa_ui is out of scope for this work. Mirroring the contract keeps the swap
   mechanical.

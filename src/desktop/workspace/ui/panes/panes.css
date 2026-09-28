@@ -84,32 +84,43 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
   background: color-mix(in oklab, var(--background) 30%, white);
 }
 
-/* The pane being carried waits, quieter, where it was. */
+/*
+ * The pane being carried leaves its place empty and dimmed — its slot, which
+ * a preview moves to where it would land, under the placeholder.
+ */
 .workspace-pane[data-lifted] {
-  opacity: 0.5;
+  background: color-mix(in oklab, var(--foreground) 2%, transparent);
+  box-shadow: inset 0 0 0 1px var(--desktop-rim);
+}
+
+.workspace-pane[data-lifted] > * {
+  visibility: hidden;
 }
 
 /*
- * While panes travel, nothing inside them repaints expensively: the glass
- * blur and deep shadows wait until they have landed.
+ * While panes travel — a flight (`data-flipping`), or a drag's preview of
+ * where a drop would put them (`data-drag-reflow`) — nothing inside them
+ * repaints expensively: the glass blur and deep shadows wait until they have
+ * landed. One set of rules for both, so a drop that hands a preview over to a
+ * flight changes no style.
  */
-.workspace[data-flipping] .workspace-pane,
-.workspace[data-flipping] .workspace-pane > * {
+.workspace:is([data-flipping], [data-drag-reflow]) .workspace-pane,
+.workspace:is([data-flipping], [data-drag-reflow]) .workspace-pane > * {
   will-change: transform;
 }
 
-.workspace[data-flipping] .workspace-pane {
+.workspace:is([data-flipping], [data-drag-reflow]) .workspace-pane {
   box-shadow: inset 0 0 0 1px var(--desktop-rim);
   transition: none;
 }
 
-.workspace[data-flipping] .workspace-pane .desktop-composer {
+.workspace:is([data-flipping], [data-drag-reflow]) .workspace-pane .desktop-composer {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   box-shadow: none;
 }
 
-.workspace[data-flipping] .workspace-pane-edge {
+.workspace:is([data-flipping], [data-drag-reflow]) .workspace-pane-edge {
   visibility: hidden;
 }
 
@@ -174,6 +185,9 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
 
 .workspace-panes[data-multi] .workspace-pane-header {
   cursor: grab;
+  /* Carries the pane, never the window (`pane-header.tsx`). */
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 .workspace-panes[data-multi] .workspace-pane-header:active {
@@ -182,7 +196,7 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
 
 /* In the window's corner, with nothing beside it, the header steps past the window controls. */
 .workspace[data-panes-alone] .workspace-pane[data-corner] .workspace-pane-header {
-  padding-left: calc(var(--workspace-controls-end) + 4px);
+  padding-left: var(--desktop-titlebar-safe-start);
 }
 
 .workspace-panes[data-multi] .workspace-pane:not([data-focused]) .workspace-pane-header {
@@ -273,8 +287,7 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
   inset: 0;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .workspace-pane {
-    animation: none;
-  }
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .workspace-pane {
+  animation: none;
 }

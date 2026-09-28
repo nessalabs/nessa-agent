@@ -2,9 +2,9 @@
  * What the in-memory source's sample sessions are written with: the models
  * they run on, the parts an agent's message is made of, and the shape of one
  * sample session. The samples themselves are in `sample-starred.ts` and
- * `sample-labs.ts`; `sample-workspace.ts` turns them into an organisation.
+ * `sample-labs.ts`; `sample-workspace.ts` turns them into an overview.
  */
-import type { ModelRef, SessionStatus } from "../../model/organisation"
+import type { ModelRef, SessionStatus } from "../../model/overview"
 import type { Approval, Part } from "../../model/transcript"
 
 export const models = {

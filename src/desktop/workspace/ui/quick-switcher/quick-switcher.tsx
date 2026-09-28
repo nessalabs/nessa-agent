@@ -10,8 +10,9 @@ import { DesktopIcon } from "../../../ui/icons"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectChannels, selectListedSessions } from "../../adapters/store/selectors"
 import { useNow } from "../../adapters/dom/clock"
+import { focusComposer } from "../../adapters/dom/focus"
 import { commandKey, commandLabel } from "../../adapters/dom/shortcuts"
-import { agentName, agentOf } from "../../model/organisation"
+import { agentName, agentOf } from "../../model/overview"
 import { switcherRows, type SwitcherRow } from "../../model/session-search"
 import { sessionTime } from "../../model/time-labels"
 import { StatusGlyph } from "../chrome/status-glyph"
@@ -71,7 +72,10 @@ export function QuickSwitcher({
     channels.find((channel) => channel.id === id)?.name ?? ""
 
   // Modal: focus stays in the field, even when a menu that just closed hands
-  // focus back to its trigger a frame after the switcher opened.
+  // focus back to its trigger a frame after the switcher opened. Closed
+  // without a pick, focus goes back where it was; a pick hands it to the
+  // focused pane's composer, wherever the pick put it.
+  const picked = useRef(false)
   useEffect(() => {
     const restore = document.activeElement as HTMLElement | null
     inputRef.current?.focus()
@@ -81,9 +85,14 @@ export function QuickSwitcher({
     document.addEventListener("focusin", keep)
     return () => {
       document.removeEventListener("focusin", keep)
-      restore?.focus?.()
+      if (picked.current) focusComposer()
+      else restore?.focus?.()
     }
   }, [])
+  const choose = (row: SwitcherRow, beside: boolean) => {
+    picked.current = true
+    onPick(row, beside)
+  }
 
   const rows = useMemo(
     () => switcherRows({ query, sessions, channels, channelId }),
@@ -110,7 +119,7 @@ export function QuickSwitcher({
     } else if (event.key === "Enter") {
       event.preventDefault()
       const row = rows[clamped]
-      if (row) onPick(row, mode === "split" || commandKey(event))
+      if (row) choose(row, mode === "split" || commandKey(event))
     } else if (event.key === "Tab") {
       event.preventDefault()
     }
@@ -179,8 +188,9 @@ export function QuickSwitcher({
                   data-index={index}
                   className="workspace-result"
                   onPointerMove={() => index !== clamped && setActive(index)}
-                  onClick={(event) => onPick(row, mode === "split" || commandKey(event))}
+                  onClick={(event) => choose(row, mode === "split" || commandKey(event))}
                 >
+                  {index === clamped ? <RowKeys mode={mode} /> : null}
                   {row.kind === "session" ? (
                     <>
                       <StatusGlyph status={row.session.status} idle />
@@ -237,27 +247,31 @@ export function QuickSwitcher({
             )
           })}
         </div>
-        <div className="workspace-switcher-foot" aria-hidden="true">
-          <span>
-            <kbd className="workspace-kbd">↑</kbd>
-            <kbd className="workspace-kbd">↓</kbd> to move
-          </span>
-          <span>
-            <kbd className="workspace-kbd">↵</kbd>{" "}
-            {mode === "split" ? "open beside" : "open"}
-          </span>
-          {mode === "open" ? (
-            <span>
-              <kbd className="workspace-kbd">{commandLabel}</kbd>
-              <kbd className="workspace-kbd">↵</kbd> open beside
-            </span>
-          ) : null}
-          <span>
-            <kbd className="workspace-kbd">esc</kbd> close
-          </span>
-        </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * What ↩ does on the chosen row, said on the row itself rather than in a bar
+ * of hints: open it — beside, when the switcher opened to put something
+ * there — and, jumping, ⌘↩ to open it beside instead.
+ */
+function RowKeys({ mode }: { mode: SwitcherMode }) {
+  return (
+    <span className="workspace-result-keys" aria-hidden="true">
+      {mode === "split" ? (
+        <>
+          Open Beside <kbd>↩</kbd>
+        </>
+      ) : (
+        <>
+          Open <kbd>↩</kbd>
+          <span aria-hidden="true">·</span>
+          Beside <kbd>{commandLabel}↩</kbd>
+        </>
+      )}
+    </span>
   )
 }
 

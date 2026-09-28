@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { useGreetingPreference } from "../adapters/window-preferences"
 import { Composer } from "./composer"
 import { HeaderArt } from "./header-art"
 
@@ -16,6 +17,8 @@ export function Home({
   onSend,
   onModelChange,
   initialModel,
+  text,
+  onTextChange,
 }: {
   /** Sends the first message; without it the composer says chat is not connected. */
   onSend?: (text: string) => void
@@ -23,21 +26,27 @@ export function Home({
   onModelChange?: (model: { provider: string; modelId: string }) => void
   /** The catalogue model the composer starts on. */
   initialModel?: { provider: string; modelId: string }
-} = {}) {
+  /** What is typed in the composer and not sent, held by the caller. */
+  text: string
+  onTextChange: (text: string) => void
+}) {
   const [page, setPage] = useState(false)
+  const [greeting] = useGreetingPreference()
 
   return (
     <div className="desktop-home" data-page={page || undefined}>
       <div className="desktop-home-stack">
         <HeaderArt />
         <div className="desktop-home-inner">
-          <h1 className="desktop-greeting">Working late?</h1>
+          {greeting === "on" ? <h1 className="desktop-greeting">Working late?</h1> : null}
           <Composer
             page={page}
             onPageChange={setPage}
             onSend={onSend}
             onModelChange={onModelChange}
             initialModel={initialModel}
+            text={text}
+            onTextChange={onTextChange}
           />
         </div>
       </div>

@@ -2,14 +2,10 @@
  * Motion helpers the DOM adapters share. Durations and curves are the
  * stylesheet's tokens (`--desktop-*` in `styles.css`), read from the element
  * that moves, so script and CSS animate on one clock and one curve, and
- * reduced motion — which the stylesheet turns into zero durations — reaches
- * script motion with no second check. A missing token is no motion.
+ * reduced motion — which the stylesheet turns into zero durations under the
+ * root's `data-motion` (`adapters/motion-preference.ts`) — reaches script
+ * motion with no second check. A missing token is no motion.
  */
-
-/** Whether the person asked for less motion; for scrolling, which has no duration token. */
-export const reducedMotion = (): boolean =>
-  typeof matchMedia !== "undefined" &&
-  matchMedia("(prefers-reduced-motion: reduce)").matches
 
 /** A curve token's value at `element`, e.g. the spring the stylesheet defines; null when unset. */
 export function motionToken(element: Element, name: string): string | null {

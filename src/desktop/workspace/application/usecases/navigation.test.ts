@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { focusedPane, panesOf } from "../../model/pane-layout"
 import { sessionListLimits, sidebarLimits } from "../../model/window-fit"
-import { testOrganisation } from "../../testing"
-import { initialWorkspace, type WorkspaceState } from "../workspace-state"
+import { roomyGrid, testOverview } from "../../testing"
+import { drawnColumns, initialWorkspace, type WorkspaceState } from "../workspace-state"
 import {
   fitToWindow,
   openChannel,
@@ -17,11 +17,12 @@ import {
   toggleShowAll,
   toggleSidebar,
 } from "./navigation"
-import { organisationLoaded } from "./updates"
+import { closePane, openBeside } from "./panes"
+import { overviewLoaded } from "./updates"
 
 const loaded = () =>
-  organisationLoaded(initialWorkspace, {
-    organisation: testOrganisation(),
+  overviewLoaded(initialWorkspace, {
+    overview: testOverview(),
     draftId: "unused",
   })
 
@@ -63,10 +64,11 @@ describe("opening a channel from the sidebar", () => {
   })
 
   it("opens it beside the focused pane when asked", () => {
-    expect(shown(openChannel(loaded(), { channelId: "gateway", beside: true }))).toEqual([
-      "a",
-      "d",
-    ])
+    expect(
+      shown(
+        openChannel(loaded(), { channelId: "gateway", beside: true, room: roomyGrid }),
+      ),
+    ).toEqual(["a", "d"])
   })
 
   it("stacks beside the focused pane when a column would not be readable", () => {
@@ -92,7 +94,7 @@ describe("revealing a session", () => {
     let state = toggleSidebar(loaded(), { open: false })
     state = toggleSection(state, { sectionId: "labs" })
     state = revealSession(state, { sessionId: "d" })
-    expect(state.chrome.sidebarOpen).toBe(true)
+    expect(state.chrome.sidebar.open).toBe(true)
     expect(state.tree.collapsedSections).not.toContain("labs")
     expect(state.tree.expandedChannels).toContain("gateway")
     expect(state.view).toEqual({ kind: "channel", channelId: "gateway" })
@@ -121,9 +123,9 @@ describe("folding the sidebar's parts", () => {
 describe("the side columns", () => {
   it("toggles each column, and does nothing when asked for what it is", () => {
     const state = loaded()
-    expect(toggleSidebar(state).chrome.sidebarOpen).toBe(false)
+    expect(toggleSidebar(state).chrome.sidebar.open).toBe(false)
     expect(toggleSidebar(state, { open: true })).toBe(state)
-    expect(toggleSessionList(state).chrome.sessionListOpen).toBe(false)
+    expect(toggleSessionList(state).chrome.sessionList.open).toBe(false)
   })
 
   it("keeps dragged widths within the columns' limits", () => {
@@ -141,16 +143,80 @@ describe("the side columns", () => {
       sidebarWidth: 240,
       sessionListWidth: 312,
     })
-    expect(fitted.chrome).toMatchObject({ sidebarOpen: false, sessionListOpen: false })
+    // Folded for room: the person's choice stands; only what is drawn changes.
+    expect(fitted.chrome).toMatchObject({
+      sidebar: { open: true, folded: true },
+      sessionList: { open: true, folded: true },
+    })
+    expect(drawnColumns(fitted.chrome)).toEqual({ sidebar: false, sessionList: false })
     const noList = fitToWindow(loaded(), {
       windowWidth: 500,
       sidebarWidth: 264,
       sessionListWidth: 0,
     })
-    expect(noList.chrome).toMatchObject({ sidebarOpen: false, sessionListOpen: true })
+    expect([noList.chrome.sidebar.folded, noList.chrome.sessionList.folded]).toEqual([
+      true,
+      false,
+    ])
     const wide = loaded()
     expect(
       fitToWindow(wide, { windowWidth: 1440, sidebarWidth: 240, sessionListWidth: 312 }),
     ).toBe(wide)
+  })
+
+  it("brings a column it folded back once the window has room again", () => {
+    const narrow = fitToWindow(loaded(), {
+      windowWidth: 600,
+      sidebarWidth: 240,
+      sessionListWidth: 312,
+    })
+    const wide = fitToWindow(narrow, {
+      windowWidth: 1440,
+      sidebarWidth: 240,
+      sessionListWidth: 312,
+    })
+    expect(drawnColumns(wide.chrome)).toEqual({ sidebar: true, sessionList: true })
+    expect([wide.chrome.sidebar.folded, wide.chrome.sessionList.folded]).toEqual([
+      false,
+      false,
+    ])
+  })
+
+  it("never brings back a column the person hid", () => {
+    const hidden = toggleSidebar(loaded())
+    const wide = fitToWindow(hidden, {
+      windowWidth: 1440,
+      sidebarWidth: 240,
+      sessionListWidth: 312,
+    })
+    expect(drawnColumns(wide.chrome).sidebar).toBe(false)
+    expect(wide).toBe(hidden)
+  })
+
+  it("lets the person show a folded column at once, their choice winning", () => {
+    const narrow = fitToWindow(loaded(), {
+      windowWidth: 600,
+      sidebarWidth: 240,
+      sessionListWidth: 312,
+    })
+    const shown = toggleSidebar(narrow)
+    expect(drawnColumns(shown.chrome).sidebar).toBe(true)
+    expect(shown.chrome.sidebar.folded).toBe(false)
+  })
+
+  it("brings a sidebar folded for a split back when the column closes", () => {
+    const split = openBeside(loaded(), {
+      sessionId: "c",
+      room: { width: 500, height: 800, spare: 260 },
+    })
+    expect(split.chrome.sidebar.folded).toBe(true)
+    const closed = closePane(split, { pane: split.panes!.focused })
+    // The layout fits the window again as the columns change (`useFitOnResize`).
+    const fitted = fitToWindow(closed, {
+      windowWidth: 900,
+      sidebarWidth: 240,
+      sessionListWidth: 0,
+    })
+    expect(drawnColumns(fitted.chrome).sidebar).toBe(true)
   })
 })

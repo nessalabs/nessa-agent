@@ -2,7 +2,7 @@
  * Everything Settings holds, as data: a few categories in the sidebar, each
  * with the tabs across the top of its page, and the settings on each tab.
  * This table is the one owner of every name and description Settings shows
- * and of what its search can find; `ui/settings/` only lays them out.
+ * and of what its search can find; `ui/` beside it only lays them out.
  *
  * ```text
  * category (sidebar) ──▶ tab (strip under the title) ──▶ setting (a row)
@@ -20,6 +20,7 @@ export const settingsCategories = [
       { id: "general", label: "General", keywords: "startup login menu bar window" },
       { id: "notifications", label: "Notifications", keywords: "alerts sound banner" },
       { id: "updates", label: "Updates", keywords: "version release channel beta" },
+      { id: "experimental", label: "Experimental", keywords: "labs preview try" },
     ],
   },
   {
@@ -94,12 +95,19 @@ interface SettingShape {
   detail?: string
   /** Words a person might search for that the label and detail do not say. */
   keywords?: string
+  /**
+   * Shown, but not available yet: what it changes lives outside the window
+   * — the host, the gateway, an account — and is not attached. Its control is
+   * disabled and says so; none may look as if it works.
+   */
+  pending?: true
 }
 
 export const settingsEntries = [
   // General › General
   {
     id: "open-at-login",
+    pending: true,
     tab: "general",
     label: "Open at login",
     detail: "Nessa starts in the menu bar when you log in.",
@@ -107,6 +115,7 @@ export const settingsEntries = [
   },
   {
     id: "menu-bar",
+    pending: true,
     tab: "general",
     label: "Show in menu bar",
     detail: "The panel stays one click away while the window is closed.",
@@ -114,6 +123,7 @@ export const settingsEntries = [
   },
   {
     id: "window-opens-to",
+    pending: true,
     tab: "general",
     label: "Open to",
     keywords: "home last session start",
@@ -121,6 +131,7 @@ export const settingsEntries = [
   // General › Notifications
   {
     id: "notify-needs-you",
+    pending: true,
     tab: "notifications",
     label: "When a session needs you",
     detail: "An approval or a question is waiting.",
@@ -128,6 +139,7 @@ export const settingsEntries = [
   },
   {
     id: "notify-finished",
+    pending: true,
     tab: "notifications",
     label: "When a long turn finishes",
     detail: "Only for turns that ran longer than a minute.",
@@ -135,6 +147,7 @@ export const settingsEntries = [
   },
   {
     id: "notify-sound",
+    pending: true,
     tab: "notifications",
     label: "Play a sound",
     keywords: "chime audio",
@@ -142,16 +155,27 @@ export const settingsEntries = [
   // General › Updates
   {
     id: "update-automatically",
+    pending: true,
     tab: "updates",
     label: "Check for updates automatically",
     keywords: "auto upgrade",
   },
   {
     id: "update-channel",
+    pending: true,
     tab: "updates",
     label: "Release channel",
     detail: "Beta builds arrive a week or two earlier.",
     keywords: "beta stable",
+  },
+  // General › Experimental
+  {
+    id: "agents-overview",
+    tab: "experimental",
+    label: "Agents overview",
+    detail:
+      "Every agent at a glance, with approvals answered in place. In the sidebar, or ⌘0.",
+    keywords: "needs you approvals running glance dashboard",
   },
   // Appearance › Theme
   { id: "theme-light", tab: "theme", label: "Light", keywords: "theme colour color" },
@@ -208,6 +232,7 @@ export const settingsEntries = [
   // Workspace › Sessions
   {
     id: "keep-sessions",
+    pending: true,
     tab: "sessions",
     label: "Keep finished sessions",
     keywords: "archive delete history",
@@ -228,18 +253,21 @@ export const settingsEntries = [
   // Models › Defaults
   {
     id: "default-model",
+    pending: true,
     tab: "defaults",
     label: "Model",
     keywords: "claude opus sonnet gpt",
   },
   {
     id: "default-thinking",
+    pending: true,
     tab: "defaults",
     label: "Thinking",
     keywords: "reasoning effort",
   },
   {
     id: "fast-mode",
+    pending: true,
     tab: "defaults",
     label: "Fast mode",
     detail: "Faster replies on models that offer it.",
@@ -248,6 +276,7 @@ export const settingsEntries = [
   // Models › Providers
   {
     id: "providers",
+    pending: true,
     tab: "providers",
     label: "Providers",
     keywords: "anthropic openai google api key",
@@ -255,6 +284,7 @@ export const settingsEntries = [
   // Connections › Agents
   {
     id: "agents",
+    pending: true,
     tab: "agents",
     label: "Agents",
     keywords: "claude code codex opencode",
@@ -262,6 +292,7 @@ export const settingsEntries = [
   // Connections › Accounts
   {
     id: "nessa-account",
+    pending: true,
     tab: "accounts",
     label: "Nessa account",
     detail: "Sync settings and sessions between your Macs.",
@@ -269,6 +300,7 @@ export const settingsEntries = [
   },
   {
     id: "github",
+    pending: true,
     tab: "accounts",
     label: "GitHub",
     detail: "Lets agents open pull requests as you.",
@@ -277,6 +309,7 @@ export const settingsEntries = [
   // Connections › Integrations
   {
     id: "mcp-servers",
+    pending: true,
     tab: "integrations",
     label: "MCP servers",
     keywords: "tools model context protocol",
@@ -284,12 +317,14 @@ export const settingsEntries = [
   // Privacy & Permissions › Access
   {
     id: "default-access",
+    pending: true,
     tab: "access",
     label: "Access",
     keywords: "permission ask edit full",
   },
   {
     id: "remember-approvals",
+    pending: true,
     tab: "access",
     label: "Remember approvals for a session",
     detail: "A command you allow once is allowed again in the same session.",
@@ -298,6 +333,7 @@ export const settingsEntries = [
   // Privacy & Permissions › Data
   {
     id: "crash-reports",
+    pending: true,
     tab: "data",
     label: "Share crash reports",
     detail: "Only the report; never your files or conversations.",
@@ -305,6 +341,7 @@ export const settingsEntries = [
   },
   {
     id: "session-history",
+    pending: true,
     tab: "data",
     label: "Session history",
     detail: "Kept on this Mac, in Nessa's data folder.",

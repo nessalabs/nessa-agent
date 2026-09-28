@@ -1,7 +1,8 @@
 import { useThemePreference } from "../../../adapters/theme-preference"
-import { openSettings } from "../../../settings/ui/settings-view"
+import { openSettings } from "../../../settings"
 import { ThemeMenu } from "../../../ui/theme-menu"
 import { commandLabel } from "../../adapters/dom/shortcuts"
+import { tooltip } from "../../../ui/tooltip"
 
 /** The sidebar's foot: "nessa Studio", which opens Settings, and the light theme's menu. */
 export function IdentityFooter() {
@@ -12,7 +13,7 @@ export function IdentityFooter() {
       <button
         type="button"
         className="desktop-identity-button workspace-identity-name"
-        title={`Settings (${commandLabel},)`}
+        {...tooltip("Settings", { shortcut: `${commandLabel},` })}
         onClick={openSettings}
       >
         <b>nessa</b> <span>Studio</span>

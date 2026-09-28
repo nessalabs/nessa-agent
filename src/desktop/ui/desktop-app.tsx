@@ -16,6 +16,7 @@ import {
 import { SplitView, SplitViewPanel, SplitViewSeparator } from "@nessa-ui/react/split-view"
 import type { HostKind } from "../../host/features"
 import { useEdgePeek } from "../adapters/use-edge-peek"
+import { EdgePeekStrip } from "./edge-peek-strip"
 import { useThemePreference } from "../adapters/theme-preference"
 import type { DesktopThemeId } from "../model/theme"
 import {
@@ -28,9 +29,11 @@ import {
 import { useSidebarLayout } from "../adapters/use-sidebar-layout"
 import { Home } from "./home"
 import { DesktopIcon } from "./icons"
-import { openSettings } from "../settings/ui/settings-view"
+import { openSettings } from "../settings"
 import { ThemeMenu } from "./theme-menu"
+import { HistoryButtons } from "./history-buttons"
 import { WindowTitlebar } from "./window-titlebar"
+import { tooltip } from "./tooltip"
 
 /** Track only the local glow position; SplitView continues to own dragging. */
 function positionEdgeGlow(event: PointerEvent<HTMLDivElement>) {
@@ -51,6 +54,8 @@ export function DesktopApp({
   hostKind: HostKind
   browserSurface: boolean
 }) {
+  // The classic home's unsent text: this shell's own, as it has no sessions.
+  const [homeText, setHomeText] = useState("")
   const {
     groupRef,
     layout,
@@ -102,8 +107,10 @@ export function DesktopApp({
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [])
 
-  const leftLabel = `${leftDocked ? "Hide" : "Show"} Sidebar (${shortcut("⌘B")})`
-  const rightLabel = `${rightShown ? "Hide" : "Show"} Panel (${shortcut("⌥⌘B")})`
+  const leftAction = `${leftDocked ? "Hide" : "Show"} Sidebar`
+  const leftLabel = `${leftAction} (${shortcut("⌘B")})`
+  const rightAction = `${rightShown ? "Hide" : "Show"} Panel`
+  const rightLabel = `${rightAction} (${shortcut("⌥⌘B")})`
   const maximizeLabel = rightMaximized ? "Restore Panel (Esc)" : "Expand Panel"
 
   const maximizeButton = (
@@ -112,7 +119,9 @@ export function DesktopApp({
       size="icon"
       className="desktop-titlebar-button"
       aria-label={maximizeLabel}
-      title={maximizeLabel}
+      {...(rightMaximized
+        ? tooltip("Restore Panel", { shortcut: "Esc" })
+        : tooltip("Expand Panel"))}
       aria-pressed={rightMaximized}
       aria-controls="right"
       onClick={() => setRightMaximized((value) => !value)}
@@ -129,7 +138,7 @@ export function DesktopApp({
       aria-label={rightLabel}
       aria-expanded={rightShown}
       aria-controls="right"
-      title={rightLabel}
+      {...tooltip(rightAction, { shortcut: shortcut("⌥⌘B") })}
       onClick={toggleRight}
     >
       <DesktopIcon name="panelRight" />
@@ -166,24 +175,19 @@ export function DesktopApp({
           windowControlsInset="var(--desktop-window-controls-inset)"
           height="var(--desktop-titlebar-height)"
           leading={
-            <SidebarTrigger
-              className="desktop-titlebar-button"
-              aria-label={leftLabel}
-              title={leftLabel}
-              aria-expanded={leftDocked}
-              aria-controls="left"
-            >
-              <DesktopIcon name="sidebar" />
-            </SidebarTrigger>
+            <>
+              <SidebarTrigger
+                className="desktop-titlebar-button"
+                aria-label={leftLabel}
+                {...tooltip(leftAction, { shortcut: shortcut("⌘B") })}
+                aria-expanded={leftDocked}
+                aria-controls="left"
+              >
+                <DesktopIcon name="sidebar" />
+              </SidebarTrigger>
+              <HistoryButtons className="desktop-titlebar-button" />
+            </>
           }
-          navigation={{
-            back: { label: "Go back", icon: <DesktopIcon name="back" />, disabled: true },
-            forward: {
-              label: "Go forward",
-              icon: <DesktopIcon name="forward" />,
-              disabled: true,
-            },
-          }}
           trailing={
             // Maximize sits beside the panel toggle, over the pane's corner.
             // The panel's 200px minimum always leaves room for both.
@@ -195,14 +199,7 @@ export function DesktopApp({
         />
         {/* Dock-style reveal: resting on the left edge while the sidebar is
             collapsed slides it in over the content until the pointer leaves. */}
-        {!leftOpen && !rightMaximized ? (
-          <div
-            className="desktop-peek-edge"
-            aria-hidden="true"
-            onPointerEnter={peek.enter}
-            onPointerLeave={peek.leave}
-          />
-        ) : null}
+        {!leftOpen && !rightMaximized ? <EdgePeekStrip peek={peek} /> : null}
         <div
           className="desktop-peek"
           data-shown={peek.shown || undefined}
@@ -211,8 +208,7 @@ export function DesktopApp({
           // While handing off, the docked sidebar beneath is the real one.
           inert={!peek.shown || peek.handingOff}
           aria-hidden={!peek.shown || peek.handingOff}
-          onPointerEnter={peek.enter}
-          onPointerLeave={peek.leave}
+          {...peek.holders}
         >
           <Sidebar
             aria-label="Main navigation"
@@ -268,7 +264,7 @@ export function DesktopApp({
               aria-hidden={rightMaximized || workspaceCollapsed}
             >
               <AppShellMain id="home" aria-label="Home" className="desktop-main">
-                <Home />
+                <Home text={homeText} onTextChange={setHomeText} />
               </AppShellMain>
             </SplitViewPanel>
             <SplitViewSeparator
@@ -350,7 +346,7 @@ function NavigationBody({
           type="button"
           className="desktop-identity-button min-w-0 flex-1 truncate"
           onClick={openSettings}
-          title="Settings (⌘,)"
+          {...tooltip("Settings", { shortcut: shortcut("⌘,") })}
         >
           <span className="font-semibold">nessa</span>
           <span className="font-normal text-muted-foreground">Studio</span>

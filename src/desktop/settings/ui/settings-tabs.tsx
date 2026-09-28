@@ -9,6 +9,24 @@ import type { SettingsTabId } from "../model/settings-catalogue"
 import { desktopThemes } from "../../model/theme"
 import { workspaceLayouts, type WorkspaceLayoutId } from "../../model/workspace-layout"
 import { useWorkspaceLayoutPreference } from "../../adapters/workspace-layout-preference"
+import { useMotionPreference } from "../../adapters/motion-preference"
+import {
+  useBesidePreference,
+  useDriftPreference,
+  useGreetingPreference,
+  useRunningFirstPreference,
+} from "../../adapters/window-preferences"
+import { motionChoices } from "../../model/motion"
+import { useAgentsOverviewPreference } from "../../experiments/agents-overview"
+import {
+  chordLabel,
+  selectSessionListChosen,
+  shortcutNames,
+  toggleSessionList,
+  workspaceShortcuts,
+  useWorkspaceDispatch,
+  useWorkspaceSelector,
+} from "../../workspace"
 import {
   DesktopIcon,
   DesktopIconProvider,
@@ -28,15 +46,17 @@ import {
 } from "./settings-controls"
 
 /**
- * What each tab shows. Theme, icons, tint, and layout are real and
- * remembered; everything else is local prototype state, kept only while
- * Settings is open, so the page has its eventual shape without claiming to
- * change anything.
+ * What each tab shows. Every setting the window owns is real and
+ * remembered: theme, icons, tint, greeting, motion, drifting light, layout,
+ * the session list, ⌘-click, running first. What lives outside the window —
+ * the host, the gateway, an account — is marked not available yet in the
+ * catalogue (`pending`), and its row says so with its control disabled.
  */
 export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   general: GeneralTab,
   notifications: NotificationsTab,
   updates: UpdatesTab,
+  experimental: ExperimentalTab,
   theme: ThemeTab,
   header: HeaderTab,
   motion: MotionTab,
@@ -138,6 +158,21 @@ function UpdatesTab() {
   )
 }
 
+/** Previews, each off until turned on (`src/desktop/experiments/`). */
+function ExperimentalTab() {
+  const [overview, setOverview] = useAgentsOverviewPreference()
+  return (
+    <Group footnote="Experiments may change or go away in a later version.">
+      <Row id="agents-overview">
+        <Toggle
+          checked={overview === "on"}
+          onChange={(on) => setOverview(on ? "on" : "off")}
+        />
+      </Row>
+    </Group>
+  )
+}
+
 /* ——— Appearance ——— */
 
 /** What the Icons choice shows of each family: a few of the window's everyday icons. */
@@ -155,55 +190,41 @@ function ThemeTab() {
   return (
     <>
       <SettingGroup id="theme-light">
-        <Choices>
-          {desktopThemes.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              role="radio"
-              aria-checked={option.id === theme}
-              className="settings-choice"
-              onClick={() => setTheme(option.id)}
+        <Choices
+          options={desktopThemes}
+          value={theme}
+          onChange={setTheme}
+          art={(id) => (
+            <span
+              className="settings-choice-art settings-theme-preview"
+              data-desktop-theme={id}
+              aria-hidden="true"
             >
-              <span
-                className="settings-choice-art settings-theme-preview"
-                data-desktop-theme={option.id}
-                aria-hidden="true"
-              >
-                <ChoiceCheck />
-              </span>
-              <span>{option.label}</span>
-            </button>
-          ))}
-        </Choices>
+              <ChoiceCheck />
+            </span>
+          )}
+        />
       </SettingGroup>
       <SettingGroup id="icon-family" footnote="Used for the window's own controls.">
-        <Choices>
-          {iconFamilies.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              role="radio"
-              aria-checked={option.id === family}
-              className="settings-choice"
-              onClick={() => setFamily(option.id)}
-            >
-              {/* Each preview draws through its own family, whatever the window uses. */}
-              <DesktopIconProvider icons={iconFamilyDrawings[option.id]}>
-                <span
-                  className="settings-choice-art settings-icon-preview"
-                  aria-hidden="true"
-                >
-                  {iconPreview.map((role) => (
-                    <DesktopIcon key={role} name={role} />
-                  ))}
-                  <ChoiceCheck />
-                </span>
-              </DesktopIconProvider>
-              <span>{option.label}</span>
-            </button>
-          ))}
-        </Choices>
+        <Choices
+          options={iconFamilies}
+          value={family}
+          onChange={setFamily}
+          art={(id) => (
+            // Each preview draws through its own family, whatever the window uses.
+            <DesktopIconProvider icons={iconFamilyDrawings[id]}>
+              <span
+                className="settings-choice-art settings-icon-preview"
+                aria-hidden="true"
+              >
+                {iconPreview.map((role) => (
+                  <DesktopIcon key={role} name={role} />
+                ))}
+                <ChoiceCheck />
+              </span>
+            </DesktopIconProvider>
+          )}
+        />
       </SettingGroup>
     </>
   )
@@ -222,37 +243,32 @@ function ChoiceCheck() {
 
 function HeaderTab() {
   const [tint, setTint] = useTintFromPicture()
-  const [greeting, setGreeting] = usePrototype(true)
+  const [greeting, setGreeting] = useGreetingPreference()
   return (
     <Group footnote="Choose or frame the picture from Customize on the home header.">
       <Row id="tint-from-picture">
         <Toggle checked={tint} onChange={setTint} />
       </Row>
       <Row id="show-greeting">
-        <Toggle checked={greeting} onChange={setGreeting} />
+        <Toggle
+          checked={greeting === "on"}
+          onChange={(on) => setGreeting(on ? "on" : "off")}
+        />
       </Row>
     </Group>
   )
 }
 
 function MotionTab() {
-  const [motion, setMotion] = usePrototype<"system" | "full" | "reduced">("system")
-  const [drift, setDrift] = usePrototype(true)
+  const [motion, setMotion] = useMotionPreference()
+  const [drift, setDrift] = useDriftPreference()
   return (
     <Group footnote="System follows Reduce motion in macOS Accessibility settings.">
       <Row id="animations">
-        <Segmented
-          value={motion}
-          onChange={setMotion}
-          options={[
-            { id: "system", label: "System" },
-            { id: "full", label: "Full" },
-            { id: "reduced", label: "Reduced" },
-          ]}
-        />
+        <Segmented value={motion} onChange={setMotion} options={motionChoices} />
       </Row>
       <Row id="drifting-light">
-        <Toggle checked={drift} onChange={setDrift} />
+        <Toggle checked={drift === "on"} onChange={(on) => setDrift(on ? "on" : "off")} />
       </Row>
     </Group>
   )
@@ -282,33 +298,32 @@ function LayoutSketch({ id }: { id: WorkspaceLayoutId }) {
 
 function LayoutTab() {
   const [layout, setLayout] = useWorkspaceLayoutPreference()
-  const [list, setList] = usePrototype(true)
-  const [cmdClick, setCmdClick] = usePrototype(true)
+  const dispatch = useWorkspaceDispatch()
+  // The same choice as the layout's own toggle (⌥⌘S): the workspace holds it.
+  const list = useWorkspaceSelector(selectSessionListChosen)
+  const [beside, setBeside] = useBesidePreference()
   return (
     <>
       <SettingGroup id="workspace-layout">
-        <Choices>
-          {workspaceLayouts.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              role="radio"
-              aria-checked={option.id === layout}
-              className="settings-choice"
-              onClick={() => setLayout(option.id)}
-            >
-              <LayoutSketch id={option.id} />
-              <span>{option.label}</span>
-            </button>
-          ))}
-        </Choices>
+        <Choices
+          options={workspaceLayouts}
+          value={layout}
+          onChange={setLayout}
+          art={(id) => <LayoutSketch id={id} />}
+        />
       </SettingGroup>
       <Group>
         <Row id="show-session-list">
-          <Toggle checked={list} onChange={setList} />
+          <Toggle
+            checked={list}
+            onChange={(open) => dispatch(toggleSessionList({ open }))}
+          />
         </Row>
         <Row id="cmd-click-beside">
-          <Toggle checked={cmdClick} onChange={setCmdClick} />
+          <Toggle
+            checked={beside === "on"}
+            onChange={(on) => setBeside(on ? "on" : "off")}
+          />
         </Row>
       </Group>
     </>
@@ -317,7 +332,7 @@ function LayoutTab() {
 
 function SessionsTab() {
   const [keep, setKeep] = usePrototype<"week" | "month" | "always">("month")
-  const [runningFirst, setRunningFirst] = usePrototype(true)
+  const [runningFirst, setRunningFirst] = useRunningFirstPreference()
   return (
     <Group footnote="Pinned sessions are always kept.">
       <Row id="keep-sessions">
@@ -332,48 +347,41 @@ function SessionsTab() {
         />
       </Row>
       <Row id="running-first">
-        <Toggle checked={runningFirst} onChange={setRunningFirst} />
+        <Toggle
+          checked={runningFirst === "on"}
+          onChange={(on) => setRunningFirst(on ? "on" : "off")}
+        />
       </Row>
     </Group>
   )
 }
 
-const shortcutGroups = [
-  {
-    title: "Window",
-    keys: [
-      ["Settings", "⌘ ,"],
-      ["Toggle sidebar", "⌘ B"],
-      ["Toggle session list", "⌥ ⌘ S"],
-      ["Search", "⌘ K"],
-    ],
-  },
-  {
-    title: "Sessions",
-    keys: [
-      ["New session", "⌘ N"],
-      ["Split right", "⌘ \\"],
-      ["Split down", "⇧ ⌘ \\"],
-      ["Close pane", "⌘ W"],
-      ["Focus pane 1–4", "⌘ 1–4"],
-    ],
-  },
-] as const
-
+/**
+ * The window's keyboard, read from the one map the keys themselves run
+ * (`workspaceShortcuts`), so what Settings lists is what the keys do.
+ */
 function KeyboardTab() {
   return (
     <>
-      {shortcutGroups.map((group) => (
-        <Group key={group.title} title={group.title}>
-          {group.keys.map(([label, keys]) => (
-            <ItemRow
-              key={label}
-              label={label}
-              control={<kbd className="settings-kbd">{keys}</kbd>}
-            />
-          ))}
-        </Group>
-      ))}
+      <Group title="Window">
+        <ItemRow
+          label="Settings"
+          control={
+            <kbd className="settings-kbd">
+              {chordLabel({ code: "Comma", command: true })}
+            </kbd>
+          }
+        />
+      </Group>
+      <Group title="Workspace">
+        {workspaceShortcuts.map((binding) => (
+          <ItemRow
+            key={binding.command}
+            label={shortcutNames[binding.command]}
+            control={<kbd className="settings-kbd">{chordLabel(binding.chord)}</kbd>}
+          />
+        ))}
+      </Group>
     </>
   )
 }
@@ -420,7 +428,10 @@ function DefaultsTab() {
 
 function ProvidersTab() {
   return (
-    <Group footnote="Models come from the agents on this Mac; a provider without one needs its own key.">
+    <SettingGroup
+      id="providers"
+      footnote="Models come from the agents on this Mac; a provider without one needs its own key."
+    >
       {composerProviders.map((provider) => {
         const agent = agentForProvider(provider.id)
         const count = provider.models.length
@@ -442,25 +453,29 @@ function ProvidersTab() {
           />
         )
       })}
-    </Group>
+    </SettingGroup>
   )
 }
 
 /* ——— Connections ——— */
 
 function AgentsTab() {
+  // Which agents are installed, and at what version, the host will say; until
+  // then each is named, and none is claimed.
   const agents = [
-    { id: "claude", name: "Claude Code", detail: "Installed · 2.4.1" },
-    { id: "codex", name: "Codex", detail: "Installed · 0.61.0" },
-    { id: "opencode", name: "OpenCode", detail: "Not signed in" },
+    { id: "claude", name: "Claude Code" },
+    { id: "codex", name: "Codex" },
+    { id: "opencode", name: "OpenCode" },
   ] as const
   return (
-    <Group footnote="Nessa runs the agents already on this Mac; it doesn't install its own copies.">
+    <SettingGroup
+      id="agents"
+      footnote="Nessa runs the agents already on this Mac; it doesn't install its own copies."
+    >
       {agents.map((agent) => (
         <ItemRow
           key={agent.id}
           label={agent.name}
-          detail={agent.detail}
           leading={
             <span className="settings-tile">
               <AgentMark id={agent.id} name={agent.name} />
@@ -468,7 +483,7 @@ function AgentsTab() {
           }
         />
       ))}
-    </Group>
+    </SettingGroup>
   )
 }
 

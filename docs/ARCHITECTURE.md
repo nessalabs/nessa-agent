@@ -179,6 +179,20 @@ beside the toggle returns to the app, as "nessa Agent" at the sidebar's foot
 does. Theme, icons, tint and layout are real; the other settings are local
 state that shows their shape, and actions not wired up are shown disabled.
 
+The window's menus are `ui/menu/`: nessa_ui's dropdown and context menus
+behind one set of parts, drawn as macOS draws its own — compact 22px rows on
+the shared glass (`--desktop-material-*` in `styles.css`), a soft rounded
+highlight in the theme's light, a check column only where something can be
+checked, and a chosen item that blinks once as its menu fades. The content
+says which kind of menu it is, so a list of `Menu*` items is written once and
+shown in either. The look selects any Radix menu that wears
+`.desktop-popover`, so menus still built from nessa_ui's parts directly match.
+Menus portal outside every surface, so the window also carries the chosen
+theme on the document root (`useThemeOnDocument`). Right-clicks the window's
+menus do not take open nothing: `adapters/use-webview-menu.ts` keeps the
+webview's own menu to editable and selected text, and a development build
+keeps it on ⌥-right-click for Inspect Element.
+
 The window's icons are semantic roles resolved through a provider
 (`ui/icons/`): `DesktopIconProvider`, `useDesktopIcon` and `<DesktopIcon
 name=… />` mirror the planned `NessaIconProvider` contract in nessa_ui's
@@ -190,18 +204,19 @@ families draw every role: Nessa's own 20-unit drawings (the built-in default)
 and Lucide. Settings › Appearance chooses between them;
 `adapters/icon-family-preference.ts` remembers the choice the way the theme
 preference does, and `main.tsx` mounts the root provider. The home header's
-Customize menu and picture toolbar draw through it too. The composer's access
+Customize control and picture toolbar draw through it too. The composer's access
 shield is the one icon the window does not resolve: nessa_ui's
 ComposerAccessMode has no icon slot, so `styles.css` still masks Lucide
-outlines over it. Theme, icon family, workspace layout and tint are each a
-`storedPreference` (`adapters/stored-preference.ts`): remembered in the
-webview's storage, applied at once to every reader in the window, falling
-back when storage refuses. Brand marks (agents,
-providers) are not icon roles.
+outlines over it. Theme, icon family, workspace layout, tint, motion and the
+window's on-or-off preferences are each a `storedPreference`
+(`adapters/stored-preference.ts`): remembered in the webview's storage,
+applied at once to every reader in the window, falling back when storage
+refuses. Brand marks (agents, providers) are not icon roles.
 
-The workspace (`src/desktop/workspace/`, [ADR 238](adr/todo/238-desktop-workspace-frontend.md))
-is the window's organisation and chat: sections hold channels, channels hold
-sessions, and sessions open in chat panes that split, stack, move and close.
+The workspace (`src/desktop/workspace/`,
+[ADR 238](adr/todo/238-desktop-workspace-frontend.md)) is the window's chat
+and what it is about: its overview — sections hold channels, channels hold
+sessions — and sessions open in chat panes that split, stack, move and close.
 Two layouts, chosen in Settings › Workspace › Layout
 (`adapters/workspace-layout-preference.ts`; `classic` keeps the shell above),
 arrange the same parts. *Three columns* (`ui/layouts/three-columns.tsx`) is a
@@ -210,23 +225,33 @@ session list (grouped Needs you, Running, Earlier; searchable; ⌥⌘S folds it)
 and the panes. *Sessions in sidebar* (`ui/layouts/sessions-in-sidebar.tsx`)
 is one sidebar where a channel discloses its newest sessions inline, with a
 quick switcher (⌘K; ⌘\ to open one beside). Both fold their side columns
-when the window grows too narrow for the panes (`model/window-fit.ts`).
+for room when the window grows too narrow for the panes, and bring them back
+when it widens (`model/window-fit.ts`, `src/desktop/model/side-column.ts`).
+The two layouts differ only in how the sidebar region is composed; the
+workspace shell (`ui/layouts/workspace-shell.tsx`) owns everything else,
+the quick switcher included. Titlebar content starts at the one safe area,
+`--desktop-titlebar-safe-start` (the host's window controls and our cluster);
+nothing draws under the window's controls, and a column's title sits on its
+own row below the titlebar (`ui/chrome/column-header.tsx`).
 
-- `model/` is pure: the organisation's types; the pane layout
+- `model/` is pure: the overview's types (`overview.ts`); the pane layout
   (`pane-layout.ts`), columns of stacked panes with one focused, whose
   operations split, move, swap, nudge, close and even out, capped at four
-  panes and three columns; its pixel rules (`pane-sizing.ts`): placements as
-  fractions, whether a pane fits beside another at 300 by 220 pixels, and
-  edge drags held to those minimums; how a window fits them
-  (`window-fit.ts`); a session's conversation, its messages and steps
+  panes and three columns, a session never shown twice; its pixel rules
+  (`pane-sizing.ts`): placements as fractions, the one fit rule every change
+  of layout and every resize is held to (each pane at least 300 by 220
+  pixels), and edge drags held to it; what a drop does (`drop.ts`); how a
+  window fits the side columns (`window-fit.ts`); why the source refused
+  (`failure.ts`); what is kept of what no pane shows (`retention.ts`); a session's conversation, its messages and steps
   (`transcript.ts`); the revision rule every replacement follows
   (`revision.ts`); session grouping, search and time labels; and the new
   session's lifecycle, a draft never listed and let go once no pane shows it,
   and a session the source never began going back to it when its last
   refused message is discarded.
-- `application/` owns the `WorkspaceSource` port (`ports.ts`: organisation,
+- `application/` owns the `WorkspaceSource` port (`ports.ts`: overview,
   transcript, one stream of replacement updates, send, approve, deny, pin,
-  archive, mark read, with typed `WorkspaceSourceError` reasons) and the pure
+  archive, mark read, with typed `WorkspaceSourceError` reasons; the stream may
+  lose updates, and a read of the overview is the resync) and the pure
   use cases (`usecases/`) over the workspace's state. Every replacement carries
   the source's revision, and the newer one wins in whatever order the stream
   and the reads deliver them (`model/revision.ts`). A message the person
@@ -245,25 +270,29 @@ when the window grows too narrow for the panes (`model/window-fit.ts`).
   needed); `effects.ts`, listener effects that read a shown session's
   conversation and mark a shown one read, whoever caused the change — a
   refused read waits for the pane's Try Again rather than being retried on
-  every update, and is forgotten when no pane shows the session;
-  `refusal.ts`, which tells the source's typed refusals from faults, logged as
-  such, for both; `hooks.ts`, the typed hooks; and `selectors.ts`, narrow per
-  pane and per row. `adapters/in-memory/` is the
-  only home of the sample organisation and the scripted, streamed replies,
+  every update, and is forgotten when no pane shows the session, and a read
+  of the overview again reads every shown conversation again; `hooks.ts`,
+  the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/in-memory/` is the
+  only home of the sample overview and the scripted, streamed replies,
   on timers it owns and cancels. `adapters/dom/` holds what belongs to the
   page: FLIP motion (`flip.tsx`, which measures in React's commit phase, so
-  any dispatch animates), drag and drop, pointer resizing, keys, the arrival of
-  a first message, and the clock's ticks.
+  any dispatch animates), drag and drop carried by the pointer with a live
+  preview (`drag.ts`), pointer resizing, keys and Tab order, focus following
+  the focused pane (`focus.ts`), the page's measure of the panes' room
+  (`measure.ts`, injected into the commands), the arrival of a first message,
+  and the clock's ticks.
 - `ui/` holds each component once — source list (two variants of one
   component), session list, pane grid, pane, pane header, transcript, message,
-  tool steps, approval card, drop target, quick switcher, empty states — and
+  tool steps, approval card, quick switcher, empty states, the words for each
+  failure (`failure-copy.ts`) — and
   `layouts/` that only arrange them.
 
 A pane subscribes to its own session and a row to its own summary, so a
 streamed word renders one transcript (`ui/panes/pane-isolation.test.tsx`).
 Layout changes land at once and play back with FLIP, by transform only; while
 panes fly, their blur and deep shadows pause. A new pane fills in the frame
-after its shell. Reduced motion skips every flight.
+after its shell. Less motion — Settings › Appearance › Motion, or the
+system's setting — skips every flight (`data-motion` on the root).
 
 The classic shell, `ui/desktop-app.tsx`, composes two existing Sidebar components inside the design
 system's SplitView panels. SplitView owns pointer capture, accessible separators,

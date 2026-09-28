@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { Channel, SessionStatus, SessionSummary } from "./organisation"
+import type { Channel, SessionStatus, SessionSummary } from "./overview"
 import { fuzzy, switcherRows } from "./session-search"
 
 const channels: Channel[] = [

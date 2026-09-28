@@ -49,12 +49,12 @@ function started() {
 }
 
 describe("the in-memory source", () => {
-  it("offers the sample organisation and every session's conversation", async () => {
+  it("offers the sample overview and every session's conversation", async () => {
     const { source } = started()
-    const organisation = await source.organisation()
-    expect(organisation.sections.length).toBeGreaterThan(0)
-    expect(organisation.sessions.length).toBeGreaterThan(10)
-    const transcript = await source.transcript(organisation.sessions[0].id)
+    const overview = await source.overview()
+    expect(overview.sections.length).toBeGreaterThan(0)
+    expect(overview.sessions.length).toBeGreaterThan(10)
+    const transcript = await source.transcript(overview.sessions[0].id)
     expect(transcript.messages.length).toBeGreaterThan(0)
   })
 
@@ -107,6 +107,37 @@ describe("the in-memory source", () => {
     expect(messageText(done.messages.at(-1)!)).toMatch(/^On it\./)
     const summaries = updates.filter((update) => update.kind === "session")
     expect(summaries.at(-1)).toMatchObject({ session: { status: "idle" } })
+  })
+
+  it("previews what a running session is at, step by step, without moving it in the lists", async () => {
+    const { source, updates, advance } = started()
+    await source.send({
+      initiator: "person",
+      sessionId: "new",
+      messageId: "m1",
+      text: "Sketch a calmer header",
+      model: { provider: "anthropic", modelId: "claude-opus-5" },
+      start: { channelId: "desktop-app", title: "Sketch a calmer header" },
+    })
+    const summary = () =>
+      (
+        updates.filter((update) => update.kind === "session").at(-1) as Extract<
+          WorkspaceUpdate,
+          { kind: "session" }
+        >
+      ).session
+    const began = summary()
+    expect(began.preview).toBe("Sketch a calmer header")
+    advance(scriptTiming.readingMs)
+    expect(summary().preview).toBe("Reading the workspace")
+    expect(summary().updatedAt).toBe(began.updatedAt)
+    advance(scriptTiming.answerMs - scriptTiming.readingMs)
+    expect(summary().preview).not.toBe("Reading the workspace")
+    advance(10_000)
+    expect(summary()).toMatchObject({
+      status: "idle",
+      preview: expect.stringMatching(/^On it\./),
+    })
   })
 
   it("keeps earlier messages as the same values while a reply streams", async () => {
@@ -296,7 +327,8 @@ describe("the in-memory source", () => {
   it("records a call it carried out as taken, whatever a listener does with the update", async () => {
     const { source } = started()
     const error = console.error
-    console.error = () => {}
+    const logged: unknown[][] = []
+    console.error = (...args: unknown[]) => void logged.push(args)
     const heard: string[] = []
     source.subscribe(() => {
       throw new Error("a listener's own fault")
@@ -309,6 +341,10 @@ describe("the in-memory source", () => {
     }
     expect(source.audit().at(-1)?.outcome).toBe("taken")
     expect(heard).toContain("session")
+    // The listener's fault is said, once, with what it threw.
+    expect(logged).toHaveLength(1)
+    expect(logged[0][0]).toBe("A workspace listener failed")
+    expect(String(logged[0][1])).toMatch(/a listener's own fault/)
   })
 
   it("begins no session again under an archived id", async () => {
@@ -381,7 +417,7 @@ describe("the in-memory source", () => {
     expect(source.audit()).toMatchObject([
       { sessionId: "notarize", action: "deny", outcome: { refused: "unavailable" } },
     ])
-    await expect(source.organisation()).rejects.toMatchObject({ reason: "unavailable" })
+    await expect(source.overview()).rejects.toMatchObject({ reason: "unavailable" })
     await expect(source.transcript("notarize")).rejects.toMatchObject({
       reason: "unavailable",
     })

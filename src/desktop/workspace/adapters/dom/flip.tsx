@@ -21,6 +21,7 @@
  * stylesheet uses to pause blur and large shadows.
  */
 import { Component, type ReactNode, type RefObject } from "react"
+import { letGoOfDragPreview } from "./drag"
 import { durationToken, motionToken } from "./motion"
 
 type Rects = { panes: Map<string, DOMRect>; slides: Map<string, DOMRect> }
@@ -71,7 +72,22 @@ export function flyPane(pane: HTMLElement, from: DOMRect, to: DOMRect): Animatio
     easing: "linear",
   }
   pane.style.transformOrigin = "50% 50%"
+  // A pane that changes size lays its header out at the size it lands at,
+  // so mid-flight its controls would float inside the box, or be cut off at
+  // its edge; it waits out of sight and comes back as the pane lands.
+  const resized = Math.abs(sx - 1) > 0.02 || Math.abs(sy - 1) > 0.02
+  const header = pane.querySelector<HTMLElement>(":scope > .workspace-pane-header")
+  const hiding =
+    resized && header
+      ? [
+          header.animate([{ opacity: 0 }, { opacity: 0, offset: 0.7 }, { opacity: 1 }], {
+            duration: durationToken(pane, "--desktop-flight"),
+            easing: "linear",
+          }),
+        ]
+      : []
   return [
+    ...hiding,
     pane.animate(box, timing),
     ...Array.from(pane.children, (child) => {
       const element = child as HTMLElement
@@ -138,6 +154,10 @@ export class FlipScope extends Component<{
     const root = this.props.root.current
     if (!snapshot || !root) return
     this.flights.forEach((flight) => flight.cancel())
+    // A drag's preview put panes where this change puts them: measured through
+    // it before the change, it is let go before measuring where they landed,
+    // so a drop that lands where it previewed has nowhere to fly.
+    letGoOfDragPreview(root)
     const flying = play(root, snapshot)
     this.flights = flying
     if (flying.length === 0) {

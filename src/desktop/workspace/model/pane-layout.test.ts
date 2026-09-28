@@ -273,3 +273,20 @@ describe("a layout's shape", () => {
     expect(layoutShape(removePane(three, keyOf(three, "c")))).not.toBe(shape)
   })
 })
+
+describe("a session is never shown twice", () => {
+  it("focuses the pane already showing a session rather than show it in another", () => {
+    const two = splitPane(singlePane("a"), 1, "right", "b")
+    const again = showInPane(two, 1, "b")
+    expect(panesOf(again).map((pane) => pane.sessionId)).toEqual(["a", "b"])
+    expect(focusedPane(again).sessionId).toBe("b")
+  })
+
+  it("shows a session in the pane named, and focuses it", () => {
+    const two = splitPane(singlePane("a"), 1, "right", "b")
+    const shown = showInPane(two, 1, "c")
+    expect(panesOf(shown).map((pane) => pane.sessionId)).toEqual(["c", "b"])
+    expect(focusedPane(shown).key).toBe(1)
+    expect(showInPane(two, 999, "c")).toBe(two)
+  })
+})

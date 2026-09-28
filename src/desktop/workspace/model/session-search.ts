@@ -10,7 +10,8 @@ import {
   byRecency,
   type Channel,
   type SessionSummary,
-} from "./organisation"
+} from "./overview"
+import { statusLabels } from "./session-groups"
 
 export interface FuzzyMatch {
   readonly score: number
@@ -95,7 +96,7 @@ export function switcherRows({
       { kind: "new", group: "", channelId },
       ...waiting.map((session): SwitcherRow => ({
         kind: "session",
-        group: "Needs you",
+        group: statusLabels["needs-you"],
         session,
         hits: [],
       })),

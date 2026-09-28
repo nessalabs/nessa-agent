@@ -10,8 +10,16 @@
  * applying one twice, or out of step with a read, cannot duplicate or undo
  * anything: the newer revision wins whichever arrived first. A conversation
  * includes each message sent to it under the id it was sent with.
+ *
+ * The stream of updates may lose some: a connection that drops, a listener
+ * that joins late. Nothing here asks the source to replay them. A read of the
+ * overview is the resync instead: its sessions are every session the source
+ * held when it answered, so one it no longer lists is taken out, and the
+ * conversations shown in panes are read again (`loadWorkspace`).
  */
-import type { ModelRef, Organisation, SessionSummary } from "../model/organisation"
+import type { WorkspaceFailureReason } from "../model/failure"
+import type { ModelRef, Overview, SessionSummary } from "../model/overview"
+import type { WorkspaceRoom } from "../model/pane-sizing"
 import type { Transcript } from "../model/transcript"
 
 /**
@@ -45,7 +53,12 @@ export interface OutgoingMessage {
 export type WorkspaceUpdate =
   /** A session began or changed; the summary replaces whatever was held. */
   | { readonly kind: "session"; readonly session: SessionSummary }
-  /** A session left the lists (archived), at this revision of it. */
+  /**
+   * A session left the lists (archived). Its revision is counted with the
+   * session's summary, not its conversation: the removal is the summary's
+   * next revision, so a summary at a higher one — the session listed again —
+   * outranks it, and one at or below it stays out.
+   */
   | {
       readonly kind: "session-removed"
       readonly sessionId: string
@@ -71,8 +84,12 @@ export type Initiator = "person" | "agent"
  * "sending" for good.
  */
 export interface WorkspaceSource {
-  /** Sections, channels and every session's summary. */
-  organisation(): Promise<Organisation>
+  /**
+   * Sections, channels and every session's summary: all the source holds when
+   * it answers. A session it does not list is gone — the resync for updates
+   * the stream lost.
+   */
+  overview(): Promise<Overview>
   /** One session's conversation as it stands. */
   transcript(sessionId: string): Promise<Transcript>
   /** Changes to any session, until the returned function is called. */
@@ -106,50 +123,43 @@ export interface WorkspaceSource {
   markRead(sessionId: string): Promise<void>
 }
 
-/**
- * Why the source did not do what it was asked. `unavailable`: no answer came —
- * the call may or may not have been done, so a message is sent again under
- * its id and the source's updates say what happened. `unknown-session`: it
- * holds no such session, archived ones included, and begins none under an
- * archived id. `not-waiting`: the approval was already answered, or never
- * asked.
- */
-export type WorkspaceFailureReason = "unavailable" | "unknown-session" | "not-waiting"
-
+/** The source's refusal: a typed reason (`model/failure.ts`), never a sentence. */
 export class WorkspaceSourceError extends Error {
   readonly reason: WorkspaceFailureReason
 
   constructor(reason: WorkspaceFailureReason) {
-    super(failureText(reason))
+    super(`The workspace source refused: ${reason}`)
     this.name = "WorkspaceSourceError"
     this.reason = reason
   }
 }
 
-/** The sentence a person is shown for each failure. */
-export function failureText(reason: WorkspaceFailureReason): string {
-  switch (reason) {
-    case "unavailable":
-      return "Nessa couldn’t reach your sessions."
-    case "unknown-session":
-      return "This session is no longer there."
-    case "not-waiting":
-      return "This was already answered."
-  }
-}
-
-/** The failure a rejected call carries, by its type; anything else is taken as unreachable. */
+/**
+ * Why a call to the source failed, by its type: the one place that tells a
+ * refusal from a fault. Anything but the source's own typed refusal is a
+ * fault, not an answer: it is logged as one, and taken as `unavailable`.
+ */
 export function failureReason(error: unknown): WorkspaceFailureReason {
-  return error instanceof WorkspaceSourceError ? error.reason : "unavailable"
+  if (error instanceof WorkspaceSourceError) return error.reason
+  console.error("The workspace source failed unexpectedly", error)
+  return "unavailable"
 }
 
 /**
  * What the workspace's commands are given, from composition: the source, and
- * the two other outside things they need — the time, and fresh ids for what
- * the person creates (a new session, a message). Tests pass their own.
+ * the other outside things they need — the time, fresh ids for what the
+ * person creates (a new session, a message), and the room the panes have on
+ * the page. Tests pass their own.
  */
 export interface WorkspaceDependencies {
   readonly workspace: WorkspaceSource
   readonly now: () => number
   readonly newId: () => string
+  /**
+   * The room the panes have now, as laid out (`adapters/dom/measure.ts`), or
+   * nothing when no workspace is on the page. Every command that changes the
+   * layout asks it, whoever dispatches it, and with nothing measured places
+   * nothing new.
+   */
+  readonly measure: () => WorkspaceRoom | undefined
 }

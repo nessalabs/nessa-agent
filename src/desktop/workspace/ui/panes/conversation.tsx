@@ -1,10 +1,14 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
 import { Composer } from "../../../ui/composer"
-import { chooseModel, sendMessage } from "../../adapters/store/commands"
-import { useWorkspaceDispatch, useWorkspaceStore } from "../../adapters/store/hooks"
-import { selectNextModel } from "../../adapters/store/selectors"
+import { chooseModel, sendMessage, setComposerText } from "../../adapters/store/commands"
+import {
+  useWorkspaceDispatch,
+  useWorkspaceSelector,
+  useWorkspaceStore,
+} from "../../adapters/store/hooks"
+import { selectComposerText, selectNextModel } from "../../adapters/store/selectors"
 import { useArrival, type Arrival } from "../../adapters/dom/arrival"
-import type { ModelRef } from "../../model/organisation"
+import type { ModelRef } from "../../model/overview"
 import { Home } from "../../../ui/home"
 import { Transcript } from "../transcript/transcript"
 import "./conversation.css"
@@ -17,6 +21,17 @@ function useInitialModel(sessionId: string): ModelRef | undefined {
   const store = useWorkspaceStore()
   const [model] = useState(() => selectNextModel(store.getState(), sessionId))
   return model
+}
+
+/** A session's unsent text, held in the workspace so it outlives a change of layout. */
+function useComposerText(sessionId: string) {
+  const dispatch = useWorkspaceDispatch()
+  const text = useWorkspaceSelector((state) => selectComposerText(state, sessionId))
+  const onTextChange = useCallback(
+    (next: string) => dispatch(setComposerText({ sessionId, text: next })),
+    [dispatch, sessionId],
+  )
+  return { text, onTextChange }
 }
 
 function useComposerActions(sessionId: string) {
@@ -48,7 +63,16 @@ export const PaneHome = memo(function PaneHome({
 }) {
   const initialModel = useInitialModel(sessionId)
   const { changeModel } = useComposerActions(sessionId)
-  return <Home initialModel={initialModel} onSend={onSend} onModelChange={changeModel} />
+  const { text, onTextChange } = useComposerText(sessionId)
+  return (
+    <Home
+      initialModel={initialModel}
+      onSend={onSend}
+      onModelChange={changeModel}
+      text={text}
+      onTextChange={onTextChange}
+    />
+  )
 })
 
 /**
@@ -101,8 +125,11 @@ export const Conversation = memo(function Conversation({
 const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: string }) {
   const initialModel = useInitialModel(sessionId)
   const { send, changeModel } = useComposerActions(sessionId)
+  const { text, onTextChange } = useComposerText(sessionId)
   return (
     <Composer
+      text={text}
+      onTextChange={onTextChange}
       page={false}
       onPageChange={stayCard}
       initialModel={initialModel}

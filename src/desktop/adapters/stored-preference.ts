@@ -15,8 +15,6 @@ import { useCallback, useEffect, useState } from "react"
  * not know falls back rather than leaking through.
  */
 export interface StoredPreference<T> {
-  /** The remembered value, or the fallback. */
-  read(): T
   /** The value and a way to choose another; every reader in the window follows. */
   usePreference(): readonly [T, (next: T) => void]
 }
@@ -77,5 +75,5 @@ export function storedPreference<T>({
     return [value, choose] as const
   }
 
-  return { read, usePreference }
+  return { usePreference }
 }

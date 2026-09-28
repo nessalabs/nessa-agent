@@ -1,10 +1,6 @@
-import type { SessionStatus } from "../../model/organisation"
-
-const labels: Record<SessionStatus, string> = {
-  running: "Working",
-  "needs-you": "Needs you",
-  idle: "",
-}
+import type { SessionStatus } from "../../model/overview"
+import { statusLabels } from "../../model/session-groups"
+import { tooltip } from "../../../ui/tooltip"
 
 /**
  * A session's state in one 10px box, so rows line up whatever it is: needs
@@ -27,8 +23,8 @@ export function StatusGlyph({
       className="workspace-status"
       data-status={status}
       role="img"
-      aria-label={labels[status]}
-      title={labels[status]}
+      aria-label={statusLabels[status]}
+      {...tooltip(statusLabels[status])}
     />
   )
 }

@@ -11,6 +11,7 @@ import {
 } from "../../adapters/store/selectors"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { ThreadRow } from "./thread-row"
+import { tooltip } from "../../../ui/tooltip"
 
 /**
  * A channel in the sidebar beside a session list: choosing it shows its
@@ -92,7 +93,7 @@ export function SidebarRow({
       data-active={active || undefined}
       data-unread={unread || undefined}
       aria-current={active ? "page" : undefined}
-      title={title}
+      {...tooltip(title ?? "")}
       onClick={onClick}
     >
       <span className="workspace-row-icon" aria-hidden="true">

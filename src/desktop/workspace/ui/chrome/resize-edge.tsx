@@ -1,5 +1,6 @@
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react"
 import { usePointerResize } from "../../adapters/dom/pointer-resize"
+import { tooltip } from "../../../ui/tooltip"
 
 /** How far an arrow key moves an edge. */
 const keyStep = 16
@@ -17,8 +18,15 @@ export function ResizeEdge({
   onStart,
   onMove,
   onReset,
+  value,
 }: {
   label: string
+  /**
+   * Where the edge stands, for assistive technology: the side before it, in
+   * the unit the edge is moved in — a column's pixels, or the share of the
+   * two panes it sits between, in percent — within the bounds it is held to.
+   */
+  value: { readonly now: number; readonly min: number; readonly max: number }
   /** The direction the edge moves in: "x" for a vertical edge, "y" for a horizontal one. */
   axis?: "x" | "y"
   className?: string
@@ -43,6 +51,9 @@ export function ResizeEdge({
       role="separator"
       aria-orientation={axis === "x" ? "vertical" : "horizontal"}
       aria-label={label}
+      aria-valuenow={Math.round(value.now)}
+      aria-valuemin={Math.round(value.min)}
+      aria-valuemax={Math.round(value.max)}
       tabIndex={0}
       className={className ? `workspace-edge ${className}` : "workspace-edge"}
       data-axis={axis}
@@ -54,7 +65,7 @@ export function ResizeEdge({
       }}
       onPointerEnter={glow}
       onDoubleClick={onReset}
-      title={onReset ? `${label} · double-click to even out` : undefined}
+      {...(onReset ? tooltip(`${label} · double-click to even out`) : {})}
       onKeyDown={(event) => {
         const step = event.key === back ? -keyStep : event.key === forward ? keyStep : 0
         if (!step) return

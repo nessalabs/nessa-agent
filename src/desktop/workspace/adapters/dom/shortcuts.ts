@@ -63,6 +63,7 @@ const keyNames: Record<string, string> = {
   ArrowUp: "↑",
   ArrowDown: "↓",
   Enter: "↩",
+  Backspace: "⌫",
 }
 
 function keyName(code: string): string {

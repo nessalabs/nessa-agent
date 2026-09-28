@@ -4,6 +4,8 @@ import { useWorkspaceDispatch } from "../../adapters/store/hooks"
 import { groupSteps, type Message as MessageValue } from "../../model/transcript"
 import { RichText } from "./rich-text"
 import { ToolSteps } from "./tool-steps"
+import type { WorkspaceFailureReason } from "../../model/failure"
+import { failureCopy } from "../failure-copy"
 
 /**
  * One message. The person's is a bubble, saying so when it has not reached
@@ -92,12 +94,12 @@ function Unsent({
 }: {
   sessionId: string
   messageId: string
-  reason: string
+  reason: WorkspaceFailureReason
 }) {
   const dispatch = useWorkspaceDispatch()
   return (
     <div className="workspace-message-failed" role="status">
-      <span>Not sent. {reason}</span>
+      <span>Not sent. {failureCopy(reason)}</span>
       <button
         type="button"
         className="workspace-link-button"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { agentOf, modelName, sameModel } from "./organisation"
+import { agentOf, modelName } from "./overview"
 import { keepShownDrafts, startSession, type Draft } from "./session-lifecycle"
 
 const opus = { provider: "anthropic", modelId: "claude-opus-5" }
@@ -45,7 +45,5 @@ describe("a session's model", () => {
     expect(modelName({ provider: "anthropic", modelId: "claude-unknown" })).toBe(
       "claude-unknown",
     )
-    expect(sameModel(opus, { ...opus })).toBe(true)
-    expect(sameModel(opus, { ...opus, modelId: "claude-sonnet-5" })).toBe(false)
   })
 })

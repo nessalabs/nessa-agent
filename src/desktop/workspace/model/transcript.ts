@@ -5,6 +5,7 @@
  * the rules for reading them (grouping steps, inline code and emphasis, a
  * title from a first message) live here, not in the views.
  */
+import type { WorkspaceFailureReason } from "./failure"
 
 export type StepKind = "read" | "edit" | "run" | "search"
 
@@ -29,7 +30,8 @@ export type StepPart = Extract<Part, { kind: "step" }>
  * everything the source itself reported.
  */
 export type Delivery =
-  { readonly state: "sending" } | { readonly state: "failed"; readonly reason: string }
+  | { readonly state: "sending" }
+  | { readonly state: "failed"; readonly reason: WorkspaceFailureReason }
 
 export interface Message {
   readonly id: string

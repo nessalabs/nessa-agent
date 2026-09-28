@@ -1,13 +1,23 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
 import type { HostKind } from "../../../host/features"
+import { reducedMotion } from "../../adapters/motion-preference"
 import { useThemePreference } from "../../adapters/theme-preference"
+import { useEdgePeek } from "../../adapters/use-edge-peek"
+import { useWindowWidth } from "../../adapters/window-width"
+import { chosen, drawn, fitted, type SideColumn } from "../../model/side-column"
+import { EdgePeekStrip } from "../../ui/edge-peek-strip"
+import { HistoryButtons } from "../../ui/history-buttons"
+import { focusComposer } from "../../workspace"
+import { settingsSidebar, settingsSidebarFits } from "../model/settings-sidebar"
 import {
   firstTabOf,
   searchSettings,
@@ -24,6 +34,7 @@ import { DesktopIcon, type DesktopIconRole } from "../../ui/icons"
 import { FoundSetting } from "./settings-controls"
 import { settingsTabPages } from "./settings-tabs"
 import "./settings.css"
+import { tooltip } from "../../ui/tooltip"
 
 /**
  * Prototype: Settings as its own surface over the window. A short sidebar of
@@ -64,8 +75,12 @@ interface SettingsHostProps {
   browserSurface: boolean
 }
 
-/** Mounts once over the app; renders nothing until opened. */
-export function SettingsHost(props: SettingsHostProps) {
+/**
+ * Whether Settings is open, and a way to close it: opened by `openSettings`
+ * from anywhere, or ⌘,. The window holds this, so what lies under Settings
+ * can be made inert while it is open.
+ */
+export function useSettingsOpening(): { open: boolean; close: () => void } {
   const [open, setOpen] = useState(false)
   useEffect(() => {
     const show = () => setOpen(true)
@@ -82,7 +97,22 @@ export function SettingsHost(props: SettingsHostProps) {
       window.removeEventListener("keydown", onKeyDown)
     }
   }, [])
-  return open ? <SettingsView {...props} onClose={() => setOpen(false)} /> : null
+  const close = useCallback(() => setOpen(false), [])
+  return { open, close }
+}
+
+/**
+ * Settings over the window. Modal: the window under it is inert while it is
+ * open (the window does that, from `useSettingsOpening`), and focus goes back
+ * to what opened it when it closes — or, gone meanwhile, to the focused
+ * pane's composer.
+ */
+export function SettingsHost({
+  open,
+  onClose,
+  ...props
+}: SettingsHostProps & { open: boolean; onClose: () => void }) {
+  return open ? <SettingsView {...props} onClose={onClose} /> : null
 }
 
 function SettingsView({
@@ -91,7 +121,23 @@ function SettingsView({
   onClose,
 }: SettingsHostProps & { onClose: () => void }) {
   const [theme] = useThemePreference()
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  // Shown or hidden by the person; folded by the window when a page would be
+  // squeezed beside it, and back once there is room (`side-column.ts`).
+  const windowWidth = useWindowWidth()
+  const [sidebarColumn, setSidebarColumn] = useState<SideColumn>(() =>
+    fitted({ open: true, folded: false }, settingsSidebarFits(window.innerWidth)),
+  )
+  useEffect(() => {
+    setSidebarColumn((column) => fitted(column, settingsSidebarFits(windowWidth)))
+  }, [windowWidth])
+  const sidebarOpen = drawn(sidebarColumn)
+  const toggleSidebar = useCallback(
+    () => setSidebarColumn((column) => chosen(column)),
+    [],
+  )
+  // Folded, the sidebar can be revealed from the window's edge, as the app's can.
+  const peek = useEdgePeek(!sidebarOpen, sidebarOpen)
+  const revealed = peek.shown && !peek.handingOff
   const [category, setCategory] = useState<SettingsCategoryId>("appearance")
   // The tab last shown in each category, kept while Settings is open.
   const [chosenTabs, setChosenTabs] = useState<
@@ -114,8 +160,16 @@ function SettingsView({
   const results = useMemo(() => searchSettings(query), [query])
   const Page = settingsTabPages[tab]
 
+  // Focus comes in on opening and goes back on closing: to what opened
+  // Settings, or — gone meanwhile — to the focused pane's composer.
   useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null
     rootRef.current?.focus()
+    return () => {
+      if (opener && opener !== document.body && opener.isConnected)
+        opener.focus({ preventScroll: true })
+      else focusComposer()
+    }
   }, [])
 
   // ⌘B toggles this sidebar, and only this one: caught before the app's own
@@ -130,18 +184,20 @@ function SettingsView({
       event.stopPropagation()
       if (!mod || event.altKey || event.shiftKey || event.code !== "KeyB") return
       event.preventDefault()
-      setSidebarOpen((value) => !value)
+      toggleSidebar()
     }
     window.addEventListener("keydown", onKeyDown, true)
     return () => window.removeEventListener("keydown", onKeyDown, true)
-  }, [])
+  }, [toggleSidebar])
 
-  // Focus left in a sidebar that slides away would be lost; it moves to the toggle.
+  // Focus left in a sidebar that slides away — folded, or its reveal over —
+  // would be lost; it moves to the toggle.
   useEffect(() => {
-    if (!sidebarOpen && sidebarRef.current?.contains(document.activeElement)) {
-      toggleRef.current?.focus()
-    }
-  }, [sidebarOpen])
+    const active = document.activeElement
+    // Inert, it may have let go of focus already, to the page.
+    const lost = active === document.body || sidebarRef.current?.contains(active)
+    if (!sidebarOpen && !revealed && lost) toggleRef.current?.focus()
+  }, [sidebarOpen, revealed])
 
   // A new tab starts at its top; a jump to a setting brings that setting into view.
   useLayoutEffect(() => {
@@ -150,8 +206,10 @@ function SettingsView({
   useEffect(() => {
     if (!found) return
     const row = scrollRef.current?.querySelector(`[data-setting="${found}"]`)
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    row?.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" })
+    row?.scrollIntoView({
+      block: "nearest",
+      behavior: reducedMotion() ? "auto" : "smooth",
+    })
     const timer = window.setTimeout(() => setFound(null), 1600)
     return () => window.clearTimeout(timer)
   }, [found])
@@ -180,7 +238,8 @@ function SettingsView({
     }
   }
 
-  const sidebarLabel = `${sidebarOpen ? "Hide" : "Show"} Sidebar (${shortcut("⌘B")})`
+  const sidebarAction = `${sidebarOpen ? "Hide" : "Show"} Sidebar`
+  const sidebarLabel = `${sidebarAction} (${shortcut("⌘B")})`
 
   return (
     <div
@@ -190,6 +249,8 @@ function SettingsView({
       data-surface={browserSurface ? "browser" : "window"}
       data-desktop-theme={theme}
       data-sidebar={sidebarOpen ? "open" : "closed"}
+      data-peek={revealed || undefined}
+      style={{ "--settings-sidebar-w": `${settingsSidebar.width}px` } as CSSProperties}
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
@@ -206,18 +267,19 @@ function SettingsView({
           type="button"
           className="settings-titlebar-button"
           aria-label={sidebarLabel}
-          title={sidebarLabel}
+          {...tooltip(sidebarAction, { shortcut: shortcut("⌘B") })}
           aria-expanded={sidebarOpen}
           aria-controls="settings-sidebar"
-          onClick={() => setSidebarOpen((value) => !value)}
+          onClick={toggleSidebar}
         >
           <DesktopIcon name="sidebar" />
         </button>
+        <HistoryButtons className="settings-titlebar-button" />
         <button
           type="button"
           className="settings-titlebar-button settings-titlebar-back"
           aria-label="Back to nessa Agent"
-          title="Back to nessa Agent"
+          {...tooltip("Back to nessa Agent")}
           tabIndex={sidebarOpen ? -1 : 0}
           aria-hidden={sidebarOpen || undefined}
           onClick={onClose}
@@ -226,12 +288,19 @@ function SettingsView({
         </button>
       </div>
 
+      {sidebarOpen ? null : (
+        <EdgePeekStrip
+          peek={peek}
+          onDragOut={() => setSidebarColumn((column) => chosen(column, true))}
+        />
+      )}
       <div
         ref={sidebarRef}
         id="settings-sidebar"
         className="settings-sidebar"
-        inert={!sidebarOpen}
-        aria-hidden={!sidebarOpen || undefined}
+        inert={!sidebarOpen && !revealed}
+        aria-hidden={(!sidebarOpen && !revealed) || undefined}
+        {...(sidebarOpen ? {} : peek.holders)}
       >
         <nav className="settings-glass" aria-label="Settings categories">
           <label className="settings-search">
@@ -325,7 +394,12 @@ function SettingsView({
           )}
 
           {/* Where "nessa Studio" opened Settings, the way back to the app. */}
-          <button type="button" className="settings-identity" onClick={onClose}>
+          <button
+            type="button"
+            className="settings-identity"
+            aria-label="Back to nessa Agent"
+            onClick={onClose}
+          >
             <DesktopIcon name="chevronLeft" className="settings-identity-back" />
             <span className="settings-identity-name">
               <strong>nessa</strong>

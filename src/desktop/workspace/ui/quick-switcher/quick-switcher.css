@@ -96,28 +96,33 @@ html:not(.dark) .workspace-switcher {
   flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 8px;
+  padding: 6px;
+  /* A row scrolled into view clears the field above it, never tucks under it. */
+  scroll-padding-block: 6px;
   scrollbar-width: thin;
 }
 
+/* Rows in the menus' own type: 13px words, quiet trailing detail, a soft rounded highlight. */
 .workspace-results-group {
-  padding: 8px 12px 4px;
-  color: var(--desktop-faint);
-  font-size: var(--desktop-text-caption);
-  font-weight: 600;
-  letter-spacing: 0.015em;
+  padding: 8px 10px 3px;
+  color: color-mix(in oklab, var(--foreground) 50%, transparent);
+  font: 600 11px / 16px var(--nessa-font-sans);
+  letter-spacing: 0.01em;
   -webkit-user-select: none;
   user-select: none;
 }
 
 .workspace-result {
+  position: relative;
   display: grid;
-  height: 36px;
+  min-height: 30px;
   grid-template-columns: 16px minmax(0, max-content) minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  padding: 0 12px;
-  border-radius: var(--desktop-radius-md);
+  gap: 10px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font: 400 13px / 16px var(--nessa-font-sans);
+  cursor: default;
 }
 
 .workspace-result > .workspace-status {
@@ -142,23 +147,42 @@ html:not(.dark) .workspace-switcher {
 
 .workspace-result-title {
   overflow: hidden;
-  color: var(--desktop-ink-2);
+  color: var(--foreground);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .workspace-result-meta {
   overflow: hidden;
-  color: var(--desktop-faint);
-  font-size: var(--desktop-text-footnote);
+  color: color-mix(in oklab, var(--foreground) 50%, transparent);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .workspace-result-trail {
-  color: var(--desktop-fainter);
-  font-size: var(--desktop-text-caption);
+  color: color-mix(in oklab, var(--foreground) 50%, transparent);
   font-variant-numeric: tabular-nums;
+}
+
+/* What ↩ does, on the chosen row only, in place of its trailing detail. */
+.workspace-result[aria-selected="true"] .workspace-result-trail {
+  visibility: hidden;
+}
+
+.workspace-result-keys {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in oklab, var(--foreground) 50%, transparent);
+  translate: 0 -50%;
+}
+
+.workspace-result-keys kbd {
+  font: inherit;
+  letter-spacing: 0.02em;
 }
 
 .workspace-hit {
@@ -167,31 +191,8 @@ html:not(.dark) .workspace-switcher {
   font-weight: 650;
 }
 
-.workspace-switcher-foot {
-  display: flex;
-  height: 40px;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 16px;
-  padding: 0 16px;
-  overflow: hidden;
-  border-top: 0.5px solid color-mix(in oklab, var(--foreground) 8%, transparent);
-  color: var(--desktop-faint);
-  font-size: var(--desktop-text-caption);
-  white-space: nowrap;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-.workspace-switcher-foot > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .workspace-overlay,
-  .workspace-switcher {
-    animation: none;
-  }
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .workspace-overlay,
+:root[data-motion="reduced"] .workspace-switcher {
+  animation: none;
 }

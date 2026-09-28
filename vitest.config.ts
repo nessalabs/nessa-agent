@@ -2,9 +2,7 @@ import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { defineConfig } from "vitest/config"
 
-const designSystemEditorDependencies = existsSync(
-  resolve("node_modules/@nessa-ui/react"),
-)
+const designSystemEditorDependencies = existsSync(resolve("node_modules/@nessa-ui/react"))
   ? [
       "@nessa-ui/react > @tiptap/core",
       "@nessa-ui/react > @tiptap/react",
@@ -50,11 +48,15 @@ export default defineConfig({
     },
     server: {
       deps: {
-        // Radix resolves React through the vendored design system's own pnpm
-        // store, so left to Node's resolver a component using `Slot` loads a
-        // second React and every hook in it throws on a null dispatcher.
-        // Transformed here instead, it goes through the dedupe above.
-        inline: [/radix-ui/],
+        // Radix, and the floating-ui it places layers with, resolve React
+        // through the vendored design system's own pnpm store, so left to
+        // Node's resolver a component using `Slot` loads a second React and
+        // every hook in it throws on a null dispatcher. Transformed here
+        // instead, they go through the dedupe above. Everything from that
+        // store is inlined, rather than each package as a test meets it; a
+        // CommonJS build (react-remove-scroll's, under a modal menu) is
+        // required by Node regardless and still loads its own.
+        inline: [/radix-ui/, /nessa_ui\/node_modules\//],
       },
     },
   },

@@ -42,48 +42,6 @@
   left: calc(2 * var(--desktop-gutter) + var(--workspace-sidebar-width));
 }
 
-.workspace-list-head {
-  display: flex;
-  height: var(--desktop-titlebar-height);
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  padding: 0 var(--desktop-control-inset) 0 12px;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-/* With the sidebar hidden, the list's title steps past the window controls. */
-.workspace[data-sidebar="closed"] .workspace-list-head {
-  padding-left: calc(var(--workspace-controls-end) + 8px);
-}
-
-.workspace-list-title {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  align-items: center;
-  gap: 4px;
-}
-
-.workspace-list-title svg {
-  width: 15px;
-  height: 15px;
-  flex: none;
-  color: var(--desktop-faint);
-  stroke-width: 2;
-}
-
-.workspace-list-title h2 {
-  margin: 0;
-  overflow: hidden;
-  font-size: var(--desktop-text-title);
-  font-weight: 650;
-  letter-spacing: -0.022em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .workspace-search {
   display: flex;
   height: 32px;

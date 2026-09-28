@@ -10,19 +10,29 @@ import {
   modelName,
   type SessionStatus,
   type SessionSummary,
-} from "./organisation"
+} from "./overview"
+
+/** The states that ask for the person's attention, each with a view of its own. */
+export type AttentionStatus = Exclude<SessionStatus, "idle">
+
+/**
+ * What each state is called wherever it is named — the list's groups, the
+ * sidebar's views, a row's mark, the switcher's heading — so it is said one
+ * way everywhere.
+ */
+export const statusLabels: Readonly<Record<SessionStatus, string>> = {
+  "needs-you": "Needs you",
+  running: "Running",
+  idle: "Earlier",
+}
 
 /** The list's groups, in the order they are shown. */
-export const statusGroups: readonly { status: SessionStatus; label: string }[] = [
-  { status: "needs-you", label: "Needs you" },
-  { status: "running", label: "Running" },
-  { status: "idle", label: "Earlier" },
-]
+const groupOrder: readonly SessionStatus[] = ["needs-you", "running", "idle"]
 
 /** What the session list shows: one channel's sessions, or every session in one state. */
 export type SessionView =
   | { readonly kind: "channel"; readonly channelId: string }
-  | { readonly kind: "status"; readonly status: "needs-you" | "running" }
+  | { readonly kind: "status"; readonly status: AttentionStatus }
 
 export function inView(session: SessionSummary, view: SessionView): boolean {
   return view.kind === "channel"
@@ -30,26 +40,43 @@ export function inView(session: SessionSummary, view: SessionView): boolean {
     : session.status === view.status
 }
 
-/** A view's name: the channel's, or the state's. */
-export function statusViewLabel(status: "needs-you" | "running"): string {
-  return status === "needs-you" ? "Needs you" : "Running"
-}
-
-export interface StatusGroup {
-  readonly status: SessionStatus
+interface StatusGroup {
+  /** The group's own name among its siblings. */
+  readonly id: string
   readonly label: string
   readonly sessions: readonly SessionSummary[]
 }
 
-/** Sessions by status in the list's order, newest first in each; empty groups are left out. */
-export function groupByStatus(sessions: readonly SessionSummary[]): StatusGroup[] {
+/**
+ * Sessions by status in the list's order, newest first in each; empty groups
+ * are left out. With `runningFirst` off (Settings › Workspace › Sessions),
+ * running sessions are not kept above the rest: "Needs you", then every other
+ * session in one group, newest first.
+ */
+export function groupByStatus(
+  sessions: readonly SessionSummary[],
+  { runningFirst = true }: { runningFirst?: boolean } = {},
+): StatusGroup[] {
   const newest = [...sessions].sort(byRecency)
-  return statusGroups
-    .map((group) => ({
-      ...group,
-      sessions: newest.filter((session) => session.status === group.status),
-    }))
-    .filter((group) => group.sessions.length > 0)
+  const groups: StatusGroup[] = runningFirst
+    ? groupOrder.map((status) => ({
+        id: status,
+        label: statusLabels[status],
+        sessions: newest.filter((session) => session.status === status),
+      }))
+    : [
+        {
+          id: "needs-you",
+          label: statusLabels["needs-you"],
+          sessions: newest.filter((session) => session.status === "needs-you"),
+        },
+        {
+          id: "rest",
+          label: "Sessions",
+          sessions: newest.filter((session) => session.status !== "needs-you"),
+        },
+      ]
+  return groups.filter((group) => group.sessions.length > 0)
 }
 
 /** Whether a session answers the list's search, by title, preview, model or agent. */

@@ -11,9 +11,11 @@
  * ```
  */
 import { configureStore } from "@reduxjs/toolkit"
-import type { WorkspaceDependencies } from "./workspace/application/ports"
-import { workspaceEffects } from "./workspace/adapters/store/effects"
-import { workspaceReducer } from "./workspace/adapters/store/slice"
+import {
+  workspaceEffects,
+  workspaceReducer,
+  type WorkspaceDependencies,
+} from "./workspace"
 
 export function makeDesktopStore(dependencies: WorkspaceDependencies) {
   const effects = workspaceEffects(dependencies)

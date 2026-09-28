@@ -102,7 +102,10 @@ export function paneByKey(layout: PaneLayout, key: PaneKey): Pane | undefined {
   return panesOf(layout).find((pane) => pane.key === key)
 }
 
-/** The pane showing a session, if one does: a session is never shown twice. */
+/**
+ * The pane showing a session, if one does: a session is never shown twice
+ * (`showInPane` and `splitPane` hold that; `pane-layout.test.ts`).
+ */
 export function paneShowing(layout: PaneLayout, sessionId: string): Pane | undefined {
   return panesOf(layout).find((pane) => pane.sessionId === sessionId)
 }
@@ -133,15 +136,23 @@ function mapPanes(layout: PaneLayout, change: (pane: Pane) => Pane): PaneLayout 
   return changed ? { ...layout, columns } : layout
 }
 
-/** Shows a session in a pane, in place of what it showed. */
+/**
+ * Shows a session in a pane, in place of what it showed, and focuses it. A
+ * session is never shown twice: one another pane shows already is focused
+ * where it is instead, and `key` is left as it was.
+ */
 export function showInPane(
   layout: PaneLayout,
   key: PaneKey,
   sessionId: string,
 ): PaneLayout {
-  return mapPanes(layout, (pane) =>
-    pane.key === key && pane.sessionId !== sessionId ? { ...pane, sessionId } : pane,
+  const existing = paneShowing(layout, sessionId)
+  if (existing) return focusPane(layout, existing.key)
+  if (!locate(layout, key)) return layout
+  const shown = mapPanes(layout, (pane) =>
+    pane.key === key ? { ...pane, sessionId } : pane,
   )
+  return focusPane(shown, key)
 }
 
 /**

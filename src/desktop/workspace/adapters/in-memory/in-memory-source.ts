@@ -10,7 +10,7 @@
  * answer. What it holds is replaced, never changed: every update it emits is
  * a new value, and a value it has handed out stays as it was.
  */
-import type { SessionSummary } from "../../model/organisation"
+import type { SessionSummary } from "../../model/overview"
 import {
   emptyTranscript,
   type Message,
@@ -21,12 +21,12 @@ import {
   failureReason,
   WorkspaceSourceError,
   type ApprovalScope,
-  type WorkspaceFailureReason,
   type Initiator,
   type OutgoingMessage,
   type WorkspaceSource,
   type WorkspaceUpdate,
 } from "../../application/ports"
+import type { WorkspaceFailureReason } from "../../model/failure"
 import { sampleWorkspace } from "./sample-workspace"
 import { approvedReply, deniedReply, replyTo, scriptTiming } from "./scripted-replies"
 
@@ -84,9 +84,7 @@ export function inMemorySource(
 ): InMemorySource {
   // Archived ids: none is begun again, so no revision of one counts from 1 twice.
   const archived = new Set<string>()
-  const sessions = new Map(
-    seed.organisation.sessions.map((session) => [session.id, session]),
-  )
+  const sessions = new Map(seed.overview.sessions.map((session) => [session.id, session]))
   const transcripts = new Map(seed.transcripts)
   const listeners = new Set<(update: WorkspaceUpdate) => void>()
   // Each session's running script, so a new message or `dispose` can stop it.
@@ -114,9 +112,10 @@ export function inMemorySource(
         : null,
     })
   }
+  /** Runs a consequential call; `work` answers with the revision it produced. */
   const audited = (
     asked: Pick<AuditEntry, "sessionId" | "action" | "approvalId" | "initiator">,
-    work: () => void,
+    work: () => number,
   ): Promise<void> => {
     let entry: AuditEntry = Object.freeze({
       ...asked,
@@ -130,12 +129,8 @@ export function inMemorySource(
       entry = next
     }
     return live(() => {
-      const before = stateOf(asked.sessionId)
-      replace({ before })
-      work()
-      const now = sessions.get(asked.sessionId)
-      // Taken: the new summary's revision, or — archived — the removal's.
-      return now ? now.revision : before ? before.revision + 1 : undefined
+      replace({ before: stateOf(asked.sessionId) })
+      return work()
     }).then(
       (after) => replace({ outcome: "taken", after, settledAt: schedule.now() }),
       (error: unknown) => {
@@ -165,13 +160,14 @@ export function inMemorySource(
   }
 
   // Every change the source makes to a session is a new revision of it.
-  const putSession = (change: SessionSummary) => {
+  const putSession = (change: SessionSummary): SessionSummary => {
     const session = {
       ...change,
       revision: (sessions.get(change.id)?.revision ?? 0) + 1,
     }
     sessions.set(session.id, session)
     emit({ kind: "session", session })
+    return session
   }
 
   const putTranscript = (change: Transcript) => {
@@ -237,6 +233,8 @@ export function inMemorySource(
       putTranscript({ ...current, activity: null, messages: [...others, written] })
     }
     putTranscript({ ...base, activity: null, messages: [...base.messages, message] })
+    const last = [...steps].reverse().find((part) => part.kind === "step")
+    if (last?.kind === "step") previewStep(sessionId, last.label)
     const step = (shown: number) => {
       const next = Math.min(shown + scriptTiming.wordsPerStep, words.length)
       write(next)
@@ -246,17 +244,27 @@ export function inMemorySource(
     later(sessionId, scriptTiming.stepMs, () => step(0))
   }
 
+  /**
+   * What a running session is at, as its list row previews it: the step it
+   * is on, rather than the message that started it. Its place in the lists
+   * (`updatedAt`) stays where it is.
+   */
+  const previewStep = (sessionId: string, step: string) => {
+    const session = known(sessionId)
+    if (session.preview !== step) putSession({ ...session, preview: step })
+  }
+
   const setActivity = (sessionId: string, label: string) => {
     putTranscript({
       ...transcriptOf(sessionId),
       activity: { label, since: schedule.now() },
     })
+    previewStep(sessionId, label)
   }
 
   const channelName = (sessionId: string) =>
-    seed.organisation.channels.find(
-      (channel) => channel.id === known(sessionId).channelId,
-    )?.name ?? ""
+    seed.overview.channels.find((channel) => channel.id === known(sessionId).channelId)
+      ?.name ?? ""
 
   const accept = (message: OutgoingMessage) => {
     const at = schedule.now()
@@ -346,10 +354,10 @@ export function inMemorySource(
   }
 
   return {
-    organisation: () =>
+    overview: () =>
       live(() => ({
-        sections: seed.organisation.sections,
-        channels: seed.organisation.channels,
+        sections: seed.overview.sections,
+        channels: seed.overview.channels,
         sessions: [...sessions.values()],
       })),
     transcript: (sessionId) =>
@@ -401,6 +409,7 @@ export function inMemorySource(
             })
             settle(sessionId, reply.preview)
           })
+          return known(sessionId).revision
         },
       ),
     deny: (sessionId, approvalId, initiator) =>
@@ -414,18 +423,22 @@ export function inMemorySource(
           messages: [...transcript.messages, agentMessage(sessionId, reply.parts)],
         })
         settle(sessionId, reply.preview)
+        return known(sessionId).revision
       }),
     setPinned: (sessionId, pinned, initiator) =>
-      audited({ sessionId, action: pinned ? "pin" : "unpin", initiator }, () =>
-        putSession({ ...known(sessionId), pinned }),
+      audited(
+        { sessionId, action: pinned ? "pin" : "unpin", initiator },
+        () => putSession({ ...known(sessionId), pinned }).revision,
       ),
     archive: (sessionId, initiator) =>
       audited({ sessionId, action: "archive", initiator }, () => {
-        const session = known(sessionId)
+        // The removal is the summary's next revision (`WorkspaceUpdate`).
+        const revision = known(sessionId).revision + 1
         stopScript(sessionId)
         sessions.delete(sessionId)
         archived.add(sessionId)
-        emit({ kind: "session-removed", sessionId, revision: session.revision + 1 })
+        emit({ kind: "session-removed", sessionId, revision })
+        return revision
       }),
     markRead: (sessionId) =>
       live(() => {

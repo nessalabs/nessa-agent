@@ -7,13 +7,14 @@ import {
   selectTranscript,
   selectTranscriptFailure,
 } from "../../adapters/store/selectors"
-import { reducedMotion } from "../../adapters/dom/motion"
+import { reducedMotion } from "../../../adapters/motion-preference"
 import { ApprovalCard } from "./approval-card"
 import { LiveRow } from "./live-row"
 import { Message } from "./message"
 import type { Message as MessageValue } from "../../model/transcript"
 import { TranscriptHeading } from "./transcript-heading"
 import "./transcript.css"
+import { failureCopy } from "../failure-copy"
 
 const noMessages: readonly MessageValue[] = []
 
@@ -142,7 +143,7 @@ export const Transcript = memo(function Transcript({
         <TranscriptHeading ref={headingRef} sessionId={sessionId} titleRef={titleRef} />
         {failure && !loaded ? (
           <div className="workspace-transcript-note" role="status">
-            <p>{failure}</p>
+            <p>{failureCopy(failure)}</p>
             <button
               type="button"
               className="workspace-button"

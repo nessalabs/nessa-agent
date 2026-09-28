@@ -69,9 +69,6 @@ const desktopRoles = [
   "enter",
   // The home header's picture
   "customize",
-  "nightScene",
-  "chooseImage",
-  "adjustImage",
   "zoomIn",
   "zoomOut",
   // What an agent did

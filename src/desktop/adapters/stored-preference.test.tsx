@@ -69,11 +69,18 @@ const mount = () =>
 
 describe("a stored preference", () => {
   it("starts on the fallback with nothing stored, or with something this build does not know", () => {
-    expect(colour.read()).toBe("grey")
+    mount()
+    expect(seen[0].at(-1)).toBe("grey")
     stored.set("test.colour", "constructor")
-    expect(colour.read()).toBe("grey")
+    act(() => root.unmount())
+    root = createRoot(host)
+    mount()
+    expect(seen[0].at(-1)).toBe("grey")
     stored.set("test.colour", "red")
-    expect(colour.read()).toBe("red")
+    act(() => root.unmount())
+    root = createRoot(host)
+    mount()
+    expect(seen[0].at(-1)).toBe("red")
   })
 
   it("remembers a choice and every reader in the window follows it at once", () => {
@@ -92,8 +99,10 @@ describe("a stored preference", () => {
   })
 
   it("reads the fallback when storage cannot be read at all", () => {
+    stored.set("test.colour", "red")
     refuse.read = true
-    expect(colour.read()).toBe("grey")
+    mount()
+    expect(seen[0].at(-1)).toBe("grey")
   })
 
   it("follows another window's change to its own key, and ignores other keys", () => {

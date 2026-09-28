@@ -1,5 +1,6 @@
 import { forwardRef, type ButtonHTMLAttributes } from "react"
 import { DesktopIcon, type DesktopIconRole } from "../../../ui/icons"
+import { tooltip } from "../../../ui/tooltip"
 
 /**
  * A square control with one icon, named for what it does. The shortcut, when
@@ -22,7 +23,7 @@ export const IconButton = forwardRef<
         className ? `workspace-icon-button ${className}` : "workspace-icon-button"
       }
       aria-label={name}
-      title={name}
+      {...tooltip(label, { shortcut })}
       {...props}
     >
       <DesktopIcon name={icon} />

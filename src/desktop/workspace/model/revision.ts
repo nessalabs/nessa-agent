@@ -3,10 +3,15 @@
  * session's summary, or to its conversation. Of two replacements for the same
  * thing, the one with the larger revision is the newer, whichever channel
  * brought it and whenever it arrived — a read answered late, an update that
- * overtook it, an organisation read while updates were already flowing.
+ * overtook it, an overview read while updates were already flowing.
  *
  * The source counts from 1. Revision 0 is the window's own: a session whose
  * first message is on its way, which the source has not spoken of yet.
+ *
+ * Two counters per session, never compared with each other: the summary's
+ * and the conversation's. A removal is counted with the summary — it is the
+ * summary's next revision — so it is weighed against summaries only
+ * (`usecases/updates.ts`, "a removal's revision" in its tests).
  */
 export interface Revised {
   readonly revision: number

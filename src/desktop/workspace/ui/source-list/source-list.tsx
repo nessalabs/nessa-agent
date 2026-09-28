@@ -24,14 +24,18 @@ import {
   selectView,
   selectWaitingIds,
 } from "../../adapters/store/selectors"
-import { commandKey } from "../../adapters/dom/shortcuts"
+import { useBesideKey } from "../session-actions"
+import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
+import { ColumnHeader } from "../chrome/column-header"
 import { IdentityFooter } from "../chrome/identity-footer"
 import { StatusGlyph } from "../chrome/status-glyph"
-import { useFocusedRoom } from "../session-actions"
-import { useWorkspaceFrame } from "../workspace-frame"
+import { useSidebarPeek, useWorkspaceFrame } from "../workspace-frame"
 import { ChannelBranch } from "./channel-branch"
 import { ChannelRow, SidebarRow } from "./channel-row"
 import "./source-list.css"
+import { tooltip } from "../../../ui/tooltip"
+import { statusLabels, type AttentionStatus } from "../../model/session-groups"
+import { AgentsOverviewEntry } from "../../../experiments/agents-overview"
 
 /**
  * The sidebar's source list: sections of channels on a glass pane, with the
@@ -52,12 +56,14 @@ export const SourceList = memo(function SourceList({
   const sections = useWorkspaceSelector(selectSections)
   const treeRef = useRef<HTMLElement>(null)
   const dispatch = useWorkspaceDispatch()
-  const room = useFocusedRoom()
+  const besideKey = useBesideKey()
+  const peek = useSidebarPeek()
+  const revealed = peek !== null && peek.shown && !peek.handingOff
 
   // Arrow keys walk the tree's visible rows; right and left unfold and fold.
   const onTreeKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     const tree = treeRef.current
-    if (!tree) return
+    if (!tree || contextMenuFromKey(event)) return
     const rows = [...tree.querySelectorAll<HTMLElement>("[data-row]")]
     const index = rows.indexOf(document.activeElement as HTMLElement)
     if (index < 0) return
@@ -85,12 +91,11 @@ export const SourceList = memo(function SourceList({
         event.preventDefault()
         rows.find((candidate) => candidate.dataset.channel === parent)?.focus()
       }
-    } else if (event.key === "Enter" && commandKey(event)) {
+    } else if (event.key === "Enter" && besideKey.asks(event)) {
       event.preventDefault()
       const { sessionRow, channel } = row.dataset
-      if (sessionRow) dispatch(openBeside({ sessionId: sessionRow, room: room() }))
-      else if (channel)
-        dispatch(openChannel({ channelId: channel, beside: true, room: room() }))
+      if (sessionRow) dispatch(openBeside({ sessionId: sessionRow }))
+      else if (channel) dispatch(openChannel({ channelId: channel, beside: true }))
     }
   }
 
@@ -100,12 +105,12 @@ export const SourceList = memo(function SourceList({
       className="workspace-sidebar"
       data-variant={variant}
       aria-label="Sidebar"
-      inert={!open}
-      aria-hidden={!open || undefined}
+      // Folded, it is only there while revealed from the window's edge.
+      inert={!open && !revealed}
+      aria-hidden={(!open && !revealed) || undefined}
+      {...(open ? {} : peek?.holders)}
     >
-      <div className="workspace-sidebar-top" data-tauri-drag-region>
-        {top}
-      </div>
+      <ColumnHeader action={top} />
       <div className="workspace-sidebar-scroll">
         {variant === "channels" ? <StatusViews /> : <TreeTop />}
         <nav
@@ -133,13 +138,14 @@ function StatusViews() {
   const dispatch = useWorkspaceDispatch()
   const counts = useWorkspaceSelector(selectStatusCounts, shallowEqual)
   const view = useWorkspaceSelector(selectView)
-  const showing = (status: "needs-you" | "running") =>
+  const showing = (status: AttentionStatus) =>
     view.kind === "status" && view.status === status
   return (
     <div className="workspace-smart">
+      <AgentsOverviewEntry />
       <SidebarRow
         icon="needsYou"
-        label="Needs you"
+        label={statusLabels["needs-you"]}
         active={showing("needs-you")}
         badge={counts.needsYou || undefined}
         badgeTone="needs"
@@ -147,7 +153,7 @@ function StatusViews() {
       />
       <SidebarRow
         icon="running"
-        label="Running"
+        label={statusLabels.running}
         active={showing("running")}
         badge={counts.running || undefined}
         onClick={() => dispatch(selectStatusView({ status: "running" }))}
@@ -167,21 +173,22 @@ function TreeTop() {
       <button
         type="button"
         className="workspace-row workspace-search-button"
-        onClick={() => frame.openSwitcher?.("open")}
+        onClick={() => frame.openSwitcher("open")}
       >
         <DesktopIcon name="search" />
         <span>Search</span>
         {shortcut ? <kbd className="workspace-kbd">{shortcut}</kbd> : null}
       </button>
+      <AgentsOverviewEntry />
       {waiting.length > 0 ? (
         <button
           type="button"
           className="workspace-row workspace-needs-button"
-          title="Open the next session waiting on you"
+          {...tooltip("Open the next session waiting on you")}
           onClick={() => dispatch(openSession({ sessionId: waiting[0] }))}
         >
           <StatusGlyph status="needs-you" />
-          <span>Needs you</span>
+          <span>{statusLabels["needs-you"]}</span>
           <span className="workspace-badge" data-tone="needs">
             {waiting.length}
           </span>
@@ -225,7 +232,7 @@ const SourceSection = memo(function SourceSection({
             type="button"
             className="workspace-section-add"
             aria-label={`Add channel to ${name}`}
-            title="Adding channels isn’t available yet"
+            {...tooltip("Adding channels isn’t available yet")}
             disabled
           >
             <DesktopIcon name="add" />

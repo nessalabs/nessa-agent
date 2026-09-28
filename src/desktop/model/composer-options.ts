@@ -117,3 +117,23 @@ export function fastModeFor(model: ComposerModel | undefined): boolean {
     )
   )
 }
+
+/**
+ * A model's name in few words, for a composer too narrow for the whole of it:
+ * the name without the word every model of its provider starts with ("Claude
+ * Opus 5" is "Opus 5"), so two models still read apart. A provider whose
+ * names share no first word keeps them whole. Derived from the catalogue,
+ * never written out.
+ */
+export function shortModelName(
+  model: ComposerModel,
+  models: readonly ComposerModel[] = composerModels,
+): string {
+  const [first, ...rest] = model.displayName.split(" ")
+  const siblings = models.filter((other) => other.provider === model.provider)
+  const shared =
+    rest.length > 0 &&
+    siblings.length > 1 &&
+    siblings.every((other) => other.displayName.split(" ")[0] === first)
+  return shared ? rest.join(" ") : model.displayName
+}

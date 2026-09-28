@@ -4,12 +4,7 @@
  * open it beside the focused pane (⌘-click), and its context menu.
  */
 import { shallowEqual } from "react-redux"
-import {
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuShortcut,
-} from "@nessa-ui/react/context-menu"
-import { panesOf } from "../model/pane-layout"
+import { paneShowing } from "../model/pane-layout"
 import { knownToSource } from "../model/revision"
 import {
   archiveSession,
@@ -18,54 +13,46 @@ import {
   openSession,
   pinSession,
 } from "../adapters/store/commands"
-import {
-  useWorkspaceDispatch,
-  useWorkspaceSelector,
-  useWorkspaceStore,
-} from "../adapters/store/hooks"
-import {
-  selectFocusedPaneKey,
-  selectPaneCount,
-  selectPanes,
-  selectSession,
-} from "../adapters/store/selectors"
+import { useWorkspaceDispatch, useWorkspaceSelector } from "../adapters/store/hooks"
+import { selectPaneCount, selectPanes, selectSession } from "../adapters/store/selectors"
+import { useBesidePreference } from "../../adapters/window-preferences"
+import { MenuItem, MenuSeparator, MenuShortcut } from "../../ui/menu"
 import { commandKey, commandLabel } from "../adapters/dom/shortcuts"
-import type { PaneRoom } from "../model/pane-sizing"
-import { useWorkspaceFrame } from "./workspace-frame"
 
 /**
- * The focused pane's room, measured when asked — for anything that opens
- * beside it. Read when clicked, so a row never renders again because focus
- * moved.
+ * Whether a click or ↩ on a row asks for beside: the command key held, while
+ * Settings › Workspace › "⌘-click opens beside" is on. The one place that
+ * says so, for every row and the channels that open like them.
  */
-export function useFocusedRoom(): () => PaneRoom | undefined {
-  const store = useWorkspaceStore()
-  const frame = useWorkspaceFrame()
-  return () => {
-    const focused = selectFocusedPaneKey(store.getState())
-    return focused === null ? undefined : frame.roomOf(focused)
-  }
+export function useBesideKey(): {
+  on: boolean
+  asks: (event: { metaKey: boolean; ctrlKey: boolean }) => boolean
+} {
+  const [preference] = useBesidePreference()
+  const on = preference === "on"
+  return { on, asks: (event) => on && commandKey(event) }
 }
 
 /** Opens a session in place, or beside the focused pane with the command key held. */
 export function useOpenFromRow() {
   const dispatch = useWorkspaceDispatch()
-  const room = useFocusedRoom()
+  const besideKey = useBesideKey()
   const open = (sessionId: string) => dispatch(openSession({ sessionId }))
-  const beside = (sessionId: string) => dispatch(openBeside({ sessionId, room: room() }))
+  const beside = (sessionId: string) => dispatch(openBeside({ sessionId }))
   return {
     open,
     beside,
-    /** A click on a row: ⌘-click opens beside. */
-    click: (event: { metaKey: boolean; ctrlKey: boolean }, sessionId: string) =>
-      commandKey(event) ? beside(sessionId) : open(sessionId),
+    besideKey,
+    /** A click, or ↩, on a row: ⌘ with it opens beside, where Settings says it does. */
+    activate: (event: { metaKey: boolean; ctrlKey: boolean }, sessionId: string) =>
+      besideKey.asks(event) ? beside(sessionId) : open(sessionId),
   }
 }
 
 /** A session row's context menu; its content mounts only while the menu is open. */
 export function SessionMenuItems({ sessionId }: { sessionId: string }) {
   const dispatch = useWorkspaceDispatch()
-  const { open, beside } = useOpenFromRow()
+  const { open, beside, besideKey } = useOpenFromRow()
   const { pinned, begun } = useWorkspaceSelector((state) => {
     const session = selectSession(state, sessionId)
     return {
@@ -78,43 +65,39 @@ export function SessionMenuItems({ sessionId }: { sessionId: string }) {
     const panes = selectPanes(state)
     return {
       count: selectPaneCount(state),
-      pane: panes
-        ? panesOf(panes).find((each) => each.sessionId === sessionId)?.key
-        : undefined,
+      pane: panes ? paneShowing(panes, sessionId)?.key : undefined,
     }
   }, shallowEqual)
   const shown = pane !== undefined
   return (
     <>
-      <ContextMenuItem onSelect={() => open(sessionId)}>
+      <MenuItem onSelect={() => open(sessionId)}>
         Open
-        <ContextMenuShortcut>↩</ContextMenuShortcut>
-      </ContextMenuItem>
+        <MenuShortcut>↩</MenuShortcut>
+      </MenuItem>
       {/* As ⌘-click does: beside when there is room, in the focused pane's place when not. */}
-      <ContextMenuItem onSelect={() => beside(sessionId)}>
+      <MenuItem onSelect={() => beside(sessionId)}>
         Open Beside
-        <ContextMenuShortcut>{commandLabel}Click</ContextMenuShortcut>
-      </ContextMenuItem>
+        {besideKey.on ? <MenuShortcut>{commandLabel}Click</MenuShortcut> : null}
+      </MenuItem>
       {shown && count > 1 ? (
-        <ContextMenuItem onSelect={() => dispatch(closePane({ pane }))}>
-          Close Pane
-        </ContextMenuItem>
+        <MenuItem onSelect={() => dispatch(closePane({ pane }))}>Close Pane</MenuItem>
       ) : null}
-      <ContextMenuSeparator />
-      <ContextMenuItem
+      <MenuSeparator />
+      <MenuItem
         disabled={!begun}
         onSelect={() =>
           void dispatch(pinSession({ sessionId, pinned: !pinned, initiator: "person" }))
         }
       >
         {pinned ? "Unpin from Sidebar" : "Pin to Sidebar"}
-      </ContextMenuItem>
-      <ContextMenuItem
+      </MenuItem>
+      <MenuItem
         disabled={!begun}
         onSelect={() => void dispatch(archiveSession({ sessionId, initiator: "person" }))}
       >
         Archive
-      </ContextMenuItem>
+      </MenuItem>
     </>
   )
 }

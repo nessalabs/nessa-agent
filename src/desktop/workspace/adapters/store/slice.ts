@@ -8,11 +8,13 @@
  * `commands.ts`, which dispatch these.
  */
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
-import type { ModelRef, Organisation } from "../../model/organisation"
+import type { ModelRef, Overview } from "../../model/overview"
 import type { Direction, PaneKey, Side, Zone } from "../../model/pane-layout"
-import type { PaneEdge, PaneRoom } from "../../model/pane-sizing"
+import type { PaneEdge, WorkspaceRoom } from "../../model/pane-sizing"
+import type { AttentionStatus } from "../../model/session-groups"
 import type { Message, Transcript } from "../../model/transcript"
-import type { WorkspaceFailureReason, WorkspaceUpdate } from "../../application/ports"
+import type { WorkspaceUpdate } from "../../application/ports"
+import type { WorkspaceFailureReason } from "../../model/failure"
 import { initialWorkspace, type WorkspaceState } from "../../application/workspace-state"
 import * as navigation from "../../application/usecases/navigation"
 import * as panes from "../../application/usecases/panes"
@@ -30,7 +32,7 @@ const workspaceSlice = createSlice({
       panes.focusPane(state, payload.pane),
     openSession: (state, { payload }: Payload<{ sessionId: string; pane?: PaneKey }>) =>
       panes.openSession(state, payload),
-    openBeside: (
+    openedBeside: (
       state,
       {
         payload,
@@ -38,24 +40,46 @@ const workspaceSlice = createSlice({
         sessionId: string
         target?: PaneKey
         side?: Side
-        room?: PaneRoom
+        room: WorkspaceRoom | undefined
         replace?: boolean
       }>,
     ) => panes.openBeside(state, payload),
-    dropSession: (
+    sessionDropped: (
       state,
       {
         payload,
-      }: Payload<{ sessionId: string; target: PaneKey; zone: Zone; room?: PaneRoom }>,
+      }: Payload<{
+        sessionId: string
+        target: PaneKey
+        zone: Zone
+        room: WorkspaceRoom | undefined
+      }>,
     ) => panes.dropSession(state, payload),
-    movePane: (
+    paneMoved: (
       state,
       {
         payload,
-      }: Payload<{ pane: PaneKey; target: PaneKey; zone: Zone; room?: PaneRoom }>,
+      }: Payload<{
+        pane: PaneKey
+        target: PaneKey
+        zone: Zone
+        room: WorkspaceRoom | undefined
+      }>,
     ) => panes.movePane(state, payload),
-    nudgePane: (state, { payload }: Payload<{ pane: PaneKey; direction: Direction }>) =>
-      panes.nudgePane(state, payload),
+    paneNudged: (
+      state,
+      {
+        payload,
+      }: Payload<{
+        pane: PaneKey
+        direction: Direction
+        room: WorkspaceRoom | undefined
+      }>,
+    ) => panes.nudgePane(state, payload),
+    panesFitted: (
+      state,
+      { payload }: Payload<{ room: { width: number; height: number } }>,
+    ) => panes.fitPanes(state, payload),
     resizePanes: (
       state,
       { payload }: Payload<{ edge: PaneEdge; fraction: number; pair: number }>,
@@ -73,17 +97,15 @@ const workspaceSlice = createSlice({
         model?: ModelRef
         beside?: Side
         target?: PaneKey
-        room?: PaneRoom
+        room?: WorkspaceRoom
       }>,
     ) => panes.createDraft(state, payload),
 
     // Navigation
     selectChannel: (state, { payload }: Payload<{ channelId: string }>) =>
       navigation.selectChannel(state, payload),
-    selectStatusView: (
-      state,
-      { payload }: Payload<{ status: "needs-you" | "running" }>,
-    ) => navigation.selectStatusView(state, payload),
+    selectStatusView: (state, { payload }: Payload<{ status: AttentionStatus }>) =>
+      navigation.selectStatusView(state, payload),
     channelOpened: (
       state,
       {
@@ -92,7 +114,7 @@ const workspaceSlice = createSlice({
         channelId: string
         beside?: boolean
         draftId?: string
-        room?: PaneRoom
+        room?: WorkspaceRoom
       }>,
     ) => navigation.openChannel(state, payload),
     revealSession: (state, { payload }: Payload<{ sessionId: string }>) =>
@@ -119,19 +141,23 @@ const workspaceSlice = createSlice({
     ) => navigation.fitToWindow(state, payload),
 
     // Sessions
-    organisationLoaded: (
+    overviewLoaded: (
       state,
-      { payload }: Payload<{ organisation: Organisation; draftId: string }>,
-    ) => updates.organisationLoaded(state, payload),
-    organisationRequested: (state) => updates.organisationRequested(state),
-    organisationFailed: (
-      state,
-      { payload }: Payload<{ reason: WorkspaceFailureReason }>,
-    ) => updates.organisationFailed(state, payload),
+      { payload }: Payload<{ overview: Overview; draftId: string }>,
+    ) => updates.overviewLoaded(state, payload),
+    overviewRequested: (state) => updates.overviewRequested(state),
+    overviewFailed: (state, { payload }: Payload<{ reason: WorkspaceFailureReason }>) =>
+      updates.overviewFailed(state, payload),
     updateReceived: (
       state,
-      { payload }: Payload<{ update: WorkspaceUpdate; draftId?: string }>,
+      {
+        payload,
+      }: Payload<{ update: Exclude<WorkspaceUpdate, { kind: "session-removed" }> }>,
     ) => updates.updateReceived(state, payload),
+    sessionRemoved: (
+      state,
+      { payload }: Payload<{ sessionId: string; revision: number; draftId: string }>,
+    ) => updates.sessionRemoved(state, payload),
     transcriptLoaded: (state, { payload }: Payload<{ transcript: Transcript }>) =>
       updates.transcriptLoaded(state, payload),
     transcriptFailed: (
@@ -183,6 +209,8 @@ const workspaceSlice = createSlice({
     ) => sessions.unsentDiscarded(state, payload),
     sessionRead: (state, { payload }: Payload<{ sessionId: string }>) =>
       sessions.sessionRead(state, payload),
+    setComposerText: (state, { payload }: Payload<{ sessionId: string; text: string }>) =>
+      sessions.composerTextChanged(state, payload),
   },
 })
 

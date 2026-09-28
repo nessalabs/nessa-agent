@@ -1,16 +1,17 @@
 /**
- * What the source says: the organisation, its updates, and the conversations
+ * What the source says: the overview, its updates, and the conversations
  * read for the panes that show them. Every one is a replacement with a
  * revision, and the newer revision wins whichever arrived first — an update
- * that overtook a read, a read answered late, an organisation read while
+ * that overtook a read, a read answered late, an overview read while
  * updates were already flowing (`model/revision.ts`).
  */
+import type { WorkspaceFailureReason } from "../../model/failure"
 import {
   byRecency,
   defaultModel,
-  type Organisation,
+  type Overview,
   type SessionSummary,
-} from "../../model/organisation"
+} from "../../model/overview"
 import {
   paneCount,
   panesOf,
@@ -18,12 +19,15 @@ import {
   removePane,
   singlePane,
 } from "../../model/pane-layout"
+import { forgotten, remembered, removedAt } from "../../model/retention"
 import { fromSource, knownToSource, supersedes } from "../../model/revision"
 import type { Transcript } from "../../model/transcript"
-import { failureText, type WorkspaceFailureReason, type WorkspaceUpdate } from "../ports"
+import type { WorkspaceUpdate } from "../ports"
 import {
+  channelOf,
   entry,
   forgetSession,
+  listedSessions,
   modelForNextTurn,
   sessionOf,
   withPanes,
@@ -36,8 +40,8 @@ import { createDraft } from "./panes"
 
 /** Whether the session was removed at or after this revision of it: it stays out. */
 function removedSince(state: WorkspaceState, session: SessionSummary): boolean {
-  const removedAt = entry(state.removed, session.id)
-  return removedAt !== undefined && removedAt >= session.revision
+  const at = removedAt(state.removed, session.id)
+  return at !== undefined && at >= session.revision
 }
 
 /**
@@ -60,7 +64,7 @@ function holdsConversation(state: WorkspaceState, transcript: Transcript): boole
 }
 
 /**
- * A summary from the source, by whichever path it came — the organisation
+ * A summary from the source, by whichever path it came — the overview
  * read or the stream — listed when it is newer than the one held and not
  * outranked by a removal. Listed again after its removal, the removal is
  * history. Listed at all, no new session's home stands under its id; a model
@@ -78,7 +82,7 @@ function summaryHeard(state: WorkspaceState, session: SessionSummary): Workspace
   return withSession(
     {
       ...state,
-      removed: without(state.removed, session.id),
+      removed: forgotten(state.removed, session.id),
       drafts: without(state.drafts, session.id),
       chosenModels,
     },
@@ -87,83 +91,15 @@ function summaryHeard(state: WorkspaceState, session: SessionSummary): Workspace
 }
 
 /**
- * The organisation has arrived. The first time, the workspace opens on the
- * first channel, showing its newest session — or, with no sessions anywhere,
- * a new session's home under `draftId`. A session already held from an
- * update newer than this read is kept, and one removed since stays out.
- */
-export function organisationLoaded(
-  state: WorkspaceState,
-  { organisation, draftId }: { organisation: Organisation; draftId: string },
-): WorkspaceState {
-  const heard = organisation.sessions.reduce(summaryHeard, state)
-  const first = organisation.channels.find(
-    (channel) => channel.sectionId === organisation.sections[0]?.id,
-  )
-  const channelId = first?.id ?? organisation.channels[0]?.id ?? ""
-  const listed = Object.values(heard.sessions)
-  const opening = listed
-    .filter((session) => session.channelId === channelId)
-    .sort(byRecency)[0]
-  // Disclosed at first: the channel being opened, and every channel with something waiting.
-  const expandedChannels = [
-    ...new Set([
-      channelId,
-      ...listed
-        .filter((session) => session.status === "needs-you")
-        .map((session) => session.channelId),
-    ]),
-  ].filter((id) => id !== "")
-  const loaded: WorkspaceState = {
-    ...heard,
-    status: "ready",
-    failure: null,
-    sections: organisation.sections,
-    channels: organisation.channels,
-  }
-  if (state.panes) return loaded
-  const opened: WorkspaceState = {
-    ...loaded,
-    view: { kind: "channel", channelId },
-    tree: { ...state.tree, expandedChannels },
-  }
-  if (opening) return withPanes(opened, singlePane(opening.id))
-  if (!channelId) return opened
-  return withPanes(
-    {
-      ...opened,
-      drafts: { [draftId]: { id: draftId, channelId, model: defaultModel() } },
-    },
-    singlePane(draftId),
-  )
-}
-
-/** The organisation is being read, again after a failure: nothing to say until it answers. */
-export function organisationRequested(state: WorkspaceState): WorkspaceState {
-  return state.status === "failed"
-    ? { ...state, status: "loading", failure: null }
-    : state
-}
-
-/** The organisation could not be read. A workspace already open stays open. */
-export function organisationFailed(
-  state: WorkspaceState,
-  { reason }: { reason: WorkspaceFailureReason },
-): WorkspaceState {
-  if (state.status === "ready") return state
-  return { ...state, status: "failed", failure: failureText(reason) }
-}
-
-/**
  * Takes a session out of the lists, with everything the window held of it —
  * listed again, it is read afresh. A pane showing it closes; the last pane
- * turns into a new session's home in the same channel when `draftId` is
- * given, and keeps showing what is left of it otherwise.
+ * turns into a new session's home in the same channel, under `draftId`, so
+ * no pane is left showing a session that is not there.
  */
-export function removeSession(
+function removeSession(
   state: WorkspaceState,
   sessionId: string,
-  draftId?: string,
+  draftId: string,
 ): WorkspaceState {
   const session = sessionOf(state, sessionId)
   if (!session) return state
@@ -172,7 +108,6 @@ export function removeSession(
   const showing = panes && paneShowing(panes, sessionId)
   if (!panes || !showing) return removed
   if (paneCount(panes) > 1) return withPanes(removed, removePane(panes, showing.key))
-  if (!draftId) return removed
   const restarted = createDraft(removed, {
     draftId,
     channelId: session.channelId,
@@ -184,32 +119,178 @@ export function removeSession(
 }
 
 /**
+ * The overview has arrived — the source's whole list, and the resync for
+ * whatever the stream lost. The first time, the workspace opens on the
+ * first channel, showing its newest session — or, with no sessions anywhere,
+ * a new session's home under `draftId`. A session already held from an
+ * update newer than this read is kept, and one removed since stays out.
+ *
+ * A session the source spoke of that the overview does not list, or lists
+ * in a channel it does not list, is gone: it is taken out as any removal is,
+ * at the revision held, unless the stream brought it while the read was on
+ * its way — the read may be the older of the two. A session the source has
+ * not spoken of yet (revision 0) is the window's own, and stays.
+ */
+export function overviewLoaded(
+  state: WorkspaceState,
+  { overview, draftId }: { overview: Overview; draftId: string },
+): WorkspaceState {
+  const channels = new Set(overview.channels.map((channel) => channel.id))
+  const inChannel = overview.sessions.filter((session) => channels.has(session.channelId))
+  const listed = new Set(inChannel.map((session) => session.id))
+  const kept = new Set(state.reading?.heard ?? [])
+  const heard = inChannel.reduce(summaryHeard, {
+    ...state,
+    sections: overview.sections,
+    channels: overview.channels,
+  })
+  const reconciled = listedSessions(heard)
+    .filter(
+      (session) =>
+        knownToSource(session) && !listed.has(session.id) && !kept.has(session.id),
+    )
+    .reduce(
+      (current, session) =>
+        removeSession(
+          {
+            ...current,
+            removed: remembered(current.removed, {
+              sessionId: session.id,
+              revision: session.revision,
+            }),
+          },
+          session.id,
+          draftId,
+        ),
+      heard,
+    )
+  const loaded: WorkspaceState = {
+    ...reconciled,
+    status: "ready",
+    failure: null,
+    reading: readAnswered(state.reading),
+  }
+  if (state.panes) {
+    // A channel the overview no longer lists is not looked at.
+    const view = loaded.view
+    return view.kind === "channel" && !channelOf(loaded, view.channelId)
+      ? {
+          ...loaded,
+          view: { kind: "channel", channelId: overview.channels[0]?.id ?? "" },
+        }
+      : loaded
+  }
+  const first = overview.channels.find(
+    (channel) => channel.sectionId === overview.sections[0]?.id,
+  )
+  const channelId = first?.id ?? overview.channels[0]?.id ?? ""
+  const sessions = listedSessions(loaded)
+  const opening = sessions
+    .filter((session) => session.channelId === channelId)
+    .sort(byRecency)[0]
+  // Disclosed at first: the channel being opened, and every channel with something waiting.
+  const expandedChannels = [
+    ...new Set([
+      channelId,
+      ...sessions
+        .filter((session) => session.status === "needs-you")
+        .map((session) => session.channelId),
+    ]),
+  ].filter((id) => id !== "")
+  const opened: WorkspaceState = {
+    ...loaded,
+    view: { kind: "channel", channelId },
+    tree: { ...state.tree, expandedChannels },
+  }
+  if (opening) return withPanes(opened, singlePane(opening.id))
+  const model = defaultModel()
+  if (!channelId || !model) return opened
+  return withPanes(
+    { ...opened, drafts: { [draftId]: { id: draftId, channelId, model } } },
+    singlePane(draftId),
+  )
+}
+
+/** One read of the overview answered: what the stream brought is let go with the last. */
+function readAnswered(reading: WorkspaceState["reading"]): WorkspaceState["reading"] {
+  if (!reading) return null
+  return reading.reads > 1 ? { ...reading, reads: reading.reads - 1 } : null
+}
+
+/**
+ * The overview is being read: after a failure, nothing to say until it
+ * answers; and until it does, what the stream brings is noted, so the read
+ * does not take out a session it may predate.
+ */
+export function overviewRequested(state: WorkspaceState): WorkspaceState {
+  const reading = {
+    reads: (state.reading?.reads ?? 0) + 1,
+    heard: state.reading?.heard ?? [],
+  }
+  return state.status === "failed"
+    ? { ...state, status: "loading", failure: null, reading }
+    : { ...state, reading }
+}
+
+/** The overview could not be read. A workspace already open stays open. */
+export function overviewFailed(
+  state: WorkspaceState,
+  { reason }: { reason: WorkspaceFailureReason },
+): WorkspaceState {
+  const reading = readAnswered(state.reading)
+  if (state.status === "ready")
+    return reading === state.reading ? state : { ...state, reading }
+  return { ...state, status: "failed", failure: reason, reading }
+}
+
+/**
  * An update from the source, applied when it is newer than what is held. A
- * removal closes the pane showing the session; the last pane starts over as a
- * new session's home under `draftId`.
+ * summary brought while the overview is being read is noted, so that read
+ * cannot take the session out.
  */
 export function updateReceived(
   state: WorkspaceState,
-  { update, draftId }: { update: WorkspaceUpdate; draftId?: string },
+  { update }: { update: Exclude<WorkspaceUpdate, { kind: "session-removed" }> },
 ): WorkspaceState {
   switch (update.kind) {
-    case "session":
-      return summaryHeard(state, update.session)
-    case "session-removed": {
-      const { sessionId, revision } = update
-      if (!fromSource(update)) return state
-      const removedAt = Math.max(revision, entry(state.removed, sessionId) ?? revision)
-      const held = sessionOf(state, sessionId)
-      // A removal older than the summary held says nothing about it now.
-      if (held && held.revision > revision) return state
-      const marked = { ...state, removed: { ...state.removed, [sessionId]: removedAt } }
-      return removeSession(marked, sessionId, draftId)
+    case "session": {
+      const heard = summaryHeard(state, update.session)
+      const reading = heard.reading
+      if (heard === state || !reading || reading.heard.includes(update.session.id))
+        return heard
+      return {
+        ...heard,
+        reading: { ...reading, heard: [...reading.heard, update.session.id] },
+      }
     }
     case "transcript":
       return holdsConversation(state, update.transcript)
         ? withTranscript(state, update.transcript)
         : state
   }
+}
+
+/**
+ * The source removed a session, at this revision of its summary (the port
+ * counts a removal with the summary, not the conversation). The pane showing
+ * it closes; the last pane starts over as a new session's home under
+ * `draftId`. A removal older than the summary held says nothing about it
+ * now; one of a session not held is remembered, in case an older read lists
+ * it.
+ */
+export function sessionRemoved(
+  state: WorkspaceState,
+  {
+    sessionId,
+    revision,
+    draftId,
+  }: { sessionId: string; revision: number; draftId: string },
+): WorkspaceState {
+  if (!fromSource({ revision })) return state
+  const held = sessionOf(state, sessionId)
+  if (held && held.revision > revision) return state
+  const marked = { ...state, removed: remembered(state.removed, { sessionId, revision }) }
+  return removeSession(marked, sessionId, draftId)
 }
 
 /** A session's conversation, read because a pane shows it; kept only if nothing newer is. */
@@ -245,7 +326,7 @@ export function transcriptFailed(
     return state
   return {
     ...state,
-    transcriptFailures: { ...state.transcriptFailures, [sessionId]: failureText(reason) },
+    transcriptFailures: { ...state.transcriptFailures, [sessionId]: reason },
   }
 }
 

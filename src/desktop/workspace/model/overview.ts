@@ -55,7 +55,7 @@ export interface SessionSummary {
   readonly revision: number
 }
 
-export interface Organisation {
+export interface Overview {
   readonly sections: readonly Section[]
   readonly channels: readonly Channel[]
   readonly sessions: readonly SessionSummary[]
@@ -80,19 +80,17 @@ export function modelName(model: ModelRef): string {
   )
 }
 
-export function sameModel(a: ModelRef, b: ModelRef): boolean {
-  return a.provider === b.provider && a.modelId === b.modelId
-}
-
 /** Newest first. */
 export function byRecency(a: SessionSummary, b: SessionSummary): number {
   return b.updatedAt - a.updatedAt
 }
 
-/** The model a new session starts on: the composer's default, or Claude Opus 5. */
-export function defaultModel(): ModelRef {
+/**
+ * The model a new session starts on: the composer's default
+ * (`defaultComposerModel`, the one owner of that choice), or nothing when
+ * the catalogue has no model at all — then no new session starts.
+ */
+export function defaultModel(): ModelRef | undefined {
   const model = defaultComposerModel(composerModels)
-  return model
-    ? { provider: model.provider, modelId: model.modelId }
-    : { provider: "anthropic", modelId: "claude-opus-5" }
+  return model && { provider: model.provider, modelId: model.modelId }
 }

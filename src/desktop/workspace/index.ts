@@ -1,5 +1,5 @@
 /**
- * The desktop window's workspace: organisation, sessions and chat panes, as
+ * The desktop window's workspace: overview, sessions and chat panes, as
  * a Redux projection of one port. See ADR 238.
  *
  * ```text
@@ -24,8 +24,18 @@
  */
 export { SessionsInSidebar } from "./ui/layouts/sessions-in-sidebar"
 export { ThreeColumns } from "./ui/layouts/three-columns"
+export { shortcutNames, workspaceShortcuts } from "./ui/layouts/shortcuts"
+export { chordLabel } from "./adapters/dom/shortcuts"
 export { ClockProvider } from "./adapters/dom/clock"
+export { focusComposer } from "./adapters/dom/focus"
+export { measureWorkspace } from "./adapters/dom/measure"
+export { inMemorySource } from "./adapters/in-memory/in-memory-source"
+export { workspaceEffects } from "./adapters/store/effects"
+export { workspaceReducer } from "./adapters/store/slice"
 export * from "./adapters/store/commands"
+export { useWorkspaceDispatch, useWorkspaceSelector } from "./adapters/store/hooks"
+export { selectSessionListChosen } from "./adapters/store/selectors"
+export { WorkspaceSourceError } from "./application/ports"
 export type {
   ApprovalScope,
   Initiator,
@@ -34,3 +44,4 @@ export type {
   WorkspaceSource,
   WorkspaceUpdate,
 } from "./application/ports"
+export type { WorkspaceFailureReason } from "./model/failure"

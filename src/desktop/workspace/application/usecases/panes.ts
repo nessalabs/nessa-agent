@@ -4,12 +4,11 @@
  * Each is a pure function of the workspace; the layout rules themselves are
  * the model's (`model/pane-layout.ts`, `model/pane-sizing.ts`).
  */
-import { defaultModel, type ModelRef } from "../../model/organisation"
+import { fitted as fittedColumn } from "../../../model/side-column"
+import { defaultModel, type ModelRef } from "../../model/overview"
 import {
   focusPane as focusLayoutPane,
-  isHorizontal,
   locate,
-  movePane as moveLayoutPane,
   nudgePane as nudgeLayoutPane,
   paneByKey,
   paneCount,
@@ -20,16 +19,18 @@ import {
   equalizePanes as equalizeLayout,
   type Direction,
   type PaneKey,
+  type PaneLayout,
   type Side,
   type Zone,
 } from "../../model/pane-layout"
+import { dropOutcome } from "../../model/drop"
 import {
-  canPlace,
-  needsSidebarRoom,
-  placeBeside,
+  arrange,
+  fitted,
   resizeEdge,
+  type Arranged,
   type PaneEdge,
-  type PaneRoom,
+  type WorkspaceRoom,
 } from "../../model/pane-sizing"
 import {
   channelOf,
@@ -67,9 +68,23 @@ function opened(state: WorkspaceState, sessionId: string): WorkspaceState {
   return discloseChannel(state, sessionId)
 }
 
-function withSidebar(state: WorkspaceState, open: boolean): WorkspaceState {
-  if (state.chrome.sidebarOpen === open) return state
-  return { ...state, chrome: { ...state.chrome, sidebarOpen: open } }
+/**
+ * A change of layout the room allowed (`arrange`): applied, the sidebar
+ * folded for room when that is what made it fit — a fold the window lifts
+ * once there is room again, not the person's choice.
+ */
+function arranged(
+  state: WorkspaceState,
+  { layout, foldSidebar }: Arranged,
+): WorkspaceState {
+  const sidebar = foldSidebar
+    ? fittedColumn(state.chrome.sidebar, false)
+    : state.chrome.sidebar
+  const folded =
+    sidebar === state.chrome.sidebar
+      ? state
+      : { ...state, chrome: { ...state.chrome, sidebar } }
+  return withPanes(folded, layout)
 }
 
 export function focusPane(state: WorkspaceState, pane: PaneKey): WorkspaceState {
@@ -78,8 +93,9 @@ export function focusPane(state: WorkspaceState, pane: PaneKey): WorkspaceState 
 }
 
 /**
- * Opens a session: focuses the pane already showing it, or shows it in
- * `pane` — the focused pane when none is named.
+ * Opens a session: shows it in `pane` — the focused pane when none is named
+ * — or, shown already, focuses the pane showing it (`showInPane`, which
+ * never shows a session twice).
  */
 export function openSession(
   state: WorkspaceState,
@@ -87,60 +103,85 @@ export function openSession(
 ): WorkspaceState {
   const panes = state.panes
   if (!panes || !showable(state, sessionId)) return state
-  const existing = paneShowing(panes, sessionId)
-  const target = existing?.key ?? pane ?? panes.focused
-  if (!locate(panes, target)) return state
-  const next = existing
-    ? focusLayoutPane(panes, existing.key)
-    : focusLayoutPane(showInPane(panes, target, sessionId), target)
+  const next = showInPane(panes, pane ?? panes.focused, sessionId)
+  if (next === panes && !paneShowing(panes, sessionId)) return state
   return withPanes(opened(state, sessionId), next)
 }
 
+/** Where a new pane showing `sessionId` goes on `side` of `target`, if the room allows. */
+function besideIn(
+  panes: PaneLayout,
+  target: PaneKey,
+  side: Side,
+  sessionId: string,
+  room: WorkspaceRoom | undefined,
+): Arranged | null {
+  return arrange(panes, splitPane(panes, target, side, sessionId), room)
+}
+
 /**
- * Opens a session beside a pane: on `side` of `target` (the focused pane, to
- * the right, by default), stacked when a column will not fit, the sidebar
- * stepping aside when that is what a column needs. Past the limits the
- * session takes the target's place — unless `replace` is false, when nothing
- * happens. A session already on screen is focused where it is.
+ * Opens a session beside a pane: on `side` of `target` (the focused pane
+ * when none is named), if the room allows (`arrange`). A side named is that
+ * side or nothing; with none named — "beside", as ⌘-click asks — to the
+ * right, else below. Where it will not fit, the session takes the target's
+ * place — unless `replace` is false, when nothing happens. A session already
+ * on screen is focused where it is.
  */
 export function openBeside(
   state: WorkspaceState,
   {
     sessionId,
     target,
-    side = "right",
+    side,
     room,
     replace = true,
   }: {
     sessionId: string
     target?: PaneKey
     side?: Side
-    room?: PaneRoom
+    room: WorkspaceRoom | undefined
     replace?: boolean
   },
 ): WorkspaceState {
   const panes = state.panes
   if (!panes || !showable(state, sessionId)) return state
-  const existing = paneShowing(panes, sessionId)
-  if (existing)
-    return withPanes(opened(state, sessionId), focusLayoutPane(panes, existing.key))
   const beside = target ?? panes.focused
-  if (!locate(panes, beside)) return state
-  const place = placeBeside(panes, beside, side, room)
-  if (!place) {
-    if (!replace) return state
-    return withPanes(
-      opened(state, sessionId),
-      focusLayoutPane(showInPane(panes, beside, sessionId), beside),
-    )
-  }
-  const roomed = needsSidebarRoom(place, room) ? withSidebar(state, false) : state
-  return withPanes(opened(roomed, sessionId), splitPane(panes, beside, place, sessionId))
+  if (paneShowing(panes, sessionId) || !locate(panes, beside))
+    return openSession(state, { sessionId })
+  const placed = side
+    ? besideIn(panes, beside, side, sessionId, room)
+    : (besideIn(panes, beside, "right", sessionId, room) ??
+      besideIn(panes, beside, "bottom", sessionId, room))
+  if (placed) return arranged(opened(state, sessionId), placed)
+  return replace ? openSession(state, { sessionId, pane: beside }) : state
 }
 
 /**
- * A session dropped on a pane: its middle opens it there, a side opens it
- * beside. A session already on screen is focused where it is.
+ * Whether a session could open beside `target` without taking its place: on
+ * `side`, or on either when none is named. What the menus and the switcher
+ * ask before they offer it, so they never promise what will not happen.
+ */
+export function canOpenBeside(
+  state: WorkspaceState,
+  {
+    target,
+    side,
+    room,
+  }: { target?: PaneKey; side?: Side; room: WorkspaceRoom | undefined },
+): boolean {
+  const panes = state.panes
+  if (!panes) return false
+  const beside = target ?? panes.focused
+  // A stand-in id no pane shows, so only the room decides.
+  const probe = "\u0000beside"
+  const sides: readonly Side[] = side ? [side] : ["right", "bottom"]
+  return sides.some((each) => besideIn(panes, beside, each, probe, room) !== null)
+}
+
+/**
+ * A session dropped on a pane (`dropOutcome`, the layout the drag previewed):
+ * its middle shows it there, a side beside it there if the room allows, or
+ * not at all. A session already on screen is focused where it is.
  */
 export function dropSession(
   state: WorkspaceState,
@@ -149,10 +190,17 @@ export function dropSession(
     target,
     zone,
     room,
-  }: { sessionId: string; target: PaneKey; zone: Zone; room?: PaneRoom },
+  }: { sessionId: string; target: PaneKey; zone: Zone; room: WorkspaceRoom | undefined },
 ): WorkspaceState {
-  if (zone === "center") return openSession(state, { sessionId, pane: target })
-  return openBeside(state, { sessionId, target, side: zone, room })
+  if (!state.panes || !showable(state, sessionId)) return state
+  const outcome = dropOutcome(
+    state.panes,
+    { kind: "session", sessionId },
+    target,
+    zone,
+    room,
+  )
+  return outcome ? arranged(opened(state, sessionId), outcome) : state
 }
 
 /**
@@ -175,18 +223,20 @@ export function createDraft(
     model?: ModelRef
     beside?: Side
     target?: PaneKey
-    room?: PaneRoom
+    room?: WorkspaceRoom
   },
 ): WorkspaceState {
   const panes = state.panes
   if (!panes || showable(state, draftId)) return state
   const home = channelId && channelOf(state, channelId) ? channelId : draftChannel(state)
-  if (!home) return state
+  // A new session runs on a model; with none to start on, none starts.
+  const startsOn = model ?? defaultModel()
+  if (!home || !startsOn) return state
   const drafted: WorkspaceState = {
     ...state,
     drafts: {
       ...state.drafts,
-      [draftId]: { id: draftId, channelId: home, model: model ?? defaultModel() },
+      [draftId]: { id: draftId, channelId: home, model: startsOn },
     },
     view:
       state.view.kind === "channel" ? state.view : { kind: "channel", channelId: home },
@@ -235,8 +285,9 @@ export function closePane(
 }
 
 /**
- * Moves a pane to a zone of another. A side it would not be readable on is
- * refused; a new column may ask the sidebar to step aside.
+ * Moves a pane to a zone of another (`dropOutcome`, the layout the drag
+ * previewed): the middle swaps the two; a side takes it there if the room
+ * allows (`arrange`), and not at all if not.
  */
 export function movePane(
   state: WorkspaceState,
@@ -245,26 +296,44 @@ export function movePane(
     target,
     zone,
     room,
-  }: { pane: PaneKey; target: PaneKey; zone: Zone; room?: PaneRoom },
+  }: { pane: PaneKey; target: PaneKey; zone: Zone; room: WorkspaceRoom | undefined },
 ): WorkspaceState {
   if (!state.panes) return state
-  // A side must leave both panes readable, as it must for any new pane.
-  if (zone !== "center" && !canPlace(state.panes, zone, target, room, pane)) return state
-  const moved = moveLayoutPane(state.panes, pane, target, zone)
-  if (moved === state.panes) return state
-  const roomed =
-    zone !== "center" && isHorizontal(zone) && needsSidebarRoom(zone, room)
-      ? withSidebar(state, false)
-      : state
-  return withPanes(roomed, moved)
+  const outcome = dropOutcome(state.panes, { kind: "pane", pane }, target, zone, room)
+  return outcome ? arranged(state, outcome) : state
 }
 
+/**
+ * The keyboard's move (`nudgePane` in the model), held to the same rule: a
+ * swap is always taken; a pane stepping out into a column of its own only
+ * where the room allows.
+ */
 export function nudgePane(
   state: WorkspaceState,
-  { pane, direction }: { pane: PaneKey; direction: Direction },
+  {
+    pane,
+    direction,
+    room,
+  }: { pane: PaneKey; direction: Direction; room: WorkspaceRoom | undefined },
 ): WorkspaceState {
   if (!state.panes) return state
-  return withPanes(state, nudgeLayoutPane(state.panes, pane, direction))
+  const placed = arrange(state.panes, nudgeLayoutPane(state.panes, pane, direction), room)
+  return placed ? arranged(state, placed) : state
+}
+
+/** Whether a pane can be moved that way: what the Move items ask before they offer it. */
+export function canNudge(
+  state: WorkspaceState,
+  {
+    pane,
+    direction,
+    room,
+  }: { pane: PaneKey; direction: Direction; room: WorkspaceRoom | undefined },
+): boolean {
+  if (!state.panes) return false
+  return (
+    arrange(state.panes, nudgeLayoutPane(state.panes, pane, direction), room) !== null
+  )
 }
 
 export function resizePanes(
@@ -278,4 +347,20 @@ export function resizePanes(
 export function equalizePanes(state: WorkspaceState): WorkspaceState {
   if (!state.panes) return state
   return withPanes(state, equalizeLayout(state.panes))
+}
+
+/**
+ * The panes' room changed — the window resized, a side column opened or
+ * folded: every pane is held to the readable size again, its share
+ * rebalanced where it must be (`fitted`). Where even that cannot fit them,
+ * the layout stays as it is, and each pane's composer takes its compact form
+ * rather than be clipped (`panes.css`).
+ */
+export function fitPanes(
+  state: WorkspaceState,
+  { room }: { room: { width: number; height: number } },
+): WorkspaceState {
+  if (!state.panes) return state
+  const fit = fitted(state.panes, room)
+  return fit ? withPanes(state, fit) : state
 }

@@ -1,20 +1,16 @@
 /**
  * The pane layout's rules that need pixels: where each pane is drawn, whether
- * a pane still fits beside another, and how far an edge between two may be
- * dragged. Pixels arrive as plain numbers a caller measured; nothing here
- * reads the DOM.
+ * the panes are readable in the room they have — the one rule every change
+ * of layout is held to (`arrange`), and the one a resized window is fitted
+ * by (`fitted`) — and how far an edge between two may be dragged. Pixels
+ * arrive as plain numbers a caller measured; nothing here reads the DOM.
  */
 import {
-  isFull,
-  isHorizontal,
-  locate,
   paneLimits,
-  removePane,
   type Column,
   type Pane,
   type PaneKey,
   type PaneLayout,
-  type Side,
 } from "./pane-layout"
 
 /** A pane's rectangle as fractions of the workspace, and its place in the grid. */
@@ -43,6 +39,8 @@ export interface EdgePlacement {
   /** A pane on each side of the edge, whose sizes the drag measures. */
   readonly before: PaneKey
   readonly after: PaneKey
+  /** The part of the two sides' room the side before the edge takes, 0 to 1. */
+  readonly leading: number
   readonly x: number
   readonly width: number
   readonly column: number
@@ -92,6 +90,7 @@ export function placements(columns: PaneLayout["columns"]): {
           edge: { axis: "y", column: c, row: r },
           before: pane.key,
           after: column.panes[r + 1].key,
+          leading: pane.share / (pane.share + column.panes[r + 1].share),
           x,
           width: w,
           column: c,
@@ -108,6 +107,7 @@ export function placements(columns: PaneLayout["columns"]): {
         edge: { axis: "x", column: c },
         before: column.panes[0].key,
         after: columns[c + 1].panes[0].key,
+        leading: column.share / (column.share + columns[c + 1].share),
         x,
         width: 0,
         column: c,
@@ -121,58 +121,181 @@ export function placements(columns: PaneLayout["columns"]): {
 }
 
 /**
- * What a caller measured about the pane something would be placed beside:
- * its size, and the width the sidebar would give up if it stepped aside.
+ * The room the panes have: the grid's size as laid out — never as a flight
+ * of motion draws it mid-way — and the width the sidebar would give up if it
+ * folded (its width and gutter; zero when it is folded already). Measured by
+ * the page (`adapters/dom/measure.ts`) and handed to every command that
+ * changes the layout, whoever dispatches it.
  */
-export interface PaneRoom {
+export interface WorkspaceRoom {
   readonly width: number
   readonly height: number
-  /** The open sidebar's width and gutter; zero when it is already closed. */
   readonly spare: number
 }
 
+/** Half a pixel either way is the same size. */
+const slack = 0.5
+
+/** What `count` items and the gutters between them need of `size` pixels, each at `min`. */
+function roomFor(count: number, min: number): number {
+  return count * min + (count - 1) * paneLimits.gutter
+}
+
+/** Whether `count` columns can each be readable in a grid `width` wide. */
+export function columnsFit(count: number, width: number): boolean {
+  return roomFor(count, paneLimits.minWidth) <= width + slack
+}
+
 /**
- * Whether a pane could go on `side` of `target`: within the limits, a column
- * needs room for a readable width (the sidebar stepping aside if that is what
- * it takes), a row needs half the target's height to stay readable. `moving`
- * is a pane already in the layout being moved there. Without a measurement
- * only the limits apply.
+ * Shares of `size` pixels (gutters between them taken out first) that keep
+ * each at least `min`: the same shares when they do already; otherwise the
+ * ones below it raised to it, the room they take coming from the others in
+ * proportion. `null` when even at the minimum they cannot all fit.
  */
-export function canPlace(
-  layout: PaneLayout,
-  side: Side,
-  target: PaneKey,
-  room?: PaneRoom,
-  moving?: PaneKey,
-): boolean {
-  if (!locate(layout, target)) return false
-  const base = moving === undefined ? layout : removePane(layout, moving)
-  if (moving === undefined && isFull(layout)) return false
-  if (isHorizontal(side)) {
-    if (base.columns.length >= paneLimits.maxColumns) return false
-    return !room || (room.width + room.spare) / 2 >= paneLimits.minWidth
+function sharesFitted(
+  shares: readonly number[],
+  size: number,
+  min: number,
+): readonly number[] | null {
+  if (roomFor(shares.length, min) > size + slack) return null
+  const available = size - (shares.length - 1) * paneLimits.gutter
+  const total = shares.reduce((sum, share) => sum + share, 0)
+  if (shares.every((share) => (available * share) / total >= min - slack)) return shares
+  const raised = new Set<number>()
+  for (;;) {
+    const rest = available - raised.size * min
+    const free = shares.flatMap((share, index) => (raised.has(index) ? [] : [share]))
+    const freeTotal = free.reduce((sum, share) => sum + share, 0)
+    const below = shares.flatMap((share, index) =>
+      !raised.has(index) && (rest * share) / freeTotal < min ? [index] : [],
+    )
+    if (below.length === 0)
+      return shares.map((share, index) =>
+        raised.has(index) ? min / available : (rest * share) / freeTotal / available,
+      )
+    below.forEach((index) => raised.add(index))
   }
-  return !room || room.height / 2 >= paneLimits.minHeight
-}
-
-/** Whether a new column only fits once the sidebar steps aside. */
-export function needsSidebarRoom(side: Side, room?: PaneRoom): boolean {
-  return isHorizontal(side) && room !== undefined && room.width / 2 < paneLimits.minWidth
 }
 
 /**
- * Where a split asked for `side` lands: that side when it fits, else the
- * other axis (a column that will not fit stacks instead), else nowhere.
+ * The layout with every column at least the readable width and every pane
+ * at least the readable height in `room`, rebalancing shares where it must:
+ * the same layout when it fits already, `null` when it cannot.
  */
-export function placeBeside(
+export function fitted(
   layout: PaneLayout,
-  target: PaneKey,
-  side: Side,
-  room?: PaneRoom,
-): Side | null {
-  if (canPlace(layout, side, target, room)) return side
-  const other: Side = isHorizontal(side) ? "bottom" : "right"
-  return canPlace(layout, other, target, room) ? other : null
+  room: { readonly width: number; readonly height: number },
+): PaneLayout | null {
+  const widths = sharesFitted(
+    layout.columns.map((column) => column.share),
+    room.width,
+    paneLimits.minWidth,
+  )
+  if (!widths) return null
+  let changed = false
+  const columns: Column[] = []
+  for (const [index, column] of layout.columns.entries()) {
+    const heights = sharesFitted(
+      column.panes.map((pane) => pane.share),
+      room.height,
+      paneLimits.minHeight,
+    )
+    if (!heights) return null
+    const share = widths[index]
+    const panesChanged = column.panes.some((pane, row) => heights[row] !== pane.share)
+    if (share === column.share && !panesChanged) {
+      columns.push(column)
+      continue
+    }
+    changed = true
+    columns.push({
+      ...column,
+      share,
+      panes: panesChanged
+        ? column.panes.map((pane, row) => ({ ...pane, share: heights[row] }))
+        : column.panes,
+    })
+  }
+  return changed ? { ...layout, columns } : layout
+}
+
+/** Whether every pane of `layout` is readable in `room` as it stands. */
+export function fits(
+  layout: PaneLayout,
+  room: { readonly width: number; readonly height: number },
+): boolean {
+  return fitted(layout, room) === layout
+}
+
+/** Whether two layouts have the same columns of the same number of panes: a swap. */
+function sameGrid(a: PaneLayout, b: PaneLayout): boolean {
+  return (
+    a.columns.length === b.columns.length &&
+    a.columns.every(
+      (column, index) => column.panes.length === b.columns[index].panes.length,
+    )
+  )
+}
+
+/** A change of layout the room allows, and whether the sidebar folds to make it. */
+export interface Arranged {
+  readonly layout: PaneLayout
+  readonly foldSidebar: boolean
+}
+
+/**
+ * The one rule every command that changes the layout goes through — split,
+ * open beside, drop, move, nudge — whoever dispatches it: `candidate` is
+ * taken if it leaves every pane readable in the room, rebalanced where it
+ * must be; else if it does once the sidebar folds; else not at all. A
+ * change that only swaps panes keeps every size, and is always taken. With
+ * no measurement there is no room to speak of, and nothing new is placed.
+ */
+export function arrange(
+  before: PaneLayout,
+  candidate: PaneLayout,
+  room: WorkspaceRoom | undefined,
+): Arranged | null {
+  if (candidate === before) return null
+  if (sameGrid(before, candidate)) return { layout: candidate, foldSidebar: false }
+  if (!room) return null
+  const here = fitted(candidate, room)
+  if (here) return { layout: here, foldSidebar: false }
+  if (room.spare <= 0) return null
+  const folded = fitted(candidate, {
+    width: room.width + room.spare,
+    height: room.height,
+  })
+  return folded ? { layout: folded, foldSidebar: true } : null
+}
+
+/** The two sides of an edge, in pixels along its axis, as the room lays them out. */
+export function edgeSides(
+  layout: PaneLayout,
+  edge: PaneEdge,
+  room: { readonly width: number; readonly height: number },
+): { before: number; after: number } | null {
+  const sizes = (shares: readonly number[], size: number) => {
+    const available = size - (shares.length - 1) * paneLimits.gutter
+    const total = shares.reduce((sum, share) => sum + share, 0)
+    return shares.map((share) => (available * share) / total)
+  }
+  if (edge.axis === "x") {
+    const widths = sizes(
+      layout.columns.map((column) => column.share),
+      room.width,
+    )
+    const [before, after] = [widths[edge.column], widths[edge.column + 1]]
+    return before === undefined || after === undefined ? null : { before, after }
+  }
+  const column = layout.columns[edge.column]
+  if (!column) return null
+  const heights = sizes(
+    column.panes.map((pane) => pane.share),
+    room.height,
+  )
+  const [before, after] = [heights[edge.row], heights[edge.row + 1]]
+  return before === undefined || after === undefined ? null : { before, after }
 }
 
 /**

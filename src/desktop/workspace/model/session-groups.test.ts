@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { SessionStatus, SessionSummary } from "./organisation"
+import type { SessionStatus, SessionSummary } from "./overview"
 import {
   branchCap,
   branchSessions,
@@ -48,9 +48,20 @@ describe("grouping by status", () => {
         ["Earlier", ["new", "old"]],
       ],
     )
-    expect(groupByStatus([session("a", 1)]).map((group) => group.status)).toEqual([
-      "idle",
-    ])
+    expect(groupByStatus([session("a", 1)]).map((group) => group.id)).toEqual(["idle"])
+  })
+
+  it("lists running sessions with the rest, newest first, when they are not kept at the top", () => {
+    const groups = groupByStatus(
+      [session("old", 1), session("run", 3, "running"), session("wait", 2, "needs-you")],
+      { runningFirst: false },
+    )
+    expect(groups.map((group) => [group.label, group.sessions.map((s) => s.id)])).toEqual(
+      [
+        ["Needs you", ["wait"]],
+        ["Sessions", ["run", "old"]],
+      ],
+    )
   })
 })
 

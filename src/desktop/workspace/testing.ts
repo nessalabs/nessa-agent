@@ -1,17 +1,18 @@
 /**
- * What the workspace's tests share: a small organisation, a source whose
+ * What the workspace's tests share: a small overview, a source whose
  * every answer the test decides — success, a typed refusal, or silence until
  * released — and a real desktop store around it. Only tests import this.
  */
 import { makeDesktopStore } from "../store"
 import type {
   OutgoingMessage,
-  WorkspaceFailureReason,
   WorkspaceSource,
   WorkspaceUpdate,
 } from "./application/ports"
+import type { WorkspaceFailureReason } from "./model/failure"
+import type { WorkspaceRoom } from "./model/pane-sizing"
 import { WorkspaceSourceError } from "./application/ports"
-import type { Organisation, SessionStatus, SessionSummary } from "./model/organisation"
+import type { Overview, SessionStatus, SessionSummary } from "./model/overview"
 import type { Transcript } from "./model/transcript"
 import { emptyTranscript } from "./model/transcript"
 
@@ -45,7 +46,7 @@ export function summary(
  * Two sections; `desktop` holds three sessions (one waiting, one running),
  * `gateway` one, `empty` none.
  */
-export function testOrganisation(): Organisation {
+export function testOverview(): Overview {
   return {
     sections: [
       { id: "starred", name: "Starred" },
@@ -80,14 +81,14 @@ export interface FakeSource extends WorkspaceSource {
   transcripts: Map<string, Transcript>
 }
 
-export function fakeSource(organisation: Organisation = testOrganisation()): FakeSource {
+export function fakeSource(overview: Overview = testOverview()): FakeSource {
   const listeners = new Set<(update: WorkspaceUpdate) => void>()
   const refusals = new Map<Method, WorkspaceFailureReason>()
   const held = new Map<Method, (() => void)[] | null>()
   const calls: unknown[][] = []
   // The summaries as the source last said them, so pin and archive report the next revision.
   const archived = new Set<string>()
-  const summaries = new Map(organisation.sessions.map((session) => [session.id, session]))
+  const summaries = new Map(overview.sessions.map((session) => [session.id, session]))
   const emit = (update: WorkspaceUpdate) => {
     if (update.kind === "session") {
       // Listed again by the source itself: it holds the session once more.
@@ -101,7 +102,7 @@ export function fakeSource(organisation: Organisation = testOrganisation()): Fak
     listeners.forEach((listener) => listener(update))
   }
   const transcripts = new Map<string, Transcript>(
-    organisation.sessions.map((session) => [
+    overview.sessions.map((session) => [
       session.id,
       // The source counts from 1; revision 0 is the window's own.
       { ...emptyTranscript(session.id), revision: 1 },
@@ -147,7 +148,7 @@ export function fakeSource(organisation: Organisation = testOrganisation()): Fak
       await Promise.resolve()
     },
     emit,
-    organisation: () => answer("organisation", [], () => organisation),
+    overview: () => answer("overview", [], () => overview),
     transcript: (sessionId) =>
       answer("transcript", [sessionId], () => {
         if (archived.has(sessionId)) throw new WorkspaceSourceError("unknown-session")
@@ -198,13 +199,24 @@ export function fakeSource(organisation: Organisation = testOrganisation()): Fak
   }
 }
 
-/** A desktop store over `source`, with a clock at 1000 and ids counting up. */
-export function testStore(source: WorkspaceSource = fakeSource()) {
+/** A grid with room for three columns of two panes, and a sidebar that could fold. */
+export const roomyGrid: WorkspaceRoom = { width: 1100, height: 800, spare: 256 }
+
+/**
+ * A desktop store over `source`, with a clock at 1000, ids counting up, and
+ * the panes' room as `measure` says — a roomy grid unless a test says
+ * otherwise.
+ */
+export function testStore(
+  source: WorkspaceSource = fakeSource(),
+  measure: () => WorkspaceRoom | undefined = () => roomyGrid,
+) {
   let next = 0
   return makeDesktopStore({
     workspace: source,
     now: () => 1000,
     newId: () => `id-${++next}`,
+    measure,
   })
 }
 

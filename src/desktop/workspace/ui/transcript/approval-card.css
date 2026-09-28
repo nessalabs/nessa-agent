@@ -87,8 +87,7 @@
   outline-offset: 2px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .workspace-approval {
-    animation: none;
-  }
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .workspace-approval {
+  animation: none;
 }

@@ -1,16 +1,6 @@
-import {
-  memo,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type RefObject,
-} from "react"
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuTrigger,
-} from "@nessa-ui/react/context-menu"
+import { memo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { shallowEqual } from "react-redux"
+import { useRunningFirstPreference } from "../../../adapters/window-preferences"
 import { DesktopIcon } from "../../../ui/icons"
 import { newSession, openSession } from "../../adapters/store/commands"
 import {
@@ -28,17 +18,18 @@ import {
   selectShownSessionIds,
   selectView,
 } from "../../adapters/store/selectors"
-import { useSessionDrag } from "../../adapters/dom/drag"
+import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
 import { useNow } from "../../adapters/dom/clock"
-import { commandKey } from "../../adapters/dom/shortcuts"
-import { statusViewLabel } from "../../model/session-groups"
+import { statusLabels } from "../../model/session-groups"
 import { sessionTime } from "../../model/time-labels"
 import { sameWords } from "../../model/transcript"
 import { AgentTile } from "../chrome/agent-tile"
+import { ColumnHeader } from "../chrome/column-header"
 import { IconButton } from "../chrome/icon-button"
 import { SessionMenuItems, useOpenFromRow } from "../session-actions"
 import { useWorkspaceFrame } from "../workspace-frame"
 import "./session-list.css"
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "../../../ui/menu"
 
 /**
  * The middle column: what the sidebar chose — a channel's sessions, or every
@@ -46,11 +37,7 @@ import "./session-list.css"
  * search over them. Arrow keys walk the list and open as they go, like Mail's
  * message list. A new session appears here with its first message.
  */
-export const SessionList = memo(function SessionList({
-  searchRef,
-}: {
-  searchRef: RefObject<HTMLInputElement | null>
-}) {
+export const SessionList = memo(function SessionList() {
   const dispatch = useWorkspaceDispatch()
   const store = useWorkspaceStore()
   const frame = useWorkspaceFrame()
@@ -63,30 +50,34 @@ export const SessionList = memo(function SessionList({
   const [search, setSearch] = useState({ view, query: "" })
   const query = search.view === view ? search.query : ""
   const setQuery = (next: string) => setSearch({ view, query: next })
+  const [runningFirst] = useRunningFirstPreference()
   const groups = useWorkspaceSelector(
-    (state) => selectListGroups(state, query),
+    (state) => selectListGroups(state, query, runningFirst === "on"),
     sameListGroups,
   )
   const listRef = useRef<HTMLDivElement>(null)
   const isChannel = view.kind === "channel"
-  const title = isChannel ? (channel?.name ?? "") : statusViewLabel(view.status)
+  const title = isChannel ? (channel?.name ?? "") : statusLabels[view.status]
   const ordered = groups.flatMap((group) => group.ids)
   // One row takes Tab: the open one, or the first when none here is open.
   const focusedId = useWorkspaceSelector(selectFocusedSessionId)
   const tabStop = focusedId && ordered.includes(focusedId) ? focusedId : ordered[0]
 
+  // ↑ and ↓ walk the list, Home and End go to its ends, each opening as it
+  // goes; the context-menu key opens the focused row's menu.
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return
+    if (contextMenuFromKey(event)) return
+    const walk: Record<string, (at: number) => number> = {
+      ArrowDown: (at) => at + 1,
+      ArrowUp: (at) => at - 1,
+      Home: () => 0,
+      End: () => ordered.length - 1,
+    }
+    if (!Object.hasOwn(walk, event.key)) return
     event.preventDefault()
     const focused = selectFocusedSessionId(store.getState())
     const at = ordered.findIndex((id) => id === focused)
-    const next =
-      ordered[
-        Math.min(
-          Math.max(at + (event.key === "ArrowDown" ? 1 : -1), 0),
-          ordered.length - 1,
-        )
-      ]
+    const next = ordered[Math.min(Math.max(walk[event.key](at), 0), ordered.length - 1)]
     if (!next) return
     dispatch(openSession({ sessionId: next }))
     listRef.current
@@ -103,39 +94,36 @@ export const SessionList = memo(function SessionList({
       aria-hidden={!open || undefined}
     >
       <div className="workspace-list-inner" data-flip="slide" data-flip-id="list">
-        <header className="workspace-list-head" data-tauri-drag-region>
-          <div
-            className="workspace-list-title"
-            data-tauri-drag-region
-            data-flip="slide"
-            data-flip-id="list-title"
-          >
-            {isChannel ? (
+        <ColumnHeader
+          title={title}
+          icon={
+            isChannel ? (
               <DesktopIcon name={channel?.private ? "privateChannel" : "channel"} />
-            ) : null}
-            <h2>{title}</h2>
-          </div>
-          <IconButton
-            icon="newSession"
-            label="New Session"
-            shortcut={frame.shortcut("newSession")}
-            onClick={() => dispatch(newSession())}
-          />
-        </header>
-        <label className="workspace-search">
-          <DesktopIcon name="search" />
-          <input
-            ref={searchRef}
-            type="search"
-            placeholder="Search sessions"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setQuery("")
-            }}
-          />
-          {query || !shortcut ? null : <kbd>{shortcut}</kbd>}
-        </label>
+            ) : undefined
+          }
+          action={
+            <IconButton
+              icon="newSession"
+              label="New Session"
+              shortcut={frame.shortcut("newSession")}
+              onClick={() => dispatch(newSession())}
+            />
+          }
+        >
+          <label className="workspace-search">
+            <DesktopIcon name="search" />
+            <input
+              type="search"
+              placeholder="Search sessions"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setQuery("")
+              }}
+            />
+            {query || !shortcut ? null : <kbd>{shortcut}</kbd>}
+          </label>
+        </ColumnHeader>
         <div
           className="workspace-list-scroll"
           ref={listRef}
@@ -164,7 +152,7 @@ export const SessionList = memo(function SessionList({
             </div>
           ) : null}
           {groups.map((group, index) => (
-            <div key={group.status} role="group" aria-label={group.label}>
+            <div key={group.id} role="group" aria-label={group.label}>
               {/* A status view holds one state, and its title already names it. */}
               {isChannel ? (
                 <h3
@@ -214,7 +202,6 @@ const SessionRow = memo(function SessionRow({
     shallowEqual,
   )
   const actions = useOpenFromRow()
-  const startDrag = useSessionDrag()
   if (!session) return null
   return (
     <ContextMenu>
@@ -228,14 +215,13 @@ const SessionRow = memo(function SessionRow({
           data-selected={selected || undefined}
           data-open={open || undefined}
           data-unread={session.unread || undefined}
-          draggable
-          onDragStart={(event) => startDrag(event, session.id, session.title)}
-          onClick={(event) => actions.click(event, session.id)}
+          // Carried by the pointer to a pane (`adapters/dom/drag.ts`).
+          data-drag-session={session.id}
+          onClick={(event) => actions.activate(event, session.id)}
           onKeyDown={(event) => {
             if (event.key !== "Enter") return
             event.preventDefault()
-            if (commandKey(event)) actions.beside(session.id)
-            else actions.open(session.id)
+            actions.activate(event, session.id)
           }}
         >
           <AgentTile model={session.model} size={22} />
@@ -261,7 +247,7 @@ const SessionRow = memo(function SessionRow({
           </div>
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent className="desktop-popover workspace-menu">
+      <ContextMenuContent>
         <SessionMenuItems sessionId={session.id} />
       </ContextMenuContent>
     </ContextMenu>

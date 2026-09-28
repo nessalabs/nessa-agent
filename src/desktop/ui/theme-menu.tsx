@@ -1,13 +1,14 @@
+import { DesktopIcon } from "./icons"
+import { desktopThemes, parseDesktopTheme, type DesktopThemeId } from "../model/theme"
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuTrigger,
-} from "@nessa-ui/react/dropdown-menu"
-import { DesktopIcon } from "./icons"
-import { desktopThemes, parseDesktopTheme, type DesktopThemeId } from "../model/theme"
+  MenuLabel,
+  MenuRadioGroup,
+  MenuRadioItem,
+} from "./menu"
+import { tooltip } from "./tooltip"
 
 /** Lists the themes, each with a swatch painted from its own colours. */
 export function ThemeMenu({
@@ -24,28 +25,28 @@ export function ThemeMenu({
           type="button"
           className="desktop-footer-button"
           aria-label="Appearance"
-          title="Appearance"
+          {...tooltip("Appearance", { side: "above" })}
         >
           <DesktopIcon name="appearance" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="end" className="desktop-popover min-w-40">
-        <DropdownMenuLabel>Light</DropdownMenuLabel>
-        <DropdownMenuRadioGroup
+      <DropdownMenuContent side="top" align="end">
+        <MenuLabel>Light</MenuLabel>
+        <MenuRadioGroup
           value={theme}
           onValueChange={(value) => onThemeChange(parseDesktopTheme(value))}
         >
           {desktopThemes.map((option) => (
-            <DropdownMenuRadioItem key={option.id} value={option.id}>
+            <MenuRadioItem key={option.id} value={option.id}>
               <span
                 aria-hidden="true"
                 className="desktop-swatch"
                 data-desktop-theme={option.id}
               />
               {option.label}
-            </DropdownMenuRadioItem>
+            </MenuRadioItem>
           ))}
-        </DropdownMenuRadioGroup>
+        </MenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   )

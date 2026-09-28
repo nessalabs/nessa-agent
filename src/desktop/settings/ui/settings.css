@@ -18,7 +18,7 @@
     var(--desktop-light-edge),
     var(--foreground) 35%
   );
-  --settings-sidebar-w: 248px;
+  /* --settings-sidebar-w is set by the view, from `model/settings-sidebar.ts`. */
   --settings-column: 640px;
   --settings-fade: 160ms;
 
@@ -42,12 +42,16 @@
   }
 }
 
-/* Keyboard focus is a faint halo in the theme's edge colour, never a hard ring. */
-.settings :focus-visible {
+/*
+ * Keyboard focus is a faint halo in the theme's edge colour, never a hard
+ * ring. Defaults, so they carry no weight: a control's own focus style
+ * outranks them.
+ */
+:where(.settings) :focus-visible {
   outline: none;
 }
 
-.settings button:focus-visible {
+:where(.settings button:focus-visible) {
   box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--settings-accent) 45%, transparent);
 }
 
@@ -63,7 +67,8 @@
 
 .settings-titlebar {
   position: absolute;
-  z-index: 10;
+  /* Above the sidebar even when it is revealed from the edge. */
+  z-index: 30;
   top: 0;
   right: 0;
   left: 0;
@@ -164,6 +169,34 @@ html:not(.dark) .settings-glass {
 .settings[data-sidebar="closed"] .settings-glass {
   opacity: 0;
   transform: translateX(calc(-1 * var(--settings-sidebar-w)));
+}
+
+/*
+ * Folded for room or by the person, the sidebar can be revealed from the
+ * window's edge (`useEdgePeek`, the same reveal as the app's): the glass
+ * slides in over the page, more opaque and lifted, and stays while the
+ * pointer or focus is in it.
+ */
+.settings[data-sidebar="closed"][data-peek] .settings-glass {
+  z-index: 20;
+  opacity: 1;
+  transform: none;
+  background: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--background) 94%, var(--foreground)) 86%,
+    transparent
+  );
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 9%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 7%, transparent),
+    0 24px 60px -12px rgb(0 0 0 / 60%);
+  transition:
+    transform 360ms var(--desktop-ease),
+    opacity 0s;
+}
+
+.settings[data-sidebar="closed"][data-peek] .settings-sidebar {
+  z-index: 20;
 }
 
 /* A soft filled capsule; focus deepens the fill a little and adds no ring. */
@@ -546,6 +579,22 @@ html:not(.dark) .settings-glass {
   font-size: 12px;
 }
 
+/*
+ * A setting not available yet: its name stays readable, its note says so
+ * quietly, and its control rests, dimmed, taking no pointer.
+ */
+.settings-row[data-pending] .settings-row-control,
+.settings-group[data-pending] .settings-card {
+  opacity: 0.45;
+}
+
+.settings-switch:disabled,
+.settings-segmented button:disabled,
+.settings-choice:disabled {
+  cursor: default;
+  pointer-events: none;
+}
+
 .settings-row-control {
   display: flex;
   flex: none;
@@ -867,22 +916,20 @@ html:not(.dark) .settings-glass {
   font-size: 15px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .settings,
-  .settings-head h1,
-  .settings-panel,
-  .settings-row[data-found],
-  .settings-group[data-found] .settings-card {
-    animation: none;
-  }
-
-  .settings-sidebar,
-  .settings-glass,
-  .settings-titlebar-button,
-  .settings-tabs[data-placed]::before,
-  .settings-choice-check {
-    transition: none;
-  }
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .settings,
+:root[data-motion="reduced"] .settings-head h1,
+:root[data-motion="reduced"] .settings-panel,
+:root[data-motion="reduced"] .settings-row[data-found],
+:root[data-motion="reduced"] .settings-group[data-found] .settings-card {
+  animation: none;
+}
+:root[data-motion="reduced"] .settings-sidebar,
+:root[data-motion="reduced"] .settings-glass,
+:root[data-motion="reduced"] .settings-titlebar-button,
+:root[data-motion="reduced"] .settings-tabs[data-placed]::before,
+:root[data-motion="reduced"] .settings-choice-check {
+  transition: none;
 }
 
 /* "nessa Studio" in each layout's sidebar footer opens Settings. */

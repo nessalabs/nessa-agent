@@ -1,18 +1,13 @@
 import {
   memo,
   startTransition,
+  useCallback,
   useEffect,
   useRef,
   useState,
   type CSSProperties,
-  type DragEvent,
 } from "react"
-import {
-  dropSession,
-  focusPane,
-  movePane,
-  sendMessage,
-} from "../../adapters/store/commands"
+import { focusPane, sendMessage } from "../../adapters/store/commands"
 import {
   useWorkspaceDispatch,
   useWorkspaceSelector,
@@ -22,27 +17,14 @@ import {
   selectDraft,
   selectFocusedPaneKey,
   selectPaneSession,
-  selectPanes,
   selectSession,
 } from "../../adapters/store/selectors"
 import { measureArrival, type Arrival } from "../../adapters/dom/arrival"
-import {
-  paneDragType,
-  sessionDragType,
-  useCarriedPane,
-  usePaneDrag,
-} from "../../adapters/dom/drag"
+import { focusedPaneAttribute } from "../../adapters/dom/focus"
 import { durationToken } from "../../adapters/dom/motion"
-import { isFull, type Side, type Zone } from "../../model/pane-layout"
-import { canPlace, type PanePlacement } from "../../model/pane-sizing"
-import { useWorkspaceFrame } from "../workspace-frame"
+import type { PanePlacement } from "../../model/pane-sizing"
 import { Conversation, PaneHome } from "./conversation"
-import { DropTarget } from "./drop-target"
-import { EmptyPane } from "./empty-state"
 import { PaneHeader } from "./pane-header"
-
-/** How near a pane's edge, as a share of its size, a drop splits rather than opens in place. */
-const edgeShare = 0.26
 
 /** Where a pane is drawn, as the custom properties the stylesheet places it by. */
 function placementStyle(placement: PanePlacement): CSSProperties {
@@ -64,9 +46,10 @@ function placementStyle(placement: PanePlacement): CSSProperties {
  * session's own content is read further down, so a reply streaming here
  * renders this pane's transcript and nothing else.
  *
- * A session or another pane dropped on it lands by zone: a side splits, the
- * middle opens in place or swaps. Sending a new session's first message
- * measures its home first, so the composer can glide into the conversation.
+ * A session or another pane carried over it (`adapters/dom/drag.ts`) lands
+ * by zone: a side splits, the middle opens in place or swaps. Sending a new
+ * session's first message measures its home first, so the composer can glide
+ * into the conversation.
  */
 export const Pane = memo(function Pane({
   placement,
@@ -78,8 +61,6 @@ export const Pane = memo(function Pane({
   const key = placement.key
   const dispatch = useWorkspaceDispatch()
   const store = useWorkspaceStore()
-  const frame = useWorkspaceFrame()
-  const drag = usePaneDrag()
   const sessionId = useWorkspaceSelector((state) => selectPaneSession(state, key)) ?? ""
   const focused = useWorkspaceSelector((state) => selectFocusedPaneKey(state) === key)
   const draft = useWorkspaceSelector(
@@ -89,7 +70,6 @@ export const Pane = memo(function Pane({
     (state) => selectSession(state, sessionId)?.title,
   )
   const listed = sessionTitle !== undefined
-  const lifted = useCarriedPane() === key
   const [headingVisible, setHeadingVisible] = useState(false)
   // A new pane answers on the frame it was asked for: its shell fades in at
   // once, and what it shows fills in over the next frames, under the fade, in
@@ -99,7 +79,6 @@ export const Pane = memo(function Pane({
     const frame = requestAnimationFrame(() => startTransition(() => setFilled(true)))
     return () => cancelAnimationFrame(frame)
   }, [])
-  const [drop, setDrop] = useState<{ zone: Zone; kind: "session" | "pane" } | null>(null)
 
   // Sending a first message: the home lifts away over the conversation that
   // replaces it, while its composer travels there as the conversation's own.
@@ -117,49 +96,35 @@ export const Pane = memo(function Pane({
   useEffect(() => () => window.clearTimeout(leaveTimer.current), [])
   // The caret follows the first message into the conversation.
   const handoff = useRef<string | null>(null)
-  const sendFromHome = (text: string) => {
-    handoff.current = sessionId
-    const measured = measureArrival(homeRef.current)
-    if (measured) {
-      setArriving({ sessionId, arrival: measured })
-      window.clearTimeout(leaveTimer.current)
-      // The home stays over the conversation until its composer has landed.
-      const home = homeRef.current ?? document.body
-      const duration =
-        durationToken(home, "--desktop-arrival") +
-        durationToken(home, "--desktop-stagger") / 2
-      leaveTimer.current = window.setTimeout(() => setArriving(null), duration)
-    }
-    void dispatch(sendMessage({ sessionId, text, initiator: "person" }))
-  }
-  const takeFocus = () => {
-    const mine = handoff.current === sessionId
+  // The session shown now, for the callbacks below: they keep their identity
+  // for the pane's life, so the memoised home and conversation they are
+  // handed render only for what they show, never because this pane did.
+  const shownRef = useRef(sessionId)
+  shownRef.current = sessionId
+  const sendFromHome = useCallback(
+    (text: string) => {
+      const shown = shownRef.current
+      handoff.current = shown
+      const measured = measureArrival(homeRef.current)
+      if (measured) {
+        setArriving({ sessionId: shown, arrival: measured })
+        window.clearTimeout(leaveTimer.current)
+        // The home stays over the conversation until its composer has landed.
+        const home = homeRef.current ?? document.body
+        const duration =
+          durationToken(home, "--desktop-arrival") +
+          durationToken(home, "--desktop-stagger") / 2
+        leaveTimer.current = window.setTimeout(() => setArriving(null), duration)
+      }
+      void dispatch(sendMessage({ sessionId: shown, text, initiator: "person" }))
+    },
+    [dispatch],
+  )
+  const takeFocus = useCallback(() => {
+    const mine = handoff.current === shownRef.current
     handoff.current = null
     return mine
-  }
-
-  const full = () => {
-    const panes = selectPanes(store.getState())
-    return !panes || isFull(panes)
-  }
-
-  // The drop target nearest the pointer's edge, or the middle to open in place.
-  const zoneFor = (event: DragEvent<HTMLElement>, moving?: number): Zone => {
-    const box = event.currentTarget.getBoundingClientRect()
-    const x = (event.clientX - box.left) / box.width
-    const y = (event.clientY - box.top) / box.height
-    const near: [Side, number][] = [
-      ["left", x],
-      ["right", 1 - x],
-      ["top", y],
-      ["bottom", 1 - y],
-    ]
-    const [side, distance] = near.reduce((a, b) => (b[1] < a[1] ? b : a))
-    if (distance > edgeShare) return "center"
-    const panes = selectPanes(store.getState())
-    if (!panes) return "center"
-    return canPlace(panes, side, key, frame.roomOf(key), moving) ? side : "center"
-  }
+  }, [])
 
   const showHome = draft || arrival !== null
   return (
@@ -171,7 +136,7 @@ export const Pane = memo(function Pane({
       data-pane-key={key}
       data-corner={placement.corner || undefined}
       data-focused={(focused && multi) || undefined}
-      data-lifted={lifted || undefined}
+      {...{ [focusedPaneAttribute]: focused || undefined }}
       aria-label={sessionTitle ?? (draft ? "New session" : "Empty pane")}
       onPointerDown={() => {
         if (!focused) dispatch(focusPane({ pane: key }))
@@ -179,40 +144,6 @@ export const Pane = memo(function Pane({
       onFocusCapture={() => {
         if (selectFocusedPaneKey(store.getState()) !== key)
           dispatch(focusPane({ pane: key }))
-      }}
-      onDragOver={(event) => {
-        const types = event.dataTransfer.types
-        const carryingPane = types.includes(paneDragType)
-        if (!carryingPane && !types.includes(sessionDragType)) return
-        const carried = drag.carried()
-        const moving = carried?.kind === "pane" ? carried.pane : undefined
-        if (carryingPane && (moving === undefined || moving === key)) return
-        event.preventDefault()
-        event.dataTransfer.dropEffect = carryingPane ? "move" : "copy"
-        const zone = zoneFor(event, moving)
-        const kind = carryingPane ? "pane" : "session"
-        if (drop?.zone !== zone || drop.kind !== kind) setDrop({ zone, kind })
-      }}
-      onDragLeave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null))
-          setDrop(null)
-      }}
-      onDrop={(event) => {
-        const zone = drop?.zone ?? "center"
-        setDrop(null)
-        const room = frame.roomOf(key)
-        if (event.dataTransfer.types.includes(paneDragType)) {
-          event.preventDefault()
-          const carried = drag.carried()
-          if (carried?.kind === "pane")
-            dispatch(movePane({ pane: carried.pane, target: key, zone, room }))
-          drag.end()
-          return
-        }
-        const dropped = event.dataTransfer.getData(sessionDragType)
-        if (!dropped) return
-        event.preventDefault()
-        dispatch(dropSession({ sessionId: dropped, target: key, zone, room }))
       }}
     >
       <PaneHeader
@@ -241,9 +172,7 @@ export const Pane = memo(function Pane({
             onHeadingVisible={setHeadingVisible}
           />
         ) : null}
-        {filled && !listed && !draft ? <EmptyPane pane={key} /> : null}
       </div>
-      {drop ? <DropTarget zone={drop.zone} kind={drop.kind} full={full()} /> : null}
     </article>
   )
 })

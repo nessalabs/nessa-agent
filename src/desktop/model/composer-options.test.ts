@@ -9,6 +9,7 @@ import {
   providerLabel,
   thinkingLevelsFor,
   type ComposerModel,
+  shortModelName,
 } from "./composer-options"
 
 function model(provider: string, modelId: string, reasoning = true): ComposerModel {
@@ -96,5 +97,32 @@ describe("fastModeFor", () => {
     expect(fastModeFor(model("anthropic", "claude-sonnet-5"))).toBe(false)
     expect(fastModeFor(model("openai", "claude-opus-5"))).toBe(false)
     expect(fastModeFor(undefined)).toBe(false)
+  })
+})
+
+describe("a model's short name", () => {
+  const model = (provider: string, displayName: string) => ({
+    provider,
+    modelId: displayName,
+    displayName,
+    reasoning: false,
+    maxContextWindowTokens: 1,
+  })
+  const catalogue = [
+    model("anthropic", "Claude Opus 5"),
+    model("anthropic", "Claude Sonnet 5"),
+    model("openai", "GPT-6 Astra"),
+    model("openai", "GPT-5.6 Sol"),
+    model("solo", "Solo One"),
+  ]
+
+  it("drops the word a provider's models all start with, so they still read apart", () => {
+    expect(shortModelName(catalogue[0], catalogue)).toBe("Opus 5")
+    expect(shortModelName(catalogue[1], catalogue)).toBe("Sonnet 5")
+  })
+
+  it("keeps a name whole where nothing is shared, or it is the only one", () => {
+    expect(shortModelName(catalogue[2], catalogue)).toBe("GPT-6 Astra")
+    expect(shortModelName(catalogue[4], catalogue)).toBe("Solo One")
   })
 })

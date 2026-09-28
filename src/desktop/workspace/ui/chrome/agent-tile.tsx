@@ -1,6 +1,6 @@
 import { memo } from "react"
 import { AgentMark } from "../../../../onboarding/ui/agent-mark"
-import { agentName, agentOf, type ModelRef } from "../../model/organisation"
+import { agentName, agentOf, type ModelRef } from "../../model/overview"
 
 /**
  * The agent a session runs, as its mark on a small glass tile, like an app

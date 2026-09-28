@@ -17,7 +17,6 @@ import {
   FolderPlus,
   Hash,
   Home,
-  ImagePlus,
   Inbox,
   Info,
   LayoutPanelLeft,
@@ -26,8 +25,6 @@ import {
   Maximize2,
   Minimize2,
   Minus,
-  Moon,
-  Move,
   Paintbrush,
   Palette,
   PanelLeft,
@@ -100,9 +97,6 @@ export const lucideIcons: DesktopIconFamily = {
   enter: lucide(CornerDownLeft),
 
   customize: lucide(Paintbrush),
-  nightScene: lucide(Moon),
-  chooseImage: lucide(ImagePlus),
-  adjustImage: lucide(Move),
   zoomIn: lucide(Plus),
   zoomOut: lucide(Minus),
 

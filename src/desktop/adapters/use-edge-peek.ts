@@ -9,10 +9,12 @@ const HIDE_MS = 350
 const HANDOFF_MS = 380
 
 /**
- * Runs the edge-peek state machine (`model/edge-peek.ts`) against the clock.
- * `enabled` is false whenever the sidebar is docked open or the panel is
- * maximized. Becoming docked while revealed is a handoff; anything else
- * that disables the reveal dismisses it.
+ * Runs the edge-peek state machine (`model/edge-peek.ts`) against the clock:
+ * the one Dock-style reveal of a folded sidebar, used by the classic shell,
+ * both workspace layouts and Settings. `enabled` is false whenever the
+ * sidebar is drawn (or, in the classic shell, the panel is maximized).
+ * Becoming docked while revealed is a handoff; anything else that disables
+ * the reveal dismisses it.
  */
 export function useEdgePeek(enabled: boolean, docked: boolean) {
   const [state, send] = useReducer(stepEdgePeek, edgePeekHidden)
@@ -44,10 +46,38 @@ export function useEdgePeek(enabled: boolean, docked: boolean) {
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [state.shown, state.pending])
 
-  const enter = useCallback(() => {
-    if (enabled) send("enter")
-  }, [enabled])
-  const leave = useCallback(() => send("leave"), [])
+  // The pointer and keyboard focus each hold the reveal open: it hides once
+  // neither is inside — the edge strip or the revealed sidebar — so choosing
+  // something there keeps it shown until the pointer leaves, and Tabbing
+  // through it keeps it shown while focus is there. Focus a press gave does
+  // not hold it: the pointer leaving is what a press means to end.
+  const inside = useRef({ pointer: false, focus: false })
+  const held = useCallback(
+    (part: "pointer" | "focus", now: boolean) => {
+      const was = inside.current.pointer || inside.current.focus
+      inside.current = { ...inside.current, [part]: now }
+      const is = inside.current.pointer || inside.current.focus
+      if (is && !was && enabled) send("enter")
+      else if (!is && was) send("leave")
+    },
+    [enabled],
+  )
+  const enter = useCallback(() => held("pointer", true), [held])
+  const leave = useCallback(() => held("pointer", false), [held])
+  const focusIn = useCallback(
+    (event: { target: EventTarget }) => {
+      if (event.target instanceof Element && event.target.matches(":focus-visible"))
+        held("focus", true)
+    },
+    [held],
+  )
+  const focusOut = useCallback(
+    (event: { currentTarget: Element; relatedTarget: EventTarget | null }) => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+        held("focus", false)
+    },
+    [held],
+  )
 
   return {
     shown: state.shown,
@@ -55,5 +85,14 @@ export function useEdgePeek(enabled: boolean, docked: boolean) {
     handedOff: state.handedOff,
     enter,
     leave,
+    /** For the revealed sidebar: pointer and focus both hold it open. */
+    holders: {
+      onPointerEnter: enter,
+      onPointerLeave: leave,
+      onFocus: focusIn,
+      onBlur: focusOut,
+    },
   }
 }
+
+export type EdgePeekControls = ReturnType<typeof useEdgePeek>

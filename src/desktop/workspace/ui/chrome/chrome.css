@@ -5,10 +5,6 @@
  */
 
 .workspace {
-  /* Clears the window controls and the two titlebar buttons beside them. */
-  --workspace-controls-end: calc(
-    var(--desktop-window-controls-inset) + 2 * var(--desktop-control-size) + 2px
-  );
   position: relative;
   display: flex;
   height: 100svh;
@@ -23,19 +19,24 @@
   -webkit-font-smoothing: antialiased;
 }
 
-.workspace button {
+/* A reset, so it carries no weight: any component's own class outranks it. */
+:where(.workspace) button {
   font: inherit;
   color: inherit;
   cursor: default;
 }
 
-/* A quiet inset ring for the keyboard; text fields show their caret instead. */
-.workspace :focus-visible {
+/*
+ * A quiet inset ring for the keyboard; text fields show their caret instead.
+ * Defaults, so they carry no weight: a component's own focus style, one class
+ * and `:focus-visible`, outranks them.
+ */
+:where(.workspace) :focus-visible {
   outline: none;
 }
 
-.workspace :focus-visible:not(textarea, input, .workspace-edge),
-.workspace .desktop-chip:focus-visible {
+:where(.workspace :focus-visible:not(textarea, input, .workspace-edge)),
+:where(.workspace .desktop-chip:focus-visible) {
   outline: 1.5px solid var(--desktop-focus-ring);
   outline-offset: -1.5px;
 }
@@ -50,7 +51,7 @@
 /* Chrome is read, not selected: a double-click on a label selects nothing. */
 .workspace-titlebar,
 .workspace-edge,
-.workspace-drag-image {
+.workspace-drag-ghost {
   -webkit-user-select: none;
   user-select: none;
 }
@@ -62,11 +63,84 @@
   }
 }
 
+/* ——— A side column's head (`column-header.tsx`) ——— */
+
+/*
+ * The titlebar row, inside the column: only the column's own action, at its
+ * far end. Hidden at once as the column folds and shown once it has slid in,
+ * so it never passes under the window's controls on the way.
+ */
+.workspace-column-bar {
+  display: flex;
+  height: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
+  flex: none;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: var(--desktop-control-inset);
+  transition: visibility 0s linear var(--desktop-slow);
+}
+
+.workspace-list > .workspace-list-inner > .workspace-column-bar {
+  height: var(--desktop-titlebar-height);
+  align-items: center;
+  padding: 0 var(--desktop-control-inset);
+}
+
+.workspace[data-sidebar="closed"]:not([data-peek])
+  .workspace-sidebar
+  .workspace-column-bar,
+.workspace[data-list="closed"] .workspace-list .workspace-column-bar {
+  visibility: hidden;
+  transition: none;
+}
+
+/* The column's title, on its own row below the titlebar, aligned with its content. */
+.workspace-column-title {
+  display: flex;
+  min-width: 0;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  padding: 2px 12px 10px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.workspace-column-title svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--desktop-faint);
+  stroke-width: 2;
+}
+
+.workspace-column-title h2 {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--desktop-text-display);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-column-title p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+}
+
 /* ——— Titlebar and icon buttons ——— */
 
+/* Above the sidebar even when it is revealed from the edge, so its toggle is always where it was. */
 .workspace-titlebar {
   position: absolute;
-  z-index: 20;
+  z-index: 40;
   top: 0;
   left: 0;
   display: flex;
@@ -228,6 +302,18 @@
   touch-action: none;
 }
 
+/*
+ * A folded session list's edge, where it folded: out of the flow, so the
+ * columns beside it keep their places, and dragged out it opens the list.
+ */
+.workspace-edge-folded {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--workspace-sidebar-width) + var(--desktop-gutter));
+}
+
 /* A glow runs along the edge near the pointer, in the theme's edge light. */
 .workspace-edge::before {
   content: "";
@@ -357,71 +443,116 @@ html[data-workspace-resizing="y"] * {
   margin-left: 4px;
 }
 
-/* ——— Menus ——— */
+/* ——— Carrying a pane or a session (`adapters/dom/drag.ts`) ——— */
 
-.workspace-menu {
-  min-width: 220px;
-}
-
-/* A highlighted item takes a soft fill only: no ring, by pointer or by key. */
-.workspace-menu [data-slot$="menu-item"],
-.workspace-menu [data-slot$="menu-item"]:focus-visible {
-  outline: none !important;
-  box-shadow: none !important;
-}
-
-.workspace-menu [data-slot$="menu-item"][data-highlighted] {
-  background: color-mix(in oklab, var(--foreground) 8.5%, transparent);
-  color: var(--foreground);
-}
-
-/* Menu items are words alone; the shortcut sits quietly at the right edge. */
-.workspace-menu [data-slot$="menu-shortcut"] {
-  padding-left: 24px;
-  color: color-mix(in oklab, var(--foreground) 40%, transparent);
-  font-family: var(--nessa-font-sans);
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  font-variant-numeric: tabular-nums;
-}
-
-/* ——— The drag's own image: one compact pill with the session's mark and title ——— */
-
-.workspace-drag-image {
+/*
+ * The copy carried: the pane itself, cloned once, at its own size, with the
+ * pointer the whole drag; translucent and lifted. Placed by transform from
+ * the window's top left; on a drop its box scales into the place it takes
+ * while its content counter-scales (`drag.ts`), so it never lays out again.
+ */
+.workspace-drag-ghost {
   position: fixed;
-  z-index: -1;
-  top: -200px;
+  z-index: 60;
+  top: 0;
   left: 0;
-  display: inline-flex;
-  max-width: 280px;
-  height: 32px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px 0 8px;
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--background) 86%, var(--foreground));
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 12%, transparent);
-  color: var(--foreground);
-  font-family: var(--nessa-font-sans);
-  font-size: var(--desktop-text-footnote);
-  font-weight: 550;
-  letter-spacing: -0.006em;
-  white-space: nowrap;
-  -webkit-font-smoothing: antialiased;
-}
-
-.workspace-drag-image > span:last-child {
+  /* Its own size, set once: nothing inside it lays out anything outside. */
+  contain: strict;
   overflow: hidden;
-  text-overflow: ellipsis;
+  border-radius: var(--desktop-radius);
+  opacity: 0.85;
+  pointer-events: none;
+  transform-origin: 0 0;
+  will-change: transform;
+  /* Lifted: one soft shadow, cheap enough to paint on the frame the drag begins. */
+  box-shadow: 0 18px 36px -14px rgb(0 0 0 / 65%);
 }
 
-.workspace-drag-image > .workspace-agent-tile {
-  width: 20px !important;
-  height: 20px !important;
+.workspace-drag-ghost-inner {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .workspace-status[data-status="running"]::before {
-    animation: none;
-  }
+.workspace-drag-ghost .workspace-drag-ghost-pane {
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  animation: none;
+  background: color-mix(in oklab, var(--background) 88%, var(--foreground));
+}
+
+/* A picture: nothing in it blurs what is behind, moves on its own, or eases. */
+.workspace-drag-ghost * {
+  animation: none !important;
+  transition: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+.workspace-drag-ghost .workspace-pane-name {
+  opacity: 1;
+  transform: none;
+}
+
+/*
+ * Where the drop would land: a calm placeholder at exactly the rect the pane
+ * will take — a soft fill and a hairline in the theme's edge light, a pane's
+ * radius. It moves between zones on its own; less motion, it moves at once.
+ */
+.workspace-drag-placeholder {
+  position: fixed;
+  contain: strict;
+  z-index: 59;
+  top: 0;
+  left: 0;
+  border-radius: var(--desktop-radius);
+  background: color-mix(in oklab, var(--desktop-light-edge) 9%, transparent);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklab, var(--desktop-light-edge) 40%, transparent);
+  pointer-events: none;
+  animation: workspace-fade-in var(--desktop-fast) ease both;
+  transition:
+    transform var(--desktop-base) var(--desktop-ease),
+    width var(--desktop-base) var(--desktop-ease),
+    height var(--desktop-base) var(--desktop-ease);
+}
+
+/* Nothing is selected while something is carried. */
+.workspace[data-dragging] {
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: grabbing;
+}
+
+/*
+ * A drop that folds the sidebar for room shows it before it happens: the
+ * sidebar slides away and the session list follows, as the fold would move
+ * them. Only while the sidebar is still open — the moment the drop folds it,
+ * its own closed look takes over, so the commit measures where things are.
+ */
+.workspace[data-drag-folds][data-sidebar="open"] .workspace-sidebar {
+  transform: translateX(calc(-100% - 2 * var(--desktop-gutter) - 48px));
+}
+
+.workspace[data-drag-folds][data-sidebar="open"] .workspace-list {
+  transform: translateX(
+    calc(-1 * (var(--workspace-sidebar-width) + var(--desktop-gutter)))
+  );
+}
+
+/* Said to assistive technology, drawn nowhere. */
+.workspace-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .workspace-status[data-status="running"]::before {
+  animation: none;
 }

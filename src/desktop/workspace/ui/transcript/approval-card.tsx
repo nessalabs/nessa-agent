@@ -4,9 +4,10 @@ import { approve, deny } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectAnswer } from "../../adapters/store/selectors"
 import { answering } from "../../application/workspace-state"
-import { agentName, agentOf, type ModelRef } from "../../model/organisation"
+import { agentName, agentOf, type ModelRef } from "../../model/overview"
 import type { Approval } from "../../model/transcript"
 import "./approval-card.css"
+import { failureCopy } from "../failure-copy"
 
 /**
  * The one warm thing on the page: a command the agent waits to run. Deny
@@ -40,7 +41,7 @@ export const ApprovalCard = memo(function ApprovalCard({
       <p className="workspace-approval-reason">{approval.reason}</p>
       {answer?.failure ? (
         <p className="workspace-approval-failure" role="status">
-          {answer.failure}
+          {failureCopy(answer.failure)}
         </p>
       ) : null}
       <div className="workspace-approval-actions">

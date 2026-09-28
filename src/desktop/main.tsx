@@ -28,7 +28,11 @@ createRoot(container).render(
       <ClockProvider now={dependencies.now}>
         {/* Every icon in the window resolves through the family chosen in Settings. */}
         <DesktopIconFamilyProvider>
-          <DesktopWindow hostKind={host.kind} browserSurface={host.kind === "browser"} />
+          <DesktopWindow
+            hostKind={host.kind}
+            browserSurface={host.kind === "browser"}
+            inspectable={import.meta.env.DEV}
+          />
         </DesktopIconFamilyProvider>
       </ClockProvider>
     </Provider>

@@ -1,8 +1,9 @@
 /**
  * What follows from a change of state, whoever caused it — a click, a
  * keystroke, an agent's dispatch: a session a pane now shows has its
- * conversation read, once (a refused read waits for `retryTranscript`), and
- * a session shown is marked read, here and at the source.
+ * conversation read, once (a refused read waits for `retryTranscript`); the
+ * overview read again — the resync — reads every shown conversation again;
+ * and a session shown is marked read, here and at the source.
  * Commands stay plain actions because these run beside the reducer rather
  * than inside each command.
  */
@@ -11,11 +12,10 @@ import {
   type ListenerMiddlewareInstance,
   type UnknownAction,
 } from "@reduxjs/toolkit"
-import type { WorkspaceDependencies } from "../../application/ports"
+import { failureReason, type WorkspaceDependencies } from "../../application/ports"
 import { shownSessionIds, unreadShown } from "../../application/usecases/updates"
 import { entry, sessionOf, type WorkspaceState } from "../../application/workspace-state"
 import { fromSource } from "../../model/revision"
-import { refusal } from "./refusal"
 import { workspaceActions } from "./slice"
 
 type Root = { workspace: WorkspaceState }
@@ -30,6 +30,43 @@ export function workspaceEffects(
   // let go with it; listed again and shown, it is read afresh.
   const reading = new Map<string, symbol>()
 
+  /** Reads a shown session's conversation, unless a read of it is on its way already. */
+  const read = (sessionId: string, dispatch: (action: UnknownAction) => unknown) => {
+    if (reading.has(sessionId)) return
+    const token = Symbol(sessionId)
+    reading.set(sessionId, token)
+    const answered = (answer: () => void) => {
+      if (reading.get(sessionId) !== token) return
+      reading.delete(sessionId)
+      answer()
+    }
+    // Asked in a promise, so an adapter that throws still answers.
+    Promise.resolve()
+      .then(() => dependencies.workspace.transcript(sessionId))
+      // An answer the window cannot use — another session's, or at a revision
+      // the source could not have sent — is a fault, and the pane says so.
+      .then((transcript) => {
+        if (transcript.sessionId !== sessionId || !fromSource(transcript))
+          throw new Error(
+            `The source answered a read of ${sessionId} it could not have sent`,
+          )
+        return transcript
+      })
+      .then(
+        (transcript) =>
+          answered(() => dispatch(workspaceActions.transcriptLoaded({ transcript }))),
+        (error: unknown) =>
+          answered(() =>
+            dispatch(
+              workspaceActions.transcriptFailed({
+                sessionId,
+                reason: failureReason(error),
+              }),
+            ),
+          ),
+      )
+  }
+
   listener.startListening({
     predicate: (_action: UnknownAction, current, previous) =>
       current.workspace.panes !== previous.workspace.panes ||
@@ -43,45 +80,22 @@ export function workspaceEffects(
         // Held, being read, or refused: a refused read waits to be asked for again.
         if (
           entry(state.transcripts, sessionId) ||
-          entry(state.transcriptFailures, sessionId) ||
-          reading.has(sessionId)
+          entry(state.transcriptFailures, sessionId)
         )
           continue
-        const read = Symbol(sessionId)
-        reading.set(sessionId, read)
-        const answered = (answer: () => void) => {
-          if (reading.get(sessionId) !== read) return
-          reading.delete(sessionId)
-          answer()
-        }
-        // Asked in a promise, so an adapter that throws still answers.
-        Promise.resolve()
-          .then(() => dependencies.workspace.transcript(sessionId))
-          // An answer the window cannot use — another session's, or at a revision
-          // the source could not have sent — is a fault, and the pane says so.
-          .then((transcript) => {
-            if (transcript.sessionId !== sessionId || !fromSource(transcript))
-              throw new Error(
-                `The source answered a read of ${sessionId} it could not have sent`,
-              )
-            return transcript
-          })
-          .then(
-            (transcript) =>
-              answered(() =>
-                api.dispatch(workspaceActions.transcriptLoaded({ transcript })),
-              ),
-            (error: unknown) =>
-              answered(() =>
-                api.dispatch(
-                  workspaceActions.transcriptFailed({
-                    sessionId,
-                    reason: refusal(error),
-                  }),
-                ),
-              ),
-          )
+        read(sessionId, api.dispatch)
       }
+    },
+  })
+
+  // The overview read again is the resync for what the stream lost: every
+  // conversation a pane shows is read again, held or not. The newer of the
+  // read's answer and what is held is kept (`transcriptLoaded`).
+  listener.startListening({
+    actionCreator: workspaceActions.overviewLoaded,
+    effect: (_action, api) => {
+      for (const sessionId of shownSessionIds(api.getState().workspace))
+        read(sessionId, api.dispatch)
     },
   })
 
@@ -101,7 +115,7 @@ export function workspaceEffects(
         Promise.resolve()
           .then(() => dependencies.workspace.markRead(sessionId))
           .catch((error: unknown) => {
-            console.warn("Could not mark a session read", sessionId, refusal(error))
+            console.warn("Could not mark a session read", sessionId, failureReason(error))
           })
       }
     },
