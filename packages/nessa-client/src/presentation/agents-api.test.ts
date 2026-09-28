@@ -93,3 +93,14 @@ it("uses the published UTF-8 version bound for offers and results", async () => 
   request.mockResolvedValue({ agents: [{ ...offer, version: version + "é" }] })
   await expect(api.installOptions()).rejects.toThrow()
 })
+
+it("enforces the schema-owned configured-agent count for unique valid rows", async () => {
+  const agents = Array.from({ length: bounds.maxConfiguredAgents }, (_, index) => ({
+    ...offered.agents[0],
+    agent: `agent-${index}`,
+  }))
+  const api = createAgentsApi({ request: vi.fn().mockResolvedValue({ agents }) })
+  expect((await api.list()).agents).toHaveLength(bounds.maxConfiguredAgents)
+  agents.push({ ...offered.agents[0], agent: "one-too-many" })
+  await expect(api.list()).rejects.toThrow("Invalid configured agents")
+})

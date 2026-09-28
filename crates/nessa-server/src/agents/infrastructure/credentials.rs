@@ -8,7 +8,9 @@
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+#[cfg(any(test, target_os = "macos", not(unix)))]
 use std::process::{Child, ExitStatus};
+#[cfg(any(test, target_os = "macos", not(unix)))]
 use std::time::{Duration, Instant};
 
 use crate::agents::application::ProbeFailure;
@@ -88,6 +90,7 @@ pub(super) fn config_directory(variable: &str, default: &str) -> Option<PathBuf>
 /// thread exists only to wait, so the cost is a wakeup every 20ms — short enough
 /// that a healthy answer is still returned promptly, long enough that a wait to
 /// the full deadline costs a few dozen wakeups rather than a spin.
+#[cfg(any(test, target_os = "macos", not(unix)))]
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Wait for `child` for at most `limit`, and kill it if that runs out.
@@ -106,6 +109,7 @@ const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// a vendor's own tool about needs the same ceiling for the same reason: the
 /// credential stores behind those tools can block on an unlock prompt nobody is
 /// looking at.
+#[cfg(any(test, target_os = "macos", not(unix)))]
 pub(super) fn wait_or_kill(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
     let deadline = Instant::now() + limit;
     loop {

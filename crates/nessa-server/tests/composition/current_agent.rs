@@ -1740,3 +1740,47 @@ fn managed_probe_failure_transitions_retain_the_admitted_owner_until_its_release
         }
     }
 }
+
+#[tokio::test]
+async fn managed_model_and_mode_refusals_match_fixed_provider_semantics() {
+    for (agent, model) in [
+        (AgentId::Claude, "claude-sonnet-5"),
+        (AgentId::Codex, "gpt-6-astra"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::new(StoreAnswer::Ready(executable(root.path()))));
+        let mut source = resolver(
+            root.path(),
+            store.clone(),
+            Arc::new(ClaudeCredentials),
+            HashMap::new(),
+        );
+        let mut runtime = source.config.runtime(AgentId::Claude).unwrap().clone();
+        runtime.model = model.into();
+        source.config.runtimes.insert(agent.name().into(), runtime);
+        source.managed_adapters.insert(agent);
+        assert!(source
+            .resolve_for(agent, model, ConversationApprovalMode::Ask)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(matches!(
+            source
+                .resolve_for(agent, "not-a-model", ConversationApprovalMode::Ask)
+                .await,
+            Err(ConversationError::ModelUnavailable)
+        ));
+        let reads = store.reads.load(Ordering::SeqCst);
+        assert!(matches!(
+            source
+                .resolve_for(agent, "not-a-model", ConversationApprovalMode::Auto)
+                .await,
+            Err(ConversationError::ApprovalModeUnavailable)
+        ));
+        assert_eq!(
+            store.reads.load(Ordering::SeqCst),
+            reads,
+            "unsupported presets are refused before managed-store lookup"
+        );
+    }
+}

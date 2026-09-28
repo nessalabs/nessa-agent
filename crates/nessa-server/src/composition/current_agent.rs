@@ -209,7 +209,7 @@ impl CurrentAgentResolver {
         .map(Some)
         .map_err(|error| {
             tracing::warn!(%error, "managed agent adapter could not be composed");
-            ConversationError::AgentNotConfigured
+            ConversationError::ModelUnavailable
         })
     }
 
@@ -624,12 +624,10 @@ impl ConversationAgentSource for CurrentAgentResolver {
                 }
             });
         }
-        if self.managed_adapters.contains(&agent) {
-            return Box::pin(self.resolve_managed(agent, model.to_owned(), selected));
-        }
-        let Some(default) = self.fixed.get(&agent) else {
+        let managed = self.managed_adapters.contains(&agent);
+        if !managed && !self.fixed.contains_key(&agent) {
             return Box::pin(async { Ok(None) });
-        };
+        }
         let offered = match agent {
             AgentId::Claude => ClaudeAcpProvider::approval_modes(model),
             AgentId::Codex => CodexAcpProvider::approval_modes(model),
@@ -638,6 +636,10 @@ impl ConversationAgentSource for CurrentAgentResolver {
         if !offered.iter().any(|choice| choice.id == selected) {
             return Box::pin(async { Err(ConversationError::ApprovalModeUnavailable) });
         }
+        if managed {
+            return Box::pin(self.resolve_managed(agent, model.to_owned(), selected));
+        }
+        let default = self.fixed.get(&agent).expect("configured fixed agent");
         if mode == ConversationApprovalMode::Ask && default.provider.identity().model_id() == model
         {
             let configured = default.clone();

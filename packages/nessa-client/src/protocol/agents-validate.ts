@@ -49,7 +49,8 @@ export function approvalModeChoices(value: unknown): ApprovalModeChoice[] {
 export function agentsList(value: unknown): AgentsListResult {
   const result = object(value)
   exact(result, ["agents"])
-  if (!Array.isArray(result.agents)) throw new Error("Invalid configured agents")
+  if (!Array.isArray(result.agents) || result.agents.length > bounds.maxConfiguredAgents)
+    throw new Error("Invalid configured agents")
   const agents = new Set<string>()
   for (const entry of result.agents) {
     const agent = object(entry)

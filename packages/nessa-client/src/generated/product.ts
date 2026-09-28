@@ -965,6 +965,7 @@ export const InstallableAgent = {
 export type InstallableAgent = (typeof InstallableAgent)[keyof typeof InstallableAgent]
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
+  maxConfiguredAgents: 3,
   maxAgentInstallVersionBytes: 128,
   maxImageBytes: 5242880,
   imageMimeTypes: ["image/png", "image/jpeg", "image/gif", "image/webp"],

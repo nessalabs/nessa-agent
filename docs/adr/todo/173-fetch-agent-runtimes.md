@@ -252,6 +252,7 @@ The following table connects these diagrams' failure orderings to regression evi
 | Replacement with active agent | Native use authority protects superseded artifact | managed adapter authority and SDK cleanup tests |
 | Unsupported platform | No offered pin; no invented fallback | pin and installed-launch tests |
 | Changed model / mode / deletion | Fresh managed resolution; existing conversation remains pinned | current-agent tests |
+| Unsupported managed model / preset | Typed model or approval-mode refusal; unsupported preset rejected before native lookup | managed_model_and_mode_refusals_match_fixed_provider_semantics |
 | Store unreadable | Unknown, not missing | managed adapter store-failure test |
 | Probe admission partly fails | No spawn; exact pre-spawn owner retained if release fails | managed_probe_failure_transitions_retain_the_admitted_owner_until_its_release |
 | Probe process cleanup unconfirmed | One retained owner; no new probe for that agent | managed_probe_failure_transitions_retain_the_admitted_owner_until_its_release; status_cleanup_removes_descendants_after_root_exit_and_after_timeout |
