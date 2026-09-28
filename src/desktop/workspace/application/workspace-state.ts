@@ -106,9 +106,18 @@ export interface WorkspaceState {
   /** Where conversations sit; none until the index arrives. */
   readonly panes: PaneLayout | null
   readonly view: SessionView
+  /**
+   * What fills the content region: the panes, or the Agents overview over
+   * them. Going anywhere else is going back to the panes
+   * (`usecases/navigation.ts`, `navigated`).
+   */
+  readonly content: ContentView
   readonly chrome: Chrome
   readonly tree: Tree
 }
+
+/** The content region's view: the chat panes, or every agent at a glance. */
+export type ContentView = "panes" | "agents"
 
 export const initialWorkspace: WorkspaceState = {
   status: "loading",
@@ -127,6 +136,7 @@ export const initialWorkspace: WorkspaceState = {
   composerText: {},
   panes: null,
   view: { kind: "channel", channelId: "" },
+  content: "panes",
   chrome: {
     sidebar: { open: true, folded: false },
     sessionList: { open: true, folded: false },

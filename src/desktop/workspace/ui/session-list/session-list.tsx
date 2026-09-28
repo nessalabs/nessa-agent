@@ -24,7 +24,7 @@ import { statusLabels } from "../../model/session-groups"
 import { sessionTime } from "../../model/time-labels"
 import { sameWords } from "../../model/transcript"
 import { AgentTile } from "../chrome/agent-tile"
-import { ColumnHeader } from "../chrome/column-header"
+import { ColumnHeader } from "../../../ui/column-header"
 import { IconButton } from "../chrome/icon-button"
 import { SessionMenuItems, useOpenFromRow } from "../session-actions"
 import { useWorkspaceFrame } from "../workspace-frame"
@@ -96,6 +96,7 @@ export const SessionList = memo(function SessionList() {
       <div className="workspace-list-inner" data-flip="slide" data-flip-id="list">
         <ColumnHeader
           title={title}
+          flipId="column-title"
           icon={
             isChannel ? (
               <DesktopIcon name={channel?.private ? "privateChannel" : "channel"} />

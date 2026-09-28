@@ -68,6 +68,8 @@ export const selectSessionListChosen = (state: Root) =>
 export const selectColumnCount = (state: Root) =>
   state.workspace.panes?.columns.length ?? 1
 export const selectView = (state: Root): SessionView => state.workspace.view
+/** What fills the content region: the panes, or the Agents overview. */
+export const selectContentView = (state: Root) => state.workspace.content
 export const selectPanes = (state: Root) => state.workspace.panes
 export const selectSections = (state: Root) => state.workspace.sections
 export const selectChannels = (state: Root) => state.workspace.channels

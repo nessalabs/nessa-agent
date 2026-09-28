@@ -58,7 +58,14 @@ const steps: Partial<Record<string, Step>> = {
  * with ↩ and answers with ⌘↩, ⌥⌘↩ and ⌘⌫, moving on to the next request as
  * each one settles and leaves.
  */
-export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
+export function AgentsOverview({
+  onLeave,
+  widthHint = 0,
+}: {
+  onLeave: () => void
+  /** A width the overview will have at least: its place's, measured before it appeared. */
+  widthHint?: number
+}) {
   const dispatch = useWorkspaceDispatch()
   const ready = useWorkspaceSelector(selectReady)
   const [settling, setSettling] = useState<readonly Settling[]>([])
@@ -80,7 +87,7 @@ export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
   const list = useRef<HTMLDivElement>(null)
   useReflow(list)
 
-  const focusItem = useCallback((id: string | null) => {
+  const focusItem = useCallback((id: string | null, choose = true) => {
     const column = list.current
     if (!column) return
     if (id === null) {
@@ -92,7 +99,7 @@ export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
       })
       return
     }
-    setActive(id)
+    if (choose) setActive(id)
     const item = column.querySelector<HTMLElement>(
       `[data-overview-item="${CSS.escape(id)}"]`,
     )
@@ -103,12 +110,19 @@ export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
     })
   }, [])
 
-  // Opened, the keyboard is here, on the first thing listed.
+  // Opened, the keyboard is here, on the first thing listed — already the
+  // current one — once the overview has been laid out and drawn, so the
+  // caret's arrival never makes its first frame lay the page out early.
   const arrived = useRef(false)
   useEffect(() => {
     if (arrived.current || !ready) return
     arrived.current = true
-    focusItem(readingOrder(glance)[0] ?? null)
+    const first = readingOrder(glance)[0] ?? null
+    // A frame asked for now is this frame's; the one after it is the next.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => focusItem(first, false))
+    })
+    return () => cancelAnimationFrame(frame)
   }, [ready, glance, focusItem])
 
   const timers = useRef(new Set<number>())
@@ -253,10 +267,18 @@ export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
     [settling],
   )
 
+  // The overview arrives fading in from nothing; the peek beside its list is
+  // drawn a frame later, so the frame it opens on lays out the list alone.
+  const [peekDrawn, setPeekDrawn] = useState(false)
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setPeekDrawn(true))
+    return () => cancelAnimationFrame(frame)
+  }, [])
+
   // Wide enough, the peek sits beside the list and follows its choice; where
   // it is not, a chosen row opens its peek beneath it.
   const surface = useRef<HTMLDivElement>(null)
-  const split = useAtLeastWide(surface, splitWidth)
+  const split = useAtLeastWide(surface, splitWidth, widthHint)
   const [expanded, setExpanded] = useState<string | null>(null)
   const splitNow = useRef(split)
   splitNow.current = split
@@ -334,15 +356,17 @@ export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
         </div>
         {split && current !== null ? (
           <aside className="agents-overview-peek" aria-label="Peek">
-            <SessionPeek
-              key={current}
-              sessionId={current}
-              settling={settlingOf.get(current)}
-              failure={failures.get(current)}
-              onOpen={open}
-              onAnswer={answer}
-              onLeaveReply={leaveReply}
-            />
+            {peekDrawn ? (
+              <SessionPeek
+                key={current}
+                sessionId={current}
+                settling={settlingOf.get(current)}
+                failure={failures.get(current)}
+                onOpen={open}
+                onAnswer={answer}
+                onLeaveReply={leaveReply}
+              />
+            ) : null}
           </aside>
         ) : null}
       </div>

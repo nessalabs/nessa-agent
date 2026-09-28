@@ -5,15 +5,22 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   type ReactNode,
 } from "react"
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
-import { focusComposer, useWorkspaceSelector } from "../../../workspace"
+import {
+  focusComposer,
+  useWorkspaceDispatch,
+  useWorkspaceSelector,
+} from "../../../workspace"
 import { labelOf, useKeyBindings } from "../../../workspace/adapters/dom/shortcuts"
 import { useAgentsOverviewPreference } from "../adapters/preference"
-import { selectFocusedSessionId, selectWaitingCount } from "../adapters/workspace-bridge"
+import {
+  selectContentView,
+  selectWaitingCount,
+  showContent,
+} from "../adapters/workspace-bridge"
 import { AgentsOverview } from "./agents-overview"
 import { toggleKeys } from "./overview-keys"
 import "./agents-overview.css"
@@ -36,29 +43,31 @@ const PlaceContext = createContext<OverviewPlace>({
 })
 
 /**
- * Holds where the overview is for a layout's window: shown or not, and put
- * away whenever the workspace moves to another session — a row, the
- * switcher, ⌘N, an agent's dispatch — so the chat area always shows what was
- * asked for. ⌘0 opens and closes it while the experiment is on.
+ * Where the overview is for a layout's window: the workspace's content view
+ * (`showContent`), so going anywhere else — a channel, a session, a status
+ * view, ⌘N, an agent's dispatch — goes back to the panes by the workspace's
+ * one rule (`navigated`). ⌘0 goes to the overview, and back, while the
+ * experiment is on; turned off, the panes come back.
  */
 export function AgentsOverviewScope({ children }: { children: ReactNode }) {
   const [flag] = useAgentsOverviewPreference()
   const enabled = flag === "on"
-  const [open, setOpen] = useState(false)
-  const focused = useWorkspaceSelector(selectFocusedSessionId)
-  const seen = useRef(focused)
+  const dispatch = useWorkspaceDispatch()
+  const content = useWorkspaceSelector(selectContentView)
   useEffect(() => {
-    if (seen.current === focused) return
-    seen.current = focused
-    setOpen(false)
-  }, [focused])
+    if (!enabled && content === "agents") dispatch(showContent({ content: "panes" }))
+  }, [enabled, content, dispatch])
   useKeyBindings(toggleKeys, () => {
     if (!enabled) return false
-    setOpen((was) => !was)
+    dispatch(showContent({ content: content === "agents" ? "panes" : "agents" }))
   })
   const place = useMemo<OverviewPlace>(
-    () => ({ enabled, shown: enabled && open, show: setOpen }),
-    [enabled, open],
+    () => ({
+      enabled,
+      shown: enabled && content === "agents",
+      show: (shown) => dispatch(showContent({ content: shown ? "agents" : "panes" })),
+    }),
+    [enabled, content, dispatch],
   )
   return <PlaceContext.Provider value={place}>{children}</PlaceContext.Provider>
 }
@@ -88,6 +97,14 @@ export function useAgentsOverviewShown(): boolean {
 export function AgentsOverviewArea({ children }: { children: ReactNode }) {
   const { shown, show } = useContext(PlaceContext)
   const under = useRef<HTMLDivElement>(null)
+  // The chat area's width as it was laid out before the overview came —
+  // at least the overview's own, which only grows as the list is set aside —
+  // read while the page is still as it was, so the overview is drawn in its
+  // arrangement the first time rather than laid out twice.
+  const hint = useRef(0)
+  const was = useRef(shown)
+  if (shown && !was.current) hint.current = under.current?.offsetWidth ?? 0
+  was.current = shown
   const leave = useCallback(() => {
     show(false)
     // Back to the panes: the caret returns to the focused pane's composer.
@@ -98,7 +115,7 @@ export function AgentsOverviewArea({ children }: { children: ReactNode }) {
       <div className="agents-overview-under" ref={under} inert={shown || undefined}>
         {children}
       </div>
-      {shown ? <AgentsOverview onLeave={leave} /> : null}
+      {shown ? <AgentsOverview onLeave={leave} widthHint={hint.current} /> : null}
     </div>
   )
 }
@@ -117,11 +134,11 @@ export function AgentsOverviewEntry() {
       className="workspace-row agents-overview-entry"
       data-active={shown || undefined}
       aria-current={shown ? "page" : undefined}
-      aria-pressed={shown}
       {...tooltip("Every agent at a glance", {
         shortcut: labelOf(toggleKeys, "toggle"),
       })}
-      onClick={() => show(!shown)}
+      // A place to go, like a channel: pressed again, it stays.
+      onClick={() => show(true)}
     >
       <span className="workspace-row-icon" aria-hidden="true">
         <DesktopIcon name="workspace" />

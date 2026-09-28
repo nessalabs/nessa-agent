@@ -26,7 +26,7 @@ import {
 } from "../../adapters/store/selectors"
 import { useBesideKey } from "../session-actions"
 import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
-import { ColumnHeader } from "../chrome/column-header"
+import { ColumnHeader } from "../../../ui/column-header"
 import { IdentityFooter } from "../chrome/identity-footer"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { useSidebarPeek, useWorkspaceFrame } from "../workspace-frame"

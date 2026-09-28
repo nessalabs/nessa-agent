@@ -1,4 +1,5 @@
 import { createContext, useContext, type ComponentProps } from "react"
+import { createPortal } from "react-dom"
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -185,7 +186,12 @@ export function MenuSubTrigger(props: DropdownMenuSubTriggerProps) {
   return <Trigger {...props} />
 }
 
-/** A submenu's surface, in the same glass as its menu. */
+/**
+ * A submenu's surface, in the same glass as its menu. nessa_ui's draws it
+ * where it is written, inside the menu's own surface — which scrolls, and so
+ * clips it: open, and drawn nowhere. It is portalled beside the menu instead,
+ * as the menu itself is, onto the page's body.
+ */
 export function MenuSubContent({
   className,
   ...props
@@ -194,7 +200,10 @@ export function MenuSubContent({
     useMenuKind("MenuSubContent") === "context"
       ? ContextMenuSubContent
       : DropdownMenuSubContent
-  return <Content className={surface(className)} {...props} />
+  return createPortal(
+    <Content className={surface(className)} {...props} />,
+    document.body,
+  )
 }
 
 export { ContextMenu, ContextMenuTrigger, DropdownMenu, DropdownMenuTrigger }

@@ -14,6 +14,7 @@ import {
   useBesidePreference,
   useDriftPreference,
   useGreetingPreference,
+  usePictureInConversationsPreference,
   useRunningFirstPreference,
 } from "../../adapters/window-preferences"
 import { motionChoices } from "../../model/motion"
@@ -47,7 +48,8 @@ import {
 
 /**
  * What each tab shows. Every setting the window owns is real and
- * remembered: theme, icons, tint, greeting, motion, drifting light, layout,
+ * remembered: theme, icons, tint, the picture in conversations, greeting,
+ * motion, drifting light, layout,
  * the session list, ⌘-click, running first. What lives outside the window —
  * the host, the gateway, an account — is marked not available yet in the
  * catalogue (`pending`), and its row says so with its control disabled.
@@ -244,10 +246,17 @@ function ChoiceCheck() {
 function HeaderTab() {
   const [tint, setTint] = useTintFromPicture()
   const [greeting, setGreeting] = useGreetingPreference()
+  const [inConversations, setInConversations] = usePictureInConversationsPreference()
   return (
     <Group footnote="Choose or frame the picture from Customize on the home header.">
       <Row id="tint-from-picture">
         <Toggle checked={tint} onChange={setTint} />
+      </Row>
+      <Row id="picture-in-conversations">
+        <Toggle
+          checked={inConversations === "on"}
+          onChange={(on) => setInConversations(on ? "on" : "off")}
+        />
       </Row>
       <Row id="show-greeting">
         <Toggle

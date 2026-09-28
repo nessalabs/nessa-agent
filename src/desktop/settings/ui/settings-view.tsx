@@ -14,6 +14,7 @@ import { useThemePreference } from "../../adapters/theme-preference"
 import { useEdgePeek } from "../../adapters/use-edge-peek"
 import { useWindowWidth } from "../../adapters/window-width"
 import { chosen, drawn, fitted, type SideColumn } from "../../model/side-column"
+import { ColumnHeader } from "../../ui/column-header"
 import { EdgePeekStrip } from "../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../ui/history-buttons"
 import { focusComposer } from "../../workspace"
@@ -410,21 +411,18 @@ function SettingsView({
       </div>
 
       <main className="settings-content" aria-labelledby="settings-heading">
-        <header className="settings-head">
-          <div className="settings-column">
-            <h1 id="settings-heading" key={category}>
-              {settingsCategory(category).label}
-            </h1>
-            {tabs.length > 1 ? (
-              <SettingsTabStrip
-                key={`tabs-${category}`}
-                tabs={tabs}
-                selected={tab}
-                onSelect={showTab}
-              />
-            ) : null}
-          </div>
-        </header>
+        <ColumnHeader
+          key={category}
+          title={settingsCategory(category).label}
+          heading="h1"
+          headingId="settings-heading"
+        >
+          {tabs.length > 1 ? (
+            <div className="settings-column settings-head-tabs">
+              <SettingsTabStrip tabs={tabs} selected={tab} onSelect={showTab} />
+            </div>
+          ) : null}
+        </ColumnHeader>
         <div ref={scrollRef} className="settings-scroll">
           <div
             key={tab}

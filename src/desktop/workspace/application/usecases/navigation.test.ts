@@ -5,12 +5,14 @@ import { roomyGrid, testIndex } from "../../testing"
 import { drawnColumns, initialWorkspace, type WorkspaceState } from "../workspace-state"
 import {
   fitToWindow,
+  navigated,
   openChannel,
   resizeSessionList,
   resizeSidebar,
   revealSession,
   selectChannel,
   selectStatusView,
+  showContent,
   toggleChannel,
   toggleSection,
   toggleSessionList,
@@ -218,5 +220,20 @@ describe("the side columns", () => {
       sessionListWidth: 0,
     })
     expect(drawnColumns(fitted.chrome).sidebar).toBe(true)
+  })
+})
+
+describe("what fills the content region", () => {
+  it("goes to the Agents overview, and asked again stays there: a place, not a switch", () => {
+    const agents = showContent(loaded(), { content: "agents" })
+    expect(agents.content).toBe("agents")
+    expect(showContent(agents, { content: "agents" })).toBe(agents)
+  })
+
+  it("goes back to the panes on going anywhere else, and changes nothing already there", () => {
+    const agents = showContent(loaded(), { content: "agents" })
+    expect(navigated(agents).content).toBe("panes")
+    const panes = loaded()
+    expect(navigated(panes)).toBe(panes)
   })
 })

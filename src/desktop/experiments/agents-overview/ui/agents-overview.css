@@ -29,10 +29,16 @@
   transition: opacity var(--desktop-base) ease;
 }
 
+/*
+ * Under the overview, the panes keep everything they hold — their scroll,
+ * their caret, what is typed — but are not laid out or painted: opening the
+ * overview never lays out four conversations again at a width no one sees.
+ */
 .agents-overview-area[data-shown] .workspace-chat {
   grid-area: 1 / 1;
   opacity: 0;
   pointer-events: none;
+  content-visibility: hidden;
 }
 
 .agents-overview {
@@ -446,20 +452,30 @@ html:not(.dark) .agents-request {
 }
 
 /* A button holding the keyboard deepens its own fill, as a row does; no ring. */
-.agents-overview :is(.agents-request-button, .agents-peek-button, .agents-peek-open) {
+.agents-overview
+  :is(
+    .agents-request-button,
+    .workspace-approval-actions .workspace-button,
+    .agents-peek-open
+  ) {
   outline: none;
 }
 
 .agents-overview
-  :is(.agents-request-button, .agents-peek-button, .agents-peek-open):not(
-    [data-primary]
-  ):focus-visible {
+  :is(
+    .agents-request-button,
+    .workspace-approval-actions .workspace-button,
+    .agents-peek-open
+  ):not([data-primary]):focus-visible {
   background: var(--desktop-press);
   color: var(--foreground) !important;
 }
 
 .agents-overview
-  :is(.agents-request-button, .agents-peek-button)[data-primary]:focus-visible {
+  :is(
+    .agents-request-button,
+    .workspace-approval-actions .workspace-button
+  )[data-primary]:focus-visible {
   background: color-mix(in oklab, var(--foreground) 80%, var(--background));
 }
 
@@ -655,51 +671,6 @@ html:not(.dark) .agents-request {
 .agents-peek-failure {
   color: var(--desktop-needs);
   font-size: var(--desktop-text-footnote);
-}
-
-.agents-peek-command {
-  margin: 0;
-  padding: 8px 11px;
-  border-radius: var(--desktop-radius-sm);
-  background: color-mix(in oklab, var(--background) 55%, transparent);
-  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent);
-  color: color-mix(in oklab, var(--foreground) 88%, transparent);
-  font-family: var(--nessa-font-mono);
-  font-size: var(--desktop-text-footnote);
-  line-height: 1.6;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.agents-peek-command::before {
-  content: "$ ";
-  color: var(--desktop-fainter);
-}
-
-.agents-peek-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-.agents-peek-allow {
-  display: flex;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.agents-peek-button:not([data-primary]) {
-  background: transparent;
-  color: var(--desktop-muted) !important;
-}
-
-.agents-peek-button:not([data-primary]):hover {
-  background: var(--desktop-hover);
-  color: var(--foreground) !important;
 }
 
 .agents-peek-answered {

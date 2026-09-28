@@ -12,7 +12,7 @@ import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { ClockProvider, loadWorkspace, setComposerText } from "../../../workspace"
 import { fakeSource, settle, summary, testStore } from "../../../workspace/testing"
-import type { WorkspaceIndex as Overview } from "../../../workspace/model/workspace-index"
+import type { WorkspaceIndex } from "../../../workspace/model/workspace-index"
 import { selectFocusedSessionId } from "../adapters/workspace-bridge"
 import {
   AgentsOverviewArea,
@@ -52,7 +52,7 @@ afterEach(async () => {
 })
 
 /** Two approvals waiting, one session running, one resting. */
-function overview(): Overview {
+function sampleIndex(): WorkspaceIndex {
   return {
     sections: [{ id: "starred", name: "Starred" }],
     channels: [
@@ -68,7 +68,7 @@ function overview(): Overview {
 }
 
 async function mount(experiment: "on" | "off" = "on") {
-  const source = fakeSource(overview())
+  const source = fakeSource(sampleIndex())
   for (const [sessionId, command] of [
     ["first", "security import build.p12"],
     ["second", "xcrun notarytool submit build.dmg"],
@@ -138,9 +138,14 @@ const button = (scope: Element | null, words: string) =>
 const row = (sessionId: string) =>
   host.querySelector<HTMLElement>(`.agents-row[data-overview-item="${sessionId}"]`)
 
+/** Opens the overview, and waits out its first frames, after which the keyboard is on it. */
 async function open() {
   await act(async () => entry()?.click())
   await act(async () => settle(10))
+  for (let frame = 0; frame < 2; frame++)
+    await act(
+      async () => new Promise<void>((done) => requestAnimationFrame(() => done())),
+    )
 }
 
 /** ⌘↩ and the like, as a keyboard off the Mac sends them: Control stands for ⌘. */
@@ -385,4 +390,85 @@ describe("the agents overview", () => {
     expect(document.activeElement).toBe(card("second"))
     expect(host.querySelector(".agents-overview")).not.toBeNull()
   })
+})
+
+describe("the frame the overview opens on", () => {
+  // Frames come when the test says, so "the opening frame" is one frame.
+  let queued: FrameRequestCallback[] = []
+  const request = window.requestAnimationFrame
+  const cancel = window.cancelAnimationFrame
+  beforeEach(() => {
+    queued = []
+    window.requestAnimationFrame = (callback) => queued.push(callback)
+    window.cancelAnimationFrame = (id) => {
+      queued[id - 1] = () => {}
+    }
+  })
+  afterEach(() => {
+    window.requestAnimationFrame = request
+    window.cancelAnimationFrame = cancel
+  })
+  const frame = () =>
+    act(async () => {
+      const due = queued
+      queued = []
+      due.forEach((run) => run(0))
+      await settle(10)
+    })
+
+  it("lays the page out once: the keyboard arrives a frame later, on what is already current", async () => {
+    await mount()
+    const focus = HTMLElement.prototype.focus
+    const early: Element[] = []
+    HTMLElement.prototype.focus = function (this: HTMLElement, options) {
+      if (this.closest(".agents-overview")) early.push(this)
+      return focus.call(this, options)
+    }
+    try {
+      await act(async () => entry()?.click())
+      await act(async () => settle(10))
+    } finally {
+      HTMLElement.prototype.focus = focus
+    }
+    // Focusing in the opening frame would make it lay the page out early.
+    expect(early).toEqual([])
+    await frame()
+    await frame()
+    expect(document.activeElement).toBe(card("first"))
+  })
+
+  it("opens in the arrangement its place allows, and draws the peek beside the list a frame on", async () => {
+    // The chat area was 1,200px wide before the overview came: wide enough for the peek beside it.
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth")
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+      configurable: true,
+      get: () => 1200,
+    })
+    try {
+      await mount()
+      await act(async () => entry()?.click())
+      expect(host.querySelector(".agents-overview")?.hasAttribute("data-split")).toBe(
+        true,
+      )
+      expect(host.querySelector(".agents-overview-peek")?.childElementCount).toBe(0)
+      // A frame on, and once its conversation is read, the peek is drawn.
+      for (let wait = 0; wait < 5 && !host.querySelector(".agents-peek"); wait++)
+        await frame()
+      expect(host.querySelector(".agents-overview-peek .agents-peek")).not.toBeNull()
+    } finally {
+      if (width) Object.defineProperty(HTMLElement.prototype, "offsetWidth", width)
+    }
+  })
+})
+
+it("asks in its peek with the pane's own approval parts, one component for both", async () => {
+  await mount()
+  await open()
+  await act(async () => card("first")?.click())
+  await act(async () => settle(10))
+  const peek = host.querySelector(".agents-inline-peek")
+  expect(peek?.querySelector(".workspace-approval-command")?.textContent).toBe(
+    "$ security import build.p12",
+  )
+  expect(peek?.querySelector(".workspace-approval-actions")).not.toBeNull()
 })

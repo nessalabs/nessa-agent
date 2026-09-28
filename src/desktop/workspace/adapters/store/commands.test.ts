@@ -29,7 +29,13 @@ import {
   resendMessage,
   resizePanes,
   retryTranscript,
+  selectChannel,
+  selectStatusView,
   sendMessage,
+  showContent,
+  focusPane,
+  toggleSessionList,
+  toggleSidebar,
 } from "./commands"
 
 async function ready(source = fakeSource()) {
@@ -1147,5 +1153,35 @@ describe("the room every change of layout is held to", () => {
     room = { width: 700, height: 800, spare: 0 }
     store.dispatch(fitPanes())
     expect(Math.min(...widths(store, room.width))).toBeGreaterThanOrEqual(299.5)
+  })
+})
+
+describe("the Agents overview is a place in the sidebar, left by going anywhere else", () => {
+  const ways = {
+    "the channel already listed": selectChannel({ channelId: "desktop" }),
+    "another channel": selectChannel({ channelId: "gateway" }),
+    "a status view": selectStatusView({ status: "running" }),
+    "a session": openSession({ sessionId: "c" }),
+    "a session beside": openBeside({ sessionId: "c" }),
+    "a channel from the tree": openChannel({ channelId: "gateway" }),
+    "a new session": newSession(),
+    "the focused pane": focusPane({ pane: 0 }),
+  }
+  for (const [way, action] of Object.entries(ways))
+    it(`goes back to the panes on ${way}`, async () => {
+      const { store } = await ready()
+      store.dispatch(showContent({ content: "agents" }))
+      store.dispatch(showContent({ content: "agents" }))
+      expect(store.getState().workspace.content).toBe("agents")
+      store.dispatch(action as Parameters<typeof store.dispatch>[0])
+      expect(store.getState().workspace.content).toBe("panes")
+    })
+
+  it("stays over what only rearranges the window", async () => {
+    const { store } = await ready()
+    store.dispatch(showContent({ content: "agents" }))
+    store.dispatch(toggleSidebar())
+    store.dispatch(toggleSessionList())
+    expect(store.getState().workspace.content).toBe("agents")
   })
 })

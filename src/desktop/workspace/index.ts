@@ -34,7 +34,7 @@ export { workspaceEffects } from "./adapters/store/effects"
 export { workspaceReducer } from "./adapters/store/slice"
 export * from "./adapters/store/commands"
 export { useWorkspaceDispatch, useWorkspaceSelector } from "./adapters/store/hooks"
-export { selectSessionListChosen } from "./adapters/store/selectors"
+export { selectContentView, selectSessionListChosen } from "./adapters/store/selectors"
 export { WorkspaceSourceError } from "./application/ports"
 export type {
   ApprovalScope,

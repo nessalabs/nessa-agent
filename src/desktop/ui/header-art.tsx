@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react"
+import { memo, useEffect, useRef, useState } from "react"
 import {
   useHeaderFraming,
   useHeaderImage,
+  useHeaderPictureUrl,
   useTintFromPicture,
 } from "../adapters/header-image"
 import { readImagePixels } from "../adapters/image-pixels"
@@ -51,7 +52,7 @@ export function HeaderArt() {
   const adjusting = draft !== null
   const adjustingRef = useRef(adjusting)
   adjustingRef.current = adjusting
-  const [url, setUrl] = useState<string | null>(null)
+  const url = useHeaderPictureUrl()
   const [refusal, setRefusal] = useState<string | null>(null)
   const input = useRef<HTMLInputElement>(null)
   const headerRef = useRef<HTMLDivElement>(null)
@@ -92,16 +93,6 @@ export function HeaderArt() {
       delete surface.dataset.tintedFromPicture
     }
   }, [palette, tint])
-
-  useEffect(() => {
-    if (!image) {
-      setUrl(null)
-      return
-    }
-    const next = URL.createObjectURL(image)
-    setUrl(next)
-    return () => URL.revokeObjectURL(next)
-  }, [image])
 
   useEffect(() => {
     if (!refusal) return
@@ -224,3 +215,38 @@ export function HeaderArt() {
     </div>
   )
 }
+
+const keepAsIs = () => {}
+
+/**
+ * A sliver of the same header at the top of a conversation pane: the picture
+ * in the framing the home header keeps, or the night scene when none is
+ * chosen, drawn by the same parts (`HeaderPicture`, `NightScene`) and
+ * narrowed by the stylesheet (`.desktop-header[data-sliver]`) to a low band
+ * that fades into the pane. It never moves on its own: the night scene's rain
+ * and steam are still here, and a GIF moves only in the `moving` — focused —
+ * pane; the others show its first frame. Decoration only.
+ */
+export const HeaderSliver = memo(function HeaderSliver({ moving }: { moving: boolean }) {
+  const [image] = useHeaderImage()
+  const [framing] = useHeaderFraming()
+  const url = useHeaderPictureUrl(!moving)
+  return (
+    <div className="desktop-header" data-sliver="" aria-hidden="true">
+      {image ? (
+        url ? (
+          <HeaderPicture
+            url={url}
+            framing={framing}
+            adjusting={false}
+            onFramingChange={keepAsIs}
+            onDone={keepAsIs}
+            onCancel={keepAsIs}
+          />
+        ) : null
+      ) : (
+        <NightScene still />
+      )}
+    </div>
+  )
+})

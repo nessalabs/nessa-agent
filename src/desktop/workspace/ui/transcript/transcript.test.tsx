@@ -100,7 +100,10 @@ async function shown(source = fakeSource()) {
 
 const buttons = () =>
   [...host.querySelectorAll<HTMLButtonElement>(".workspace-approval button")].map(
-    (button) => [button.textContent, button.disabled],
+    (button) => [
+      button.getAttribute("aria-label") ?? button.textContent,
+      button.disabled,
+    ],
   )
 
 describe("a transcript", () => {
@@ -240,10 +243,12 @@ describe("a transcript", () => {
     const source = fakeSource()
     source.hold("approve")
     await shown(source)
+    // Every answer, whichever of them the card's width shows (`approval-request.tsx`).
     expect(buttons()).toEqual([
       ["Deny", false],
       ["Always Allow", false],
       ["Allow Once", false],
+      ["More Ways to Allow", false],
     ])
     await act(async () => {
       host.querySelector<HTMLButtonElement>(".workspace-approval [data-primary]")?.click()

@@ -418,18 +418,39 @@ html:not(.dark) .settings-glass {
   margin: 0 auto;
 }
 
-.settings-head {
-  flex: none;
-  padding-top: calc(var(--desktop-titlebar-height) + 12px);
+/*
+ * The page's head (`ui/column-header.tsx`): its title inline in the titlebar
+ * row where it fits — starting with the page's column, or after the window's
+ * controls with the sidebar away — else on its own row above the tabs.
+ */
+.settings-content > .desktop-column-bar {
+  padding-right: calc((100% - min(var(--settings-column), 100% - 64px)) / 2);
+  padding-left: calc((100% - min(var(--settings-column), 100% - 64px)) / 2);
 }
 
-.settings-head h1 {
-  margin: 0;
+.settings[data-sidebar="closed"] .settings-content > .desktop-column-bar {
+  padding-left: max(
+    calc((100% - min(var(--settings-column), 100% - 64px)) / 2),
+    var(--desktop-titlebar-safe-start)
+  );
+}
+
+.settings-content > .desktop-column-title[data-placement="below"] {
+  width: min(var(--settings-column), 100% - 64px);
+  margin: 0 auto;
+  padding: 12px 0 0;
+}
+
+.settings-content > .desktop-column-title[data-placement="below"] h1 {
   font-size: 20px;
   font-weight: 600;
   line-height: 28px;
   letter-spacing: -0.02em;
   animation: settings-fade var(--settings-fade) ease-out;
+}
+
+.settings-head-tabs {
+  flex: none;
 }
 
 .settings-tabs {
@@ -918,7 +939,7 @@ html:not(.dark) .settings-glass {
 
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
 :root[data-motion="reduced"] .settings,
-:root[data-motion="reduced"] .settings-head h1,
+:root[data-motion="reduced"] .settings-content > .desktop-column-title h1,
 :root[data-motion="reduced"] .settings-panel,
 :root[data-motion="reduced"] .settings-row[data-found],
 :root[data-motion="reduced"] .settings-group[data-found] .settings-card {

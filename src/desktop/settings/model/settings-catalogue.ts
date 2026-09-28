@@ -189,6 +189,13 @@ export const settingsEntries = [
     keywords: "colour color image palette",
   },
   {
+    id: "picture-in-conversations",
+    tab: "header",
+    label: "Show picture in conversations",
+    detail: "A quiet band of it at the top of each conversation.",
+    keywords: "image scene sliver pane band",
+  },
+  {
     id: "show-greeting",
     tab: "header",
     label: "Show greeting",

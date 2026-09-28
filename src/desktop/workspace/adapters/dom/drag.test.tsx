@@ -47,6 +47,17 @@ function Grid() {
             <header className="workspace-pane-header" data-drag-pane={pane.key}>
               {pane.sessionId}
             </header>
+            <div className="workspace-pane-body">
+              <div className="workspace-transcript">
+                <div className="workspace-transcript-inner">
+                  {[0, 1, 2, 3, 4].map((part) => (
+                    <p key={part} data-part={part}>
+                      {`${pane.sessionId} part ${part}`}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            </div>
           </article>
         ))}
       </div>
@@ -54,7 +65,16 @@ function Grid() {
   )
 }
 
-const frames = () => act(async () => new Promise((resolve) => setTimeout(resolve, 40)))
+/** Three frames: the drag's first shows the copy, its second what the zone would do. */
+const frames = () =>
+  act(
+    async () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+      ),
+  )
 const pointer = (type: string, x: number, y: number, target: EventTarget = window) =>
   target.dispatchEvent(
     new PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true }),
@@ -121,5 +141,106 @@ it("lets everything go on Escape, the layout untouched", async () => {
   expect(host.querySelector("[data-dragging]")).toBeNull()
   pointer("pointerup", 830, 400)
   expect(store.getState().workspace.panes).toBe(before)
+  await act(async () => root.unmount())
+})
+
+it("copies one screen of the conversation, what is scrolled above standing in as a spacer", async () => {
+  const { root } = await mounted()
+  const pane = host.querySelector<HTMLElement>('[data-pane-key="1"]')
+  if (!pane) throw new Error("no pane")
+  // The conversation shows 300–700; its five parts are 200px tall, from 0.
+  const view = pane.querySelector<HTMLElement>(".workspace-transcript")
+  if (view) view.getBoundingClientRect = () => new DOMRect(0, 300, 546, 400)
+  pane.querySelectorAll<HTMLElement>("[data-part]").forEach((part, index) => {
+    part.getBoundingClientRect = () => new DOMRect(0, index * 200, 546, 200)
+  })
+  pointer("pointerdown", 60, 16, pane.querySelector("header") ?? pane)
+  pointer("pointermove", 90, 40)
+  const copied = host.querySelector(".workspace-drag-ghost .workspace-transcript-inner")
+  const parts = [...(copied?.querySelectorAll("[data-part]") ?? [])]
+  expect(parts.map((part) => part.textContent)).toEqual([
+    "a part 1",
+    "a part 2",
+    "a part 3",
+  ])
+  // What is scrolled out above keeps its height, so the copy shows the same screen.
+  expect((copied?.firstElementChild as HTMLElement | null)?.style.height).toBe("200px")
+  await act(async () => root.unmount())
+})
+
+it("reads where every pane is drawn before it moves any, when the zone changes", async () => {
+  const { root } = await mounted()
+  const log: ("read" | "write")[] = []
+  const animate = Element.prototype.animate
+  Element.prototype.animate = function (...args) {
+    log.push("write")
+    return animate.apply(this, args)
+  }
+  host.querySelectorAll<HTMLElement>("[data-pane-key]").forEach((pane) => {
+    const rect = pane.getBoundingClientRect
+    pane.getBoundingClientRect = () => {
+      log.push("read")
+      return rect()
+    }
+    for (const child of pane.children)
+      Object.defineProperty(child, "offsetTop", {
+        get: () => {
+          log.push("read")
+          return 0
+        },
+      })
+  })
+  const header = host.querySelector('[data-drag-pane="1"]')
+  if (!header) throw new Error("no header")
+  pointer("pointerdown", 60, 16, header)
+  pointer("pointermove", 830, 400)
+  await frames()
+  expect(log).toContain("write")
+  // Every read of the page, then every write: the page is laid out once.
+  expect(log.join(" ")).toMatch(/^(read )+(write ?)+$/)
+  Element.prototype.animate = animate
+  await act(async () => root.unmount())
+})
+
+it("draws the copy in the frame the drag begins, and what the zone would do in the next", async () => {
+  const { root } = await mounted()
+  const queued: FrameRequestCallback[] = []
+  const request = window.requestAnimationFrame
+  window.requestAnimationFrame = (callback) => queued.push(callback)
+  const frame = () => act(async () => queued.splice(0).forEach((run) => run(0)))
+  const header = host.querySelector('[data-drag-pane="1"]')
+  if (!header) throw new Error("no header")
+  pointer("pointerdown", 60, 16, header)
+  pointer("pointermove", 830, 400)
+  expect(host.querySelector(".workspace-drag-ghost")).not.toBeNull()
+  await frame()
+  expect(host.querySelector(".workspace-drag-placeholder")).toBeNull()
+  await frame()
+  expect(host.querySelector(".workspace-drag-placeholder")).not.toBeNull()
+  window.requestAnimationFrame = request
+  pointer("pointerup", 830, 400)
+  await act(async () => root.unmount())
+})
+
+it("takes the zone the pointer heads for: sideways near the top is the side, upward the top", async () => {
+  const { root } = await mounted()
+  const header = host.querySelector('[data-drag-pane="1"]')
+  if (!header) throw new Error("no header")
+  const said = () => host.querySelector('[role="status"]')?.textContent
+  // The other pane spans 554–1100; 1034, 40 is 66px from its right and 40 from its top.
+  pointer("pointerdown", 60, 16, header)
+  for (const x of [700, 800, 900, 1000, 1034]) pointer("pointermove", x, 40)
+  await frames()
+  expect(said()).toBe("Move right of Session c")
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+  pointer("pointerup", 1034, 40)
+  await frames()
+
+  pointer("pointerdown", 60, 16, header)
+  for (const y of [400, 300, 200, 100, 40]) pointer("pointermove", 1034, y)
+  await frames()
+  expect(said()).toBe("Move above Session c")
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+  pointer("pointerup", 1034, 40)
   await act(async () => root.unmount())
 })

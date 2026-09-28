@@ -6,6 +6,7 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import {
   selectChannel,
   selectChannelActivity,
+  selectContentView,
   selectPinnedIds,
   selectView,
 } from "../../adapters/store/selectors"
@@ -21,9 +22,14 @@ import { tooltip } from "../../../ui/tooltip"
 export const ChannelRow = memo(function ChannelRow({ channelId }: { channelId: string }) {
   const dispatch = useWorkspaceDispatch()
   const channel = useWorkspaceSelector((state) => selectChannel(state, channelId))
+  // Chosen while the panes are shown: over them, the Agents overview is what is chosen.
   const active = useWorkspaceSelector((state) => {
     const view = selectView(state)
-    return view.kind === "channel" && view.channelId === channelId
+    return (
+      view.kind === "channel" &&
+      view.channelId === channelId &&
+      selectContentView(state) === "panes"
+    )
   })
   const activity = useWorkspaceSelector(
     (state) => selectChannelActivity(state, channelId),

@@ -102,10 +102,17 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
  * where a drop would put them (`data-drag-reflow`) — nothing inside them
  * repaints expensively: the glass blur and deep shadows wait until they have
  * landed. One set of rules for both, so a drop that hands a preview over to a
- * flight changes no style.
+ * flight changes no style. A pane's two parts are named rather than matched
+ * as `> *`: a rule whose subject is any element makes the browser restyle
+ * every element in every pane as a flight begins; named, two per pane.
  */
 .workspace:is([data-flipping], [data-drag-reflow]) .workspace-pane,
-.workspace:is([data-flipping], [data-drag-reflow]) .workspace-pane > * {
+.workspace:is([data-flipping], [data-drag-reflow])
+  .workspace-pane
+  > .workspace-pane-header,
+.workspace:is([data-flipping], [data-drag-reflow])
+  .workspace-pane
+  > .workspace-pane-body {
   will-change: transform;
 }
 

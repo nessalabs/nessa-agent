@@ -31,12 +31,17 @@ import { useEffect, type RefObject } from "react"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import type { DesktopStore } from "../../../store"
 import type { Carried, DropOutcome } from "../../model/drop"
-import { zoneAt } from "../../model/drop"
+import {
+  headingWindow,
+  pointerVelocity,
+  zoneAt,
+  type PointerSample,
+} from "../../model/drop"
 import type { PaneKey, PaneLayout, Zone } from "../../model/pane-layout"
 import { paneLimits } from "../../model/pane-layout"
 import { placements, type PanePlacement } from "../../model/pane-sizing"
 import { dropSession, movePane, previewDrop } from "../store/commands"
-import { durationToken, motionToken } from "./motion"
+import { durationToken, motionToken } from "../../../adapters/motion"
 
 /** Marks the preview's own motion. */
 const dragPreview = "workspace-drag-preview"
@@ -161,6 +166,8 @@ export function useWorkspaceDrag(
       /** The copy's content, counter-scaled as its box settles into a place. */
       inner: HTMLElement
       pointer: { x: number; y: number }
+      /** Where the pointer has been lately, for where it heads (`pointerVelocity`). */
+      path: PointerSample[]
       frame: number
       aim: { target: PaneKey; zone: Zone } | null
       outcome: DropOutcome | null
@@ -198,13 +205,36 @@ export function useWorkspaceDrag(
           previews.get(scope)?.delete(animation)
         })
 
-    /** Draws a pane laid out at `real` at `to`, from wherever it is drawn now. */
-    const reflow = (pane: HTMLElement, real: Box, to: Box | null, fade = false) => {
-      const now = boxOf(pane.getBoundingClientRect())
+    /** A pane as it is drawn now, and where each of its children sits in it. */
+    interface DrawnPane {
+      readonly pane: HTMLElement
+      readonly now: Box
+      readonly children: readonly { element: HTMLElement; top: number }[]
+    }
+    const drawnPane = (pane: HTMLElement): DrawnPane => ({
+      pane,
+      now: boxOf(pane.getBoundingClientRect()),
+      children: Array.from(pane.children, (child) => ({
+        element: child as HTMLElement,
+        top: (child as HTMLElement).offsetTop,
+      })),
+    })
+
+    /**
+     * Draws a pane laid out at `real` at `to`, from `now`, where it is drawn
+     * — read with every other pane's before anything is written, so a zone
+     * change lays the page out once, not once per pane.
+     */
+    const reflow = (
+      { pane, now, children }: DrawnPane,
+      real: Box,
+      to: Box | null,
+      fade = false,
+    ) => {
       const from = between(real, now)
       const target = to ? between(real, to) : { transform: "none", sx: 1, sy: 1 }
       letGo(pane)
-      Array.from(pane.children).forEach(letGo)
+      children.forEach(({ element }) => letGo(element))
       pane.style.transformOrigin = "50% 50%"
       const box = track(
         scope,
@@ -218,9 +248,8 @@ export function useWorkspaceDrag(
       )
       // The content keeps its size, as in a flight (`flip.tsx`), held to the
       // pane's top left as it waits there, so it reads from its start.
-      Array.from(pane.children, (child) => {
-        const element = child as HTMLElement
-        element.style.transformOrigin = `0px ${-element.offsetTop}px`
+      children.forEach(({ element, top }) => {
+        element.style.transformOrigin = `0px ${-top}px`
         track(
           scope,
           element.animate(
@@ -304,17 +333,23 @@ export function useWorkspaceDrag(
       const real = boxes(layout, grid)
       const spare = outcome?.foldSidebar ? foldSpare() : 0
       const landing = outcome ? boxes(outcome.layout, landingGrid(grid, spare)) : null
-      scope.toggleAttribute("data-drag-folds", Boolean(outcome?.foldSidebar))
       const still = reducedMotion()
-      if (outcome && landing) scope.dataset.dragReflow = ""
-      for (const [key, box] of real) {
-        const pane = paneElement(key)
-        if (!pane) continue
-        if (still) continue
+      // Every read first — where each pane is drawn now — then every write.
+      const drawnNow = still
+        ? []
+        : [...real].flatMap(([key, box]) => {
+            const pane = paneElement(key)
+            return pane ? [{ key, box, drawn: drawnPane(pane) }] : []
+          })
+      if (scope.hasAttribute("data-drag-folds") !== Boolean(outcome?.foldSidebar))
+        scope.toggleAttribute("data-drag-folds", Boolean(outcome?.foldSidebar))
+      if (outcome && landing && !("dragReflow" in scope.dataset))
+        scope.dataset.dragReflow = ""
+      for (const { key, box, drawn } of drawnNow) {
         const to = landing?.get(key) ?? null
         const replaced = outcome?.does === "replace" && key === outcome.lands
         reflow(
-          pane,
+          drawn,
           box,
           outcome && to ? inside(to, landingGrid(grid, spare)) : null,
           replaced,
@@ -359,8 +394,17 @@ export function useWorkspaceDrag(
 
     // ——— Following the pointer ———
 
-    /** The pane and zone under the pointer, from where the panes are laid out, not drawn. */
-    const aimAt = (x: number, y: number): { target: PaneKey; zone: Zone } | null => {
+    /**
+     * The pane and zone under the pointer, from where the panes are laid out,
+     * not drawn; the zone weighed by where the pointer heads, and held while
+     * the pointer stays over the same pane (`zoneAt`).
+     */
+    const aimAt = (
+      x: number,
+      y: number,
+      velocity: { x: number; y: number },
+      was: { target: PaneKey; zone: Zone } | null,
+    ): { target: PaneKey; zone: Zone } | null => {
       const layout = layoutNow()
       const grid = gridBox()
       if (!layout || !grid) return null
@@ -374,7 +418,11 @@ export function useWorkspaceDrag(
           continue
         return {
           target: key,
-          zone: zoneAt((x - box.left) / box.width, (y - box.top) / box.height),
+          zone: zoneAt(
+            { x: x - box.left, y: y - box.top, velocity },
+            box,
+            was?.target === key ? was.zone : null,
+          ),
         }
       }
       return null
@@ -384,7 +432,7 @@ export function useWorkspaceDrag(
       if (!drag) return
       drag.frame = 0
       const { pointer } = drag
-      const aim = aimAt(pointer.x, pointer.y)
+      const aim = aimAt(pointer.x, pointer.y, pointerVelocity(drag.path), drag.aim)
       const same = aim?.target === drag.aim?.target && aim?.zone === drag.aim?.zone
       if (!same) {
         drag.aim = aim
@@ -438,8 +486,12 @@ export function useWorkspaceDrag(
       const inner = document.createElement("div")
       inner.className = "workspace-drag-ghost-inner"
       ghost.append(inner)
-      const picture = (element: Element): HTMLElement => {
+      const picture = (
+        element: Element,
+        prune?: (from: Element, copy: Element) => void,
+      ): HTMLElement => {
         const clone = element.cloneNode(true) as HTMLElement
+        prune?.(element, clone)
         for (const node of [clone, ...clone.querySelectorAll<HTMLElement>("*")]) {
           for (const name of [
             "id",
@@ -465,10 +517,40 @@ export function useWorkspaceDrag(
       ) => {
         if (from && to) to.scrollTop = from.scrollTop
       }
+      /**
+       * The conversation as it shows, and no more: the copy is a picture of
+       * one screen of it, so what is scrolled out of view above stands in as
+       * one spacer of its height and what is below is left out. A long
+       * conversation then costs the drag's first frame one screen to copy
+       * and lay out, not all of it.
+       */
+      const onScreenOnly = (from: Element, to: Element) => {
+        const scroller = from.querySelector<HTMLElement>(".workspace-transcript")
+        const content = scroller?.querySelector(":scope > .workspace-transcript-inner")
+        const copied = to.querySelector(
+          ".workspace-transcript > .workspace-transcript-inner",
+        )
+        if (!scroller || !content || !copied) return
+        const view = scroller.getBoundingClientRect()
+        const parts = Array.from(content.children, (child) =>
+          child.getBoundingClientRect(),
+        )
+        const copies = Array.from(copied.children)
+        const firstShown = parts.findIndex((part) => part.bottom > view.top)
+        if (firstShown < 0) return
+        parts.forEach((part, index) => {
+          if (index < firstShown || part.top >= view.bottom) copies[index]?.remove()
+        })
+        if (firstShown > 0) {
+          const spacer = document.createElement("div")
+          spacer.style.height = `${parts[firstShown].top - parts[0].top}px`
+          copied.prepend(spacer)
+        }
+      }
       if (carried.kind === "pane") {
         const pane = paneElement(carried.pane)
         if (pane) {
-          const copy = picture(pane)
+          const copy = picture(pane, onScreenOnly)
           copy.removeAttribute("style")
           copy.classList.add("workspace-drag-ghost-pane")
           inner.append(copy)
@@ -592,6 +674,7 @@ export function useWorkspaceDrag(
         ghost,
         inner,
         pointer: { x: event.clientX, y: event.clientY },
+        path: [{ x: event.clientX, y: event.clientY, t: event.timeStamp }],
         frame: 0,
         aim: null,
         outcome: null,
@@ -609,7 +692,12 @@ export function useWorkspaceDrag(
       } catch {
         // A pointer the page no longer has: the drag still follows window events.
       }
-      schedule()
+      // The copy is laid out and painted in this frame; what the zone under
+      // the pointer would do waits for the next, so neither frame does both.
+      const first = drag
+      first.frame = requestAnimationFrame(() => {
+        if (drag === first) first.frame = requestAnimationFrame(follow)
+      })
     }
 
     /**
@@ -755,6 +843,13 @@ export function useWorkspaceDrag(
     const onPointerMove = (event: PointerEvent) => {
       if (drag) {
         drag.pointer = { x: event.clientX, y: event.clientY }
+        // Only the last tenth of a second or so is read; a little more is kept.
+        drag.path = [
+          ...drag.path.filter(
+            (sample) => event.timeStamp - sample.t <= 2 * headingWindow,
+          ),
+          { x: event.clientX, y: event.clientY, t: event.timeStamp },
+        ]
         carry()
         schedule()
         return

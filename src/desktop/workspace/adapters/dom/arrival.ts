@@ -6,7 +6,7 @@
  * it; the motion plays once the conversation has mounted.
  */
 import { useLayoutEffect, type RefObject } from "react"
-import { durationToken, motionToken } from "./motion"
+import { durationToken, motionToken } from "../../../adapters/motion"
 
 /** Where the first message was when it was sent. */
 export interface Arrival {

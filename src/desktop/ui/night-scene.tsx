@@ -26,9 +26,10 @@ import {
  * around its sill, which stays on the box's bottom edge, to fill the box's
  * height; sideways it is only cropped. The scale is `nightSceneScale`,
  * written straight to the element from a ResizeObserver so it lands in the
- * same frame as the resize rather than a render later.
+ * same frame as the resize rather than a render later. `still`: its rain and
+ * steam hold still, as they do in a conversation pane's sliver of it.
  */
-export function NightScene() {
+export function NightScene({ still = false }: { still?: boolean }) {
   const frameRef = useRef<HTMLPreElement>(null)
 
   useLayoutEffect(() => {
@@ -55,6 +56,7 @@ export function NightScene() {
       ref={frameRef}
       aria-hidden="true"
       className="desktop-night-scene"
+      data-still={still || undefined}
       style={
         {
           "--night-scene-sill-rows": nightSceneSillRows,

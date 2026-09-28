@@ -83,7 +83,7 @@ the colour both vivid and plentiful, the light from above in its hue, the
 light from below from a second hue or an analogous one, neutral for a
 colourless picture, all held within the built-in themes' ranges; the palette
 shows in the Customize menu, and the theme tints the window, over the chosen
-light theme and fading in, unless "Tint app from picture" is turned off), the greeting
+light theme and fading in, unless "Tint app from picture" is turned off; the same picture, or the scene, shows as a quiet, still sliver at the top of each conversation pane — `HeaderSliver`, one decoded file shared by every reader in the window, a GIF moving only in the focused pane — unless Settings › Appearance › Header › "Show picture in conversations" is off), the greeting
 "Working late?", the scene's own
 caption whatever the hour,
 and the composer (`ui/composer.tsx`), which takes text but cannot send, and says so on its send button, until conversations
@@ -231,10 +231,12 @@ The two layouts differ only in how the sidebar region is composed; the
 workspace shell (`ui/layouts/workspace-shell.tsx`) owns everything else,
 the quick switcher included. Titlebar content starts at the one safe area,
 `--desktop-titlebar-safe-start` (the host's window controls and our cluster);
-nothing draws under the window's controls, and a column's title sits on its
-own row below the titlebar (`ui/chrome/column-header.tsx`).
+nothing draws under the window's controls. A column's title sits inline in
+the titlebar row, after the controls, where it fits, and on its own row below
+where it does not (`src/desktop/ui/column-header.tsx`, the same head for the
+session list, the sidebar and Settings' page).
 
-- `model/` is pure: the index's types (`index.ts`); the pane layout
+- `model/` is pure: the index's types (`workspace-index.ts`); the pane layout
   (`pane-layout.ts`), columns of stacked panes with one focused, whose
   operations split, move, swap, nudge, close and even out, capped at four
   panes and three columns, a session never shown twice; its pixel rules

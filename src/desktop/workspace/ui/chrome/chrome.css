@@ -63,76 +63,26 @@
   }
 }
 
-/* ——— A side column's head (`column-header.tsx`) ——— */
+/* ——— A side column's head (`ui/column-header.tsx`, shared with Settings) ——— */
 
 /*
- * The titlebar row, inside the column: only the column's own action, at its
- * far end. Hidden at once as the column folds and shown once it has slid in,
- * so it never passes under the window's controls on the way.
+ * The titlebar row, inside the column. Its action hides at once as the
+ * column folds and shows once it has slid in, so it never passes under the
+ * window's controls on the way.
  */
-.workspace-column-bar {
-  display: flex;
-  height: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
-  flex: none;
-  align-items: flex-start;
-  justify-content: flex-end;
-  padding: var(--desktop-control-inset);
+.workspace .desktop-column-bar {
   transition: visibility 0s linear var(--desktop-slow);
 }
 
-.workspace-list > .workspace-list-inner > .workspace-column-bar {
-  height: var(--desktop-titlebar-height);
-  align-items: center;
-  padding: 0 var(--desktop-control-inset);
+/* Revealed from the edge, the sidebar slides in for 360ms (`source-list.css`); its action waits it out. */
+.workspace[data-sidebar="closed"][data-peek] .workspace-sidebar .desktop-column-bar {
+  transition: visibility 0s linear 360ms;
 }
 
-.workspace[data-sidebar="closed"]:not([data-peek])
-  .workspace-sidebar
-  .workspace-column-bar,
-.workspace[data-list="closed"] .workspace-list .workspace-column-bar {
+.workspace[data-sidebar="closed"]:not([data-peek]) .workspace-sidebar .desktop-column-bar,
+.workspace[data-list="closed"] .workspace-list .desktop-column-bar {
   visibility: hidden;
   transition: none;
-}
-
-/* The column's title, on its own row below the titlebar, aligned with its content. */
-.workspace-column-title {
-  display: flex;
-  min-width: 0;
-  flex: none;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px 6px;
-  padding: 2px 12px 10px;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-.workspace-column-title svg {
-  width: 16px;
-  height: 16px;
-  flex: none;
-  color: var(--desktop-faint);
-  stroke-width: 2;
-}
-
-.workspace-column-title h2 {
-  min-width: 0;
-  flex: 1;
-  margin: 0;
-  overflow: hidden;
-  font-size: var(--desktop-text-display);
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-column-title p {
-  flex-basis: 100%;
-  margin: 0;
-  color: var(--desktop-faint);
-  font-size: var(--desktop-text-footnote);
 }
 
 /* ——— Titlebar and icon buttons ——— */

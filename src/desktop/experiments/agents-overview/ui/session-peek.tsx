@@ -17,6 +17,10 @@ import { AgentTile } from "../../../workspace/ui/chrome/agent-tile"
 import { StatusGlyph } from "../../../workspace/ui/chrome/status-glyph"
 import { failureCopy } from "../../../workspace/ui/failure-copy"
 import { LiveRow } from "../../../workspace/ui/transcript/live-row"
+import {
+  ApprovalActions,
+  ApprovalCommand,
+} from "../../../workspace/ui/transcript/approval-request"
 import { ToolSteps } from "../../../workspace/ui/transcript/tool-steps"
 import "../../../workspace/ui/transcript/transcript.css"
 import { selectChannelName, selectSummary } from "../adapters/workspace-bridge"
@@ -127,7 +131,7 @@ export const SessionPeek = memo(function SessionPeek({
       {approval ? (
         <section className="agents-peek-ask" aria-label="Request">
           <p className="agents-peek-reason">{approval.reason}</p>
-          <pre className="agents-peek-command">{approval.command}</pre>
+          <ApprovalCommand command={approval.command} />
           {refused ? (
             <p className="agents-peek-failure" role="status">
               {failureCopy(refused)}
@@ -139,42 +143,24 @@ export const SessionPeek = memo(function SessionPeek({
               {answeredLabels[settling.answer]}
             </p>
           ) : (
-            <div className="agents-peek-actions">
-              <button
-                type="button"
-                className="workspace-button agents-peek-button"
-                disabled={!answerable}
-                {...tooltip("Don’t run it", { shortcut: labelOf(overviewKeys, "deny") })}
-                onClick={() => answerable && onAnswer(summary, approval, "deny")}
-              >
-                Deny
-              </button>
-              <span className="agents-peek-allow">
-                <button
-                  type="button"
-                  className="workspace-button agents-peek-button"
-                  disabled={!answerable}
-                  {...tooltip("Allow it now, and whenever it’s asked again", {
-                    shortcut: labelOf(overviewKeys, "always"),
-                  })}
-                  onClick={() => answerable && onAnswer(summary, approval, "always")}
-                >
-                  Always Allow
-                </button>
-                <button
-                  type="button"
-                  className="workspace-button agents-peek-button"
-                  data-primary
-                  disabled={!answerable}
-                  {...tooltip("Run it once", {
-                    shortcut: labelOf(overviewKeys, "allow"),
-                  })}
-                  onClick={() => answerable && onAnswer(summary, approval, "allow")}
-                >
-                  Allow Once
-                </button>
-              </span>
-            </div>
+            <ApprovalActions
+              disabled={!answerable}
+              tips={{
+                deny: tooltip("Don’t run it", {
+                  shortcut: labelOf(overviewKeys, "deny"),
+                }),
+                always: tooltip("Allow it now, and whenever it’s asked again", {
+                  shortcut: labelOf(overviewKeys, "always"),
+                }),
+                once: tooltip("Run it once", {
+                  shortcut: labelOf(overviewKeys, "allow"),
+                }),
+              }}
+              onAnswer={(choice) =>
+                answerable &&
+                onAnswer(summary, approval, choice === "once" ? "allow" : choice)
+              }
+            />
           )}
         </section>
       ) : null}

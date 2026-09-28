@@ -37,7 +37,9 @@ The binding constraints:
 - **Agents drive the window too.** "Open this session beside that one" and
   "close the focused pane" must be named actions (0001), not hook setters.
 - **Calm means no dropped frames.** No frame over 50 ms on split, move, close,
-  sidebar toggle, send or typing in a production build.
+  sidebar and list toggles, send, typing, streaming, a pane dragged across
+  zones, or opening and answering in the Agents overview, in a production
+  build at 4× CPU throttling.
 
 ## Decision
 
@@ -47,7 +49,7 @@ laid out feature-first with roles below, like `src/conversation/`.
 - **`model/`** holds pure values and rules:
   - the **index**'s types (`model/workspace-index.ts`: `Section`, `Channel`,
     `SessionSummary`, the session's model from the SDK catalogue) — see
-    _Naming the overview_ below;
+    _Naming the index_ below;
   - a **pane layout** (`pane-layout.ts`) of columns of stacked panes, one
     focused, with tested operations — split, move, swap, nudge, close, even
     out, focus — and the limits of four panes and three columns;
@@ -77,7 +79,8 @@ laid out feature-first with roles below, like `src/conversation/`.
 - **`ui/`** holds each component once:
   - source list (both sidebars as variants of one component), session list,
     pane grid, pane, pane header, transcript, transcript heading, message, tool
-    steps, approval card, pane home (the window's own `Home`, given the
+    steps, approval card (its command and answers, `approval-request.tsx`,
+    arranged by the card's width and shared with the Agents overview's peek), pane home (the window's own `Home`, given the
     composer's props), quick switcher and empty states;
   - **one workspace shell** (`ui/layouts/workspace-shell.tsx`) and two
     layouts that are only a `SidebarRegion` each — see _Layouts_.
@@ -166,6 +169,14 @@ A folded sidebar can be revealed from the window's left edge by the one
 edge-peek reveal (`useEdgePeek`) in the classic shell, both workspace layouts
 and Settings; the pointer or keyboard focus inside it keeps it shown.
 
+**What fills the content region** is workspace state (`content`: the panes,
+or the Agents overview while that experiment is on), so an agent can move it
+too. The sidebar's Agents entry is a place like a channel: choosing it again
+keeps it; and every action that goes somewhere — a session, a channel, a
+status view, a new session, another pane — goes back to the panes by one rule
+(`navigated`, applied by the slice to each). The sidebar marks what is shown:
+Agents while the overview is, a channel or session only while the panes are.
+
 **Focus follows the focused pane** (`adapters/dom/focus.ts`, one mechanism):
 whenever another pane takes focus — a split, ⌘N, ⌘W, ⌘1–4, ⇧⌘[ ⇧⌘], a pick in
 ⌘K, an agent's dispatch — the caret lands in its composer; when what held the
@@ -180,7 +191,14 @@ cloned once when the drag begins — its conversation where it was scrolled
 to, its composer and chips; a session from a list is drawn from what the
 window holds of it. **While dragging, the copy belongs to the pointer**: it
 keeps its size and grab offset and follows one to one, with no pull toward a
-target. **The result is shown by the layout**: over a zone, the real panes
+target. **The zone is the pointer's, in pixels** (`zoneAt`, `model/drop.ts`): each
+side is the triangle between the pane's diagonals and the middle a size in
+pixels (`centreInset`, 48–120px), so a tall narrow pane's top and bottom are
+short; the sides within reach are weighed by where the pointer has headed
+over the last tenth of a second (`pointerVelocity`), so a sideways sweep
+across a top corner reaches the side; and the zone it is in holds until
+another wins by 12px, so it does not flicker at a boundary. **The result is
+shown by the layout**: over a zone, the real panes
 move to where the drop would put them, only when the zone changes, and a
 calm placeholder marks exactly the rect the drop will take — from
 `dropOutcome`, the same outcome the drop's command commits, so nothing jumps
@@ -228,7 +246,9 @@ Settings is a typed catalogue: categories → tabs → settings, with the search
 index derived from it, in `src/desktop/settings/model/`, rendered generically
 by `src/desktop/settings/ui/` (`src/desktop/settings/index.ts` is its map).
 Preferences stay host-side adapters that notify other readers in the same
-window — theme, icon family, workspace layout, tint, greeting, motion
+window — theme, icon family, workspace layout, tint, the picture in
+conversations (a still sliver of the header atop each conversation pane,
+`HeaderSliver`), greeting, motion
 (System/Full/Reduced, carried on the root as `data-motion`, which every
 duration token and script motion reads), drifting light, ⌘-click opens
 beside, running sessions first — each a `storedPreference`
@@ -251,14 +271,23 @@ nothing draws under the window's controls. `--desktop-titlebar-safe-start`
 is defined once, from the host's inset for its traffic lights and the width
 of our control cluster (sidebar toggle, Back, Forward, and the session list's
 toggle or New Session), and every titlebar-row element derives its start from
-it (`styles.test.ts` holds the rules to it). A column's title never shares the
-titlebar row: every side column's head is one component
-(`ui/chrome/column-header.tsx`) — the titlebar row holding only the column's
-own action at its far end, then the title on a row of its own, then its
-search — so no title ever sits under the controls or moves when a sidebar
-folds. A column's titlebar-row action hides at once as the column folds and
-shows once it has slid in; a pane's header is hidden while its pane flies and
-changes size. A frame-sampled check over every transition that moves titlebar
+it (`styles.test.ts` holds the rules to it). Every column's head — the
+session list's in both layouts, the sidebar's, Settings' page — is one
+component (`src/desktop/ui/column-header.tsx`): the titlebar row, holding the
+column's own action at its far end, and the column's title **inline in that
+row, after the controls where they stand over the column, when it fits there
+with room to breathe; on a row of its own below when it does not**
+(`titlePlacement`, `src/desktop/model/column-title.ts`, decided from the
+laid-out widths before the frame paints, with a 12px hold so a dragged edge
+does not flip it). Where an inline title starts is the column's stylesheet's,
+at the safe area wherever the controls stand over the column. When the title
+changes rows it fades in at its new place and what is beneath it glides by
+the row, by transform and opacity; if its column is sliding at that moment,
+an inline title holds still at its place (`holdStill`) rather than ride the
+slide from where the column began. A column's titlebar-row action hides at
+once as the column folds and shows once it has slid in; a pane's header is
+hidden while its pane flies and changes size. A frame-sampled check over
+every transition that moves titlebar
 content (⌘B, ⌥⌘S, the edge reveal, a resize that folds, a split, Settings,
 a change of layout), in Chrome and WebKit at 1440 × 900 and 1000 × 700, finds
 nothing that reads or takes a press under the controls in any frame.
@@ -437,3 +466,20 @@ Watch for:
   (`scripts/architecture/whole-workspace.mjs`, with its tests).
 - **Rules drifting into `ui/`.**
 - **Frame timing regressing** on the interactions named above.
+
+Remaining:
+
+- **The in-memory source records a same-tick message and answer out of
+  order.** A message that lets an approval go is recorded when the source
+  carries it out, while an answer is on record the moment it is asked, so an
+  answer given in the same tick as the message that overtakes it is listed
+  first. Reproduction, against `inMemorySource` with no timers:
+  `send({ sessionId: "signing", messageId: "m1", … })` then, before either
+  settles, `approve("signing", "signing-import", "once", "person")`; the
+  answer is refused `not-waiting`, and `audit()` reads
+  `[allow-once refused not-waiting, let-go m1 taken]` — the refusal before the
+  message whose effect caused it. Each entry is right on its own; the order
+  across them is not causal. The fix belongs to the audit's ordering (record a
+  message when it is asked too, or order by when each was carried out) and is
+  owed before a durable audit adapter copies this one's shape.
+

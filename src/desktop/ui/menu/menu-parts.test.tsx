@@ -20,6 +20,9 @@ import {
   MenuLabel,
   MenuSeparator,
   MenuShortcut,
+  MenuSub,
+  MenuSubContent,
+  MenuSubTrigger,
 } from "."
 
 let root: Root
@@ -131,4 +134,27 @@ it("refuses a part drawn outside any menu, naming where it belongs", () => {
     "MenuItem belongs inside a DropdownMenuContent or ContextMenuContent",
   )
   vi.restoreAllMocks()
+})
+
+it("draws an open submenu beside its menu, not inside the menu's own surface that clips it", async () => {
+  await render(
+    <DropdownMenu open modal={false}>
+      <DropdownMenuTrigger>Menu</DropdownMenuTrigger>
+      <DropdownMenuContent>
+        <MenuItem>New Session</MenuItem>
+        <MenuSub open>
+          <MenuSubTrigger>Move To</MenuSubTrigger>
+          <MenuSubContent>
+            <MenuItem>Left Column</MenuItem>
+          </MenuSubContent>
+        </MenuSub>
+      </DropdownMenuContent>
+    </DropdownMenu>,
+  )
+  const menus = [...document.querySelectorAll<HTMLElement>('[role="menu"]')]
+  const sub = menus.find((each) => each.textContent?.startsWith("Left Column"))
+  const top = menus.find((each) => each.textContent?.startsWith("New Session"))
+  expect(sub).toBeDefined()
+  expect(top?.contains(sub ?? null)).toBe(false)
+  expect(sub?.classList.contains("desktop-popover")).toBe(true)
 })

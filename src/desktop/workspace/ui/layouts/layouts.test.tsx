@@ -84,3 +84,52 @@ describe("both layouts are the one shell", () => {
       await act(async () => root.unmount())
     })
 })
+
+describe("Agents in the sidebar is a place to go, like a channel", () => {
+  for (const [name, Layout] of [
+    ["three columns", ThreeColumns],
+    ["sessions in the sidebar", SessionsInSidebar],
+  ] as const)
+    it(`opens the overview, keeps it open when chosen again, and leaves it for a channel, in ${name}`, async () => {
+      const store = testStore()
+      await store.dispatch(loadWorkspace())
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <Layout hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("nessa:desktop-experiments-agents-overview", { detail: "on" }),
+        )
+      })
+      const agents = () => host.querySelector<HTMLButtonElement>(".agents-overview-entry")
+      const current = () =>
+        [...host.querySelectorAll('.workspace-sidebar [aria-current="page"]')].map(
+          (row) => row.textContent?.trim(),
+        )
+      const channel = () =>
+        [...host.querySelectorAll<HTMLButtonElement>(".workspace-sidebar button")].find(
+          (row) => row.textContent?.trim().startsWith("desktop"),
+        )
+      const shown = () =>
+        host.querySelector("[data-workspace]")?.getAttribute("data-content")
+
+      await act(async () => agents()?.click())
+      expect(shown()).toBe("agents")
+      await act(async () => agents()?.click())
+      expect(shown()).toBe("agents")
+      expect(current()).toEqual([expect.stringMatching(/^Agents/)])
+
+      await act(async () => channel()?.click())
+      expect(shown()).toBe("panes")
+      expect(current()).not.toContainEqual(expect.stringMatching(/^Agents/))
+      await act(async () => root.unmount())
+    })
+})

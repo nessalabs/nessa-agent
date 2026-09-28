@@ -61,7 +61,7 @@ body {
    * host's (the traffic lights, `--desktop-window-controls-inset`) and ours
    * (the sidebar toggle, Back, Forward and one more: four controls). Every
    * titlebar-row element starts at or after it; nothing draws beneath the
-   * window controls (ADR 238, `titlebar.test.ts`).
+   * window controls (ADR 238, `styles.test.ts`).
    */
   --desktop-titlebar-cluster: calc(4 * var(--desktop-control-size) + 3 * 2px);
   --desktop-titlebar-safe-start: calc(
@@ -1047,6 +1047,61 @@ html:not(.dark) [data-surface] {
 
 .desktop-home[data-page] .desktop-header-controls {
   display: none;
+}
+
+/*
+ * A conversation pane's sliver of the header (`HeaderSliver`): the same
+ * scene or picture, low and quiet behind the pane's header and the top of its
+ * transcript, fading out downward into the pane. It stays where it is while
+ * the transcript scrolls — the calmer of the two: nothing in it moves as the
+ * person reads — and sits beneath every word, dimmed and desaturated so the
+ * text over it keeps its contrast. It shrinks with a short pane and goes
+ * below 220px; an unfocused pane dims it with itself.
+ */
+.desktop-header[data-sliver] {
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: min(calc(var(--desktop-titlebar-height) + 56px), 24cqh);
+  justify-content: flex-end;
+  overflow: clip;
+  opacity: 0.38;
+  filter: saturate(0.7);
+  pointer-events: none;
+  mask-image:
+    linear-gradient(to right, transparent, black 12%, black 88%, transparent),
+    linear-gradient(to bottom, black 20%, transparent);
+  mask-composite: intersect;
+}
+
+.desktop-header[data-sliver] > * {
+  flex-shrink: 0;
+  margin-bottom: 0;
+}
+
+/* A picture fills the band, framed as the home header frames it. */
+.desktop-header[data-sliver] .desktop-header-image {
+  height: 100%;
+  mask-image: none;
+}
+
+.desktop-night-scene[data-still] .desktop-night-scene-rain > span,
+.desktop-night-scene[data-still] .desktop-night-scene-steam > span {
+  animation: none;
+}
+
+.workspace-panes[data-multi]
+  .workspace-pane:not([data-focused])
+  .desktop-header[data-sliver] {
+  opacity: 0.24;
+}
+
+@container workspace-pane (max-height: 219px) {
+  .desktop-header[data-sliver] {
+    display: none;
+  }
 }
 
 .desktop-home-inner {

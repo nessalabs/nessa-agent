@@ -77,6 +77,19 @@ html:not(.dark) .workspace-sidebar {
     visibility 0s;
 }
 
+/*
+ * The sidebar's titlebar row: its own action, in the glass's top corner, and
+ * never under the window's controls, which stand over the sidebar — at its
+ * narrowest the action is pushed past its edge and clipped, rather than drawn
+ * beneath them.
+ */
+.workspace-sidebar > .desktop-column-bar {
+  height: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
+  align-items: flex-start;
+  padding: var(--desktop-control-inset);
+  padding-left: calc(var(--desktop-titlebar-safe-start) - var(--desktop-gutter));
+}
+
 .workspace-sidebar-scroll {
   flex: 1;
   min-width: 200px;

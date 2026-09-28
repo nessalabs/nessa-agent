@@ -39,6 +39,13 @@ import type { SessionTag } from "../model/filter"
 import type { Transcript } from "../../../workspace/model/transcript"
 import type { Answer } from "../model/request"
 
+/**
+ * Whether the overview or the panes fill the content region, and the way to
+ * say which: the workspace's own, since leaving the overview for anywhere
+ * else is its rule (`navigated`).
+ */
+export { selectContentView, showContent } from "../../../workspace"
+
 type Root = Pick<DesktopState, "workspace">
 
 /** A record keyed by an id from outside this module, read for what it holds. */
@@ -83,11 +90,11 @@ export const selectHeldConversation = (
 export const selectChannelName = (state: Root, channelId: string) =>
   state.workspace.channels.find((channel) => channel.id === channelId)?.name
 
-/** The session in the focused pane, so opening one elsewhere can put the overview away. */
+/** The session in the focused pane. */
 export const selectFocusedSessionId = (state: Root): string | null =>
   state.workspace.panes ? focusedPane(state.workspace.panes).sessionId : null
 
-/** Whether the workspace has read its overview and can list sessions. */
+/** Whether the workspace has read its index and can list sessions. */
 export const selectReady = (state: Root) => state.workspace.status === "ready"
 
 /** What a read of a session's conversation came to. */

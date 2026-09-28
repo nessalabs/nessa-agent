@@ -49,6 +49,7 @@ export const {
   equalizePanes,
   selectChannel,
   selectStatusView,
+  showContent,
   revealSession,
   toggleSection,
   toggleChannel,

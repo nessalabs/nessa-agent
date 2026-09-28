@@ -21,7 +21,9 @@ import {
 } from "../../adapters/store/selectors"
 import { measureArrival, type Arrival } from "../../adapters/dom/arrival"
 import { focusedPaneAttribute } from "../../adapters/dom/focus"
-import { durationToken } from "../../adapters/dom/motion"
+import { durationToken } from "../../../adapters/motion"
+import { usePictureInConversationsPreference } from "../../../adapters/window-preferences"
+import { HeaderSliver } from "../../../ui/header-art"
 import type { PanePlacement } from "../../model/pane-sizing"
 import { Conversation, PaneHome } from "./conversation"
 import { PaneHeader } from "./pane-header"
@@ -127,6 +129,8 @@ export const Pane = memo(function Pane({
   }, [])
 
   const showHome = draft || arrival !== null
+  const [picture] = usePictureInConversationsPreference()
+  const pictured = picture === "on"
   return (
     <article
       className="workspace-pane"
@@ -146,6 +150,9 @@ export const Pane = memo(function Pane({
           dispatch(focusPane({ pane: key }))
       }}
     >
+      {pictured && filled && listed && !showHome ? (
+        <HeaderSliver moving={focused} />
+      ) : null}
       <PaneHeader
         pane={key}
         sessionId={sessionId}

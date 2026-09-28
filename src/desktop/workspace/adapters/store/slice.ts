@@ -15,7 +15,11 @@ import type { AttentionStatus } from "../../model/session-groups"
 import type { Message, Transcript } from "../../model/transcript"
 import type { WorkspaceUpdate } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
-import { initialWorkspace, type WorkspaceState } from "../../application/workspace-state"
+import {
+  initialWorkspace,
+  type ContentView,
+  type WorkspaceState,
+} from "../../application/workspace-state"
 import * as navigation from "../../application/usecases/navigation"
 import * as panes from "../../application/usecases/panes"
 import * as sessions from "../../application/usecases/sessions"
@@ -102,6 +106,8 @@ const workspaceSlice = createSlice({
     ) => panes.createDraft(state, payload),
 
     // Navigation
+    showContent: (state, { payload }: Payload<{ content: ContentView }>) =>
+      navigation.showContent(state, payload),
     selectChannel: (state, { payload }: Payload<{ channelId: string }>) =>
       navigation.selectChannel(state, payload),
     selectStatusView: (state, { payload }: Payload<{ status: AttentionStatus }>) =>
@@ -215,4 +221,27 @@ const workspaceSlice = createSlice({
 })
 
 export const workspaceActions = workspaceSlice.actions
-export const workspaceReducer = workspaceSlice.reducer
+
+/**
+ * The actions that go somewhere: a session, a channel, a status view, a new
+ * session, another pane. Each leaves the Agents overview for the panes
+ * (`navigated`), whoever dispatched it — the sidebar, the switcher, a key,
+ * the overview's own Open, or an agent.
+ */
+const goesSomewhere: ReadonlySet<string> = new Set(
+  [
+    workspaceActions.focusPane,
+    workspaceActions.openSession,
+    workspaceActions.openedBeside,
+    workspaceActions.sessionDropped,
+    workspaceActions.draftCreated,
+    workspaceActions.selectChannel,
+    workspaceActions.selectStatusView,
+    workspaceActions.channelOpened,
+  ].map((action) => action.type),
+)
+
+export const workspaceReducer: typeof workspaceSlice.reducer = (state, action) => {
+  const next = workspaceSlice.reducer(state, action)
+  return goesSomewhere.has(action.type) ? navigation.navigated(next) : next
+}

@@ -2,6 +2,7 @@ import { memo } from "react"
 import { shallowEqual } from "react-redux"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
+  selectContentView,
   selectFocusedSessionId,
   selectSession,
   selectShownSessionIds,
@@ -33,7 +34,10 @@ export const ThreadRow = memo(function ThreadRow({
   const { open, focused } = useWorkspaceSelector(
     (state) => ({
       open: selectShownSessionIds(state).includes(sessionId),
-      focused: selectFocusedSessionId(state) === sessionId,
+      // The focused pane's, while the panes are shown rather than the Agents overview.
+      focused:
+        selectFocusedSessionId(state) === sessionId &&
+        selectContentView(state) === "panes",
     }),
     shallowEqual,
   )

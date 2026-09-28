@@ -20,32 +20,37 @@ collides with anything and is the name used below.
 | `adapters/workspace-bridge.ts` | deleted: its selectors move to `adapters/store/selectors.ts`, and its two thunks are replaced by the workspace's own commands (below) |
 | `adapters/preference.ts` (filter) | deleted: the filter becomes slice state (below) |
 | `ui/*` | `ui/overview/` (`overview.tsx`, `request-row.tsx`, `session-row.tsx`, `session-peek.tsx`, `reply-pill.tsx`, `filter-menu.tsx`, `all-clear.tsx`, `overview-keys.ts`, `overview.css`, `overview.test.tsx`) |
-| `ui/overview-scope.tsx` | split: the entry becomes `ui/source-list/overview-row.tsx`; the area becomes `ui/panes/overview-area.tsx`; the scope and its context go away (the slice holds `open`, and the shell reads `selectOverviewOpen` for `data-content`) |
+| `ui/overview-scope.tsx` | split: the entry becomes `ui/source-list/overview-row.tsx`; the area becomes `ui/panes/overview-area.tsx`; the scope and its context go away (the slice holds `content`, which the scope already reads through `selectContentView`) |
 
 ## State: named actions per ADR 0001
 
 `application/workspace-state.ts`:
 
 ```ts
+// Already there: `content: ContentView` ("panes" | "agents"), the content
+// region's view — the overview's open state — with `showContent` and the
+// `navigated` rule. The rest is still to come:
 export interface OverviewState {
-  readonly open: boolean
   /** The session the peek shows; kept even when a filter hides it. */
   readonly selected: string | null
   readonly filter: AgentsFilter // from model/overview/filter.ts
 }
 // WorkspaceState gains: readonly overview: OverviewState
-// initialWorkspace: overview: { open: false, selected: null, filter: defaultFilter }
+// initialWorkspace: overview: { selected: null, filter: defaultFilter }
 ```
 
 `application/usecases/overview.ts` (new, pure) and `adapters/store/slice.ts`
 add these actions, re-exported from `commands.ts`:
 
-- `showOverview({ open?: boolean })`: toggles when `open` is absent.
+- `showContent({ content })` — already applied: the overview is open while
+  `content` is `"agents"`, and asking again keeps it (the sidebar's entry is
+  a place, not a switch). `showOverview` below means this, and `selectOverviewOpen` means
+  `selectContentView(state) === "agents"`.
 - `selectInOverview({ sessionId })`: an id not listed is not selected.
 - `filterOverview({ filter })`.
-- Rule (use case): a change of the focused pane's session (`openSession`,
-  `newSession`, …) sets `overview.open = false`. It is written once, in the
-  reducer, not in a component.
+- Rule (use case) — already applied: every action that goes somewhere
+  (`openSession`, `newSession`, a channel, a status view, focusing a pane, …)
+  goes back to the panes (`navigated`, applied once in `slice.ts`).
 
 The filter stays remembered, as it is now. The slice owns it, and a listener
 effect in `effects.ts` writes each change to the stored preference key the
@@ -184,9 +189,9 @@ glance selector.
 1. **The Settings toggle:** does "Agents overview" stay under Experimental
    until the user flips it, or go away so the view is always there?
 2. **Tags in the filter menu** are a labelled section ("Tags" / "No tags
-   yet"), not a submenu. The design system's submenu reported itself open
-   but never drew in this window. That needs looking at in `ui/menu/` before
-   tags have data. The typed seam is `SessionTag`, `AgentsFilter.tags`, and
+   yet"), not a submenu. The submenu that reported itself open but never drew
+   is fixed in `ui/menu/` (its surface is portalled beside the menu), so tags
+   can become a submenu once they have data. The typed seam is `SessionTag`, `AgentsFilter.tags`, and
    the bridge's `sessionTags` / `tagsOf`; a tagged summary fills it.
 3. **Replying while an approval waits sets the approval aside.** This is the
    port's rule: a message moves the turn on. The pill says so. Keep it, or

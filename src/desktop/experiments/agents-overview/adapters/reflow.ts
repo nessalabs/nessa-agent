@@ -72,12 +72,14 @@ export function useReflow(list: RefObject<HTMLElement | null>): void {
 
   useLayoutEffect(() => {
     const element = list.current
-    if (!element) return
-    const now = places(element)
+    // The first layout is the page arriving, which has its own motion: it is
+    // not read here, where reading would lay the page out early — the
+    // observer below takes it once the page has laid out on its own.
     const was = before.current
+    if (!element || !was) return
+    const now = places(element)
     before.current = now
-    // The first layout is the page arriving, which has its own motion.
-    if (!was || typeof element.animate !== "function") return
+    if (typeof element.animate !== "function") return
     const duration = durationOf(element, "--desktop-slow")
     if (duration === 0) return
     const easing = token(element, "--desktop-out", "ease-out")

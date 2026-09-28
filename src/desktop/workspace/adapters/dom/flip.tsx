@@ -21,8 +21,9 @@
  * stylesheet uses to pause blur and large shadows.
  */
 import { Component, type ReactNode, type RefObject } from "react"
+import { slideAnimation } from "../../../adapters/hold-still"
 import { letGoOfDragPreview } from "./drag"
-import { durationToken, motionToken } from "./motion"
+import { durationToken, motionToken } from "../../../adapters/motion"
 
 type Rects = { panes: Map<string, DOMRect>; slides: Map<string, DOMRect> }
 
@@ -42,14 +43,28 @@ const moved = (a: DOMRect, b: DOMRect) =>
   Math.abs(a.width - b.width) >= 0.5 ||
   Math.abs(a.height - b.height) >= 0.5
 
+/** A pane where it landed, read with everything else before any flight starts. */
+interface Landed {
+  readonly pane: HTMLElement
+  readonly to: DOMRect
+  /** Each child and where it sits in the pane. */
+  readonly children: readonly { element: HTMLElement; top: number }[]
+}
+
 /**
  * FLIP with scale correction: the pane's box travels and resizes from `from`
  * to `to` by transform, while its children counter-scale on the same curve,
  * so the text, laid out once at its final size, never stretches. Both scale
  * about the pane's centre, so what is centred in it glides from its old
- * centre to its new one.
+ * centre to its new one. It only writes: what it needs of the page was read
+ * beforehand (`Landed`), so flights begun one after another never make the
+ * page lay out again between them.
  */
-export function flyPane(pane: HTMLElement, from: DOMRect, to: DOMRect): Animation[] {
+export function flyPane(
+  { pane, to, children }: Landed,
+  from: DOMRect,
+  duration: number,
+): Animation[] {
   const steps = 14
   const ease = (t: number) => 1 - Math.pow(1 - t, 3.2)
   const dx = from.left + from.width / 2 - (to.left + to.width / 2)
@@ -67,32 +82,30 @@ export function flyPane(pane: HTMLElement, from: DOMRect, to: DOMRect): Animatio
     })
     inner.push({ transform: `scale(${1 / x}, ${1 / y})` })
   }
-  const timing: KeyframeAnimationOptions = {
-    duration: durationToken(pane, "--desktop-flight"),
-    easing: "linear",
-  }
+  const timing: KeyframeAnimationOptions = { duration, easing: "linear" }
   pane.style.transformOrigin = "50% 50%"
   // A pane that changes size lays its header out at the size it lands at,
   // so mid-flight its controls would float inside the box, or be cut off at
   // its edge; it waits out of sight and comes back as the pane lands.
   const resized = Math.abs(sx - 1) > 0.02 || Math.abs(sy - 1) > 0.02
-  const header = pane.querySelector<HTMLElement>(":scope > .workspace-pane-header")
+  const header = children.find(({ element }) =>
+    element.classList.contains("workspace-pane-header"),
+  )?.element
   const hiding =
     resized && header
       ? [
-          header.animate([{ opacity: 0 }, { opacity: 0, offset: 0.7 }, { opacity: 1 }], {
-            duration: durationToken(pane, "--desktop-flight"),
-            easing: "linear",
-          }),
+          header.animate(
+            [{ opacity: 0 }, { opacity: 0, offset: 0.7 }, { opacity: 1 }],
+            timing,
+          ),
         ]
       : []
   return [
     ...hiding,
     pane.animate(box, timing),
-    ...Array.from(pane.children, (child) => {
-      const element = child as HTMLElement
+    ...children.map(({ element, top }) => {
       // The pane's centre, in the child's own box.
-      element.style.transformOrigin = `${to.width / 2}px ${to.height / 2 - element.offsetTop}px`
+      element.style.transformOrigin = `${to.width / 2}px ${to.height / 2 - top}px`
       return element.animate(inner, timing)
     }),
   ]
@@ -103,33 +116,46 @@ function play(root: HTMLElement, from: Rects): Animation[] {
   const shifted = new Map<HTMLElement, number>()
   const ease = motionToken(root, "--desktop-ease") ?? "linear"
   const duration = durationToken(root, "--desktop-slow")
-  root
-    .querySelectorAll<HTMLElement>('[data-flip="slide"][data-flip-id]')
-    .forEach((element) => {
-      const before = from.slides.get(element.dataset.flipId ?? "")
-      // Only what is on screen slides; a column folding away has its own transition.
-      if (!before || element.closest("[inert]")) return
-      const outer = element.parentElement?.closest<HTMLElement>('[data-flip="slide"]')
-      const carried = (outer && shifted.get(outer)) ?? 0
-      const dx = before.left - element.getBoundingClientRect().left
-      shifted.set(element, dx)
-      const own = dx - carried
-      if (Math.abs(own) < 0.5) return
-      flying.push(
-        element.animate([{ transform: `translateX(${own}px)` }, { transform: "none" }], {
-          duration,
-          easing: ease,
-        }),
-      )
-    })
-  root
-    .querySelectorAll<HTMLElement>('[data-flip="pane"][data-flip-id]')
-    .forEach((pane) => {
-      const before = from.panes.get(pane.dataset.flipId ?? "")
-      if (!before) return
-      const after = pane.getBoundingClientRect()
-      if (moved(before, after)) flying.push(...flyPane(pane, before, after))
-    })
+  const flight = durationToken(root, "--desktop-flight")
+  // Where everything landed, read before anything starts: a slide begun first
+  // would be read back into the place of what it carries, and every write
+  // between two reads lays the page out again.
+  const landed = [
+    ...root.querySelectorAll<HTMLElement>('[data-flip="slide"][data-flip-id]'),
+  ].map((element) => ({ element, after: element.getBoundingClientRect() }))
+  const panes = [
+    ...root.querySelectorAll<HTMLElement>('[data-flip="pane"][data-flip-id]'),
+  ].map((pane): Landed => ({
+    pane,
+    to: pane.getBoundingClientRect(),
+    children: Array.from(pane.children, (child) => ({
+      element: child as HTMLElement,
+      top: (child as HTMLElement).offsetTop,
+    })),
+  }))
+  landed.forEach(({ element, after }) => {
+    const before = from.slides.get(element.dataset.flipId ?? "")
+    // Only what is on screen slides; a column folding away has its own transition.
+    if (!before || element.closest("[inert]")) return
+    const outer = element.parentElement?.closest<HTMLElement>('[data-flip="slide"]')
+    const carried = (outer && shifted.get(outer)) ?? 0
+    const dx = before.left - after.left
+    shifted.set(element, dx)
+    const own = dx - carried
+    if (Math.abs(own) < 0.5) return
+    flying.push(
+      element.animate([{ transform: `translateX(${own}px)` }, { transform: "none" }], {
+        duration,
+        easing: ease,
+        id: slideAnimation,
+      }),
+    )
+  })
+  panes.forEach((landedPane) => {
+    const before = from.panes.get(landedPane.pane.dataset.flipId ?? "")
+    if (before && moved(before, landedPane.to))
+      flying.push(...flyPane(landedPane, before, flight))
+  })
   return flying
 }
 

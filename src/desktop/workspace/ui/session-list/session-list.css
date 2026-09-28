@@ -42,6 +42,19 @@
   left: calc(2 * var(--desktop-gutter) + var(--workspace-sidebar-width));
 }
 
+/*
+ * The list's head (`ui/column-header.tsx`). An inline title starts where the
+ * list's content does; with the sidebar away the list begins at the window's
+ * edge, under the window's controls, so it starts after them.
+ */
+.workspace-list .desktop-column-bar {
+  padding-left: 12px;
+}
+
+.workspace[data-sidebar="closed"] .workspace-list .desktop-column-bar {
+  padding-left: var(--desktop-titlebar-safe-start);
+}
+
 .workspace-search {
   display: flex;
   height: 32px;

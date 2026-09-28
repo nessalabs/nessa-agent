@@ -19,9 +19,31 @@ import {
   listedSessions,
   sessionOf,
   toggled,
+  type ContentView,
   type WorkspaceState,
 } from "../workspace-state"
 import { createDraft, openBeside, openSession } from "./panes"
+
+/**
+ * Shows the panes or the Agents overview in the content region. Asking for
+ * the one already shown leaves it: the sidebar's Agents entry is a place to
+ * go, like a channel, not a switch.
+ */
+export function showContent(
+  state: WorkspaceState,
+  { content }: { content: ContentView },
+): WorkspaceState {
+  return state.content === content ? state : { ...state, content }
+}
+
+/**
+ * Going somewhere — a session, a channel, a status view, a new session,
+ * another pane — is going to the panes: the one rule every way there
+ * follows, applied by the store to each of them (`adapters/store/slice.ts`).
+ */
+export function navigated(state: WorkspaceState): WorkspaceState {
+  return showContent(state, { content: "panes" })
+}
 
 /**
  * Shows a channel's sessions in the list. With the list hidden, choosing a
