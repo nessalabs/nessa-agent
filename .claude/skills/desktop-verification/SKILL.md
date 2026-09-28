@@ -60,10 +60,9 @@ Iterate on the quick tier, then run the whole set once:
   line; perf prints a table (max, median, frames over 50 ms, each run).
 - stdout / `--out`: the JSON; each result keeps its detail (a focus trail,
   the frames that broke, LoAF attribution for slow frames).
-- Exit `1` is a broken contract. Exit `2` is "could not run": a selector not
-  found, a browser missing, the server down. It is **not** a pass and not a
-  finding about the product — read the message; if the UI moved, update
-  `lib/selectors.mjs` (the only file that names selectors, keys and storage).
+- Exit codes are in [`verification/README.md` › Output](../../../verification/README.md#output).
+  Exit `2` is not a pass: read the message; if the UI moved, update
+  `lib/selectors.mjs`.
 - perf: trust a row only after `calibration` held. Report max **and** median
   over several runs; attribute every over-budget frame from its LoAF entry
   (script, source position, forced layout) before proposing a fix. Numbers
@@ -84,8 +83,8 @@ Chromium-only. When a failure is WebKit-only:
    differs from WKWebView in places (pointer events outside the viewport).
    Reproduce it in the app (`pnpm app`) before calling it a bug, and say which
    you did.
-3. An intermittent WebKit failure is re-run at least twice; report the count
-   ("failed 1 of 3") rather than dropping it.
+3. For an intermittent WebKit failure, re-run it a few times and report the
+   count ("failed 1 of 3"), so the report says how often rather than whether.
 
 ## 5. Prove the check bites (revert probe)
 
@@ -100,17 +99,17 @@ A check that passes against the bug proves nothing. For a fix, or a new check:
    the check once more — it holds.
 
 This is [evidence and closure](../../../CODING_STANDARDS.md#evidence-and-closure)'s
-revert rule applied to browser checks. Never do it on files another agent is
-editing; ask first.
+revert rule applied to browser checks. A revert changes the tree others may be
+building from: do it in a tree only you are editing, or agree it first.
 
 ## 6. Turn a reviewer's reproduction into a script
 
 A reviewer's scratch script that found a real bug belongs under
 `verification/desktop/scripts/`: port it onto `lib/` (`openPage`, `need`,
-`attempt`, the samplers), move its selectors into `lib/selectors.mjs`, make it
-assert numbers (rects, frame times, the active element, zone sequences)
-rather than print them, and add its item to CHECKLIST.md. Then do the revert
-probe above to show it catches the bug.
+`attempt`, the samplers, the condition waits), move its selectors into
+`lib/selectors.mjs`, make it assert numbers (rects, frame times, the active
+element, zone sequences) rather than print them, and add its item to
+CHECKLIST.md. Then do the revert probe above to show it catches the bug.
 
 ## 7. Report
 
