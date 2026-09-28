@@ -21,7 +21,7 @@ export type AgentsApi = {
   installOptions(): Promise<AgentInstallOptionsResult>
   /** Download the pinned runtime on explicit request. A lost response does not
    * cancel installation; refresh installOptions before making a new attempt.
-   * requestId must satisfy the product schema's nonempty UTF-8 byte bound
+   * requestId must be well-formed Unicode and satisfy the product schema's nonempty UTF-8 byte bound
    * published by AgentInstallParams; invalid IDs are rejected before sending.
    * The gateway retains this attempt ID with authenticated audit attribution.
    */

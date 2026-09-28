@@ -120,6 +120,8 @@ it("rejects invalid invocation IDs before dispatch and preserves bounded IDs", a
     "x".repeat(limit + 1),
     "é".repeat(Math.floor(limit / 2)) + "x",
     "x".repeat(4097),
+    "\uD800",
+    "\uDC00",
   ]) {
     await expect(api.install("claude", requestId)).rejects.toThrow(
       "Invalid agent installation request ID",
@@ -133,6 +135,7 @@ it("rejects invalid invocation IDs before dispatch and preserves bounded IDs", a
     "\u007f".repeat(limit),
     "\u0085".repeat(Math.floor(limit / 2)),
     "\\".repeat(limit),
+    "\uD83D\uDCA9",
   ]) {
     expect(await api.install("claude", requestId)).toEqual(result)
     expect(request).toHaveBeenLastCalledWith(
