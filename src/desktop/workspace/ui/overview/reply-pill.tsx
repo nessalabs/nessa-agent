@@ -43,15 +43,12 @@ const pillLines = 4
 export function ReplyPill({
   sessionId,
   agent,
-  note,
   fieldRef,
   onLeave,
 }: {
   sessionId: string
   /** Who it goes to, as the placeholder says: "Reply to Codex…". */
   agent: string
-  /** A line under the pill, where replying does something the person should know. */
-  note?: string
   fieldRef?: RefObject<HTMLTextAreaElement | null>
   onLeave: () => void
 }) {
@@ -144,8 +141,6 @@ export function ReplyPill({
         <p className="agents-reply-note" role="status">
           Sending…
         </p>
-      ) : note ? (
-        <p className="agents-reply-note">{note}</p>
       ) : null}
     </div>
   )

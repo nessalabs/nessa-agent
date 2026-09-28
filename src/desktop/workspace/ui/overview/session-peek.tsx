@@ -77,11 +77,6 @@ export const SessionPeek = memo(function SessionPeek({
       agent={agent}
       fieldRef={replyRef}
       onLeave={onLeaveReply}
-      note={
-        approval && !settling
-          ? "Sending a reply sets this request aside without running it."
-          : undefined
-      }
     />
   )
 

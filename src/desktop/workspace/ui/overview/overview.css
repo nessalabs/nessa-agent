@@ -111,10 +111,11 @@ html:not(.dark) .agents-overview-surface {
 .agents-overview-title {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
 }
 
-/* What is listed, beside the title: a quiet chip, like the composer's. */
+/* What is listed, at the right end of the title's row: a quiet chip, like the composer's. */
 .agents-filter {
   display: inline-flex;
   height: 24px;
