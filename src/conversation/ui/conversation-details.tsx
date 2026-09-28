@@ -119,7 +119,7 @@ function ConversationFacts({ conversation }: { conversation: Conversation }) {
       {remote ? (
         <FactGroup title="Model">
           {runtime ? (
-            <Fact label="Context window" value={tokens(runtime.contextWindowTokens)} />
+            <Fact label="Model max context" value={tokens(runtime.contextWindowTokens)} />
           ) : null}
           {runtime ? (
             <Fact label="Reasoning" value={runtime.reasoning ? "On" : "Off"} />

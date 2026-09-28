@@ -133,16 +133,36 @@ async fn stale_claude_mode_notification_after_verified_change_fails_the_generati
 }
 
 #[test]
-fn unverified_claude_model_cannot_select_automatic_review() {
-    let (_root, config, model) = test_acp_configuration("echo", 16);
-    let binding = ClaudeAcpProvider::new(
-        config,
-        &model,
-        TokenLimits::new(900, 100).unwrap(),
-        Arc::new(RecordingAudit::default()),
-    )
-    .unwrap();
-    assert!(binding.with_approval_mode(ApprovalMode::Auto).is_err());
+fn unverified_claude_models_cannot_select_elevated_presets() {
+    for model_id in [
+        "claude-opus-5",
+        "claude-fable-5-1",
+        "claude-haiku-4-5-20251001",
+        "unknown-model",
+    ] {
+        for mode in [ApprovalMode::Ask, ApprovalMode::Auto, ApprovalMode::Full] {
+            let (_root, config, fixture_model) = test_acp_configuration("echo", 16);
+            let mut metadata = ModelMetadataDto::from(&fixture_model);
+            metadata.model_id = model_id.into();
+            let model = ModelMetadata::try_from(metadata).unwrap();
+            let binding = ClaudeAcpProvider::new(
+                config,
+                &model,
+                TokenLimits::new(900, 100).unwrap(),
+                Arc::new(RecordingAudit::default()),
+            )
+            .unwrap();
+            let result = binding.with_approval_mode(mode);
+            if mode == ApprovalMode::Ask {
+                assert!(result.is_ok(), "{model_id}");
+            } else {
+                assert!(
+                    matches!(result, Err(AgentError::Unsupported(_))),
+                    "{model_id}"
+                );
+            }
+        }
+    }
 }
 
 #[tokio::test]

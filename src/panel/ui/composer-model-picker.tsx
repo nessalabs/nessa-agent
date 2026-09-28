@@ -50,7 +50,7 @@ function groups(
       models: entry.models.map((model) => ({
         id: model.modelId,
         label: model.displayName,
-        description: `${contextLabel(model.maxContextWindowTokens)} context`,
+        description: `${contextLabel(model.maxContextWindowTokens)} model max`,
         icon: mark,
       })),
     }

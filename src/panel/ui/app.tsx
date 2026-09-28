@@ -63,7 +63,7 @@ import { useContentDrop } from "./use-content-drop"
 import { useHostDrop } from "./use-host-drop"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
-import { ComposerTray } from "./composer-tray"
+import { approvalLabel, ComposerTray } from "./composer-tray"
 import { ComposerModelPicker } from "./composer-model-picker"
 import {
   useBindCatalogFallback,
@@ -182,12 +182,8 @@ export function App({
       ? selection.approvalMode
       : "ask"
   const modeChange = chat.active.remote?.approvalModeChange
-  const requestedModeName =
-    chat.active.remote?.approvalModes?.find(
-      (choice) => choice.id === modeChange?.requestedMode,
-    )?.name ?? modeChange?.requestedMode
   const modeStatus = modeChange
-    ? `${modeChange.status === "recovery_required" ? "Recovery required" : "Changing"}: ${requestedModeName}`
+    ? `${modeChange.status === "recovery_required" ? "Recovery required" : "Changing"}: ${approvalLabel(modeChange.requestedMode)}`
     : undefined
   const [tabDetails, setTabDetails] = React.useState<{
     id: string

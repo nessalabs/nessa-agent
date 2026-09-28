@@ -99,4 +99,22 @@ fn agent_catalog_uses_binding_choices_for_each_catalog_model() {
     }
     assert_eq!(offered.agents[0].agent, "claude");
     assert_eq!(offered.agents[1].agent, "codex");
+    for agent in &offered.agents {
+        for model in &agent.models {
+            let ids: Vec<_> = model
+                .approval_modes
+                .iter()
+                .map(|choice| choice.id)
+                .collect();
+            let expected = match model.model_id.as_str() {
+                "claude-sonnet-5" | "gpt-6-astra" => vec![
+                    WireApprovalMode::Ask,
+                    WireApprovalMode::Auto,
+                    WireApprovalMode::Full,
+                ],
+                _ => vec![WireApprovalMode::Ask],
+            };
+            assert_eq!(ids, expected, "{} {}", agent.agent, model.model_id);
+        }
+    }
 }

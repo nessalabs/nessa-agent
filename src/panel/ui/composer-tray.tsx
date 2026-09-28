@@ -15,6 +15,17 @@ export interface TrayApproval {
 
 type Page = "root" | "approval" | "confirm-full"
 
+export function approvalLabel(mode: ApprovalMode): string {
+  switch (mode) {
+    case "ask":
+      return "Ask"
+    case "auto":
+      return "Auto"
+    case "full":
+      return "Full"
+  }
+}
+
 /**
  * What full access lets the agent do, said before it is turned on. Plain
  * consequences, not a policy: the person decides with these in front of them.
@@ -260,8 +271,7 @@ export function ComposerTray({
                         : "text-muted-foreground"
                     }
                   >
-                    {approval.modes.find((choice) => choice.id === approval.mode)?.name ??
-                      approval.mode}
+                    {approvalLabel(approval.mode)}
                   </span>
                   <ChevronRight
                     aria-hidden="true"
@@ -334,12 +344,11 @@ export function ComposerTray({
                       role="radio"
                       aria-checked={chosen}
                       aria-labelledby={`${trayId}-${choice.id}-name`}
-                      aria-describedby={`${trayId}-${choice.id}-says`}
                       data-tray-focus={`mode-${choice.id}`}
                       // One stop in the tab order: the checked mode.
                       tabIndex={chosen ? 0 : -1}
                       disabled={approval.disabled}
-                      className={`${ROW} items-start`}
+                      className={ROW}
                       onClick={() => {
                         // Turning full access on asks first; every other
                         // choice, including leaving full access, does not.
@@ -351,27 +360,14 @@ export function ComposerTray({
                         if (!chosen) approval.onChange(choice.id)
                       }}
                     >
-                      <span className="flex flex-1 flex-col gap-0.5">
-                        <span
-                          id={`${trayId}-${choice.id}-name`}
-                          className={
-                            choice.id === "full" ? "text-destructive" : undefined
-                          }
-                        >
-                          {choice.name}
-                        </span>
-                        <span
-                          id={`${trayId}-${choice.id}-says`}
-                          className="nessa-text-2 text-muted-foreground"
-                        >
-                          {choice.description}
-                        </span>
+                      <span
+                        id={`${trayId}-${choice.id}-name`}
+                        className={`flex-1 ${choice.id === "full" ? "text-destructive" : ""}`}
+                      >
+                        {approvalLabel(choice.id)}
                       </span>
                       {chosen ? (
-                        <Check
-                          aria-hidden="true"
-                          className="mt-0.5 size-4 text-foreground"
-                        />
+                        <Check aria-hidden="true" className="size-4 text-foreground" />
                       ) : null}
                     </button>
                   )
