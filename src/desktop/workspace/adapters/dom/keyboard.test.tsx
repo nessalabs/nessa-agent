@@ -7,7 +7,7 @@
 import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { describe, expect, it } from "vitest"
-import { movePane, singlePane, splitPane } from "../../model/pane-layout"
+import { movePane, singlePane, splitPane } from "../../../split-panes/model/pane-layout"
 import { ResizeEdge } from "../../ui/chrome/resize-edge"
 import { contextMenuFromKey } from "./context-menu-key"
 import { paneTabOrder } from "./pane-tab-order"

@@ -10,7 +10,7 @@ import {
 import { closePane } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectSession } from "../../adapters/store/selectors"
-import type { PaneKey } from "../../model/pane-layout"
+import type { PaneKey } from "../../../split-panes/model/pane-layout"
 import { AgentTile } from "../chrome/agent-tile"
 import { IconButton } from "../chrome/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"

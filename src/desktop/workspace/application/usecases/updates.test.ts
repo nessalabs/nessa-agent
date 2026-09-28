@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { panesOf, paneShowing } from "../../model/pane-layout"
+import { panesOf, paneShowing } from "../../../split-panes/model/pane-layout"
 import { retention } from "../../model/retention"
 import { emptyTranscript, type Transcript } from "../../model/transcript"
 import { astra, roomyGrid as roomy, summary, testIndex } from "../../testing"

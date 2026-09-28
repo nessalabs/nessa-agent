@@ -20,10 +20,10 @@ import {
   openBeside,
   showContent,
 } from "../store/commands"
-import { panesOf } from "../../model/pane-layout"
+import { panesOf } from "../../../split-panes/model/pane-layout"
 import { fakeSource, settle, testStore } from "../../testing"
-import { restAfter } from "../../model/drop"
-import type { WorkspaceRoom } from "../../model/pane-sizing"
+import { restAfter } from "../../../split-panes/model/drop"
+import type { WorkspaceRoom } from "../../../split-panes/model/pane-sizing"
 import { measureWorkspace } from "./measure"
 import { saying, useWorkspaceDrag } from "./drag"
 

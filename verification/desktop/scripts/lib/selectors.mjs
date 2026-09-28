@@ -119,7 +119,7 @@ export const safeAreaTokens = {
  * imported in the page through the dev server — so only with `--mode dev`.
  */
 export const modules = {
-  drop: "/src/desktop/workspace/model/drop.ts",
+  drop: "/src/desktop/split-panes/model/drop.ts",
 }
 
 /** localStorage keys the scripts seed before the page loads. */

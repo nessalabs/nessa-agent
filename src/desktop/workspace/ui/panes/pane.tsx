@@ -24,7 +24,7 @@ import { focusedPaneAttribute } from "../../adapters/dom/focus"
 import { durationToken } from "../../../adapters/motion"
 import { usePictureInConversationsPreference } from "../../../adapters/window-preferences"
 import { HeaderSliver } from "../../../ui/header-art"
-import type { PanePlacement } from "../../model/pane-sizing"
+import type { PanePlacement } from "../../../split-panes/model/pane-sizing"
 import { Conversation, PaneHome } from "./conversation"
 import { PaneHeader } from "./pane-header"
 

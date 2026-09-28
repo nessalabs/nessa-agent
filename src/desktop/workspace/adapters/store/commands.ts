@@ -16,7 +16,7 @@ import {
   type PaneKey,
   type Side,
   type Zone,
-} from "../../model/pane-layout"
+} from "../../../split-panes/model/pane-layout"
 import { messageText, type Message } from "../../model/transcript"
 import {
   failureReason,
@@ -38,12 +38,16 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import * as panesUseCases from "../../application/usecases/panes"
-import { dropOutcome, type Carried, type DropOutcome } from "../../model/drop"
+import {
+  dropOutcome,
+  type Carried,
+  type DropOutcome,
+} from "../../../split-panes/model/drop"
 import {
   edgeSides as edgeSidesIn,
   type PaneEdge,
   type WorkspaceRoom,
-} from "../../model/pane-sizing"
+} from "../../../split-panes/model/pane-sizing"
 import { workspaceActions } from "./slice"
 
 export const {

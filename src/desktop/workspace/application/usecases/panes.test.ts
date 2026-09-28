@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { dropOutcome } from "../../model/drop"
-import { focusedPane, paneCount, panesOf, paneLimits } from "../../model/pane-layout"
+import { dropOutcome } from "../../../split-panes/model/drop"
+import {
+  focusedPane,
+  paneCount,
+  panesOf,
+  paneLimits,
+} from "../../../split-panes/model/pane-layout"
 import { astra, roomyGrid, summary, testIndex } from "../../testing"
 import { initialWorkspace, type WorkspaceState } from "../workspace-state"
 import {

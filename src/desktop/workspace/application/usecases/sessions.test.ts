@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { panesOf } from "../../model/pane-layout"
+import { panesOf } from "../../../split-panes/model/pane-layout"
 import type { Message } from "../../model/transcript"
 import { emptyTranscript } from "../../model/transcript"
 import { astra, summary, testIndex } from "../../testing"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { focusedPane, panesOf } from "../../model/pane-layout"
+import { focusedPane, panesOf } from "../../../split-panes/model/pane-layout"
 import { sessionListLimits, sidebarLimits } from "../../model/window-fit"
 import { roomyGrid, testIndex } from "../../testing"
 import { drawnColumns, initialWorkspace, type WorkspaceState } from "../workspace-state"

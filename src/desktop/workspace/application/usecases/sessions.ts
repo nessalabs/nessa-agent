@@ -10,7 +10,7 @@
  */
 import type { Initiator } from "../ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
-import { paneShowing } from "../../model/pane-layout"
+import { paneShowing } from "../../../split-panes/model/pane-layout"
 import { knownToSource } from "../../model/revision"
 import type { ModelRef } from "../../model/workspace-index"
 import { startSession } from "../../model/session-lifecycle"

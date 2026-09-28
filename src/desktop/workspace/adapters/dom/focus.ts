@@ -17,7 +17,7 @@
  * handler is the other direction (a click or Tab into a pane focuses it).
  */
 import { useEffect, type RefObject } from "react"
-import { focusedPane } from "../../model/pane-layout"
+import { focusedPane } from "../../../split-panes/model/pane-layout"
 import type { DesktopStore } from "../../../store"
 
 /** Marks the focused pane, whichever layout draws it, for the caret to find. */

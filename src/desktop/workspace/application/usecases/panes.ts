@@ -22,8 +22,8 @@ import {
   type PaneLayout,
   type Side,
   type Zone,
-} from "../../model/pane-layout"
-import { dropOutcome } from "../../model/drop"
+} from "../../../split-panes/model/pane-layout"
+import { dropOutcome } from "../../../split-panes/model/drop"
 import {
   arrange,
   fitted,
@@ -31,7 +31,7 @@ import {
   type Arranged,
   type PaneEdge,
   type WorkspaceRoom,
-} from "../../model/pane-sizing"
+} from "../../../split-panes/model/pane-sizing"
 import {
   channelOf,
   draftOf,

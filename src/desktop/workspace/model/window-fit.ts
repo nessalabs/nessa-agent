@@ -4,8 +4,8 @@
  * is too narrow for the panes beside them. The stylesheet draws the widths
  * this module computes; it does not clamp them again.
  */
-import { paneLimits } from "./pane-layout"
-import { columnsFit } from "./pane-sizing"
+import { paneLimits } from "../../split-panes/model/pane-layout"
+import { columnsFit } from "../../split-panes/model/pane-sizing"
 
 export interface ColumnLimits {
   readonly min: number

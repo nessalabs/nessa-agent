@@ -12,7 +12,7 @@ import type {
 } from "./application/ports"
 import { defaultFilter, type AgentsFilter } from "./model/overview/filter"
 import type { WorkspaceFailureReason } from "./model/failure"
-import type { WorkspaceRoom } from "./model/pane-sizing"
+import type { WorkspaceRoom } from "../split-panes/model/pane-sizing"
 import { WorkspaceSourceError } from "./application/ports"
 import type {
   WorkspaceIndex,

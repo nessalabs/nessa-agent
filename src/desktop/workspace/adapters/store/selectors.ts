@@ -20,12 +20,12 @@ import {
   paneCount,
   panesOf,
   type PaneKey,
-} from "../../model/pane-layout"
+} from "../../../split-panes/model/pane-layout"
 import {
   placements,
   type EdgePlacement,
   type PanePlacement,
-} from "../../model/pane-sizing"
+} from "../../../split-panes/model/pane-sizing"
 import {
   branchSessions,
   channelActivity,

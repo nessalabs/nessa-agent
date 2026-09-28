@@ -4,7 +4,7 @@
  * columns themselves.
  */
 import { byRecency } from "../../model/workspace-index"
-import type { WorkspaceRoom } from "../../model/pane-sizing"
+import type { WorkspaceRoom } from "../../../split-panes/model/pane-sizing"
 import { chosen, fitted } from "../../../model/side-column"
 import { mostPressing } from "../../model/session-groups"
 import {

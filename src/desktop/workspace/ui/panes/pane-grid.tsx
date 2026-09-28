@@ -16,7 +16,7 @@ import {
   selectPlacements,
 } from "../../adapters/store/selectors"
 import { paneTabOrder } from "../../adapters/dom/pane-tab-order"
-import type { EdgePlacement, PanePlacement } from "../../model/pane-sizing"
+import type { EdgePlacement, PanePlacement } from "../../../split-panes/model/pane-sizing"
 import { ResizeEdge } from "../chrome/resize-edge"
 import { EmptyWorkspace } from "./empty-state"
 import { Pane } from "./pane"

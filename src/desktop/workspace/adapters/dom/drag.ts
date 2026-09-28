@@ -55,7 +55,7 @@ import {
   type DragEvent,
   type DragPhase,
   type Size,
-} from "../../model/drag"
+} from "../../../split-panes/model/drag"
 import {
   refusedZones,
   restAfter,
@@ -64,14 +64,14 @@ import {
   type DropOutcome,
   type PointerSample,
   type Targets,
-} from "../../model/drop"
-import type { PaneKey, PaneLayout, Zone } from "../../model/pane-layout"
-import { paneLimits } from "../../model/pane-layout"
+} from "../../../split-panes/model/drop"
+import type { PaneKey, PaneLayout, Zone } from "../../../split-panes/model/pane-layout"
+import { paneLimits } from "../../../split-panes/model/pane-layout"
 import {
   placements,
   type PanePlacement,
   type WorkspaceRoom,
-} from "../../model/pane-sizing"
+} from "../../../split-panes/model/pane-sizing"
 import { commitDrop, measureRoom, previewDrop } from "../store/commands"
 import { durationToken, motionToken } from "../../../adapters/motion"
 

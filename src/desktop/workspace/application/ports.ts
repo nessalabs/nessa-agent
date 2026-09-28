@@ -23,7 +23,7 @@
  */
 import type { WorkspaceFailureReason } from "../model/failure"
 import type { ModelRef, WorkspaceIndex, SessionSummary } from "../model/workspace-index"
-import type { WorkspaceRoom } from "../model/pane-sizing"
+import type { WorkspaceRoom } from "../../split-panes/model/pane-sizing"
 import type { Transcript } from "../model/transcript"
 import type { AgentsFilter } from "../model/overview/filter"
 

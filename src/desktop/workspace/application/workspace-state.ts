@@ -10,7 +10,12 @@
  */
 import type { WorkspaceFailureReason } from "../model/failure"
 import type { Channel, ModelRef, Section, SessionSummary } from "../model/workspace-index"
-import { focusedPane, panesOf, paneShowing, type PaneLayout } from "../model/pane-layout"
+import {
+  focusedPane,
+  panesOf,
+  paneShowing,
+  type PaneLayout,
+} from "../../split-panes/model/pane-layout"
 import { keptConversations, retention, type Removal } from "../model/retention"
 import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overview/filter"
 import { drawn, type SideColumn } from "../../model/side-column"

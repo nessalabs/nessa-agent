@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { paneLimits } from "./pane-layout"
+import { paneLimits } from "../../split-panes/model/pane-layout"
 import {
   clampColumn,
   columnWidth,

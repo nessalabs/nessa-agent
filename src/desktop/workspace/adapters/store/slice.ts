@@ -9,8 +9,13 @@
  */
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
 import type { ModelRef, WorkspaceIndex } from "../../model/workspace-index"
-import type { Direction, PaneKey, Side, Zone } from "../../model/pane-layout"
-import type { PaneEdge, WorkspaceRoom } from "../../model/pane-sizing"
+import type {
+  Direction,
+  PaneKey,
+  Side,
+  Zone,
+} from "../../../split-panes/model/pane-layout"
+import type { PaneEdge, WorkspaceRoom } from "../../../split-panes/model/pane-sizing"
 import type { Message, Transcript } from "../../model/transcript"
 import type {
   Initiator,

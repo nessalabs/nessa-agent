@@ -65,7 +65,11 @@ import {
   selectSidebarOpen,
   selectView,
 } from "../../adapters/store/selectors"
-import { layoutShape, panesOf, type Direction } from "../../model/pane-layout"
+import {
+  layoutShape,
+  panesOf,
+  type Direction,
+} from "../../../split-panes/model/pane-layout"
 import type { SwitcherRow } from "../../model/session-search"
 import { columnWidth, sessionListLimits, type ColumnLimits } from "../../model/window-fit"
 import { IconButton } from "../chrome/icon-button"

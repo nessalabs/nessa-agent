@@ -7,7 +7,7 @@
  * last to what follows the panes.
  */
 import type { KeyboardEvent as ReactKeyboardEvent } from "react"
-import { panesOf, type PaneLayout } from "../../model/pane-layout"
+import { panesOf, type PaneLayout } from "../../../split-panes/model/pane-layout"
 
 const tabbable =
   'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
