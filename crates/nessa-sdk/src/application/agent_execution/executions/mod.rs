@@ -3,11 +3,13 @@
 //! owns admission, observations, and permission transitions. The mandatory audit
 //! port retains queue order, session closure, and permission evidence independently
 //! of events.
+//! The controller reserves admitted question IDs until execution settlement.
 //! Shared identity limits keep live admission and restored observations consistent.
 //!
 //! ```text
 //! adapter --> ExecutionController --> domain session
 //!                 |
+//!                 +--> AdmittedQuestion --> asked/closed events and answer audit
 //!                 +--> ExecutionEvent
 //! Agent / adapter --> ExecutionAudit --> host-owned durable sink
 //! ```
@@ -19,6 +21,7 @@ mod audit;
 mod controller;
 mod events;
 pub(crate) mod limits;
+mod question;
 mod request;
 pub use audit::{
     AdmissionAuditCause, AdmissionAuditStage, AttachmentAuditCause, AttachmentAuditRecord,
@@ -28,6 +31,7 @@ pub use audit::{
 };
 pub use controller::ExecutionController;
 pub use events::{ExecutionEvent, ExecutionUpdate};
+pub use question::AdmittedQuestion;
 pub use request::ExecutionRequest;
 
 pub use crate::domain::agent_execution::executions::SubmissionMode;

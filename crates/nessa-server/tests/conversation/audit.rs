@@ -1,9 +1,9 @@
 use super::*;
 use nessa_sdk::application::agent_execution::{
     executions::{
-        AttachmentAuditCause, AttachmentAuditRecord, AttachmentAuditStage, ExecutionController,
-        QueueAdmissionRecord, QueueOrderRecord, QueueSettlementRecord, SessionClosureRecord,
-        SteeringAcknowledgementRecord,
+        AdmittedQuestion, AttachmentAuditCause, AttachmentAuditRecord, AttachmentAuditStage,
+        ExecutionController, ExecutionUpdate, QueueAdmissionRecord, QueueOrderRecord,
+        QueueSettlementRecord, SessionClosureRecord, SteeringAcknowledgementRecord,
     },
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
@@ -563,10 +563,7 @@ fn audit_maps_each_unanswered_ending_of_an_ask_to_what_ended_it() {
     ] {
         let value = record_value(&ExecutionAuditRecord::QuestionAnswered(
             QuestionAnswerRecord::ended(
-                ExecutionSessionId::new("session").unwrap(),
-                ExecutionId::new("run").unwrap(),
-                QuestionId::new("1").unwrap(),
-                deploy_question(),
+                admit_question(deploy_question()),
                 cause,
                 PermissionAnswerDelivery::Written,
             ),
@@ -578,6 +575,15 @@ fn audit_maps_each_unanswered_ending_of_an_ask_to_what_ended_it() {
         assert!(value.get("actor").is_none() && value["origin"].get("actor").is_none());
         assert_eq!(value["question"]["message"], "Where to?");
     }
+}
+
+fn admit_question(question: AgentQuestion) -> AdmittedQuestion {
+    let mut controller = ExecutionController::new(ExecutionSessionId::new("session").unwrap());
+    let execution = ExecutionId::new("run").unwrap();
+    controller.begin_execution(execution.clone()).unwrap();
+    controller
+        .ask_question(&execution, QuestionId::new("1").unwrap(), question)
+        .unwrap()
 }
 
 fn deploy_question() -> AgentQuestion {
@@ -603,10 +609,7 @@ fn audit_maps_an_answer_with_its_answerer_and_the_ask_it_answered() {
     // was one the question offered, and who chose it is the verified caller.
     let chosen = |asked: AgentQuestion, value: &str| {
         QuestionAnswerRecord::chosen(
-            ExecutionSessionId::new("session").unwrap(),
-            ExecutionId::new("run").unwrap(),
-            QuestionId::new("1").unwrap(),
-            asked,
+            admit_question(asked),
             Some(vec![QuestionChoice::new(
                 "question_0",
                 vec![value.into()],
@@ -638,4 +641,45 @@ fn audit_maps_an_answer_with_its_answerer_and_the_ask_it_answered() {
     assert_eq!(question["required"], true);
     assert_eq!(question["freeTextKey"], "question_0_custom");
     assert_eq!(question["multiSelect"], false);
+}
+
+#[test]
+fn answer_audit_correlation_matches_the_admitted_question_event() {
+    let mut controller = ExecutionController::new(ExecutionSessionId::new("provider").unwrap());
+    let execution = ExecutionId::new("run").unwrap();
+    controller.begin_execution(execution.clone()).unwrap();
+    for id in ["A", "B"] {
+        let admitted = controller
+            .ask_question(&execution, QuestionId::new(id).unwrap(), deploy_question())
+            .unwrap();
+        let event = admitted.event();
+        let ExecutionUpdate::QuestionAsked { id, question } = event.update() else {
+            panic!("expected ask")
+        };
+        let records = [
+            QuestionAnswerRecord::chosen(
+                admitted.clone(),
+                None,
+                actor(),
+                PermissionAnswerDelivery::Selected,
+            )
+            .unwrap(),
+            QuestionAnswerRecord::ended(
+                admitted.clone(),
+                QuestionCancellation::ExecutionFinished,
+                PermissionAnswerDelivery::Written,
+            ),
+        ];
+        for record in records {
+            let value = record_value(&ExecutionAuditRecord::QuestionAnswered(record));
+            assert_eq!(value["sessionId"], admitted.session_id().as_str());
+            assert_eq!(value["executionId"], event.execution_id().as_str());
+            assert_eq!(value["questionId"], id.as_str());
+            assert_eq!(value["question"]["message"], question.message());
+            assert_eq!(
+                value["question"]["questions"][0]["options"][0]["value"],
+                question.questions()[0].options()[0].value()
+            );
+        }
+    }
 }

@@ -3,6 +3,7 @@
 
 use super::{ActionContext, PermissionResolution};
 use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::executions::AdmittedQuestion;
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::permissions::{ReviewDecline, ReviewDeclineId};
 use crate::domain::agent_execution::questions::{
@@ -151,41 +152,34 @@ impl ReviewDeclineRecord {
 /// [`ended`](Self::ended) takes none, because nobody chose a cancellation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuestionAnswerRecord {
-    session_id: ExecutionSessionId,
-    execution_id: ExecutionId,
-    question_id: QuestionId,
-    question: AgentQuestion,
+    admitted: AdmittedQuestion,
     response: QuestionResponse,
     actor: Option<ActionContext>,
     delivery: PermissionAnswerDelivery,
 }
 impl QuestionAnswerRecord {
-    /// Record that `actor` answered `question_id` with `choices`, or declined
+    /// Record that `actor` answered `admitted` with `choices`, or declined
     /// it where `choices` is `None`.
     ///
     /// `actor` is who answered, verified by the host that took the answer;
     /// leaving it out of an explicit answer would lose the one fact an audit
-    /// of it exists to keep. `choices` are validated here against `question`,
+    /// of it exists to keep. `choices` are validated here against the admitted question,
     /// the ask as it was asked, so the record can only ever hold an answer to
     /// the question it holds. Returns the domain's reason when they disagree.
     pub fn chosen(
-        session_id: ExecutionSessionId,
-        execution_id: ExecutionId,
-        question_id: QuestionId,
-        question: AgentQuestion,
+        admitted: AdmittedQuestion,
         choices: Option<Vec<QuestionChoice>>,
         actor: ActionContext,
         delivery: PermissionAnswerDelivery,
     ) -> Result<Self, ExecutionError> {
         let response = match choices {
-            Some(choices) => QuestionResponse::Answered(AcceptedAnswer::new(&question, choices)?),
+            Some(choices) => {
+                QuestionResponse::Answered(AcceptedAnswer::new(admitted.question(), choices)?)
+            }
             None => QuestionResponse::Declined,
         };
         Ok(Self {
-            session_id,
-            execution_id,
-            question_id,
-            question,
+            admitted,
             response,
             actor: Some(actor),
             delivery,
@@ -198,23 +192,17 @@ impl QuestionAnswerRecord {
     pub fn with_delivery(self, delivery: PermissionAnswerDelivery) -> Self {
         Self { delivery, ..self }
     }
-    /// Record that `question_id` ended unanswered, for `cause`.
+    /// Record that `admitted` ended unanswered, for `cause`.
     ///
     /// There is no actor: nobody chose this, and naming one would invent an
     /// initiator. `cause` says what ended it instead.
     pub fn ended(
-        session_id: ExecutionSessionId,
-        execution_id: ExecutionId,
-        question_id: QuestionId,
-        question: AgentQuestion,
+        admitted: AdmittedQuestion,
         cause: QuestionCancellation,
         delivery: PermissionAnswerDelivery,
     ) -> Self {
         Self {
-            session_id,
-            execution_id,
-            question_id,
-            question,
+            admitted,
             response: QuestionResponse::Cancelled(cause),
             actor: None,
             delivery,
@@ -227,19 +215,19 @@ impl QuestionAnswerRecord {
     }
     /// Provider session whose agent asked.
     pub fn session_id(&self) -> &ExecutionSessionId {
-        &self.session_id
+        self.admitted.session_id()
     }
     /// Execution the agent was running when it asked.
     pub fn execution_id(&self) -> &ExecutionId {
-        &self.execution_id
+        self.admitted.execution_id()
     }
     /// The ask this answers.
     pub fn question_id(&self) -> &QuestionId {
-        &self.question_id
+        self.admitted.id()
     }
     /// The ask as it was asked: what it offered, required and invited.
     pub fn question(&self) -> &AgentQuestion {
-        &self.question
+        self.admitted.question()
     }
     /// What was answered, validated against [`question`](Self::question).
     pub fn response(&self) -> &QuestionResponse {
