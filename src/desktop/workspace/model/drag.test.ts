@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest"
 import {
+  copyShape,
   idle,
   keyToDrag,
   liftDistance,
@@ -361,5 +362,19 @@ describe("dropping and cancelling", () => {
   it("its flight landing ends it", () => {
     expect(run([release(), { kind: "landed" }], carrying())).toBe(idle)
     expect(run([{ kind: "changed" }, { kind: "landed" }], carrying())).toBe(idle)
+  })
+})
+
+describe("what the copy is drawn at", () => {
+  const own = { width: 546, height: 800 }
+  it("with a zone shown, the slot it would land in: a tall pane over a wide one's lower half is wide and short", () => {
+    expect(copyShape(own, { width: 1100, height: 396 })).toEqual({
+      width: 1100,
+      height: 396,
+    })
+  })
+
+  it("with no zone shown — off the grid, a side column, a refused side — its own size", () => {
+    expect(copyShape(own, null)).toBe(own)
   })
 })

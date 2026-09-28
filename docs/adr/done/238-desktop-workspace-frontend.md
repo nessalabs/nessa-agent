@@ -288,14 +288,14 @@ button carries**; and **the zone settles at rest**.
 | pressed (no copy yet) | the copy cannot be made: no panes laid out | idle | — |
 | pressed (no copy yet) | move | pressed | nothing: a press becomes a drag only once its copy is made, so no event reads the page |
 | pressed | a move of another pointer, or of its own under 4px (`liftDistance`) | pressed | — |
-| pressed (with its copy) | move 4px or more | carrying (aim: none yet) | the copy is shown under the pointer, full size, and glides (`--desktop-base`, transform only) until its centre is under the pointer, where it stays; the zone waits for the next frame |
+| pressed (with its copy) | move 4px or more | carrying (aim: none yet) | the copy is shown under the pointer at the carried pane's own size, and glides (`--desktop-base`, transform only) until its centre is under the pointer, where it stays; the zone waits for the next frame |
 | pressed | release of its pointer | idle | a click; what was made goes |
 | pressed | Escape; any other key but a lone modifier; another button (a move whose `buttons` is not the primary alone — a chorded button reaches the page as a move, never a press); `pointercancel`; the window's blur; a change (below) | idle | the press is let go: no later move can start a drag |
-| carrying | move of its pointer | carrying | the copy moves with the pointer, one to one; the zone is decided from the pointer (below); the panes and the placeholder change only when the zone does, a frame later (the preview) |
+| carrying | move of its pointer | carrying | the copy moves with the pointer, one to one; the zone is decided from the pointer (below); the panes, the placeholder and the copy's shape change only when the zone does, a frame later (the preview): each pane takes the rect the drop would give it, and the copy the placeholder's size about the pointer — or, with nothing offered, its own (_What the copy and the panes are drawn at_, below) |
 | carrying | a move of another pointer, or to where it already is | carrying | — (resting is not restarted) |
 | carrying | no move for 150ms (`restAfter`, `still`) | carrying | the pointer's heading has aged out: the zone is decided again as at rest, and previewed a frame later |
-| carrying | release of its pointer while the page shows a zone that offers something (`dropOutcome`) | dropping | the zone shown is committed — what the person saw, never one decided again at the release, so a heading that ages out as the button lifts cancels nothing — by `commitDrop`, in the room read as the press began, and the copy flies into its rect; the click the release makes is swallowed |
-| carrying | release of its pointer with no zone shown that offers something: before any preview was shown (a flick), off the grid, over a side column, the carried pane's own place, a side the room refuses, no pane in sight | cancelling (home) | the copy flies home as the panes go back; the click is swallowed |
+| carrying | release of its pointer while the page shows a zone that offers something (`dropOutcome`) | dropping | the zone shown is committed — what the person saw, never one decided again at the release, so a heading that ages out as the button lifts cancels nothing — by `commitDrop`, in the room read as the press began, and the copy flies into its rect — already its shape, so it only moves, unless the release came mid-change; the click the release makes is swallowed |
+| carrying | release of its pointer with no zone shown that offers something: before any preview was shown (a flick), off the grid, over a side column, the carried pane's own place, a side the room refuses, no pane in sight | cancelling (home) | the copy flies home, taking its own size again, as the panes go back to theirs; the click is swallowed |
 | carrying | release of another pointer | carrying | — (no click is swallowed for it) |
 | carrying | Escape | cancelling (home) | as above; Escape goes no further |
 | carrying | another button, `lostpointercapture`, `pointercancel`, the window's blur | cancelling (home) | as above; with the press let go, a later move starts nothing |
@@ -303,6 +303,59 @@ button carries**; and **the zone settles at rest**.
 | dropping | the drop's own change to the panes | dropping | (it is the drop) |
 | dropping, cancelling | the copy's flight ends (`landed`) | idle | — |
 | dropping, cancelling | anything else, a press included | unchanged | a press while the copy still flies starts nothing |
+
+What the copy and the panes are drawn at (`copyShape`, `model/drag.ts`; the
+drawing is `adapters/dom/drag.ts`):
+
+| while carrying | the copy | a pane the drop would move or resize |
+| --- | --- | --- |
+| no zone shown: before the first preview, off the grid, over a side column, its own place, a side the room refuses, under the overview | the carried pane's own size, its centre on the pointer | where and as big as it is |
+| a zone shown that offers something | the placeholder's size — the slot it would land in — its centre still on the pointer, never the slot's place | the rect the drop gives it (`dropOutcome`, the same the drop commits), what it holds at its own size, as a pane that shape would place it — its conversation held to the top and centred across, its header to the top left — and cut to the shape where smaller, its header past the window's controls where it would rest in the corner (`data-drag-corner`) and not until it has moved out from under them where it would leave |
+| the zone changes, even mid-change | from the size it is drawn at now to the new one, `--desktop-base` on `--desktop-ease`, one way, never past it | from where it is drawn now, the same |
+| released onto the zone shown | flies from the pointer into the placeholder's rect | lands where it was previewed: `FlipScope` lets the preview go and finds nothing to fly |
+| cancelled home | flies home, back to its own size | back to its own place and size |
+| less motion | changes size at once | does not move (nothing but the copy moves); the placeholder marks the slot |
+
+Neither the copy nor a pane is ever drawn stretched: each grows or shrinks
+into its shape by a scale its content undoes at each of twelve steps (as a
+flight does, `flip.tsx`), so at every step its words are drawn at their own
+size, and at rest the box is exactly the rect it would take. The two differ
+in what the content is laid out at, chosen by measurement:
+
+- **The copy is laid out at the slot's size, once per zone change**, so its
+  words, its composer and its foot read as the pane will; at rest nothing in
+  it is scaled. It is one screen of a conversation in a box of its own
+  (`contain: strict`): in Chrome at 4× CPU throttle, four panes, dragged
+  across six zones, the longest frame was 33ms (median 33ms, four runs;
+  drop and cancel alike).
+- **A pane keeps its layout and is cut to its would-be shape**: its box
+  takes the rect by transform (`overflow: hidden` clips it) and its content,
+  scaled back, stays at the size it has, placed as a pane that shape would
+  place it — its conversation centred across, as a wider pane centres its
+  column, and held to the top; its header held to the top left, so it steps
+  past the window's controls where it rests in the corner and nothing of it
+  passes under them. Centring down as well was tried: a pane shorter than
+  before then drew its conversation's heading into the titlebar row, under
+  the controls (`copy-takes-slot-shape`'s safe-area sampling caught it).
+  Laying a pane out at its would-be size instead was built and measured: a
+  pane is a size container (`container: workspace-pane / size`), so a change
+  of its size restyles and lays out everything it holds — traced at 20–42ms
+  of layout per zone change at 4×, frames of 67–83ms, over the 50ms budget
+  even with its conversation held at its width; turning the container off
+  during a drag cut it to 26ms but would drop its container queries and
+  jump at the drop.
+
+A box's change of shape and its content's undoing of it start at one time
+on the document's clock (`startTime`), so an engine never starts one a
+frame before the other and draws the content stretched for that frame.
+
+The other ways were weighed for the copy too: a uniform scale clipped to the
+slot (`clip-path: inset()`) never distorts but draws a tall pane's words
+three times their size in a wide slot, and a box cut to the slot with its
+content at the carried shape shows empty space where the slot is bigger;
+animating `width` and `height` lays the copy out every frame. The copy's
+shape is `made.drawing.shape`, and a pane's the preview's own motion —
+neither is read back.
 
 The copy is drawn in a layer that begins below the titlebar row
 (`.workspace-drag-layer`), so nothing carried is ever painted under the
@@ -339,8 +392,8 @@ the same outcome the drop's command commits, so nothing jumps
 held inside the grid). A zone the fit rule refuses offers nothing; a session
 already on screen offers "Go to Pane". What is carried is a translucent copy
 of the pane itself — one screen of its conversation, moved to where it was
-scrolled by transform, its composer and chips, in a box of its own size
-(`contain: strict`); a session from a list is drawn from what the window holds
+scrolled by transform, its composer and chips, in a box of the shape it
+would land in (`contain: strict`); a session from a list is drawn from what the window holds
 of it. Nothing of the page is read after the press's frame: where a preview
 has drawn a pane is known from the preview's own motion, and the preview and
 the drop's command are given the room read as the press began (a resize or a
@@ -353,18 +406,24 @@ Chrome at 4× CPU throttle, four panes, the task took a median 1.6ms (max
 written into every pane in between, six runs each — well inside a frame. A
 press on what can be carried, and the drag it becomes, select nothing
 (`selectstart`) and leave nothing selected; while carrying, one element over the page holds the
-grabbing hand. Only transforms move; the zone is announced in a polite live
+grabbing hand. Only transforms move — but the copy, laid out once per zone
+change at the slot's size, as above; the zone is announced in a polite live
 region; with less motion, nothing but the copy moves. `model/drag.test.ts`
 has a test for each row above, and `adapters/dom/drag.test.tsx` for the page's
 side of them (the click a release makes, a control's own press, the carried
-session unlisted, Settings' Escape, nothing read after the press);
+session unlisted, Settings' Escape, nothing read after the press, the copy
+laid out at its slot and the panes drawn at their would-be rects, never
+stretched on the way);
 `verification/desktop/scripts/drag.mjs` checks the rest in Chrome and WebKit,
 frame by frame — the copy's centre stays on the pointer, no pane leaves the
 grid or the window, panes move one way between zone changes, the zone settles
 at rest, nothing is a target under the overview or over the revealed sidebar
 (which stays revealed), a flick or a chord drops nothing, nothing carried is
 painted under the controls, a resize or a command mid-drag leaves nothing
-lifted, and a lost pointer starts nothing again.
+lifted, a lost pointer starts nothing again, the copy takes the slot's shape
+about the pointer and its own with no zone, changing size one way
+(`copy-takes-slot-shape`), and every pane is previewed at the rect it lands
+at with no title drawn stretched (`preview-panes-take-shape`).
 
 **What is typed and not sent** is product state: `composerText` in the
 workspace slice, by session or new session, written by the composer (and by an

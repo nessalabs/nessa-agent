@@ -12,9 +12,10 @@
  *   columns drawn. Until then a move does not lift it;
  * - **carrying**: the copy is shown under the pointer and glides so its
  *   centre comes under it, then stays there; the zone the pointer is in
- *   (`aimAt`) shows what dropping there would do — the panes move where the
- *   drop would put them and a placeholder marks the rect it takes, from the
- *   one outcome the drop commits (`previewDrop`);
+ *   (`aimAt`) shows what dropping there would do — the panes take the rects
+ *   the drop would give them and a placeholder marks the rect it takes, from
+ *   the one outcome the drop commits (`previewDrop`), and the copy takes the
+ *   placeholder's shape about the pointer (`copyShape`);
  * - **dropping**: released while a zone is shown, the drop commits what is
  *   shown (`commitDrop`) in the room the press read, and the copy flies into
  *   the placeholder's rect and hands over to the real pane;
@@ -24,8 +25,11 @@
  *
  * Everything moves by transform, in animations the compositor runs; the
  * pointer is followed without rendering anything, and the store is asked
- * only when the zone changes. No frame of a drag makes the page lay out
- * early: after the press's frame nothing is read again — a change that would
+ * only when the zone changes. What changes shape grows or shrinks into it by
+ * a scale its content undoes step by step, so no text is ever drawn
+ * stretched: a pane the preview resizes is cut to the shape it would take;
+ * the copy is laid out once at it, as the zone changes. No frame of a drag
+ * makes the page lay out early: after the press's frame nothing is read again — a change that would
  * make what was read wrong ends the drag instead. Where a preview has drawn a
  * pane is known from the preview's own motion, never read back. The
  * preview's motion is marked (`dragPreview`) so `FlipScope` measures through
@@ -43,12 +47,14 @@ import { useEffect, type RefObject } from "react"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import type { DesktopStore } from "../../../store"
 import {
+  copyShape,
   idle,
   keyToDrag,
   sameAim,
   stepDrag,
   type DragEvent,
   type DragPhase,
+  type Size,
 } from "../../model/drag"
 import {
   restAfter,
@@ -74,6 +80,32 @@ const dragPreview = "workspace-drag-preview"
 /** The preview's animations under each workspace root, so they can be let go without a search. */
 const previews = new WeakMap<Element, Set<Animation>>()
 
+/** The panes a preview marked as resting in the window's corner, or leaving it, under each workspace root. */
+const cornered = new WeakMap<Element, Set<HTMLElement>>()
+
+/** Whether `pane`'s header steps past the window's controls now. */
+const steppedAside = (pane: HTMLElement) => {
+  const corner = pane.getAttribute("data-drag-corner")
+  return corner === "yes" || (corner !== "no" && pane.hasAttribute("data-corner"))
+}
+
+/**
+ * Steps `pane`'s header past the window's controls where a drop would rest
+ * it in the corner, and back where it would leave it (`data-drag-corner`,
+ * `panes.css`) — or, with `null`, as its placement does.
+ */
+function markCorner(root: Element, pane: HTMLElement, corner: boolean | null) {
+  const held = cornered.get(root) ?? new Set<HTMLElement>()
+  cornered.set(root, held)
+  const differs = corner !== null && corner !== pane.hasAttribute("data-corner")
+  if (differs) held.add(pane)
+  else held.delete(pane)
+  const value = differs ? (corner ? "yes" : "no") : null
+  if (pane.getAttribute("data-drag-corner") === value) return
+  if (value) pane.setAttribute("data-drag-corner", value)
+  else pane.removeAttribute("data-drag-corner")
+}
+
 function track(root: Element, animation: Animation): Animation {
   const held = previews.get(root) ?? new Set<Animation>()
   previews.set(root, held)
@@ -91,21 +123,40 @@ interface Drawn {
   readonly opacity: number
 }
 
-const inPlace: Drawn = { dx: 0, dy: 0, sx: 1, sy: 1, opacity: 1 }
-
 const transformOf = ({ dx, dy, sx, sy }: Drawn) =>
   `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`
 
-/** Part of the way from one drawing to another, as a transform's functions interpolate. */
-function partWay(from: Drawn, to: Drawn, progress: number): Drawn {
-  const at = (a: number, b: number) => a + (b - a) * progress
-  return {
-    dx: at(from.dx, to.dx),
-    dy: at(from.dy, to.dy),
-    sx: at(from.sx, to.sx),
-    sy: at(from.sy, to.sy),
-    opacity: at(from.opacity, to.opacity),
-  }
+/**
+ * How many steps a change of shape is drawn in. A box scaled on one curve and
+ * its content scaled back on the same curve only cancel where the two are
+ * given together, so the content's undoing is given at each step: between
+ * two, it is out by less than a percent.
+ */
+const shapeSteps = 12
+
+const lerp = (a: number, b: number, progress: number) => a + (b - a) * progress
+
+/** Part of the way from one rect to another: its centre and its size, each on a line. */
+const boxPartWay = (from: Box, to: Box, progress: number): Box => ({
+  left: lerp(from.left, to.left, progress),
+  top: lerp(from.top, to.top, progress),
+  width: lerp(from.width, to.width, progress),
+  height: lerp(from.height, to.height, progress),
+})
+
+const sameSize = (a: Size, b: Size) =>
+  Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5
+
+/**
+ * Starts a box's change of shape and its content's undoing of it at one
+ * time on the document's clock, so neither is ever drawn a frame ahead of the
+ * other — which would draw the content stretched for that frame. Left to
+ * start when each is ready, an engine may start them a frame apart.
+ */
+function together(animations: readonly Animation[]) {
+  const now = document.timeline?.currentTime
+  if (now === null || now === undefined) return
+  for (const animation of animations) animation.startTime = now
 }
 
 /** How far along its clock an animation is drawn, eased; 1 once it has ended or with none. */
@@ -120,6 +171,8 @@ const progressOf = (animation: Animation | null) => {
  * nowhere to fly. Nothing to do, and no search, when no drag previewed.
  */
 export function letGoOfDragPreview(root: Element): void {
+  cornered.get(root)?.forEach((pane) => markCorner(root, pane, null))
+  cornered.delete(root)
   const held = previews.get(root)
   if (!held) return
   held.forEach((animation) => animation.cancel())
@@ -245,9 +298,11 @@ interface Made {
   readonly layer: HTMLElement
   /** Moved to the pointer, one to one; holds the copy. */
   readonly carrier: HTMLElement
-  /** The copy, drawn about the pointer: its offset glides to its centre. */
+  /** Where the copy was grabbed, gliding to where its centre is under the pointer. */
+  readonly glider: HTMLElement
+  /** The copy, drawn about its centre: it takes the shape of where it would land. */
   readonly ghost: HTMLElement
-  /** The copy's content, counter-scaled as its box settles into a place. */
+  /** The copy's content, counter-scaled as its box changes shape. */
   readonly inner: HTMLElement
   /** What was pressed: marked while carried. */
   readonly source: HTMLElement
@@ -257,7 +312,8 @@ interface Made {
   readonly home: Box
   /** Where the pointer holds the copy as it is lifted, from its top left. */
   readonly grab: { x: number; y: number }
-  readonly size: { width: number; height: number }
+  /** The carried pane's own size: what the copy is drawn at with no zone shown. */
+  readonly size: Size
   readonly grid: Box
   /** The panes' room as the press found it: what the preview and the drop are held to. */
   readonly room: WorkspaceRoom | undefined
@@ -274,6 +330,10 @@ interface Made {
     pointer: { x: number; y: number }
     /** The copy's glide, from where it was grabbed to its centre under the pointer. */
     glide: Animation | null
+    /** The size the copy is laid out at: the last shape it was asked to take. */
+    laid: Size
+    /** The copy's change of shape, from the size it was drawn at to `laid`. */
+    shape: { from: Size; to: Size; motion: Animation | null; counter: Animation | null }
     /** The frame asked for to show the zone; 0 when none is. */
     frame: number
     /** The timer that says the pointer has been still long enough to be at rest; 0 when none. */
@@ -326,17 +386,29 @@ export function useWorkspaceDrag(
     // this says, part way on its clock — never read back from the page.
     const previewed = new Map<
       HTMLElement,
-      { from: Drawn; to: Drawn; motion: Animation; parts: Animation[] }
+      {
+        from: Box
+        to: Box
+        opacity: { from: number; to: number }
+        motion: Animation
+        parts: Animation[]
+      }
     >()
-    const drawnNow = (pane: HTMLElement): Drawn => {
+    /** Where a pane laid out at `real` is drawn now, and how faded. */
+    const drawnNow = (pane: HTMLElement, real: Box) => {
       const held = previewed.get(pane)
-      if (!held) return inPlace
-      return partWay(held.from, held.to, progressOf(held.motion))
+      if (!held) return { box: real, opacity: 1 }
+      const progress = progressOf(held.motion)
+      return {
+        box: boxPartWay(held.from, held.to, progress),
+        opacity: lerp(held.opacity.from, held.opacity.to, progress),
+      }
     }
     const letGo = (pane: HTMLElement) => {
       const held = previewed.get(pane)
       if (!held) return
       previewed.delete(pane)
+      markCorner(scope, pane, null)
       for (const animation of [held.motion, ...held.parts]) {
         animation.cancel()
         previews.get(scope)?.delete(animation)
@@ -345,7 +417,12 @@ export function useWorkspaceDrag(
 
     /**
      * Draws a pane laid out at `real` at `to` — or where it is laid out — from
-     * where it is drawn now. It only writes.
+     * where it is drawn now. Its box takes the rect by transform, and what it
+     * holds is scaled back at every step (`shapeSteps`), so the pane is drawn
+     * the shape it would take — its content cut to it, never stretched — and
+     * nothing is laid out again: a pane laid out at another size restyles and
+     * lays out all it holds (it is a size container), more than a frame's
+     * budget at every zone change (ADR 238 › _Drag and drop_). It only writes.
      */
     const reflow = (
       made: Made,
@@ -353,38 +430,58 @@ export function useWorkspaceDrag(
       real: Box,
       to: Box | null,
       fade = false,
+      corner = false,
     ) => {
-      const from = drawnNow(pane)
-      const target = to ? between(real, to, fade ? 0.2 : 1) : inPlace
+      const from = drawnNow(pane, real)
+      const target = to ?? real
+      const opacity = { from: from.opacity, to: to && fade ? 0.2 : 1 }
+      const resting = to ? corner : pane.hasAttribute("data-corner")
+      // A header stepped past the window's controls stays so until its pane
+      // has moved out from under them.
+      const leaving = steppedAside(pane) && !resting
       letGo(pane)
+      markCorner(scope, pane, resting || leaving)
+      const box: Keyframe[] = []
+      const counter: Keyframe[] = []
+      for (let step = 0; step <= shapeSteps; step++) {
+        const progress = step / shapeSteps
+        const drawing = between(
+          real,
+          boxPartWay(from.box, target, progress),
+          lerp(opacity.from, opacity.to, progress),
+        )
+        box.push({ transform: transformOf(drawing), opacity: drawing.opacity })
+        counter.push({ transform: `scale(${1 / drawing.sx}, ${1 / drawing.sy})` })
+      }
       const parts = made.parts.get(pane) ?? []
       pane.style.transformOrigin = "50% 50%"
       const motion = track(
         scope,
-        pane.animate(
-          [
-            { transform: transformOf(from), opacity: from.opacity },
-            { transform: transformOf(target), opacity: target.opacity },
-          ],
-          { ...made.motion, fill: "forwards", id: dragPreview },
-        ),
+        pane.animate(box, { ...made.motion, fill: "forwards", id: dragPreview }),
       )
-      // The content keeps its size, as in a flight (`flip.tsx`), held to the
-      // pane's top left as it waits there, so it reads from its start.
-      const counter = parts.map(({ element, top }) => {
-        element.style.transformOrigin = `0px ${-top}px`
+      // The content keeps its size, as in a flight (`flip.tsx`), scaled back
+      // as a pane that shape would lay it out: its header held to the top
+      // left, where it steps past the window's controls; the rest held to
+      // the top and centred across, as a pane centres its conversation —
+      // cut to the shape where it is smaller.
+      const undone = parts.map(({ element, top }) => {
+        const across = element.classList.contains("workspace-pane-header")
+          ? 0
+          : real.width / 2
+        element.style.transformOrigin = `${across}px ${-top}px`
         return track(
           scope,
-          element.animate(
-            [
-              { transform: `scale(${1 / from.sx}, ${1 / from.sy})` },
-              { transform: `scale(${1 / target.sx}, ${1 / target.sy})` },
-            ],
-            { ...made.motion, fill: "forwards", id: dragPreview },
-          ),
+          element.animate(counter, { ...made.motion, fill: "forwards", id: dragPreview }),
         )
       })
-      previewed.set(pane, { from, to: target, motion, parts: counter })
+      together([motion, ...undone])
+      previewed.set(pane, { from: from.box, to: target, opacity, motion, parts: undone })
+      if (leaving)
+        void motion.finished
+          .then(() => {
+            if (previewed.get(pane)?.motion === motion) markCorner(scope, pane, resting)
+          })
+          .catch(() => undefined)
     }
 
     /**
@@ -420,6 +517,13 @@ export function useWorkspaceDrag(
       const real = boxes(layout, grid)
       const spare = outcome?.foldSidebar ? (room?.spare ?? 0) : 0
       const landing = outcome ? boxes(outcome.layout, landingGrid(grid, spare)) : null
+      const corners = new Set(
+        outcome
+          ? placements(outcome.layout.columns).panes.flatMap((placement) =>
+              placement.corner ? [placement.key] : [],
+            )
+          : [],
+      )
       if (scope.hasAttribute("data-drag-folds") !== Boolean(outcome?.foldSidebar))
         scope.toggleAttribute("data-drag-folds", Boolean(outcome?.foldSidebar))
       if (outcome && landing && !("dragReflow" in scope.dataset))
@@ -436,6 +540,7 @@ export function useWorkspaceDrag(
             box,
             outcome && to ? inside(to, landingGrid(grid, spare)) : null,
             replaced,
+            corners.has(key),
           )
         }
       const lands = outcome && landing ? (landing.get(outcome.lands) ?? null) : null
@@ -472,46 +577,94 @@ export function useWorkspaceDrag(
       if (outcome === drawing.outcome) return
       drawing.outcome = outcome
       preview(made, outcome, aim)
+      // The copy takes the shape of the slot it would land in, or — with
+      // nothing offered — its own, its centre still on the pointer.
+      const shape = copyShape(made.size, drawing.landing)
+      if (!sameSize(shape, drawing.shape.to)) reshape(made, shape)
     }
 
     // ——— The copy ———
 
-    /** The copy's offset from the pointer: where it was grabbed, gliding to its centre. */
-    const offsetNow = ({ grab, size, drawing }: Made) => {
-      const progress = progressOf(drawing.glide)
+    /** Where the copy's centre is drawn from the pointer: where it was grabbed, gliding to nought. */
+    const glideNow = ({ grab, size, drawing }: Made) => {
+      const rest = 1 - progressOf(drawing.glide)
       return {
-        x: grab.x + (size.width / 2 - grab.x) * progress,
-        y: grab.y + (size.height / 2 - grab.y) * progress,
+        x: (size.width / 2 - grab.x) * rest,
+        y: (size.height / 2 - grab.y) * rest,
+      }
+    }
+
+    /** The size the copy is drawn at now, part way through a change of shape. */
+    const shapeNow = ({ drawing: { shape } }: Made): Size => {
+      const progress = progressOf(shape.motion)
+      return {
+        width: lerp(shape.from.width, shape.to.width, progress),
+        height: lerp(shape.from.height, shape.to.height, progress),
       }
     }
 
     /**
-     * The copy flies into `box` — onto its place, or home — by transform
-     * alone, from where it is drawn now. Its box is scaled and its content
-     * counter-scaled, so its words keep their size and nothing is laid out
-     * again, as a pane's flight does (`flip.tsx`).
+     * Draws the copy from the size and the place it is drawn at now to
+     * `size`, its centre moved by `by` from the pointer, in `made.motion`'s
+     * time. Its box is laid out at `size` — once, as the shape is asked for —
+     * and scaled from what it is drawn at, its content scaled back at every
+     * step (`shapeSteps`), so the words keep their size and are laid out as
+     * they will be; at rest nothing is scaled. Only a shape it is not laid
+     * out at already lays anything out.
+     */
+    const reshape = (
+      made: Made,
+      size: Size,
+      by: { x: number; y: number } = { x: 0, y: 0 },
+      opacity?: { from: number; to: number },
+    ): Animation => {
+      const { ghost, inner, drawing } = made
+      const from = shapeNow(made)
+      drawing.shape.motion?.cancel()
+      drawing.shape.counter?.cancel()
+      if (!sameSize(size, drawing.laid)) {
+        ghost.style.width = `${size.width}px`
+        ghost.style.height = `${size.height}px`
+        drawing.laid = size
+      }
+      const box: Keyframe[] = []
+      const counter: Keyframe[] = []
+      for (let step = 0; step <= shapeSteps; step++) {
+        const progress = step / shapeSteps
+        const width = lerp(from.width, size.width, progress)
+        const height = lerp(from.height, size.height, progress)
+        const sx = width / size.width
+        const sy = height / size.height
+        box.push({
+          transform: `translate(${by.x * progress - width / 2}px, ${by.y * progress - height / 2}px) scale(${sx}, ${sy})`,
+          ...(opacity ? { opacity: lerp(opacity.from, opacity.to, progress) } : {}),
+        })
+        counter.push({ transform: `scale(${1 / sx}, ${1 / sy})` })
+      }
+      const options: KeyframeAnimationOptions = { ...made.motion, fill: "forwards" }
+      const motion = ghost.animate(box, options)
+      const undone = inner.animate(counter, options)
+      together([motion, undone])
+      drawing.shape = { from, to: size, motion, counter: undone }
+      return motion
+    }
+
+    /**
+     * The copy flies into `box` — onto its place, or home — from where it is
+     * drawn now: its glide is held where it has got to, and it takes the
+     * box's shape (`reshape`) as its centre travels to the box's.
      */
     const flyTo = (made: Made, box: Box, fade: boolean) => {
-      const { ghost, inner, size, drawing } = made
-      const offset = offsetNow(made)
+      const { glider, drawing } = made
+      const glide = glideNow(made)
       drawing.glide?.cancel()
-      const sx = box.width / size.width
-      const sy = box.height / size.height
-      const options: KeyframeAnimationOptions = { ...made.motion, fill: "forwards" }
-      inner.animate(
-        [{ transform: "none" }, { transform: `scale(${1 / sx}, ${1 / sy})` }],
-        options,
-      )
-      return ghost.animate(
-        [
-          { transform: `translate(${-offset.x}px, ${-offset.y}px)`, opacity: 1 },
-          {
-            transform: `translate(${box.left - drawing.pointer.x}px, ${box.top - drawing.pointer.y}px) scale(${sx}, ${sy})`,
-            opacity: fade ? 0 : 1,
-          },
-        ],
-        options,
-      )
+      drawing.glide = null
+      glider.style.transform = `translate(${glide.x}px, ${glide.y}px)`
+      const by = {
+        x: box.left + box.width / 2 - drawing.pointer.x - glide.x,
+        y: box.top + box.height / 2 - drawing.pointer.y - glide.y,
+      }
+      return reshape(made, box, by, { from: 1, to: fade ? 0 : 1 })
     }
 
     const ghostFor = (
@@ -523,7 +676,11 @@ export function useWorkspaceDrag(
       ghost.className = "workspace-drag-ghost"
       ghost.setAttribute("aria-hidden", "true")
       ghost.inert = true
-      Object.assign(ghost.style, { width: `${size.width}px`, height: `${size.height}px` })
+      Object.assign(ghost.style, {
+        width: `${size.width}px`,
+        height: `${size.height}px`,
+        transform: `translate(${-size.width / 2}px, ${-size.height / 2}px)`,
+      })
       const inner = document.createElement("div")
       inner.className = "workspace-drag-ghost-inner"
       ghost.append(inner)
@@ -746,10 +903,14 @@ export function useWorkspaceDrag(
       const carrier = document.createElement("div")
       carrier.className = "workspace-drag-carrier"
       carrier.style.transform = `translate(${x}px, ${y}px)`
-      ghost.style.transform = `translate(${-grab.x}px, ${-grab.y}px)`
+      // The copy is drawn about its centre; the glider holds it where it was grabbed.
+      const glider = document.createElement("div")
+      glider.className = "workspace-drag-glider"
+      glider.style.transform = `translate(${size.width / 2 - grab.x}px, ${size.height / 2 - grab.y}px)`
       // On the page, unseen, until the press becomes a drag.
       ghost.dataset.waiting = ""
-      carrier.append(ghost)
+      glider.append(ghost)
+      carrier.append(glider)
       layer.append(carrier)
       scope.append(layer)
       const shield = document.createElement("div")
@@ -758,6 +919,7 @@ export function useWorkspaceDrag(
       return {
         layer,
         carrier,
+        glider,
         ghost,
         inner,
         source,
@@ -773,6 +935,8 @@ export function useWorkspaceDrag(
         drawing: {
           pointer: { x, y },
           glide: null,
+          laid: size,
+          shape: { from: size, to: size, motion: null, counter: null },
           frame: 0,
           still: 0,
           shown: null,
@@ -785,17 +949,19 @@ export function useWorkspaceDrag(
 
     /** The press became a drag: the copy is shown under the pointer, and glides to its centre. */
     const begin = (made: Made, what: Carried, pointerId: number, at: PointerSample) => {
-      const { carrier, ghost, grab, size, shield, source, drawing } = made
+      const { carrier, glider, ghost, grab, size, shield, source, drawing } = made
       drawing.pointer = { x: at.x, y: at.y }
       shield.addEventListener("lostpointercapture", onLost)
       window.getSelection()?.removeAllRanges()
       // With the pointer from its first frame, and seen from it.
       carrier.style.transform = `translate(${at.x}px, ${at.y}px)`
       delete ghost.dataset.waiting
-      drawing.glide = ghost.animate(
+      drawing.glide = glider.animate(
         [
-          { transform: `translate(${-grab.x}px, ${-grab.y}px)` },
-          { transform: `translate(${-size.width / 2}px, ${-size.height / 2}px)` },
+          {
+            transform: `translate(${size.width / 2 - grab.x}px, ${size.height / 2 - grab.y}px)`,
+          },
+          { transform: "translate(0px, 0px)" },
         ],
         { ...made.motion, fill: "forwards" },
       )
@@ -873,6 +1039,8 @@ export function useWorkspaceDrag(
     const cancel = (made: Made, how: "home" | "at-once") => {
       if (how === "at-once") {
         made.drawing.glide?.cancel()
+        made.drawing.shape.motion?.cancel()
+        made.drawing.shape.counter?.cancel()
         ;[...previewed.keys()].forEach(letGo)
         scope.removeAttribute("data-drag-folds")
         tidy(made)

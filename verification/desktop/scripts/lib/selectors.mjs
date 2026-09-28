@@ -26,6 +26,8 @@ export const css = {
   paneHeader: ".workspace-pane-header", // class: a pane's header, which carries the drag
   paneDragHandle: "[data-drag-pane]",
   paneTitle: "[data-drag-pane] .workspace-pane-title", // class: where a pane is grabbed by its title
+  titleText: ".workspace-pane-title", // class: a pane's title, in a pane or in the drag's copy of it
+  paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
   transcript: ".workspace-transcript", // class
   dragLayer: ".workspace-drag-layer", // class: what is carried is drawn in it, below the titlebar row

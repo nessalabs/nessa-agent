@@ -7,6 +7,15 @@ import { expect, it } from "vitest"
 
 const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8")
 
+/**
+ * A pane in the window's corner — or where a drag's preview would put it
+ * there (`data-drag-corner`, `adapters/dom/drag.ts`), and not where it would
+ * leave — as the stylesheets select it.
+ */
+const cornered = `.workspace[data-panes-alone]
+  .workspace-pane:is([data-corner]:not([data-drag-corner="no"]), [data-drag-corner="yes"])
+`
+
 it("glides without overshoot: the composer lands, and never passes its place", () => {
   const curve = /--desktop-glide:\s*linear\(([^)]*)\)/.exec(styles)?.[1]
   expect(curve).toBeDefined()
@@ -54,7 +63,7 @@ it("starts titlebar-row content at the one safe area, never at a length of its o
     // A pane in the window's corner starts its header at the safe area.
     [
       read("./workspace/ui/panes/panes.css"),
-      ".workspace[data-panes-alone] .workspace-pane[data-corner] .workspace-pane-header {",
+      `${cornered}  .workspace-pane-header {`,
       "var(--desktop-titlebar-safe-start)",
     ],
   ] as const
@@ -169,8 +178,7 @@ it("paints nothing of a pane under the window's controls: its content below the 
     /margin-bottom:\s*calc\(\s*var\(--desktop-titlebar-height\) - var\(--desktop-gutter\)/,
   )
   // In the corner, the band begins after the controls.
-  const corner =
-    ".workspace[data-panes-alone] .workspace-pane[data-corner] .desktop-header[data-sliver] {"
+  const corner = `${cornered}  .desktop-header[data-sliver] {`
   expect(styles).toContain(corner)
   expect(body(styles, corner)).toMatch(
     /left:\s*calc\(var\(--desktop-titlebar-safe-start\) - var\(--desktop-gutter\)\)/,

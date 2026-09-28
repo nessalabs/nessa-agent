@@ -427,11 +427,24 @@ html[data-workspace-resizing="y"] * {
   will-change: transform;
 }
 
+/* Where the copy was grabbed, gliding to where its centre is under the pointer. */
+.workspace-drag-glider {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  will-change: transform;
+}
+
 .workspace-drag-ghost {
   position: absolute;
   top: 0;
   left: 0;
-  /* Its own size, set once: nothing inside it lays out anything outside. */
+  /*
+   * Its size set once per shape it takes (`drag.ts`): nothing inside it lays
+   * out anything outside.
+   */
   contain: strict;
   overflow: hidden;
   border-radius: var(--desktop-radius);

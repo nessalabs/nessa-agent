@@ -216,6 +216,23 @@ export function stepDrag<Made>(
   }
 }
 
+/** A box's size, in CSS pixels. */
+export interface Size {
+  readonly width: number
+  readonly height: number
+}
+
+/**
+ * The shape the carried copy is drawn at: while a zone that offers something
+ * is shown, the slot a release would land it in (the placeholder's size); with
+ * none — off the grid, over a side column, a zone the room refuses, before any
+ * preview — the carried pane's own size. Its centre stays on the pointer
+ * either way (ADR 238 › _Drag and drop_, what the copy and the panes are drawn
+ * at).
+ */
+export const copyShape = (own: Size, slot: Size | null): Size =>
+  slot ? { width: slot.width, height: slot.height } : own
+
 /** Keys that are only held with others: pressed alone, they command nothing. */
 const modifiers = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "Fn", "OS"])
 

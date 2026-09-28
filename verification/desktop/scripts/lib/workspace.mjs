@@ -289,6 +289,11 @@ export function dragResidue(page) {
           return transform !== "none" && !new DOMMatrix(transform).isIdentity
         })
         .map((p) => p.dataset.paneKey),
+      // Laid out at a size of the drag's preview rather than the stylesheet's.
+      sized: [...document.querySelectorAll(sel.pane)]
+        .filter((p) => !p.closest(sel.dragGhost))
+        .filter((p) => p.style.width || p.style.height)
+        .map((p) => p.dataset.paneKey),
     }),
     css,
   )
@@ -301,6 +306,8 @@ export function residueFailures(residue) {
     if (residue[key]) out.push(`${residue[key]} ${key} left after the drag`)
   if (residue.transformed.length)
     out.push(`panes left drawn off their place: ${residue.transformed.join(",")}`)
+  if (residue.sized.length)
+    out.push(`panes left at a size of the drag's: ${residue.sized.join(",")}`)
   return out
 }
 

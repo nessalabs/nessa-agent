@@ -133,6 +133,21 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   `drag.mjs` (`sweep-across-zones`, `outside-cancels`).
 - [ ] **Preview equals commit** — the placeholder marks exactly the rect the
   drop takes. _Check:_ unit test `panes.test.ts`; by eye with `--headed`.
+- [ ] **The copy takes the shape of where it would land** (ADR 238 › _What
+  the copy and the panes are drawn at_): with a zone shown and the pointer
+  at rest, the copy's painted size is the placeholder's (± 2 px) and its
+  centre is on the pointer (± 2 px); with no zone it is the carried pane's
+  own size; each change of size runs one way, never past where it goes,
+  with nothing painted under the controls and no title drawn stretched.
+  _Check:_ `drag.mjs` (`copy-takes-slot-shape`; `--shots <dir>` saves it
+  below, beside, and over its own place); unit tests `model/drag.test.ts`,
+  `adapters/dom/drag.test.tsx`.
+- [ ] **Every pane previews the shape it lands at**: with a zone shown and
+  the pointer at rest, each pane is painted at the rect the drop then gives
+  it (± 2 px), its conversation centred across that shape (± 2 px), its
+  header held to the top left, and cut to it —
+  its title never drawn stretched, any frame — and a drag leaves no pane at a size of its own. _Check:_
+  `drag.mjs` (`preview-panes-take-shape`; every drag check's residue).
 - [ ] **A zone the fit rule refuses offers nothing; a session already on
   screen offers "Go to Pane".** _Check:_ manual (drag a session from the list
   onto four panes; drag an on-screen session).
