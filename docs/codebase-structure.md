@@ -203,7 +203,7 @@ writing the full defaults on first launch is buying.
   stay in adapters. See
   [adr/0002-conversation-vertical-and-gateway.md](adr/done/0002-conversation-vertical-and-gateway.md).
 - The desktop window's workspace is its own vertical, nested in the window:
-  `src/desktop/workspace/` with `model/` (overview, conversations,
+  `src/desktop/workspace/` with `model/` (index, conversations,
   revisions, pane layout and sizing, drops, failures, retention, session
   groups, the new-session lifecycle), `application/` (the `WorkspaceSource`
   port and pure use cases over the workspace's state), `adapters/` (the Redux

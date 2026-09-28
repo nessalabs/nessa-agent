@@ -14,7 +14,7 @@ import {
   type Channel,
   type ModelRef,
   type SessionSummary,
-} from "../../model/overview"
+} from "../../model/workspace-index"
 import {
   focusedPane,
   paneByKey,
@@ -129,7 +129,7 @@ const channelIdsBySection = createSelector([selectChannels], (channels) => {
 
 const noIds: readonly string[] = []
 
-/** A section's channels, as ids, in the overview's order. */
+/** A section's channels, as ids, in the index's order. */
 export const selectChannelIdsIn = (state: Root, sectionId: string): readonly string[] =>
   channelIdsBySection(state).get(sectionId) ?? noIds
 

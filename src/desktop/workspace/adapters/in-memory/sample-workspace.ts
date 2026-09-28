@@ -1,10 +1,15 @@
 /**
- * The in-memory source's sample overview: sections, channels, sessions
+ * The in-memory source's sample index: sections, channels, sessions
  * and their conversations, dated relative to `now` so they always read as
  * recent. Only `in-memory-source.ts` reads this; nothing else in the window
  * knows it exists.
  */
-import type { Channel, Overview, Section, SessionSummary } from "../../model/overview"
+import type {
+  Channel,
+  WorkspaceIndex,
+  Section,
+  SessionSummary,
+} from "../../model/workspace-index"
 import type { Activity, Message, Transcript } from "../../model/transcript"
 import { labsSamples } from "./sample-labs"
 import { starredSamples } from "./sample-starred"
@@ -38,9 +43,9 @@ const channels: Channel[] = [
   channel("dotfiles", "personal", "Shell, editor and machine setup"),
 ]
 
-/** The sample workspace as it stands at `now`: its overview, and every conversation. */
+/** The sample workspace as it stands at `now`: its index, and every conversation. */
 export function sampleWorkspace(now: number): {
-  overview: Overview
+  index: WorkspaceIndex
   transcripts: Map<string, Transcript>
 } {
   const ago = (minutes: number) => now - minutes * minute
@@ -82,5 +87,5 @@ export function sampleWorkspace(now: number): {
       ]
     }),
   )
-  return { overview: { sections, channels, sessions }, transcripts }
+  return { index: { sections, channels, sessions }, transcripts }
 }

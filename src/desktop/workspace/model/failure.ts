@@ -1,7 +1,7 @@
 /**
  * Why the source did not do what it was asked, as the workspace holds it: a
  * message marked not sent, an answer to an approval asked again, a
- * conversation or the overview that could not be read. State keeps the
+ * conversation or the index that could not be read. State keeps the
  * reason, never a sentence; the words a person is shown for each are the
  * UI's (`ui/failure-copy.ts`).
  *

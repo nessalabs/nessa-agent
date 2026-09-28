@@ -55,7 +55,7 @@ export interface SessionSummary {
   readonly revision: number
 }
 
-export interface Overview {
+export interface WorkspaceIndex {
   readonly sections: readonly Section[]
   readonly channels: readonly Channel[]
   readonly sessions: readonly SessionSummary[]

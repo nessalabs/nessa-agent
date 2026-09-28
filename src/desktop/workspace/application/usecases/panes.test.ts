@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { dropOutcome } from "../../model/drop"
 import { focusedPane, paneCount, panesOf, paneLimits } from "../../model/pane-layout"
-import { astra, roomyGrid, summary, testOverview } from "../../testing"
+import { astra, roomyGrid, summary, testIndex } from "../../testing"
 import { initialWorkspace, type WorkspaceState } from "../workspace-state"
 import {
   canOpenBeside,
@@ -16,11 +16,11 @@ import {
   openSession,
   resizePanes,
 } from "./panes"
-import { overviewLoaded } from "./updates"
+import { indexLoaded } from "./updates"
 
 const loaded = () =>
-  overviewLoaded(initialWorkspace, {
-    overview: testOverview(),
+  indexLoaded(initialWorkspace, {
+    index: testIndex(),
     draftId: "unused",
   })
 
@@ -60,7 +60,7 @@ describe("opening a session", () => {
     expect(openSession(state, { sessionId: "a", pane: 999 })).toBe(state)
   })
 
-  it("does nothing before the overview arrives", () => {
+  it("does nothing before the index arrives", () => {
     expect(openSession(initialWorkspace, { sessionId: "a" })).toBe(initialWorkspace)
     expect(openBeside(initialWorkspace, { sessionId: "a", room: roomy })).toBe(
       initialWorkspace,
@@ -102,11 +102,11 @@ describe("opening beside", () => {
   })
 
   it("replaces the target in a full workspace, and starts no draft beside one", () => {
-    const overview = testOverview()
-    let state = overviewLoaded(initialWorkspace, {
-      overview: {
-        ...overview,
-        sessions: [...overview.sessions, summary("e", "gateway", 50)],
+    const index = testIndex()
+    let state = indexLoaded(initialWorkspace, {
+      index: {
+        ...index,
+        sessions: [...index.sessions, summary("e", "gateway", 50)],
       },
       draftId: "unused",
     })

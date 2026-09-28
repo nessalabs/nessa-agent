@@ -8,7 +8,7 @@
  * `commands.ts`, which dispatch these.
  */
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
-import type { ModelRef, Overview } from "../../model/overview"
+import type { ModelRef, WorkspaceIndex } from "../../model/workspace-index"
 import type { Direction, PaneKey, Side, Zone } from "../../model/pane-layout"
 import type { PaneEdge, WorkspaceRoom } from "../../model/pane-sizing"
 import type { AttentionStatus } from "../../model/session-groups"
@@ -141,13 +141,13 @@ const workspaceSlice = createSlice({
     ) => navigation.fitToWindow(state, payload),
 
     // Sessions
-    overviewLoaded: (
+    indexLoaded: (
       state,
-      { payload }: Payload<{ overview: Overview; draftId: string }>,
-    ) => updates.overviewLoaded(state, payload),
-    overviewRequested: (state) => updates.overviewRequested(state),
-    overviewFailed: (state, { payload }: Payload<{ reason: WorkspaceFailureReason }>) =>
-      updates.overviewFailed(state, payload),
+      { payload }: Payload<{ index: WorkspaceIndex; draftId: string }>,
+    ) => updates.indexLoaded(state, payload),
+    indexRequested: (state) => updates.indexRequested(state),
+    indexFailed: (state, { payload }: Payload<{ reason: WorkspaceFailureReason }>) =>
+      updates.indexFailed(state, payload),
     updateReceived: (
       state,
       {

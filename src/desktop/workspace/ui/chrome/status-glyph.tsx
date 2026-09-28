@@ -1,4 +1,4 @@
-import type { SessionStatus } from "../../model/overview"
+import type { SessionStatus } from "../../model/workspace-index"
 import { statusLabels } from "../../model/session-groups"
 import { tooltip } from "../../../ui/tooltip"
 

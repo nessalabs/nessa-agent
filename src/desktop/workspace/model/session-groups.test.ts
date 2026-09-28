@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { SessionStatus, SessionSummary } from "./overview"
+import type { SessionStatus, SessionSummary } from "./workspace-index"
 import {
   branchCap,
   branchSessions,

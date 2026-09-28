@@ -13,12 +13,12 @@
  *
  * The stream of updates may lose some: a connection that drops, a listener
  * that joins late. Nothing here asks the source to replay them. A read of the
- * overview is the resync instead: its sessions are every session the source
+ * index is the resync instead: its sessions are every session the source
  * held when it answered, so one it no longer lists is taken out, and the
  * conversations shown in panes are read again (`loadWorkspace`).
  */
 import type { WorkspaceFailureReason } from "../model/failure"
-import type { ModelRef, Overview, SessionSummary } from "../model/overview"
+import type { ModelRef, WorkspaceIndex, SessionSummary } from "../model/workspace-index"
 import type { WorkspaceRoom } from "../model/pane-sizing"
 import type { Transcript } from "../model/transcript"
 
@@ -89,7 +89,7 @@ export interface WorkspaceSource {
    * it answers. A session it does not list is gone — the resync for updates
    * the stream lost.
    */
-  overview(): Promise<Overview>
+  index(): Promise<WorkspaceIndex>
   /** One session's conversation as it stands. */
   transcript(sessionId: string): Promise<Transcript>
   /** Changes to any session, until the returned function is called. */

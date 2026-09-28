@@ -2,7 +2,7 @@
  * What follows from a change of state, whoever caused it — a click, a
  * keystroke, an agent's dispatch: a session a pane now shows has its
  * conversation read, once (a refused read waits for `retryTranscript`); the
- * overview read again — the resync — reads every shown conversation again;
+ * index read again — the resync — reads every shown conversation again;
  * and a session shown is marked read, here and at the source.
  * Commands stay plain actions because these run beside the reducer rather
  * than inside each command.
@@ -88,11 +88,11 @@ export function workspaceEffects(
     },
   })
 
-  // The overview read again is the resync for what the stream lost: every
+  // The index read again is the resync for what the stream lost: every
   // conversation a pane shows is read again, held or not. The newer of the
   // read's answer and what is held is kept (`transcriptLoaded`).
   listener.startListening({
-    actionCreator: workspaceActions.overviewLoaded,
+    actionCreator: workspaceActions.indexLoaded,
     effect: (_action, api) => {
       for (const sessionId of shownSessionIds(api.getState().workspace))
         read(sessionId, api.dispatch)

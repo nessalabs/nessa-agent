@@ -3,7 +3,7 @@
 ## Purpose
 
 Turn the desktop window's workspace spike into production frontend code:
-the workspace's overview (sections → channels → sessions), chat panes that split and move,
+the workspace's index (sections → channels → sessions), chat panes that split and move,
 two selectable layouts, Settings, and themeable icons. It extends
 [0001](../done/0001-redux-toolkit-for-product-state.md)'s product state and
 [0002](../done/0002-conversation-vertical-and-gateway.md)'s gateway seam to the
@@ -45,7 +45,7 @@ The desktop window gets a `workspace` vertical in `src/desktop/workspace/`,
 laid out feature-first with roles below, like `src/conversation/`.
 
 - **`model/`** holds pure values and rules:
-  - the **overview**'s types (`model/overview.ts`: `Section`, `Channel`,
+  - the **index**'s types (`model/workspace-index.ts`: `Section`, `Channel`,
     `SessionSummary`, the session's model from the SDK catalogue) — see
     _Naming the overview_ below;
   - a **pane layout** (`pane-layout.ts`) of columns of stacked panes, one
@@ -82,7 +82,7 @@ laid out feature-first with roles below, like `src/conversation/`.
   - **one workspace shell** (`ui/layouts/workspace-shell.tsx`) and two
     layouts that are only a `SidebarRegion` each — see _Layouts_.
 
-The port is narrow and speaks the workspace's own types: the overview, a
+The port is narrow and speaks the workspace's own types: the index, a
 session's transcript, **one stream of replacement updates** (a summary, a
 transcript, a removal), send, approve and deny, and the three things the lists
 let a person change: pin, archive, mark read. Refusals are a typed
@@ -91,7 +91,7 @@ logged as one (`failureReason`, the one place that tells them apart). State
 holds the reason, never a sentence. Every replacement carries the source's
 **revision** of it (`model/revision.ts`), and the newer revision wins whichever
 channel brought it and whenever it arrived, so an update that overtakes a read,
-a read answered late, or an overview read while updates already flow cannot
+a read answered late, or an index read while updates already flow cannot
 undo anything. A session has two counters — its summary's and its
 conversation's — never compared with each other; **a removal is counted with
 the summary** (it is the summary's next revision), and is remembered with that
@@ -99,9 +99,9 @@ revision, so an older read cannot bring the session back. An update at a
 revision the source could not have sent is let go, and logged where it is
 received (`followWorkspace`, `loadWorkspace`); the reducers stay pure.
 
-**The stream may lose updates; the overview is the resync.** The port does
+**The stream may lose updates; the index is the resync.** The port does
 not ask the source to replay what a dropped connection or a late listener
-missed. A read of the overview is instead the source's whole list when it
+missed. A read of the index is instead the source's whole list when it
 answered, and so authoritative: dispatched again (`loadWorkspace`), a session
 it does not list — or lists in a channel it does not list — is taken out by
 the same removal path the stream's removals take, at the revision held, and
@@ -115,7 +115,7 @@ it, and the last pane starts over as a new session's home in the same channel.
 **What is kept of what is not shown** (`model/retention.ts`, as data): every
 conversation a pane shows, and the eight most recently active of the rest; the
 newest 256 removals. Anything let go is read again when a pane shows it; a read
-older than 256 removals is corrected by the next overview read.
+older than 256 removals is corrected by the next index read.
 
 **Commands.** Everything a person or an agent does is dispatched from
 `adapters/store/commands.ts`: plain actions where the state alone decides
@@ -131,7 +131,7 @@ architecture check keeps Redux out of `application/`, as it does for the
 conversation vertical. What follows from a change whoever caused it — reading
 a newly shown session's transcript, marking a shown one read — is a listener
 effect, so a plain action from an agent gets it too. "Shown means read" has
-that one owner: opening a session, the overview's first session, and a
+that one owner: opening a session, the index's first session, and a
 shown session the source marks unread again all reach it.
 
 **One fit rule for every change of layout.** Split, open beside, drop, move
@@ -328,7 +328,7 @@ pinned nor archived. Discarding its last refused message takes a shown one
 back to the new session's home it came from, under the same id, and lets an
 unshown one go; either way the window forgets all it held of it, and a summary
 from the source listed later under that id replaces the home, keeping the
-model chosen there. A summary is listed by one rule whether the overview
+model chosen there. A summary is listed by one rule whether the index
 read or the stream brings it. A read that fails after a conversation arrived
 another way changes nothing, and a read begun before its session was removed
 is let go whenever it answers. Starting over, a home keeps the model chosen
@@ -367,21 +367,21 @@ leave a read or a send hanging. The one mark the window clears itself is
 | `archiveSession` | nothing; a session at revision 0 is not archived (Archive is disabled) | its removal, delivered first, takes it out of the lists with everything the source said up to it; its pane closes, or the last starts over | left where it is | a summary the removal outranks stays out, whenever it arrives |
 | a session is shown | marked read, and the source told | nothing more | the mark stays cleared | marked unread again while shown: read again |
 | a shown session's transcript is read | the heading | the conversation, unless a newer one arrived meanwhile | the pane says why, and is not read again until "Try Again" (`retryTranscript`); a failure no pane shows any more is not kept, so the session is read afresh when shown again | the newer of it and the read's answer is kept, in either order |
-| the overview is read | nothing yet | the workspace opens on its first session; summaries the stream already brought, if newer, are kept | the workspace says why, with "Try Again" | a removal that arrived first keeps the session out |
-| the overview is read again (the resync) | nothing | a session it does not list, or lists in a channel it does not list, is taken out at the revision held — its pane closes, or the last starts over; every shown conversation is read again | an open workspace stays open, as it was | a summary the stream brought while the read was on its way stays |
+| the index is read | nothing yet | the workspace opens on its first session; summaries the stream already brought, if newer, are kept | the workspace says why, with "Try Again" | a removal that arrived first keeps the session out |
+| the index is read again (the resync) | nothing | a session it does not list, or lists in a channel it does not list, is taken out at the revision held — its pane closes, or the last starts over; every shown conversation is read again | an open workspace stays open, as it was | a summary the stream brought while the read was on its way stays |
 | a shown session's transcript read is answered with one the window cannot use (another session's, revision 0) | — | a fault, logged; the pane says why, with "Try Again" | — | — |
 | an update at a revision the source could not have sent | — | let go, logged where received | — | — |
 
-### Naming the overview
+### Naming the index
 
 The workspace's sections → channels → sessions was first "organisation",
 which collides with the wire's tenant `organization`. "Directory" collides
 too: a session runs in a working directory (`ConversationRuntime.workspace`,
 "Working directory" in the conversation details), and the panel handles
 dropped directories. "Listing" collides with the backend's
-`ConversationListing` port. **Overview** names what the read is — everything
+`ConversationListing` port. **WorkspaceIndex** names what the read is — everything
 the source holds, at a glance — and is used nowhere else; the port method is
-`overview()`.
+`index()`.
 
 ## Alternatives considered
 

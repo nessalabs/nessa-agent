@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { panesOf, paneShowing } from "../../model/pane-layout"
 import { retention } from "../../model/retention"
 import { emptyTranscript, type Transcript } from "../../model/transcript"
-import { astra, roomyGrid as roomy, summary, testOverview } from "../../testing"
+import { astra, roomyGrid as roomy, summary, testIndex } from "../../testing"
 import {
   initialWorkspace,
   modelForNextTurn,
@@ -11,9 +11,9 @@ import {
 import { closePane, createDraft, openBeside } from "./panes"
 import { chooseModel, messageSent } from "./sessions"
 import {
-  overviewFailed,
-  overviewLoaded,
-  overviewRequested,
+  indexFailed,
+  indexLoaded,
+  indexRequested,
   sessionRemoved,
   shownSessionIds,
   transcriptFailed,
@@ -24,8 +24,8 @@ import {
 } from "./updates"
 
 const loaded = () =>
-  overviewLoaded(initialWorkspace, {
-    overview: testOverview(),
+  indexLoaded(initialWorkspace, {
+    index: testIndex(),
     draftId: "unused",
   })
 
@@ -44,7 +44,7 @@ const transcript = (
   ],
 })
 
-describe("the overview arriving", () => {
+describe("the index arriving", () => {
   it("opens on the first channel's newest session and discloses what waits", () => {
     const state = loaded()
     expect(state.status).toBe("ready")
@@ -54,8 +54,8 @@ describe("the overview arriving", () => {
   })
 
   it("opens on a new session's home when there are no sessions", () => {
-    const state = overviewLoaded(initialWorkspace, {
-      overview: { ...testOverview(), sessions: [] },
+    const state = indexLoaded(initialWorkspace, {
+      index: { ...testIndex(), sessions: [] },
       draftId: "first",
     })
     expect(shown(state)).toEqual(["first"])
@@ -63,25 +63,25 @@ describe("the overview arriving", () => {
   })
 
   it("shows nothing at all with no channels to start in", () => {
-    const state = overviewLoaded(initialWorkspace, {
-      overview: { sections: [], channels: [], sessions: [] },
+    const state = indexLoaded(initialWorkspace, {
+      index: { sections: [], channels: [], sessions: [] },
       draftId: "first",
     })
     expect(state.panes).toBeNull()
     expect(state.status).toBe("ready")
   })
 
-  it("keeps the panes it has when the overview is read again", () => {
+  it("keeps the panes it has when the index is read again", () => {
     const two = openBeside(loaded(), { sessionId: "c", room: roomy })
-    const again = overviewLoaded(two, {
-      overview: testOverview(),
+    const again = indexLoaded(two, {
+      index: testIndex(),
       draftId: "x",
     })
     expect(again.panes).toBe(two.panes)
   })
 
   it("says why it could not be read", () => {
-    const state = overviewFailed(initialWorkspace, { reason: "unavailable" })
+    const state = indexFailed(initialWorkspace, { reason: "unavailable" })
     expect(state.status).toBe("failed")
     expect(state.failure).toBe("unavailable")
   })
@@ -185,11 +185,11 @@ describe("updates from the source", () => {
 
 describe("what goes with a session", () => {
   it("names the shown sessions still marked unread, the one the workspace opens on included", () => {
-    const overview = testOverview()
-    const state = overviewLoaded(initialWorkspace, {
-      overview: {
-        ...overview,
-        sessions: overview.sessions.map((session) =>
+    const index = testIndex()
+    const state = indexLoaded(initialWorkspace, {
+      index: {
+        ...index,
+        sessions: index.sessions.map((session) =>
           session.id === "a" ? { ...session, unread: true } : session,
         ),
       },
@@ -265,11 +265,11 @@ describe("what goes with a session", () => {
     expect(modelForNextTurn(listed, "new")).toEqual(astra)
   })
 
-  it("lists a summary the same way whether the overview read or the stream brings it", () => {
+  it("lists a summary the same way whether the index read or the stream brings it", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
-    const reread = overviewLoaded(drafted, {
-      overview: {
-        ...testOverview(),
+    const reread = indexLoaded(drafted, {
+      index: {
+        ...testIndex(),
         sessions: [summary("new", "desktop", 900, "running")],
       },
       draftId: "unused",
@@ -314,7 +314,7 @@ describe("what goes with a session", () => {
     const state = {
       ...loaded(),
       answers: { c: { approvalId: "ap", token: "t1" } },
-      chosenModels: { c: testOverview().sessions[3].model },
+      chosenModels: { c: testIndex().sessions[3].model },
     }
     const removed = sessionRemoved(state, {
       sessionId: "c",
@@ -338,19 +338,19 @@ describe("what goes with a session", () => {
     expect(transcriptLoaded(removed, { transcript: transcript("c", 4) })).toBe(removed)
   })
 
-  it("keeps an open workspace open when a later read of the overview fails", () => {
+  it("keeps an open workspace open when a later read of the index fails", () => {
     const state = loaded()
-    expect(overviewFailed(state, { reason: "unavailable" })).toBe(state)
+    expect(indexFailed(state, { reason: "unavailable" })).toBe(state)
   })
 
-  it("says nothing while the overview is read again after a failure", () => {
-    const failed = overviewFailed(initialWorkspace, { reason: "unavailable" })
-    expect(overviewRequested(failed)).toMatchObject({
+  it("says nothing while the index is read again after a failure", () => {
+    const failed = indexFailed(initialWorkspace, { reason: "unavailable" })
+    expect(indexRequested(failed)).toMatchObject({
       status: "loading",
       failure: null,
     })
     const ready = loaded()
-    expect(overviewRequested(ready)).toMatchObject({
+    expect(indexRequested(ready)).toMatchObject({
       status: "ready",
       failure: null,
       reading: { reads: 1, heard: [] },
@@ -397,29 +397,29 @@ describe("replacements out of order", () => {
     expect(twice.transcripts.a).toEqual(once.transcripts.a)
   })
 
-  it("keeps summaries the stream brought before an older overview read", () => {
+  it("keeps summaries the stream brought before an older index read", () => {
     const early = updateReceived(initialWorkspace, {
       update: {
         kind: "session",
         session: summary("a", "desktop", 999, "idle", { revision: 7 }),
       },
     })
-    const state = overviewLoaded(early, {
-      overview: testOverview(),
+    const state = indexLoaded(early, {
+      index: testIndex(),
       draftId: "x",
     })
     expect(state.sessions.a).toMatchObject({ status: "idle", revision: 7 })
     expect(state.sessions.b.revision).toBe(1)
   })
 
-  it("does not bring back a session removed before an older overview read", () => {
+  it("does not bring back a session removed before an older index read", () => {
     const removed = sessionRemoved(initialWorkspace, {
       sessionId: "b",
       revision: 2,
       draftId: "fresh",
     })
-    const state = overviewLoaded(removed, {
-      overview: testOverview(),
+    const state = indexLoaded(removed, {
+      index: testIndex(),
       draftId: "x",
     })
     expect(state.sessions.b).toBeUndefined()
@@ -467,10 +467,10 @@ describe("replacements out of order", () => {
     ).toBe(removed.sessions)
   })
 
-  it("keeps the view it has when the overview is read again", () => {
+  it("keeps the view it has when the index is read again", () => {
     const viewing = { ...loaded(), view: { kind: "status", status: "running" } as const }
-    const again = overviewLoaded(viewing, {
-      overview: testOverview(),
+    const again = indexLoaded(viewing, {
+      index: testIndex(),
       draftId: "x",
     })
     expect(again.view).toEqual(viewing.view)
@@ -484,16 +484,16 @@ describe("replacements out of order", () => {
   })
 })
 
-describe("the overview read again: the resync", () => {
+describe("the index read again: the resync", () => {
   const without = (...ids: string[]) => ({
-    ...testOverview(),
-    sessions: testOverview().sessions.filter((session) => !ids.includes(session.id)),
+    ...testIndex(),
+    sessions: testIndex().sessions.filter((session) => !ids.includes(session.id)),
   })
 
   it("takes out a session it no longer lists, closing its pane, and keeps it out", () => {
     const two = openBeside(loaded(), { sessionId: "c", room: roomy })
-    const resynced = overviewLoaded(overviewRequested(two), {
-      overview: without("c"),
+    const resynced = indexLoaded(indexRequested(two), {
+      index: without("c"),
       draftId: "x",
     })
     expect(resynced.sessions.c).toBeUndefined()
@@ -514,20 +514,20 @@ describe("the overview read again: the resync", () => {
   })
 
   it("starts the last pane over when the session it shows is no longer listed", () => {
-    const resynced = overviewLoaded(overviewRequested(loaded()), {
-      overview: without("a"),
+    const resynced = indexLoaded(indexRequested(loaded()), {
+      index: without("a"),
       draftId: "fresh",
     })
     expect(shown(resynced)).toEqual(["fresh"])
     expect(resynced.drafts.fresh.channelId).toBe("desktop")
   })
 
-  it("takes out a session listed in a channel the overview no longer lists", () => {
-    const overview = testOverview()
-    const resynced = overviewLoaded(overviewRequested(loaded()), {
-      overview: {
-        ...overview,
-        channels: overview.channels.filter((channel) => channel.id !== "gateway"),
+  it("takes out a session listed in a channel the index no longer lists", () => {
+    const index = testIndex()
+    const resynced = indexLoaded(indexRequested(loaded()), {
+      index: {
+        ...index,
+        channels: index.channels.filter((channel) => channel.id !== "gateway"),
       },
       draftId: "x",
     })
@@ -536,33 +536,33 @@ describe("the overview read again: the resync", () => {
   })
 
   it("keeps a session the stream brought while the read was on its way", () => {
-    const asked = overviewRequested(loaded())
+    const asked = indexRequested(loaded())
     const brought = updateReceived(asked, {
       update: { kind: "session", session: summary("z", "gateway", 900) },
     })
-    const resynced = overviewLoaded(brought, { overview: testOverview(), draftId: "x" })
+    const resynced = indexLoaded(brought, { index: testIndex(), draftId: "x" })
     expect(resynced.sessions.z).toBeDefined()
     expect(resynced.reading).toBeNull()
     // Heard before the read was asked, it is not: the read is the newer word.
     const early = updateReceived(loaded(), {
       update: { kind: "session", session: summary("z", "gateway", 900) },
     })
-    const reread = overviewLoaded(overviewRequested(early), {
-      overview: testOverview(),
+    const reread = indexLoaded(indexRequested(early), {
+      index: testIndex(),
       draftId: "x",
     })
     expect(reread.sessions.z).toBeUndefined()
   })
 
   it("keeps what the stream brought until the last of two reads on their way answers", () => {
-    const twice = overviewRequested(overviewRequested(loaded()))
+    const twice = indexRequested(indexRequested(loaded()))
     const brought = updateReceived(twice, {
       update: { kind: "session", session: summary("z", "gateway", 900) },
     })
-    const first = overviewLoaded(brought, { overview: testOverview(), draftId: "x" })
+    const first = indexLoaded(brought, { index: testIndex(), draftId: "x" })
     expect(first.sessions.z).toBeDefined()
     expect(first.reading).toEqual({ reads: 1, heard: ["z"] })
-    const second = overviewLoaded(first, { overview: testOverview(), draftId: "y" })
+    const second = indexLoaded(first, { index: testIndex(), draftId: "y" })
     expect(second.sessions.z).toBeDefined()
     expect(second.reading).toBeNull()
   })
@@ -573,20 +573,20 @@ describe("the overview read again: the resync", () => {
       sessionId: "new",
       message: { id: "m1", role: "user", at: 1, parts: [{ kind: "text", text: "hi" }] },
     })
-    const resynced = overviewLoaded(overviewRequested(started), {
-      overview: testOverview(),
+    const resynced = indexLoaded(indexRequested(started), {
+      index: testIndex(),
       draftId: "x",
     })
     expect(resynced.sessions.new.revision).toBe(0)
   })
 
   it("looks at another channel when the one looked at is no longer listed", () => {
-    const overview = testOverview()
-    const resynced = overviewLoaded(overviewRequested(loaded()), {
-      overview: {
-        ...overview,
-        channels: overview.channels.filter((channel) => channel.id !== "desktop"),
-        sessions: overview.sessions.filter((session) => session.channelId !== "desktop"),
+    const index = testIndex()
+    const resynced = indexLoaded(indexRequested(loaded()), {
+      index: {
+        ...index,
+        channels: index.channels.filter((channel) => channel.id !== "desktop"),
+        sessions: index.sessions.filter((session) => session.channelId !== "desktop"),
       },
       draftId: "x",
     })
@@ -618,10 +618,10 @@ describe("what is kept of sessions no pane shows", () => {
     const sessions = Array.from({ length: retention.unshownConversations + 2 }, (_, i) =>
       summary(`s${i}`, "gateway", 1000 + i),
     )
-    const state = overviewLoaded(initialWorkspace, {
-      overview: {
-        ...testOverview(),
-        sessions: [...testOverview().sessions, ...sessions],
+    const state = indexLoaded(initialWorkspace, {
+      index: {
+        ...testIndex(),
+        sessions: [...testIndex().sessions, ...sessions],
       },
       draftId: "x",
     })

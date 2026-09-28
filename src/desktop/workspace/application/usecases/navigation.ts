@@ -3,7 +3,7 @@
  * from the sidebar, folding and unfolding the sidebar's parts, and the side
  * columns themselves.
  */
-import { byRecency } from "../../model/overview"
+import { byRecency } from "../../model/workspace-index"
 import type { WorkspaceRoom } from "../../model/pane-sizing"
 import { chosen, fitted } from "../../../model/side-column"
 import { mostPressing, type AttentionStatus } from "../../model/session-groups"

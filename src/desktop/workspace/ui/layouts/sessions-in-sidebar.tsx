@@ -1,4 +1,5 @@
 import type { HostKind } from "../../../../host/features"
+import { AgentsOverviewScope } from "../../../experiments/agents-overview"
 import { treeSidebarLimits } from "../../model/window-fit"
 import { WorkspaceShell, type SidebarRegion } from "./workspace-shell"
 
@@ -18,5 +19,9 @@ export function SessionsInSidebar(props: {
   hostKind: HostKind
   browserSurface: boolean
 }) {
-  return <WorkspaceShell region={region} {...props} />
+  return (
+    <AgentsOverviewScope>
+      <WorkspaceShell region={region} {...props} />
+    </AgentsOverviewScope>
+  )
 }

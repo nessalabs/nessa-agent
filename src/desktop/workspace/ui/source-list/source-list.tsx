@@ -35,7 +35,10 @@ import { ChannelRow, SidebarRow } from "./channel-row"
 import "./source-list.css"
 import { tooltip } from "../../../ui/tooltip"
 import { statusLabels, type AttentionStatus } from "../../model/session-groups"
-import { AgentsOverviewEntry } from "../../../experiments/agents-overview"
+import {
+  AgentsOverviewEntry,
+  useAgentsOverviewEnabled,
+} from "../../../experiments/agents-overview"
 
 /**
  * The sidebar's source list: sections of channels on a glass pane, with the
@@ -133,16 +136,25 @@ export const SourceList = memo(function SourceList({
   )
 })
 
-/** "Needs you" and "Running": every session in that state, in the list beside. */
+/**
+ * "Needs you" and "Running": every session in that state, in the list beside;
+ * or, with the agents overview on, its entry in their place.
+ */
 function StatusViews() {
   const dispatch = useWorkspaceDispatch()
   const counts = useWorkspaceSelector(selectStatusCounts, shallowEqual)
   const view = useWorkspaceSelector(selectView)
   const showing = (status: AttentionStatus) =>
     view.kind === "status" && view.status === status
+  // The agents overview, when on, holds both views: its entry stands in their place.
+  if (useAgentsOverviewEnabled())
+    return (
+      <div className="workspace-smart">
+        <AgentsOverviewEntry />
+      </div>
+    )
   return (
     <div className="workspace-smart">
-      <AgentsOverviewEntry />
       <SidebarRow
         icon="needsYou"
         label={statusLabels["needs-you"]}
@@ -162,11 +174,16 @@ function StatusViews() {
   )
 }
 
-/** Search, which opens the quick switcher, and the way to the next session waiting. */
+/**
+ * Search, which opens the quick switcher, and the way to the next session
+ * waiting — or, with the agents overview on, its entry in that place.
+ */
 function TreeTop() {
   const dispatch = useWorkspaceDispatch()
   const frame = useWorkspaceFrame()
   const waiting = useWorkspaceSelector(selectWaitingIds, shallowEqual)
+  // With the agents overview on, its entry is the way to what waits.
+  const overviewEnabled = useAgentsOverviewEnabled()
   const shortcut = frame.shortcut("switcher")
   return (
     <>
@@ -180,7 +197,7 @@ function TreeTop() {
         {shortcut ? <kbd className="workspace-kbd">{shortcut}</kbd> : null}
       </button>
       <AgentsOverviewEntry />
-      {waiting.length > 0 ? (
+      {waiting.length > 0 && !overviewEnabled ? (
         <button
           type="button"
           className="workspace-row workspace-needs-button"

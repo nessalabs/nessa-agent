@@ -5,7 +5,7 @@
  * the model's (`model/pane-layout.ts`, `model/pane-sizing.ts`).
  */
 import { fitted as fittedColumn } from "../../../model/side-column"
-import { defaultModel, type ModelRef } from "../../model/overview"
+import { defaultModel, type ModelRef } from "../../model/workspace-index"
 import {
   focusPane as focusLayoutPane,
   locate,

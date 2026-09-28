@@ -12,7 +12,7 @@
  *                   └──no pane shows it──▶ gone
  * ```
  */
-import type { ModelRef, SessionSummary } from "./overview"
+import type { ModelRef, SessionSummary } from "./workspace-index"
 import { titleFrom } from "./transcript"
 
 export interface Draft {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { focusedPane, panesOf } from "../../model/pane-layout"
 import { sessionListLimits, sidebarLimits } from "../../model/window-fit"
-import { roomyGrid, testOverview } from "../../testing"
+import { roomyGrid, testIndex } from "../../testing"
 import { drawnColumns, initialWorkspace, type WorkspaceState } from "../workspace-state"
 import {
   fitToWindow,
@@ -18,11 +18,11 @@ import {
   toggleSidebar,
 } from "./navigation"
 import { closePane, openBeside } from "./panes"
-import { overviewLoaded } from "./updates"
+import { indexLoaded } from "./updates"
 
 const loaded = () =>
-  overviewLoaded(initialWorkspace, {
-    overview: testOverview(),
+  indexLoaded(initialWorkspace, {
+    index: testIndex(),
     draftId: "unused",
   })
 

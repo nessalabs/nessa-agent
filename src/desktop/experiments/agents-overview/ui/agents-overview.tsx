@@ -10,12 +10,20 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../../workspace"
 import { openSession } from "../../../workspace"
 import { matchesChord } from "../../../workspace/adapters/dom/shortcuts"
 import type { WorkspaceFailureReason } from "../../../workspace/model/failure"
-import type { SessionSummary } from "../../../workspace/model/overview"
+import type { SessionSummary } from "../../../workspace/model/workspace-index"
 import type { Approval } from "../../../workspace/model/transcript"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { durationOf, useReflow } from "../adapters/reflow"
 import { useAtLeastWide } from "../adapters/surface-width"
-import { answerRequest, selectGlance, selectReady } from "../adapters/workspace-bridge"
+import {
+  answerRequest,
+  selectGlance,
+  selectReady,
+  tagsOf,
+} from "../adapters/workspace-bridge"
+import { useAgentsFilterPreference } from "../adapters/preference"
+import { useNow } from "../../../workspace/adapters/dom/clock"
+import { FilterMenu } from "./filter-menu"
 import {
   glanceLine,
   readingOrder,
@@ -60,9 +68,14 @@ export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
     () => settling.map(({ sessionId, updatedAt }) => ({ sessionId, updatedAt })),
     [settling],
   )
-  const glance = useWorkspaceSelector((state) => selectGlance(state, held), sameGlance)
-  const order = useMemo(() => readingOrder(glance), [glance])
+  const [filter, setFilter] = useAgentsFilterPreference()
+  const now = useNow(60_000)
   const [active, setActive] = useState<string | null>(null)
+  const glance = useWorkspaceSelector(
+    (state) => selectGlance(state, held, { filter, now, tagsOf, looking: active }),
+    sameGlance,
+  )
+  const order = useMemo(() => readingOrder(glance), [glance])
   const current = active !== null && order.includes(active) ? active : (order[0] ?? null)
   const list = useRef<HTMLDivElement>(null)
   useReflow(list)
@@ -183,6 +196,10 @@ export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
   )
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    // A menu opened from the list (the filter) is portalled elsewhere in the
+    // page but bubbles here through React: its keys are its own.
+    if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target))
+      return
     const binding = overviewKeys.find((candidate) =>
       matchesChord(event.nativeEvent, candidate.chord),
     )
@@ -190,6 +207,17 @@ export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
     if (binding.command === "leave") {
       event.preventDefault()
       onLeave()
+      return
+    }
+    if (binding.command === "reply") {
+      event.preventDefault()
+      const from =
+        event.target instanceof HTMLElement
+          ? event.target.closest<HTMLElement>("[data-overview-item]")?.dataset
+              .overviewItem
+          : undefined
+      const to = from ?? current
+      if (to !== null) reply(to)
       return
     }
     const step = steps[binding.command]
@@ -237,8 +265,28 @@ export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
     if (!splitNow.current) setExpanded((open) => (open === sessionId ? null : sessionId))
   }, [])
 
+  // ⌘R: the keyboard goes to the reply pill of the session it is on, its
+  // peek opened first where the peek is beneath the row.
+  const section = useRef<HTMLElement>(null)
+  const reply = (sessionId: string) => {
+    setActive(sessionId)
+    if (!splitNow.current) setExpanded(sessionId)
+    requestAnimationFrame(() =>
+      section.current
+        ?.querySelector<HTMLTextAreaElement>(
+          `[data-reply-for="${CSS.escape(sessionId)}"] textarea`,
+        )
+        ?.focus(),
+    )
+  }
+  const currentNow = useRef(current)
+  currentNow.current = current
+  // Escape in a pill: back to the row it replies to.
+  const leaveReply = useCallback(() => focusItem(currentNow.current), [focusItem])
+
   return (
     <section
+      ref={section}
       className="agents-overview"
       aria-label="Agents"
       data-alt={alt || undefined}
@@ -253,7 +301,10 @@ export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
             onKeyDown={onKeyDown}
           >
             <header className="agents-overview-header">
-              <h1>Agents</h1>
+              <div className="agents-overview-title">
+                <h1>Agents</h1>
+                <FilterMenu filter={filter} onChange={setFilter} />
+              </div>
               <p>{ready ? glanceLine(glance) : "\u00a0"}</p>
             </header>
             {ready ? (
@@ -268,6 +319,12 @@ export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
                 onChoose={choose}
                 onOpen={open}
                 onAnswer={answer}
+                onLeaveReply={leaveReply}
+                onShowAll={
+                  filter.scope === "all"
+                    ? undefined
+                    : () => setFilter({ ...filter, scope: "all" })
+                }
               />
             ) : null}
             <p className="agents-overview-said" aria-live="polite">
@@ -284,6 +341,7 @@ export function AgentsOverview({ onLeave }: { onLeave: () => void }) {
               failure={failures.get(current)}
               onOpen={open}
               onAnswer={answer}
+              onLeaveReply={leaveReply}
             />
           </aside>
         ) : null}
@@ -318,6 +376,8 @@ function Groups({
   onChoose,
   onOpen,
   onAnswer,
+  onLeaveReply,
+  onShowAll,
 }: {
   glance: AgentsGlance
   current: string | null
@@ -329,6 +389,9 @@ function Groups({
   onChoose: (id: string) => void
   onOpen: (sessionId: string) => void
   onAnswer: (summary: SessionSummary, approval: Approval, choice: Answer) => void
+  onLeaveReply: () => void
+  /** Widens the filter to every session; absent when it already lists them all. */
+  onShowAll: (() => void) | undefined
 }) {
   const row = (sessionId: string) => ({
     sessionId,
@@ -339,6 +402,7 @@ function Groups({
     onChoose,
     onOpen,
     onAnswer,
+    onLeaveReply,
   })
   return (
     <>
@@ -385,10 +449,30 @@ function Groups({
           </ul>
         </section>
       ) : null}
-      {glance.resting > 0 ? (
-        <p className="agents-overview-resting" data-reflow="resting">
-          {glance.resting} more {glance.resting === 1 ? "session is" : "sessions are"}{" "}
-          idle
+      {glance.earlier.length > 0 ? (
+        <section className="agents-overview-group" aria-labelledby="agents-earlier">
+          <h2 id="agents-earlier" data-reflow="title:earlier">
+            Earlier
+          </h2>
+          <ul role="list" className="agents-overview-list">
+            {glance.earlier.map((sessionId) => (
+              <SessionRow key={sessionId} {...row(sessionId)} kind="earlier" />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {glance.hidden > 0 ? (
+        <p className="agents-overview-resting" data-reflow="hidden">
+          {glance.hidden} more {glance.hidden === 1 ? "session" : "sessions"} outside this
+          view
+          {onShowAll ? (
+            <>
+              {" · "}
+              <button type="button" onClick={onShowAll}>
+                Show All
+              </button>
+            </>
+          ) : null}
         </p>
       ) : null}
     </>

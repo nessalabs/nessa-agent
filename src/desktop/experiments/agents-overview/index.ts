@@ -16,13 +16,16 @@
  * them, and come back as the workspace's own updates. The bridge says what
  * workspace API would replace its two thunks.
  *
- * A layout wraps its columns in `AgentsOverviewScope`, its pane grid in
- * `AgentsOverviewArea`, and puts `AgentsOverviewEntry` in the sidebar; each
- * draws nothing while the experiment is off.
+ * A layout wraps its shell in `AgentsOverviewScope`; the shell wraps its pane
+ * grid in `AgentsOverviewArea` and, while `useAgentsOverviewShown`, sets the
+ * session list aside so the overview fills the content region; the sidebar
+ * shows `AgentsOverviewEntry`. Each draws nothing while the experiment is off.
  */
 export { useAgentsOverviewPreference } from "./adapters/preference"
 export {
   AgentsOverviewArea,
   AgentsOverviewEntry,
   AgentsOverviewScope,
+  useAgentsOverviewEnabled,
+  useAgentsOverviewShown,
 } from "./ui/overview-scope"

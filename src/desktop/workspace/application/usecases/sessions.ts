@@ -11,7 +11,7 @@
 import type { WorkspaceFailureReason } from "../../model/failure"
 import { paneShowing } from "../../model/pane-layout"
 import { knownToSource } from "../../model/revision"
-import type { ModelRef } from "../../model/overview"
+import type { ModelRef } from "../../model/workspace-index"
 import { startSession } from "../../model/session-lifecycle"
 import { messageText, type Message } from "../../model/transcript"
 import {

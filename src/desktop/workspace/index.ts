@@ -1,5 +1,5 @@
 /**
- * The desktop window's workspace: overview, sessions and chat panes, as
+ * The desktop window's workspace: index, sessions and chat panes, as
  * a Redux projection of one port. See ADR 238.
  *
  * ```text

@@ -1,7 +1,9 @@
 /**
  * A peek at a session without opening it: what its agent is doing now, the
- * last few things it did this turn, and the last thing it said. Read from
- * the session's conversation; nothing here is kept apart from it.
+ * last few things it did this turn, and the last thing said — by the agent,
+ * or by the person when they wrote last, so a reply sent from the peek shows
+ * there until the agent answers. Read from the session's conversation;
+ * nothing here is kept apart from it.
  */
 import {
   messageText,
@@ -19,8 +21,12 @@ export interface Peek {
   readonly steps: readonly StepPart[]
   /** How many of the turn's steps came before those. */
   readonly earlier: number
-  /** The agent's last words, as plain text, and when. */
-  readonly said: { readonly text: string; readonly at: number } | null
+  /** The last words in it, as plain text, when, and whose. */
+  readonly said: {
+    readonly text: string
+    readonly at: number
+    readonly by: "agent" | "you"
+  } | null
 }
 
 /**
@@ -42,11 +48,17 @@ export function peekOf(transcript: Transcript): Peek {
   )
   const lastWords = [...messages]
     .reverse()
-    .find((message) => message.role === "agent" && messageText(message).trim() !== "")
+    .find((message) => messageText(message).trim() !== "")
   return {
     activity: transcript.activity,
     steps: steps.slice(-peekSteps),
     earlier: Math.max(0, steps.length - peekSteps),
-    said: lastWords ? { text: messageText(lastWords).trim(), at: lastWords.at } : null,
+    said: lastWords
+      ? {
+          text: messageText(lastWords).trim(),
+          at: lastWords.at,
+          by: lastWords.role === "user" ? "you" : "agent",
+        }
+      : null,
   }
 }

@@ -12,7 +12,7 @@ import { selectChannels, selectListedSessions } from "../../adapters/store/selec
 import { useNow } from "../../adapters/dom/clock"
 import { focusComposer } from "../../adapters/dom/focus"
 import { commandKey, commandLabel } from "../../adapters/dom/shortcuts"
-import { agentName, agentOf } from "../../model/overview"
+import { agentName, agentOf } from "../../model/workspace-index"
 import { switcherRows, type SwitcherRow } from "../../model/session-search"
 import { sessionTime } from "../../model/time-labels"
 import { StatusGlyph } from "../chrome/status-glyph"

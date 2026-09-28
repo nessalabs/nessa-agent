@@ -1,5 +1,5 @@
 /**
- * The workspace as the window holds it: the source's overview and the
+ * The workspace as the window holds it: the source's index and the
  * transcripts it has loaded, the new sessions not yet started, where each
  * conversation sits, and the window's own arrangement — which columns are
  * open, what the session list shows, which parts of the sidebar are folded.
@@ -9,7 +9,7 @@
  * the store in `adapters/store/` applies them.
  */
 import type { WorkspaceFailureReason } from "../model/failure"
-import type { Channel, ModelRef, Section, SessionSummary } from "../model/overview"
+import type { Channel, ModelRef, Section, SessionSummary } from "../model/workspace-index"
 import { focusedPane, panesOf, type PaneLayout } from "../model/pane-layout"
 import { keptConversations, type Removal } from "../model/retention"
 import { drawn, type SideColumn } from "../../model/side-column"
@@ -56,10 +56,10 @@ export type LoadStatus = "loading" | "ready" | "failed"
 
 export interface WorkspaceState {
   readonly status: LoadStatus
-  /** Why the overview could not be read, when it could not. */
+  /** Why the index could not be read, when it could not. */
   readonly failure: WorkspaceFailureReason | null
   /**
-   * While a read of the overview is on its way: how many, and the sessions
+   * While a read of the index is on its way: how many, and the sessions
    * the stream brought meanwhile, which the read may predate — a session it
    * does not list is taken out unless it is one of these. `null` when no read
    * is on its way.
@@ -84,7 +84,7 @@ export interface WorkspaceState {
   readonly transcriptFailures: Readonly<Record<string, WorkspaceFailureReason>>
   /**
    * Sessions the source removed, newest last, with the summary revision it
-   * removed them at, so an older summary — an overview read before the
+   * removed them at, so an older summary — an index read before the
    * removal, say — cannot bring one back. Bounded (`model/retention.ts`).
    */
   readonly removed: readonly Removal[]
@@ -103,7 +103,7 @@ export interface WorkspaceState {
    * write it (`setComposerText`). Sent, or its session let go, it goes.
    */
   readonly composerText: Readonly<Record<string, string>>
-  /** Where conversations sit; none until the overview arrives. */
+  /** Where conversations sit; none until the index arrives. */
   readonly panes: PaneLayout | null
   readonly view: SessionView
   readonly chrome: Chrome

@@ -5,7 +5,7 @@
  * header's counts follow the same choice, since they are counted from what
  * this lets through.
  */
-import type { SessionSummary } from "../../../workspace/model/overview"
+import type { SessionSummary } from "../../../workspace/model/workspace-index"
 
 /** `ongoing`: waiting on the person or working. `all`: every session, idle ones too. */
 export type AgentsScope = "ongoing" | "all"
@@ -45,8 +45,9 @@ export const rangeLabels: Readonly<Record<AgentsRange, string>> = {
   month: "Last 30 days",
 }
 
-const scopes: readonly AgentsScope[] = ["ongoing", "all"]
-const ranges: readonly AgentsRange[] = ["any", "today", "week", "month"]
+/** The choices, in the order the menu offers them. */
+export const scopes: readonly AgentsScope[] = ["ongoing", "all"]
+export const ranges: readonly AgentsRange[] = ["any", "today", "week", "month"]
 
 const day = 24 * 60 * 60 * 1000
 

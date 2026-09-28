@@ -7,14 +7,7 @@ import { describe, expect, it } from "vitest"
 import { WorkspaceSourceError } from "../../application/ports"
 import { panesOf } from "../../model/pane-layout"
 import { emptyTranscript } from "../../model/transcript"
-import {
-  astra,
-  fakeSource,
-  settle,
-  summary,
-  testOverview,
-  testStore,
-} from "../../testing"
+import { astra, fakeSource, settle, summary, testIndex, testStore } from "../../testing"
 import {
   approve,
   archiveSession,
@@ -53,7 +46,7 @@ const outboxOf = (store: ReturnType<typeof testStore>, sessionId: string) =>
   store.getState().workspace.outbox[sessionId] ?? []
 
 describe("loading", () => {
-  it("opens on the overview, and reads the conversation the pane shows", async () => {
+  it("opens on the index, and reads the conversation the pane shows", async () => {
     const { store, source } = await ready()
     expect(shown(store)).toEqual(["a"])
     expect(source.calls).toContainEqual(["transcript", "a"])
@@ -63,9 +56,9 @@ describe("loading", () => {
     })
   })
 
-  it("says why when the overview cannot be read", async () => {
+  it("says why when the index cannot be read", async () => {
     const source = fakeSource()
-    source.refuse("overview", "unavailable")
+    source.refuse("index", "unavailable")
     const { store } = await ready(source)
     expect(store.getState().workspace.status).toBe("failed")
     expect(store.getState().workspace.failure).toBe("unavailable")
@@ -261,9 +254,9 @@ describe("reads that fail or are overtaken", () => {
     })
   })
 
-  it("keeps what the stream said before the overview was read", async () => {
+  it("keeps what the stream said before the index was read", async () => {
     const source = fakeSource()
-    source.hold("overview")
+    source.hold("index")
     const store = testStore(source)
     store.dispatch(followWorkspace())
     const loading = store.dispatch(loadWorkspace())
@@ -272,7 +265,7 @@ describe("reads that fail or are overtaken", () => {
       kind: "session",
       session: summary("a", "desktop", 999, "idle", { revision: 4 }),
     })
-    await source.release("overview")
+    await source.release("index")
     await loading
     const workspace = store.getState().workspace
     expect(workspace.sessions.c).toBeUndefined()
@@ -315,12 +308,12 @@ describe("marking read", () => {
     const { store, source } = await ready()
     store.dispatch(openBeside({ sessionId: "c" }))
     await settle()
-    const overview = testOverview()
-    // One read of the overview marks both shown sessions unread at once.
-    source.overview = () =>
+    const index = testIndex()
+    // One read of the index marks both shown sessions unread at once.
+    source.index = () =>
       Promise.resolve({
-        ...overview,
-        sessions: overview.sessions.map((session) =>
+        ...index,
+        sessions: index.sessions.map((session) =>
           session.id === "a" || session.id === "c"
             ? { ...session, unread: true, revision: 2 }
             : session,
@@ -335,10 +328,10 @@ describe("marking read", () => {
   })
 
   it("marks the session the workspace opens on read, here and at the source", async () => {
-    const overview = testOverview()
+    const index = testIndex()
     const source = fakeSource({
-      ...overview,
-      sessions: overview.sessions.map((session) =>
+      ...index,
+      sessions: index.sessions.map((session) =>
         session.id === "a" ? { ...session, unread: true } : session,
       ),
     })
@@ -1000,19 +993,19 @@ describe("pinning and archiving", () => {
   })
 })
 
-describe("the overview read again", () => {
+describe("the index read again", () => {
   it("takes out what it no longer lists and reads every shown conversation again", async () => {
     const { store, source } = await ready()
     store.dispatch(openBeside({ sessionId: "c" }))
     await settle()
     const reads = () => source.calls.filter((call) => call[0] === "transcript").length
     const before = reads()
-    const overview = testOverview()
-    // The stream lost c's removal; the next read of the overview does not list it.
-    source.overview = () =>
+    const index = testIndex()
+    // The stream lost c's removal; the next read of the index does not list it.
+    source.index = () =>
       Promise.resolve({
-        ...overview,
-        sessions: overview.sessions.filter((session) => session.id !== "c"),
+        ...index,
+        sessions: index.sessions.filter((session) => session.id !== "c"),
       })
     await store.dispatch(loadWorkspace())
     await settle()
@@ -1046,14 +1039,14 @@ describe("the overview read again", () => {
     expect(logged).toHaveLength(2)
   })
 
-  it("says so when the overview lists a session at a revision the source could not have sent", async () => {
+  it("says so when the index lists a session at a revision the source could not have sent", async () => {
     const source = fakeSource()
-    const overview = testOverview()
-    source.overview = () =>
+    const index = testIndex()
+    source.index = () =>
       Promise.resolve({
-        ...overview,
+        ...index,
         sessions: [
-          ...overview.sessions,
+          ...index.sessions,
           summary("z", "desktop", 1, "idle", { revision: 0 }),
         ],
       })
@@ -1067,10 +1060,7 @@ describe("the overview read again", () => {
       console.warn = warn
     }
     expect(logged).toEqual([
-      [
-        "The overview listed sessions at a revision the source could not have sent",
-        ["z"],
-      ],
+      ["The index listed sessions at a revision the source could not have sent", ["z"]],
     ])
   })
 })

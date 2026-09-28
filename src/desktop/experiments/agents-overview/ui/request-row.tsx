@@ -13,7 +13,7 @@ import {
   agentName,
   agentOf,
   type SessionSummary,
-} from "../../../workspace/model/overview"
+} from "../../../workspace/model/workspace-index"
 import { sessionTime } from "../../../workspace/model/time-labels"
 import type { Approval } from "../../../workspace/model/transcript"
 import { AgentTile } from "../../../workspace/ui/chrome/agent-tile"
@@ -48,6 +48,7 @@ export const RequestRow = memo(function RequestRow({
   onChoose,
   onOpen,
   onAnswer,
+  onLeaveReply,
 }: {
   sessionId: string
   /** The one the keyboard is on, or lands on when the list is entered. */
@@ -64,6 +65,7 @@ export const RequestRow = memo(function RequestRow({
   onChoose: (sessionId: string) => void
   onOpen: (sessionId: string) => void
   onAnswer: (summary: SessionSummary, approval: Approval, choice: Answer) => void
+  onLeaveReply: () => void
 }) {
   const live = useWorkspaceSelector((state) => selectSummary(state, sessionId))
   const summary = settling?.summary ?? live
@@ -229,6 +231,7 @@ export const RequestRow = memo(function RequestRow({
             failure={failure}
             onOpen={onOpen}
             onAnswer={onAnswer}
+            onLeaveReply={onLeaveReply}
           />
         </div>
       ) : null}

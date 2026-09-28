@@ -10,7 +10,7 @@ import {
   byRecency,
   type Channel,
   type SessionSummary,
-} from "./overview"
+} from "./workspace-index"
 import { statusLabels } from "./session-groups"
 
 export interface FuzzyMatch {

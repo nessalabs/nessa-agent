@@ -1,5 +1,5 @@
 /**
- * What the workspace's tests share: a small overview, a source whose
+ * What the workspace's tests share: a small index, a source whose
  * every answer the test decides — success, a typed refusal, or silence until
  * released — and a real desktop store around it. Only tests import this.
  */
@@ -12,7 +12,11 @@ import type {
 import type { WorkspaceFailureReason } from "./model/failure"
 import type { WorkspaceRoom } from "./model/pane-sizing"
 import { WorkspaceSourceError } from "./application/ports"
-import type { Overview, SessionStatus, SessionSummary } from "./model/overview"
+import type {
+  WorkspaceIndex,
+  SessionStatus,
+  SessionSummary,
+} from "./model/workspace-index"
 import type { Transcript } from "./model/transcript"
 import { emptyTranscript } from "./model/transcript"
 
@@ -46,7 +50,7 @@ export function summary(
  * Two sections; `desktop` holds three sessions (one waiting, one running),
  * `gateway` one, `empty` none.
  */
-export function testOverview(): Overview {
+export function testIndex(): WorkspaceIndex {
   return {
     sections: [
       { id: "starred", name: "Starred" },
@@ -81,14 +85,14 @@ export interface FakeSource extends WorkspaceSource {
   transcripts: Map<string, Transcript>
 }
 
-export function fakeSource(overview: Overview = testOverview()): FakeSource {
+export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
   const listeners = new Set<(update: WorkspaceUpdate) => void>()
   const refusals = new Map<Method, WorkspaceFailureReason>()
   const held = new Map<Method, (() => void)[] | null>()
   const calls: unknown[][] = []
   // The summaries as the source last said them, so pin and archive report the next revision.
   const archived = new Set<string>()
-  const summaries = new Map(overview.sessions.map((session) => [session.id, session]))
+  const summaries = new Map(index.sessions.map((session) => [session.id, session]))
   const emit = (update: WorkspaceUpdate) => {
     if (update.kind === "session") {
       // Listed again by the source itself: it holds the session once more.
@@ -102,7 +106,7 @@ export function fakeSource(overview: Overview = testOverview()): FakeSource {
     listeners.forEach((listener) => listener(update))
   }
   const transcripts = new Map<string, Transcript>(
-    overview.sessions.map((session) => [
+    index.sessions.map((session) => [
       session.id,
       // The source counts from 1; revision 0 is the window's own.
       { ...emptyTranscript(session.id), revision: 1 },
@@ -148,7 +152,7 @@ export function fakeSource(overview: Overview = testOverview()): FakeSource {
       await Promise.resolve()
     },
     emit,
-    overview: () => answer("overview", [], () => overview),
+    index: () => answer("index", [], () => index),
     transcript: (sessionId) =>
       answer("transcript", [sessionId], () => {
         if (archived.has(sessionId)) throw new WorkspaceSourceError("unknown-session")

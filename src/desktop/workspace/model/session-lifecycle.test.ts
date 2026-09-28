@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { agentOf, modelName } from "./overview"
+import { agentOf, modelName } from "./workspace-index"
 import { keepShownDrafts, startSession, type Draft } from "./session-lifecycle"
 
 const opus = { provider: "anthropic", modelId: "claude-opus-5" }

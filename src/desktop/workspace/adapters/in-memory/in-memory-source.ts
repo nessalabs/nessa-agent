@@ -10,7 +10,7 @@
  * answer. What it holds is replaced, never changed: every update it emits is
  * a new value, and a value it has handed out stays as it was.
  */
-import type { SessionSummary } from "../../model/overview"
+import type { SessionSummary } from "../../model/workspace-index"
 import {
   emptyTranscript,
   type Message,
@@ -84,7 +84,7 @@ export function inMemorySource(
 ): InMemorySource {
   // Archived ids: none is begun again, so no revision of one counts from 1 twice.
   const archived = new Set<string>()
-  const sessions = new Map(seed.overview.sessions.map((session) => [session.id, session]))
+  const sessions = new Map(seed.index.sessions.map((session) => [session.id, session]))
   const transcripts = new Map(seed.transcripts)
   const listeners = new Set<(update: WorkspaceUpdate) => void>()
   // Each session's running script, so a new message or `dispose` can stop it.
@@ -263,7 +263,7 @@ export function inMemorySource(
   }
 
   const channelName = (sessionId: string) =>
-    seed.overview.channels.find((channel) => channel.id === known(sessionId).channelId)
+    seed.index.channels.find((channel) => channel.id === known(sessionId).channelId)
       ?.name ?? ""
 
   const accept = (message: OutgoingMessage) => {
@@ -354,10 +354,10 @@ export function inMemorySource(
   }
 
   return {
-    overview: () =>
+    index: () =>
       live(() => ({
-        sections: seed.overview.sections,
-        channels: seed.overview.channels,
+        sections: seed.index.sections,
+        channels: seed.index.channels,
         sessions: [...sessions.values()],
       })),
     transcript: (sessionId) =>

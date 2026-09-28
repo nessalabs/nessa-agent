@@ -9,7 +9,7 @@
  * - **Removals**: the newest few hundred, each with the revision it was taken
  *   at, so an older read answered late cannot bring a session back. A read
  *   older than that many removals is let go by the next read of the
- *   overview, which is the resync (`application/ports.ts`).
+ *   index, which is the resync (`application/ports.ts`).
  */
 export const retention = {
   /** Conversations kept for sessions no pane shows. */

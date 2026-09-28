@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { panesOf } from "../../model/pane-layout"
 import type { Message } from "../../model/transcript"
 import { emptyTranscript } from "../../model/transcript"
-import { astra, summary, testOverview } from "../../testing"
+import { astra, summary, testIndex } from "../../testing"
 import {
   initialWorkspace,
   modelForNextTurn,
@@ -21,16 +21,11 @@ import {
   sessionRead,
   unsentDiscarded,
 } from "./sessions"
-import {
-  overviewLoaded,
-  sessionRemoved,
-  transcriptLoaded,
-  updateReceived,
-} from "./updates"
+import { indexLoaded, sessionRemoved, transcriptLoaded, updateReceived } from "./updates"
 
 const loaded = () =>
-  overviewLoaded(initialWorkspace, {
-    overview: testOverview(),
+  indexLoaded(initialWorkspace, {
+    index: testIndex(),
     draftId: "unused",
   })
 
@@ -405,7 +400,7 @@ describe("what the person changes", () => {
 
 describe("what is typed and not sent", () => {
   const loadedState = () =>
-    overviewLoaded(initialWorkspace, { overview: testOverview(), draftId: "unused" })
+    indexLoaded(initialWorkspace, { index: testIndex(), draftId: "unused" })
 
   it("is kept beside the session, whoever writes it, and outlives the pane showing another", () => {
     const typed = composerTextChanged(loadedState(), {

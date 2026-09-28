@@ -1,5 +1,6 @@
 import { storedPreference } from "../../../adapters/stored-preference"
 import { parseExperimentFlag } from "../model/experiment-flag"
+import { parseFilter, serializeFilter } from "../model/filter"
 
 /**
  * Settings › General › Experimental › Agents overview: whether the sidebar
@@ -11,4 +12,15 @@ export const useAgentsOverviewPreference = storedPreference({
   key: "nessa.desktop.experiments.agents-overview",
   event: "nessa:desktop-experiments-agents-overview",
   parse: parseExperimentFlag,
+}).usePreference
+
+/**
+ * What the overview lists (`model/filter.ts`): Ongoing unless another was
+ * chosen, remembered like the window's other preferences.
+ */
+export const useAgentsFilterPreference = storedPreference({
+  key: "nessa.desktop.experiments.agents-overview.filter",
+  event: "nessa:desktop-experiments-agents-overview-filter",
+  parse: parseFilter,
+  serialize: serializeFilter,
 }).usePreference

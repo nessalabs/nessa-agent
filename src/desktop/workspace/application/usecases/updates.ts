@@ -1,17 +1,17 @@
 /**
- * What the source says: the overview, its updates, and the conversations
+ * What the source says: the index, its updates, and the conversations
  * read for the panes that show them. Every one is a replacement with a
  * revision, and the newer revision wins whichever arrived first — an update
- * that overtook a read, a read answered late, an overview read while
+ * that overtook a read, a read answered late, an index read while
  * updates were already flowing (`model/revision.ts`).
  */
 import type { WorkspaceFailureReason } from "../../model/failure"
 import {
   byRecency,
   defaultModel,
-  type Overview,
+  type WorkspaceIndex,
   type SessionSummary,
-} from "../../model/overview"
+} from "../../model/workspace-index"
 import {
   paneCount,
   panesOf,
@@ -64,7 +64,7 @@ function holdsConversation(state: WorkspaceState, transcript: Transcript): boole
 }
 
 /**
- * A summary from the source, by whichever path it came — the overview
+ * A summary from the source, by whichever path it came — the index
  * read or the stream — listed when it is newer than the one held and not
  * outranked by a removal. Listed again after its removal, the removal is
  * history. Listed at all, no new session's home stands under its id; a model
@@ -119,30 +119,30 @@ function removeSession(
 }
 
 /**
- * The overview has arrived — the source's whole list, and the resync for
+ * The index has arrived — the source's whole list, and the resync for
  * whatever the stream lost. The first time, the workspace opens on the
  * first channel, showing its newest session — or, with no sessions anywhere,
  * a new session's home under `draftId`. A session already held from an
  * update newer than this read is kept, and one removed since stays out.
  *
- * A session the source spoke of that the overview does not list, or lists
+ * A session the source spoke of that the index does not list, or lists
  * in a channel it does not list, is gone: it is taken out as any removal is,
  * at the revision held, unless the stream brought it while the read was on
  * its way — the read may be the older of the two. A session the source has
  * not spoken of yet (revision 0) is the window's own, and stays.
  */
-export function overviewLoaded(
+export function indexLoaded(
   state: WorkspaceState,
-  { overview, draftId }: { overview: Overview; draftId: string },
+  { index, draftId }: { index: WorkspaceIndex; draftId: string },
 ): WorkspaceState {
-  const channels = new Set(overview.channels.map((channel) => channel.id))
-  const inChannel = overview.sessions.filter((session) => channels.has(session.channelId))
+  const channels = new Set(index.channels.map((channel) => channel.id))
+  const inChannel = index.sessions.filter((session) => channels.has(session.channelId))
   const listed = new Set(inChannel.map((session) => session.id))
   const kept = new Set(state.reading?.heard ?? [])
   const heard = inChannel.reduce(summaryHeard, {
     ...state,
-    sections: overview.sections,
-    channels: overview.channels,
+    sections: index.sections,
+    channels: index.channels,
   })
   const reconciled = listedSessions(heard)
     .filter(
@@ -171,19 +171,19 @@ export function overviewLoaded(
     reading: readAnswered(state.reading),
   }
   if (state.panes) {
-    // A channel the overview no longer lists is not looked at.
+    // A channel the index no longer lists is not looked at.
     const view = loaded.view
     return view.kind === "channel" && !channelOf(loaded, view.channelId)
       ? {
           ...loaded,
-          view: { kind: "channel", channelId: overview.channels[0]?.id ?? "" },
+          view: { kind: "channel", channelId: index.channels[0]?.id ?? "" },
         }
       : loaded
   }
-  const first = overview.channels.find(
-    (channel) => channel.sectionId === overview.sections[0]?.id,
+  const first = index.channels.find(
+    (channel) => channel.sectionId === index.sections[0]?.id,
   )
-  const channelId = first?.id ?? overview.channels[0]?.id ?? ""
+  const channelId = first?.id ?? index.channels[0]?.id ?? ""
   const sessions = listedSessions(loaded)
   const opening = sessions
     .filter((session) => session.channelId === channelId)
@@ -211,18 +211,18 @@ export function overviewLoaded(
   )
 }
 
-/** One read of the overview answered: what the stream brought is let go with the last. */
+/** One read of the index answered: what the stream brought is let go with the last. */
 function readAnswered(reading: WorkspaceState["reading"]): WorkspaceState["reading"] {
   if (!reading) return null
   return reading.reads > 1 ? { ...reading, reads: reading.reads - 1 } : null
 }
 
 /**
- * The overview is being read: after a failure, nothing to say until it
+ * The index is being read: after a failure, nothing to say until it
  * answers; and until it does, what the stream brings is noted, so the read
  * does not take out a session it may predate.
  */
-export function overviewRequested(state: WorkspaceState): WorkspaceState {
+export function indexRequested(state: WorkspaceState): WorkspaceState {
   const reading = {
     reads: (state.reading?.reads ?? 0) + 1,
     heard: state.reading?.heard ?? [],
@@ -232,8 +232,8 @@ export function overviewRequested(state: WorkspaceState): WorkspaceState {
     : { ...state, reading }
 }
 
-/** The overview could not be read. A workspace already open stays open. */
-export function overviewFailed(
+/** The index could not be read. A workspace already open stays open. */
+export function indexFailed(
   state: WorkspaceState,
   { reason }: { reason: WorkspaceFailureReason },
 ): WorkspaceState {
@@ -245,7 +245,7 @@ export function overviewFailed(
 
 /**
  * An update from the source, applied when it is newer than what is held. A
- * summary brought while the overview is being read is noted, so that read
+ * summary brought while the index is being read is noted, so that read
  * cannot take the session out.
  */
 export function updateReceived(

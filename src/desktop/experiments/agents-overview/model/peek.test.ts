@@ -26,7 +26,7 @@ describe("peekOf", () => {
     )
     expect(peek.steps.map((each) => each.label)).toEqual(["a", "b", "c"])
     expect(peek.earlier).toBe(0)
-    expect(peek.said).toEqual({ text: "Looking.", at: 4 })
+    expect(peek.said).toEqual({ text: "Looking.", at: 4, by: "agent" })
   })
 
   it("keeps the last few steps and counts the ones before", () => {
@@ -37,7 +37,7 @@ describe("peekOf", () => {
     expect(peek.earlier).toBe(3)
   })
 
-  it("has no steps once the person has written and the agent has not answered", () => {
+  it("shows what the person wrote, and no steps, until the agent answers it", () => {
     const peek = peekOf(
       conversation(
         message("agent", 1, step("a"), text("Ready.")),
@@ -45,13 +45,18 @@ describe("peekOf", () => {
       ),
     )
     expect(peek.steps).toEqual([])
-    // What it said last still stands.
-    expect(peek.said?.text).toBe("Ready.")
+    expect(peek.said).toEqual({ text: "Go on.", at: 2, by: "you" })
   })
 
-  it("says nothing for a reply that has not begun to stream", () => {
-    const peek = peekOf(conversation(message("agent", 1, step("a"), text(""))))
-    expect(peek.said).toBeNull()
+  it("passes over a reply that has not begun to stream", () => {
+    const peek = peekOf(
+      conversation(
+        message("user", 1, text("Go.")),
+        message("agent", 2, step("a"), text("")),
+      ),
+    )
+    expect(peek.said).toEqual({ text: "Go.", at: 1, by: "you" })
+    expect(peekOf(conversation(message("agent", 1, text("")))).said).toBeNull()
   })
 
   it("carries what the agent is doing now", () => {

@@ -49,12 +49,12 @@ function started() {
 }
 
 describe("the in-memory source", () => {
-  it("offers the sample overview and every session's conversation", async () => {
+  it("offers the sample index and every session's conversation", async () => {
     const { source } = started()
-    const overview = await source.overview()
-    expect(overview.sections.length).toBeGreaterThan(0)
-    expect(overview.sessions.length).toBeGreaterThan(10)
-    const transcript = await source.transcript(overview.sessions[0].id)
+    const index = await source.index()
+    expect(index.sections.length).toBeGreaterThan(0)
+    expect(index.sessions.length).toBeGreaterThan(10)
+    const transcript = await source.transcript(index.sessions[0].id)
     expect(transcript.messages.length).toBeGreaterThan(0)
   })
 
@@ -417,7 +417,7 @@ describe("the in-memory source", () => {
     expect(source.audit()).toMatchObject([
       { sessionId: "notarize", action: "deny", outcome: { refused: "unavailable" } },
     ])
-    await expect(source.overview()).rejects.toMatchObject({ reason: "unavailable" })
+    await expect(source.index()).rejects.toMatchObject({ reason: "unavailable" })
     await expect(source.transcript("notarize")).rejects.toMatchObject({
       reason: "unavailable",
     })

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
-import type { SessionStatus, SessionSummary } from "../../../workspace/model/overview"
+import type {
+  SessionStatus,
+  SessionSummary,
+} from "../../../workspace/model/workspace-index"
 import {
   agentsGlance,
   glanceLine,
@@ -99,6 +102,14 @@ describe("agentsGlance", () => {
     )
     expect(glance.needsYou).toEqual(["b"])
     expect(glance.hidden).toBe(0)
+  })
+
+  it("keeps listing the session being looked at when it leaves the filter, until the person moves on", () => {
+    const finishing = [session("a", 30, "needs-you"), session("b", 40, "idle", true)]
+    expect(agentsGlance(finishing, [], { ...ongoing, looking: "b" }).finished).toEqual([
+      "b",
+    ])
+    expect(agentsGlance(finishing, [], ongoing).finished).toEqual([])
   })
 
   it("lets a held request go into its new group once released", () => {

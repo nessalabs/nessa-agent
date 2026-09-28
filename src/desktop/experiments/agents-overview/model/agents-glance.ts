@@ -11,7 +11,7 @@
  * the session on: the list re-flows once, when the settle ends, rather than
  * the row jumping into "Working" under the pointer.
  */
-import { byRecency, type SessionSummary } from "../../../workspace/model/overview"
+import { byRecency, type SessionSummary } from "../../../workspace/model/workspace-index"
 import { passes, type AgentsFilter } from "./filter"
 
 /** An answered request kept in its place while it settles: where it stood when answered. */
@@ -41,12 +41,18 @@ export interface GlanceContext {
   readonly filter: AgentsFilter
   readonly now: number
   readonly tagsOf: (session: SessionSummary) => readonly string[]
+  /**
+   * The session the person is looking at, listed whatever the filter says —
+   * one that finishes while its peek is open, or while a reply is written
+   * to it, does not vanish from under them. It goes once they move on.
+   */
+  readonly looking?: string | null
 }
 
 export function agentsGlance(
   sessions: readonly SessionSummary[],
   held: readonly Held[],
-  { filter, now, tagsOf }: GlanceContext,
+  { filter, now, tagsOf, looking = null }: GlanceContext,
 ): AgentsGlance {
   const listed = new Map(sessions.map((session) => [session.id, session]))
   // A held request whose session is gone — archived meanwhile — is not kept;
@@ -57,7 +63,9 @@ export function agentsGlance(
       .map((hold) => [hold.sessionId, hold]),
   )
   const free = sessions.filter((session) => !holding.has(session.id))
-  const shown = free.filter((session) => passes(session, filter, now, tagsOf))
+  const shown = free.filter(
+    (session) => session.id === looking || passes(session, filter, now, tagsOf),
+  )
   const waitingNow = shown.filter((session) => session.status === "needs-you")
   const needsYou = [
     ...waitingNow.map((session) => ({ id: session.id, updatedAt: session.updatedAt })),
@@ -72,7 +80,8 @@ export function agentsGlance(
     shown
       .filter(
         (session) =>
-          session.status === status && (unread === undefined || session.unread === unread),
+          session.status === status &&
+          (unread === undefined || session.unread === unread),
       )
       .sort(byRecency)
       .map((session) => session.id)

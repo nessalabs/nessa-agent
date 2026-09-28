@@ -27,7 +27,7 @@ import {
   type WorkspaceUpdate,
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
-import type { ModelRef } from "../../model/overview"
+import type { ModelRef } from "../../model/workspace-index"
 import { fromSource, knownToSource } from "../../model/revision"
 import {
   answering,
@@ -70,8 +70,8 @@ const {
   paneMoved,
   paneNudged,
   panesFitted,
-  overviewLoaded,
-  overviewFailed,
+  indexLoaded,
+  indexFailed,
   updateReceived,
   sessionRemoved,
   draftCreated,
@@ -83,7 +83,7 @@ const {
   sendFailed,
   approvalAnswering,
   approvalFailed,
-  overviewRequested,
+  indexRequested,
 } = workspaceActions
 
 export type WorkspaceCommand<Result = void> = ThunkAction<
@@ -94,25 +94,25 @@ export type WorkspaceCommand<Result = void> = ThunkAction<
 >
 
 /**
- * Reads the overview and opens the workspace on it. Open already, it is the
- * resync for whatever the stream lost: a session the overview no longer lists
+ * Reads the index and opens the workspace on it. Open already, it is the
+ * resync for whatever the stream lost: a session the index no longer lists
  * is taken out, and the conversations the panes show are read again.
  */
 export function loadWorkspace(): WorkspaceCommand<Promise<void>> {
   return async (dispatch, _getState, { workspace, newId }) => {
-    dispatch(overviewRequested())
+    dispatch(indexRequested())
     try {
-      const overview = await workspace.overview()
-      const unusable = overview.sessions.filter((session) => !fromSource(session))
+      const index = await workspace.index()
+      const unusable = index.sessions.filter((session) => !fromSource(session))
       // Let go by the reducer; said here, where the source's answer is still at hand.
       if (unusable.length > 0)
         console.warn(
-          "The overview listed sessions at a revision the source could not have sent",
+          "The index listed sessions at a revision the source could not have sent",
           unusable.map((session) => session.id),
         )
-      dispatch(overviewLoaded({ overview, draftId: newId() }))
+      dispatch(indexLoaded({ index, draftId: newId() }))
     } catch (error) {
-      dispatch(overviewFailed({ reason: failureReason(error) }))
+      dispatch(indexFailed({ reason: failureReason(error) }))
     }
   }
 }

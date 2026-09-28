@@ -1,4 +1,4 @@
-import { memo } from "react"
+import { memo, type RefObject } from "react"
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
 import { useWorkspaceSelector } from "../../../workspace"
@@ -10,7 +10,7 @@ import {
   agentOf,
   modelName,
   type SessionSummary,
-} from "../../../workspace/model/overview"
+} from "../../../workspace/model/workspace-index"
 import { sessionTime } from "../../../workspace/model/time-labels"
 import type { Approval } from "../../../workspace/model/transcript"
 import { AgentTile } from "../../../workspace/ui/chrome/agent-tile"
@@ -23,6 +23,7 @@ import { selectChannelName, selectSummary } from "../adapters/workspace-bridge"
 import { peekOf } from "../model/peek"
 import { answeredLabels, type Answer, type Settling } from "../model/request"
 import { overviewKeys } from "./overview-keys"
+import { ReplyPill } from "./reply-pill"
 import { useConversation } from "./use-request"
 
 /**
@@ -30,7 +31,8 @@ import { useConversation } from "./use-request"
  * doing now, what it has done this turn, the last thing it said — and, when
  * it waits on the person, the request in full with its answers. Drawn with
  * the conversation's own pieces (the live row, the steps), so a session reads
- * the same here as in its pane.
+ * the same here as in its pane. A reply pill at its foot lets the person
+ * answer the agent from here.
  */
 export const SessionPeek = memo(function SessionPeek({
   sessionId,
@@ -38,6 +40,8 @@ export const SessionPeek = memo(function SessionPeek({
   failure,
   onOpen,
   onAnswer,
+  onLeaveReply,
+  replyRef,
 }: {
   sessionId: string
   settling: Settling | undefined
@@ -45,6 +49,9 @@ export const SessionPeek = memo(function SessionPeek({
     { readonly approvalId: string; readonly reason: WorkspaceFailureReason } | undefined
   onOpen: (sessionId: string) => void
   onAnswer: (summary: SessionSummary, approval: Approval, choice: Answer) => void
+  /** Escape in the reply pill: the keyboard goes back to the list. */
+  onLeaveReply: () => void
+  replyRef?: RefObject<HTMLTextAreaElement | null>
 }) {
   const live = useWorkspaceSelector((state) => selectSummary(state, sessionId))
   const summary = settling?.summary ?? live
@@ -61,6 +68,19 @@ export const SessionPeek = memo(function SessionPeek({
   const refused =
     failure && approval && failure.approvalId === approval.id ? failure.reason : null
   const agent = agentName(agentOf(summary.model))
+  const reply = (
+    <ReplyPill
+      sessionId={sessionId}
+      agent={agent}
+      fieldRef={replyRef}
+      onLeave={onLeaveReply}
+      note={
+        approval && !settling
+          ? "Sending a reply sets this request aside without running it."
+          : undefined
+      }
+    />
+  )
 
   return (
     <article className="agents-peek" aria-label={`${summary.title}, at a glance`}>
@@ -182,7 +202,7 @@ export const SessionPeek = memo(function SessionPeek({
           aria-labelledby={`peek-said-${sessionId}`}
         >
           <h3 id={`peek-said-${sessionId}`}>
-            Last said
+            {peek.said.by === "you" ? "You said" : "Last said"}
             <span>{sessionTime(peek.said.at, now)}</span>
           </h3>
           <p className="agents-peek-said">{peek.said.text}</p>
@@ -194,6 +214,8 @@ export const SessionPeek = memo(function SessionPeek({
           {failureCopy(unreadable)}
         </p>
       ) : null}
+
+      {reply}
     </article>
   )
 })

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
-import type { SessionStatus, SessionSummary } from "../../../workspace/model/overview"
+import type {
+  SessionStatus,
+  SessionSummary,
+} from "../../../workspace/model/workspace-index"
 import {
   defaultFilter,
   filterLabel,
@@ -14,7 +17,11 @@ const day = 24 * 60 * 60 * 1000
 // Noon, local time, so "today" and the day before are unambiguous.
 const now = new Date(2026, 8, 27, 12).getTime()
 
-function session(id: string, ago: number, status: SessionStatus = "idle"): SessionSummary {
+function session(
+  id: string,
+  ago: number,
+  status: SessionStatus = "idle",
+): SessionSummary {
   return {
     id,
     channelId: "c",
@@ -79,12 +86,14 @@ describe("filtered", () => {
   it("lets through only sessions carrying a chosen tag", () => {
     const tagsOf = (each: SessionSummary) => (each.id === "run-today" ? ["ui"] : [])
     expect(
-      ids(filtered(sessions, { ...defaultFilter, scope: "all", tags: ["ui"] }, now, tagsOf)),
+      ids(
+        filtered(sessions, { ...defaultFilter, scope: "all", tags: ["ui"] }, now, tagsOf),
+      ),
     ).toEqual(["run-today"])
     // With no tags carried, a tag filter lets nothing through: nothing is faked.
-    expect(ids(filtered(sessions, { ...defaultFilter, tags: ["ui"] }, now, noTags))).toEqual(
-      [],
-    )
+    expect(
+      ids(filtered(sessions, { ...defaultFilter, tags: ["ui"] }, now, noTags)),
+    ).toEqual([])
   })
 })
 

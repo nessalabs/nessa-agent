@@ -6,7 +6,7 @@
  * whichever the source counted later is the one shown (`newer`).
  */
 import type { WorkspaceFailureReason } from "../../../workspace/model/failure"
-import type { SessionSummary } from "../../../workspace/model/overview"
+import type { SessionSummary } from "../../../workspace/model/workspace-index"
 import type { Approval, Transcript } from "../../../workspace/model/transcript"
 
 export type Request =

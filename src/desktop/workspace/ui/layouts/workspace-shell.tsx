@@ -25,7 +25,7 @@ import { useEdgePeek } from "../../../adapters/use-edge-peek"
 import { useWindowWidth } from "../../../adapters/window-width"
 import {
   AgentsOverviewArea,
-  AgentsOverviewScope,
+  useAgentsOverviewShown,
 } from "../../../experiments/agents-overview"
 import { draggedEdge } from "../../../model/side-column"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
@@ -287,6 +287,8 @@ export function WorkspaceShell({
   useFocusFollowsPane(store, root)
   useWorkspaceDrag(store, root)
   const peek = useEdgePeek(!sidebarOpen, sidebarOpen)
+  // What fills the content region: the panes, or the agents overview over them.
+  const overviewShown = useAgentsOverviewShown()
   const shape = useMotionShape(sidebarOpen, listOpen)
 
   // Beside where the room allows it, in the focused pane's place where not —
@@ -348,7 +350,10 @@ export function WorkspaceShell({
               data-peek={(peek.shown && !peek.handedOff) || undefined}
               data-sidebar={sidebarOpen ? "open" : "closed"}
               data-list={region.sessionList ? (listOpen ? "open" : "closed") : undefined}
-              data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
+              data-panes-alone={
+                (!sidebarOpen && (!listOpen || overviewShown)) || undefined
+              }
+              data-content={overviewShown ? "agents" : "panes"}
               style={
                 {
                   "--workspace-sidebar-width": `${sidebarWidth}px`,
@@ -463,6 +468,9 @@ const Columns = memo(function Columns({
   const sidebarFrom = useRef<number | null>(0)
   const listFrom = useRef<number | null>(0)
   const limits = region.sidebar.limits
+  // The agents overview fills the content region: the session list waits,
+  // still mounted, beneath it (hidden by `data-content` on the root).
+  const overviewShown = useAgentsOverviewShown()
   // Dragged past its narrowest, a column folds away — the person's own choice —
   // and dragged back out from where it folded, it opens (`draggedEdge`).
   const dragSidebar = (delta: number) => {
@@ -476,7 +484,7 @@ const Columns = memo(function Columns({
     if (open) dispatch(resizeSessionList({ width }))
   }
   return (
-    <AgentsOverviewScope>
+    <>
       <SourceList variant={region.sidebar.variant} top={top} />
       {sidebarOpen ? (
         <ResizeEdge
@@ -489,7 +497,7 @@ const Columns = memo(function Columns({
         />
       ) : null}
       {region.sessionList ? <SessionList /> : null}
-      {region.sessionList && (listOpen || sidebarOpen) ? (
+      {region.sessionList && (listOpen || sidebarOpen) && !overviewShown ? (
         <ResizeEdge
           label="Resize Session List"
           className={listOpen ? undefined : "workspace-edge-folded"}
@@ -509,6 +517,6 @@ const Columns = memo(function Columns({
       <AgentsOverviewArea>
         <PaneGrid />
       </AgentsOverviewArea>
-    </AgentsOverviewScope>
+    </>
   )
 })

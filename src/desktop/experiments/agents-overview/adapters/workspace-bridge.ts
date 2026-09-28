@@ -27,9 +27,15 @@ import type { DesktopState } from "../../../store"
 import type { WorkspaceCommand } from "../../../workspace"
 import { failureReason } from "../../../workspace/application/ports"
 import type { WorkspaceFailureReason } from "../../../workspace/model/failure"
-import type { SessionSummary } from "../../../workspace/model/overview"
+import type { SessionSummary } from "../../../workspace/model/workspace-index"
 import { focusedPane } from "../../../workspace/model/pane-layout"
-import { agentsGlance, type AgentsGlance, type Held } from "../model/agents-glance"
+import {
+  agentsGlance,
+  type AgentsGlance,
+  type GlanceContext,
+  type Held,
+} from "../model/agents-glance"
+import type { SessionTag } from "../model/filter"
 import type { Transcript } from "../../../workspace/model/transcript"
 import type { Answer } from "../model/request"
 
@@ -45,9 +51,25 @@ const listed = createSelector(
   (sessions): readonly SessionSummary[] => Object.values(sessions),
 )
 
-/** The overview's groups; compare with `sameGlance`. */
-export const selectGlance = (state: Root, held: readonly Held[]): AgentsGlance =>
-  agentsGlance(listed(state), held)
+/** The overview's groups under a filter; compare with `sameGlance`. */
+export const selectGlance = (
+  state: Root,
+  held: readonly Held[],
+  context: GlanceContext,
+): AgentsGlance => agentsGlance(listed(state), held, context)
+
+/**
+ * The tags sessions carry, and the ones a session carries: none yet — the
+ * source's summary has no tags. This is the seam a tagged summary fills; the
+ * filter and its menu already read it.
+ */
+export const sessionTags: readonly SessionTag[] = []
+const untagged: readonly string[] = []
+export const tagsOf = (_session: SessionSummary): readonly string[] => untagged
+
+/** What is typed in a session's composer and not sent: the pane's and the reply pill's, one draft. */
+export const selectDraft = (state: Root, sessionId: string): string =>
+  own(state.workspace.composerText, sessionId) ?? ""
 
 export const selectSummary = (state: Root, sessionId: string) =>
   own(state.workspace.sessions, sessionId)
@@ -124,3 +146,30 @@ export function answerRequest({
     }
   }
 }
+
+/** Whether a message the person sent to a session is still on its way. */
+export const selectSending = (state: Root, sessionId: string): boolean =>
+  (own(state.workspace.outbox, sessionId) ?? []).some(
+    (message) => message.delivery?.state === "sending",
+  )
+
+/** Why the last message the person sent to a session was not taken, while it waits to be sent again. */
+export const selectUnsent = (
+  state: Root,
+  sessionId: string,
+): WorkspaceFailureReason | undefined => {
+  const outbox = own(state.workspace.outbox, sessionId) ?? []
+  for (let index = outbox.length - 1; index >= 0; index--) {
+    const delivery = outbox[index].delivery
+    if (delivery?.state === "failed") return delivery.reason
+  }
+  return undefined
+}
+
+/** How many sessions wait on the person: the sidebar entry's count. */
+export const selectWaitingCount = createSelector([listed], (sessions) =>
+  sessions.reduce(
+    (count, session) => count + (session.status === "needs-you" ? 1 : 0),
+    0,
+  ),
+)

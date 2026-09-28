@@ -3,7 +3,7 @@
  * session's summary, or to its conversation. Of two replacements for the same
  * thing, the one with the larger revision is the newer, whichever channel
  * brought it and whenever it arrived — a read answered late, an update that
- * overtook it, an overview read while updates were already flowing.
+ * overtook it, an index read while updates were already flowing.
  *
  * The source counts from 1. Revision 0 is the window's own: a session whose
  * first message is on its way, which the source has not spoken of yet.

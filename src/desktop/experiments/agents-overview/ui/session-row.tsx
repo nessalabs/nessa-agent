@@ -6,7 +6,7 @@ import {
   agentName,
   agentOf,
   type SessionSummary,
-} from "../../../workspace/model/overview"
+} from "../../../workspace/model/workspace-index"
 import { sessionTime } from "../../../workspace/model/time-labels"
 import type { Approval } from "../../../workspace/model/transcript"
 import { AgentTile } from "../../../workspace/ui/chrome/agent-tile"
@@ -17,9 +17,9 @@ import { overviewKeys } from "./overview-keys"
 import { SessionPeek } from "./session-peek"
 
 /**
- * A session working, or finished and not yet looked at: its agent, its
- * title, the last thing it said, and — working — the turning glyph the rest
- * of the window shows, or — finished — how long ago. A click peeks at it,
+ * A session working, finished and not yet looked at, or earlier: its agent,
+ * its title, the last thing it said, and — working — the turning glyph the
+ * rest of the window shows, or else how long ago. A click peeks at it,
  * ↩ or a double-click opens it.
  */
 export const SessionRow = memo(function SessionRow({
@@ -32,9 +32,10 @@ export const SessionRow = memo(function SessionRow({
   onChoose,
   onOpen,
   onAnswer,
+  onLeaveReply,
 }: {
   sessionId: string
-  kind: "working" | "finished"
+  kind: "working" | "finished" | "earlier"
   current: boolean
   /** The one the peek beside the list shows. */
   selected: boolean
@@ -44,6 +45,7 @@ export const SessionRow = memo(function SessionRow({
   onChoose: (sessionId: string) => void
   onOpen: (sessionId: string) => void
   onAnswer: (summary: SessionSummary, approval: Approval, choice: Answer) => void
+  onLeaveReply: () => void
 }) {
   const summary = useWorkspaceSelector((state) => selectSummary(state, sessionId))
   const now = useNow(30_000)
@@ -94,6 +96,7 @@ export const SessionRow = memo(function SessionRow({
             failure={undefined}
             onOpen={onOpen}
             onAnswer={onAnswer}
+            onLeaveReply={onLeaveReply}
           />
         </div>
       ) : null}

@@ -1,4 +1,5 @@
 import type { HostKind } from "../../../../host/features"
+import { AgentsOverviewScope } from "../../../experiments/agents-overview"
 import { sidebarLimits } from "../../model/window-fit"
 import { WorkspaceShell, type SidebarRegion } from "./workspace-shell"
 
@@ -14,5 +15,9 @@ const region: SidebarRegion = {
 }
 
 export function ThreeColumns(props: { hostKind: HostKind; browserSurface: boolean }) {
-  return <WorkspaceShell region={region} {...props} />
+  return (
+    <AgentsOverviewScope>
+      <WorkspaceShell region={region} {...props} />
+    </AgentsOverviewScope>
+  )
 }

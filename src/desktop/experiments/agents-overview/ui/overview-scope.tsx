@@ -13,15 +13,15 @@ import { tooltip } from "../../../ui/tooltip"
 import { focusComposer, useWorkspaceSelector } from "../../../workspace"
 import { labelOf, useKeyBindings } from "../../../workspace/adapters/dom/shortcuts"
 import { useAgentsOverviewPreference } from "../adapters/preference"
-import { selectFocusedSessionId } from "../adapters/workspace-bridge"
+import { selectFocusedSessionId, selectWaitingCount } from "../adapters/workspace-bridge"
 import { AgentsOverview } from "./agents-overview"
 import { toggleKeys } from "./overview-keys"
 import "./agents-overview.css"
 
 /**
  * Whether the agents overview is on in Settings, and whether it holds the
- * chat area now. One per workspace layout, around its columns, so the
- * sidebar's entry and the chat area read the same answer.
+ * content region now. One per workspace layout, around its shell, so the
+ * sidebar's entry, the shell and the chat area read the same answer.
  */
 interface OverviewPlace {
   readonly enabled: boolean
@@ -36,7 +36,7 @@ const PlaceContext = createContext<OverviewPlace>({
 })
 
 /**
- * Holds where the overview is for a layout's columns: shown or not, and put
+ * Holds where the overview is for a layout's window: shown or not, and put
  * away whenever the workspace moves to another session — a row, the
  * switcher, ⌘N, an agent's dispatch — so the chat area always shows what was
  * asked for. ⌘0 opens and closes it while the experiment is on.
@@ -64,6 +64,22 @@ export function AgentsOverviewScope({ children }: { children: ReactNode }) {
 }
 
 /**
+ * Whether the overview is on in Settings: the sidebar then offers "Agents"
+ * in place of its "Needs you" and "Running" views, which the overview holds.
+ */
+export function useAgentsOverviewEnabled(): boolean {
+  return useContext(PlaceContext).enabled
+}
+
+/**
+ * Whether the overview holds the workspace's content region now: the shell
+ * asks, to set the session list aside while it does.
+ */
+export function useAgentsOverviewShown(): boolean {
+  return useContext(PlaceContext).shown
+}
+
+/**
  * The chat area, with the overview over it while shown. The panes stay
  * mounted and laid out underneath — inert and faded — so their room, scroll
  * and caret are as they were when the person comes back. With the
@@ -88,11 +104,12 @@ export function AgentsOverviewArea({ children }: { children: ReactNode }) {
 }
 
 /**
- * The sidebar's way in: "Agents", above the status views. Absent while the
- * experiment is off.
+ * The sidebar's way in: "Agents", with how many wait on the person, in place
+ * of the "Needs you" and "Running" views. Absent while the experiment is off.
  */
 export function AgentsOverviewEntry() {
   const { enabled, shown, show } = useContext(PlaceContext)
+  const waiting = useWorkspaceSelector(selectWaitingCount)
   if (!enabled) return null
   return (
     <button
@@ -110,6 +127,15 @@ export function AgentsOverviewEntry() {
         <DesktopIcon name="workspace" />
       </span>
       <span className="workspace-truncate">Agents</span>
+      {waiting > 0 ? (
+        <span
+          className="workspace-badge"
+          data-tone="needs"
+          aria-label={`${waiting} ${waiting === 1 ? "needs" : "need"} you`}
+        >
+          {waiting}
+        </span>
+      ) : null}
     </button>
   )
 }

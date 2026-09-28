@@ -10,9 +10,9 @@ import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { ClockProvider, loadWorkspace } from "../../../workspace"
+import { ClockProvider, loadWorkspace, setComposerText } from "../../../workspace"
 import { fakeSource, settle, summary, testStore } from "../../../workspace/testing"
-import type { Overview } from "../../../workspace/model/overview"
+import type { WorkspaceIndex as Overview } from "../../../workspace/model/workspace-index"
 import { selectFocusedSessionId } from "../adapters/workspace-bridge"
 import {
   AgentsOverviewArea,
@@ -124,7 +124,7 @@ async function mount(experiment: "on" | "off" = "on") {
 }
 
 const entry = () =>
-  [...host.querySelectorAll("button")].find((button) => button.textContent === "Agents")
+  host.querySelector<HTMLButtonElement>(".agents-overview-entry") ?? undefined
 const cards = () => [...host.querySelectorAll<HTMLElement>(".agents-request")]
 const card = (sessionId: string) =>
   host.querySelector<HTMLElement>(`.agents-request[data-overview-item="${sessionId}"]`)
@@ -325,5 +325,64 @@ describe("the agents overview", () => {
     expect(document.activeElement?.classList.contains("agents-overview-column")).toBe(
       true,
     )
+  })
+
+  it("lists only what is ongoing at first, and says how many it keeps out", async () => {
+    await mount()
+    await open()
+    expect(row("rest")).toBeNull()
+    expect(host.querySelector(".agents-overview-resting")?.textContent).toContain(
+      "1 more session outside this view",
+    )
+  })
+
+  it("lists every session once All is chosen, and counts what it lists", async () => {
+    await mount()
+    await open()
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("nessa:desktop-experiments-agents-overview-filter", {
+          detail: JSON.stringify({ scope: "all", range: "any", tags: [] }),
+        }),
+      )
+    })
+    expect(row("rest")).not.toBeNull()
+    expect(host.querySelector(".agents-overview-header p")?.textContent).toBe(
+      "2 need you · 1 working · 1 earlier",
+    )
+    expect(host.querySelector(".agents-filter")?.textContent).toBe("All")
+  })
+
+  it("replies from the peek with ⌘R, through the workspace's send, as the person", async () => {
+    const { source, store } = await mount()
+    await open()
+    await press(card("second") as HTMLElement, "KeyR", { command: true })
+    await act(
+      async () => new Promise<void>((done) => requestAnimationFrame(() => done())),
+    )
+    const field = host.querySelector<HTMLTextAreaElement>(
+      '[data-reply-for="second"] textarea',
+    )
+    expect(field?.placeholder).toBe("Reply to Claude…")
+    expect(document.activeElement).toBe(field)
+    await act(async () =>
+      store.dispatch(
+        setComposerText({ sessionId: "second", text: "Use the beta profile." }),
+      ),
+    )
+    await press(field as HTMLElement, "Enter")
+    const sent = source.calls.find((call) => call[0] === "send")?.[1]
+    expect(sent).toMatchObject({
+      sessionId: "second",
+      text: "Use the beta profile.",
+      initiator: "person",
+    })
+    // Emptied, and still where the person is writing.
+    expect(field?.value).toBe("")
+    expect(document.activeElement).toBe(field)
+    // Escape gives the keyboard back to the list, on the row it replied to.
+    await press(field as HTMLElement, "Escape")
+    expect(document.activeElement).toBe(card("second"))
+    expect(host.querySelector(".agents-overview")).not.toBeNull()
   })
 })

@@ -215,7 +215,7 @@ refuses. Brand marks (agents, providers) are not icon roles.
 
 The workspace (`src/desktop/workspace/`,
 [ADR 238](adr/todo/238-desktop-workspace-frontend.md)) is the window's chat
-and what it is about: its overview — sections hold channels, channels hold
+and what it is about: its index — sections hold channels, channels hold
 sessions — and sessions open in chat panes that split, stack, move and close.
 Two layouts, chosen in Settings › Workspace › Layout
 (`adapters/workspace-layout-preference.ts`; `classic` keeps the shell above),
@@ -234,7 +234,7 @@ the quick switcher included. Titlebar content starts at the one safe area,
 nothing draws under the window's controls, and a column's title sits on its
 own row below the titlebar (`ui/chrome/column-header.tsx`).
 
-- `model/` is pure: the overview's types (`overview.ts`); the pane layout
+- `model/` is pure: the index's types (`index.ts`); the pane layout
   (`pane-layout.ts`), columns of stacked panes with one focused, whose
   operations split, move, swap, nudge, close and even out, capped at four
   panes and three columns, a session never shown twice; its pixel rules
@@ -248,10 +248,10 @@ own row below the titlebar (`ui/chrome/column-header.tsx`).
   session's lifecycle, a draft never listed and let go once no pane shows it,
   and a session the source never began going back to it when its last
   refused message is discarded.
-- `application/` owns the `WorkspaceSource` port (`ports.ts`: overview,
+- `application/` owns the `WorkspaceSource` port (`ports.ts`: index,
   transcript, one stream of replacement updates, send, approve, deny, pin,
   archive, mark read, with typed `WorkspaceSourceError` reasons; the stream may
-  lose updates, and a read of the overview is the resync) and the pure
+  lose updates, and a read of the index is the resync) and the pure
   use cases (`usecases/`) over the workspace's state. Every replacement carries
   the source's revision, and the newer one wins in whatever order the stream
   and the reads deliver them (`model/revision.ts`). A message the person
@@ -271,9 +271,9 @@ own row below the titlebar (`ui/chrome/column-header.tsx`).
   conversation and mark a shown one read, whoever caused the change — a
   refused read waits for the pane's Try Again rather than being retried on
   every update, and is forgotten when no pane shows the session, and a read
-  of the overview again reads every shown conversation again; `hooks.ts`,
+  of the index again reads every shown conversation again; `hooks.ts`,
   the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/in-memory/` is the
-  only home of the sample overview and the scripted, streamed replies,
+  only home of the sample index and the scripted, streamed replies,
   on timers it owns and cancels. `adapters/dom/` holds what belongs to the
   page: FLIP motion (`flip.tsx`, which measures in React's commit phase, so
   any dispatch animates), drag and drop carried by the pointer with a live

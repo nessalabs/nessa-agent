@@ -10,7 +10,7 @@ import {
   modelName,
   type SessionStatus,
   type SessionSummary,
-} from "./overview"
+} from "./workspace-index"
 
 /** The states that ask for the person's attention, each with a view of its own. */
 export type AttentionStatus = Exclude<SessionStatus, "idle">

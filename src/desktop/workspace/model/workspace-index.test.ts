@@ -11,7 +11,7 @@ vi.mock("../../model/composer-options", async (load) => {
   }
 })
 
-const { defaultModel } = await import("./overview")
+const { defaultModel } = await import("./workspace-index")
 const { defaultComposerModel, composerModels } =
   await import("../../model/composer-options")
 

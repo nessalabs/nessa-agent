@@ -8,7 +8,7 @@ import {
 } from "../../adapters/store/hooks"
 import { selectComposerText, selectNextModel } from "../../adapters/store/selectors"
 import { useArrival, type Arrival } from "../../adapters/dom/arrival"
-import type { ModelRef } from "../../model/overview"
+import type { ModelRef } from "../../model/workspace-index"
 import { Home } from "../../../ui/home"
 import { Transcript } from "../transcript/transcript"
 import "./conversation.css"
