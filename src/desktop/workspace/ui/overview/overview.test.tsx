@@ -17,12 +17,14 @@ import { focusedPaneAttribute } from "../../adapters/dom/focus"
 import {
   approve,
   filterOverview,
+  followWorkspace,
   loadWorkspace,
   setComposerText,
   showContent,
 } from "../../adapters/store/commands"
 import { selectFocusedSessionId } from "../../adapters/store/selectors"
 import { fakeSource, keptFilter, settle, summary, testStore } from "../../testing"
+import { selectOverviewOpen } from "../../adapters/store/selectors"
 import type { WorkspaceIndex } from "../../model/workspace-index"
 import { OverviewRow } from "../source-list/overview-row"
 import { answerPause } from "../../model/overview/walk"
@@ -258,6 +260,37 @@ describe("the agents overview", () => {
     expect(answers).toEqual([["approve", "first", "first-ask", "once", "person"]])
   })
 
+  it("times the pause from when the answering key was pressed, not from when the page got to it", async () => {
+    const { source } = await mount()
+    await open()
+    const key = () =>
+      new KeyboardEvent("keydown", {
+        code: "Enter",
+        key: "Enter",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    // The answer is pressed; the page gets to it only after the pause, and a
+    // second press was made that long after the first: a choice, and taken.
+    const answer = key()
+    await act(async () => new Promise((done) => setTimeout(done, answerPause + 30)))
+    const next = key()
+    await act(async () => {
+      card("first")?.dispatchEvent(answer)
+      await settle(10)
+      document.activeElement?.dispatchEvent(next)
+      await settle(10)
+    })
+    const answers = source.calls.filter(
+      (call) => call[0] === "approve" || call[0] === "deny",
+    )
+    expect(answers).toEqual([
+      ["approve", "first", "first-ask", "once", "person"],
+      ["approve", "second", "second-ask", "once", "person"],
+    ])
+  })
+
   it("gives the region back when the preview is turned off, in this window or another", async () => {
     const { store } = await mount()
     // Turned on in this window, as Settings does.
@@ -296,14 +329,17 @@ describe("the agents overview", () => {
     await open()
     source.hold("approve")
     // As the pane's card would, or an agent.
-    const fromPane = store.dispatch(
-      approve({ sessionId: "first", approvalId: "first-ask", initiator: "agent" }),
-    )
-    await act(async () => settle(10))
+    let fromPane: Promise<unknown> = Promise.resolve()
+    await act(async () => {
+      fromPane = store.dispatch(
+        approve({ sessionId: "first", approvalId: "first-ask", initiator: "agent" }),
+      )
+      await settle(10)
+    })
     expect(button(card("first"), "Allow")?.disabled).toBe(true)
     await press(card("first") as HTMLElement, "Enter", { command: true })
     expect(source.calls.filter((call) => call[0] === "approve")).toHaveLength(1)
-    await source.release("approve")
+    await act(async () => source.release("approve"))
     expect(await fromPane).toBe("sent")
   })
 
@@ -507,6 +543,102 @@ describe("the agents overview", () => {
     await press(field as HTMLElement, "Escape")
     expect(document.activeElement).toBe(card("second"))
     expect(host.querySelector(".agents-overview")).not.toBeNull()
+  })
+})
+
+describe("the reply pill keeps the caret", () => {
+  it("keeps it with the session when sending moves its row to another group", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    // Beneath the row (no room beside the list here): ⌘R, then a reply.
+    await press(card("second") as HTMLElement, "KeyR", { command: true })
+    const before = host.querySelector<HTMLTextAreaElement>(
+      '[data-reply-for="second"] textarea',
+    )
+    expect(document.activeElement).toBe(before)
+    await act(async () => {
+      if (!before) return
+      const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")
+      set?.set?.call(before, "Use the beta profile.")
+      before.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+    await press(before as HTMLElement, "Enter")
+    // The source takes it, lets the approval go, and says the session works
+    // on: its row moves from Needs you to Working, its pill drawn anew.
+    await act(async () => {
+      const held = source.transcripts.get("second")
+      if (held) {
+        const next = { ...held, approval: null, revision: held.revision + 1 }
+        source.transcripts.set("second", next)
+        source.emit({ kind: "transcript", transcript: next })
+      }
+      source.emit({
+        kind: "session",
+        session: summary("second", "desktop", 400, "running", {
+          title: "Notarize",
+          revision: 2,
+        }),
+      })
+      await settle(10)
+    })
+    await nextFrame()
+    expect(card("second")).toBeNull()
+    expect(row("second")).not.toBeNull()
+    const after = host.querySelector<HTMLTextAreaElement>(
+      '[data-reply-for="second"] textarea',
+    )
+    expect(after).not.toBeNull()
+    expect(after).not.toBe(before)
+    expect(document.activeElement).toBe(after)
+  })
+
+  it("lets the caret go once the person moves it: a pill drawn again later does not take it", async () => {
+    await mount()
+    await open()
+    await press(card("second") as HTMLElement, "KeyR", { command: true })
+    const field = host.querySelector<HTMLTextAreaElement>(
+      '[data-reply-for="second"] textarea',
+    )
+    expect(document.activeElement).toBe(field)
+    // Escape: back to the row; then the row is clicked twice, closing and
+    // opening its peek again.
+    await press(field as HTMLElement, "Escape")
+    expect(document.activeElement).toBe(card("second"))
+    await act(async () => card("second")?.click())
+    await act(async () => card("second")?.click())
+    expect(host.querySelector('[data-reply-for="second"] textarea')).not.toBeNull()
+    expect(document.activeElement).toBe(card("second"))
+  })
+})
+
+describe("Escape in the overview", () => {
+  it("leaves at once, before the keyboard has landed on its row", async () => {
+    const { store } = await mount()
+    const composer = host.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Message"]',
+    )
+    composer?.focus()
+    // ⌘0's dispatch, and Escape straight after it: no frame has passed.
+    await act(async () => store.dispatch(showContent({ content: "agents" })))
+    expect(selectOverviewOpen(store.getState())).toBe(true)
+    expect(document.activeElement).toBe(composer)
+    await press(composer as HTMLElement, "Escape")
+    expect(selectOverviewOpen(store.getState())).toBe(false)
+  })
+
+  it("leaves Escape in a menu over it to the menu", async () => {
+    const { store } = await mount()
+    await open()
+    const menu = document.createElement("div")
+    menu.setAttribute("role", "menu")
+    const item = document.createElement("div")
+    item.setAttribute("role", "menuitem")
+    menu.append(item)
+    document.body.append(menu)
+    await press(item, "Escape")
+    expect(selectOverviewOpen(store.getState())).toBe(true)
+    menu.remove()
   })
 })
 

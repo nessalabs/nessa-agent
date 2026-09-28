@@ -214,7 +214,7 @@ applied at once to every reader in the window, falling back when storage
 refuses. Brand marks (agents, providers) are not icon roles.
 
 The workspace (`src/desktop/workspace/`,
-[ADR 238](adr/todo/238-desktop-workspace-frontend.md)) is the window's chat
+[ADR 238](adr/done/238-desktop-workspace-frontend.md)) is the window's chat
 and what it is about: its index — sections hold channels, channels hold
 sessions — and sessions open in chat panes that split, stack, move and close.
 Two layouts, chosen in Settings › Workspace › Layout

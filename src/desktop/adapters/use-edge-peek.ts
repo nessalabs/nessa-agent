@@ -1,5 +1,10 @@
-import { useCallback, useEffect, useReducer, useRef } from "react"
-import { edgePeekHidden, stepEdgePeek } from "../model/edge-peek"
+import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  edgePeekHidden,
+  stepEdgePeek,
+  type EdgePeek,
+  type EdgePeekEvent,
+} from "../model/edge-peek"
 
 /** Resting on the edge this long reveals the sidebar; a pass-through does not. */
 const REVEAL_MS = 150
@@ -17,8 +22,24 @@ const HANDOFF_MS = 380
  * the reveal dismisses it.
  */
 export function useEdgePeek(enabled: boolean, docked: boolean) {
-  const [state, send] = useReducer(stepEdgePeek, edgePeekHidden)
+  // The model's whole state, stepped on every event; the page is drawn again
+  // only when what it draws changes — every press and release in the window
+  // reaches the model, and most change nothing on screen.
+  const model = useRef<EdgePeek>(edgePeekHidden)
+  const [state, setState] = useState<EdgePeek>(edgePeekHidden)
+  const send = useCallback((event: EdgePeekEvent) => {
+    const was = model.current
+    const next = stepEdgePeek(was, event)
+    model.current = next
+    if (
+      next.shown !== was.shown ||
+      next.pending !== was.pending ||
+      next.handedOff !== was.handedOff
+    )
+      setState(next)
+  }, [])
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const pending = state.pending
 
   useEffect(() => {
     clearTimeout(timer.current)
@@ -28,14 +49,15 @@ export function useEdgePeek(enabled: boolean, docked: boolean) {
       handoff: "handoff-due",
     } as const
     const delay = { reveal: REVEAL_MS, hide: HIDE_MS, handoff: HANDOFF_MS } as const
-    const pending = state.pending
     if (pending) timer.current = setTimeout(() => send(due[pending]), delay[pending])
     return () => clearTimeout(timer.current)
-  }, [state])
+    // Timed from when it became pending: where the pointer is while a
+    // handoff plays does not start its clock again.
+  }, [pending, send])
 
   useEffect(() => {
     if (!enabled) send(docked ? "dock" : "dismiss")
-  }, [enabled, docked])
+  }, [enabled, docked, send])
 
   useEffect(() => {
     if (!state.shown || state.pending === "handoff") return
@@ -44,7 +66,7 @@ export function useEdgePeek(enabled: boolean, docked: boolean) {
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [state.shown, state.pending])
+  }, [state.shown, state.pending, send])
 
   // The pointer and keyboard focus each hold the reveal open: it hides once
   // neither is inside — the edge strip or the revealed sidebar — so choosing
@@ -60,35 +82,34 @@ export function useEdgePeek(enabled: boolean, docked: boolean) {
       if (is && !was && enabled) send("enter")
       else if (!is && was) send("leave")
     },
-    [enabled],
+    [enabled, send],
   )
-  // While a pointer button is held — a pane or a session carried, a text
-  // selection — the pointer neither reveals nor hides the sidebar: as the
-  // press found it, it stays. Engines differ on whether a captured pointer
-  // enters and leaves at all; this does not (`use-edge-peek.test.tsx`, and
-  // `drag.mjs` › peek-session-no-zone in both). Once released, where the
-  // pointer last was decides, and a pointer that comes back enters again.
-  const whileHeld = useRef<boolean | null>(null)
+  // A press freezes the peek (`model/edge-peek.ts`): the model is told of
+  // every press and release, and of a release the page missed — the button
+  // let go outside the window — at the next enter or leave with no button
+  // held, or the window's blur. An enter or leave with a button held and no
+  // press seen (one begun outside the window) is a press.
+  useEffect(() => {
+    const press = () => send("press")
+    const release = () => send("release")
+    window.addEventListener("pointerdown", press, true)
+    window.addEventListener("pointerup", release, true)
+    window.addEventListener("pointercancel", release, true)
+    window.addEventListener("blur", release)
+    return () => {
+      window.removeEventListener("pointerdown", press, true)
+      window.removeEventListener("pointerup", release, true)
+      window.removeEventListener("pointercancel", release, true)
+      window.removeEventListener("blur", release)
+    }
+  }, [send])
   const pointerAt = useCallback(
     (now: boolean, event?: { buttons: number }) => {
-      if (event && event.buttons !== 0) whileHeld.current = now
-      else held("pointer", now)
+      if (event) send(event.buttons === 0 ? "release" : "press")
+      held("pointer", now)
     },
-    [held],
+    [held, send],
   )
-  useEffect(() => {
-    const onRelease = () => {
-      const last = whileHeld.current
-      whileHeld.current = null
-      if (last !== null) held("pointer", last)
-    }
-    window.addEventListener("pointerup", onRelease)
-    window.addEventListener("pointercancel", onRelease)
-    return () => {
-      window.removeEventListener("pointerup", onRelease)
-      window.removeEventListener("pointercancel", onRelease)
-    }
-  }, [held])
   const enter = useCallback(
     (event?: { buttons: number }) => pointerAt(true, event),
     [pointerAt],

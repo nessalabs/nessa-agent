@@ -10,7 +10,10 @@ two selectable layouts, Settings, and themeable icons. It extends
 desktop window, so the backend can attach later by implementing one port.
 
 - **Date:** 2026-09-27
-- **Status:** proposed ([#238](https://github.com/nessalabs/nessa-agent/issues/238)); implemented, in review
+- **Status:** accepted ([#238](https://github.com/nessalabs/nessa-agent/issues/238)). Implemented: the
+  workspace vertical, both layouts and Classic, Settings, the Agents overview,
+  and the verification scripts that hold them; what is left is under
+  _Remaining_.
 
 ## Context
 
@@ -140,11 +143,17 @@ let go is read again when a pane or the overview shows it; a read older than
 `adapters/store/commands.ts`: plain actions where the state alone decides
 (`openSession`, `focusPane`, `toggleSidebar`, …), thunks where a fresh id, the
 time, the source or the page's measure of the panes' room is needed
-(`newSession`, `openBeside`, `movePane`, `nudgePane`, `closePane`,
-`sendMessage`, `approve`, `deny`, …), taking them from the store's thunk extra
-argument following [dependency injection](../../design/dependency-injection.md):
+(`newSession`, `openBeside`, `movePane`, `dropSession`, `nudgePane`,
+`closePane`, `sendMessage`, `approve`, `deny`, …), taking them from the
+store's thunk extra argument following
+[dependency injection](../../design/dependency-injection.md):
 `WorkspaceDependencies` carries `measure(): WorkspaceRoom | undefined`,
-composed in `src/desktop/dependencies.ts` from `adapters/dom/measure.ts`. The
+composed in `src/desktop/dependencies.ts` from `adapters/dom/measure.ts`.
+An agent drives the window as a person does, so `movePane` and `dropSession`
+measure the room as they run, like every other command that places a pane.
+The drag alone is given the room it read as its press began: it previews
+with `previewDrop` and commits with `commitDrop`, both in that room, and
+neither is a command an agent is meant to dispatch. The
 thunks live beside the slice rather than in `application/`, because the
 architecture check keeps Redux out of `application/`, as it does for the
 conversation vertical. What follows from a change whoever caused it — reading
@@ -162,7 +171,7 @@ not at all. A named side is that side or nothing (Split Right never silently
 splits down); "beside" with no side named — ⌘-click — is to the right, else
 below, else in the focused pane's place. With nothing measured, nothing new is
 placed: no room is not room. Menus and the switcher ask the same rule before
-they offer anything (`canOpenBeside`, `canNudge`, `previewDrop`), so an item is
+they offer anything (`canOpenBeside`, `canNudge`), so an item is
 disabled, or says what it will do ("Open Here…", "Go to Pane"), rather than
 promise what it will not. When the panes' room changes (a resize, a side column
 opening), `fitPanes` holds them to the same minimum; the side columns fold
@@ -182,8 +191,17 @@ shared by the workspace's sidebar and session list and by Settings' sidebar):
 | closed | room or none | closed |
 
 A folded sidebar can be revealed from the window's left edge by the one
-edge-peek reveal (`useEdgePeek`) in the classic shell, both workspace layouts
-and Settings; the pointer or keyboard focus inside it keeps it shown.
+edge-peek reveal in the classic shell, both workspace layouts and Settings;
+the pointer or keyboard focus inside it keeps it shown. Its states, and what
+a held pointer button does to them, are one table in
+`src/desktop/model/edge-peek.ts` (`stepEdgePeek`); `useEdgePeek` only runs
+its clock and sends it the page's events. **A press freezes it**: a reveal or
+a hide on its way is cancelled as the button goes down, and the peek stays
+exactly as the press found it — entering and leaving change nothing — until
+the release, when where the pointer then is decides. A release the page
+missed (the button let go outside the window) is taken as one at the next
+enter or leave with no button held, or when the window loses focus, so a
+lost release never leaves it frozen.
 
 **What fills the content region** is workspace state (`content`: the panes,
 or the Agents overview), so an agent can move it too. The overview is part of
@@ -199,7 +217,9 @@ open). Settings › General › Experimental decides only whether the window
 offers a way in — the sidebar's "Agents" entry and ⌘0; turned off, from
 Settings in this window or another beside it (the storage event), an open
 overview gives the region back (`OverviewLayer`, the one place that says so). The entry and ⌘0 are a place like a channel:
-choosing it again keeps it, and Escape in it leaves; every action that goes
+choosing it again keeps it, and Escape leaves it whenever it is open —
+wherever the keyboard is, even before the keyboard has landed on its row —
+but for Escape in a menu or dialog over it, which is theirs; every action that goes
 somewhere — a session, a channel, a status view, a new session, another pane,
 or the focused pane asked for by name — goes back to the panes, even when it
 finds the window already there; and one that changes the panes a person asked
@@ -214,9 +234,16 @@ opens, so its first frame is laid out once. Opened, the keyboard lands on the
 current row; left — by Escape, or by any command that brings the panes back,
 one that changed nothing else included — it goes back to the focused pane's
 composer; an answer given in it — by key or click — moves it to the next
-request. **One press answers one request**: a held key's repeats answer and
-open nothing, in a row or on an answer's button, and a press within 250ms of
-the keyboard moving on by answering is not taken (`takesAnswerKey`); a held
+request. ⌘R puts the caret in the reply pill of the session the keyboard is
+on: the peek it sits in is drawn at once for it (not a step behind, as the
+list's walk draws it), so what is typed next lands in the pill. **The caret
+stays with the session's pill**: sending a reply that moves its row to
+another group (Needs you → Working), which draws its pill anew, gives the
+caret to the new pill; the caret leaves the pill only when the person moves
+it (Escape, a click, Tab). **One press answers one request**: a held key's repeats answer and
+open nothing, in a row or on an answer's button, and a press made within
+250ms of the press that answered — each timed as it was made — is not taken
+(`takesAnswerKey`); a held
 Return in a composer sends once. The sidebar
 marks what is shown: Agents while the overview is, a channel or session only
 while the panes are.
@@ -260,12 +287,12 @@ button carries**; and **the zone settles at rest**.
 | pressed | a move of another pointer, or of its own under 4px (`liftDistance`) | pressed | — |
 | pressed (with its copy) | move 4px or more | carrying (aim: none yet) | the copy is shown under the pointer, full size, and glides (`--desktop-base`, transform only) until its centre is under the pointer, where it stays; the zone waits for the next frame |
 | pressed | release of its pointer | idle | a click; what was made goes |
-| pressed | Escape; any other key but a lone modifier; another button (a move whose `buttons` is not the primary alone, or a press of the same pointer); `pointercancel`; the window's blur; a change (below) | idle | the press is let go: no later move can start a drag |
+| pressed | Escape; any other key but a lone modifier; another button (a move whose `buttons` is not the primary alone — a chorded button reaches the page as a move, never a press); `pointercancel`; the window's blur; a change (below) | idle | the press is let go: no later move can start a drag |
 | carrying | move of its pointer | carrying | the copy moves with the pointer, one to one; the zone is decided from the pointer (below); the panes and the placeholder change only when the zone does, a frame later (the preview) |
 | carrying | a move of another pointer, or to where it already is | carrying | — (resting is not restarted) |
 | carrying | no move for 150ms (`restAfter`, `still`) | carrying | the pointer's heading has aged out: the zone is decided again as at rest, and previewed a frame later |
-| carrying | release of its pointer in the zone the page has previewed, one that offers something (`dropOutcome`) | dropping | the command (`movePane`, `dropSession`) commits what was previewed, in the room read as the press began, and the copy flies into its rect; the click the release makes is swallowed |
-| carrying | release of its pointer anywhere else: before any preview was shown (a flick), in a zone not previewed yet, off the grid, over a side column, the carried pane's own place, a side the room refuses, no pane in sight | cancelling (home) | the copy flies home as the panes go back; the click is swallowed |
+| carrying | release of its pointer while the page shows a zone that offers something (`dropOutcome`) | dropping | the zone shown is committed — what the person saw, never one decided again at the release, so a heading that ages out as the button lifts cancels nothing — by `commitDrop`, in the room read as the press began, and the copy flies into its rect; the click the release makes is swallowed |
+| carrying | release of its pointer with no zone shown that offers something: before any preview was shown (a flick), off the grid, over a side column, the carried pane's own place, a side the room refuses, no pane in sight | cancelling (home) | the copy flies home as the panes go back; the click is swallowed |
 | carrying | release of another pointer | carrying | — (no click is swallowed for it) |
 | carrying | Escape | cancelling (home) | as above; Escape goes no further |
 | carrying | another button, `lostpointercapture`, `pointercancel`, the window's blur | cancelling (home) | as above; with the press let go, a later move starts nothing |
@@ -277,9 +304,11 @@ button carries**; and **the zone settles at rest**.
 The copy is drawn in a layer that begins below the titlebar row
 (`.workspace-drag-layer`), so nothing carried is ever painted under the
 window's controls, whatever it passes over. The folded sidebar revealed from
-the window's edge (the peek, `useEdgePeek`) neither shows nor hides while a
-pointer button is held: as a press found it, it stays until the release, and
-then where the pointer is decides.
+the window's edge (the peek) neither shows nor hides while a pointer button
+is held — a press freezes it (_Side columns_, above) — so the side columns
+the press read are the ones there until the release. A peek still sliding in
+as the press reads it is taken as covering where it is sliding to, its
+settled rect, never the part of the way it has come.
 
 Where the pointer is decides the zone (`aimAt`, `model/drop.ts`):
 
@@ -294,6 +323,7 @@ Where the pointer is decides the zone (`aimAt`, `model/drop.ts`):
 | over a pane, heading plainly along one axis | the sides across it are reached only within 16px of their edge — unless the pointer is already in one — so a sideways drag near a tall narrow pane's top moves beside it, never above |
 | over a pane, still for 150ms | as at rest: the heading has aged out |
 | over the zone it is already in | it holds until another wins by 12px, so it does not flicker at a boundary |
+| released | the zone shown then, as above: a release decides nothing again |
 | over the carried pane's own place | its zone, offering nothing: let go there, it goes home |
 
 The pointer is the aim because the copy's centre is under it: what the eye
@@ -379,7 +409,11 @@ duration token and script motion reads), drifting light, ⌘-click opens
 beside, running sessions first — each a `storedPreference`
 (`src/desktop/adapters/stored-preference.ts`). They are not Redux state,
 because an agent does not dispatch "tint from picture". "Show session list"
-is the workspace's own column choice, the same as ⌥⌘S. Settings is modal: the
+is the workspace's own column choice, the same as ⌥⌘S. It and "Keep running
+sessions at the top" apply only where there is a session list — three
+columns — so the catalogue says which layout a setting applies in
+(`layout`), and in any other its control is disabled and its row says
+"Three columns only" (`settings-view.test.tsx`, per layout). Settings is modal: the
 window under it is inert while it is open, and focus goes back to what opened
 it; its sidebar folds for room below a page's 420px, as the side columns do,
 refitted in the render that sees the width; its room changes at once and the
@@ -634,8 +668,20 @@ Watch for:
 - **Rules drifting into `ui/`.**
 - **Frame timing regressing** on the interactions named above.
 
-Remaining:
+Remaining — the one list of what this record leaves open; the
+[index](../README.md) summarises it. Each is its own issue:
 
+- **The gateway's `WorkspaceSource`.** The window runs on the in-memory
+  source; attaching the backend is one adapter implementing the port
+  (`application/ports.ts`), composed in `src/desktop/dependencies.ts` in its
+  place, with the port's guarantees: every call settles on a timeout of its
+  own, refusals are typed, each replacement carries its revision, and the
+  stream says `resync` when it reconnects or finds a gap.
+- **nessa_ui's icon contract, and an icon slot on its access mode.** The icon
+  provider in `src/desktop/ui/icons/` mirrors `NessaIconProvider` until
+  nessa_ui ships it, and is then replaced by it, not kept beside it; the
+  composer's access shield stays a masked outline in `styles.css` until
+  nessa_ui's `ComposerAccessMode` has an icon slot.
 - **The in-memory source records a same-tick message and answer out of
   order.** A message that lets an approval go is recorded when the source
   carries it out, while an answer is on record the moment it is asked, so an
@@ -649,4 +695,16 @@ Remaining:
   across them is not causal. The fix belongs to the audit's ordering (record a
   message when it is asked too, or order by when each was carried out) and is
   owed before a durable audit adapter copies this one's shape.
-
+- **Watch: the drop's commit frame under load.** A drop's `pointerup`
+  commits the move, and `FlipScope` reads where the panes landed in that same
+  task, so the new arrangement is laid out there (forced layout) rather than
+  in the frame's own layout step; it is the same layout either way, which is
+  why it is watched rather than moved. The frame after the press's `prepare`
+  task is the other one near the line. On a quiet machine (load 3.0–3.7) at
+  4× throttle, four runs each, the drop's longest frame was 33 ms headless
+  and 35 ms headed (median 33–34), the cancel's 33–35 ms: inside the budget.
+  Under heavy load (a fifth review's headed runs, other browsers running)
+  the same frames reached 67–118 ms, the `pointerup` task 55–106 ms of it
+  forced layout 41–84 ms. If a quiet run ever crosses 50 ms, the next step
+  is reading the landed rects from what the drop already knows (the outcome's
+  boxes) instead of from the page.

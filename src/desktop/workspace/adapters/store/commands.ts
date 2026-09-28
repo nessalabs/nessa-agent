@@ -186,34 +186,31 @@ export function openBeside(options: {
 }
 
 /**
- * A session dropped on a pane's zone: the middle opens it there, a side
- * beside it there if `room` allows, else nothing. The room is the one the
- * drag read as its press began and previewed in (`measureRoom`), so the drop
- * reads nothing of the page.
+ * Opens a session on a pane's zone, as a drop there would: the middle opens
+ * it there, a side beside it there where the room the page measures now
+ * allows, else nothing. An agent's way to do what a drag does.
  */
 export function dropSession(options: {
   sessionId: string
   target: PaneKey
   zone: Zone
-  room: WorkspaceRoom | undefined
 }): WorkspaceCommand {
-  return (dispatch) => {
-    dispatch(sessionDropped(options))
+  return (dispatch, _getState, { measure }) => {
+    dispatch(sessionDropped({ ...options, room: measure() }))
   }
 }
 
 /**
  * Moves a pane to a zone of another: the middle swaps them; a side only where
- * `room` allows — the room the drag previewed in, as `dropSession` takes it.
+ * the room the page measures now allows. An agent's way to do what a drag does.
  */
 export function movePane(options: {
   pane: PaneKey
   target: PaneKey
   zone: Zone
-  room: WorkspaceRoom | undefined
 }): WorkspaceCommand {
-  return (dispatch) => {
-    dispatch(paneMoved(options))
+  return (dispatch, _getState, { measure }) => {
+    dispatch(paneMoved({ ...options, room: measure() }))
   }
 }
 
@@ -264,8 +261,8 @@ export function measureRoom(): WorkspaceCommand<WorkspaceRoom | undefined> {
 /**
  * What dropping what is carried on `zone` of `target` would leave, in `room`
  * (`measureRoom`, read as the drag's press began): the outcome a drag
- * previews, which the drop's command then commits in the same room
- * (`dropOutcome`, one function for both).
+ * previews, which `commitDrop` then commits in the same room (`dropOutcome`,
+ * one function for both). The drag's own, as `commitDrop` is.
  */
 export function previewDrop({
   carried,
@@ -281,6 +278,33 @@ export function previewDrop({
   return (_dispatch, getState) => {
     const panes = getState().workspace.panes
     return panes ? dropOutcome(panes, carried, target, zone, room) : null
+  }
+}
+
+/**
+ * The drag's drop: commits what `previewDrop` showed for the same zone, in
+ * the same room — the one read as the press began, so the drop reads nothing
+ * of the page (`dropOutcome`, one function for both). The drag's own; an
+ * agent moves a pane with `movePane` or opens a session with `dropSession`,
+ * which measure the room as they run.
+ */
+export function commitDrop({
+  carried,
+  target,
+  zone,
+  room,
+}: {
+  carried: Carried
+  target: PaneKey
+  zone: Zone
+  room: WorkspaceRoom | undefined
+}): WorkspaceCommand {
+  return (dispatch) => {
+    dispatch(
+      carried.kind === "pane"
+        ? paneMoved({ pane: carried.pane, target, zone, room })
+        : sessionDropped({ sessionId: carried.sessionId, target, zone, room }),
+    )
   }
 }
 

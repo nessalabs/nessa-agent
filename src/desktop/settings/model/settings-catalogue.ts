@@ -11,6 +11,7 @@
  * Tab ids are unique across the whole catalogue, so a tab alone says which
  * category it belongs to (`settings-catalogue.test.ts` holds them to that).
  */
+import type { WorkspaceLayoutId } from "../../model/workspace-layout"
 
 export const settingsCategories = [
   {
@@ -101,6 +102,12 @@ interface SettingShape {
    * disabled and says so; none may look as if it works.
    */
   pending?: true
+  /**
+   * The one workspace layout it applies in — what it changes is drawn only
+   * there. In any other its control is disabled and its row says where it
+   * applies, so it never looks as if it works where it does nothing.
+   */
+  layout?: WorkspaceLayoutId
 }
 
 export const settingsEntries = [
@@ -226,6 +233,7 @@ export const settingsEntries = [
   {
     id: "show-session-list",
     tab: "layout",
+    layout: "columns",
     label: "Show session list",
     detail: "The column of a channel's sessions, beside the sidebar.",
   },
@@ -247,6 +255,7 @@ export const settingsEntries = [
   {
     id: "running-first",
     tab: "sessions",
+    layout: "columns",
     label: "Keep running sessions at the top",
     keywords: "sort order",
   },

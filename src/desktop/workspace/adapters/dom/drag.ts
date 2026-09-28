@@ -14,10 +14,10 @@
  *   centre comes under it, then stays there; the zone the pointer is in
  *   (`aimAt`) shows what dropping there would do — the panes move where the
  *   drop would put them and a placeholder marks the rect it takes, from the
- *   one outcome the command commits (`previewDrop`);
- * - **dropping**: released in the zone previewed, the command commits that
- *   outcome in the room the press read, and the copy flies into the
- *   placeholder's rect and hands over to the real pane;
+ *   one outcome the drop commits (`previewDrop`);
+ * - **dropping**: released while a zone is shown, the drop commits what is
+ *   shown (`commitDrop`) in the room the press read, and the copy flies into
+ *   the placeholder's rect and hands over to the real pane;
  * - **cancelling**: the copy flies home as the panes go back — or, when the
  *   room, the panes or the view changed under it, both go at once and the
  *   change plays as it would with no drag.
@@ -45,6 +45,7 @@ import type { DesktopStore } from "../../../store"
 import {
   idle,
   keyToDrag,
+  sameAim,
   stepDrag,
   type DragEvent,
   type DragPhase,
@@ -64,7 +65,7 @@ import {
   type PanePlacement,
   type WorkspaceRoom,
 } from "../../model/pane-sizing"
-import { dropSession, measureRoom, movePane, previewDrop } from "../store/commands"
+import { commitDrop, measureRoom, previewDrop } from "../store/commands"
 import { durationToken, motionToken } from "../../../adapters/motion"
 
 /** Marks the preview's own motion. */
@@ -142,6 +143,27 @@ const boxOf = (rect: DOMRect | Box): Box => ({
   height: rect.height,
 })
 
+/**
+ * Where a side column is once it has settled. A drawn column rests at no
+ * transform, so one still sliding in — the peek, revealed just before the
+ * press — is taken at the rect it is sliding to, its box less the
+ * translation it is drawn at now, never the part of the way it has come.
+ */
+function settledBox(column: Element): Box {
+  const rect = column.getBoundingClientRect()
+  const transform = getComputedStyle(column).transform
+  const values = /^matrix(3d)?\(([^)]*)\)$/.exec(transform)
+  if (!values) return boxOf(rect)
+  const numbers = (values[2] ?? "").split(",").map(Number)
+  const [dx, dy] = values[1] ? [numbers[12], numbers[13]] : [numbers[4], numbers[5]]
+  return {
+    left: rect.left - (dx ?? 0),
+    top: rect.top - (dy ?? 0),
+    width: rect.width,
+    height: rect.height,
+  }
+}
+
 /** Where a placement is drawn in a grid laid out at `grid`, as the stylesheet draws it. */
 function drawn(placement: PanePlacement, grid: Box): Box {
   const g = paneLimits.gutter
@@ -211,9 +233,6 @@ export function saying(outcome: DropOutcome, zone: Zone, title: string): string 
       return `Go to ${title}`
   }
 }
-
-const sameAim = (a: Aim | null, b: Aim | null) =>
-  a?.target === b?.target && a?.zone === b?.zone
 
 /**
  * What the page made for one drag, once the press's frame painted, and what
@@ -700,7 +719,7 @@ export function useWorkspaceDrag(
           ? scope.querySelector(".workspace-sidebar")
           : null,
         list === "open" ? scope.querySelector(".workspace-list") : null,
-      ].flatMap((column) => (column ? [boxOf(column.getBoundingClientRect())] : []))
+      ].flatMap((column) => (column ? [settledBox(column)] : []))
       const parts = new Map(
         Array.from(scope.querySelectorAll<HTMLElement>("[data-pane-key]"), (pane) => [
           pane,
@@ -875,24 +894,14 @@ export function useWorkspaceDrag(
         })
     }
 
-    /** Let go in the zone previewed: the command commits what was previewed, and the copy hands over. */
+    /** Let go with a zone shown: what is shown is committed, and the copy hands over. */
     const drop = (made: Made, what: Carried, aim: Aim) => {
       const { ghost, room, drawing } = made
-      // The command first, in the room the preview was drawn for — nothing of
+      // The drop first, in the room the preview was drawn for — nothing of
       // the page is read — then the copy's flight and the tidying.
-      if (what.kind === "pane")
-        store.dispatch(
-          movePane({ pane: what.pane, target: aim.target, zone: aim.zone, room }),
-        )
-      else
-        store.dispatch(
-          dropSession({
-            sessionId: what.sessionId,
-            target: aim.target,
-            zone: aim.zone,
-            room,
-          }),
-        )
+      store.dispatch(
+        commitDrop({ carried: what, target: aim.target, zone: aim.zone, room }),
+      )
       // Now it snaps: the copy flies from the pointer into the place it takes.
       const flight = drawing.landing ? flyTo(made, drawing.landing, false) : null
       tidy(made, true)
@@ -988,11 +997,8 @@ export function useWorkspaceDrag(
     }
 
     const onPointerDown = (event: PointerEvent) => {
-      if (phase.kind === "pressed" || phase.kind === "carrying") {
-        // Another button of the pointer that carries: the press or the drag ends.
-        if (event.pointerId === phase.pointerId) send({ kind: "lost" })
-        return
-      }
+      // Another button of the carrying pointer reaches the page as a move
+      // (a chord), never a press; a press of another pointer is not the drag's.
       if (event.button !== 0 || phase.kind !== "idle") return
       const target = event.target as Element
       const source = target.closest<HTMLElement>("[data-drag-pane], [data-drag-session]")
@@ -1073,7 +1079,7 @@ export function useWorkspaceDrag(
           pointerId: event.pointerId,
           at: sample(event),
           targets: null,
-          previewed: null,
+          shown: null,
         })
         return
       }
@@ -1081,14 +1087,14 @@ export function useWorkspaceDrag(
       // The press that ended a drag is not also a click on what it started from.
       window.addEventListener("click", swallowClick, { capture: true, once: true })
       window.setTimeout(() => window.removeEventListener("click", swallowClick, true), 0)
-      const { targets, drawing } = phase.made
+      const { drawing, targets } = phase.made
       send({
         kind: "release",
         pointerId: event.pointerId,
         at: sample(event),
         targets,
-        // Only what the page has shown may be committed.
-        previewed: drawing.outcome ? drawing.shown : null,
+        // What the page shows, and offers something: what the person saw.
+        shown: drawing.outcome ? drawing.shown : null,
       })
     }
 

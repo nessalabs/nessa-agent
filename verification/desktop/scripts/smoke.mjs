@@ -23,6 +23,7 @@ import {
 const meta = {
   name: "smoke",
   summary: "load both layouts, send, split, Settings, overview; no console errors",
+  defaults: { engine: "chromium,webkit" },
   help: `
 Usage: node verification/desktop/scripts/smoke.mjs [options]
 
@@ -32,7 +33,8 @@ Checks, per engine and layout:
   send             a message typed in a new session appears in its transcript
   split            ⇧⌘N (new session beside) adds a pane
   settings         ⌘, opens Settings; its Back button closes it and the panes return
-  overview         ⌘0 shows the Agents overview; Escape returns to the panes
+  overview         ⌘0 shows the Agents overview and the keyboard lands on its row;
+                   Escape returns to the panes (focus.mjs covers Escape before it lands)
   console          no console.error / pageerror / failed request (favicon 404 ignored)`,
 }
 
@@ -133,6 +135,15 @@ await main(meta, async ({ options, rep, url }) => {
           failures.push(
             `content is ${open.content} after ⌘0, expected ${content.overview}`,
           )
+        // Escape leaves whether or not the keyboard has landed yet; waiting
+        // for it keeps this check about the overview opening and leaving.
+        const landed = await until(
+          page,
+          (item) => document.activeElement?.closest(item) != null,
+          css.overviewItem,
+        )
+        if (!landed)
+          failures.push("the keyboard did not land on an overview row after ⌘0")
         await page.keyboard.press(keys.escape)
         await contentIs(page, content.panes)
         const left = await state(page)

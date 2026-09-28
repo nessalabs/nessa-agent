@@ -119,7 +119,7 @@ export const RequestRow = memo(function RequestRow({
     if (command !== "once" && command !== "always" && command !== "deny") return
     event.preventDefault()
     event.stopPropagation()
-    if (answerable) onAnswer(summary, approval, command)
+    if (answerable) onAnswer(summary, approval, command, event.timeStamp)
   }
 
   // A click peeks at the session, a double-click opens it; the buttons answer.
@@ -185,8 +185,8 @@ export const RequestRow = memo(function RequestRow({
                 tabIndex={current && answerable ? 0 : -1}
                 disabled={!answerable}
                 {...tooltip("Don’t run it", { shortcut: labelOf(overviewKeys, "deny") })}
-                onClick={() => {
-                  if (answerable) onAnswer(summary, approval, "deny")
+                onClick={(event) => {
+                  if (answerable) onAnswer(summary, approval, "deny", event.timeStamp)
                 }}
               >
                 Deny
@@ -202,7 +202,12 @@ export const RequestRow = memo(function RequestRow({
                 })}
                 onClick={(event) => {
                   if (answerable)
-                    onAnswer(summary, approval, event.altKey ? "always" : "once")
+                    onAnswer(
+                      summary,
+                      approval,
+                      event.altKey ? "always" : "once",
+                      event.timeStamp,
+                    )
                 }}
               >
                 <span className="agents-request-once">Allow</span>

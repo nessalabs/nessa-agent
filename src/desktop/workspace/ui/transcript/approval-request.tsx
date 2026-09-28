@@ -98,7 +98,8 @@ export function ApprovalActions({
   tips = {},
 }: {
   disabled: boolean
-  onAnswer: (choice: ApprovalChoice) => void
+  /** `at`: when the answer was made (the event's `timeStamp`, on `performance.now()`'s clock). */
+  onAnswer: (choice: ApprovalChoice, at: number) => void
   /** Each answer's tooltip, where the card offers one (its shortcut, say). */
   tips?: Partial<Record<ApprovalChoice, TooltipAttributes>>
 }) {
@@ -118,7 +119,7 @@ export function ApprovalActions({
           className="workspace-button workspace-approval-deny"
           disabled={disabled}
           {...tips.deny}
-          onClick={() => onAnswer("deny")}
+          onClick={(event) => onAnswer("deny", event.timeStamp)}
         >
           Deny
         </button>
@@ -129,7 +130,7 @@ export function ApprovalActions({
             aria-label="Always Allow"
             disabled={disabled}
             {...tips.always}
-            onClick={() => onAnswer("always")}
+            onClick={(event) => onAnswer("always", event.timeStamp)}
           >
             <span className="workspace-approval-long" aria-hidden="true">
               Always Allow
@@ -144,7 +145,7 @@ export function ApprovalActions({
             data-primary
             disabled={disabled}
             {...tips.once}
-            onClick={() => onAnswer("once")}
+            onClick={(event) => onAnswer("once", event.timeStamp)}
           >
             Allow Once
           </button>
@@ -161,7 +162,9 @@ export function ApprovalActions({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <MenuItem onSelect={() => onAnswer("always")}>Always Allow</MenuItem>
+              <MenuItem onSelect={(event) => onAnswer("always", event.timeStamp)}>
+                Always Allow
+              </MenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

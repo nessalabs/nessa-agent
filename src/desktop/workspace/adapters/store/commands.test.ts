@@ -27,9 +27,11 @@ import {
   closePane,
   deny,
   discardUnsent,
+  dropSession,
   fitPanes,
   followWorkspace,
   loadWorkspace,
+  movePane,
   newSession,
   nudgePane,
   openBeside,
@@ -1107,6 +1109,46 @@ describe("the room every change of layout is held to", () => {
     expect(store.getState().workspace.panes!.columns.map((c) => c.panes.length)).toEqual([
       2,
     ])
+  })
+
+  it("measures the room for an agent's move and drop, as a person's drag reads it", async () => {
+    let measured = 0
+    const store = testStore(fakeSource(), () => {
+      measured++
+      return { width: 1100, height: 800, spare: 0 }
+    })
+    await store.dispatch(loadWorkspace())
+    await settle()
+    store.dispatch(openBeside({ sessionId: "c", side: "right" }))
+    const [first, second] = panesOf(store.getState().workspace.panes!).map((p) => p.key)
+    // A side needs the room: given none, the agent's command measures it.
+    const before = measured
+    store.dispatch(movePane({ pane: first, target: second, zone: "bottom" }))
+    expect(measured).toBe(before + 1)
+    expect(store.getState().workspace.panes!.columns.map((c) => c.panes.length)).toEqual([
+      2,
+    ])
+    store.dispatch(dropSession({ sessionId: "b", target: first, zone: "right" }))
+    expect(measured).toBe(before + 2)
+    expect(shown(store)).toContain("b")
+    expect(store.getState().workspace.panes!.columns).toHaveLength(2)
+  })
+
+  it("moves nothing to a side for an agent when nothing was measured", async () => {
+    let room: { width: number; height: number; spare: number } | undefined = {
+      width: 1100,
+      height: 800,
+      spare: 0,
+    }
+    const store = testStore(fakeSource(), () => room)
+    await store.dispatch(loadWorkspace())
+    await settle()
+    store.dispatch(openBeside({ sessionId: "c", side: "right" }))
+    const layout = store.getState().workspace.panes
+    const [first, second] = panesOf(layout!).map((p) => p.key)
+    room = undefined
+    store.dispatch(movePane({ pane: first, target: second, zone: "bottom" }))
+    expect(store.getState().workspace.panes).toBe(layout)
   })
 
   it("places nothing new when nothing was measured", async () => {

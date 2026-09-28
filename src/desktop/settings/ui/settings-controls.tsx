@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from "react"
 import { setting, type SettingId } from "../model/settings-catalogue"
+import { useWorkspaceLayoutPreference } from "../../adapters/workspace-layout-preference"
+import { workspaceLayouts } from "../../model/workspace-layout"
 import { tooltip } from "../../ui/tooltip"
 
 /**
@@ -60,17 +62,29 @@ export function Group({
 
 /**
  * A row for one catalogued setting: its name and description come from the
- * catalogue, and so does whether it is available yet.
+ * catalogue, and so does whether it is available yet, and in which layout
+ * it applies — elsewhere its control is disabled and the row says where.
  */
 export function Row({ id, children }: { id: SettingId; children?: ReactNode }) {
   const entry = setting(id)
   const found = useContext(FoundSetting) === id
-  const available = entry.pending !== true
+  const [layout] = useWorkspaceLayoutPreference()
+  const elsewhere =
+    entry.layout !== undefined && entry.layout !== layout
+      ? workspaceLayouts.find((each) => each.id === entry.layout)?.label
+      : undefined
+  const available = entry.pending !== true && elsewhere === undefined
   return (
     <RowAvailable.Provider value={available}>
       <ItemRow
         label={entry.label}
-        detail={available ? entry.detail : notYet}
+        detail={
+          entry.pending === true
+            ? notYet
+            : elsewhere !== undefined
+              ? `${elsewhere} only`
+              : entry.detail
+        }
         setting={id}
         found={found}
         pending={!available}

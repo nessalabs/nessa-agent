@@ -1,4 +1,11 @@
-import { useLayoutEffect, useRef, type RefObject } from "react"
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useRef,
+  type MutableRefObject,
+  type RefObject,
+} from "react"
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
 import { sendMessage, setComposerText } from "../../adapters/store/commands"
@@ -10,6 +17,16 @@ import {
 } from "../../adapters/store/selectors"
 import { failureCopy } from "../failure-copy"
 
+/**
+ * Which session's reply pill holds the caret, or is to take it (⌘R), for as
+ * long as the overview is open: the overview's, given to every pill in it.
+ * A pill drawn anew for that session — its row moved to another group by the
+ * reply just sent, or its peek drawn for ⌘R — takes the caret as it mounts,
+ * so the keyboard stays with the session, not with the element that was
+ * drawn for it. Focus landing anywhere else lets the caret go.
+ */
+export const ReplyCaret = createContext<MutableRefObject<string | null> | null>(null)
+
 /** The most lines the pill grows to before it scrolls. */
 const pillLines = 4
 
@@ -19,8 +36,9 @@ const pillLines = 4
  * pieces, pared to a pill. Its draft is the session's own
  * (`setComposerText`), so it is the same text the pane's composer shows, and
  * sending is the workspace's `sendMessage`, as from the pane, which empties
- * it. The reply streams into the peek above; the pill keeps the caret. Escape
- * gives the keyboard back to the list.
+ * it. The reply streams into the peek above; the caret stays with the
+ * session's pill (`ReplyCaret`), even when sending moves its row and draws
+ * the pill anew. Escape gives the keyboard back to the list.
  */
 export function ReplyPill({
   sessionId,
@@ -43,6 +61,15 @@ export function ReplyPill({
   const unsent = useWorkspaceSelector((state) => selectUnsent(state, sessionId))
   const own = useRef<HTMLTextAreaElement>(null)
   const field = fieldRef ?? own
+  const caret = useContext(ReplyCaret)
+
+  // Drawn for the session the caret belongs with: the caret comes here,
+  // before the frame paints, so the next key typed lands in the pill.
+  useLayoutEffect(() => {
+    const textarea = field.current
+    if (textarea && caret?.current === sessionId && document.activeElement !== textarea)
+      textarea.focus()
+  }, [caret, sessionId, field])
 
   // Grows with the draft, before paint, up to four lines; then it scrolls.
   useLayoutEffect(() => {
@@ -81,6 +108,9 @@ export function ReplyPill({
           onChange={(event) =>
             dispatch(setComposerText({ sessionId, text: event.target.value }))
           }
+          onFocus={() => {
+            if (caret) caret.current = sessionId
+          }}
           onKeyDown={(event) => {
             // The list's keys stay out of the field.
             event.stopPropagation()

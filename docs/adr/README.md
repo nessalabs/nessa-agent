@@ -49,6 +49,7 @@ the Interactive macOS policy, local timing logs, and deferred follow-up work.
 | [0007 — Authentication API readiness](done/0007-authentication-delivery.md) | Existing APIs verified, durable lost-response retry tested, registry/gateway bounds measured, retention recorded |
 | [0010 — Local authentication](done/0010-local-authentication.md) | Owner bootstrap/recovery, scoped tokens, SDK/CLI, and mandatory gateway authorization |
 | [0013 — Files by path](done/0013-files-by-path-not-by-payload.md) | Host file picker, a path attachment on the wire, a `resource_link` in the prompt, and its audit record |
+| [238 — Desktop workspace frontend](done/238-desktop-workspace-frontend.md) | Frontend only: a `workspace` vertical for the desktop window — pure pane layouts, a `WorkspaceSource` port with an in-memory adapter, a desktop store, shared components behind both layouts (plus Classic), a Settings catalogue, the Agents overview, and an icon provider mirroring nessa_ui's contract. Remaining (the record's own list): the gateway's `WorkspaceSource`; nessa_ui's icon contract and an access-mode icon slot; the in-memory audit's same-tick ordering; a watch on the drop's commit frame under load |
 
 ## Todo — implementation priority
 
@@ -72,7 +73,6 @@ this table. None of it changes implementation or approval status.
 | 9 | [196 — Conversation metadata in an embedded database](todo/196-conversation-metadata-database.md) | Implemented, in review: ownership, tombstones and summaries in one private SQLite file through `nessa-local-database`, and a list that reads only its caller's conversations with `complete` exact per caller. No migration: earlier files are deleted by hand. Remaining: page tokens |
 | 10 | [202 — Versioned local datasets](todo/202-versioned-local-datasets.md) | Accepted. Implemented, in review: conversation metadata and the browser-session journal refuse the gateway as `datasetRefused` — not retried, recorded, said by the host — when they hold something this build cannot read. Remaining: migrations once Nessa leaves alpha |
 | 11 | [221 — Startup refusals are handled or said plainly](todo/221-startup-refusals.md) | Accepted. Implemented, in review: setup opens a window instead of aborting, the one shared-read repair, named startup steps and the panel's startup notice, named retirement refusals, and the host's stop of a gateway whose data is gone, on launchd and systemd |
-| 12 | [238 — Desktop workspace frontend](todo/238-desktop-workspace-frontend.md) | Proposed; implemented, in review: a `workspace` vertical for the desktop window — pure pane layouts, a `WorkspaceSource` port with an in-memory adapter, a desktop store, shared components behind both layouts (plus Classic), a Settings catalogue, and an icon provider mirroring nessa_ui's contract. Frontend only. Remaining: the gateway's `WorkspaceSource`, and nessa_ui's icon contract (and an icon slot on its access mode) to replace the mirror |
 
 Auth API readiness and operating-bound work is complete. The
 [current Rust SDK](../../crates/nessa-sdk/docs/agent_execution/README.md) provides

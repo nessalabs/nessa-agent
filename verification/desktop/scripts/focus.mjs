@@ -9,7 +9,11 @@
  * returns the caret to the focused pane's composer, and a move at the edge
  * leaves the overview where it is. One press answers one request: a held
  * ⌘↩, or two presses 80ms apart, answer one; so does a held ↩ or a double
- * click on a pane's card (focus-answers-overview, focus-answers-card).
+ * click on a pane's card (focus-answers-overview, focus-answers-card). ⌘R
+ * straight after ↓ puts the caret in the reply pill of the row ↓ went to,
+ * and what is typed at once lands there; sending, which moves that row from
+ * Needs you to Working and draws its pill anew, leaves the caret in the
+ * session's pill (focus-reply, at 1440 × 900 and 1000 × 700).
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
@@ -94,6 +98,16 @@ function overviewSteps() {
       : `content ${s.content}, expected the panes`
   let last = null
   return [
+    // Escape leaves whenever the overview is open, before the keyboard has
+    // landed on its row too.
+    [
+      "⌘0 then Escape at once",
+      async (p) => {
+        await p.keyboard.press(keys.overview)
+        await p.keyboard.press(keys.escape)
+      },
+      backInComposer,
+    ],
     [
       "⌘0 opens",
       (p) => p.keyboard.press(keys.overview),
@@ -277,7 +291,19 @@ async function answerOnceOnCard(page) {
     const composer = page.locator(`${css.focusedPane} ${css.field}`).first()
     await composer.fill("keep these words")
     if (answer === "held") {
-      await card.getByRole("button", { name: names.allowOnce }).focus()
+      // The pick's caret lands in the composer a frame or two after it: let
+      // it, then put the keyboard on Allow Once, and hold ↩ only once it is there.
+      await settled(page)
+      await frames(page, 3)
+      const allow = card.getByRole("button", { name: names.allowOnce })
+      await allow.focus()
+      const onAllow = await until(
+        page,
+        (name) => document.activeElement?.textContent?.trim() === name,
+        names.allowOnce,
+        1000,
+      )
+      if (!onAllow) throw new CannotRun("the keyboard would not stay on Allow Once")
       for (let i = 0; i < 5; i++) await page.keyboard.down(keys.enter)
       await page.keyboard.up(keys.enter)
     } else await card.getByRole("button", { name, exact: true }).dblclick()
@@ -301,6 +327,76 @@ async function answerOnceOnCard(page) {
   return { trail, failures }
 }
 
+/** Where the caret is in the overview: the session whose reply pill holds it, and what it holds. */
+const replyCaret = (page) =>
+  page.evaluate((field) => {
+    const a = document.activeElement
+    return a?.matches(field)
+      ? {
+          session: a.closest("[data-reply-for]")?.dataset.replyFor ?? null,
+          value: a.value,
+        }
+      : { session: null, active: a ? `${a.tagName}.${a.className}` : null }
+  }, css.overviewReplyField)
+
+/**
+ * ⌘R straight after ↓, then typing at once and sending: the caret is in the
+ * pill of the row ↓ went to with every key typed in it, and it stays in that
+ * session's pill after the reply moves its row from Needs you to Working.
+ */
+async function replyKeepsCaret(page) {
+  const failures = []
+  const trail = []
+  await page.keyboard.press(keys.overview)
+  await contentIs(page, content.overview)
+  await settled(page)
+  await frames(page, 4)
+  const start = (await state(page)).activeOverviewItem
+  // ↓ and ⌘R in one breath, then the words at once: the peek may not have followed ↓ yet.
+  await page.keyboard.press(keys.down)
+  await page.keyboard.press(keys.reply)
+  await page.keyboard.type("status?")
+  const typed = await replyCaret(page)
+  trail.push({ step: "↓ ⌘R and type", from: start, ...typed })
+  const to = typed.session
+  if (!to || to === start) {
+    failures.push(
+      `after ↓ then ⌘R the caret is on ${typed.active ?? to}, not the next row's pill`,
+    )
+    await page.keyboard.press(keys.escape)
+    return { trail, failures }
+  }
+  if (typed.value !== "status?")
+    failures.push(`the pill holds "${typed.value}", not every key typed ("status?")`)
+  const moved = await until(
+    page,
+    ([sel, id]) => document.querySelector(`${sel}[data-overview-item="${id}"]`) !== null,
+    [css.overviewRequest, to],
+    1000,
+  )
+  await page.keyboard.press(keys.enter)
+  // The reply lets the request go: the row leaves Needs you, its pill drawn anew.
+  const left = await until(
+    page,
+    ([sel, id]) => document.querySelector(`${sel}[data-overview-item="${id}"]`) === null,
+    [css.overviewRequest, to],
+    4000,
+  )
+  await frames(page, 3)
+  const after = await replyCaret(page)
+  trail.push({ step: "sent", wasRequest: moved, rowLeftNeedsYou: left, ...after })
+  if (!moved) throw new CannotRun(`the row ↓ reached (${to}) is not a request`)
+  if (!left) failures.push(`the row ${to} did not leave Needs you after the reply`)
+  if (after.session !== to)
+    failures.push(
+      `after sending, the caret is on ${after.active ?? after.session}, not ${to}'s pill`,
+    )
+  else if (after.value !== "")
+    failures.push(`after sending, the pill still holds "${after.value}"`)
+  await page.keyboard.press(keys.escape)
+  return { trail, failures }
+}
+
 const meta = {
   name: "focus",
   summary:
@@ -317,10 +413,14 @@ Usage: node verification/desktop/scripts/focus.mjs [options]
 Steps (each asserts where the caret is afterwards):
   ⌘N, ⇧⌘N, ⌘\\ + pick, ⇧⌘\\, ⌘1–4, ⇧⌘], ⇧⌘[, ⌘W, ⌘K + Escape, Settings + Back
   → the caret is in the focused pane's composer
+  ⌘0 then Escape at once → back to the panes, caret in the composer
   ⌘0, ↓, ⌘0 again → the caret is on an overview item, and ↓ moves it
   Escape → back to the panes, caret in the focused pane's composer
   from the overview: ⌘1 on the focused pane, ⇧⌘[ at the first → back to the
   panes, caret in the composer; ⌃⌥← at the edge → the overview stays
+  focus-reply (1440 × 900 and 1000 × 700): ↓ then ⌘R at once, and typing at
+  once → the caret and every key are in the next row's reply pill; sending,
+  which moves that row to Working → the caret stays in that session's pill
   focus-answers-overview, -card: a held ⌘↩, and ⌘↩ twice 80ms apart, each answer one request;
   a held ↩ on a pane card's Allow Once, and a double click on Deny and on
   Always Allow, each answer one, and the held ↩ sends nothing typed`,
@@ -401,6 +501,25 @@ await main(meta, async ({ options, rep, url }) => {
             await fresh.close()
           }
         })
+      for (const [width, height] of [
+        [1440, 900],
+        [1000, 700],
+      ])
+        await attempt(
+          rep,
+          { name: "focus-reply", engine, layout, size: `${width}x${height}` },
+          async () => {
+            const fresh = await openPage(browser, { url, layout, width, height })
+            try {
+              await need(fresh.page, css.composer, "a composer")
+              await focusComposer(fresh.page)
+              const result = await replyKeepsCaret(fresh.page)
+              return { ...result, failures: [...result.failures, ...fresh.errors] }
+            } finally {
+              await fresh.close()
+            }
+          },
+        )
     }
   })
 })

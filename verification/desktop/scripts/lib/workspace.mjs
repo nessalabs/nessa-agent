@@ -355,3 +355,21 @@ export async function recordFrames(page) {
       }),
   }
 }
+
+/**
+ * Calls a model rule in the page (`modules`): the owner's own function, so a
+ * script never keeps a copy of it. Needs the dev server, which serves the
+ * source; a production build has no module to import.
+ */
+export async function modelRule(page, module, name, ...args) {
+  try {
+    return await page.evaluate(
+      async ([path, fn, list]) => (await import(path))[fn](...list),
+      [module, name, args],
+    )
+  } catch (error) {
+    throw new CannotRun(
+      `could not read ${name} from ${module} in the page (it needs --mode dev): ${error.message.split("\n")[0]}`,
+    )
+  }
+}

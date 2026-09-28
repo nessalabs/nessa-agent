@@ -30,17 +30,29 @@
  *                        for the whole drag, and the release changes nothing
  *   copy-under-controls  the corner pane carried: nothing of its copy is painted under the
  *                        window's controls, any frame
+ *   docked-columns-no-zone  (1440 × 900) a pane carried over the docked sidebar, and over
+ *                        the docked session list, offers no zone and no placeholder; the
+ *                        release there changes nothing
+ *   peek-press-while-hiding  the sidebar revealed from the edge, the pointer leaves it for a
+ *                        pane's header and presses within the reveal's 350 ms hide: the
+ *                        reveal stays, every frame of the drag; over it is no zone, just past
+ *                        it a pane is a target; released away, it hides
+ *   reduced-motion       with less motion, nothing but the copy moves: no pane is drawn
+ *                        off its place while a zone is shown, and the placeholder marks it
+ *
+ * `--reduced-motion` runs every check with the system's reduced motion on.
  */
 import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { safeArea, safeAreaInit, summarize } from "./lib/safe-area.mjs"
-import { content, css, keys, zoneSaid } from "./lib/selectors.mjs"
+import { content, css, keys, modules, zoneSaid } from "./lib/selectors.mjs"
 import {
   dragResidue,
   frames,
   hideColumns,
   lift,
+  modelRule,
   openPanes,
   order,
   panes,
@@ -296,8 +308,14 @@ const checks = {
   "boundary-jitter": async (page, layout) => {
     const list = await fourPanes(page, layout)
     const target = list[1]
-    // The left side's reach at rest: a third of the pane, held to 90–300px.
-    const inset = Math.min(Math.max(target.w / 3, 90), 300, target.w / 2)
+    // The left side's reach at rest, as the model decides it (`edgeReach`).
+    const inset = await modelRule(
+      page,
+      modules.drop,
+      "edgeReach",
+      { width: target.w, height: target.h },
+      "left",
+    )
     const x = target.x + inset
     await lift(page, 0)
     await page.mouse.move(x, target.y + target.h / 2, { steps: 10 })
@@ -696,6 +714,161 @@ Object.assign(checks, {
       return { failures }
     },
   },
+  "docked-columns-no-zone": {
+    sizes: ["1440x900"],
+    run: async (page, layout) => {
+      await openPanes(page, 2)
+      await settled(page)
+      const columns = await page.evaluate(
+        ([sidebar, list]) =>
+          [sidebar, list].flatMap((sel) => {
+            const element = document.querySelector(sel)
+            const r = element?.getBoundingClientRect()
+            return r && r.width > 40 && r.right > 0 && r.left < innerWidth
+              ? [{ sel, x: r.left, y: r.top, w: r.width, h: r.height }]
+              : []
+          }),
+        [css.sidebar, css.sessionList],
+      )
+      const want = layout === "columns" ? 2 : 1
+      if (columns.length < want)
+        throw new CannotRun(
+          `expected ${want} docked side columns, found ${columns.map((c) => c.sel).join(", ") || "none"}`,
+        )
+      const before = (await order(page)).join(",")
+      await lift(page, 0)
+      const failures = []
+      for (const column of columns) {
+        await page.mouse.move(column.x + column.w / 2, column.y + column.h / 2, {
+          steps: 12,
+        })
+        // Past `restAfter`: pacing, then what the page shows there.
+        await page.waitForTimeout(250)
+        await frames(page, 2)
+        const said = await page.locator(css.dropAnnouncer).first().textContent()
+        const placeholders = await page.locator(css.dragPlaceholder).count()
+        if (said) failures.push(`over the docked ${column.sel}, a zone: "${said}"`)
+        if (placeholders) failures.push(`over the docked ${column.sel}, a placeholder`)
+      }
+      await page.mouse.up()
+      await settled(page)
+      await frames(page, 4)
+      const after = (await order(page)).join(",")
+      if (after !== before)
+        failures.push(
+          `the release over a side column changed the panes: ${before} → ${after}`,
+        )
+      failures.push(...residueFailures(await dragResidue(page)))
+      return { columns: columns.map((c) => c.sel), failures }
+    },
+  },
+  "peek-press-while-hiding": async (page, layout) => {
+    await hideColumns(page, layout)
+    await openPanes(page, 2)
+    await settled(page)
+    const size = page.viewportSize()
+    const peekShown = (sel) => "peek" in (document.querySelector(sel)?.dataset ?? {})
+    await page.mouse.move(3, size.height / 2)
+    await page.waitForFunction(peekShown, css.workspace, { timeout: 2000 })
+    await settled(page)
+    const peek = await page.locator(css.sidebar).first().boundingBox()
+    if (!peek) throw new CannotRun(`the revealed sidebar (${css.sidebar}) has no box`)
+    // Every frame from here on: is the reveal still there?
+    await page.evaluate((sel) => {
+      window.__peekGone = 0
+      window.__peekWatch = true
+      const tick = () => {
+        if (!("peek" in (document.querySelector(sel)?.dataset ?? {}))) window.__peekGone++
+        if (window.__peekWatch) requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    }, css.workspace)
+    const left = await page.evaluate(() => performance.now())
+    // Out of the reveal to the right pane's title, and pressed at once:
+    // inside the reveal's 350 ms hide.
+    await lift(page, 1)
+    const pressedAfter = (await page.evaluate(() => performance.now())) - left
+    const failures = []
+    // Carried about the right pane past the hide's delay, then over the reveal.
+    const panesNow = (await panes(page)).sort((a, b) => a.x - b.x)
+    const right = panesNow.at(-1)
+    await page.mouse.move(right.x + right.w / 2, right.y + right.h / 2, { steps: 10 })
+    await page.waitForTimeout(400)
+    await page.mouse.move(peek.x + peek.width / 2, peek.y + peek.height / 2, {
+      steps: 12,
+    })
+    await page.waitForTimeout(250)
+    await frames(page, 2)
+    const overPeek = await page.locator(css.dropAnnouncer).first().textContent()
+    if (overPeek) failures.push(`over the revealed sidebar, a zone: "${overPeek}"`)
+    // Just past its edge, over the first pane: a target, not a dead area.
+    await page.mouse.move(peek.x + peek.width + 40, peek.y + peek.height / 2, {
+      steps: 6,
+    })
+    const pastPeek = await zoneSays(page, zoneSaid.any, 1500)
+    if (!pastPeek)
+      failures.push("just past the revealed sidebar's edge, no zone: a dead area")
+    const gone = await page.evaluate(() => {
+      window.__peekWatch = false
+      return window.__peekGone
+    })
+    if (gone) failures.push(`the reveal was gone in ${gone} frames of the drag`)
+    await page.keyboard.press(keys.escape)
+    await page.mouse.up()
+    await settled(page)
+    // Released away from it: now it hides, on its own delay.
+    const hid = await page
+      .waitForFunction(
+        (sel) => !("peek" in (document.querySelector(sel)?.dataset ?? {})),
+        css.workspace,
+        {
+          timeout: 2000,
+        },
+      )
+      .then(() => true)
+      .catch(() => false)
+    if (!hid) failures.push("released away from it, the reveal never hid")
+    failures.push(...residueFailures(await dragResidue(page)))
+    return { pressedAfterLeaving: Math.round(pressedAfter), failures }
+  },
+  "reduced-motion": async (page, layout, fresh) => {
+    const still = await fresh({ reducedMotion: "reduce" })
+    const list = await threeColumns(still, layout)
+    const target = list[2]
+    await still.evaluate((sel) => {
+      window.__moved = new Set()
+      window.__watch = true
+      const tick = () => {
+        document.querySelectorAll(sel.pane).forEach((p) => {
+          if (p.closest(sel.dragGhost)) return
+          const t = getComputedStyle(p).transform
+          if (t !== "none" && !new DOMMatrix(t).isIdentity)
+            window.__moved.add(p.dataset.paneKey)
+        })
+        if (window.__watch) requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    }, css)
+    await lift(still, 0)
+    await still.mouse.move(target.x + target.w - 20, target.y + target.h / 2, {
+      steps: 20,
+    })
+    const said = await zoneSays(still, zoneSaid.any)
+    await still.waitForTimeout(300)
+    const placeholders = await still.locator(css.dragPlaceholder).count()
+    const moved = await still.evaluate(() => {
+      window.__watch = false
+      return [...window.__moved]
+    })
+    await letGo(still, { escape: true })
+    const failures = []
+    if (!said) throw new CannotRun("no zone was offered over the far pane")
+    if (moved.length)
+      failures.push(`panes drawn off their place with less motion: ${moved.join(", ")}`)
+    if (!placeholders) failures.push("no placeholder marks where the drop would land")
+    failures.push(...residueFailures(await dragResidue(still)))
+    return { failures }
+  },
   "copy-under-controls": async (page, layout) => {
     await hideColumns(page, layout)
     await openPanes(page, 2)
@@ -730,6 +903,7 @@ const meta = {
   options: {
     only: { type: "string" },
     sizes: { type: "string", default: "1440x900,1000x700" },
+    "reduced-motion": { type: "boolean", default: false },
   },
   help: `
 Usage: node verification/desktop/scripts/drag.mjs [options]
@@ -737,6 +911,7 @@ Usage: node verification/desktop/scripts/drag.mjs [options]
   --only <list>    Checks, comma-separated. Available:
                    ${Object.keys(checks).join(", ")}
   --sizes <list>   Window sizes (default 1440x900,1000x700).
+  --reduced-motion Every check with the system's reduced motion on.
 
 sweep-across-zones covers follows-pointer, inside-grid, inside-window, one-way
 and no-selection in one recorded drag. Side columns are hidden first so the
@@ -759,18 +934,21 @@ await main(meta, async ({ options, rep, url }) => {
           if (only && !only.includes(name)) continue
           const run = typeof check === "function" ? check : check.run
           if (check.layouts && !check.layouts.includes(layout)) continue
+          if (check.sizes && !check.sizes.includes(`${width}x${height}`)) continue
           await attempt(
             rep,
             { name, engine, layout, width: `${width}x${height}` },
             async () => {
               const pages = []
-              const fresh = async () => {
+              const fresh = async (overrides = {}) => {
                 const opened = await openPage(browser, {
                   url,
                   layout,
                   width,
                   height,
                   initScripts: [safeAreaInit],
+                  reducedMotion: options["reduced-motion"] ? "reduce" : undefined,
+                  ...overrides,
                 })
                 pages.push(opened)
                 await need(opened.page, css.paneHeader, "a pane header")

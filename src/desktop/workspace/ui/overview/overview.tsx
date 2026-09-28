@@ -46,6 +46,7 @@ import { FilterMenu } from "./filter-menu"
 import { overviewKeys } from "./overview-keys"
 import { RequestRow } from "./request-row"
 import { SessionPeek } from "./session-peek"
+import { ReplyCaret } from "./reply-pill"
 import { SessionRow } from "./session-row"
 import { answeredLabels, type OnAnswer, type Settling } from "./settling"
 import "./overview.css"
@@ -207,7 +208,7 @@ export function AgentsOverview({
   )
 
   const answer = useCallback<OnAnswer>(
-    (summary, approval, choice) => {
+    (summary, approval, choice, at) => {
       const { glance, settling } = latest.current
       if (settling.some((entry) => entry.sessionId === summary.id)) return
       const next = afterAnswer(
@@ -237,7 +238,8 @@ export function AgentsOverview({
       ])
       if (here) {
         focusItem(next)
-        movedAt.current = performance.now()
+        // Timed from the answering press itself, on the clock a later press is stamped on.
+        movedAt.current = at
       }
       const asked =
         choice === "deny"
@@ -276,11 +278,6 @@ export function AgentsOverview({
       matchesChord(event.nativeEvent, candidate.chord),
     )
     if (!binding) return
-    if (binding.command === "leave") {
-      event.preventDefault()
-      onLeave()
-      return
-    }
     if (binding.command === "reply") {
       event.preventDefault()
       const from =
@@ -337,7 +334,11 @@ export function AgentsOverview({
   // step behind the list, so a key that moves on (an arrow, an answer) draws
   // the list's change in its own frame and the next session's peek after it;
   // where it is not, a chosen row opens its peek beneath it.
-  const peeked = useDeferredValue(current)
+  const following = useDeferredValue(current)
+  // ⌘R draws the peek of the session it replies to at once, not a step
+  // behind, so the pill is there for the next key typed.
+  const [replyingTo, setReplyingTo] = useState<string | null>(null)
+  const peeked = replyingTo !== null && replyingTo === current ? current : following
   const splitNow = useRef(split)
   splitNow.current = split
   const pick = useCallback(
@@ -349,86 +350,133 @@ export function AgentsOverview({
     [choose],
   )
 
-  // ⌘R: the keyboard goes to the reply pill of the session it is on, its
-  // peek opened first where the peek is beneath the row.
+  // The session whose reply pill holds the caret, or is to take it: a pill
+  // drawn for it takes the caret as it mounts (`ReplyCaret`).
+  const caret = useRef<string | null>(null)
+  // ⌘R: the keyboard goes to the reply pill of the session it is on — the
+  // one on the page, or the one drawn for it now: its peek, beside the list
+  // or opened beneath the row, drawn in this same update.
   const reply = (sessionId: string) => {
+    caret.current = sessionId
     choose(sessionId)
+    setReplyingTo(sessionId)
+    setPeekDrawn(true)
     if (!splitNow.current) setExpanded(sessionId)
-    requestAnimationFrame(() =>
-      section.current
-        ?.querySelector<HTMLTextAreaElement>(
-          `[data-reply-for="${CSS.escape(sessionId)}"] textarea`,
-        )
-        ?.focus(),
-    )
+    section.current
+      ?.querySelector<HTMLTextAreaElement>(
+        `[data-reply-for="${CSS.escape(sessionId)}"] textarea`,
+      )
+      ?.focus()
   }
+  // Focus landing anywhere but that session's pill lets the caret go: the
+  // person moved it (Escape, a click, Tab).
+  useEffect(() => {
+    const onFocusIn = (event: FocusEvent) => {
+      const pill =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-reply-for]")
+          : null
+      if (pill?.dataset.replyFor === caret.current) return
+      caret.current = null
+      setReplyingTo(null)
+    }
+    document.addEventListener("focusin", onFocusIn)
+    return () => document.removeEventListener("focusin", onFocusIn)
+  }, [])
+
+  // Escape leaves whenever the overview is open — wherever the keyboard is,
+  // even before it has landed on a row — but for Escape in a menu or a
+  // dialog over it, which is theirs, and under Settings, whose keys are its own.
+  const leaveNow = useRef(onLeave)
+  leaveNow.current = onLeave
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
+      const leave = overviewKeys.find(
+        (binding) => binding.command === "leave" && matchesChord(event, binding.chord),
+      )
+      if (!leave) return
+      if (section.current?.closest("[inert]")) return
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[role="dialog"], [role="menu"], [role="listbox"]')
+      )
+        return
+      event.preventDefault()
+      leaveNow.current()
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [])
   // Escape in a pill: back to the row it replies to.
   const leaveReply = useCallback(() => focusItem(currentNow.current), [focusItem])
 
   return (
-    <section
-      ref={section}
-      className="agents-overview"
-      aria-label="Agents"
-      data-alt={alt || undefined}
-      data-split={split || undefined}
-    >
-      <div className="agents-overview-surface">
-        <div className="agents-overview-scroll">
-          <div
-            ref={list}
-            className="agents-overview-column"
-            tabIndex={-1}
-            onKeyDown={onKeyDown}
-          >
-            <header className="agents-overview-header">
-              <div className="agents-overview-title">
-                <h1>Agents</h1>
-                <FilterMenu filter={filter} onChange={setFilter} />
-              </div>
-              <p>{ready ? glanceLine(glance) : "\u00a0"}</p>
-            </header>
-            {ready ? (
-              <Groups
-                glance={glance}
-                current={current}
-                selected={split ? current : null}
-                expanded={split ? null : expanded}
-                settlingOf={settlingOf}
-                onFocusItem={choose}
-                onChoose={pick}
-                onOpen={open}
-                onAnswer={answer}
-                onLeaveReply={leaveReply}
-                takesKey={takesKey}
-                onShowAll={
-                  filter.scope === "all"
-                    ? undefined
-                    : () => setFilter({ ...filter, scope: "all" })
-                }
-              />
-            ) : null}
-            <p className="agents-overview-said" aria-live="polite">
-              {said}
-            </p>
+    <ReplyCaret.Provider value={caret}>
+      <section
+        ref={section}
+        className="agents-overview"
+        aria-label="Agents"
+        data-alt={alt || undefined}
+        data-split={split || undefined}
+      >
+        <div className="agents-overview-surface">
+          <div className="agents-overview-scroll">
+            <div
+              ref={list}
+              className="agents-overview-column"
+              tabIndex={-1}
+              onKeyDown={onKeyDown}
+            >
+              <header className="agents-overview-header">
+                <div className="agents-overview-title">
+                  <h1>Agents</h1>
+                  <FilterMenu filter={filter} onChange={setFilter} />
+                </div>
+                <p>{ready ? glanceLine(glance) : "\u00a0"}</p>
+              </header>
+              {ready ? (
+                <Groups
+                  glance={glance}
+                  current={current}
+                  selected={split ? current : null}
+                  expanded={split ? null : expanded}
+                  settlingOf={settlingOf}
+                  onFocusItem={choose}
+                  onChoose={pick}
+                  onOpen={open}
+                  onAnswer={answer}
+                  onLeaveReply={leaveReply}
+                  takesKey={takesKey}
+                  onShowAll={
+                    filter.scope === "all"
+                      ? undefined
+                      : () => setFilter({ ...filter, scope: "all" })
+                  }
+                />
+              ) : null}
+              <p className="agents-overview-said" aria-live="polite">
+                {said}
+              </p>
+            </div>
           </div>
+          {split && peeked !== null ? (
+            <aside className="agents-overview-peek" aria-label="Peek">
+              {peekDrawn ? (
+                <SessionPeek
+                  key={peeked}
+                  sessionId={peeked}
+                  settling={settlingOf.get(peeked)}
+                  onOpen={open}
+                  onAnswer={answer}
+                  onLeaveReply={leaveReply}
+                />
+              ) : null}
+            </aside>
+          ) : null}
         </div>
-        {split && peeked !== null ? (
-          <aside className="agents-overview-peek" aria-label="Peek">
-            {peekDrawn ? (
-              <SessionPeek
-                key={peeked}
-                sessionId={peeked}
-                settling={settlingOf.get(peeked)}
-                onOpen={open}
-                onAnswer={answer}
-                onLeaveReply={leaveReply}
-              />
-            ) : null}
-          </aside>
-        ) : null}
-      </div>
-    </section>
+      </section>
+    </ReplyCaret.Provider>
   )
 }
 

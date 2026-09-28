@@ -57,6 +57,7 @@ export const css = {
   overviewRequest: ".agents-request", // class
   overviewRow: ".agents-row", // class
   overviewReplyPill: ".agents-reply-pill", // class
+  overviewReplyField: "[data-reply-for] textarea", // data-reply-for is the session replied to
   overviewFilter: ".agents-filter", // class
 
   // Column heads (src/desktop/ui/column-header.tsx): data-title / data-placement are "inline" | "below"
@@ -102,6 +103,14 @@ export const safeAreaExempt = [
 export const safeAreaTokens = {
   start: "--desktop-titlebar-safe-start",
   height: "--desktop-titlebar-height",
+}
+
+/**
+ * Model modules a script reads a rule from rather than retyping it (gate 13),
+ * imported in the page through the dev server — so only with `--mode dev`.
+ */
+export const modules = {
+  drop: "/src/desktop/workspace/model/drop.ts",
 }
 
 /** localStorage keys the scripts seed before the page loads. */

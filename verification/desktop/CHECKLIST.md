@@ -7,7 +7,7 @@ be harmless. Why these exist and when to run them:
 [Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui).
 How to run them: [`verification/README.md`](../README.md).
 
-ADR 238 is [`docs/adr/todo/238-desktop-workspace-frontend.md`](../../docs/adr/todo/238-desktop-workspace-frontend.md);
+ADR 238 is [`docs/adr/done/238-desktop-workspace-frontend.md`](../../docs/adr/done/238-desktop-workspace-frontend.md);
 its sections are cited as _ADR 238 › Section_. The window as a whole is
 described in [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md) (_Minimal
 desktop surface_ and the workspace section).
@@ -107,9 +107,23 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   offers no zone and no placeholder, the reveal does not hide while the button
   is held, and the release changes nothing. _Check:_ `drag.mjs`
   (`peek-session-no-zone`, sidebar layout, both engines).
+- [ ] **A pane carried over a docked side column finds no zone**: over the
+  docked sidebar and the docked session list, no zone and no placeholder; the
+  release there changes nothing. _Check:_ `drag.mjs` (`docked-columns-no-zone`,
+  1440 × 900, both layouts).
+- [ ] **A press freezes the edge reveal** (`src/desktop/model/edge-peek.ts`,
+  its table): pressed within the reveal's 350 ms hide — the pointer just left
+  it for a pane's header — it stays every frame of the drag, is no zone, and
+  just past its edge a pane is a target; released away, it hides. A release
+  the page missed, or the window's blur, ends the freeze. _Check:_ `drag.mjs`
+  (`peek-press-while-hiding`); unit tests `edge-peek.test.ts`,
+  `use-edge-peek.test.tsx`.
 - [ ] **Only a drop that was previewed commits**: down, across and up in one
   task — before the copy is made, or lifted but before any preview — changes
-  nothing. _Check:_ `drag.mjs` (`flick`).
+  nothing. _Check:_ `drag.mjs` (`flick`). A release commits the zone shown as
+  the button lifts, never one decided again then (a heading aging out as it
+  lifts cancels nothing). _Check:_ unit tests `model/drag.test.ts`,
+  `adapters/dom/drag.test.tsx`.
 - [ ] **Only the primary button carries**: the right button joining the left
   mid-drag ends the drag; nothing is carried after it and its release drops
   nothing. _Check:_ `drag.mjs` (`chord-right-button`).
@@ -183,7 +197,14 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
 - [ ] **Turning the preview off gives the region back**, in this window and
   in another beside it. _Check:_ unit test `overview.test.tsx`; by hand with two windows.
 - [ ] **Escape, or anywhere else chosen, goes back to the panes** with the
-  caret in the focused pane's composer. _Check:_ `focus.mjs` (`focus-overview`).
+  caret in the focused pane's composer — Escape straight after ⌘0 too, before
+  the keyboard has landed on a row. _Check:_ `focus.mjs` (`focus-overview`,
+  "⌘0 then Escape at once").
+- [ ] **⌘R keeps the keyboard in the reply pill**: straight after ↓, with
+  the words typed at once, every key lands in the pill of the row ↓ went to;
+  sending, which moves the row from Needs you to Working and draws its pill
+  anew, leaves the caret in that session's pill. _Check:_ `focus.mjs`
+  (`focus-reply`, 1440 × 900 and 1000 × 700); unit test `overview.test.tsx`.
 - [ ] **The sidebar marks what is shown**: Agents while the overview is, a
   channel or session only while the panes are. _Check:_ manual.
 
@@ -211,6 +232,10 @@ _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds 
 - [ ] **Pending settings say "Not available yet" and their controls are
   disabled** — nothing looks as if it works when it does not. _Check:_ unit
   test `settings-view.test.tsx`; by eye.
+- [ ] **A setting for one layout says so elsewhere**: "Show session list" and
+  "Keep running sessions at the top" work in three columns; in sessions in
+  the sidebar and classic their switches are disabled and say "Three columns
+  only". _Check:_ unit test `settings-view.test.tsx` (per layout).
 
 ## Menus and tooltips
 
@@ -233,7 +258,9 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   with `--headed` and a slowed animation for the rest.
 - [ ] **Reduced motion sets durations to zero** (Settings › Motion, or the
   system's), and script motion follows. _Check:_ `safe-area.mjs --reduced-motion`
-  and by hand; with less motion, a drag moves only the copy.
+  and by hand; with less motion, a drag moves only the copy: `drag.mjs`
+  (`reduced-motion`), and `drag.mjs --reduced-motion` for every drag check
+  with the system's reduced motion on.
 
 ## Themes, zoom and sizes
 
@@ -253,6 +280,10 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
 - [ ] **A WebKit-only difference is reproduced in the app itself** (Tauri,
   WKWebView) before it is reported as a bug; Playwright's WebKit is close,
   not identical (pointer events outside the viewport differ, for one).
+- _Known:_ headless WebKit does not draw `backdrop-filter`: the window's glass
+  (menus, tooltips, the revealed sidebar, the model picker) shows as its flat
+  fill in headless WebKit screenshots. Judge glass with `--headed` or in the
+  app, not from a headless WebKit shot.
 
 ## Console errors
 

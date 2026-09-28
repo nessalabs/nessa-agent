@@ -139,4 +139,47 @@ describe("what Settings offers", () => {
       available.every((row) => row.querySelectorAll("button:disabled").length === 0),
     ).toBe(true)
   })
+
+  // The session list is drawn only in three columns: its settings do
+  // nothing elsewhere, so there they are disabled and say where they apply.
+  const sessionList = ["show-session-list", "running-first"] as const
+  for (const [layout, applies] of [
+    ["columns", true],
+    ["sidebar", false],
+    ["classic", false],
+  ] as const)
+    it(`${applies ? "enables" : "disables, saying where they apply,"} the session list's settings in ${layout}`, async () => {
+      // The layout as the window stored it (jsdom here keeps no storage of its own).
+      const kept = new Map<string, string>([["nessa.desktop.workspace-layout", layout]])
+      const storage = Object.getOwnPropertyDescriptor(window, "localStorage")
+      Object.defineProperty(window, "localStorage", {
+        configurable: true,
+        value: {
+          getItem: (key: string) => kept.get(key) ?? null,
+          setItem: (key: string, value: string) => void kept.set(key, value),
+          removeItem: (key: string) => void kept.delete(key),
+        },
+      })
+      try {
+        await act(async () =>
+          root.render(
+            <Provider store={testStore()}>
+              {[settingsTabPages.layout, settingsTabPages.sessions].map((Page, index) => (
+                <Page key={index} />
+              ))}
+            </Provider>,
+          ),
+        )
+        for (const id of sessionList) {
+          const row = host.querySelector(`[data-setting="${id}"]`)
+          const toggle = row?.querySelector<HTMLButtonElement>('[role="switch"]')
+          expect(toggle, id).not.toBeNull()
+          expect(toggle?.disabled, id).toBe(!applies)
+          expect(row?.textContent?.includes("Three columns only"), id).toBe(!applies)
+        }
+      } finally {
+        if (storage) Object.defineProperty(window, "localStorage", storage)
+        else Reflect.deleteProperty(window, "localStorage")
+      }
+    })
 })

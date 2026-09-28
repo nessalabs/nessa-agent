@@ -228,7 +228,7 @@ writing the full defaults on first launch is buying.
   that selects the whole workspace. Settings is `src/desktop/settings/`
   (its map is `index.ts`), a typed catalogue (`model/`) rendered generically
   (`ui/`). See
-  [adr/todo/238-desktop-workspace-frontend.md](adr/todo/238-desktop-workspace-frontend.md).
+  [adr/done/238-desktop-workspace-frontend.md](adr/done/238-desktop-workspace-frontend.md).
 - A preview behind Settings › General › Experimental is a window
   preference, off until turned on (`parseOptIn`), that decides only whether
   the window offers a way in; the feature itself lives in the vertical that

@@ -27,9 +27,14 @@ export const answeredLabels: Readonly<Record<ApprovalChoice, string>> = {
   deny: "Denied",
 }
 
-/** Answers an approval shown in the overview, as the person. */
+/**
+ * Answers an approval shown in the overview, as the person. `at` is when the
+ * answer was made — the key's or click's `timeStamp`, on `performance.now()`'s
+ * clock — from which the next press is timed (`takesAnswerKey`).
+ */
 export type OnAnswer = (
   summary: SessionSummary,
   approval: Approval,
   choice: ApprovalChoice,
+  at: number,
 ) => void

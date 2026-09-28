@@ -9,7 +9,7 @@
  *
  * ```text
  *   idle ──press──▶ pressed ──ready──▶ pressed, made ──move ≥ 4px──▶ carrying
- *   carrying ──release in the zone previewed──▶ dropping ──landed──▶ idle
+ *   carrying ──release with a zone shown──▶ dropping ──landed──▶ idle
  *   carrying ──release elsewhere, Escape, lost──▶ cancelling (home) ──landed──▶ idle
  *   carrying ──a change──▶ cancelling (at once) ──landed──▶ idle
  *   pressed ──release, Escape, lost, a change──▶ idle
@@ -22,6 +22,7 @@
 import {
   aimAt,
   headingWindow,
+  inReach,
   type Aim,
   type Carried,
   type PointerSample,
@@ -88,10 +89,14 @@ export type DragEvent<Made = unknown> =
   | {
       readonly kind: "release"
       readonly pointerId: number
+      /** Where the button lifted, and what could be aimed at there. */
       readonly at: PointerSample
       readonly targets: Targets | null
-      /** The aim the page has previewed an outcome for (`dropOutcome`), if any. */
-      readonly previewed: Aim | null
+      /**
+       * The aim the page shows an outcome for (`dropOutcome`) as the button
+       * lifts, if any: what the person saw, and so what a release commits.
+       */
+      readonly shown: Aim | null
     }
   | { readonly kind: "escape" }
   /**
@@ -111,7 +116,8 @@ export type DragEvent<Made = unknown> =
 
 export const idle: DragPhase<never> = { kind: "idle" }
 
-const sameAim = (a: Aim | null, b: Aim | null) =>
+/** Whether two aims are the same zone of the same pane. */
+export const sameAim = (a: Aim | null, b: Aim | null) =>
   a?.target === b?.target && a?.zone === b?.zone
 
 /** How much of the pointer's path is kept: all its heading reads (`pointerVelocity`). */
@@ -187,19 +193,15 @@ export function stepDrag<Made>(
           const aim = aimAt(phase.path, event.t, phase.aim, event.targets)
           return sameAim(aim, phase.aim) ? phase : { ...phase, aim }
         }
-        case "release": {
+        case "release":
           if (event.pointerId !== phase.pointerId) return phase
-          // The zone under the release, as its path had it — a pause before
-          // letting go has aged the heading out (`restAfter`) — and only if
-          // it is the one the page previewed: nothing unseen is committed.
-          const last = phase.path.at(-1)
-          const moved = !last || last.x !== event.at.x || last.y !== event.at.y
-          const path = moved ? along(phase.path, event.at) : phase.path
-          const aim = aimAt(path, event.at.t, phase.aim, event.targets)
-          return aim && sameAim(aim, event.previewed)
-            ? { kind: "dropping", carried: phase.carried, aim }
+          // What the page shows is what a release commits — what the person
+          // saw — never a zone decided again as the button lifts. Let go
+          // where nothing can be aimed at (off the grid, out of the window,
+          // over a side column), or with nothing shown, it goes home.
+          return event.shown && inReach(event.at, event.targets)
+            ? { kind: "dropping", carried: phase.carried, aim: event.shown }
             : { kind: "cancelling", how: "home" }
-        }
         case "escape":
         case "lost":
           return { kind: "cancelling", how: "home" }

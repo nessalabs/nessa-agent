@@ -55,18 +55,19 @@ const move = (
   targets: over,
 })
 const middleOf2: Aim = { target: 2, zone: "center" }
+/** A release of the carrying pointer at 827, 400 (pane 2's middle), with what the page shows as it lifts. */
 const release = (
-  x: number,
-  y: number,
-  t: number,
-  previewed: Aim | null = middleOf2,
+  shown: Aim | null = middleOf2,
+  x = 827,
+  y = 400,
   over: Targets | null = targets,
+  t = 500,
 ): Event => ({
   kind: "release",
   pointerId: 1,
   at: at(x, y, t),
   targets: over,
-  previewed,
+  shown,
 })
 
 const run = (events: readonly Event[], from: Phase = idle) =>
@@ -93,7 +94,7 @@ describe("a press", () => {
     for (const event of [
       ready,
       move(90, 40, 10),
-      release(90, 40, 10),
+      release(),
       { kind: "escape" },
       { kind: "lost" },
       { kind: "changed" },
@@ -140,11 +141,9 @@ describe("a press", () => {
   })
 
   it("pressed: a release of its pointer is a click, back to idle; another's changes nothing", () => {
-    expect(run([press(), release(61, 16, 5)])).toBe(idle)
+    expect(run([press(), release(null)])).toBe(idle)
     const pressed = run([press(), ready])
-    expect(stepDrag(pressed, { ...release(61, 16, 5), pointerId: 2 } as Event)).toBe(
-      pressed,
-    )
+    expect(stepDrag(pressed, { ...release(null), pointerId: 2 } as Event)).toBe(pressed)
   })
 
   it("pressed: Escape, another key, another button, a lost pointer or a change let the press go — a later move starts nothing", () => {
@@ -186,7 +185,7 @@ describe("carrying", () => {
     const peeked = { ...targets, covered: [{ left: 0, top: 0, width: 256, height: 800 }] }
     const over = run([move(100, 400, 500, peeked)], carrying(peeked))
     expect(over).toMatchObject({ kind: "carrying", aim: null })
-    expect(run([release(100, 400, 510, null, peeked)], over)).toEqual({
+    expect(run([release(null)], over)).toEqual({
       kind: "cancelling",
       how: "home",
     })
@@ -204,7 +203,7 @@ describe("carrying", () => {
     const blind = carrying(null)
     expect(blind).toMatchObject({ kind: "carrying", aim: null })
     expect(run([{ kind: "still", t: 1000, targets: null }], blind)).toBe(blind)
-    expect(run([release(827, 400, 1000, middleOf2, null)], blind)).toEqual({
+    expect(run([release(middleOf2, 827, 400, null)], blind)).toEqual({
       kind: "cancelling",
       how: "home",
     })
@@ -246,15 +245,16 @@ describe("carrying", () => {
     expect(carried.path[0]?.t).toBe(190)
   })
 
-  it("release in the zone the page previewed, one that offers something, drops it there", () => {
-    expect(run([release(827, 400, 500)], carrying())).toEqual({
+  it("release while the page shows a zone that offers something drops it there", () => {
+    expect(run([release()], carrying())).toEqual({
       kind: "dropping",
       carried: pane,
       aim: { target: 2, zone: "center" },
     })
   })
 
-  it("release after a pause drops on the zone at rest, once that is what was previewed", () => {
+  it("release commits the zone shown, never one decided again as the button lifts", () => {
+    // Heading right fast into pane 2: the page shows "right of".
     const fast = run([
       press(),
       ready,
@@ -264,45 +264,43 @@ describe("carrying", () => {
       move(880, 400, 30),
     ])
     const right: Aim = { target: 2, zone: "right" }
-    expect(run([release(880, 400, 30 + restAfter)], fast)).toMatchObject({
+    expect(fast).toMatchObject({ aim: right })
+    // Let go just after the heading aged out, before the rest was shown:
+    // what was on the page — "right of" — is what drops, not the middle
+    // the release point would settle to now.
+    expect(run([release(right, 880, 400, targets, 30 + restAfter + 5)], fast)).toEqual({
       kind: "dropping",
-      aim: { zone: "center" },
-    })
-    // Let go while still moving: the zone it was heading for, previewed.
-    expect(run([release(880, 400, 40, right)], fast)).toMatchObject({
-      kind: "dropping",
+      carried: pane,
       aim: right,
     })
-    // At rest, with the heading's zone still on the page: not what was seen, so home.
-    expect(run([release(880, 400, 30 + restAfter, right)], fast)).toEqual({
-      kind: "cancelling",
-      how: "home",
+    // Let go before the next zone was drawn: the one on the page drops.
+    expect(run([move(1090, 400, 40), release(middleOf2, 1090)], carrying())).toEqual({
+      kind: "dropping",
+      carried: pane,
+      aim: middleOf2,
     })
   })
 
-  it("release where nothing was previewed — a flick, no zone, a zone not shown yet or one that offers nothing — goes home", () => {
+  it("release with nothing shown, or where nothing can be aimed at, goes home", () => {
     const home = { kind: "cancelling", how: "home" }
     // A flick: lifted and let go over a zone before any preview was shown.
     expect(
-      run([
-        press(),
-        ready,
-        move(90, 40, 10),
-        move(827, 400, 12),
-        release(827, 400, 14, null),
-      ]),
+      run([press(), ready, move(90, 40, 10), move(827, 400, 12), release(null)]),
     ).toEqual(home)
-    expect(run([release(827, 900, 500)], carrying())).toEqual(home)
-    expect(run([release(1090, 400, 500)], carrying())).toEqual(home)
-    // The carried pane's own place, or a side the room refuses: previewed as nothing.
-    expect(run([release(827, 400, 500, null)], carrying())).toEqual(home)
+    // Off the grid once its preview has cleared; the carried pane's own
+    // place, or a side the room refuses: shown as nothing.
+    expect(run([move(827, 900, 500), release(null, 827, 900)], carrying())).toEqual(home)
+    expect(run([release(null)], carrying())).toEqual(home)
+    // Let go off the grid, out of the window or over a side column before
+    // the frame cleared what was shown: nothing there can be aimed at.
+    expect(run([release(middleOf2, 1300, 400)], carrying())).toEqual(home)
+    const peeked = { ...targets, covered: [{ left: 0, top: 0, width: 256, height: 800 }] }
+    expect(run([release(middleOf2, 100, 400, peeked)], carrying(peeked))).toEqual(home)
   })
 
   it("another pointer's release changes nothing", () => {
     const carried = carrying()
-    expect(stepDrag(carried, { ...release(827, 400, 500), pointerId: 2 } as Event)).toBe(
-      carried,
-    )
+    expect(stepDrag(carried, { ...release(), pointerId: 2 } as Event)).toBe(carried)
   })
 
   it("Escape, another button, or a lost pointer goes home — and the press goes with it", () => {
@@ -315,12 +313,9 @@ describe("carrying", () => {
       const after = run([end], carrying())
       expect(after).toEqual({ kind: "cancelling", how: "home" })
       // Lost, then a move and a release over a zone.
-      const later = run(
-        [move(827, 400, 600), release(827, 400, 610), { kind: "landed" }],
-        after,
-      )
+      const later = run([move(827, 400, 600), release(), { kind: "landed" }], after)
       expect(later).toBe(idle)
-      expect(run([move(827, 400, 700), release(827, 400, 710)], later)).toBe(idle)
+      expect(run([move(827, 400, 700), release()], later)).toBe(idle)
     }
   })
 
@@ -340,20 +335,14 @@ describe("carrying", () => {
 
   it("carries a session the same way", () => {
     expect(
-      run([
-        press(session),
-        ready,
-        move(90, 40, 10),
-        move(827, 400, 20),
-        release(827, 400, 30),
-      ]),
+      run([press(session), ready, move(90, 40, 10), move(827, 400, 20), release()]),
     ).toMatchObject({ kind: "dropping", carried: session, aim: { target: 2 } })
   })
 })
 
 describe("dropping and cancelling", () => {
   it("the drop's own change, a press, or any other event changes nothing until it lands", () => {
-    const dropping = run([release(827, 400, 500)], carrying())
+    const dropping = run([release()], carrying())
     const home = run([{ kind: "escape" }], carrying())
     for (const phase of [dropping, home])
       for (const event of [
@@ -361,7 +350,7 @@ describe("dropping and cancelling", () => {
         press(),
         ready,
         move(100, 100, 600),
-        release(100, 100, 600),
+        release(),
         { kind: "escape" },
         { kind: "lost" },
         { kind: "still", t: 900, targets },
@@ -370,7 +359,7 @@ describe("dropping and cancelling", () => {
   })
 
   it("its flight landing ends it", () => {
-    expect(run([release(827, 400, 500), { kind: "landed" }], carrying())).toBe(idle)
+    expect(run([release(), { kind: "landed" }], carrying())).toBe(idle)
     expect(run([{ kind: "changed" }, { kind: "landed" }], carrying())).toBe(idle)
   })
 })

@@ -254,6 +254,21 @@ const within = (point: { readonly x: number; readonly y: number }, box: Rect) =>
   point.y >= box.top &&
   point.y <= box.top + box.height
 
+/**
+ * Whether a drag can aim where the pointer is at all: a pane in sight, and
+ * the pointer on the grid and off every side column.
+ */
+export function inReach(
+  point: { readonly x: number; readonly y: number },
+  targets: Targets | null,
+): targets is Targets {
+  return (
+    targets !== null &&
+    within(point, targets.grid) &&
+    !targets.covered.some((column) => within(point, column))
+  )
+}
+
 /** The pane and zone a drag aims at. */
 export interface Aim {
   readonly target: PaneKey
@@ -276,9 +291,7 @@ export function aimAt(
   targets: Targets | null,
 ): Aim | null {
   const pointer = path.at(-1)
-  if (!pointer || !targets) return null
-  if (!within(pointer, targets.grid)) return null
-  if (targets.covered.some((column) => within(pointer, column))) return null
+  if (!pointer || !inReach(pointer, targets)) return null
   const over = paneAt(pointer, targets.panes)
   if (!over) return null
   return {

@@ -10,7 +10,7 @@
 import { act, useRef } from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
-import { afterEach, beforeEach, expect, it } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { useWorkspaceStore } from "../store/hooks"
 import {
   closePane,
@@ -453,7 +453,11 @@ it("commits only a drop that was previewed: a flick, in any engine's timing, cha
   await frames()
   nothingLeft()
   expect(store.getState().workspace.panes).toBe(before)
-  // Previewed, then let go in a zone not shown yet: home too.
+  await act(async () => root.unmount())
+})
+
+it("commits the zone on the page when let go in another before the frame drew it", async () => {
+  const { store, root } = await mounted()
   await press(60, 16, header(1))
   pointer("pointermove", 90, 40)
   pointer("pointermove", 827, 400)
@@ -462,8 +466,9 @@ it("commits only a drop that was previewed: a flick, in any engine's timing, cha
   pointer("pointermove", 1090, 400)
   pointer("pointerup", 1090, 400)
   await frames()
+  const after = store.getState().workspace.panes
+  expect((after ? panesOf(after) : []).map((pane) => pane.sessionId)).toEqual(["c", "a"])
   nothingLeft()
-  expect(store.getState().workspace.panes).toBe(before)
   await act(async () => root.unmount())
 })
 
@@ -482,19 +487,10 @@ it("carries with the primary button alone: another button ends the press or the 
   pointer("pointerup", 90, 40)
   await frames()
   // Carrying, a chord — the right button joining the left — ends it: home, nothing dropped.
+  // (A chorded button reaches the page as a move, never a press: the Pointer
+  // Events spec's chorded button interactions.)
   for (const chord of [
     () => pointer("pointermove", 828, 400, window, { button: 2, buttons: 3 }),
-    () =>
-      pointer(
-        "pointerdown",
-        828,
-        400,
-        host.querySelector(".workspace-drag-shield") ?? host,
-        {
-          button: 2,
-          buttons: 3,
-        },
-      ),
   ]) {
     await press(60, 16, header(1))
     pointer("pointermove", 90, 40)
@@ -583,6 +579,42 @@ it("never aims over a side column: the sidebar revealed over the panes is no zon
   await frames()
   expect(said()).toMatch(/Session a$/)
   pointer("pointermove", 100, 400)
+  await frames()
+  expect(said()).toBe("")
+  pointer("pointerup", 100, 400)
+  await frames()
+  expect(store.getState().workspace.panes).toBe(before)
+  nothingLeft()
+  await act(async () => root.unmount())
+})
+
+it("takes a peek still sliding in as covering where it slides to, not the part of the way it has come", async () => {
+  const { store, root } = await mounted()
+  const before = store.getState().workspace.panes
+  const scope = host.querySelector<HTMLElement>("[data-workspace]")
+  const sidebar = host.querySelector<HTMLElement>(".workspace-sidebar")
+  if (!scope || !sidebar) throw new Error("no sidebar")
+  // Revealed just before the press: drawn 200px short of its place, 8–264,
+  // by the transform it slides on (a browser computes it as a matrix).
+  scope.dataset.peek = ""
+  sidebar.getBoundingClientRect = () => new DOMRect(-192, 8, 256, 784)
+  const computed = window.getComputedStyle
+  const style = vi.spyOn(window, "getComputedStyle").mockImplementation((element) => {
+    const real = computed(element)
+    if (element !== sidebar) return real
+    return new Proxy(real, {
+      get: (target, key) =>
+        key === "transform" ? "matrix(1, 0, 0, 1, -200, 0)" : Reflect.get(target, key),
+    })
+  })
+  const row = host.querySelector("[data-drag-session]")
+  if (!row) throw new Error("no row")
+  await press(10, 10, row)
+  style.mockRestore()
+  pointer("pointermove", 40, 40)
+  // Past where it is drawn now (64), inside where it settles (264): no zone.
+  pointer("pointermove", 100, 400)
+  await act(async () => new Promise((resolve) => setTimeout(resolve, restAfter + 30)))
   await frames()
   expect(said()).toBe("")
   pointer("pointerup", 100, 400)
