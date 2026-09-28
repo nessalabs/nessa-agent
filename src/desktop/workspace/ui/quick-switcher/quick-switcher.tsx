@@ -46,6 +46,26 @@ function Highlight({ text, hits }: { text: string; hits: readonly number[] }) {
  * order are the model's (`model/session-search.ts`); this only draws them
  * and moves through them. Modal: focus stays in the field.
  */
+/**
+ * A pick hands the caret to the focused pane's composer, which may still be
+ * filling in (`focusComposer` tries for a few frames). The try is kept so it
+ * can be called off — by the switcher opening again, or the person pressing
+ * somewhere else first — rather than land the caret after they moved on.
+ */
+let stopHanding: () => void = () => {}
+
+function handToComposer() {
+  stopHanding()
+  const stop = focusComposer()
+  const callOff = () => {
+    stop()
+    window.removeEventListener("pointerdown", callOff, true)
+    stopHanding = () => {}
+  }
+  window.addEventListener("pointerdown", callOff, true)
+  stopHanding = callOff
+}
+
 export function QuickSwitcher({
   mode,
   channelId,
@@ -77,6 +97,9 @@ export function QuickSwitcher({
   // focused pane's composer, wherever the pick put it.
   const picked = useRef(false)
   useEffect(() => {
+    // A pick's caret still on its way from the last time — a new pane filling
+    // in — is called off: the switcher has the keyboard now.
+    stopHanding()
     const restore = document.activeElement as HTMLElement | null
     inputRef.current?.focus()
     const keep = (event: FocusEvent) => {
@@ -85,7 +108,7 @@ export function QuickSwitcher({
     document.addEventListener("focusin", keep)
     return () => {
       document.removeEventListener("focusin", keep)
-      if (picked.current) focusComposer()
+      if (picked.current) handToComposer()
       else restore?.focus?.()
     }
   }, [])

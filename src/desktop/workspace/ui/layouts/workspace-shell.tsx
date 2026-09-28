@@ -5,9 +5,10 @@
  * (`workspaceShortcuts`, one map); the quick switcher (⌘K, ⌘\); the pane grid
  * and everything in a pane; focus following the focused pane; drag and drop;
  * the folded sidebar's reveal from the edge; fitting the side columns to the
- * window. A layout (`three-columns.tsx`, `sessions-in-sidebar.tsx`) says only
- * how the sidebar region is composed — which sidebar, and whether a session
- * list stands beside it — as a `SidebarRegion`.
+ * window; the Agents overview's layer over the list and the panes
+ * (`ui/overview/`). A layout (`three-columns.tsx`, `sessions-in-sidebar.tsx`)
+ * says only how the sidebar region is composed — which sidebar, and whether a
+ * session list stands beside it — as a `SidebarRegion`.
  */
 import {
   memo,
@@ -23,10 +24,7 @@ import { reducedMotion } from "../../../adapters/motion-preference"
 import { useThemePreference } from "../../../adapters/theme-preference"
 import { useEdgePeek } from "../../../adapters/use-edge-peek"
 import { useWindowWidth } from "../../../adapters/window-width"
-import {
-  AgentsOverviewArea,
-  useAgentsOverviewShown,
-} from "../../../experiments/agents-overview"
+import { useAgentsOverviewPreference } from "../../../adapters/window-preferences"
 import { draggedEdge } from "../../../model/side-column"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../../ui/history-buttons"
@@ -48,6 +46,7 @@ import {
   resizeSessionList,
   resizeSidebar,
   sendMessage,
+  showContent,
   toggleSessionList,
   toggleSidebar,
 } from "../../adapters/store/commands"
@@ -61,6 +60,7 @@ import {
   selectColumnCount,
   selectFocusedChannel,
   selectFocusedPaneKey,
+  selectOverviewOpen,
   selectPanes,
   selectSessionListOpen,
   selectSidebarOpen,
@@ -72,6 +72,7 @@ import { columnWidth, sessionListLimits, type ColumnLimits } from "../../model/w
 import { IconButton } from "../chrome/icon-button"
 import { ResizeEdge } from "../chrome/resize-edge"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
+import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
 import { QuickSwitcher, type SwitcherMode } from "../quick-switcher/quick-switcher"
 import { SessionList } from "../session-list/session-list"
@@ -94,7 +95,6 @@ import "./layouts.css"
  * a session list stands beside it.
  */
 export interface SidebarRegion {
-  readonly layout: "columns" | "sidebar"
   readonly sidebar: {
     readonly variant: "channels" | "tree"
     readonly defaultWidth: number
@@ -259,6 +259,8 @@ export function WorkspaceShell({
 
   const [switcher, setSwitcher] = useState<SwitcherMode | null>(null)
   const frame = useWindowFrame(root, workspaceShortcuts, setSwitcher)
+  // The Agents overview's way in, offered while Settings › General › Experimental says so.
+  const [overviewOffered] = useAgentsOverviewPreference()
   // While the switcher is up it has the keyboard, but for ⌘K, which closes it.
   useWorkspaceKeys(
     {
@@ -269,6 +271,11 @@ export function WorkspaceShell({
       toggleSessionList: () => {
         if (!region.sessionList) return false
         dispatch(toggleSessionList())
+      },
+      // A place to go, as the sidebar's entry is: asked again, it stays; Escape in it leaves.
+      showOverview: () => {
+        if (switcher || overviewOffered !== "on") return false
+        dispatch(showContent({ content: "agents" }))
       },
       // Searching the list brings it back first; with no list, it is a jump.
       search: () => {
@@ -287,8 +294,8 @@ export function WorkspaceShell({
   useFocusFollowsPane(store, root)
   useWorkspaceDrag(store, root)
   const peek = useEdgePeek(!sidebarOpen, sidebarOpen)
-  // What fills the content region: the panes, or the agents overview over them.
-  const overviewShown = useAgentsOverviewShown()
+  // What fills the content region: the panes, or the Agents overview over them.
+  const overviewShown = useWorkspaceSelector(selectOverviewOpen)
   const shape = useMotionShape(sidebarOpen, listOpen)
 
   // Beside where the room allows it, in the focused pane's place where not —
@@ -343,16 +350,13 @@ export function WorkspaceShell({
               ref={root}
               className="workspace"
               data-workspace
-              data-layout={region.layout}
               data-host={hostKind}
               data-surface={browserSurface ? "browser" : "window"}
               data-desktop-theme={theme}
               data-peek={(peek.shown && !peek.handedOff) || undefined}
               data-sidebar={sidebarOpen ? "open" : "closed"}
               data-list={region.sessionList ? (listOpen ? "open" : "closed") : undefined}
-              data-panes-alone={
-                (!sidebarOpen && (!listOpen || overviewShown)) || undefined
-              }
+              data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
               data-content={overviewShown ? "agents" : "panes"}
               style={
                 {
@@ -411,6 +415,7 @@ export function WorkspaceShell({
                 listWidth={listWidth}
                 top={top}
               />
+              <OverviewLayer root={root} />
               {switcher ? (
                 <SwitcherHost
                   mode={switcher}
@@ -468,9 +473,6 @@ const Columns = memo(function Columns({
   const sidebarFrom = useRef<number | null>(0)
   const listFrom = useRef<number | null>(0)
   const limits = region.sidebar.limits
-  // The agents overview fills the content region: the session list waits,
-  // still mounted, beneath it (hidden by `data-content` on the root).
-  const overviewShown = useAgentsOverviewShown()
   // Dragged past its narrowest, a column folds away — the person's own choice —
   // and dragged back out from where it folded, it opens (`draggedEdge`).
   const dragSidebar = (delta: number) => {
@@ -497,10 +499,12 @@ const Columns = memo(function Columns({
         />
       ) : null}
       {region.sessionList ? <SessionList /> : null}
-      {region.sessionList && (listOpen || sidebarOpen) && !overviewShown ? (
+      {region.sessionList && (listOpen || sidebarOpen) ? (
         <ResizeEdge
           label="Resize Session List"
-          className={listOpen ? undefined : "workspace-edge-folded"}
+          className={
+            listOpen ? "workspace-list-edge" : "workspace-list-edge workspace-edge-folded"
+          }
           value={{
             now: listOpen ? listWidth : 0,
             min: sessionListLimits.min,
@@ -514,9 +518,7 @@ const Columns = memo(function Columns({
           onMove={dragList}
         />
       ) : null}
-      <AgentsOverviewArea>
-        <PaneGrid />
-      </AgentsOverviewArea>
+      <PaneGrid />
     </>
   )
 })

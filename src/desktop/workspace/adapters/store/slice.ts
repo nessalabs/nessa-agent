@@ -13,7 +13,7 @@ import type { Direction, PaneKey, Side, Zone } from "../../model/pane-layout"
 import type { PaneEdge, WorkspaceRoom } from "../../model/pane-sizing"
 import type { AttentionStatus } from "../../model/session-groups"
 import type { Message, Transcript } from "../../model/transcript"
-import type { WorkspaceUpdate } from "../../application/ports"
+import type { WorkspaceDependencies, WorkspaceUpdate } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import {
   initialWorkspace,
@@ -21,6 +21,8 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import * as navigation from "../../application/usecases/navigation"
+import * as overview from "../../application/usecases/overview"
+import type { AgentsFilter } from "../../model/overview/filter"
 import * as panes from "../../application/usecases/panes"
 import * as sessions from "../../application/usecases/sessions"
 import * as updates from "../../application/usecases/updates"
@@ -108,6 +110,10 @@ const workspaceSlice = createSlice({
     // Navigation
     showContent: (state, { payload }: Payload<{ content: ContentView }>) =>
       navigation.showContent(state, payload),
+    selectInOverview: (state, { payload }: Payload<{ sessionId: string }>) =>
+      overview.selectInOverview(state, payload),
+    filterOverview: (state, { payload }: Payload<{ filter: AgentsFilter }>) =>
+      overview.filterOverview(state, payload),
     selectChannel: (state, { payload }: Payload<{ channelId: string }>) =>
       navigation.selectChannel(state, payload),
     selectStatusView: (state, { payload }: Payload<{ status: AttentionStatus }>) =>
@@ -158,7 +164,9 @@ const workspaceSlice = createSlice({
       state,
       {
         payload,
-      }: Payload<{ update: Exclude<WorkspaceUpdate, { kind: "session-removed" }> }>,
+      }: Payload<{
+        update: Extract<WorkspaceUpdate, { kind: "session" | "transcript" }>
+      }>,
     ) => updates.updateReceived(state, payload),
     sessionRemoved: (
       state,
@@ -222,11 +230,24 @@ const workspaceSlice = createSlice({
 
 export const workspaceActions = workspaceSlice.actions
 
+/** The workspace's first state, with what was kept between launches: the overview's filter. */
+export function initialWorkspaceFrom({
+  overviewFilter,
+}: Pick<WorkspaceDependencies, "overviewFilter">): WorkspaceState {
+  return {
+    ...initialWorkspace,
+    overview: { ...initialWorkspace.overview, filter: overviewFilter.read() },
+  }
+}
+
 /**
- * The actions that go somewhere: a session, a channel, a status view, a new
- * session, another pane. Each leaves the Agents overview for the panes
- * (`navigated`), whoever dispatched it — the sidebar, the switcher, a key,
- * the overview's own Open, or an agent.
+ * The actions that go somewhere — a session, a channel, a status view, a new
+ * session, another pane — and those that change the panes a person asked
+ * to change: closing, moving, evening them out. Each leaves the Agents
+ * overview for the panes (`navigated`), whoever dispatched it — the sidebar,
+ * the switcher, a key, the overview's own Open, or an agent — so no pane
+ * changes unseen beneath it. Fitting the panes to the window is not asked
+ * by anyone, and leaves the view as it is.
  */
 const goesSomewhere: ReadonlySet<string> = new Set(
   [
@@ -234,6 +255,11 @@ const goesSomewhere: ReadonlySet<string> = new Set(
     workspaceActions.openSession,
     workspaceActions.openedBeside,
     workspaceActions.sessionDropped,
+    workspaceActions.paneMoved,
+    workspaceActions.paneNudged,
+    workspaceActions.paneClosed,
+    workspaceActions.equalizePanes,
+    workspaceActions.resizePanes,
     workspaceActions.draftCreated,
     workspaceActions.selectChannel,
     workspaceActions.selectStatusView,

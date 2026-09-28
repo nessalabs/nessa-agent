@@ -30,6 +30,7 @@ export type ShortcutCommand =
   | "moveRight"
   | "moveUp"
   | "moveDown"
+  | "showOverview"
 
 export interface WorkspaceFrame {
   /** The chord bound to a command in this layout, written out; none when it has none. */

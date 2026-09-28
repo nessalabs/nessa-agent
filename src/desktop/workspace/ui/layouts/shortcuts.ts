@@ -39,6 +39,8 @@ export const workspaceShortcuts: readonly Binding<ShortcutCommand>[] = [
   bind({ code: "ArrowRight", control: true, alt: true }, "moveRight"),
   bind({ code: "ArrowUp", control: true, alt: true }, "moveUp"),
   bind({ code: "ArrowDown", control: true, alt: true }, "moveDown"),
+  // The Agents overview, as its sidebar entry opens it: a place, so ⌘0 again keeps it.
+  bind({ code: "Digit0", command: true }, "showOverview"),
 ]
 
 /** What each command is called where the keyboard is listed (Settings › Workspace › Keyboard). */
@@ -63,4 +65,5 @@ export const shortcutNames: Readonly<Record<ShortcutCommand, string>> = {
   moveRight: "Move pane right",
   moveUp: "Move pane up",
   moveDown: "Move pane down",
+  showOverview: "Show every agent at a glance",
 }

@@ -124,12 +124,15 @@
 
 /* ——— Sidebar ——— */
 
+/*
+ * The sidebar's room changes at once; what moves is by transform only — the
+ * glass slides (below), and the page slides into its new place by script
+ * (`slideFrom`, on the app's ⌘B timing, so both sidebars move alike).
+ */
 .settings-sidebar {
   position: relative;
   width: var(--settings-sidebar-w);
   flex: none;
-  /* The app's ⌘B timing, so both sidebars move alike. */
-  transition: width var(--desktop-slow) var(--desktop-out);
 }
 
 .settings[data-sidebar="closed"] .settings-sidebar {

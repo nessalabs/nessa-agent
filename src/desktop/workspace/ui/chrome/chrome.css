@@ -418,10 +418,27 @@ html[data-workspace-resizing="y"] * {
   box-shadow: 0 18px 36px -14px rgb(0 0 0 / 65%);
 }
 
+/* Made as the press begins, it waits on the page unseen until the press becomes a drag. */
+.workspace-drag-ghost[data-waiting] {
+  opacity: 0;
+}
+
 .workspace-drag-ghost-inner {
   position: absolute;
   inset: 0;
   transform-origin: 0 0;
+}
+
+/* One screen of the conversation, moved to where it was scrolled by transform (`drag.ts`). */
+.workspace-drag-ghost .workspace-transcript {
+  overflow: hidden;
+}
+
+/* A session's copy shows its latest words at the foot, as a conversation opens. */
+.workspace-drag-ghost .workspace-drag-ghost-latest {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
 .workspace-drag-ghost .workspace-drag-ghost-pane {
@@ -469,10 +486,17 @@ html[data-workspace-resizing="y"] * {
     height var(--desktop-base) var(--desktop-ease);
 }
 
-/* Nothing is selected while something is carried. */
-.workspace[data-dragging] {
-  -webkit-user-select: none;
-  user-select: none;
+/*
+ * Over the page while something is carried: the grabbing hand wherever the
+ * pointer goes, and nothing under it hovered or selected. One element of its
+ * own, so beginning a drag restyles it alone, not every element of the window
+ * as an inherited cursor or selection on the root would.
+ */
+.workspace-drag-shield {
+  position: fixed;
+  z-index: 58;
+  inset: 0;
+  contain: strict;
   cursor: grabbing;
 }
 

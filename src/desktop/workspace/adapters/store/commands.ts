@@ -12,7 +12,6 @@
  */
 import type { ThunkAction, UnknownAction } from "@reduxjs/toolkit"
 import {
-  paneShowing,
   type Direction,
   type PaneKey,
   type Side,
@@ -34,6 +33,7 @@ import {
   draftOf,
   entry,
   modelForNextTurn,
+  onScreen,
   sessionOf,
   type WorkspaceState,
 } from "../../application/workspace-state"
@@ -50,6 +50,8 @@ export const {
   selectChannel,
   selectStatusView,
   showContent,
+  selectInOverview,
+  filterOverview,
   revealSession,
   toggleSection,
   toggleChannel,
@@ -119,7 +121,7 @@ export function loadWorkspace(): WorkspaceCommand<Promise<void>> {
 }
 
 /** The revision an update carries, whichever it is. */
-function revisionOf(update: WorkspaceUpdate): number {
+function revisionOf(update: Exclude<WorkspaceUpdate, { kind: "resync" }>): number {
   switch (update.kind) {
     case "session":
       return update.session.revision
@@ -133,10 +135,16 @@ function revisionOf(update: WorkspaceUpdate): number {
 /**
  * Follows the source's changes until the returned function is called. An
  * update at a revision the source could not have sent is let go, and said.
+ * A `resync` — the source may have lost updates — reads the index again
+ * (`loadWorkspace`), and with it every conversation on screen.
  */
 export function followWorkspace(): WorkspaceCommand<() => void> {
   return (dispatch, _getState, { workspace, newId }) =>
     workspace.subscribe((update) => {
+      if (update.kind === "resync") {
+        void dispatch(loadWorkspace())
+        return
+      }
       if (!fromSource({ revision: revisionOf(update) })) {
         console.warn("The workspace source sent an update it could not have sent", update)
         return
@@ -444,7 +452,8 @@ export function resendMessage({
  * says why while it shows the session); `unknown` when no answer came and it
  * may have been taken (`outcomeOf`); `answering` already, a first answer on
  * its way; or `not-asked` — the window holds no such approval: the session is
- * not shown in a pane, or its conversation has moved on. Nothing is sent
+ * not on screen (`onScreen`: in a pane, or in the open overview), or its
+ * conversation has moved on. Nothing is sent
  * then, and the source records nothing, since nothing was asked of it.
  */
 export type AnswerOutcome = "sent" | "refused" | "unknown" | "answering" | "not-asked"
@@ -471,10 +480,8 @@ function answer(
   return async (dispatch, getState, dependencies) => {
     const state = getState().workspace
     const approval = entry(state.transcripts, sessionId)?.approval
-    // Only an approval on screen is answered: one a pane shows.
-    const shown =
-      state.panes !== null && paneShowing(state.panes, sessionId) !== undefined
-    if (!shown || approval?.id !== approvalId) return "not-asked"
+    // Only an approval on screen is answered: one a pane or the open overview shows.
+    if (!onScreen(state, sessionId) || approval?.id !== approvalId) return "not-asked"
     // One answer at a time: a second waits until the first is refused.
     if (answering(entry(state.answers, sessionId), approvalId)) return "answering"
     const token = dependencies.newId()

@@ -3,17 +3,20 @@
  * holds every session, so the window only keeps what makes going back
  * instant, and forgets the rest to be read again when asked.
  *
- * - **Conversations**: every one a pane shows, and the few most recently
- *   active of the rest (by the summary's `updatedAt`); another is read afresh
- *   when a pane shows it.
+ * - **Conversations**: every one a pane shows; those the open Agents
+ *   overview shows, up to a bound, most recently active first; and the few
+ *   most recently active of the rest (by the summary's `updatedAt`). Another
+ *   is read afresh when a pane or the overview shows it.
  * - **Removals**: the newest few hundred, each with the revision it was taken
  *   at, so an older read answered late cannot bring a session back. A read
  *   older than that many removals is let go by the next read of the
  *   index, which is the resync (`application/ports.ts`).
  */
 export const retention = {
-  /** Conversations kept for sessions no pane shows. */
+  /** Conversations kept for sessions nothing on screen shows. */
   unshownConversations: 8,
+  /** Conversations the open overview shows that are read and kept, at most. */
+  overviewConversations: 24,
   /** Removals remembered. */
   removals: 256,
 } as const

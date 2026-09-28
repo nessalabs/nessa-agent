@@ -4,7 +4,12 @@ import { useCallback, useEffect, useState } from "react"
  * A preference remembered in this webview's storage and shared by every
  * reader in the window: choosing it in Settings changes the window at once,
  * and a window beside it follows through the storage event. Theme, icon
- * family, workspace layout and tint are each one of these.
+ * family, workspace layout, tint, motion, and each on-or-off preference
+ * (`window-preferences.ts`: greeting, drifting light, ⌘-click beside, running
+ * first, the picture in conversations, and the Agents overview preview) are
+ * each one of these. What agents drive is the store's, not one of these —
+ * the overview's filter is kept between launches by the workspace's own
+ * `RememberedFilter`.
  *
  * Storage can be missing or refuse access (a private window, cleared site
  * data). Reading then falls back to what `parse` makes of nothing; choosing

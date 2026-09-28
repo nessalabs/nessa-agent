@@ -106,7 +106,9 @@ export function Composer({
   /**
    * What is typed and not sent, held by whoever owns it — the workspace keeps
    * a session's in its state, so it outlives a change of layout — and told of
-   * every change. Sending empties it.
+   * every change. Sending empties it there, not here: the workspace's
+   * `sendMessage` lets it go once the message is on its way, and keeps it
+   * when there was nothing to send.
    */
   text: string
   onTextChange: (text: string) => void
@@ -127,7 +129,6 @@ export function Composer({
     const message = draft.trim()
     if (!onSend || message === "") return
     onSend(message)
-    onTextChange("")
   }
   const [model, setModel] = useState(
     () =>

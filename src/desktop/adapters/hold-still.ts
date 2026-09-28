@@ -12,8 +12,30 @@
  * frame while the column arrives around it.
  */
 
+import { durationToken, motionToken } from "./motion"
+
 /** The id every sideways slide carries, so the ones in flight can be found and answered. */
 export const slideAnimation = "desktop-slide"
+
+/**
+ * Slides `element` sideways into its place from `shift` pixels away, by
+ * transform, on the window's slow token and curve — none under less motion —
+ * as a slide `holdStill` can answer. Its place has already changed; this only
+ * plays the way there.
+ */
+export function slideFrom(element: HTMLElement, shift: number): Animation | null {
+  if (Math.abs(shift) < 0.5 || typeof element.animate !== "function") return null
+  const duration = durationToken(element, "--desktop-slow")
+  if (duration === 0) return null
+  return element.animate(
+    [{ transform: `translateX(${shift}px)` }, { transform: "none" }],
+    {
+      duration,
+      easing: motionToken(element, "--desktop-out") ?? "ease-out",
+      id: slideAnimation,
+    },
+  )
+}
 
 /** The x of a `translateX(…px)` keyframe; 0 for anything else. */
 function shiftOf(keyframe: Keyframe | undefined): number {

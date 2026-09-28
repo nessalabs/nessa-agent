@@ -101,6 +101,15 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
     built only after its owner agrees it is worth the states it adds, and the
     agreement is recorded in the ADR. Precision nobody asked for is where the
     edge cases live.
+17. **A user-facing feature is measured in a real browser.** A substantial UI
+    feature — a new surface, interaction, layout, animation, or timing budget —
+    merges only with [browser verification](#browser-verification-for-ui)
+    scripts that reproduce it in Chromium and WebKit, its contracts listed in the
+    verification checklist, and their numbers in the PR: frame times against the
+    budget (max and median over several throttled runs), and the measured
+    geometry, focus, and error counts each contract claims. A number that does
+    not meet its contract is a failed gate, not a note. A review finding that a
+    script could have caught becomes a script in the same PR.
 
 If a gate fails, fix it in the same PR.
 
@@ -143,12 +152,14 @@ member package's minimum version. Verify a claimed mismatch at the reviewed head
 The implementer runs this gate on their own diff before asking anyone else to
 review it, and hands over the result with the change:
 
-- Every applicable dimension below, the agreement check, and gates 15 and 16.
+- Every applicable dimension below, the agreement check, and gates 15, 16 and 17.
 - **Break it on purpose.** Change each rule the diff adds or touches — one at a
   time — and confirm a test fails, as a revert probe under
   [evidence and closure](#evidence-and-closure). A rule that fails no test is
   untested: add the test, or the rule is not load-bearing and goes.
 - The checks from gate 6, run on the tree being handed over.
+- For a UI change, the [browser verification](#browser-verification-for-ui)
+  scripts that cover it, extended to cover what the change adds.
 
 A reviewer is the second pair of eyes, not the first.
 
@@ -754,6 +765,39 @@ or I/O writer without tracing metadata. Keep diagnostics on standard error throu
 tracing and preserve a nonzero exit status on failure. Test documented commands
 with stdout and stderr captured separately; a logging-only test cannot verify the
 machine-readable output contract. This does not permit print macros for diagnostics.
+
+## Browser verification for UI
+
+A unit test proves a rule; it cannot prove a frame. Whether a pane follows the
+pointer, whether anything paints under the window controls mid-animation, where
+focus lands after a split, whether a drag stays inside the frame budget — these
+are only true in a real browser engine, measured. The desktop app ships in
+WKWebView, so Chrome alone is not evidence.
+
+- **A UI behaviour ships with a script that drives a real browser and measures
+  it.** When a change adds or alters what the person sees or does — layout,
+  motion, focus, drag, a responsive breakpoint, a timing budget — add or extend a
+  script under [`verification/`](verification/README.md) that reproduces it in
+  Chromium and WebKit and asserts the contract with numbers (rects, frame times,
+  the active element), not screenshots alone. Put the contract it checks in
+  [`verification/desktop/CHECKLIST.md`](verification/desktop/CHECKLIST.md) with a
+  pointer to the rule it enforces. A reviewer's reproduction that found a real
+  bug becomes one of these scripts, so the bug cannot come back unnoticed.
+- **Run the scripts that cover the change before handing off**, and report their
+  output as evidence under [evidence and closure](#evidence-and-closure). A fix
+  that a script cannot tell apart from the bug is not verified. They are not a
+  CI gate: they need a display, a dev server, and minutes, so they run when the
+  change is UI, not on every push ([adding a check to CI](#adding-a-check-to-ci)).
+- **Keep them cheap to run and to maintain.** One shared library for launching
+  browsers, sampling frames and measuring performance; every selector in one
+  place, preferring roles, labels and stable `data-*` attributes; data on stdout,
+  diagnostics on stderr ([machine-readable command output](#machine-readable-command-output));
+  a non-zero exit when a contract breaks. A script that is flaky or slow stops
+  being run, which is worse than not having it — fix or delete it.
+- **Performance is measured, not asserted.** Budgets are checked in a production
+  build with CPU throttling, several runs, reporting max and median, and every
+  over-budget frame is attributed to the code that spent it. A calibration frame
+  of known cost shows the measurement itself is working.
 
 ## Adding a check to CI
 

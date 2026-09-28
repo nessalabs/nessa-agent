@@ -93,3 +93,44 @@ it("arranges the answers by the card's width, with no rule that leaves one alone
   expect(sheet).toMatch(/text-indent:\s*-2ch/)
   expect(sheet).not.toMatch(/overflow-wrap:\s*anywhere/)
 })
+
+it("takes the keyboard where a word is wider than the card, so the arrows scroll it", async () => {
+  let report: () => void = () => {}
+  class Observer {
+    constructor(callback: () => void) {
+      report = callback
+    }
+    observe() {}
+    disconnect() {}
+  }
+  const was = globalThis.ResizeObserver
+  Object.assign(globalThis, { ResizeObserver: Observer })
+  const root = createRoot(host)
+  await act(async () =>
+    root.render(
+      <ApprovalCommand command="xcrun notarytool submit Nessa_0.9.0_aarch64.dmg" />,
+    ),
+  )
+  const block = host.querySelector<HTMLElement>(".workspace-approval-command")
+  if (!block) throw new Error("no command")
+  Object.defineProperty(block, "clientWidth", { configurable: true, value: 78 })
+  Object.defineProperty(block, "scrollWidth", { configurable: true, value: 202 })
+  await act(async () => report())
+  expect(block.hasAttribute("data-overflow")).toBe(true)
+  expect(block.tabIndex).toBe(0)
+  const scrolled: number[] = []
+  block.scrollBy = ((options: ScrollToOptions) =>
+    scrolled.push(options.left ?? 0)) as never
+  await act(async () => {
+    block.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    )
+    block.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }))
+  })
+  expect(scrolled).toEqual([48, -48])
+  Object.defineProperty(block, "scrollWidth", { configurable: true, value: 78 })
+  await act(async () => report())
+  expect(block.hasAttribute("tabindex")).toBe(false)
+  await act(async () => root.unmount())
+  Object.assign(globalThis, { ResizeObserver: was })
+})

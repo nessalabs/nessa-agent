@@ -12,3 +12,48 @@
   pointer-events: auto;
   transition-delay: var(--desktop-fast);
 }
+
+/*
+ * The Agents overview's layer (`ui/overview/overview-layer.tsx`): over the
+ * session list and the panes, from where the list begins — past the sidebar
+ * and its edge, or the window's edge with the sidebar away — to the window's
+ * right, with the chat area's gutters. It is on the page, empty, while the
+ * overview is closed, so its width is known before it opens.
+ */
+.workspace-overview-layer {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: calc(2 * var(--desktop-gutter) + var(--workspace-sidebar-width));
+  display: flex;
+  padding: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter) 0;
+  pointer-events: none;
+}
+
+.workspace[data-sidebar="closed"] .workspace-overview-layer {
+  left: 0;
+  padding-left: var(--desktop-gutter);
+}
+
+.workspace-overview-layer[data-open] {
+  pointer-events: auto;
+}
+
+/*
+ * Under the overview, the session list and the panes keep their layout —
+ * their size, scroll, caret and what is typed — unseen and out of reach, so
+ * a pane command measures the room the panes really have, and coming back
+ * lays nothing out again; they fade back in as it leaves.
+ */
+.workspace-chat {
+  transition: opacity var(--desktop-base) ease;
+}
+
+.workspace[data-content="agents"] .workspace-list,
+.workspace[data-content="agents"] .workspace-list-edge,
+.workspace[data-content="agents"] .workspace-chat {
+  opacity: 0;
+  visibility: hidden;
+}

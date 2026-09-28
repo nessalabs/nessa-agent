@@ -11,6 +11,7 @@ import { workspaceLayouts, type WorkspaceLayoutId } from "../../model/workspace-
 import { useWorkspaceLayoutPreference } from "../../adapters/workspace-layout-preference"
 import { useMotionPreference } from "../../adapters/motion-preference"
 import {
+  useAgentsOverviewPreference,
   useBesidePreference,
   useDriftPreference,
   useGreetingPreference,
@@ -18,11 +19,11 @@ import {
   useRunningFirstPreference,
 } from "../../adapters/window-preferences"
 import { motionChoices } from "../../model/motion"
-import { useAgentsOverviewPreference } from "../../experiments/agents-overview"
 import {
   chordLabel,
   selectSessionListChosen,
   shortcutNames,
+  showContent,
   toggleSessionList,
   workspaceShortcuts,
   useWorkspaceDispatch,
@@ -160,15 +161,23 @@ function UpdatesTab() {
   )
 }
 
-/** Previews, each off until turned on (`src/desktop/experiments/`). */
+/**
+ * Previews, each off until turned on (`parseOptIn`). The Agents overview's
+ * decides whether the sidebar and ⌘0 offer it; turned off, an open overview
+ * gives the content region back to the panes.
+ */
 function ExperimentalTab() {
+  const dispatch = useWorkspaceDispatch()
   const [overview, setOverview] = useAgentsOverviewPreference()
   return (
     <Group footnote="Experiments may change or go away in a later version.">
       <Row id="agents-overview">
         <Toggle
           checked={overview === "on"}
-          onChange={(on) => setOverview(on ? "on" : "off")}
+          onChange={(on) => {
+            setOverview(on ? "on" : "off")
+            if (!on) dispatch(showContent({ content: "panes" }))
+          }}
         />
       </Row>
     </Group>
@@ -370,6 +379,11 @@ function SessionsTab() {
  * (`workspaceShortcuts`), so what Settings lists is what the keys do.
  */
 function KeyboardTab() {
+  const [overview] = useAgentsOverviewPreference()
+  // ⌘0 is listed only while the Agents overview is offered: off, it does nothing.
+  const offered = workspaceShortcuts.filter(
+    (binding) => binding.command !== "showOverview" || overview === "on",
+  )
   return (
     <>
       <Group title="Window">
@@ -383,7 +397,7 @@ function KeyboardTab() {
         />
       </Group>
       <Group title="Workspace">
-        {workspaceShortcuts.map((binding) => (
+        {offered.map((binding) => (
           <ItemRow
             key={binding.command}
             label={shortcutNames[binding.command]}

@@ -352,10 +352,17 @@ html:not(.dark) .workspace-diff del {
   }
 }
 
+/* The time holds together at any width ("50 s", never "50" over "s"); the label gives way. */
 .workspace-live-time {
+  flex-shrink: 0;
   color: var(--desktop-fainter);
   font-size: var(--desktop-text-footnote);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.workspace-live .workspace-shimmer {
+  min-width: 0;
 }
 
 /*

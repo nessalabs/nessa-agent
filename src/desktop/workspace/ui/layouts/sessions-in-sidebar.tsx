@@ -1,5 +1,4 @@
 import type { HostKind } from "../../../../host/features"
-import { AgentsOverviewScope } from "../../../experiments/agents-overview"
 import { treeSidebarLimits } from "../../model/window-fit"
 import { WorkspaceShell, type SidebarRegion } from "./workspace-shell"
 
@@ -10,7 +9,6 @@ import { WorkspaceShell, type SidebarRegion } from "./workspace-shell"
  * sidebar region is this layout's; everything else is the shell's.
  */
 const region: SidebarRegion = {
-  layout: "sidebar",
   sidebar: { variant: "tree", defaultWidth: 256, limits: treeSidebarLimits },
   sessionList: false,
 }
@@ -19,9 +17,5 @@ export function SessionsInSidebar(props: {
   hostKind: HostKind
   browserSurface: boolean
 }) {
-  return (
-    <AgentsOverviewScope>
-      <WorkspaceShell region={region} {...props} />
-    </AgentsOverviewScope>
-  )
+  return <WorkspaceShell region={region} {...props} />
 }

@@ -7,7 +7,16 @@ import { describe, expect, it } from "vitest"
 import { WorkspaceSourceError } from "../../application/ports"
 import { panesOf } from "../../model/pane-layout"
 import { emptyTranscript } from "../../model/transcript"
-import { astra, fakeSource, settle, summary, testIndex, testStore } from "../../testing"
+import {
+  astra,
+  fakeSource,
+  keptFilter,
+  settle,
+  summary,
+  testIndex,
+  testStore,
+} from "../../testing"
+import { retention } from "../../model/retention"
 import {
   approve,
   archiveSession,
@@ -34,6 +43,10 @@ import {
   sendMessage,
   showContent,
   focusPane,
+  equalizePanes,
+  filterOverview,
+  selectInOverview,
+  setComposerText,
   toggleSessionList,
   toggleSidebar,
 } from "./commands"
@@ -1166,6 +1179,14 @@ describe("the Agents overview is a place in the sidebar, left by going anywhere 
     "a channel from the tree": openChannel({ channelId: "gateway" }),
     "a new session": newSession(),
     "the focused pane": focusPane({ pane: 0 }),
+    "closing a pane": closePane(),
+    "moving a pane": nudgePane({ pane: 0, direction: "right" }),
+    "evening the panes out": equalizePanes(),
+    "resizing panes": resizePanes({
+      edge: { axis: "x", column: 0 },
+      fraction: 0.5,
+      pair: 1,
+    }),
   }
   for (const [way, action] of Object.entries(ways))
     it(`goes back to the panes on ${way}`, async () => {
@@ -1183,5 +1204,284 @@ describe("the Agents overview is a place in the sidebar, left by going anywhere 
     store.dispatch(toggleSidebar())
     store.dispatch(toggleSessionList())
     expect(store.getState().workspace.content).toBe("agents")
+  })
+})
+
+describe("the Agents overview answers and reads what it shows, as a pane does", () => {
+  const waitingOn = (source = fakeSource()) => {
+    source.transcripts.set("b", {
+      ...emptyTranscript("b"),
+      revision: 1,
+      approval: { id: "ap", command: "cargo test", reason: "Runs tests." },
+    })
+    return source
+  }
+
+  it("reads the conversation of a session waiting on the person once the overview opens, without marking it read", async () => {
+    const { store, source } = await ready(waitingOn())
+    expect(source.calls).not.toContainEqual(["transcript", "b"])
+    store.dispatch(showContent({ content: "agents" }))
+    await settle()
+    expect(source.calls).toContainEqual(["transcript", "b"])
+    expect(store.getState().workspace.transcripts.b?.approval?.id).toBe("ap")
+    // A peek is not reading the session — not when it opens, nor when the session changes.
+    expect(store.getState().workspace.sessions.b.unread).toBe(true)
+    store.dispatch(followWorkspace())
+    source.emit({
+      kind: "session",
+      session: summary("b", "desktop", 250, "needs-you", { unread: true, revision: 2 }),
+    })
+    await settle()
+    expect(store.getState().workspace.sessions.b.unread).toBe(true)
+    expect(source.calls).not.toContainEqual(["markRead", "b"])
+  })
+
+  it("answers an approval the open overview shows in no pane, as the person, through the one answer", async () => {
+    const { store, source } = await ready(waitingOn())
+    store.dispatch(showContent({ content: "agents" }))
+    await settle()
+    source.hold("approve")
+    const answer = store.dispatch(
+      approve({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+    )
+    // A second answer, from a pane or the overview, waits on the first.
+    expect(
+      await store.dispatch(
+        deny({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+      ),
+    ).toBe("answering")
+    await source.release("approve")
+    expect(await answer).toBe("sent")
+    expect(source.calls).toContainEqual(["approve", "b", "ap", "once", "person"])
+    expect(source.calls.filter((call) => call[0] === "deny")).toEqual([])
+    expect(store.getState().workspace.content).toBe("agents")
+  })
+
+  it("says an approval was not asked when neither a pane nor the open overview shows it", async () => {
+    const { store, source } = await ready(waitingOn())
+    // Open, but listing only sessions under a tag this one does not carry.
+    store.dispatch(showContent({ content: "agents" }))
+    store.dispatch(
+      filterOverview({ filter: { scope: "all", range: "any", tags: ["ui"] } }),
+    )
+    await settle()
+    expect(
+      await store.dispatch(
+        approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+      ),
+    ).toBe("not-asked")
+    store.dispatch(showContent({ content: "panes" }))
+    expect(
+      await store.dispatch(
+        approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+      ),
+    ).toBe("not-asked")
+    expect(source.calls.some((call) => call[0] === "approve")).toBe(false)
+  })
+
+  it("keeps a refused answer's reason, and answers again, from the overview", async () => {
+    const { store, source } = await ready(waitingOn())
+    store.dispatch(showContent({ content: "agents" }))
+    await settle()
+    source.refuse("approve", "not-waiting")
+    expect(
+      await store.dispatch(
+        approve({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+      ),
+    ).toBe("refused")
+    source.refuse("approve", "unavailable")
+    expect(
+      await store.dispatch(
+        approve({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+      ),
+    ).toBe("unknown")
+    expect(store.getState().workspace.answers.b?.failure).toBe("unavailable")
+    source.refuse("approve", undefined)
+    expect(
+      await store.dispatch(
+        approve({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+      ),
+    ).toBe("sent")
+  })
+
+  it("keeps an answer on its way when the overview closes, and lets it go on the conversation that no longer asks", async () => {
+    const { store, source } = await ready(waitingOn())
+    store.dispatch(followWorkspace())
+    store.dispatch(showContent({ content: "agents" }))
+    await settle()
+    source.hold("approve")
+    const answer = store.dispatch(
+      approve({ sessionId: "b", approvalId: "ap", initiator: "person" }),
+    )
+    store.dispatch(showContent({ content: "panes" }))
+    expect(store.getState().workspace.answers.b?.approvalId).toBe("ap")
+    await source.release("approve")
+    expect(await answer).toBe("sent")
+    await settle()
+    expect(store.getState().workspace.answers.b).toBeUndefined()
+  })
+
+  it("sends a reply from the overview to a waiting session no pane shows, as the person, and says when it is not sent", async () => {
+    const { store, source } = await ready(waitingOn())
+    store.dispatch(showContent({ content: "agents" }))
+    await settle()
+    source.hold("send")
+    const reply = store.dispatch(
+      sendMessage({ sessionId: "b", text: "Use the beta profile.", initiator: "person" }),
+    )
+    expect(outboxOf(store, "b").map((message) => message.delivery?.state)).toEqual([
+      "sending",
+    ])
+    await source.release("send")
+    expect(await reply).toBe("sent")
+    expect(source.calls.find((call) => call[0] === "send")?.[1]).toMatchObject({
+      sessionId: "b",
+      initiator: "person",
+    })
+    source.refuse("send", "unavailable")
+    expect(
+      await store.dispatch(
+        sendMessage({ sessionId: "b", text: "And again.", initiator: "person" }),
+      ),
+    ).toBe("unknown")
+    expect(outboxOf(store, "b").at(-1)?.delivery).toEqual({
+      state: "failed",
+      reason: "unavailable",
+    })
+  })
+
+  it("reads what a session chosen in the overview says, and lets it go when it is removed", async () => {
+    const { store, source } = await ready()
+    store.dispatch(showContent({ content: "agents" }))
+    store.dispatch(selectInOverview({ sessionId: "d" }))
+    await settle()
+    expect(source.calls).toContainEqual(["transcript", "d"])
+    // A session not listed is not chosen.
+    store.dispatch(selectInOverview({ sessionId: "nowhere" }))
+    expect(store.getState().workspace.overview.selected).toBe("d")
+    store.dispatch(followWorkspace())
+    await store.dispatch(archiveSession({ sessionId: "d", initiator: "person" }))
+    expect(store.getState().workspace.overview.selected).toBeNull()
+  })
+
+  it("reads and keeps the conversations of at most so many waiting sessions, and a chosen one past them", async () => {
+    const many = Array.from({ length: retention.overviewConversations + 6 }, (_, at) =>
+      summary(`w${at}`, "desktop", 500 + at, "needs-you"),
+    )
+    const index = testIndex()
+    const source = fakeSource({ ...index, sessions: [...index.sessions, ...many] })
+    const { store } = await ready(source)
+    store.dispatch(showContent({ content: "agents" }))
+    await settle()
+    const read = () =>
+      new Set(
+        source.calls.filter((call) => call[0] === "transcript").map((call) => call[1]),
+      )
+    // The most recently active, "b" and the oldest waiting left out.
+    expect(read().has("w0")).toBe(false)
+    expect(read().has(`w${many.length - 1}`)).toBe(true)
+    const kept = Object.keys(store.getState().workspace.transcripts)
+    expect(kept.length).toBeLessThanOrEqual(
+      retention.overviewConversations + retention.unshownConversations + 1,
+    )
+    store.dispatch(selectInOverview({ sessionId: "w0" }))
+    await settle()
+    expect(read().has("w0")).toBe(true)
+    expect(store.getState().workspace.transcripts.w0).toBeDefined()
+  })
+
+  it("keeps a failed read while the overview shows the session, and reads it afresh once shown again", async () => {
+    const source = waitingOn()
+    const { store } = await ready(source)
+    source.refuse("transcript", "unavailable")
+    store.dispatch(showContent({ content: "agents" }))
+    await settle()
+    expect(store.getState().workspace.transcriptFailures.b).toBe("unavailable")
+    store.dispatch(showContent({ content: "panes" }))
+    expect(store.getState().workspace.transcriptFailures.b).toBeUndefined()
+    source.refuse("transcript", undefined)
+    store.dispatch(showContent({ content: "agents" }))
+    await settle()
+    expect(store.getState().workspace.transcripts.b?.approval?.id).toBe("ap")
+  })
+})
+
+describe("the overview's filter is the store's, kept between launches", () => {
+  it("starts from what was kept, and keeps each change", async () => {
+    const kept = keptFilter({ scope: "all", range: "week", tags: [] })
+    const store = testStore(fakeSource(), undefined, kept)
+    expect(store.getState().workspace.overview.filter).toEqual({
+      scope: "all",
+      range: "week",
+      tags: [],
+    })
+    store.dispatch(
+      filterOverview({ filter: { scope: "ongoing", range: "any", tags: [] } }),
+    )
+    expect(kept.writes).toEqual([{ scope: "ongoing", range: "any", tags: [] }])
+  })
+})
+
+describe("what is typed goes when it is sent, whoever sends it", () => {
+  it("empties the composer on send, and keeps it when there is nothing to send it with", async () => {
+    const { store } = await ready()
+    store.dispatch(setComposerText({ sessionId: "a", text: "Run it." }))
+    expect(
+      await store.dispatch(
+        sendMessage({ sessionId: "a", text: "Run it.", initiator: "agent" }),
+      ),
+    ).toBe("sent")
+    expect(store.getState().workspace.composerText.a).toBeUndefined()
+    store.dispatch(setComposerText({ sessionId: "a", text: "  " }))
+    expect(
+      await store.dispatch(
+        sendMessage({ sessionId: "a", text: "  ", initiator: "person" }),
+      ),
+    ).toBe("not-asked")
+    expect(store.getState().workspace.composerText.a).toBe("  ")
+  })
+})
+
+describe("the source's resync", () => {
+  it("reads the index again when the source says its stream may have lost updates", async () => {
+    const { store, source } = await ready()
+    store.dispatch(followWorkspace())
+    const index = testIndex()
+    // c was archived while the stream was down; the source says so by a resync.
+    source.index = () =>
+      Promise.resolve({
+        ...index,
+        sessions: index.sessions.filter((session) => session.id !== "c"),
+      })
+    source.emit({ kind: "resync" })
+    await settle(10)
+    expect(store.getState().workspace.sessions.c).toBeUndefined()
+  })
+
+  it("reads a shown conversation again even with a read of it asked before the resync still on its way", async () => {
+    const source = fakeSource()
+    source.hold("transcript")
+    const store = testStore(source)
+    store.dispatch(followWorkspace())
+    await store.dispatch(loadWorkspace())
+    await settle()
+    const reads = () =>
+      source.calls.filter((call) => call[0] === "transcript" && call[1] === "a").length
+    expect(reads()).toBe(1)
+    source.emit({ kind: "resync" })
+    await settle(10)
+    // The first read may predate what was lost: it is set aside, and a is read again.
+    expect(reads()).toBe(2)
+    source.transcripts.set("a", { ...emptyTranscript("a"), revision: 4 })
+    await source.release("transcript")
+    await settle()
+    expect(store.getState().workspace.transcripts.a?.revision).toBe(4)
+  })
+
+  it("does not read twice what it reads as it first opens", async () => {
+    const { source } = await ready()
+    expect(
+      source.calls.filter((call) => call[0] === "transcript" && call[1] === "a"),
+    ).toHaveLength(1)
   })
 })

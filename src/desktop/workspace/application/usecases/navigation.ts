@@ -16,6 +16,7 @@ import {
 import {
   channelOf,
   drawnColumns,
+  keepShownFailures,
   listedSessions,
   sessionOf,
   toggled,
@@ -33,13 +34,16 @@ export function showContent(
   state: WorkspaceState,
   { content }: { content: ContentView },
 ): WorkspaceState {
-  return state.content === content ? state : { ...state, content }
+  return state.content === content ? state : keepShownFailures({ ...state, content })
 }
 
 /**
  * Going somewhere — a session, a channel, a status view, a new session,
- * another pane — is going to the panes: the one rule every way there
- * follows, applied by the store to each of them (`adapters/store/slice.ts`).
+ * another pane — or changing the panes — closing, moving, evening them out —
+ * is going to the panes: the one rule every way there follows, applied by
+ * the store to each of them (`adapters/store/slice.ts`). The panes stay laid
+ * out under the overview, so a change asked for while it is open is measured
+ * against the room they really have.
  */
 export function navigated(state: WorkspaceState): WorkspaceState {
   return showContent(state, { content: "panes" })

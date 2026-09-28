@@ -14,7 +14,8 @@
  * The command breaks only between its words — never inside one, so
  * `--simulate` stays whole — each line after the first hanging under the
  * first word, clear of the `$`; a word longer than the card scrolls
- * sideways instead, its cut edge faded.
+ * sideways instead, its cut edge faded, by the trackpad or — the block then
+ * taking the keyboard, in both engines — the arrow keys.
  */
 import { useLayoutEffect, useRef } from "react"
 import { DesktopIcon } from "../../../ui/icons"
@@ -40,6 +41,10 @@ export function ApprovalCommand({ command }: { command: string }) {
     const mark = () => {
       const over = element.scrollWidth - element.clientWidth > 1
       element.toggleAttribute("data-overflow", over)
+      // Scrolled by the keys too, where it scrolls at all: WebKit does not
+      // make a scrolling block focusable on its own.
+      if (over) element.tabIndex = 0
+      else element.removeAttribute("tabindex")
       element.toggleAttribute("data-scrolled", over && element.scrollLeft > 1)
       element.toggleAttribute(
         "data-at-end",
@@ -55,7 +60,20 @@ export function ApprovalCommand({ command }: { command: string }) {
     }
   }, [])
   return (
-    <pre ref={block} className="workspace-approval-command">
+    <pre
+      ref={block}
+      className="workspace-approval-command"
+      aria-label="Command"
+      onKeyDown={(event) => {
+        // The arrows scroll it, as they would any scrolling block, in both engines.
+        const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key]
+        if (!step || event.metaKey || event.ctrlKey || event.altKey) return
+        const element = event.currentTarget
+        if (element.scrollWidth - element.clientWidth <= 1) return
+        event.preventDefault()
+        element.scrollBy({ left: step * 48 })
+      }}
+    >
       <span className="workspace-approval-prompt" aria-hidden="true">
         ${" "}
       </span>

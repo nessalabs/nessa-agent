@@ -38,23 +38,30 @@ export type Carried =
  *
  * ```text
  *   ┌──────────────────────┐
- *   │ ╲        top       ╱ │   each side is the triangle between the
- *   │   ╲──────────────╱   │   pane's diagonals — the side the pointer is
- *   │ l  │   center   │  r │   nearest in pixels, so a tall narrow pane's
- *   │ e  │  (replace) │  i │   top and bottom are short, not most of it —
- *   │ f  │            │  g │   and a centre `centreInset` in from every
- *   │ t  │            │  h │   edge, a size in pixels, not a share.
+ *   │ ╲        top       ╱ │   each side reaches a share of the way in —
+ *   │   ╲──────────────╱   │   a third of the pane across it, held to
+ *   │ l  │   center   │  r │   90–300px (`edgeReach`) — the middle is what
+ *   │ e  │  (replace) │  i │   is left; where two sides' reaches meet, the
+ *   │ f  │            │  g │   diagonal between them decides, as a share of
+ *   │ t  │            │  h │   each reach.
  *   │   ╱──────────────╲ t │
  *   │ ╱      bottom      ╲ │
  *   └──────────────────────┘
  * ```
  *
- * The pointer's heading weighs the sides within its reach: travelling toward
- * one brings it nearer, away sends it further (`headingPull`), so a sideways
- * sweep across a pane's top corner reaches the side, not the top — and a side
- * out of reach stays out of it, however the pointer heads. And the zone it is in holds:
- * another takes over only once it wins by `zoneHold` pixels, so the zone
- * does not flicker at a boundary.
+ * The pointer's heading over the last tenth of a second
+ * (`pointerVelocity`) reads its intent early and alike in every direction:
+ *
+ * | the pointer heads            | the side it heads for         | the sides across its way            |
+ * | ---------------------------- | ----------------------------- | ----------------------------------- |
+ * | mostly toward a side         | reaches `headingReach` times further, so moving down a pane from its middle is "below" by two-thirds of the way | as at rest                          |
+ * | plainly along one axis       | as above                      | only within `edgeHug` of their edge, unless already in one |
+ * | resting                      | as at rest                    | as at rest                          |
+ *
+ * so a sideways drag near a tall narrow pane's top moves beside it, never
+ * above, and a drag down a tall pane splits below well before its foot. The
+ * zone the pointer is in holds: another takes over only once it wins by
+ * `zoneHold` pixels, so the zone does not flicker at a boundary.
  */
 export interface Pointer {
   /** From the pane's top left, in pixels. */
@@ -64,13 +71,16 @@ export interface Pointer {
   readonly velocity: { readonly x: number; readonly y: number }
 }
 
-/** How far in from every edge the centre begins: its share of the pane's shorter side, held to 48–120px. */
-export function centreInset(size: { width: number; height: number }): number {
-  return Math.min(Math.max(0.28 * Math.min(size.width, size.height), 48), 120)
-}
+/** A side's reach into the pane: its share of the pane across it, held to a floor and a cap. */
+export const edgeShare = 0.35
+export const edgeFloor = 90
+export const edgeCap = 300
 
-/** How much a side the pointer heads straight for is brought nearer, as a share of its distance. */
-export const headingPull = 0.5
+/** How much further a side reaches while the pointer heads mostly toward it. */
+export const headingReach = 1.4
+
+/** How much of the pointer's motion must be toward a side for it to be heading there (a cosine). */
+export const toward = 0.7
 
 /** Below this speed, in px/ms, the pointer is resting: its heading says nothing. */
 export const restingSpeed = 0.05
@@ -78,11 +88,32 @@ export const restingSpeed = 0.05
 /** By how many pixels another zone must win before it takes over from the one the pointer is in. */
 export const zoneHold = 12
 
+/** How many times more along one axis than the other a heading must be to be plainly that way. */
+export const plainly = 2
+
+/** How near an edge, in pixels, the pointer must be for a heading across it to still reach it. */
+export const edgeHug = 16
+
 const outward: Record<Side, { x: number; y: number }> = {
   left: { x: -1, y: 0 },
   right: { x: 1, y: 0 },
   top: { x: 0, y: -1 },
   bottom: { x: 0, y: 1 },
+}
+
+const across: Record<Side, "x" | "y"> = { left: "x", right: "x", top: "y", bottom: "y" }
+
+/**
+ * How far into a pane of `size` a side reaches, at rest: a share of the pane
+ * across it, held to 90–300px, and never past its middle.
+ */
+export function edgeReach(
+  size: { readonly width: number; readonly height: number },
+  side: Side,
+): number {
+  const extent = across[side] === "x" ? size.width : size.height
+  const reach = Math.min(Math.max(edgeShare * extent, edgeFloor), edgeCap)
+  return Math.min(reach, extent / 2)
 }
 
 /** The zone of a pane of `size` the pointer is in; `now` is the zone it was in over this pane, if any. */
@@ -98,25 +129,95 @@ export function zoneAt(
     bottom: size.height - pointer.y,
   }
   const sides = Object.keys(distance) as Side[]
-  const nearest = Math.min(...sides.map((side) => distance[side]))
-  const inset = centreInset(size)
-  // The centre's edge holds too: in it, the pointer leaves only well past it; outside, it enters only well within.
-  const centre =
-    now === "center" ? nearest >= inset - zoneHold : nearest >= inset + zoneHold
-  if (centre || (now === null && nearest >= inset)) return "center"
-  const speed = Math.hypot(pointer.velocity.x, pointer.velocity.y)
-  const weighed = (side: Side) => {
-    const heading =
-      speed < restingSpeed
-        ? 0
-        : (pointer.velocity.x * outward[side].x + pointer.velocity.y * outward[side].y) /
-          speed
-    return distance[side] * (1 - headingPull * heading) - (side === now ? zoneHold : 0)
+  const { x: vx, y: vy } = pointer.velocity
+  const speed = Math.hypot(vx, vy)
+  const moving = speed >= restingSpeed
+  const headingTo = (side: Side) =>
+    moving ? (vx * outward[side].x + vy * outward[side].y) / speed : 0
+  // Plainly along one axis: the sides across it are reached only at their edge.
+  const plain = !moving
+    ? null
+    : Math.abs(vx) >= plainly * Math.abs(vy)
+      ? "x"
+      : Math.abs(vy) >= plainly * Math.abs(vx)
+        ? "y"
+        : null
+  const reach = (side: Side) => {
+    const extent = across[side] === "x" ? size.width : size.height
+    const heading = headingTo(side) >= toward ? headingReach : 1
+    return Math.min(edgeReach(size, side) * heading, extent / 2)
   }
-  // Only a side the pointer is within reach of: heading for the far side of
-  // a pane does not make it nearer than the side the pointer is at.
-  const within = sides.filter((side) => distance[side] < inset + zoneHold)
-  return within.reduce((best, side) => (weighed(side) < weighed(best) ? side : best))
+  // The zone the pointer is in holds by `zoneHold` pixels: its side reaches
+  // that much further, and — resting in the middle — the sides that much less.
+  const hold = (side: Side) =>
+    side === now ? zoneHold : now === "center" ? -zoneHold : 0
+  // A plain heading keeps the pointer out of the sides across it, but does not
+  // throw it out of the one it is in: jitter across a boundary holds.
+  const candidates = sides.filter(
+    (side) =>
+      distance[side] < reach(side) + hold(side) &&
+      (plain === null ||
+        across[side] === plain ||
+        side === now ||
+        distance[side] <= edgeHug),
+  )
+  if (candidates.length === 0) return "center"
+  // Where two reaches meet, the diagonal between them, as a share of each;
+  // the side the pointer is in wins ties by `zoneHold` pixels.
+  const depth = (side: Side) =>
+    (distance[side] - (side === now ? zoneHold : 0)) / reach(side)
+  return candidates.reduce((best, side) => (depth(side) < depth(best) ? side : best))
+}
+
+/** A box on the page, in pixels. */
+export interface Rect {
+  readonly left: number
+  readonly top: number
+  readonly width: number
+  readonly height: number
+}
+
+/**
+ * How far from the pointer toward the carried copy's centre a drag aims, 0
+ * to 1. A pane is carried at full size, grabbed by its header: the eye
+ * follows the copy's body as much as the hand, so the drag aims between the
+ * two — halfway — rather than at the pointer near the copy's top corner.
+ */
+export const aimBlend = 0.5
+
+/** Where a drag aims: between the pointer and the centre of the copy it carries (`aimBlend`). */
+export function aimPoint(
+  pointer: { readonly x: number; readonly y: number },
+  copy: Rect,
+): { x: number; y: number } {
+  const centre = { x: copy.left + copy.width / 2, y: copy.top + copy.height / 2 }
+  return {
+    x: pointer.x + (centre.x - pointer.x) * aimBlend,
+    y: pointer.y + (centre.y - pointer.y) * aimBlend,
+  }
+}
+
+/**
+ * The pane a drag aims at, and where on it: the pane the point is over; else
+ * — the point in a gutter between panes, or past the grid's edge, the copy
+ * run off the window — the nearest pane, the point held to its edge. So
+ * every place a drag can aim resolves to a pane and a zone, and aiming past
+ * the grid's right or foot reaches its last column's side or its lowest
+ * pane's foot. `null` only with no panes.
+ */
+export function paneAt(
+  point: { readonly x: number; readonly y: number },
+  panes: Iterable<readonly [PaneKey, Rect]>,
+): { key: PaneKey; x: number; y: number; box: Rect } | null {
+  let nearest: { key: PaneKey; x: number; y: number; box: Rect; off: number } | null =
+    null
+  for (const [key, box] of panes) {
+    const x = Math.min(Math.max(point.x - box.left, 0), box.width)
+    const y = Math.min(Math.max(point.y - box.top, 0), box.height)
+    const off = Math.hypot(point.x - box.left - x, point.y - box.top - y)
+    if (!nearest || off < nearest.off) nearest = { key, x, y, box, off }
+  }
+  return nearest && { key: nearest.key, x: nearest.x, y: nearest.y, box: nearest.box }
 }
 
 /** A pointer position at a moment, in pixels and milliseconds. */

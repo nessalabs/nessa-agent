@@ -1070,6 +1070,7 @@ html:not(.dark) [data-surface] {
   opacity: 0.38;
   filter: saturate(0.7);
   pointer-events: none;
+  transition: opacity var(--desktop-base) ease;
   mask-image:
     linear-gradient(to right, transparent, black 12%, black 88%, transparent),
     linear-gradient(to bottom, black 20%, transparent);
@@ -1096,6 +1097,19 @@ html:not(.dark) [data-surface] {
   .workspace-pane:not([data-focused])
   .desktop-header[data-sliver] {
   opacity: 0.24;
+}
+
+/*
+ * In the window's corner, with nothing beside it, the band begins after the
+ * window's controls, as the pane's header does: nothing of it is drawn
+ * beneath them, and its left fade starts where they end. While panes travel
+ * it waits out of sight (`panes.css`), so a pane leaving the corner does not
+ * carry the band under the controls on its way.
+ */
+.workspace[data-panes-alone] .workspace-pane[data-corner] .desktop-header[data-sliver] {
+  left: calc(var(--desktop-titlebar-safe-start) - var(--desktop-gutter));
+  width: auto;
+  right: 0;
 }
 
 @container workspace-pane (max-height: 219px) {
@@ -1378,6 +1392,24 @@ html:not(.dark) [data-surface] {
   height: 12px;
   opacity: 0.55;
   transition: transform 200ms var(--desktop-ease);
+}
+
+/*
+ * The model's name gives way before anything beside it: squeezed, it ends in
+ * an ellipsis inside its own chip, never running under the access and
+ * thinking controls. Narrower still, a pane's composer shows a short name,
+ * then the mark alone (`conversation.css`).
+ */
+.desktop-chip-model {
+  overflow: hidden;
+}
+
+.desktop-chip-model > span:not([aria-hidden]):not(:first-child),
+.desktop-chip-model::after {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .desktop-chip-model[data-state="open"] > svg:last-child {

@@ -9,6 +9,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
 import type { HostKind } from "../../../host/features"
+import { holdStill, slideFrom } from "../../adapters/hold-still"
 import { reducedMotion } from "../../adapters/motion-preference"
 import { useThemePreference } from "../../adapters/theme-preference"
 import { useEdgePeek } from "../../adapters/use-edge-peek"
@@ -125,16 +126,31 @@ function SettingsView({
   // Shown or hidden by the person; folded by the window when a page would be
   // squeezed beside it, and back once there is room (`side-column.ts`).
   const windowWidth = useWindowWidth()
-  const [sidebarColumn, setSidebarColumn] = useState<SideColumn>(() =>
-    fitted({ open: true, folded: false }, settingsSidebarFits(window.innerWidth)),
+  // Refitted as the window's width changes, in the render that sees it — not
+  // in a later effect, which a resize observer's synchronous render would
+  // flush out of turn.
+  const [sidebar, setSidebar] = useState(() => ({
+    column: fitted({ open: true, folded: false }, settingsSidebarFits(windowWidth)),
+    width: windowWidth,
+  }))
+  if (sidebar.width !== windowWidth)
+    setSidebar({
+      column: fitted(sidebar.column, settingsSidebarFits(windowWidth)),
+      width: windowWidth,
+    })
+  const sidebarColumn =
+    sidebar.width === windowWidth
+      ? sidebar.column
+      : fitted(sidebar.column, settingsSidebarFits(windowWidth))
+  const setSidebarColumn = useCallback(
+    (change: (column: SideColumn) => SideColumn) =>
+      setSidebar((held) => ({ ...held, column: change(held.column) })),
+    [],
   )
-  useEffect(() => {
-    setSidebarColumn((column) => fitted(column, settingsSidebarFits(windowWidth)))
-  }, [windowWidth])
   const sidebarOpen = drawn(sidebarColumn)
   const toggleSidebar = useCallback(
     () => setSidebarColumn((column) => chosen(column)),
-    [],
+    [setSidebarColumn],
   )
   // Folded, the sidebar can be revealed from the window's edge, as the app's can.
   const peek = useEdgePeek(!sidebarOpen, sidebarOpen)
@@ -190,6 +206,25 @@ function SettingsView({
     window.addEventListener("keydown", onKeyDown, true)
     return () => window.removeEventListener("keydown", onKeyDown, true)
   }, [toggleSidebar])
+
+  // The sidebar's room changes at once, and the page slides into its new
+  // place by transform, as the workspace's columns do; an inline title holds
+  // still at its own place meanwhile (`holdStill`), clear of the window's
+  // controls, rather than ride the slide from under them.
+  const sidebarWas = useRef(sidebarOpen)
+  useLayoutEffect(() => {
+    const was = sidebarWas.current
+    sidebarWas.current = sidebarOpen
+    if (was === sidebarOpen) return
+    const content = rootRef.current?.querySelector<HTMLElement>(".settings-content")
+    if (!content) return
+    const width = settingsSidebar.width
+    if (!slideFrom(content, (was ? width : 0) - (sidebarOpen ? width : 0))) return
+    const title = content.querySelector<HTMLElement>(
+      ":scope > .desktop-column-bar > .desktop-column-title:not(.desktop-column-sizer)",
+    )
+    if (title) holdStill(title)
+  }, [sidebarOpen])
 
   // Focus left in a sidebar that slides away — folded, or its reveal over —
   // would be lost; it moves to the toggle.

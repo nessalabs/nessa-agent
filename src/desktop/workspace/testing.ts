@@ -6,9 +6,11 @@
 import { makeDesktopStore } from "../store"
 import type {
   OutgoingMessage,
+  RememberedFilter,
   WorkspaceSource,
   WorkspaceUpdate,
 } from "./application/ports"
+import { defaultFilter, type AgentsFilter } from "./model/overview/filter"
 import type { WorkspaceFailureReason } from "./model/failure"
 import type { WorkspaceRoom } from "./model/pane-sizing"
 import { WorkspaceSourceError } from "./application/ports"
@@ -203,6 +205,18 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
   }
 }
 
+/** The overview's filter kept in memory, as storage would keep it between launches. */
+export function keptFilter(
+  initial: AgentsFilter = defaultFilter,
+): RememberedFilter & { readonly writes: AgentsFilter[] } {
+  const writes: AgentsFilter[] = []
+  return {
+    writes,
+    read: () => writes.at(-1) ?? initial,
+    write: (filter) => void writes.push(filter),
+  }
+}
+
 /** A grid with room for three columns of two panes, and a sidebar that could fold. */
 export const roomyGrid: WorkspaceRoom = { width: 1100, height: 800, spare: 256 }
 
@@ -214,6 +228,7 @@ export const roomyGrid: WorkspaceRoom = { width: 1100, height: 800, spare: 256 }
 export function testStore(
   source: WorkspaceSource = fakeSource(),
   measure: () => WorkspaceRoom | undefined = () => roomyGrid,
+  overviewFilter: RememberedFilter = keptFilter(),
 ) {
   let next = 0
   return makeDesktopStore({
@@ -221,6 +236,7 @@ export function testStore(
     now: () => 1000,
     newId: () => `id-${++next}`,
     measure,
+    overviewFilter,
   })
 }
 

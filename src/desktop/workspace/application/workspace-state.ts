@@ -10,8 +10,9 @@
  */
 import type { WorkspaceFailureReason } from "../model/failure"
 import type { Channel, ModelRef, Section, SessionSummary } from "../model/workspace-index"
-import { focusedPane, panesOf, type PaneLayout } from "../model/pane-layout"
-import { keptConversations, type Removal } from "../model/retention"
+import { focusedPane, panesOf, paneShowing, type PaneLayout } from "../model/pane-layout"
+import { keptConversations, retention, type Removal } from "../model/retention"
+import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overview/filter"
 import { drawn, type SideColumn } from "../../model/side-column"
 import type { SessionView } from "../model/session-groups"
 import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
@@ -100,7 +101,8 @@ export interface WorkspaceState {
    * What the person has typed in a session's composer and not sent, by
    * session or new session: the window's own, kept here so it survives a
    * change of layout or a pane showing another session, and so an agent can
-   * write it (`setComposerText`). Sent, or its session let go, it goes.
+   * write it (`setComposerText`). Sent (`messageSent`, whoever sent it), or its
+   * session let go, it goes.
    */
   readonly composerText: Readonly<Record<string, string>>
   /** Where conversations sit; none until the index arrives. */
@@ -108,16 +110,27 @@ export interface WorkspaceState {
   readonly view: SessionView
   /**
    * What fills the content region: the panes, or the Agents overview over
-   * them. Going anywhere else is going back to the panes
-   * (`usecases/navigation.ts`, `navigated`).
+   * them — the overview's open state. Going anywhere else, or changing the
+   * panes, is going back to the panes (`usecases/navigation.ts`,
+   * `navigated`).
    */
   readonly content: ContentView
+  /** What the Agents overview shows while open: its filter and the session chosen. */
+  readonly overview: OverviewState
   readonly chrome: Chrome
   readonly tree: Tree
 }
 
 /** The content region's view: the chat panes, or every agent at a glance. */
 export type ContentView = "panes" | "agents"
+
+/** The Agents overview's own state: kept while it is closed, for when it opens again. */
+export interface OverviewState {
+  /** The session the peek shows, chosen in the list; kept even when a filter hides it. */
+  readonly selected: string | null
+  /** What it lists (`model/overview/filter.ts`), remembered between launches. */
+  readonly filter: AgentsFilter
+}
 
 export const initialWorkspace: WorkspaceState = {
   status: "loading",
@@ -137,6 +150,7 @@ export const initialWorkspace: WorkspaceState = {
   panes: null,
   view: { kind: "channel", channelId: "" },
   content: "panes",
+  overview: { selected: null, filter: defaultFilter },
   chrome: {
     sidebar: { open: true, folded: false },
     sessionList: { open: true, folded: false },
@@ -186,8 +200,74 @@ export function withSession(
 }
 
 /** The sessions the panes show, drafts among them. */
-function shownIds(state: WorkspaceState): Set<string> {
-  return new Set(state.panes ? panesOf(state.panes).map((pane) => pane.sessionId) : [])
+function paneIds(panes: PaneLayout | null): string[] {
+  return panes ? panesOf(panes).map((pane) => pane.sessionId) : []
+}
+
+/**
+ * Whether the open overview shows a session: the one chosen in it, or one
+ * its filter lists waiting on the person (`listsWaiting`). The one rule for
+ * what the overview puts on screen — what it answers (`onScreen`), and what
+ * the window reads and keeps for it (`shownIds`).
+ */
+export function overviewShows(state: WorkspaceState, sessionId: string): boolean {
+  if (state.content !== "agents") return false
+  if (state.overview.selected === sessionId) return true
+  const session = sessionOf(state, sessionId)
+  return session !== undefined && listsWaiting(session, state.overview.filter)
+}
+
+/**
+ * On screen: in a pane, or in the open overview. Only an approval on screen
+ * is answered (`approve`, `deny`), so an agent answers what it has opened.
+ */
+export function onScreen(state: WorkspaceState, sessionId: string): boolean {
+  return (
+    (state.panes !== null && paneShowing(state.panes, sessionId) !== undefined) ||
+    overviewShows(state, sessionId)
+  )
+}
+
+/**
+ * The sessions the open overview shows whose conversations the window
+ * reads and keeps: the one chosen, then the waiting ones, most recently
+ * active first, at most `retention.overviewConversations`. Past the bound, a
+ * waiting session's conversation is read once its row is chosen.
+ */
+export function overviewShownIds(state: WorkspaceState): string[] {
+  if (state.content !== "agents") return []
+  const { selected } = state.overview
+  const waiting = listedSessions(state)
+    .filter((session) => session.id !== selected && overviewShows(state, session.id))
+    .sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? -1 : 1))
+    .map((session) => session.id)
+  const chosen = selected !== null && sessionOf(state, selected) ? [selected] : []
+  return [...chosen, ...waiting].slice(0, retention.overviewConversations)
+}
+
+/**
+ * The sessions on screen whose conversations the window keeps whatever
+ * their age: the panes' (drafts among them), and the overview's, bounded.
+ */
+export function shownIds(state: WorkspaceState): Set<string> {
+  return new Set([...paneIds(state.panes), ...overviewShownIds(state)])
+}
+
+/**
+ * Keeps a failed read only while its session is on screen: shown again, a
+ * session is read afresh. The same state when nothing is let go.
+ */
+export function keepShownFailures(state: WorkspaceState): WorkspaceState {
+  const failed = Object.keys(state.transcriptFailures)
+  if (failed.length === 0) return state
+  const shown = shownIds(state)
+  if (failed.every((id) => shown.has(id))) return state
+  return {
+    ...state,
+    transcriptFailures: Object.fromEntries(
+      Object.entries(state.transcriptFailures).filter(([id]) => shown.has(id)),
+    ),
+  }
 }
 
 /**
@@ -246,14 +326,7 @@ export function without<T>(
  */
 export function withPanes(state: WorkspaceState, panes: PaneLayout): WorkspaceState {
   if (panes === state.panes) return state
-  const shown = new Set(panesOf(panes).map((pane) => pane.sessionId))
-  // A failed read belongs to the pane that showed it: shown again, a session is read afresh.
-  const failed = Object.keys(state.transcriptFailures)
-  const transcriptFailures = failed.every((id) => shown.has(id))
-    ? state.transcriptFailures
-    : Object.fromEntries(
-        Object.entries(state.transcriptFailures).filter(([id]) => shown.has(id)),
-      )
+  const shown = new Set(paneIds(panes))
   const drafts = keepShownDrafts(state.drafts, shown)
   // A new session's typing goes with it; a listed session's stays until it is let go.
   const composerText =
@@ -262,7 +335,8 @@ export function withPanes(state: WorkspaceState, panes: PaneLayout): WorkspaceSt
       : Object.keys(state.drafts)
           .filter((id) => !Object.hasOwn(drafts, id))
           .reduce(without, state.composerText)
-  return { ...state, panes, drafts, transcriptFailures, composerText }
+  // A failed read belongs to what showed it: shown again, a session is read afresh.
+  return keepShownFailures({ ...state, panes, drafts, composerText })
 }
 
 /** Adds `id` to a list of ids, or takes it out; the same list when nothing changes. */
@@ -309,6 +383,10 @@ export function forgetSession(state: WorkspaceState, sessionId: string): Workspa
     answers: without(state.answers, sessionId),
     chosenModels: without(state.chosenModels, sessionId),
     composerText: without(state.composerText, sessionId),
+    overview:
+      state.overview.selected === sessionId
+        ? { ...state.overview, selected: null }
+        : state.overview,
   }
 }
 

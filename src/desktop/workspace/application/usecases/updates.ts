@@ -30,6 +30,7 @@ import {
   listedSessions,
   modelForNextTurn,
   sessionOf,
+  shownIds,
   withPanes,
   without,
   withSession,
@@ -250,7 +251,7 @@ export function indexFailed(
  */
 export function updateReceived(
   state: WorkspaceState,
-  { update }: { update: Exclude<WorkspaceUpdate, { kind: "session-removed" }> },
+  { update }: { update: Extract<WorkspaceUpdate, { kind: "session" | "transcript" }> },
 ): WorkspaceState {
   switch (update.kind) {
     case "session": {
@@ -308,20 +309,21 @@ export function transcriptLoaded(
 }
 
 /**
- * A conversation a pane shows could not be read; the pane says why, and it
- * is not read again until someone asks (`transcriptRetried`).
+ * A conversation on screen could not be read; the pane, or the overview's
+ * row, says why, and it is not read again until someone asks
+ * (`transcriptRetried`) or it is shown afresh.
  */
 export function transcriptFailed(
   state: WorkspaceState,
   { sessionId, reason }: { sessionId: string; reason: WorkspaceFailureReason },
 ): WorkspaceState {
-  // A read that failed after a conversation arrived another way, or once no pane
-  // shows the session, changes nothing: shown again, it is read afresh.
+  // A read that failed after a conversation arrived another way, or once
+  // nothing on screen shows the session, changes nothing: shown again, it is
+  // read afresh.
   if (
     !sessionOf(state, sessionId) ||
     entry(state.transcripts, sessionId) ||
-    !state.panes ||
-    !paneShowing(state.panes, sessionId)
+    !shownIds(state).has(sessionId)
   )
     return state
   return {
@@ -341,8 +343,8 @@ export function transcriptRetried(
     : { ...state, transcriptFailures }
 }
 
-/** The ids of the sessions shown in a pane that are listed, in pane order. */
-function shownSessions(state: WorkspaceState): SessionSummary[] {
+/** The sessions shown in a pane that are listed, in pane order. */
+function sessionsInPanes(state: WorkspaceState): SessionSummary[] {
   if (!state.panes) return []
   return panesOf(state.panes).flatMap((pane) => {
     const session = sessionOf(state, pane.sessionId)
@@ -351,14 +353,17 @@ function shownSessions(state: WorkspaceState): SessionSummary[] {
 }
 
 /**
- * The sessions shown in a pane whose conversations are the source's to give:
- * listed, and spoken of by the source — a session whose first message is
- * still on its way has nothing to read yet.
+ * The sessions on screen — in a pane, or in the open overview, bounded
+ * (`shownIds`) — whose conversations are the source's to give: listed, and
+ * spoken of by the source — a session whose first message is still on its
+ * way has nothing to read yet. What the window reads, and reads again on a
+ * resync (`effects.ts`).
  */
 export function shownSessionIds(state: WorkspaceState): string[] {
-  return shownSessions(state)
-    .filter(knownToSource)
-    .map((session) => session.id)
+  return [...shownIds(state)].filter((sessionId) => {
+    const session = sessionOf(state, sessionId)
+    return session !== undefined && knownToSource(session)
+  })
 }
 
 /**
@@ -366,7 +371,8 @@ export function shownSessionIds(state: WorkspaceState): string[] {
  * reading it, whoever opened it and however (`effects.ts` tells the source).
  */
 export function unreadShown(state: WorkspaceState): string[] {
-  return shownSessions(state)
+  // A pane only: a peek in the overview is not reading the session.
+  return sessionsInPanes(state)
     .filter((session) => session.unread)
     .map((session) => session.id)
 }

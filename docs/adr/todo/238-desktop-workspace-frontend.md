@@ -62,7 +62,11 @@ laid out feature-first with roles below, like `src/conversation/`.
     keeps of what it does not show (`retention.ts`);
   - session grouping ("Needs you", "Running", "Earlier"), search, and the
     new-session lifecycle, where a draft is never listed and is let go once no
-    pane shows it.
+    pane shows it;
+  - the Agents overview's rules (`model/overview/`): what it lists and in
+    what order (`agents-glance.ts`), its filter (`filter.ts`), where the
+    keyboard goes (`walk.ts`), a peek and a request read from a conversation
+    (`peek.ts`, `request.ts`).
 - **`application/`** owns the **`WorkspaceSource`** port and the workspace's
   state, with each use case a pure function over it (`usecases/`).
 - **`adapters/`** holds:
@@ -81,7 +85,8 @@ laid out feature-first with roles below, like `src/conversation/`.
     pane grid, pane, pane header, transcript, transcript heading, message, tool
     steps, approval card (its command and answers, `approval-request.tsx`,
     arranged by the card's width and shared with the Agents overview's peek), pane home (the window's own `Home`, given the
-    composer's props), quick switcher and empty states;
+    composer's props), quick switcher, empty states, and the Agents overview
+    (`ui/overview/`: its layer, list, rows, peek and reply pill);
   - **one workspace shell** (`ui/layouts/workspace-shell.tsx`) and two
     layouts that are only a `SidebarRegion` each — see _Layouts_.
 
@@ -108,7 +113,13 @@ missed. A read of the index is instead the source's whole list when it
 answered, and so authoritative: dispatched again (`loadWorkspace`), a session
 it does not list — or lists in a channel it does not list — is taken out by
 the same removal path the stream's removals take, at the revision held, and
-the conversation of every shown session is read again. The one exception is a
+the conversation of every session on screen is read again — a read of one
+already on its way is set aside unless it was asked after the index was, since
+one asked before may predate what was lost. **The source says when to
+resync**: it sends `{ kind: "resync" }` on its stream when it reconnects or
+finds a gap, and `followWorkspace` reads the index again; a source that cannot
+tell never sends one, and the window then resyncs only when it opens or the
+person asks (Try Again). The in-memory source sends one on `resync()`. The one exception is a
 session the stream brought while the read was on its way, which the read may
 predate: it stays, until a later read says otherwise. A session the source
 has not spoken of (revision 0) is the window's own and stays. A pane is never
@@ -116,9 +127,11 @@ left showing a session that is not there: a removal closes the pane showing
 it, and the last pane starts over as a new session's home in the same channel.
 
 **What is kept of what is not shown** (`model/retention.ts`, as data): every
-conversation a pane shows, and the eight most recently active of the rest; the
-newest 256 removals. Anything let go is read again when a pane shows it; a read
-older than 256 removals is corrected by the next index read.
+conversation a pane shows; those the open Agents overview shows, up to 24,
+the chosen one first, then the waiting ones most recently active first; and
+the eight most recently active of the rest; the newest 256 removals. Anything
+let go is read again when a pane or the overview shows it; a read older than
+256 removals is corrected by the next index read.
 
 **Commands.** Everything a person or an agent does is dispatched from
 `adapters/store/commands.ts`: plain actions where the state alone decides
@@ -170,12 +183,38 @@ edge-peek reveal (`useEdgePeek`) in the classic shell, both workspace layouts
 and Settings; the pointer or keyboard focus inside it keeps it shown.
 
 **What fills the content region** is workspace state (`content`: the panes,
-or the Agents overview while that experiment is on), so an agent can move it
-too. The sidebar's Agents entry is a place like a channel: choosing it again
-keeps it; and every action that goes somewhere — a session, a channel, a
-status view, a new session, another pane — goes back to the panes by one rule
-(`navigated`, applied by the slice to each). The sidebar marks what is shown:
-Agents while the overview is, a channel or session only while the panes are.
+or the Agents overview), so an agent can move it too. The overview is part of
+the workspace (`ui/overview/`, `model/overview/`): its selection and filter
+are slice state (`selectInOverview`, `filterOverview`; a session not listed is
+not selected), and the filter is kept between launches by composition
+(`RememberedFilter`, read once into the store's first state and written by an
+effect on each change — storage never speaks for it while the window is
+open). Settings › General › Experimental decides only whether the window
+offers a way in — the sidebar's "Agents" entry and ⌘0; turned off, an open
+overview gives the region back. The entry and ⌘0 are a place like a channel:
+choosing it again keeps it, and Escape in it leaves; and every action that
+goes somewhere — a session, a channel, a status view, a new session, another
+pane — or changes the panes a person asked to change — closing, moving,
+evening them out — goes back to the panes by one rule (`navigated`, applied by
+the slice to each), so no pane changes unseen beneath the overview. The
+overview is drawn in a layer over the session list and the panes, which stay
+laid out beneath it, unseen and out of reach: the room a pane command
+measures is the panes' own whether the overview is open or not, and the
+layer's width — whether the peek fits beside the list — is known before it
+opens, so its first frame is laid out once. Opened, the keyboard lands on the
+current row; left, it goes back to the focused pane's composer; an answer
+given in it — by key or click — moves it to the next request. The sidebar
+marks what is shown: Agents while the overview is, a channel or session only
+while the panes are.
+
+**What the overview shows is on screen** (`overviewShows`, `onScreen`, one
+rule in `application/workspace-state.ts`): the session chosen in it, and each
+session its filter lists waiting on the person. Its approvals are answered by
+the same `approve` and `deny` as a pane's card, so there is one answer per
+approval whichever surface gave it — a second, from either, is `answering` —
+and refused stays apart from unknown. Its conversations are read and kept as
+a pane's are (bounded, above), and a failed read is kept while it is shown. A
+peek is not reading the session: only a pane marks it read.
 
 **Focus follows the focused pane** (`adapters/dom/focus.ts`, one mechanism):
 whenever another pane takes focus — a split, ⌘N, ⌘W, ⌘1–4, ⇧⌘[ ⇧⌘], a pick in
@@ -187,17 +226,39 @@ without a pick, or Settings, gives focus back to what opened it.
 **Drag and drop** is carried by the pointer (`adapters/dom/drag.ts`), not the
 browser's drag, and a pane's header carries the pane, never the window (no
 drag region in it). What is carried is a translucent copy of the pane itself,
-cloned once when the drag begins — its conversation where it was scrolled
-to, its composer and chips; a session from a list is drawn from what the
-window holds of it. **While dragging, the copy belongs to the pointer**: it
+made once the press's frame has painted (or as it becomes a drag, if sooner) and shown once it becomes a drag — one screen of its
+conversation, moved to where it was scrolled by transform, its composer and
+chips, in a box of its own size (`contain: strict`); a session from a list is
+drawn from what the window holds of it. What a drag needs of the page — the
+grid, each pane's parts, the sidebar's room — is read then, on a laid-out page, and where
+a preview has drawn a pane is known from the preview's own motion, so
+beginning, previewing, dropping and letting go only write. A press on what
+can be carried, and the drag it becomes, select nothing (`selectstart`), and
+leave nothing selected; while carrying, one element over the page holds the
+grabbing hand, so beginning a drag restyles it alone. **While dragging, the copy belongs to the pointer**: it
 keeps its size and grab offset and follows one to one, with no pull toward a
-target. **The zone is the pointer's, in pixels** (`zoneAt`, `model/drop.ts`): each
-side is the triangle between the pane's diagonals and the middle a size in
-pixels (`centreInset`, 48–120px), so a tall narrow pane's top and bottom are
-short; the sides within reach are weighed by where the pointer has headed
-over the last tenth of a second (`pointerVelocity`), so a sideways sweep
-across a top corner reaches the side; and the zone it is in holds until
-another wins by 12px, so it does not flicker at a boundary. **The result is
+target. **The zone is the drag's aim, in pixels** (`model/drop.ts`). A pane is
+carried at full size, grabbed by its header, and the eye follows the copy's
+body as much as the hand, so the drag aims halfway from the pointer to the
+copy's centre (`aimPoint`); an aim in a gutter, past the grid's edge, or with
+the copy run off the window reads as the pane nearest it, held to its edge
+(`paneAt`), so past the grid's right is its last column's side and past its
+foot the lowest pane's foot; aimed at the carried pane's own place, nothing is
+offered, and let go there it goes back. With the pointer itself off the grid —
+over a side column, or out of the window — nothing is offered either, and a
+release there, or the page losing the pointer, is as Escape; the zone
+committed is the one under the release, read then. On that pane (`zoneAt`), each side
+reaches a third of the way in, held to 90–300px and never past the middle
+(`edgeReach`), the middle is what the sides leave, and where two reaches meet
+the diagonal between them decides. The pointer's heading over the last tenth
+of a second (`pointerVelocity`) reads intent early and alike in every
+direction: heading mostly toward a side makes it reach 1.4 times further — a
+drag down a tall pane is "below" by two-thirds of the way — and a heading
+plainly along one axis leaves the sides across it reachable only within 16px
+of their edge — one the pointer is already in holds — so a sideways drag
+near a tall narrow pane's top moves beside
+it, never above. The zone it is in holds until another wins by 12px, so it
+does not flicker at a boundary. **The result is
 shown by the layout**: over a zone, the real panes
 move to where the drop would put them, only when the zone changes, and a
 calm placeholder marks exactly the rect the drop will take — from
@@ -215,7 +276,9 @@ pane leaves the grid, and panes move one way between zone changes.
 **What is typed and not sent** is product state: `composerText` in the
 workspace slice, by session or new session, written by the composer (and by an
 agent, `setComposerText`), so it survives a change of layout, Settings, or a
-pane showing another session, and goes with its session.
+pane showing another session, and goes with its session. Sent, it goes by the
+command's own rule (`messageSent`), whoever sent it; nothing sent
+(`not-asked`), it stays.
 
 The desktop gets its own store and composition root: `src/desktop/store.ts`,
 with `src/desktop/dependencies.ts` building its dependencies and
@@ -232,8 +295,9 @@ layout file holds. Everything else is the workspace shell's, once: the quick
 switcher (⌘K, and ⌘\ to pick what opens beside, in both), one keyboard map
 (`workspaceShortcuts`; ⌘F searches the list where there is one), the pane
 grid and all pane behaviour, focus, drag and drop, the titlebar's controls,
-the edge reveal, and fitting the side columns (`layouts.test.tsx` holds that
-both layouts answer the same keys with the same parts). Where the spike's two copies of a pane
+the edge reveal, and fitting the side columns (`layouts.test.tsx` presses
+every key of the shared map in both layouts and holds that each does the
+same, but for ⌥⌘S and ⌘F where one has no session list). Where the spike's two copies of a pane
 differed, one design was kept for both: the three-column pane chrome and grid
 (which also gives the second layout split down and moving panes), the
 second's richer transcript (step groups with diff counts, code, lists, the
@@ -256,7 +320,10 @@ beside, running sessions first — each a `storedPreference`
 because an agent does not dispatch "tint from picture". "Show session list"
 is the workspace's own column choice, the same as ⌥⌘S. Settings is modal: the
 window under it is inert while it is open, and focus goes back to what opened
-it; its sidebar folds for room below a page's 420px, as the side columns do.
+it; its sidebar folds for room below a page's 420px, as the side columns do,
+refitted in the render that sees the width; its room changes at once and the
+page slides into place by transform (`slideFrom`), its inline title held
+still at its place meanwhile (`holdStill`), whatever row it was in.
 
 Every surface's titlebar — classic, both layouts, Settings — carries the
 sidebar toggle, then Back and Forward (`src/desktop/ui/history-buttons.tsx`),
@@ -267,7 +334,8 @@ tooltip for the whole window, in the window's own glass
 (`src/desktop/adapters/use-window-tooltips.ts`).
 
 **The titlebar's safe area.** Titlebar content starts at the safe area;
-nothing draws under the window's controls. `--desktop-titlebar-safe-start`
+nothing is painted under the window's controls — no text, code, picture,
+drawing or decorative layer's image. `--desktop-titlebar-safe-start`
 is defined once, from the host's inset for its traffic lights and the width
 of our control cluster (sidebar toggle, Back, Forward, and the session list's
 toggle or New Session), and every titlebar-row element derives its start from
@@ -286,11 +354,17 @@ the row, by transform and opacity; if its column is sliding at that moment,
 an inline title holds still at its place (`holdStill`) rather than ride the
 slide from where the column began. A column's titlebar-row action hides at
 once as the column folds and shows once it has slid in; a pane's header is
-hidden while its pane flies and changes size. A frame-sampled check over
-every transition that moves titlebar
-content (⌘B, ⌥⌘S, the edge reveal, a resize that folds, a split, Settings,
-a change of layout), in Chrome and WebKit at 1440 × 900 and 1000 × 700, finds
-nothing that reads or takes a press under the controls in any frame.
+hidden while its pane flies and changes size. A pane's header is its titlebar
+row, and what follows it begins below the titlebar's height wherever the pane
+is, so a scrolled transcript or a narrow pane's heading never passes under
+the controls; a conversation's picture band begins after them in the corner
+pane, and waits out of sight while panes travel. A frame-sampled check over
+every transition that moves titlebar content (⌘B, ⌥⌘S, the edge reveal, a
+resize that folds, a split, a new session, Settings, a change of layout), a
+scrolled transcript, and widths down to 560, in Chrome and WebKit at 1440 ×
+900 and 1000 × 700, finds nothing painted under the controls in any frame:
+text, `pre`, svg, images, canvas, and any element's background image but the
+window's own backdrop.
 
 **A column's edge dragged past its narrowest folds it** (`draggedEdge`, in
 `src/desktop/model/side-column.ts`): it resists at its minimum, folds once
@@ -376,9 +450,10 @@ Each of these commands, and sending a message, answers its caller with what
 became of it — `sent`, `refused` when the source said no, `unknown` when no
 answer came and it may have been done (`unavailable`), or `not-asked` when
 there was nothing to ask, and for an answer `answering` when one is already on
-its way. An answer is `not-asked` when no pane shows the session, or its
-conversation no longer asks that approval: only an approval on screen is
-answered, so an agent answers what it has opened. An answer on its way stays
+its way. An answer is `not-asked` when neither a pane nor the open overview
+shows the session (`onScreen`), or its conversation no longer asks that
+approval: only an approval on screen is answered, so an agent answers what it
+has opened. An answer on its way stays
 while its pane shows another session. Each answer has its own token, so an
 earlier answer's late refusal never sets aside the one on its way. Every call
 to the source settles — an adapter rejects on a timeout of its own rather than
@@ -391,13 +466,18 @@ leave a read or a send hanging. The one mark the window clears itself is
 | `sendMessage` to a session | the message in the outbox, "sending", with the model chosen for the next turn | mark cleared; an approval still waiting is let go, on the source's record with who sent the message | "Not sent. …", with Send Again (`resendMessage`) and Discard (`discardUnsent`); the session as the source last said | any conversation without it — a read of the history, a reply still streaming — leaves it where it is |
 | `approve` / `deny` (with the initiator: `"person"` from the card, `"agent"` from an agent) | the approval's buttons at rest | the conversation that no longer asks, delivered first, lets the answer go; the source has recorded the decision and who made it | asks again, saying why; answerable again | a conversation no longer asking lets the answer go |
 | an answer to an approval the window does not hold — moved on, or its session in no pane | nothing; the command returns `not-asked` | — | — | — |
+| `approve` / `deny` for a session the open overview shows (waiting, or chosen), in no pane | the row's and the peek's answers at rest; the row settles in place | as for a pane: the conversation that no longer asks, delivered first, lets the answer go; the row says what became of it, then leaves | asks again, saying why, in the row and its peek; `unknown` (no answer came) the same, as a pane's card does | the session moves to Working; the row leaves once its settle has played |
+| `approve` / `deny` for a session neither a pane nor the open overview shows (closed, or its filter leaves it out) | nothing; `not-asked` | — | — | — |
+| the overview closes while an answer is on its way | nothing | the answer is kept, as for a pane showing another session | its reason is kept for when it is shown again | as above |
+| `sendMessage` from the peek's reply pill while an approval waits | the message in the outbox, "sending"; the pill says replying sets the request aside | the approval is let go, on the source's record with who sent it | "Not sent" under the pill; Send Again in the pane | as for a pane |
 | a second answer while the first is on its way | nothing; the command returns `answering` | — | — | — |
 | `pinSession` | nothing; a session at revision 0 is not pinned (Pin is disabled) | its update, delivered first, shows the pin | left as it was | a newer summary replaces it |
 | `archiveSession` | nothing; a session at revision 0 is not archived (Archive is disabled) | its removal, delivered first, takes it out of the lists with everything the source said up to it; its pane closes, or the last starts over | left where it is | a summary the removal outranks stays out, whenever it arrives |
 | a session is shown | marked read, and the source told | nothing more | the mark stays cleared | marked unread again while shown: read again |
 | a shown session's transcript is read | the heading | the conversation, unless a newer one arrived meanwhile | the pane says why, and is not read again until "Try Again" (`retryTranscript`); a failure no pane shows any more is not kept, so the session is read afresh when shown again | the newer of it and the read's answer is kept, in either order |
 | the index is read | nothing yet | the workspace opens on its first session; summaries the stream already brought, if newer, are kept | the workspace says why, with "Try Again" | a removal that arrived first keeps the session out |
-| the index is read again (the resync) | nothing | a session it does not list, or lists in a channel it does not list, is taken out at the revision held — its pane closes, or the last starts over; every shown conversation is read again | an open workspace stays open, as it was | a summary the stream brought while the read was on its way stays |
+| the index is read again (the resync) | nothing | a session it does not list, or lists in a channel it does not list, is taken out at the revision held — its pane closes, or the last starts over; every conversation on screen is read again, a read asked before the index set aside and its answer let go | an open workspace stays open, as it was | a summary the stream brought while the read was on its way stays |
+| the source sends `resync` (it reconnected, or found a gap) | nothing | the index is read again, as above | as above | as above |
 | a shown session's transcript read is answered with one the window cannot use (another session's, revision 0) | — | a fault, logged; the pane says why, with "Try Again" | — | — |
 | an update at a revision the source could not have sent | — | let go, logged where received | — | — |
 

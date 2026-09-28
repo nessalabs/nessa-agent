@@ -210,7 +210,8 @@ writing the full defaults on first launch is buying.
   slice, commands, effects, typed hooks and selectors in `store/`; the
   in-memory source in `in-memory/`; motion, drag and drop, focus, the panes'
   room, resizing, keys and the clock in `dom/`) and `ui/` (each component
-  once, and `layouts/` that only arrange them), with
+  once, and `layouts/` that only arrange them; `ui/overview/` the Agents
+  overview, with its rules in `model/overview/`), with
   `testing.ts` the fake source and store its tests share. The
   window has its own store (`src/desktop/store.ts`) and composition
   (`src/desktop/dependencies.ts`). Views select what they show — a pane its own
@@ -219,11 +220,10 @@ writing the full defaults on first launch is buying.
   (its map is `index.ts`), a typed catalogue (`model/`) rendered generically
   (`ui/`). See
   [adr/todo/238-desktop-workspace-frontend.md](adr/todo/238-desktop-workspace-frontend.md).
-- Previews behind Settings › General › Experimental live in
-  `src/desktop/experiments/`, one folder each with its own `model/`,
-  `adapters/` and `ui/` and its map in `index.ts`, off until turned on. The
-  agents overview (`experiments/agents-overview/`) reads the workspace only
-  through its `adapters/workspace-bridge.ts`.
+- A preview behind Settings › General › Experimental is a window
+  preference, off until turned on (`parseOptIn`), that decides only whether
+  the window offers a way in; the feature itself lives in the vertical that
+  owns it — the Agents overview in the workspace.
 - Design-system components are consumed, not wrapped "just in case". A wrapper
   with no behaviour is a layer that only forwards.
 - Decisions live in `model/` and `application/` and are tested as plain

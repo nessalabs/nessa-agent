@@ -63,6 +63,8 @@ export function messageSent(
     : startingRun(state, sessionId)
   return {
     ...started,
+    // Sent, what was typed goes, whoever sent it: the composer's owner is this state.
+    composerText: without(started.composerText, sessionId),
     outbox: {
       ...started.outbox,
       [sessionId]: [...(entry(started.outbox, sessionId) ?? []), message],

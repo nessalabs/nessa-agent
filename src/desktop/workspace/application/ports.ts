@@ -15,12 +15,17 @@
  * that joins late. Nothing here asks the source to replay them. A read of the
  * index is the resync instead: its sessions are every session the source
  * held when it answered, so one it no longer lists is taken out, and the
- * conversations shown in panes are read again (`loadWorkspace`).
+ * conversations on screen are read again (`loadWorkspace`). The source says
+ * when it may have lost updates — it reconnected, or found a gap in its
+ * stream — with a `resync` on the stream, and the window reads the index
+ * again (`followWorkspace`). A source that cannot tell never sends one, and
+ * the window then resyncs only when it is opened or asked to (Try Again).
  */
 import type { WorkspaceFailureReason } from "../model/failure"
 import type { ModelRef, WorkspaceIndex, SessionSummary } from "../model/workspace-index"
 import type { WorkspaceRoom } from "../model/pane-sizing"
 import type { Transcript } from "../model/transcript"
+import type { AgentsFilter } from "../model/overview/filter"
 
 /**
  * A message sent to a session, as the source is asked to deliver it. Sent
@@ -66,6 +71,12 @@ export type WorkspaceUpdate =
     }
   /** A session's conversation changed; the transcript replaces whatever was held. */
   | { readonly kind: "transcript"; readonly transcript: Transcript }
+  /**
+   * The stream may have lost updates — the source reconnected, or found a
+   * gap in what it sent. It carries nothing to apply: the window reads the
+   * index again, and every conversation on screen, to catch up.
+   */
+  | { readonly kind: "resync" }
 
 /** How the person answered an approval. */
 export type ApprovalScope = "once" | "always"
@@ -162,4 +173,18 @@ export interface WorkspaceDependencies {
    * nothing new.
    */
   readonly measure: () => WorkspaceRoom | undefined
+  /**
+   * Where the Agents overview's filter is remembered between launches: read
+   * once, into the store's first state, and written on each change
+   * (`effects.ts`). The store owns the filter; this only keeps it.
+   */
+  readonly overviewFilter: RememberedFilter
+}
+
+/** A filter kept outside the window's state, between launches. */
+export interface RememberedFilter {
+  /** What was chosen last; the overview's default when nothing is kept, or storage refuses. */
+  read(): AgentsFilter
+  /** Keeps a choice; a refusal to keep it is survivable, and the choice still applies. */
+  write(filter: AgentsFilter): void
 }

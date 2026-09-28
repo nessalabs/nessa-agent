@@ -12,6 +12,7 @@
  */
 import { configureStore } from "@reduxjs/toolkit"
 import {
+  initialWorkspaceFrom,
   workspaceEffects,
   workspaceReducer,
   type WorkspaceDependencies,
@@ -21,6 +22,8 @@ export function makeDesktopStore(dependencies: WorkspaceDependencies) {
   const effects = workspaceEffects(dependencies)
   return configureStore({
     reducer: { workspace: workspaceReducer },
+    // What the window kept between launches, read once.
+    preloadedState: { workspace: initialWorkspaceFrom(dependencies) },
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({ thunk: { extraArgument: dependencies } }).prepend(
         effects.middleware,

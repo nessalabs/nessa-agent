@@ -7,7 +7,9 @@
  *
  * Layout sizes only (`offsetWidth`, `offsetHeight`): a pane flying by FLIP
  * is drawn with a transform, and a change asked for mid-flight must be
- * measured against where things are, not where the motion shows them.
+ * measured against where things are, not where the motion shows them. The
+ * panes stay laid out under the Agents overview, so what is measured while it
+ * is open is the room they have.
  */
 import { paneLimits } from "../../model/pane-layout"
 import type { WorkspaceRoom } from "../../model/pane-sizing"

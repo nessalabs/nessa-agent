@@ -236,6 +236,22 @@ the titlebar row, after the controls, where it fits, and on its own row below
 where it does not (`src/desktop/ui/column-header.tsx`, the same head for the
 session list, the sidebar and Settings' page).
 
+The **Agents overview** (`ui/overview/`, ⌘0 or "Agents" at the top of the
+sidebar, offered while Settings › General › Experimental says so) takes the
+content region while open, as a layer over the session list and the panes,
+which stay laid out beneath it — so a pane command asked meanwhile measures
+the room they really have, and first goes back to them. It lists what waits
+on the person, what is working and what finished unseen, filtered by
+Ongoing/All and a span of time (`model/overview/`), with a peek at the chosen
+session: its live activity, this turn's steps, the last thing said, and a
+reply pill. Its open state, selection and filter are slice state, so an agent
+can drive it (`showContent`, `selectInOverview`, `filterOverview`); the
+filter is kept between launches by composition (`RememberedFilter`). An
+approval it shows is on screen: answered by the same `approve`/`deny` as a
+pane's card (`onScreen`, one rule), and the conversations it shows are read
+and kept like a pane's, bounded (`retention.overviewConversations`); a peek is
+not reading the session, which stays unread.
+
 - `model/` is pure: the index's types (`workspace-index.ts`); the pane layout
   (`pane-layout.ts`), columns of stacked panes with one focused, whose
   operations split, move, swap, nudge, close and even out, capped at four
@@ -253,7 +269,8 @@ session list, the sidebar and Settings' page).
 - `application/` owns the `WorkspaceSource` port (`ports.ts`: index,
   transcript, one stream of replacement updates, send, approve, deny, pin,
   archive, mark read, with typed `WorkspaceSourceError` reasons; the stream may
-  lose updates, and a read of the index is the resync) and the pure
+  lose updates, a read of the index is the resync, and the source asks for one
+  with a `resync` on its stream when it reconnects or finds a gap) and the pure
   use cases (`usecases/`) over the workspace's state. Every replacement carries
   the source's revision, and the newer one wins in whatever order the stream
   and the reads deliver them (`model/revision.ts`). A message the person
@@ -269,11 +286,12 @@ session list, the sidebar and Settings' page).
 - `adapters/store/` is the Redux slice, which only names actions over those use
   cases; `commands.ts`, the one list of commands a person or an agent
   dispatches (plain actions, and thunks where an id, the time or the source is
-  needed); `effects.ts`, listener effects that read a shown session's
-  conversation and mark a shown one read, whoever caused the change — a
-  refused read waits for the pane's Try Again rather than being retried on
-  every update, and is forgotten when no pane shows the session, and a read
-  of the index again reads every shown conversation again; `hooks.ts`,
+  needed); `effects.ts`, listener effects that read the conversation of a
+  session on screen — in a pane or the open overview — and mark one a pane
+  shows read, whoever caused the change — a refused read waits for the pane's
+  Try Again rather than being retried on every update, and is forgotten once
+  nothing shows the session, and a read of the index again reads every
+  conversation on screen again, setting aside a read asked before it; `hooks.ts`,
   the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/in-memory/` is the
   only home of the sample index and the scripted, streamed replies,
   on timers it owns and cancels. `adapters/dom/` holds what belongs to the
@@ -285,8 +303,8 @@ session list, the sidebar and Settings' page).
   and the clock's ticks.
 - `ui/` holds each component once — source list (two variants of one
   component), session list, pane grid, pane, pane header, transcript, message,
-  tool steps, approval card, quick switcher, empty states, the words for each
-  failure (`failure-copy.ts`) — and
+  tool steps, approval card, quick switcher, empty states, the Agents
+  overview, the words for each failure (`failure-copy.ts`) — and
   `layouts/` that only arrange them.
 
 A pane subscribes to its own session and a row to its own summary, so a

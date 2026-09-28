@@ -93,8 +93,10 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
   box-shadow: inset 0 0 0 1px var(--desktop-rim);
 }
 
-.workspace-pane[data-lifted] > * {
-  visibility: hidden;
+/* Its two parts, faded rather than hidden: an inherited property would restyle all they hold. */
+.workspace-pane[data-lifted] > .workspace-pane-header,
+.workspace-pane[data-lifted] > .workspace-pane-body {
+  opacity: 0;
 }
 
 /*
@@ -129,6 +131,17 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
 
 .workspace:is([data-flipping], [data-drag-reflow]) .workspace-pane-edge {
   visibility: hidden;
+}
+
+/*
+ * The picture's band waits out of sight while panes travel, and fades back
+ * once they land: it begins after the window's controls only where a pane
+ * rests in the corner (`styles.css`), so a pane sliding out of the corner, or
+ * into it, would carry it beneath them.
+ */
+.workspace:is([data-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {
+  opacity: 0;
+  transition: none;
 }
 
 /* ——— Edges between panes: the gutter itself, lit near the pointer ——— */
@@ -177,10 +190,20 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
  * The session's mark, title and state, and nothing else until the pointer is
  * in the pane. Its row lines up with the window controls.
  */
+/*
+ * The header is the pane's titlebar row, level with the window's controls;
+ * what follows it begins below the titlebar's height, wherever the pane is
+ * and wherever it is sliding — so a transcript scrolled, a narrow pane's
+ * heading, or a home's scene never passes under the window's controls.
+ */
 .workspace-pane-header {
   display: flex;
   height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
   flex: none;
+  margin-bottom: calc(
+    var(--desktop-titlebar-height) - var(--desktop-gutter) - var(--desktop-control-size) -
+      2 * var(--desktop-control-inset)
+  );
   align-items: center;
   gap: 8px;
   padding: var(--desktop-control-inset) var(--desktop-control-inset)

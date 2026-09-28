@@ -38,6 +38,12 @@ import {
   type SessionView,
 } from "../../model/session-groups"
 import type { WorkspaceFailureReason } from "../../model/failure"
+import {
+  agentsGlance,
+  type AgentsGlance,
+  type Held,
+} from "../../model/overview/agents-glance"
+import type { AgentsFilter } from "../../model/overview/filter"
 import type { Draft } from "../../model/session-lifecycle"
 import type { Message, Transcript } from "../../model/transcript"
 import {
@@ -70,6 +76,15 @@ export const selectColumnCount = (state: Root) =>
 export const selectView = (state: Root): SessionView => state.workspace.view
 /** What fills the content region: the panes, or the Agents overview. */
 export const selectContentView = (state: Root) => state.workspace.content
+/** Whether the Agents overview fills the content region. */
+export const selectOverviewOpen = (state: Root) => state.workspace.content === "agents"
+/** The session the overview's peek shows, as chosen in its list. */
+export const selectOverviewSelected = (state: Root) => state.workspace.overview.selected
+/** What the overview lists. */
+export const selectOverviewFilter = (state: Root): AgentsFilter =>
+  state.workspace.overview.filter
+/** Whether the workspace has read its index and can list sessions. */
+export const selectReady = (state: Root) => state.workspace.status === "ready"
 export const selectPanes = (state: Root) => state.workspace.panes
 export const selectSections = (state: Root) => state.workspace.sections
 export const selectChannels = (state: Root) => state.workspace.channels
@@ -98,6 +113,23 @@ export const selectComposerText = (state: Root, sessionId: string): string =>
 /** The model a session's next message is sent with: chosen in its composer, else its own. */
 export const selectNextModel = (state: Root, sessionId: string): ModelRef | undefined =>
   modelForNextTurn(state.workspace, sessionId)
+
+/** Whether a message the person sent to a session is still on its way. */
+export const selectSending = (state: Root, sessionId: string): boolean =>
+  selectOutbox(state, sessionId).some((message) => message.delivery?.state === "sending")
+
+/** Why the last message sent to a session was not taken, while it waits to be sent again. */
+export const selectUnsent = (
+  state: Root,
+  sessionId: string,
+): WorkspaceFailureReason | undefined => {
+  const outbox = selectOutbox(state, sessionId)
+  for (let index = outbox.length - 1; index >= 0; index--) {
+    const delivery = outbox[index].delivery
+    if (delivery?.state === "failed") return delivery.reason
+  }
+  return undefined
+}
 
 /** The person's answer to a session's approval, while it is on its way or after it failed. */
 export const selectAnswer = (
@@ -280,6 +312,22 @@ export function sameListGroups(
 
 /** Every listed session, for the quick switcher, which searches them all. */
 export const selectListedSessions = listed
+
+/**
+ * The overview's groups under its filter at `now`, with answered requests
+ * `held` in their places and the chosen session listed whatever the filter
+ * says; compare with `sameGlance`.
+ */
+export const selectGlance = (
+  state: Root,
+  held: readonly Held[],
+  now: number,
+): AgentsGlance =>
+  agentsGlance(listed(state), held, {
+    filter: state.workspace.overview.filter,
+    now,
+    looking: state.workspace.overview.selected,
+  })
 
 /** The sessions waiting on the person, newest first, as ids. */
 export const selectWaitingIds = createSelector([listed], (sessions) =>

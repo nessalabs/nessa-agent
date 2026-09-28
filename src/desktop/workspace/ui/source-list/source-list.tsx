@@ -35,10 +35,8 @@ import { ChannelRow, SidebarRow } from "./channel-row"
 import "./source-list.css"
 import { tooltip } from "../../../ui/tooltip"
 import { statusLabels, type AttentionStatus } from "../../model/session-groups"
-import {
-  AgentsOverviewEntry,
-  useAgentsOverviewEnabled,
-} from "../../../experiments/agents-overview"
+import { useAgentsOverviewPreference } from "../../../adapters/window-preferences"
+import { OverviewRow } from "./overview-row"
 
 /**
  * The sidebar's source list: sections of channels on a glass pane, with the
@@ -138,7 +136,8 @@ export const SourceList = memo(function SourceList({
 
 /**
  * "Needs you" and "Running": every session in that state, in the list beside;
- * or, with the agents overview on, its entry in their place.
+ * or, with the Agents overview offered (Settings › General › Experimental),
+ * its entry in their place.
  */
 function StatusViews() {
   const dispatch = useWorkspaceDispatch()
@@ -146,11 +145,12 @@ function StatusViews() {
   const view = useWorkspaceSelector(selectView)
   const showing = (status: AttentionStatus) =>
     view.kind === "status" && view.status === status
-  // The agents overview, when on, holds both views: its entry stands in their place.
-  if (useAgentsOverviewEnabled())
+  // The Agents overview, when offered, holds both views: its entry stands in their place.
+  const [overview] = useAgentsOverviewPreference()
+  if (overview === "on")
     return (
       <div className="workspace-smart">
-        <AgentsOverviewEntry />
+        <OverviewRow />
       </div>
     )
   return (
@@ -182,8 +182,9 @@ function TreeTop() {
   const dispatch = useWorkspaceDispatch()
   const frame = useWorkspaceFrame()
   const waiting = useWorkspaceSelector(selectWaitingIds, shallowEqual)
-  // With the agents overview on, its entry is the way to what waits.
-  const overviewEnabled = useAgentsOverviewEnabled()
+  // With the Agents overview offered, its entry is the way to what waits.
+  const [overview] = useAgentsOverviewPreference()
+  const overviewEnabled = overview === "on"
   const shortcut = frame.shortcut("switcher")
   return (
     <>
@@ -196,7 +197,7 @@ function TreeTop() {
         <span>Search</span>
         {shortcut ? <kbd className="workspace-kbd">{shortcut}</kbd> : null}
       </button>
-      <AgentsOverviewEntry />
+      {overviewEnabled ? <OverviewRow /> : null}
       {waiting.length > 0 && !overviewEnabled ? (
         <button
           type="button"

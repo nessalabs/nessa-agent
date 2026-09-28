@@ -107,16 +107,28 @@ it("names what a flight restyles, so beginning one restyles a few elements, not 
   for (const rule of flightRules) expect(rule, rule).not.toMatch(/(?:>|\s)\*\s*(?:,|\{)/)
 })
 
-it("keeps the panes under the Agents overview out of layout and paint", () => {
-  // Opening the overview must not lay four conversations out again at a width no one sees.
+it("keeps the list and the panes under the Agents overview laid out, only unseen", () => {
+  // A pane command asked while the overview is open measures the panes' room:
+  // it must be the room they have, so nothing under the overview may leave the
+  // layout (display, content-visibility) or change its size.
   const sheet = readFileSync(
-    new URL("./experiments/agents-overview/ui/agents-overview.css", import.meta.url),
+    new URL("./workspace/ui/layouts/layouts.css", import.meta.url),
     "utf8",
   )
-  const selector = ".agents-overview-area[data-shown] .workspace-chat {"
+  const selector =
+    '.workspace[data-content="agents"] .workspace-list,\n.workspace[data-content="agents"] .workspace-list-edge,\n.workspace[data-content="agents"] .workspace-chat {'
   const body = sheet.slice(sheet.indexOf(selector)).split("}")[0]
   expect(sheet).toContain(selector)
-  expect(body).toMatch(/content-visibility:\s*hidden/)
+  expect(body).toMatch(/visibility:\s*hidden/)
+  const everyAgentsRule = sheet.match(/\[data-content="agents"\][^{]*\{[^}]*\}/g) ?? []
+  for (const rule of everyAgentsRule)
+    expect(rule, rule).not.toMatch(/display:|content-visibility|width:|padding/)
+  // The overview's own sheet sets nothing on what is under it.
+  const overview = readFileSync(
+    new URL("./workspace/ui/overview/overview.css", import.meta.url),
+    "utf8",
+  )
+  expect(overview).not.toMatch(/\.workspace-(?:list|chat)\b/)
 })
 
 it("keeps a conversation's sliver of the header still, beneath the text, and out of short panes", () => {
@@ -133,4 +145,50 @@ it("keeps a conversation's sliver of the header still, beneath the text, and out
   expect(styles).toMatch(
     /@container workspace-pane \(max-height: 219px\) \{\s*\.desktop-header\[data-sliver\] \{\s*display:\s*none/,
   )
+})
+
+it("keeps a running step's time on one line, whatever the pane's width", () => {
+  const sheet = readFileSync(
+    new URL("./workspace/ui/transcript/transcript.css", import.meta.url),
+    "utf8",
+  )
+  const body = sheet.slice(sheet.indexOf(".workspace-live-time {")).split("}")[0]
+  expect(body).toMatch(/white-space:\s*nowrap/)
+  expect(body).toMatch(/flex-shrink:\s*0/)
+})
+
+it("paints nothing of a pane under the window's controls: its content below the titlebar row, its picture band after them", () => {
+  const panes = readFileSync(
+    new URL("./workspace/ui/panes/panes.css", import.meta.url),
+    "utf8",
+  )
+  const body = (sheet: string, selector: string) =>
+    sheet.slice(sheet.indexOf(selector)).split("}")[0]
+  // The header is the titlebar row; what follows it starts below the titlebar's height.
+  expect(body(panes, ".workspace-pane-header {")).toMatch(
+    /margin-bottom:\s*calc\(\s*var\(--desktop-titlebar-height\) - var\(--desktop-gutter\)/,
+  )
+  // In the corner, the band begins after the controls.
+  const corner =
+    ".workspace[data-panes-alone] .workspace-pane[data-corner] .desktop-header[data-sliver] {"
+  expect(styles).toContain(corner)
+  expect(body(styles, corner)).toMatch(
+    /left:\s*calc\(var\(--desktop-titlebar-safe-start\) - var\(--desktop-gutter\)\)/,
+  )
+  // While panes travel, it waits out of sight.
+  expect(
+    body(
+      panes,
+      ".workspace:is([data-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {",
+    ),
+  ).toMatch(/opacity:\s*0/)
+})
+
+it("moves Settings' sidebar by transform, never by animating its width", () => {
+  const sheet = readFileSync(
+    new URL("./settings/ui/settings.css", import.meta.url),
+    "utf8",
+  )
+  const body = sheet.slice(sheet.indexOf(".settings-sidebar {")).split("}")[0]
+  expect(body).not.toMatch(/transition/)
 })
