@@ -3,7 +3,7 @@
 
 use super::{
     limits::{validate_message_chunk, validate_observation_id},
-    ExecutionAuditRecord, ExecutionEvent, ExecutionUpdate, SessionClosureRecord,
+    AdmittedQuestion, ExecutionAuditRecord, ExecutionEvent, ExecutionUpdate, SessionClosureRecord,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::permissions::{
@@ -118,34 +118,23 @@ impl ExecutionController {
         self.observe_tool(execution, update.clone())?;
         self.event(execution, ExecutionUpdate::Tool(update))
     }
-    /// Emit one question the agent is asking, correlated to `execution`.
+    /// Bind an adapter-minted ask identity and question to this active execution.
     ///
-    /// Not a review, so nothing is admitted to the session aggregate: an ask
-    /// authorises nothing and holds no lifetime there. What it does share with
-    /// a review is its retention budget, which is checked before the event is
-    /// built rather than after.
+    /// Returns an immutable admission from which the adapter derives events and
+    /// audit records. The adapter owns ID uniqueness and open-question limits;
+    /// this method publishes nothing and retains no question lifetime. It rejects
+    /// an inactive/different execution with InvalidInput and invalid identity or
+    /// payload size with the event validator's typed error before returning a value.
     pub fn ask_question(
         &mut self,
         execution: &ExecutionId,
         id: QuestionId,
         question: AgentQuestion,
-    ) -> Result<ExecutionEvent, AgentError> {
-        let event = ExecutionEvent::new(
-            execution.clone(),
-            ExecutionUpdate::QuestionAsked { id, question },
-        );
-        event.validate_payload_size()?;
-        Ok(event)
-    }
-    /// Emit that one ask has stopped waiting, answered or withdrawn.
-    pub fn close_question(
-        &self,
-        execution: &ExecutionId,
-        id: QuestionId,
-    ) -> Result<ExecutionEvent, AgentError> {
-        let event = ExecutionEvent::new(execution.clone(), ExecutionUpdate::QuestionClosed { id });
-        event.validate_payload_size()?;
-        Ok(event)
+    ) -> Result<AdmittedQuestion, AgentError> {
+        self.check_execution(execution)?;
+        let admitted = AdmittedQuestion::new(self.id().clone(), execution.clone(), id, question);
+        admitted.event().validate_payload_size()?;
+        Ok(admitted)
     }
     /// Admits review `id` for the observed `tool`, retaining its exact `input` and
     /// offered `options` until resolution. Produces the correlated review event.

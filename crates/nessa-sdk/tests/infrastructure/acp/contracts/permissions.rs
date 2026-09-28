@@ -1083,6 +1083,8 @@ async fn a_question_reaches_a_host_and_its_answer_reaches_the_agent() {
     for record in &answers {
         assert_eq!(record.execution_id().as_str(), "write");
         assert_eq!(record.question_id(), &id);
+        assert_eq!(record.question(), &question);
+        assert_eq!(record.session_id(), opened.session.id());
         // Who answered is kept, not merely checked on the way in: an explicit
         // answer's audit without its initiator is not evidence of anything.
         assert_eq!(record.actor(), Some(&answerer()));

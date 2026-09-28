@@ -642,7 +642,6 @@ async fn an_ask_whose_answer_could_not_be_recorded_is_still_ended_with_evidence(
     let (reply, replied) = oneshot::channel();
     let answered = worker
         .answer_question(
-            &execution,
             QuestionAnswer {
                 actor: ActionContext::new("person", "panel", "answer").unwrap(),
                 execution_id: ExecutionId::new("active").unwrap(),

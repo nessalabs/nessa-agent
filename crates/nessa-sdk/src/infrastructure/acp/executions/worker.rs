@@ -26,8 +26,8 @@ use crate::application::agent_execution::agents::{
     AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep, ProviderDiagnostic,
 };
 use crate::application::agent_execution::executions::{
-    ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionRequest,
-    ExecutionUpdate,
+    AdmittedQuestion, ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent,
+    ExecutionRequest, ExecutionUpdate,
 };
 
 use crate::application::agent_execution::permissions::{
@@ -53,7 +53,7 @@ use crate::domain::agent_execution::permissions::{
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
-    AgentQuestion, QuestionCancellation, QuestionId, QuestionRefusalReason, QuestionResponse,
+    QuestionCancellation, QuestionId, QuestionRefusalReason, QuestionResponse,
 };
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
@@ -1304,9 +1304,7 @@ impl<P: AcpProfile> Worker<P> {
             Command::Answer(answer, reply) => {
                 self.answer_permission(execution, answer, reply).await
             }
-            Command::AnswerQuestion(answer, reply) => {
-                self.answer_question(execution, answer, reply).await
-            }
+            Command::AnswerQuestion(answer, reply) => self.answer_question(answer, reply).await,
         }
     }
     async fn set_approval_mode(
@@ -1809,7 +1807,6 @@ impl<P: AcpProfile> Worker<P> {
                     let delivery = self.send(question_wire::cancelled(&open.wire_id)).await;
                     let closed = self
                         .close_question(
-                            id,
                             open,
                             QuestionCancellation::ProviderWithdrawal,
                             delivery.clone(),
@@ -2533,7 +2530,7 @@ impl<P: AcpProfile> Worker<P> {
         let open_cost = self
             .questions
             .values()
-            .map(|open| open.question.carrying_cost())
+            .map(|open| open.admitted.question().carrying_cost())
             .fold(0, usize::saturating_add);
         // Bounded where the view that shows them is bounded: an ask nobody can
         // see is an ask nobody can answer, so admitting more than the surface
@@ -2560,14 +2557,13 @@ impl<P: AcpProfile> Worker<P> {
             .expect("validated active prompt")
             .execution_id
             .clone();
-        let event = execution.ask_question(&execution_id, id.clone(), question.clone())?;
+        let admitted = execution.ask_question(&execution_id, id, question)?;
+        let event = admitted.event();
         self.questions.insert(
-            id,
+            admitted.id().clone(),
             OpenQuestion {
                 wire_id,
-                session_id: execution.id().clone(),
-                execution_id,
-                question,
+                admitted,
                 cancel_delivery: None,
             },
         );
@@ -2582,14 +2578,11 @@ impl<P: AcpProfile> Worker<P> {
     /// answered review does.
     async fn answer_question(
         &mut self,
-        execution: &ExecutionController,
         answer: QuestionAnswer,
         reply: oneshot::Sender<ProviderOperationResult<()>>,
     ) -> Result<(), WorkerFailure> {
         let Some(OpenQuestion {
-            wire_id,
-            question: asked,
-            ..
+            wire_id, admitted, ..
         }) = self.questions.get(&answer.id).cloned()
         else {
             let _ = reply.send(Err(ProviderOperationFailure::new(
@@ -2615,10 +2608,7 @@ impl<P: AcpProfile> Worker<P> {
         // recorded beside, so an answer this refuses never becomes evidence and
         // one it accepts can only be an answer to that ask.
         let selected = match QuestionAnswerRecord::chosen(
-            execution.id().clone(),
-            answer.execution_id.clone(),
-            answer.id.clone(),
-            asked.clone(),
+            admitted.clone(),
             answer.choices,
             answer.actor.clone(),
             PermissionAnswerDelivery::Selected,
@@ -2661,7 +2651,7 @@ impl<P: AcpProfile> Worker<P> {
         self.questions.remove(&answer.id);
         let written = match &response {
             QuestionResponse::Answered(accepted) => {
-                question_wire::accepted(&wire_id, &asked, accepted)
+                question_wire::accepted(&wire_id, admitted.question(), accepted)
             }
             QuestionResponse::Declined => question_wire::declined(&wire_id),
             // A host answers or declines; cancelling is not something it can
@@ -2673,9 +2663,7 @@ impl<P: AcpProfile> Worker<P> {
         // Closure is how a surface that did not answer learns the ask is over,
         // so a queue that cannot take it is a failure to report, not to ignore:
         // dropping it leaves an actionable ask whose later answers are refused.
-        let closed = execution
-            .close_question(&answer.execution_id, answer.id.clone())
-            .and_then(|event| self.emit(event));
+        let closed = self.emit(admitted.closed_event());
         let observed = match &delivery {
             Ok(()) => PermissionAnswerDelivery::Written,
             Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
@@ -2874,12 +2862,12 @@ impl<P: AcpProfile> Worker<P> {
     ) -> Result<(), AgentError> {
         let questions = std::mem::take(&mut self.questions);
         let mut failure = None;
-        for (id, mut open) in questions {
+        for mut open in questions.into_values() {
             let delivery = open
                 .cancel_delivery
                 .take()
                 .unwrap_or(Err(AgentError::Deadline));
-            if let Err(error) = self.close_question(id, open, cause, delivery).await {
+            if let Err(error) = self.close_question(open, cause, delivery).await {
                 failure.get_or_insert(error);
             }
         }
@@ -2897,23 +2885,16 @@ impl<P: AcpProfile> Worker<P> {
     /// not an exception to that. The first local failure is returned.
     async fn close_question(
         &mut self,
-        id: QuestionId,
         open: OpenQuestion,
         cause: QuestionCancellation,
         delivery: Result<(), AgentError>,
     ) -> Result<(), AgentError> {
-        let closed = ExecutionEvent::new(
-            open.execution_id.clone(),
-            ExecutionUpdate::QuestionClosed { id: id.clone() },
-        );
+        let closed = open.admitted.closed_event();
         let observed = self.emit(closed);
         let recorded = self
             .record_audit(
                 ExecutionAuditRecord::QuestionAnswered(QuestionAnswerRecord::ended(
-                    open.session_id,
-                    open.execution_id,
-                    id,
-                    open.question,
+                    open.admitted,
                     cause,
                     match &delivery {
                         Ok(()) => PermissionAnswerDelivery::Written,
@@ -2939,9 +2920,7 @@ impl<P: AcpProfile> Worker<P> {
 #[derive(Clone)]
 struct OpenQuestion {
     wire_id: RpcId,
-    session_id: ExecutionSessionId,
-    execution_id: ExecutionId,
-    question: AgentQuestion,
+    admitted: AdmittedQuestion,
     /// What telling the provider this ask is over came to, once a teardown
     /// has tried. Kept here because that attempt runs under a deadline that
     /// can drop it, and the record made afterwards must say what happened.
