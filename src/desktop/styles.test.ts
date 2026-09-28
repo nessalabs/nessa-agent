@@ -102,6 +102,19 @@ it("starts an inline column title after the window's controls wherever they stan
   }
 })
 
+it("keeps the list's inline title out from under the window's controls while a drop would fold the sidebar", () => {
+  // The fold's preview slides the list to the window's edge, under the
+  // controls; the title the fold moves to its own row fades from this one.
+  const sheet = readFileSync(
+    new URL("./workspace/ui/session-list/session-list.css", import.meta.url),
+    "utf8",
+  )
+  const selector = '.workspace[data-drag-folds][data-sidebar="open"]'
+  const body = sheet.slice(sheet.indexOf(selector)).split("}")[0]
+  expect(body).toContain(".desktop-column-title")
+  expect(body).toMatch(/opacity:\s*0;/)
+})
+
 it("names what a flight restyles, so beginning one restyles a few elements, not every one in every pane", () => {
   // `.workspace[data-flipping] .workspace-pane > *` made the browser restyle all
   // ~1,100 elements of four panes as a flight began: a rule whose subject is any
