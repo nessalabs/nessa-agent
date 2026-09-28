@@ -1,3 +1,4 @@
+import { gatewayAgentInstallations } from "../onboarding/adapters/agent-installations"
 import { gatewayEffects } from "../conversation/adapters/gateway/effects"
 import { createAttachmentResources } from "../panel/adapters/attachment-resources"
 import { sha256Digest } from "../panel/adapters/sha256"
@@ -91,6 +92,11 @@ export function createDependencies(
   }
   const chosenAgent = () => (chosen ??= ask())
   return {
+    agentInstallations: gatewayAgentInstallations(
+      () => session.get()?.agents,
+      () => globalThis.crypto.randomUUID(),
+      session.subscribe,
+    ),
     loadConversationChoices: async (): Promise<{
       catalog: AgentsListResult
       chosenAgent: string | undefined

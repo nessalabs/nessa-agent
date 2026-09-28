@@ -444,3 +444,23 @@ it("rises from the row, over the draft, when the composer leaves no room above i
   expect(style.bottom).toBe(`${596 - 550 + 10}px`)
   expect(style.maxHeight).toBe(`${550 - 10 - 8}px`)
 })
+
+it("names and exposes agent downloads without approval or sign-out controls", async () => {
+  render({
+    disabled: true,
+    agentInstallations: {
+      subscribe: () => () => {},
+      offers: async () => [
+        { agent: "claude", archiveBytes: 87_000_000, installed: false },
+      ],
+      install: async () => ({ status: "installed", cleanupPending: false }),
+    },
+  })
+  expect(plus().getAttribute("aria-label")).toBe("More options")
+  expect(plus().disabled).toBe(false)
+  click(plus())
+  await act(async () => row("Agent downloads").click())
+  expect(container.querySelector('[aria-label="Download Claude · 87 MB"]')).not.toBeNull()
+  key("Escape")
+  expect(row("Agent downloads")).toBe(document.activeElement)
+})

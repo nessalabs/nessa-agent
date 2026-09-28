@@ -52,6 +52,7 @@ type VendorStore = fn(Option<&AgentLaunchFiles>) -> Result<bool, ProbeFailure>;
 /// while the server runs: this process's environment is fixed at start, and so
 /// is where an agent keeps its file. Whether the file is *there* is asked every
 /// time, which is the part a person can change by signing in.
+#[derive(Clone)]
 struct SignIn {
     /// The agent's own credentials file, when this host has somewhere to look.
     credentials: Option<PathBuf>,
@@ -126,6 +127,15 @@ impl LocalAgentProbe {
                     },
                 ),
             ]),
+        }
+    }
+
+    /// Reuse captured authentication locations with a freshly resolved launch.
+    pub fn with_launch_files(&self, launch_files: HashMap<AgentId, AgentLaunchFiles>) -> Self {
+        Self {
+            launch_files,
+            credentials: self.credentials.clone(),
+            sign_in: self.sign_in.clone(),
         }
     }
 

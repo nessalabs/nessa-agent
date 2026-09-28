@@ -1,6 +1,7 @@
 //! Installing an agent's runtime: the order of the steps, none of the effects.
 //!
 //! ```text
+//! AgentInstallations -> composition -> InstallAgentRuntime
 //! InstallAgentRuntime -> ArchiveSource   (the network)
 //!                     -> RuntimeStore    (this machine's disk)
 //!                     -> InstallAudit    (durable transition evidence)
@@ -31,3 +32,6 @@ pub use reclamation::{
     ReclamationAudit, ReclamationAuditFailure, ReclamationOperationIds,
     ReclamationPersistenceFailure, ReclamationPersistenceStage, ReclamationWarning,
 };
+
+mod gateway;
+pub use gateway::{AgentInstallations, GatewayInstallFailure, InstallationOffer};

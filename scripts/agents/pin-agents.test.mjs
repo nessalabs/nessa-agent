@@ -435,7 +435,7 @@ test("the pinned releases are the ones this table describes", () => {
       const launches = pin.files.filter((file) => file.role === "launch")
       assert.deepEqual(
         launches.map((file) => file.path),
-        [agent.launch],
+        [build.launch ?? agent.launch],
         `${build.package} launches something other than what the table names`,
       )
       for (const file of pin.files)
@@ -487,8 +487,11 @@ test("claude and codex are pinned at the versions the harness lockfiles install"
         "utf8",
       ),
     )
-    const locked = lockedDependency(lockfile, agent.version.dependency)
-    for (const pin of pins[agent.name]) {
+    for (const [index, pin] of pins[agent.name].entries()) {
+      const locked = lockedDependency(
+        lockfile,
+        agent.builds[index].dependency ?? agent.version.dependency,
+      )
       assert.equal(
         pin.version,
         locked.version,

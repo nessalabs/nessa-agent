@@ -24,7 +24,9 @@
     "conversation.reorder": "ConversationReorderParams",
     "attachment.begin": "AttachmentBeginParams",
     "agents.list": null,
-    "conversation.setApprovalMode": "ConversationSetApprovalModeParams"
+    "conversation.setApprovalMode": "ConversationSetApprovalModeParams",
+    "agents.installOptions": null,
+    "agents.install": "AgentInstallParams"
   },
   "events": {
     "session.challenge": "SessionChallenge"

@@ -1,3 +1,4 @@
+import type { AgentInstallations } from "../../onboarding"
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { AttachmentResources } from "../adapters/attachment-resources"
 import * as React from "react"
@@ -113,6 +114,7 @@ export function App({
   onSignOut,
   sessionError,
   loadConversationChoices,
+  agentInstallations,
 }: {
   attachmentResources: AttachmentResources
   /**
@@ -132,6 +134,7 @@ export function App({
   onSignOut?: () => void
   sessionError?: string
   loadConversationChoices: () => Promise<ConversationChoices>
+  agentInstallations?: AgentInstallations
 }) {
   const scheme = useColorScheme()
   const ground = scheme === "dark" ? "ink" : "paper"
@@ -795,6 +798,7 @@ export function App({
                   disabled={attachments.reading}
                   onChoose={attachments.chooseFiles}
                   onSignOut={onSignOut}
+                  agentInstallations={agentInstallations}
                   approval={
                     !chat.active.serverConversationId && selectedAgent && selectedModel
                       ? {

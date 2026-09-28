@@ -118,10 +118,21 @@ export function assembleDesktopRuntime({
       mkdirSync(harness, { recursive: true })
       for (const file of ["package.json", "package-lock.json"])
         cpSync(join(root, "crates/nessa-sdk/harnesses", name, file), join(harness, file))
-      run("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
-        cwd: harness,
-        stdio: "inherit",
-      })
+      run(
+        "npm",
+        [
+          "ci",
+          "--omit=dev",
+          "--omit=optional",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund",
+        ],
+        {
+          cwd: harness,
+          stdio: "inherit",
+        },
+      )
       materializeBinLinks(join(harness, "node_modules"))
       const harnessManifest = JSON.parse(
         readFileSync(join(harness, "package.json"), "utf8"),

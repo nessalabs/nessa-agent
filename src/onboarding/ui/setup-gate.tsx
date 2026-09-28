@@ -1,3 +1,4 @@
+import type { AgentInstallations } from "../application/agent-installations"
 import * as React from "react"
 import { AgentBloom } from "./agent-bloom"
 import { Onboarding, SETUP_HEADING_ID } from "./onboarding"
@@ -118,6 +119,7 @@ export function HandoffFailed({
 export function SetupGate({
   agents,
   apiKeys,
+  installations,
   children,
   onHandOver,
 }: {
@@ -126,6 +128,7 @@ export function SetupGate({
   agents: AgentReadinessSource
   /** Native secure-store boundary, present only on a surface that owns it. */
   apiKeys?: AgentApiKeySink
+  installations?: AgentInstallations
   /** The panel, for a surface that has to become it in place. Omitted by the
    * desktop setup window, which closes instead. */
   children?: React.ReactNode
@@ -224,6 +227,7 @@ export function SetupGate({
         <Onboarding
           state={onboarding.state}
           apiKeys={apiKeys}
+          installations={installations}
           accelerator={onboarding.accelerator}
           onBegin={onboarding.begin}
           onChoose={onboarding.choose}

@@ -37,6 +37,8 @@ const PRODUCT_METHODS: &[&str] = &[
     "credential.list",
     "credential.revoke",
     "agents.list",
+    "agents.installOptions",
+    "agents.install",
     "conversation.create",
     "conversation.setApprovalMode",
     "conversation.read",
@@ -457,6 +459,9 @@ async fn dispatch_authorized(
                 None => failure(&frame.id, "conversations_not_configured"),
             }
         }
+        "agents.installOptions" | "agents.install" => {
+            super::agent_install::dispatch(state, session, frame).await
+        }
         method if method.starts_with("conversation.") => {
             super::conversation::dispatch(state, session, frame).await
         }
@@ -618,8 +623,9 @@ pub(super) fn success<T: serde::Serialize>(request_id: &str, payload: &T) -> Out
 
 fn action_for_method(method: &str) -> Option<&'static str> {
     match method {
-        "server.health" | "agents.list" => Some("server.read"),
-        "conversation.create"
+        "server.health" | "agents.list" | "agents.installOptions" => Some("server.read"),
+        "agents.install"
+        | "conversation.create"
         | "conversation.setApprovalMode"
         | "conversation.read"
         | "conversation.list"
@@ -1897,4 +1903,5 @@ mod tests {
     }
     include!("../../tests/conversation/gateway.rs");
     include!("../../tests/attachments/gateway.rs");
+    include!("../../tests/agent_install/gateway.rs");
 }

@@ -177,14 +177,14 @@ pub(super) fn product_state(
     // this server finds out which configured agents cannot be started at all,
     // and that answer belongs in what setup is told. Nothing else between here
     // and its use depends on the order.
-    let managed_opencode = bundle.is_some();
+    let packaged_agents = bundle.is_some();
     let (conversations, agent_probe, warm_ups) = match &settings.agents {
         Some(agents) => {
             let built = conversations(
                 agents,
                 directory,
                 agent_credentials.clone(),
-                managed_opencode,
+                packaged_agents,
             )?;
             (
                 Some((built.service, built.attachments, built.agents_catalog)),
@@ -225,6 +225,16 @@ pub(super) fn product_state(
         PersistentSessions::open(&path, SystemClock.unix_seconds())
             .map_err(|cause| RunError::opening_browser_sessions(&path, cause))?
     }));
+    if bundle.is_some() {
+        product =
+            product.with_agent_installations(Arc::new(super::install_command::GatewayInstaller {
+                account_id: super::install_command::local_account_id(),
+                root: directory
+                    .parent()
+                    .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
+                    .join("agents"),
+            }));
+    }
     product.browser_http_allowed = config.browser_http_allowed();
     if let Some((service, attachments, agents_catalog)) = conversations {
         product = product
@@ -305,7 +315,7 @@ fn conversations(
     _agents: &AgentsConfig,
     _directory: &Path,
     _credentials: Arc<dyn AgentCredentialSource>,
-    _managed_opencode: bool,
+    _packaged_agents: bool,
 ) -> Result<BuiltConversations, RunError> {
     Err(RunError::Agent(
         "ACP agents require Unix process supervision".into(),
@@ -324,7 +334,7 @@ fn conversations(
     agents: &AgentsConfig,
     directory: &Path,
     credentials: Arc<dyn AgentCredentialSource>,
-    managed_opencode: bool,
+    packaged_agents: bool,
 ) -> Result<BuiltConversations, RunError> {
     let mut warm_ups = Vec::new();
     let root = conversation_root(
@@ -338,9 +348,9 @@ fn conversations(
     let host = crate::agent_install::infrastructure::host_platform();
     let opencode = EffectiveOpenCodeProfile::decide(
         agents,
-        managed_opencode,
+        packaged_agents,
         &host,
-        (!managed_opencode)
+        (!packaged_agents)
             .then(|| std::env::var_os("OPENCODE_API_KEY"))
             .flatten(),
     );
@@ -388,11 +398,19 @@ fn conversations(
         ),
         clock.clone(),
     )?;
-    let deferred = if opencode.configured().is_some() {
+    let managed_adapters: HashSet<_> = if packaged_agents {
+        HashSet::from([AgentId::Claude, AgentId::Codex])
+    } else {
+        HashSet::new()
+    };
+    let mut deferred = if opencode.configured().is_some() {
         HashSet::from([AgentId::Opencode])
     } else {
         HashSet::new()
     };
+    if packaged_agents {
+        deferred.extend([AgentId::Claude, AgentId::Codex]);
+    }
     let mut built = super::agent::providers(
         agents,
         &root,
@@ -478,9 +496,11 @@ fn conversations(
     if warm_current_opencode {
         configured.insert(AgentId::Opencode);
     }
+    configured.extend(managed_adapters.iter().copied());
     let agents_catalog = agent_catalog(agents, &configured, opencode.configured())?;
     let resolver = Arc::new(CurrentAgentResolver::new(CurrentAgentResolverInput {
         fixed: built.providers,
+        managed_adapters,
         fixed_probe,
         config: agents.clone(),
         opencode,
