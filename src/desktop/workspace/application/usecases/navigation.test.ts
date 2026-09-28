@@ -11,7 +11,6 @@ import {
   resizeSidebar,
   revealSession,
   selectChannel,
-  selectStatusView,
   showContent,
   toggleChannel,
   toggleSection,
@@ -34,7 +33,7 @@ const shown = (state: WorkspaceState) =>
 describe("choosing what the list shows", () => {
   it("shows a channel's sessions and leaves the panes alone while the list is open", () => {
     const state = selectChannel(loaded(), { channelId: "gateway" })
-    expect(state.view).toEqual({ kind: "channel", channelId: "gateway" })
+    expect(state.view).toEqual({ channelId: "gateway" })
     expect(shown(state)).toEqual(["a"])
   })
 
@@ -48,13 +47,6 @@ describe("choosing what the list shows", () => {
     const state = loaded()
     expect(selectChannel(state, { channelId: "toString" })).toBe(state)
     expect(openChannel(state, { channelId: "missing", draftId: "x" })).toBe(state)
-  })
-
-  it("shows every session in one state", () => {
-    expect(selectStatusView(loaded(), { status: "running" }).view).toEqual({
-      kind: "status",
-      status: "running",
-    })
   })
 })
 
@@ -99,7 +91,7 @@ describe("revealing a session", () => {
     expect(state.chrome.sidebar.open).toBe(true)
     expect(state.tree.collapsedSections).not.toContain("labs")
     expect(state.tree.expandedChannels).toContain("gateway")
-    expect(state.view).toEqual({ kind: "channel", channelId: "gateway" })
+    expect(state.view).toEqual({ channelId: "gateway" })
   })
 
   it("ignores a session it does not have", () => {

@@ -4,13 +4,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react"
-import { shallowEqual } from "react-redux"
 import { DesktopIcon } from "../../../ui/icons"
 import {
   openBeside,
   openChannel,
-  openSession,
-  selectStatusView,
   toggleChannel,
   toggleSection,
 } from "../../adapters/store/commands"
@@ -20,30 +17,24 @@ import {
   selectSectionCollapsed,
   selectSections,
   selectSidebarOpen,
-  selectStatusCounts,
-  selectView,
-  selectWaitingIds,
 } from "../../adapters/store/selectors"
 import { useBesideKey } from "../session-actions"
 import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
 import { ColumnHeader } from "../../../ui/column-header"
 import { IdentityFooter } from "../chrome/identity-footer"
-import { StatusGlyph } from "../chrome/status-glyph"
 import { useSidebarPeek, useWorkspaceFrame } from "../workspace-frame"
 import { ChannelBranch } from "./channel-branch"
-import { ChannelRow, SidebarRow } from "./channel-row"
+import { ChannelRow } from "./channel-row"
 import "./source-list.css"
 import { tooltip } from "../../../ui/tooltip"
-import { statusLabels, type AttentionStatus } from "../../model/session-groups"
-import { useAgentsOverviewPreference } from "../../../adapters/window-preferences"
 import { OverviewRow } from "./overview-row"
 
 /**
  * The sidebar's source list: sections of channels on a glass pane, with the
  * window's identity at its foot. `channels` is the sidebar beside a session
- * list — "Needs you" and "Running" views, then channels to choose from.
- * `tree` stands alone — search, the next session waiting, then channels
- * that disclose their sessions inline. `top` fills the window's row inside
+ * list — the Agents overview's entry, then channels to choose from. `tree`
+ * stands alone — search, the Agents overview's entry, then channels that
+ * disclose their sessions inline. `top` fills the window's row inside
  * the glass.
  */
 export const SourceList = memo(function SourceList({
@@ -113,7 +104,7 @@ export const SourceList = memo(function SourceList({
     >
       <ColumnHeader action={top} />
       <div className="workspace-sidebar-scroll">
-        {variant === "channels" ? <StatusViews /> : <TreeTop />}
+        {variant === "channels" ? <ChannelsTop /> : <TreeTop />}
         <nav
           ref={treeRef}
           aria-label="Channels"
@@ -134,57 +125,18 @@ export const SourceList = memo(function SourceList({
   )
 })
 
-/**
- * "Needs you" and "Running": every session in that state, in the list beside;
- * or, with the Agents overview offered (Settings › General › Experimental),
- * its entry in their place.
- */
-function StatusViews() {
-  const dispatch = useWorkspaceDispatch()
-  const counts = useWorkspaceSelector(selectStatusCounts, shallowEqual)
-  const view = useWorkspaceSelector(selectView)
-  const showing = (status: AttentionStatus) =>
-    view.kind === "status" && view.status === status
-  // The Agents overview, when offered, holds both views: its entry stands in their place.
-  const [overview] = useAgentsOverviewPreference()
-  if (overview === "on")
-    return (
-      <div className="workspace-smart">
-        <OverviewRow />
-      </div>
-    )
+/** The Agents overview's entry, above the channels of a sidebar beside a session list. */
+function ChannelsTop() {
   return (
     <div className="workspace-smart">
-      <SidebarRow
-        icon="needsYou"
-        label={statusLabels["needs-you"]}
-        active={showing("needs-you")}
-        badge={counts.needsYou || undefined}
-        badgeTone="needs"
-        onClick={() => dispatch(selectStatusView({ status: "needs-you" }))}
-      />
-      <SidebarRow
-        icon="running"
-        label={statusLabels.running}
-        active={showing("running")}
-        badge={counts.running || undefined}
-        onClick={() => dispatch(selectStatusView({ status: "running" }))}
-      />
+      <OverviewRow />
     </div>
   )
 }
 
-/**
- * Search, which opens the quick switcher, and the way to the next session
- * waiting — or, with the agents overview on, its entry in that place.
- */
+/** Search, which opens the quick switcher, and the Agents overview's entry. */
 function TreeTop() {
-  const dispatch = useWorkspaceDispatch()
   const frame = useWorkspaceFrame()
-  const waiting = useWorkspaceSelector(selectWaitingIds, shallowEqual)
-  // With the Agents overview offered, its entry is the way to what waits.
-  const [overview] = useAgentsOverviewPreference()
-  const overviewEnabled = overview === "on"
   const shortcut = frame.shortcut("switcher")
   return (
     <>
@@ -197,21 +149,7 @@ function TreeTop() {
         <span>Search</span>
         {shortcut ? <kbd className="workspace-kbd">{shortcut}</kbd> : null}
       </button>
-      {overviewEnabled ? <OverviewRow /> : null}
-      {waiting.length > 0 && !overviewEnabled ? (
-        <button
-          type="button"
-          className="workspace-row workspace-needs-button"
-          {...tooltip("Open the next session waiting on you")}
-          onClick={() => dispatch(openSession({ sessionId: waiting[0] }))}
-        >
-          <StatusGlyph status="needs-you" />
-          <span>{statusLabels["needs-you"]}</span>
-          <span className="workspace-badge" data-tone="needs">
-            {waiting.length}
-          </span>
-        </button>
-      ) : null}
+      <OverviewRow />
     </>
   )
 }

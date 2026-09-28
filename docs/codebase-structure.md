@@ -229,10 +229,10 @@ writing the full defaults on first launch is buying.
   (its map is `index.ts`), a typed catalogue (`model/`) rendered generically
   (`ui/`). See
   [adr/done/238-desktop-workspace-frontend.md](adr/done/238-desktop-workspace-frontend.md).
-- A preview behind Settings › General › Experimental is a window
-  preference, off until turned on (`parseOptIn`), that decides only whether
-  the window offers a way in; the feature itself lives in the vertical that
-  owns it — the Agents overview in the workspace.
+- A preview offered under Settings › Advanced › Experimental is a window
+  preference that decides only whether the window offers a way in; the
+  feature itself lives in the vertical that owns it, as the Agents overview —
+  a preview once, always offered now — lives in the workspace.
 - Design-system components are consumed, not wrapped "just in case". A wrapper
   with no behaviour is a layer that only forwards.
 - Decisions live in `model/` and `application/` and are tested as plain

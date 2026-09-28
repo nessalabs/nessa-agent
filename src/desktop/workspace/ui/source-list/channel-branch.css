@@ -181,19 +181,3 @@
 .workspace-search-button > span {
   flex: 1;
 }
-
-.workspace-needs-button {
-  gap: 6px;
-  margin-top: 4px;
-  padding: 0 8px 0 11px;
-  color: var(--desktop-ink-2) !important;
-  font-weight: 500;
-}
-
-.workspace-needs-button > .workspace-status {
-  margin-right: 9px;
-}
-
-.workspace-needs-button > span:nth-child(2) {
-  flex: 1;
-}

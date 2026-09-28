@@ -183,6 +183,9 @@ _ADR 238 › Focus follows the focused pane_; keys in
 
 _ADR 238 › What fills the content region_ (the overview is workspace state).
 
+- [ ] **It is always offered**: on a fresh profile, with nothing stored, the
+  sidebar shows "Agents" (and no separate Needs you or Running rows) and ⌘0
+  opens it. _Check:_ `smoke.mjs` (`overview`); unit test `layouts.test.tsx`.
 - [ ] **⌘0 and the sidebar's Agents entry open it; asked again, it stays.**
   _Check:_ `focus.mjs` (`focus-overview`), `smoke.mjs` (`overview`).
 - [ ] **The keyboard walks its items; ⌘↩ allows, ⌘⌫ denies, ⌘R replies**, and
@@ -194,8 +197,6 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   click on Deny or Always Allow answers one. _Check:_ `focus.mjs`
   (`focus-answers-overview`, `focus-answers-card`); unit tests `walk.test.ts`,
   `overview.test.tsx`, `approval-request.test.tsx`, `composer.test.tsx`.
-- [ ] **Turning the preview off gives the region back**, in this window and
-  in another beside it. _Check:_ unit test `overview.test.tsx`; by hand with two windows.
 - [ ] **Escape, or anywhere else chosen, goes back to the panes** with the
   caret in the focused pane's composer — Escape straight after ⌘0 too, before
   the keyboard has landed on a row. _Check:_ `focus.mjs` (`focus-overview`,
@@ -236,6 +237,14 @@ _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds 
   "Keep running sessions at the top" work in three columns; in sessions in
   the sidebar and classic their switches are disabled and say "Three columns
   only". _Check:_ unit test `settings-view.test.tsx` (per layout).
+- [ ] **Advanced › Experimental is the home of previews**: Advanced sits just
+  before About with its flask in both icon families; its one tab,
+  Experimental, shows "Nothing to try right now." and no control while no
+  preview is on offer; General has no Experimental tab; search finds it as
+  "advanced", "experimental", "labs" or "preview". _Check:_ `smoke.mjs`
+  (`settings`); unit tests `settings-view.test.tsx`,
+  `settings-catalogue.test.ts`, `icon-provider.test.tsx`; the flask by eye in
+  both families.
 
 ## Menus and tooltips
 

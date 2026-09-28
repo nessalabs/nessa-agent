@@ -25,6 +25,7 @@ import {
   searchSettings,
   settingsCategories,
   settingsCategory,
+  showsTabs,
   tabsOf,
   type SettingId,
   type SettingsCategoryId,
@@ -69,6 +70,7 @@ const categoryIcons: Record<SettingsCategoryId, DesktopIconRole> = {
   models: "model",
   connections: "connections",
   privacy: "privacy",
+  advanced: "advanced",
   about: "about",
 }
 
@@ -173,6 +175,7 @@ function SettingsView({
   const resultsRef = useRef<HTMLUListElement>(null)
 
   const tabs = tabsOf(category)
+  const tabsShown = showsTabs(category)
   const tab = chosenTabs[category] ?? firstTabOf(category)
   const results = useMemo(() => searchSettings(query), [query])
   const Page = settingsTabPages[tab]
@@ -452,7 +455,7 @@ function SettingsView({
           heading="h1"
           headingId="settings-heading"
         >
-          {tabs.length > 1 ? (
+          {tabsShown ? (
             <div className="settings-column settings-head-tabs">
               <SettingsTabStrip tabs={tabs} selected={tab} onSelect={showTab} />
             </div>
@@ -463,8 +466,8 @@ function SettingsView({
             key={tab}
             className="settings-column settings-panel"
             id="settings-panel"
-            role={tabs.length > 1 ? "tabpanel" : undefined}
-            aria-labelledby={tabs.length > 1 ? tabButtonId(tab) : undefined}
+            role={tabsShown ? "tabpanel" : undefined}
+            aria-labelledby={tabsShown ? tabButtonId(tab) : undefined}
           >
             <FoundSetting.Provider value={found}>
               <Page />

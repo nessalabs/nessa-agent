@@ -11,7 +11,6 @@ import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
 import type { ModelRef, WorkspaceIndex } from "../../model/workspace-index"
 import type { Direction, PaneKey, Side, Zone } from "../../model/pane-layout"
 import type { PaneEdge, WorkspaceRoom } from "../../model/pane-sizing"
-import type { AttentionStatus } from "../../model/session-groups"
 import type { Message, Transcript } from "../../model/transcript"
 import type {
   Initiator,
@@ -122,8 +121,6 @@ const workspaceSlice = createSlice({
       overview.filterOverview(state, payload),
     selectChannel: (state, { payload }: Payload<{ channelId: string }>) =>
       navigation.selectChannel(state, payload),
-    selectStatusView: (state, { payload }: Payload<{ status: AttentionStatus }>) =>
-      navigation.selectStatusView(state, payload),
     channelOpened: (
       state,
       {
@@ -255,7 +252,7 @@ export function initialWorkspaceFrom({
 }
 
 /**
- * The actions that go somewhere — a session, a channel, a status view, a new
+ * The actions that go somewhere — a session, a channel, a new
  * session, another pane (or the focused one, asked for by name). Each leaves
  * the Agents overview for the panes (`navigated`), whoever dispatched it —
  * the sidebar, the switcher, a key, the overview's own Open, or an agent —
@@ -270,7 +267,6 @@ const goesSomewhere: ReadonlySet<string> = new Set(
     workspaceActions.sessionDropped,
     workspaceActions.draftCreated,
     workspaceActions.selectChannel,
-    workspaceActions.selectStatusView,
     workspaceActions.channelOpened,
   ].map((action) => action.type),
 )

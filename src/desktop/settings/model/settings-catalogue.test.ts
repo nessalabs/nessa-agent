@@ -7,6 +7,7 @@ import {
   settingsCategory,
   settingsEntries,
   settingsTab,
+  showsTabs,
   tabsOf,
 } from "./settings-catalogue"
 
@@ -49,6 +50,27 @@ describe("the settings catalogue", () => {
       tab: "header",
       label: "Tint app from header picture",
     })
+  })
+
+  it("keeps experiments under Advanced, just before About, and not under General", () => {
+    const ids = settingsCategories.map((category) => category.id)
+    expect(ids.slice(-2)).toEqual(["advanced", "about"])
+    expect(tabsOf("advanced").map((tab) => tab.id)).toEqual(["experimental"])
+    expect(settingsTab("experimental")).toMatchObject({
+      category: "advanced",
+      label: "Experimental",
+    })
+    expect(tabsOf("general").map((tab) => tab.id)).not.toContain("experimental")
+    // No experiment is on offer, so Advanced holds no setting.
+    expect(
+      settingsEntries.filter((entry) => settingsTab(entry.tab).category === "advanced"),
+    ).toEqual([])
+  })
+
+  it("shows a category's tabs when it has several, or one named other than itself", () => {
+    expect(showsTabs("general")).toBe(true)
+    expect(showsTabs("advanced")).toBe(true)
+    expect(showsTabs("about")).toBe(false)
   })
 
   it("names every category by its label", () => {
@@ -118,6 +140,22 @@ describe("searchSettings", () => {
 
   it("names a single-tab category alone in the trail", () => {
     expect(searchSettings("version")[0]).toMatchObject({ tab: "about", trail: "About" })
+  })
+
+  it("finds Advanced › Experimental by its name and by what people call it", () => {
+    expect(searchSettings("advanced")[0]).toEqual({
+      category: "advanced",
+      tab: "experimental",
+      label: "Advanced",
+      trail: "",
+    })
+    for (const query of ["experimental", "labs", "preview"])
+      expect(searchSettings(query)[0], query).toEqual({
+        category: "advanced",
+        tab: "experimental",
+        label: "Experimental",
+        trail: "Advanced",
+      })
   })
 
   it("treats search syntax as plain text", () => {

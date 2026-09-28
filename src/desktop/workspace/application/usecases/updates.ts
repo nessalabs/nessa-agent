@@ -174,12 +174,9 @@ export function indexLoaded(
   if (state.panes) {
     // A channel the index no longer lists is not looked at.
     const view = loaded.view
-    return view.kind === "channel" && !channelOf(loaded, view.channelId)
-      ? {
-          ...loaded,
-          view: { kind: "channel", channelId: index.channels[0]?.id ?? "" },
-        }
-      : loaded
+    return channelOf(loaded, view.channelId)
+      ? loaded
+      : { ...loaded, view: { channelId: index.channels[0]?.id ?? "" } }
   }
   const first = index.channels.find(
     (channel) => channel.sectionId === index.sections[0]?.id,
@@ -200,7 +197,7 @@ export function indexLoaded(
   ].filter((id) => id !== "")
   const opened: WorkspaceState = {
     ...loaded,
-    view: { kind: "channel", channelId },
+    view: { channelId },
     tree: { ...state.tree, expandedChannels },
   }
   if (opening) return withPanes(opened, singlePane(opening.id))

@@ -213,14 +213,17 @@ the session its peek shows is the one the window reads for it), and the filter
 is kept between launches by composition
 (`RememberedFilter`, read once into the store's first state and written by an
 effect on each change — storage never speaks for it while the window is
-open). Settings › General › Experimental decides only whether the window
-offers a way in — the sidebar's "Agents" entry and ⌘0; turned off, from
-Settings in this window or another beside it (the storage event), an open
-overview gives the region back (`OverviewLayer`, the one place that says so). The entry and ⌘0 are a place like a channel:
+open). **The overview is always offered**: the sidebar's "Agents" entry, at
+its top in both workspace layouts, and ⌘0 open it, with no preference to
+turn on (`layouts.test.tsx`). It began as a preview behind a setting; that
+setting is gone, and with it the sidebar's separate "Needs you" and "Running"
+views, which the overview holds — the session list shows one channel's
+sessions (`SessionView`). Previews to come are offered under Settings ›
+Advanced › Experimental, which says so while it has none. The entry and ⌘0 are a place like a channel:
 choosing it again keeps it, and Escape leaves it whenever it is open —
 wherever the keyboard is, even before the keyboard has landed on its row —
 but for Escape in a menu or dialog over it, which is theirs; every action that goes
-somewhere — a session, a channel, a status view, a new session, another pane,
+somewhere — a session, a channel, a new session, another pane,
 or the focused pane asked for by name — goes back to the panes, even when it
 finds the window already there; and one that changes the panes a person asked
 to change — closing, moving, evening them out, resizing — goes back only when
@@ -400,6 +403,12 @@ and removing it is a product decision this work does not make.
 Settings is a typed catalogue: categories → tabs → settings, with the search
 index derived from it, in `src/desktop/settings/model/`, rendered generically
 by `src/desktop/settings/ui/` (`src/desktop/settings/index.ts` is its map).
+A category's page shows its tabs when it has several, or one named other than
+the category (`showsTabs`): Advanced, just before About, holds one tab,
+Experimental, the home of previews, which shows a calm empty state and no
+control while none is on offer; search finds it as "advanced",
+"experimental", "labs" or "preview" (`settings-catalogue.test.ts`,
+`settings-view.test.tsx`).
 Preferences stay host-side adapters that notify other readers in the same
 window — theme, icon family, workspace layout, tint, the picture in
 conversations (a still sliver of the header atop each conversation pane,
@@ -671,19 +680,21 @@ Watch for:
 Remaining — the one list of what this record leaves open; the
 [index](../README.md) summarises it. Each is its own issue:
 
-- **The gateway's `WorkspaceSource`.** The window runs on the in-memory
+- **The gateway's `WorkspaceSource`**
+  ([#248](https://github.com/nessalabs/nessa-agent/issues/248)). The window runs on the in-memory
   source; attaching the backend is one adapter implementing the port
   (`application/ports.ts`), composed in `src/desktop/dependencies.ts` in its
   place, with the port's guarantees: every call settles on a timeout of its
   own, refusals are typed, each replacement carries its revision, and the
   stream says `resync` when it reconnects or finds a gap.
-- **nessa_ui's icon contract, and an icon slot on its access mode.** The icon
+- **nessa_ui's icon contract, and an icon slot on its access mode**
+  ([nessa_ui#101](https://github.com/nessalabs/nessa_ui/issues/101)). The icon
   provider in `src/desktop/ui/icons/` mirrors `NessaIconProvider` until
   nessa_ui ships it, and is then replaced by it, not kept beside it; the
   composer's access shield stays a masked outline in `styles.css` until
   nessa_ui's `ComposerAccessMode` has an icon slot.
 - **The in-memory source records a same-tick message and answer out of
-  order.** A message that lets an approval go is recorded when the source
+  order** ([#249](https://github.com/nessalabs/nessa-agent/issues/249)). A message that lets an approval go is recorded when the source
   carries it out, while an answer is on record the moment it is asked, so an
   answer given in the same tick as the message that overtakes it is listed
   first. Reproduction, against `inMemorySource` with no timers:
@@ -695,7 +706,8 @@ Remaining — the one list of what this record leaves open; the
   across them is not causal. The fix belongs to the audit's ordering (record a
   message when it is asked too, or order by when each was carried out) and is
   owed before a durable audit adapter copies this one's shape.
-- **Watch: the drop's commit frame under load.** A drop's `pointerup`
+- **Watch: the drop's commit frame under load**
+  ([#250](https://github.com/nessalabs/nessa-agent/issues/250)). A drop's `pointerup`
   commits the move, and `FlipScope` reads where the panes landed in that same
   task, so the new arrangement is laid out there (forced layout) rather than
   in the frame's own layout step; it is the same layout either way, which is

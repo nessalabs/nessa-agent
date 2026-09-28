@@ -238,8 +238,6 @@ export function createDraft(
       ...state.drafts,
       [draftId]: { id: draftId, channelId: home, model: startsOn },
     },
-    view:
-      state.view.kind === "channel" ? state.view : { kind: "channel", channelId: home },
   }
   const placed = beside
     ? openBeside(drafted, {
@@ -256,8 +254,7 @@ export function createDraft(
 
 /** The channel a new session starts in: the one being looked at, else the focused session's. */
 function draftChannel(state: WorkspaceState): string | undefined {
-  if (state.view.kind === "channel" && channelOf(state, state.view.channelId))
-    return state.view.channelId
+  if (channelOf(state, state.view.channelId)) return state.view.channelId
   return focusedChannel(state) ?? state.channels[0]?.id
 }
 

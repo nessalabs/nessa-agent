@@ -179,12 +179,6 @@ describe("new sessions", () => {
     expect(closed.drafts).toEqual({})
   })
 
-  it("switches a status view to the draft's channel", () => {
-    const viewing = { ...loaded(), view: { kind: "status", status: "running" } as const }
-    const state = createDraft(viewing, { draftId: "new", channelId: "gateway" })
-    expect(state.view).toEqual({ kind: "channel", channelId: "gateway" })
-  })
-
   it("does not reuse an id already in use", () => {
     const state = loaded()
     expect(createDraft(state, { draftId: "a" })).toBe(state)

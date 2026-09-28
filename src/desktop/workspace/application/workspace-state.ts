@@ -148,7 +148,7 @@ export const initialWorkspace: WorkspaceState = {
   chosenModels: {},
   composerText: {},
   panes: null,
-  view: { kind: "channel", channelId: "" },
+  view: { channelId: "" },
   content: "panes",
   overview: { selected: null, filter: defaultFilter },
   chrome: {

@@ -7,9 +7,8 @@ import { useWorkspaceFrame } from "../workspace-frame"
 
 /**
  * The sidebar's way into the Agents overview: "Agents", with how many wait
- * on the person, in place of the "Needs you" and "Running" views, which the
- * overview holds. A place to go, like a channel: chosen again, it stays; ⌘0
- * does the same.
+ * on the person — the overview holds what waits and what runs. A place to
+ * go, like a channel: chosen again, it stays; ⌘0 does the same.
  */
 export function OverviewRow() {
   const dispatch = useWorkspaceDispatch()

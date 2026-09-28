@@ -24,7 +24,6 @@ import { reducedMotion } from "../../../adapters/motion-preference"
 import { useThemePreference } from "../../../adapters/theme-preference"
 import { useEdgePeek } from "../../../adapters/use-edge-peek"
 import { useWindowWidth } from "../../../adapters/window-width"
-import { useAgentsOverviewPreference } from "../../../adapters/window-preferences"
 import { draggedEdge } from "../../../model/side-column"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../../ui/history-buttons"
@@ -259,8 +258,6 @@ export function WorkspaceShell({
 
   const [switcher, setSwitcher] = useState<SwitcherMode | null>(null)
   const frame = useWindowFrame(root, workspaceShortcuts, setSwitcher)
-  // The Agents overview's way in, offered while Settings › General › Experimental says so.
-  const [overviewOffered] = useAgentsOverviewPreference()
   // While the switcher is up it has the keyboard, but for ⌘K, which closes it.
   useWorkspaceKeys(
     {
@@ -274,7 +271,7 @@ export function WorkspaceShell({
       },
       // A place to go, as the sidebar's entry is: asked again, it stays; Escape in it leaves.
       showOverview: () => {
-        if (switcher || overviewOffered !== "on") return false
+        if (switcher) return false
         dispatch(showContent({ content: "agents" }))
       },
       // Searching the list brings it back first; with no list, it is a jump.
@@ -341,9 +338,7 @@ export function WorkspaceShell({
   )
   return (
     <WorkspaceFrameProvider value={frame}>
-      <ListedChannelProvider
-        value={listOpen && view.kind === "channel" ? view.channelId : null}
-      >
+      <ListedChannelProvider value={listOpen ? view.channelId : null}>
         <SidebarPeekProvider value={peek}>
           <FlipScope shape={shape} root={root}>
             <div

@@ -110,6 +110,46 @@ describe("Settings over the window", () => {
   })
 })
 
+describe("Advanced", () => {
+  const navItem = (label: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>(".settings-nav-item")].find(
+      (item) => item.textContent?.trim() === label,
+    )
+  const tabNames = () =>
+    [...document.querySelectorAll('.settings-tabs [role="tab"]')].map((tab) =>
+      tab.textContent?.trim(),
+    )
+
+  it("sits in the sidebar just before About, with its icon", async () => {
+    await mount()
+    await act(async () => setOpen(true))
+    const items = [...document.querySelectorAll(".settings-nav-item")].map((item) =>
+      item.textContent?.trim(),
+    )
+    expect(items.slice(-2)).toEqual(["Advanced", "About"])
+    expect(navItem("Advanced")?.querySelector("svg.settings-nav-icon")).not.toBeNull()
+  })
+
+  it("shows its Experimental tab, calmly empty, with no control that does nothing", async () => {
+    await mount()
+    await act(async () => setOpen(true))
+    await act(async () => navItem("Advanced")?.click())
+    expect(document.querySelector("#settings-heading")?.textContent).toBe("Advanced")
+    expect(tabNames()).toEqual(["Experimental"])
+    const panel = document.querySelector("#settings-panel")
+    expect(panel?.textContent).toContain("Nothing to try right now.")
+    expect(panel?.textContent).toContain("Previews of new features will appear here.")
+    expect(panel?.querySelectorAll("button, input, [role='switch']").length).toBe(0)
+  })
+
+  it("has taken Experimental out of General", async () => {
+    await mount()
+    await act(async () => setOpen(true))
+    await act(async () => navItem("General")?.click())
+    expect(tabNames()).not.toContain("Experimental")
+  })
+})
+
 describe("what Settings offers", () => {
   it("disables every control a setting not available yet shows, and says so", async () => {
     const tabs = settingsCategories.flatMap((category) =>

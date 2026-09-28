@@ -51,7 +51,8 @@ export const css = {
   approvalActions: ".workspace-approval-actions button", // class
   approvalWord: ".workspace-approval-word", // class
 
-  // Agents overview
+  // Agents overview (always offered: the sidebar's entry and ⌘0)
+  overviewEntry: ".workspace-sidebar .agents-overview-entry", // class: the sidebar's "Agents"
   overview: ".agents-overview", // class
   overviewItem: "[data-overview-item]",
   overviewRequest: ".agents-request", // class
@@ -68,6 +69,11 @@ export const css = {
   // Settings (data-sidebar is "open" | "closed"; --settings-sidebar-w its width)
   settings: ".settings", // class
   settingsTitlebar: ".settings-titlebar", // class
+  settingsCategory: ".settings-nav-item", // class: a category in Settings' sidebar
+  settingsHeading: "#settings-heading", // the open category's name
+  settingsTab: '.settings-tabs [role="tab"]',
+  settingsPanel: "#settings-panel", // the open tab's page
+  control: 'button, input, select, textarea, [role="switch"]',
 
   // Elements by kind, inside a part found by one of the above
   field: "textarea",
@@ -116,7 +122,6 @@ export const modules = {
 /** localStorage keys the scripts seed before the page loads. */
 export const storage = {
   layout: "nessa.desktop.workspace-layout",
-  agentsOverview: "nessa.desktop.experiments.agents-overview",
   motion: "nessa.desktop.motion",
   theme: "nessa.desktop.theme",
   pictureInConversations: "nessa.desktop.picture-in-conversations",

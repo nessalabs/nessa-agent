@@ -25,11 +25,7 @@ export const ChannelRow = memo(function ChannelRow({ channelId }: { channelId: s
   // Chosen while the panes are shown: over them, the Agents overview is what is chosen.
   const active = useWorkspaceSelector((state) => {
     const view = selectView(state)
-    return (
-      view.kind === "channel" &&
-      view.channelId === channelId &&
-      selectContentView(state) === "panes"
-    )
+    return view.channelId === channelId && selectContentView(state) === "panes"
   })
   const activity = useWorkspaceSelector(
     (state) => selectChannelActivity(state, channelId),

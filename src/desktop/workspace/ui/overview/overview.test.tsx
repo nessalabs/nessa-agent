@@ -291,26 +291,6 @@ describe("the agents overview", () => {
     ])
   })
 
-  it("gives the region back when the preview is turned off, in this window or another", async () => {
-    const { store } = await mount()
-    // Turned on in this window, as Settings does.
-    await act(async () => {
-      window.dispatchEvent(
-        new CustomEvent("nessa:desktop-experiments-agents-overview", { detail: "on" }),
-      )
-    })
-    await open()
-    expect(store.getState().workspace.content).toBe("agents")
-    // Another window beside this one turns it off: the storage event says so
-    // (nothing is stored here, which reads as off).
-    await act(async () => {
-      window.dispatchEvent(
-        new StorageEvent("storage", { key: "nessa.desktop.experiments.agents-overview" }),
-      )
-    })
-    expect(store.getState().workspace.content).toBe("panes")
-  })
-
   it("allows always with ⌥⌘↩", async () => {
     const { source } = await mount()
     await open()

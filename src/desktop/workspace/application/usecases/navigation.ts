@@ -6,7 +6,7 @@
 import { byRecency } from "../../model/workspace-index"
 import type { WorkspaceRoom } from "../../model/pane-sizing"
 import { chosen, fitted } from "../../../model/side-column"
-import { mostPressing, type AttentionStatus } from "../../model/session-groups"
+import { mostPressing } from "../../model/session-groups"
 import {
   clampColumn,
   foldToFit,
@@ -38,7 +38,7 @@ export function showContent(
 }
 
 /**
- * Going somewhere — a session, a channel, a status view, a new session,
+ * Going somewhere — a session, a channel, a new session,
  * another pane — or changing the panes — closing, moving, evening them out —
  * is going to the panes: the one rule every way there follows, applied by
  * the store to each of them (`adapters/store/slice.ts`). The panes stay laid
@@ -59,20 +59,12 @@ export function selectChannel(
   { channelId }: { channelId: string },
 ): WorkspaceState {
   if (!channelOf(state, channelId)) return state
-  const viewed: WorkspaceState = { ...state, view: { kind: "channel", channelId } }
+  const viewed: WorkspaceState = { ...state, view: { channelId } }
   if (drawnColumns(state.chrome).sessionList) return viewed
   const pick = mostPressing(
     listedSessions(state).filter((session) => session.channelId === channelId),
   )
   return pick ? openSession(viewed, { sessionId: pick.id }) : viewed
-}
-
-/** Shows every session waiting on the person, or every one running. */
-export function selectStatusView(
-  state: WorkspaceState,
-  { status }: { status: AttentionStatus },
-): WorkspaceState {
-  return { ...state, view: { kind: "status", status } }
 }
 
 /**
@@ -89,11 +81,7 @@ export function openChannel(
   }: { channelId: string; beside?: boolean; draftId?: string; room?: WorkspaceRoom },
 ): WorkspaceState {
   if (!channelOf(state, channelId)) return state
-  const disclosed = setChannelOpen(
-    { ...state, view: { kind: "channel", channelId } },
-    channelId,
-    true,
-  )
+  const disclosed = setChannelOpen({ ...state, view: { channelId } }, channelId, true)
   const latest = listedSessions(state)
     .filter((session) => session.channelId === channelId)
     .sort(byRecency)[0]
@@ -121,7 +109,7 @@ export function revealSession(
   return setChannelOpen(
     {
       ...toggleSidebar(state, { open: true }),
-      view: { kind: "channel", channelId: channel.id },
+      view: { channelId: channel.id },
       tree: {
         ...state.tree,
         collapsedSections: toggled(

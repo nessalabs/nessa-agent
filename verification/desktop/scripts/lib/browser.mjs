@@ -75,7 +75,6 @@ function seed([prefs, mac, surface]) {
  * @param {"reduce"|"no-preference"} [o.reducedMotion]
  * @param {Record<string,string>} [o.prefs] extra localStorage entries
  * @param {Array<Function|[Function, unknown]>} [o.initScripts] extra init scripts
- * @param {boolean} [o.overview] turn on the Agents overview preference (default true)
  */
 export async function openPage(browser, o) {
   const context = await browser.newContext({
@@ -86,7 +85,6 @@ export async function openPage(browser, o) {
   })
   const prefs = {
     [storage.layout]: o.layout ?? "columns",
-    ...(o.overview === false ? {} : { [storage.agentsOverview]: "on" }),
     ...(o.prefs ?? {}),
   }
   await context.addInitScript(seed, [prefs, o.mac !== false, css.surface])

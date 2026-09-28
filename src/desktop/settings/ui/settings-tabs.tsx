@@ -11,7 +11,6 @@ import { workspaceLayouts, type WorkspaceLayoutId } from "../../model/workspace-
 import { useWorkspaceLayoutPreference } from "../../adapters/workspace-layout-preference"
 import { useMotionPreference } from "../../adapters/motion-preference"
 import {
-  useAgentsOverviewPreference,
   useBesidePreference,
   useDriftPreference,
   useGreetingPreference,
@@ -58,7 +57,6 @@ export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   general: GeneralTab,
   notifications: NotificationsTab,
   updates: UpdatesTab,
-  experimental: ExperimentalTab,
   theme: ThemeTab,
   header: HeaderTab,
   motion: MotionTab,
@@ -72,6 +70,7 @@ export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   integrations: IntegrationsTab,
   access: AccessTab,
   data: DataTab,
+  experimental: ExperimentalTab,
   about: AboutTab,
 }
 
@@ -157,26 +156,6 @@ function UpdatesTab() {
         </Row>
       </Group>
     </>
-  )
-}
-
-/**
- * Previews, each off until turned on (`parseOptIn`). The Agents overview's
- * decides whether the sidebar and ⌘0 offer it; turned off, an open overview
- * gives the content region back to the panes.
- */
-function ExperimentalTab() {
-  const [overview, setOverview] = useAgentsOverviewPreference()
-  return (
-    <Group footnote="Experiments may change or go away in a later version.">
-      <Row id="agents-overview">
-        <Toggle
-          checked={overview === "on"}
-          // Turned off, an open overview gives the region back (`OverviewLayer`).
-          onChange={(on) => setOverview(on ? "on" : "off")}
-        />
-      </Row>
-    </Group>
   )
 }
 
@@ -375,11 +354,6 @@ function SessionsTab() {
  * (`workspaceShortcuts`), so what Settings lists is what the keys do.
  */
 function KeyboardTab() {
-  const [overview] = useAgentsOverviewPreference()
-  // ⌘0 is listed only while the Agents overview is offered: off, it does nothing.
-  const offered = workspaceShortcuts.filter(
-    (binding) => binding.command !== "showOverview" || overview === "on",
-  )
   return (
     <>
       <Group title="Window">
@@ -393,7 +367,7 @@ function KeyboardTab() {
         />
       </Group>
       <Group title="Workspace">
-        {offered.map((binding) => (
+        {workspaceShortcuts.map((binding) => (
           <ItemRow
             key={binding.command}
             label={shortcutNames[binding.command]}
@@ -577,6 +551,24 @@ function DataTab() {
         </Row>
       </Group>
     </>
+  )
+}
+
+/* ——— Advanced ——— */
+
+/**
+ * Previews of features not settled yet. None is on offer now, so the page
+ * says so rather than showing a control that does nothing.
+ */
+function ExperimentalTab() {
+  return (
+    <Group>
+      <div className="settings-empty">
+        <DesktopIcon name="advanced" />
+        <p>Nothing to try right now.</p>
+        <p>Previews of new features will appear here.</p>
+      </div>
+    </Group>
   )
 }
 

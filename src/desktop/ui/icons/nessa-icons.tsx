@@ -143,12 +143,6 @@ export const nessaIcons: DesktopIconFamily = {
       <Dot x={10} y={12.9} r={0.95} />
     </>,
   ),
-  running: drawn(
-    <>
-      <path d="M16 10a6 6 0 1 1-6-6" />
-      <Dot x={10} y={10} r={1.4} />
-    </>,
-  ),
 
   // On send's filled disc a slightly firmer line keeps the arrow from thinning out.
   send: drawn(<path d="M10 15.5v-11M5.5 9 10 4.5 14.5 9" />, 1.6),
@@ -235,6 +229,14 @@ export const nessaIcons: DesktopIconFamily = {
     <>
       {shield}
       <path d="M7.75 10.1l1.6 1.6 3-3.2" />
+    </>,
+  ),
+  // A flask: a neck 3 wide, shoulders, a flat base with rounded corners, and
+  // the line of what it holds.
+  advanced: drawn(
+    <>
+      <path d="M8.5 3.75v4L4.6 14.2a1.4 1.4 0 0 0 1.2 2.05h8.4a1.4 1.4 0 0 0 1.2-2.05L11.5 7.75v-4" />
+      <path d="M7.5 3.75h5M6.25 11.5h7.5" />
     </>,
   ),
   about: drawn(

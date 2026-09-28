@@ -57,7 +57,6 @@ const desktopRoles = [
   "channel",
   "privateChannel",
   "needsYou",
-  "running",
   // Composer
   "send",
   "attach",
@@ -82,6 +81,7 @@ const desktopRoles = [
   "model",
   "connections",
   "privacy",
+  "advanced",
   "about",
 ] as const
 

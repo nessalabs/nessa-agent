@@ -21,7 +21,6 @@ export const settingsCategories = [
       { id: "general", label: "General", keywords: "startup login menu bar window" },
       { id: "notifications", label: "Notifications", keywords: "alerts sound banner" },
       { id: "updates", label: "Updates", keywords: "version release channel beta" },
-      { id: "experimental", label: "Experimental", keywords: "labs preview try" },
     ],
   },
   {
@@ -65,6 +64,19 @@ export const settingsCategories = [
     tabs: [
       { id: "access", label: "Access", keywords: "permissions approval ask shield" },
       { id: "data", label: "Data", keywords: "history crash reports storage" },
+    ],
+  },
+  {
+    // The home of previews of features not settled yet; with none on offer
+    // its page says so, and shows no control that would do nothing.
+    id: "advanced",
+    label: "Advanced",
+    tabs: [
+      {
+        id: "experimental",
+        label: "Experimental",
+        keywords: "labs preview previews experiments features try",
+      },
     ],
   },
   {
@@ -174,15 +186,6 @@ export const settingsEntries = [
     label: "Release channel",
     detail: "Beta builds arrive a week or two earlier.",
     keywords: "beta stable",
-  },
-  // General › Experimental
-  {
-    id: "agents-overview",
-    tab: "experimental",
-    label: "Agents overview",
-    detail:
-      "Every agent at a glance, with approvals answered in place. In the sidebar, or ⌘0.",
-    keywords: "needs you approvals running glance dashboard",
   },
   // Appearance › Theme
   { id: "theme-light", tab: "theme", label: "Light", keywords: "theme colour color" },
@@ -414,6 +417,17 @@ export function tabsOf(category: SettingsCategoryId): readonly SettingsTab[] {
   return settingsCategory(category).tabs.map((tab) => settingsTab(tab.id))
 }
 
+/**
+ * Whether a category's page shows its tabs across the top: when it has more
+ * than one, or when its one tab is named other than the category (Advanced ›
+ * Experimental) — otherwise the tab would be a name nobody sees. Search
+ * names the tab in its trail by the same rule.
+ */
+export function showsTabs(category: SettingsCategoryId): boolean {
+  const { tabs, label } = settingsCategory(category)
+  return tabs.length > 1 || tabs[0].label !== label
+}
+
 /** Where a category's page opens before a tab has been chosen. */
 export function firstTabOf(category: SettingsCategoryId): SettingsTabId {
   return settingsCategory(category).tabs[0].id
@@ -485,8 +499,6 @@ export function searchSettings(query: string): SettingsMatch[] {
       { category: category.id, tab: first.id, label: category.label, trail: "" },
       rank(terms, category.label, ""),
     )
-    // A category's only tab is the category; one result is enough.
-    if (category.tabs.length === 1) continue
     for (const tab of category.tabs) {
       // The first tab named like its category is the category's own result.
       if (tab === first && tab.label === category.label) continue
@@ -505,10 +517,9 @@ export function searchSettings(query: string): SettingsMatch[] {
         tab: tab.id,
         setting: id,
         label: entry.label,
-        trail:
-          category.tabs.length === 1
-            ? category.label
-            : `${category.label} › ${tab.label}`,
+        trail: showsTabs(category.id)
+          ? `${category.label} › ${tab.label}`
+          : category.label,
       },
       rank(terms, entry.label, `${entry.detail ?? ""} ${entry.keywords ?? ""}`),
     )

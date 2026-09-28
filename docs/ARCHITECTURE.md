@@ -167,9 +167,12 @@ mobile sidebar stacking level cannot cover the fixed header controls.
 Settings (`settings/`, a prototype) opens over the whole window from "nessa
 Studio" in the sidebar footer or Cmd/Ctrl+,, and Esc does not close it. A short
 glass sidebar lists categories — General, Appearance, Workspace, Models,
-Connections, Privacy & Permissions, About — and each category's page has a strip
-of tabs under its title (arrow keys, Home and End move between them; the tab last
-shown in each category is remembered while Settings is open). Every category,
+Connections, Privacy & Permissions, Advanced, About — and each category's page
+has a strip of tabs under its title, but for a category whose one tab bears its
+own name, as About's does (`showsTabs`; arrow keys, Home and End move between
+tabs; the tab last shown in each category is remembered while Settings is
+open). Advanced's one tab, Experimental, is the home of previews of features
+not settled yet, and says so while none is on offer. Every category,
 tab and setting, with its name, description and search keywords, is one typed
 table in `settings/model/settings-catalogue.ts`, which also owns search, and
 `settings/ui/` renders it generically: a match jumps
@@ -220,11 +223,11 @@ sessions — and sessions open in chat panes that split, stack, move and close.
 Two layouts, chosen in Settings › Workspace › Layout
 (`adapters/workspace-layout-preference.ts`; `classic` keeps the shell above),
 arrange the same parts. *Three columns* (`ui/layouts/three-columns.tsx`) is a
-sidebar of channels with "Needs you" and "Running" views, the chosen channel's
+sidebar of channels under the Agents overview's entry, the chosen channel's
 session list (grouped Needs you, Running, Earlier; searchable; ⌥⌘S folds it),
 and the panes. *Sessions in sidebar* (`ui/layouts/sessions-in-sidebar.tsx`)
-is one sidebar where a channel discloses its newest sessions inline, with a
-quick switcher (⌘K; ⌘\ to open one beside). Both fold their side columns
+is one sidebar — search, the Agents overview's entry, then channels — where a
+channel discloses its newest sessions inline, with a quick switcher (⌘K; ⌘\ to open one beside). Both fold their side columns
 for room when the window grows too narrow for the panes, and bring them back
 when it widens (`model/window-fit.ts`, `src/desktop/model/side-column.ts`).
 The two layouts differ only in how the sidebar region is composed; the
@@ -237,7 +240,7 @@ where it does not (`src/desktop/ui/column-header.tsx`, the same head for the
 session list, the sidebar and Settings' page).
 
 The **Agents overview** (`ui/overview/`, ⌘0 or "Agents" at the top of the
-sidebar, offered while Settings › General › Experimental says so) takes the
+sidebar, in every layout but Classic, with nothing to turn on) takes the
 content region while open, as a layer over the session list and the panes,
 which stay laid out beneath it — so a pane command asked meanwhile measures
 the room they really have, and first goes back to them. It lists what waits

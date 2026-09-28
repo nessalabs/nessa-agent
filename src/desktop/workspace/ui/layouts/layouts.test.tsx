@@ -41,20 +41,7 @@ beforeEach(() => {
 
 afterEach(() => {
   host.remove()
-  window.dispatchEvent(
-    new CustomEvent("nessa:desktop-experiments-agents-overview", { detail: "off" }),
-  )
 })
-
-/** Turns the Agents overview on or off as Settings does, in the same window. */
-const offer = (on: boolean) =>
-  act(async () => {
-    window.dispatchEvent(
-      new CustomEvent("nessa:desktop-experiments-agents-overview", {
-        detail: on ? "on" : "off",
-      }),
-    )
-  })
 
 type Store = ReturnType<typeof testStore>
 
@@ -192,11 +179,6 @@ describe("Agents in the sidebar is a place to go, like a channel", () => {
           </Provider>,
         ),
       )
-      await act(async () => {
-        window.dispatchEvent(
-          new CustomEvent("nessa:desktop-experiments-agents-overview", { detail: "on" }),
-        )
-      })
       const agents = () => host.querySelector<HTMLButtonElement>(".agents-overview-entry")
       const current = () =>
         [...host.querySelectorAll('.workspace-sidebar [aria-current="page"]')].map(
@@ -240,7 +222,6 @@ describe("every key of the shared map does the same in both layouts", () => {
   }
   const pressAll = async (command: string, Layout: typeof ThreeColumns) => {
     const { store, root } = await render(Layout, command)
-    await offer(true)
     const list = () => store.getState().workspace.chrome.sessionList.open
     const listBefore = list()
     const before = outcome(store)
@@ -272,19 +253,22 @@ describe("every key of the shared map does the same in both layouts", () => {
     })
 })
 
-describe("⌘0 and the sidebar's Agents open the overview only while it is offered", () => {
+describe("⌘0 and the sidebar's Agents entry always open the overview, with nothing to turn on", () => {
   for (const [name, Layout] of [
     ["three columns", ThreeColumns],
     ["sessions in the sidebar", SessionsInSidebar],
   ] as const)
     it(`in ${name}`, async () => {
+      // A fresh window: nothing stored, nothing chosen in Settings.
       const { store, root } = await render(Layout)
-      await offer(false)
-      expect(host.querySelector(".agents-overview-entry")).toBeNull()
-      await act(async () => press("showOverview"))
+      const entry = host.querySelector(".workspace-sidebar .agents-overview-entry")
+      expect(entry?.textContent).toContain("Agents")
+      // The overview holds what waits and what runs: no separate rows for them.
+      const rows = [...host.querySelectorAll(".workspace-sidebar button")].map((row) =>
+        row.textContent?.trim(),
+      )
+      expect(rows).not.toContainEqual(expect.stringMatching(/^(Needs you|Running)/))
       expect(store.getState().workspace.content).toBe("panes")
-      await offer(true)
-      expect(host.querySelector(".agents-overview-entry")).not.toBeNull()
       await act(async () => press("showOverview"))
       expect(store.getState().workspace.content).toBe("agents")
       // A place, as the entry is: asked again, it stays.

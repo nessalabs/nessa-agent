@@ -12,13 +12,9 @@ import {
   type SessionSummary,
 } from "./workspace-index"
 
-/** The states that ask for the person's attention, each with a view of its own. */
-export type AttentionStatus = Exclude<SessionStatus, "idle">
-
 /**
- * What each state is called wherever it is named — the list's groups, the
- * sidebar's views, a row's mark, the switcher's heading — so it is said one
- * way everywhere.
+ * What each state is called wherever it is named — the list's groups, a
+ * row's mark, the switcher's heading — so it is said one way everywhere.
  */
 export const statusLabels: Readonly<Record<SessionStatus, string>> = {
   "needs-you": "Needs you",
@@ -29,15 +25,13 @@ export const statusLabels: Readonly<Record<SessionStatus, string>> = {
 /** The list's groups, in the order they are shown. */
 const groupOrder: readonly SessionStatus[] = ["needs-you", "running", "idle"]
 
-/** What the session list shows: one channel's sessions, or every session in one state. */
-export type SessionView =
-  | { readonly kind: "channel"; readonly channelId: string }
-  | { readonly kind: "status"; readonly status: AttentionStatus }
+/** What the session list shows: one channel's sessions. */
+export interface SessionView {
+  readonly channelId: string
+}
 
 export function inView(session: SessionSummary, view: SessionView): boolean {
-  return view.kind === "channel"
-    ? session.channelId === view.channelId
-    : session.status === view.status
+  return session.channelId === view.channelId
 }
 
 interface StatusGroup {
@@ -139,10 +133,8 @@ export function channelActivity(sessions: readonly SessionSummary[]): ChannelAct
 
 export function statusCounts(sessions: readonly SessionSummary[]): {
   needsYou: number
-  running: number
 } {
   return {
     needsYou: sessions.filter((session) => session.status === "needs-you").length,
-    running: sessions.filter((session) => session.status === "running").length,
   }
 }

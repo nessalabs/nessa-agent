@@ -252,11 +252,6 @@
   -webkit-line-clamp: 2;
 }
 
-.workspace-session-meta {
-  color: var(--desktop-muted);
-  font-size: var(--desktop-text-caption);
-}
-
 .workspace-list-empty {
   display: grid;
   justify-items: center;

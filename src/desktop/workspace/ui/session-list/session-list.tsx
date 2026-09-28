@@ -20,7 +20,6 @@ import {
 } from "../../adapters/store/selectors"
 import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
 import { useNow } from "../../adapters/dom/clock"
-import { statusLabels } from "../../model/session-groups"
 import { sessionTime } from "../../model/time-labels"
 import { sameWords } from "../../model/transcript"
 import { AgentTile } from "../chrome/agent-tile"
@@ -43,9 +42,7 @@ export const SessionList = memo(function SessionList() {
   const frame = useWorkspaceFrame()
   const open = useWorkspaceSelector(selectSessionListOpen)
   const view = useWorkspaceSelector(selectView)
-  const channel = useWorkspaceSelector((state) =>
-    view.kind === "channel" ? selectChannel(state, view.channelId) : undefined,
-  )
+  const channel = useWorkspaceSelector((state) => selectChannel(state, view.channelId))
   // The search is the list's own; choosing another channel starts it afresh.
   const [search, setSearch] = useState({ view, query: "" })
   const query = search.view === view ? search.query : ""
@@ -56,8 +53,7 @@ export const SessionList = memo(function SessionList() {
     sameListGroups,
   )
   const listRef = useRef<HTMLDivElement>(null)
-  const isChannel = view.kind === "channel"
-  const title = isChannel ? (channel?.name ?? "") : statusLabels[view.status]
+  const title = channel?.name ?? ""
   const ordered = groups.flatMap((group) => group.ids)
   // One row takes Tab: the open one, or the first when none here is open.
   const focusedId = useWorkspaceSelector(selectFocusedSessionId)
@@ -97,11 +93,7 @@ export const SessionList = memo(function SessionList() {
         <ColumnHeader
           title={title}
           flipId="column-title"
-          icon={
-            isChannel ? (
-              <DesktopIcon name={channel?.private ? "privateChannel" : "channel"} />
-            ) : undefined
-          }
+          icon={<DesktopIcon name={channel?.private ? "privateChannel" : "channel"} />}
           action={
             <IconButton
               icon="newSession"
@@ -134,14 +126,8 @@ export const SessionList = memo(function SessionList() {
         >
           {ordered.length === 0 ? (
             <div className="workspace-list-empty">
-              <p>
-                {query
-                  ? "No sessions match."
-                  : isChannel
-                    ? "No sessions here yet."
-                    : "Nothing here right now."}
-              </p>
-              {!query && isChannel ? (
+              <p>{query ? "No sessions match." : "No sessions here yet."}</p>
+              {query ? null : (
                 <button
                   type="button"
                   className="workspace-button"
@@ -149,26 +135,19 @@ export const SessionList = memo(function SessionList() {
                 >
                   New Session
                 </button>
-              ) : null}
+              )}
             </div>
           ) : null}
           {groups.map((group, index) => (
             <div key={group.id} role="group" aria-label={group.label}>
-              {/* A status view holds one state, and its title already names it. */}
-              {isChannel ? (
-                <h3
-                  className="workspace-group-label"
-                  data-first={index === 0 || undefined}
-                >
-                  {group.label}
-                  <span>{group.ids.length}</span>
-                </h3>
-              ) : null}
+              <h3 className="workspace-group-label" data-first={index === 0 || undefined}>
+                {group.label}
+                <span>{group.ids.length}</span>
+              </h3>
               {group.ids.map((sessionId) => (
                 <SessionRow
                   key={sessionId}
                   sessionId={sessionId}
-                  showChannel={!isChannel}
                   tabStop={sessionId === tabStop}
                 />
               ))}
@@ -182,19 +161,13 @@ export const SessionList = memo(function SessionList() {
 
 const SessionRow = memo(function SessionRow({
   sessionId,
-  showChannel,
   tabStop,
 }: {
   sessionId: string
-  /** Whether the row names its channel: in a status view, where the list is not one channel. */
-  showChannel: boolean
   /** Whether the row is the list's one Tab stop. */
   tabStop: boolean
 }) {
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
-  const channelName = useWorkspaceSelector((state) =>
-    showChannel && session ? selectChannel(state, session.channelId)?.name : undefined,
-  )
   const { selected, open } = useWorkspaceSelector(
     (state) => ({
       selected: selectFocusedSessionId(state) === sessionId,
@@ -240,11 +213,6 @@ const SessionRow = memo(function SessionRow({
             {sameWords(session.title, session.preview) ? null : (
               <p className="workspace-session-preview">{session.preview}</p>
             )}
-            {channelName ? (
-              <div className="workspace-session-meta workspace-truncate">
-                #{channelName}
-              </div>
-            ) : null}
           </div>
         </div>
       </ContextMenuTrigger>

@@ -48,7 +48,7 @@ describe("the index arriving", () => {
   it("opens on the first channel's newest session and discloses what waits", () => {
     const state = loaded()
     expect(state.status).toBe("ready")
-    expect(state.view).toEqual({ kind: "channel", channelId: "desktop" })
+    expect(state.view).toEqual({ channelId: "desktop" })
     expect(shown(state)).toEqual(["a"])
     expect(state.tree.expandedChannels).toEqual(["desktop"])
   })
@@ -304,11 +304,11 @@ describe("what goes with a session", () => {
     )
     // The model the person chose for its next turn carries over to the new home.
     expect(chosen.drafts.fresh.model).toEqual(astra)
-    const waiting = sessionRemoved(
-      { ...loaded(), view: { kind: "status", status: "running" } },
+    const elsewhere = sessionRemoved(
+      { ...loaded(), view: { channelId: "gateway" } },
       { sessionId: "a", revision: 3, draftId: "fresh" },
     )
-    expect(waiting.view).toEqual({ kind: "status", status: "running" })
+    expect(elsewhere.view).toEqual({ channelId: "gateway" })
   })
 
   it("drops an answer and a chosen model with a removed session", () => {
@@ -469,7 +469,7 @@ describe("replacements out of order", () => {
   })
 
   it("keeps the view it has when the index is read again", () => {
-    const viewing = { ...loaded(), view: { kind: "status", status: "running" } as const }
+    const viewing = { ...loaded(), view: { channelId: "gateway" } }
     const again = indexLoaded(viewing, {
       index: testIndex(),
       draftId: "x",
@@ -592,7 +592,7 @@ describe("the index read again: the resync", () => {
       },
       draftId: "x",
     })
-    expect(resynced.view).toEqual({ kind: "channel", channelId: "empty" })
+    expect(resynced.view).toEqual({ channelId: "empty" })
   })
 })
 

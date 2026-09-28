@@ -42,7 +42,6 @@ import {
   resizePanes,
   retryTranscript,
   selectChannel,
-  selectStatusView,
   sendMessage,
   showContent,
   focusPane,
@@ -1216,7 +1215,6 @@ describe("the Agents overview is a place in the sidebar, left by going anywhere 
   const ways = {
     "the channel already listed": selectChannel({ channelId: "desktop" }),
     "another channel": selectChannel({ channelId: "gateway" }),
-    "a status view": selectStatusView({ status: "running" }),
     "a session": openSession({ sessionId: "c" }),
     "a session beside": openBeside({ sessionId: "c" }),
     "a channel from the tree": openChannel({ channelId: "gateway" }),

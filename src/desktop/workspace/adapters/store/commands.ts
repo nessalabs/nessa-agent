@@ -52,7 +52,6 @@ export const {
   resizePanes,
   equalizePanes,
   selectChannel,
-  selectStatusView,
   showContent,
   selectInOverview,
   filterOverview,

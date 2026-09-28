@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, type RefObject } from "react"
-import { useAgentsOverviewPreference } from "../../../adapters/window-preferences"
+import { useCallback, useRef, type RefObject } from "react"
 import { focusComposer } from "../../adapters/dom/focus"
 import { useAtLeastWide } from "../../adapters/dom/width"
 import { showContent } from "../../adapters/store/commands"
@@ -18,9 +17,7 @@ import { AgentsOverview, splitWidth } from "./overview"
  *
  * Leaving it — Escape, Open, or going anywhere else — gives the keyboard
  * back to the focused pane's composer, a frame later, once the panes are
- * drawn again. Turning the preview off (Settings › General › Experimental,
- * in this window or another beside it) leaves it the same way: the one place
- * that change closes it.
+ * drawn again.
  */
 export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> }) {
   const dispatch = useWorkspaceDispatch()
@@ -33,16 +30,6 @@ export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> })
     stop.current()
     stop.current = focusComposer(root.current ?? document)
   }, [dispatch, root])
-  // The preview turned off, from wherever: an open overview gives the region back.
-  const [offered] = useAgentsOverviewPreference()
-  const offeredBefore = useRef(offered)
-  const openNow = useRef(open)
-  openNow.current = open
-  useEffect(() => {
-    const turnedOff = offeredBefore.current === "on" && offered !== "on"
-    offeredBefore.current = offered
-    if (turnedOff && openNow.current) leave()
-  }, [offered, leave])
   return (
     <div className="workspace-overview-layer" ref={layer} data-open={open || undefined}>
       {open ? <AgentsOverview split={split} onLeave={leave} /> : null}

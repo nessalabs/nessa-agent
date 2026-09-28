@@ -13,11 +13,11 @@ import {
   Cpu,
   Ellipsis,
   FileText,
+  FlaskConical,
   Folder,
   FolderPlus,
   Hash,
   Home,
-  Inbox,
   Info,
   LayoutPanelLeft,
   List,
@@ -85,7 +85,6 @@ export const lucideIcons: DesktopIconFamily = {
   channel: lucide(Hash),
   privateChannel: lucide(Lock),
   needsYou: lucide(ShieldAlert),
-  running: lucide(Inbox),
 
   send: lucide(ArrowUp),
   attach: lucide(Paperclip),
@@ -110,5 +109,6 @@ export const lucideIcons: DesktopIconFamily = {
   model: lucide(Cpu),
   connections: lucide(Plug),
   privacy: lucide(ShieldCheck),
+  advanced: lucide(FlaskConical),
   about: lucide(Info),
 }

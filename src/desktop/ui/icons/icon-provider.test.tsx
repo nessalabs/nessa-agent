@@ -5,7 +5,11 @@
  */
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
-import type { DesktopIconComponent, DesktopIconRole } from "./icon-contract"
+import {
+  desktopIconRoles,
+  type DesktopIconComponent,
+  type DesktopIconRole,
+} from "./icon-contract"
 import { DesktopIcon, DesktopIconProvider, useDesktopIcon } from "./icon-provider"
 import { lucideIcons } from "./lucide-icons"
 import { nessaIcons } from "./nessa-icons"
@@ -79,6 +83,29 @@ describe("DesktopIcon", () => {
     expect(markup).toContain('class="quiet"')
     expect(markup).toContain('aria-hidden="false"')
     expect(markup).toContain('stroke="currentColor"')
+  })
+})
+
+describe("both families", () => {
+  it("draw every role, each as a drawing of its own", () => {
+    for (const [name, family] of [
+      ["nessa", nessaIcons],
+      ["lucide", lucideIcons],
+    ] as const)
+      for (const role of desktopIconRoles)
+        expect(renderToStaticMarkup(family[role]({})), `${name} ${role}`).toMatch(
+          /^<svg[^>]*><\w/,
+        )
+  })
+
+  it("draw Settings' Advanced as a flask", () => {
+    expect(renderToStaticMarkup(lucideIcons.advanced({}))).toContain(
+      "lucide-flask-conical",
+    )
+    const flask = renderToStaticMarkup(nessaIcons.advanced({}))
+    expect(flask).toMatch(/<svg[^>]*viewBox="0 0 20 20"/)
+    expect(flask).toMatch(/<g[^>]*stroke-width="1.4"/)
+    expect(flask).not.toBe(renderToStaticMarkup(nessaIcons.about({})))
   })
 })
 

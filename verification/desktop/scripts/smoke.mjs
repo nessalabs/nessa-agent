@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * Smoke: the page loads in each layout, a new session sends, a split opens
- * a pane, an empty draft is not listed, Settings opens and closes, the Agents
- * overview opens and is left — and no console or page error is raised along
- * the way (the known favicon 404 aside).
+ * a pane, an empty draft is not listed, Settings opens, shows Advanced ›
+ * Experimental, and closes, the Agents overview is offered on a fresh
+ * profile and opens and is left — and no console or page error is raised
+ * along the way (the known favicon 404 aside).
  */
 import { attempt } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
@@ -32,9 +33,11 @@ Checks, per engine and layout:
   draft-unlisted   ⌘N adds no row to the lists until something is sent
   send             a message typed in a new session appears in its transcript
   split            ⇧⌘N (new session beside) adds a pane
-  settings         ⌘, opens Settings; its Back button closes it and the panes return
-  overview         ⌘0 shows the Agents overview and the keyboard lands on its row;
-                   Escape returns to the panes (focus.mjs covers Escape before it lands)
+  settings         ⌘, opens Settings; Advanced shows its one tab, Experimental, empty
+                   and with no control; its Back button closes it and the panes return
+  overview         on a fresh profile the sidebar offers "Agents"; ⌘0 shows the
+                   overview and the keyboard lands on its row; Escape returns to the
+                   panes (focus.mjs covers Escape before it lands)
   console          no console.error / pageerror / failed request (favicon 404 ignored)`,
 }
 
@@ -113,6 +116,44 @@ await main(meta, async ({ options, rep, url }) => {
           .then(() => true)
           .catch(() => false)
         if (!shown) failures.push(`Settings (${css.settings}) not visible after ⌘,`)
+        // Advanced › Experimental: the home of previews, empty while none is on offer.
+        await page.locator(css.settingsCategory, { hasText: "Advanced" }).click()
+        await page
+          .locator(css.settingsHeading, { hasText: "Advanced" })
+          .waitFor({ state: "visible", timeout: 3000 })
+          .catch(() =>
+            failures.push("Advanced's page did not open from its sidebar entry"),
+          )
+        const advanced = await page.evaluate(
+          ({ tab, panel, control }) => {
+            const page = document.querySelector(panel)
+            return {
+              tabs: [...document.querySelectorAll(tab)].map((each) => ({
+                name: each.textContent?.trim(),
+                selected: each.getAttribute("aria-selected") === "true",
+              })),
+              text: page?.textContent ?? "",
+              controls: page?.querySelectorAll(control).length ?? -1,
+            }
+          },
+          { tab: css.settingsTab, panel: css.settingsPanel, control: css.control },
+        )
+        if (
+          advanced.tabs.length !== 1 ||
+          advanced.tabs[0].name !== "Experimental" ||
+          !advanced.tabs[0].selected
+        )
+          failures.push(
+            `Advanced's tabs are ${JSON.stringify(advanced.tabs)}, expected Experimental alone, selected`,
+          )
+        if (!advanced.text.includes("Nothing to try right now."))
+          failures.push(
+            `Experimental's page says "${advanced.text}", not its empty state`,
+          )
+        if (advanced.controls !== 0)
+          failures.push(
+            `Experimental's page shows ${advanced.controls} controls, expected none`,
+          )
         await leaveSettings(page)
         const gone = await page
           .locator(css.settings)
@@ -122,11 +163,17 @@ await main(meta, async ({ options, rep, url }) => {
           .catch(() => false)
         if (!gone) failures.push("Settings still visible after its Back button")
         if (!(await paneCount(page))) failures.push("no panes after leaving Settings")
-        return { failures }
+        return { advanced, failures }
       })
 
       await attempt(rep, { ...base, name: "overview" }, async () => {
         const failures = []
+        // Nothing is stored about the overview (openPage seeds only the layout):
+        // the sidebar offers it as it is.
+        const entry = page.locator(css.overviewEntry)
+        const offered = (await entry.count()) === 1 && (await entry.isVisible())
+        if (!offered)
+          failures.push(`the sidebar's Agents entry (${css.overviewEntry}) is not shown`)
         await focusComposer(page)
         await page.keyboard.press(keys.overview)
         await contentIs(page, content.overview)

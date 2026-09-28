@@ -66,13 +66,11 @@ describe("grouping by status", () => {
 })
 
 describe("views and search", () => {
-  it("shows a channel's sessions, or every session in one state", () => {
+  it("shows a channel's sessions", () => {
     const a = session("a", 1, "running")
     const b = session("b", 1, "idle", { channelId: "sdk" })
-    expect(inView(a, { kind: "channel", channelId: "desktop-app" })).toBe(true)
-    expect(inView(b, { kind: "channel", channelId: "desktop-app" })).toBe(false)
-    expect(inView(a, { kind: "status", status: "running" })).toBe(true)
-    expect(inView(b, { kind: "status", status: "running" })).toBe(false)
+    expect(inView(a, { channelId: "desktop-app" })).toBe(true)
+    expect(inView(b, { channelId: "desktop-app" })).toBe(false)
   })
 
   it("searches title, preview, model and agent, ignoring case and spacing", () => {
@@ -143,13 +141,13 @@ describe("a channel's branch", () => {
     expect(channelActivity([])).toEqual({ waiting: 0, running: false, unread: false })
   })
 
-  it("counts every session waiting and running", () => {
+  it("counts every session waiting", () => {
     expect(
       statusCounts([
         session("a", 1, "needs-you"),
         session("b", 1, "running"),
         session("c", 1),
       ]),
-    ).toEqual({ needsYou: 1, running: 1 })
+    ).toEqual({ needsYou: 1 })
   })
 })

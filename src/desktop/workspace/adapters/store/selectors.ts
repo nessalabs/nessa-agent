@@ -10,7 +10,6 @@
  */
 import { createSelector } from "@reduxjs/toolkit"
 import {
-  byRecency,
   type Channel,
   type ModelRef,
   type SessionSummary,
@@ -328,11 +327,3 @@ export const selectGlance = (
     now,
     looking: state.workspace.overview.selected,
   })
-
-/** The sessions waiting on the person, newest first, as ids. */
-export const selectWaitingIds = createSelector([listed], (sessions) =>
-  sessions
-    .filter((session) => session.status === "needs-you")
-    .sort(byRecency)
-    .map((session) => session.id),
-)
