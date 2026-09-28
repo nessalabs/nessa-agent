@@ -73,7 +73,7 @@ import {
 import type { SwitcherRow } from "../../model/session-search"
 import { columnWidth, sessionListLimits, type ColumnLimits } from "../../model/window-fit"
 import { IconButton } from "../chrome/icon-button"
-import { ResizeEdge } from "../chrome/resize-edge"
+import { ResizeEdge } from "../../../split-panes/ui/resize-edge"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
 import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"

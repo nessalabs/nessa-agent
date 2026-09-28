@@ -1,6 +1,6 @@
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react"
-import { usePointerResize } from "../../adapters/dom/pointer-resize"
-import { tooltip } from "../../../ui/tooltip"
+import { usePointerResize } from "../adapters/dom/pointer-resize"
+import { tooltip } from "../../ui/tooltip"
 
 /** How far an arrow key moves an edge. */
 const keyStep = 16
