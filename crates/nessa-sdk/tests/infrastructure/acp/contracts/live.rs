@@ -7,7 +7,7 @@ use crate::{
     infrastructure::session_storage::LocalFileStorage,
 };
 
-fn live_config(
+pub(super) fn live_config(
     mut config: AcpConfig,
     executable_variable: &str,
     context_keys: &[&str],

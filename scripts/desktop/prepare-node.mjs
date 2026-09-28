@@ -260,7 +260,7 @@ function refuseNonregularCacheEntry(path, stat) {
 function pathIdentity(path, { allowAbsent = false } = {}) {
   let pathStat
   try {
-    pathStat = lstatSync(path)
+    pathStat = lstatSync(path, { bigint: true })
   } catch (error) {
     if (allowAbsent && error?.code === "ENOENT") return undefined
     throw error
@@ -292,12 +292,12 @@ function inspectArchive(path, expectedSha256, { allowAbsent = false, identity } 
     })
   }
   try {
-    const before = fstatSync(descriptor)
+    const before = fstatSync(descriptor, { bigint: true })
     if (!before.isFile()) refuseNonregularCacheEntry(path, before)
     const openedIdentity = { dev: before.dev, ino: before.ino }
     if (!sameIdentity(initialIdentity, openedIdentity))
       throw new Error(`Node archive path identity changed while opening: ${path}`)
-    if (before.size > MAX_NODE_ARCHIVE_BYTES)
+    if (before.size > BigInt(MAX_NODE_ARCHIVE_BYTES))
       throw new Error(`Node archive exceeds its compressed-size limit: ${path}`)
 
     const hash = createHash("sha256")
@@ -314,12 +314,12 @@ function inspectArchive(path, expectedSha256, { allowAbsent = false, identity } 
       hash.update(used)
       chunks.push(Buffer.from(used))
     }
-    const after = fstatSync(descriptor)
+    const after = fstatSync(descriptor, { bigint: true })
     const finalPathIdentity = pathIdentity(path)
     if (
       !sameIdentity(openedIdentity, { dev: after.dev, ino: after.ino }) ||
       !sameIdentity(openedIdentity, finalPathIdentity) ||
-      after.size !== size
+      after.size !== BigInt(size)
     )
       throw new Error(`Node archive path identity changed while reading: ${path}`)
     if (hash.digest("hex") !== expectedSha256)
@@ -341,7 +341,7 @@ export function nodeCacheObjectName(release) {
 }
 
 function directoryIdentity(path) {
-  const stat = lstatSync(path)
+  const stat = lstatSync(path, { bigint: true })
   if (!stat.isDirectory() || stat.isSymbolicLink())
     throw new Error(`Node download stage identity changed: ${path}`)
   return { dev: stat.dev, ino: stat.ino }

@@ -8,13 +8,19 @@ use crate::domain::agent_execution::tools::ToolContent;
 #[tokio::test]
 async fn codex_verified_presets_are_selected_on_open_and_resume() {
     let _process_slot = process_test_slot().await;
-    for (fixture, choice) in [
-        ("approval-auto", ApprovalMode::Auto),
-        ("approval-full", ApprovalMode::Full),
+    for (model_id, fixture, choice) in [
+        ("gpt-6-astra", "approval-auto", ApprovalMode::Auto),
+        ("gpt-5.6-sol", "approval-auto", ApprovalMode::Auto),
+        ("gpt-5.6-terra", "approval-auto", ApprovalMode::Auto),
+        ("gpt-5.6-luna", "approval-auto", ApprovalMode::Auto),
+        ("gpt-6-astra", "approval-full", ApprovalMode::Full),
+        ("gpt-5.6-sol", "approval-full", ApprovalMode::Full),
+        ("gpt-5.6-terra", "approval-full", ApprovalMode::Full),
+        ("gpt-5.6-luna", "approval-full", ApprovalMode::Full),
     ] {
         let (root, config, fixture_model) = codex_configuration(fixture, 16);
         let mut metadata = ModelMetadataDto::from(&fixture_model);
-        metadata.model_id = "gpt-6-astra".into();
+        metadata.model_id = model_id.into();
         let model = ModelMetadata::try_from(metadata).unwrap();
         let binding = CodexAcpProvider::new(
             config,
@@ -23,8 +29,13 @@ async fn codex_verified_presets_are_selected_on_open_and_resume() {
             Arc::new(RecordingAudit::default()),
         )
         .unwrap()
-        .with_approval_mode(choice)
-        .unwrap();
+        .with_approval_mode(choice);
+        if !cfg!(target_os = "macos") && model_id != "gpt-6-astra" {
+            assert!(matches!(binding, Err(AgentError::Unsupported(_))));
+            assert!(!root.path().join("pid").exists());
+            continue;
+        }
+        let binding = binding.unwrap();
         let opened = binding
             .open(ProviderOpenRequest::without_startup_control(None))
             .await
@@ -85,12 +96,7 @@ async fn codex_live_mode_is_verified_before_the_next_turn() {
 
 #[test]
 fn unverified_codex_models_cannot_select_elevated_presets() {
-    for model_id in [
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "unknown-model",
-    ] {
+    for model_id in ["unknown-model", "gpt-5.6-luna-unverified"] {
         for mode in [ApprovalMode::Ask, ApprovalMode::Auto, ApprovalMode::Full] {
             let (_root, config, fixture_model) = codex_configuration("echo", 16);
             let mut metadata = ModelMetadataDto::from(&fixture_model);
@@ -259,7 +265,7 @@ async fn an_approval_with_no_arguments_still_reaches_the_host_with_what_codex_sa
     assert_eq!(input.name, "edit");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&input.arguments_json).unwrap(),
-        serde_json::json!({"params":{"itemId":"file-change-1","reason":"Modifying config file"}})
+        serde_json::json!({"toolCall":{"toolCallId":"file-change-1","kind":"edit","status":"pending","locations":[{"path":"/workspace/config.txt"}]},"metadata":{"permission":{"version":1,"title":"Make edits?"}}})
     );
     // Codex offers a persistent choice this binding cannot enforce; it is not
     // passed on to the host as one it may take.
@@ -658,4 +664,84 @@ async fn a_codex_approval_the_audit_cannot_record_is_never_given_to_codex() {
         Err(rejected_audits(3))
     );
     assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn sparse_mcp_approval_preserves_input_and_attribution_in_both_answer_stages() {
+    let _process_slot = process_test_slot().await;
+    for effect in [PermissionEffect::Allow, PermissionEffect::Deny] {
+        let (root, config, model) = codex_configuration("mcp-sparse-permission", 16);
+        let audit = Arc::new(RecordingAudit::default());
+        let binding = CodexAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            audit.clone(),
+        )
+        .unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
+        let running = start(&opened, "review MCP").await;
+        assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+        let ExecutionUpdate::PermissionRequested {
+            id, input, options, ..
+        } = next(&mut opened).await
+        else {
+            panic!("expected review");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&input.arguments_json).unwrap(),
+            serde_json::json!({"server":"probe","tool":"record_probe","arguments":{"marker":"fixture"}})
+        );
+        let option = options
+            .choices()
+            .iter()
+            .find(|option| {
+                option.decision().clone()
+                    == PermissionDecision::new(effect, PermissionScope::request())
+            })
+            .unwrap()
+            .id()
+            .clone();
+        opened
+            .session
+            .answer_permission(PermissionAnswer {
+                attribution: attribution(),
+                execution_id: ExecutionId::new("review MCP").unwrap(),
+                id: id.clone(),
+                option_id: option.clone(),
+            })
+            .await
+            .map_err(|failure| failure.into_error())
+            .unwrap();
+        assert_eq!(running.await.unwrap().unwrap(), ExecutionOutcome::Completed);
+        let records = audit.answers.lock().unwrap().clone();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
+        assert_eq!(records[1].delivery(), &PermissionAnswerDelivery::Written);
+        for record in records {
+            assert_eq!(record.resolution().input(), &input);
+            assert_eq!(record.resolution().attribution(), &attribution());
+            assert_eq!(record.resolution().request().id(), &id);
+            assert_eq!(
+                record.resolution().request().execution_id().as_str(),
+                "review MCP"
+            );
+        }
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(root.path().join("permission-outcome")).unwrap()
+            )
+            .unwrap(),
+            serde_json::json!({"outcome":"selected","optionId":option.as_str()})
+        );
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result()
+            .unwrap();
+    }
 }
