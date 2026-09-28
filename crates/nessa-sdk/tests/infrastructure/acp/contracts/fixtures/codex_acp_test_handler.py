@@ -160,18 +160,24 @@ for line in sys.stdin:
             update({"sessionUpdate": "tool_call_update", "toolCallId": "command-1", "status": "completed",
                     "rawOutput": {"formatted_output": "compiling\n2 passed\n", "exit_code": 0},
                     "_meta": {"terminal_exit": {"exit_code": 0, "signal": None, "terminal_id": "command-1"}}})
-        elif mode == "file-change-permission":
-            # A file change is asked for with an identifier, a kind and a status,
-            # and what it is asking about is in the request's own metadata.
+        elif mode in ("file-change-permission", "mcp-sparse-permission"):
+            if mode == "mcp-sparse-permission":
+                update({"sessionUpdate": "tool_call", "toolCallId": "file-change-1", "kind": "execute",
+                        "title": "mcp.probe.record_probe", "status": "in_progress",
+                        "rawInput": {"server": "probe", "tool": "record_probe", "arguments": {"marker": "fixture"}},
+                        "_meta": {"is_mcp_tool_call": True}})
+                call = {"toolCallId": "file-change-1", "kind": "execute", "status": "pending"}
+                meta = {"is_mcp_tool_approval": True}
+            else:
+                call = {"toolCallId": "file-change-1", "kind": "edit", "status": "pending", "locations": [{"path": "/workspace/config.txt"}]}
+                meta = {"permission": {"version": 1, "title": "Make edits?"}}
             send({"id": "file-review", "method": "session/request_permission", "params": {
-                "sessionId": session,
-                "toolCall": {"toolCallId": "file-change-1", "kind": "edit", "status": "pending"},
+                "sessionId": session, "toolCall": call,
                 "options": [
                     {"optionId": "allow_once", "kind": "allow_once", "name": "Allow Once"},
                     {"optionId": "allow_always", "kind": "allow_always", "name": "Allow for Session"},
                     {"optionId": "reject_once", "kind": "reject_once", "name": "Reject"},
-                ],
-                "_meta": {"codex": {"params": {"itemId": "file-change-1", "reason": "Modifying config file"}}},
+                ], "_meta": meta,
             }})
             continue
         else:

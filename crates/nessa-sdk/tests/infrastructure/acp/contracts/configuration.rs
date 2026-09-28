@@ -11,13 +11,22 @@ use serde_json::json;
 #[tokio::test]
 async fn claude_verified_presets_are_selected_on_open_and_resume() {
     let _process_slot = process_test_slot().await;
-    for (fixture, choice) in [
-        ("approval-auto", ApprovalMode::Auto),
-        ("approval-full", ApprovalMode::Full),
+    for (model_id, fixture, choice) in [
+        ("claude-sonnet-5", "approval-auto", ApprovalMode::Auto),
+        ("claude-opus-5", "approval-auto", ApprovalMode::Auto),
+        ("claude-fable-5-1", "approval-auto", ApprovalMode::Auto),
+        ("claude-sonnet-5", "approval-full", ApprovalMode::Full),
+        ("claude-opus-5", "approval-full", ApprovalMode::Full),
+        ("claude-fable-5-1", "approval-full", ApprovalMode::Full),
+        (
+            "claude-haiku-4-5-20251001",
+            "approval-full",
+            ApprovalMode::Full,
+        ),
     ] {
         let (root, config, fixture_model) = test_acp_configuration(fixture, 16);
         let mut metadata = ModelMetadataDto::from(&fixture_model);
-        metadata.model_id = "claude-sonnet-5".into();
+        metadata.model_id = model_id.into();
         let model = ModelMetadata::try_from(metadata).unwrap();
         let binding = ClaudeAcpProvider::new(
             config,
@@ -134,12 +143,7 @@ async fn stale_claude_mode_notification_after_verified_change_fails_the_generati
 
 #[test]
 fn unverified_claude_models_cannot_select_elevated_presets() {
-    for model_id in [
-        "claude-opus-5",
-        "claude-fable-5-1",
-        "claude-haiku-4-5-20251001",
-        "unknown-model",
-    ] {
+    for model_id in ["unknown-model", "claude-opus-5-unverified"] {
         for mode in [ApprovalMode::Ask, ApprovalMode::Auto, ApprovalMode::Full] {
             let (_root, config, fixture_model) = test_acp_configuration("echo", 16);
             let mut metadata = ModelMetadataDto::from(&fixture_model);
@@ -1416,4 +1420,23 @@ async fn a_permission_mode_reported_while_it_is_still_being_set_is_not_the_settl
         .into_result()
         .unwrap();
     assert_gone(&root, "pid");
+}
+
+#[test]
+fn claude_haiku_does_not_offer_auto_that_the_adapter_applies_as_accept_edits() {
+    let (_root, config, fixture_model) = test_acp_configuration("echo", 16);
+    let mut metadata = ModelMetadataDto::from(&fixture_model);
+    metadata.model_id = "claude-haiku-4-5-20251001".into();
+    let model = ModelMetadata::try_from(metadata).unwrap();
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    assert!(matches!(
+        binding.with_approval_mode(ApprovalMode::Auto),
+        Err(AgentError::Unsupported(_))
+    ));
 }

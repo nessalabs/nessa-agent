@@ -1,4 +1,4 @@
-use super::super::tools::wire::{self, ObservedTool};
+use super::super::tools::wire::{self, ObservedTools};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::providers::{ApprovalMode, ApprovalModeChoice};
@@ -10,7 +10,6 @@ use crate::infrastructure::acp::profile::AcpProfile;
 use crate::infrastructure::acp::sessions::{configuration, AcpConfig};
 use crate::infrastructure::json_rpc::protocol;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 
 /// The npm package this profile is written against. Codex's adapter is not the
 /// only one publishing an ACP server for Codex, and a fork's wire behavior is
@@ -47,12 +46,11 @@ const FULL: ApprovalModeChoice = ApprovalModeChoice {
     description: "Codex runs in its native full-access preset without user approval requests.",
 };
 
-/// Choices demonstrated for this catalog model by the pinned adapter.
+/// Catalog presets covered by the SDK live matrix in review report #239.
 pub(super) fn approval_modes(model_id: &str) -> &'static [ApprovalModeChoice] {
-    if model_id == "gpt-6-astra" {
-        &[ASK, AUTO, FULL]
-    } else {
-        &[ASK]
+    match model_id {
+        "gpt-6-astra" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => &[ASK, AUTO, FULL],
+        _ => &[ASK],
     }
 }
 
@@ -70,14 +68,14 @@ pub(super) fn native_mode(mode: ApprovalMode) -> &'static str {
 pub(super) struct CodexProfile {
     model: String,
     approval_mode: ApprovalMode,
-    tools: HashMap<String, ObservedTool>,
+    tools: ObservedTools,
 }
 impl CodexProfile {
     pub(super) fn new(model: &str, approval_mode: ApprovalMode) -> Self {
         Self {
             model: model.to_owned(),
             approval_mode,
-            tools: HashMap::new(),
+            tools: ObservedTools::default(),
         }
     }
 }

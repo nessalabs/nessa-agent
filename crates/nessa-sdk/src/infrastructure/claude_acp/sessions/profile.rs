@@ -31,13 +31,13 @@ const FULL: ApprovalModeChoice = ApprovalModeChoice {
     description: "Claude may run allowed actions without asking; Nessa's fixed denied tools remain unavailable.",
 };
 
-/// Choices demonstrated for the exact catalog model by the pinned harness.
-/// Other models retain native default until their auto/full behavior is tested.
+/// Catalog presets covered by the SDK live matrix in review report #239.
+/// Haiku's advertised `auto` falls back to `acceptEdits`, which is not Auto.
 pub(super) fn approval_modes(model_id: &str) -> &'static [ApprovalModeChoice] {
-    if model_id == "claude-sonnet-5" {
-        &[ASK, AUTO, FULL]
-    } else {
-        &[ASK]
+    match model_id {
+        "claude-fable-5-1" | "claude-opus-5" | "claude-sonnet-5" => &[ASK, AUTO, FULL],
+        "claude-haiku-4-5-20251001" => &[ASK, FULL],
+        _ => &[ASK],
     }
 }
 

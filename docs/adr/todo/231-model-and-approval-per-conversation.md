@@ -227,15 +227,20 @@ fixed profile; new OpenCode mode switching and paid-provider probes are deferred
   after `auto`. Isolated live native-edit
   turns succeeded on Opus 5 in `auto` and `bypassPermissions`, and Luna in
   `agent` and `agent-full-access`. These are partial probes, not the complete
-  behavior matrix required below. They do not extend the binding-owned choices:
-  only Sonnet and Astra retain Auto/Full; the other models retain Ask until
-  the required behavior evidence exists.
+  behavior matrix required below. PR #237 therefore retained Auto/Full only
+  for Sonnet and Astra. [Issue #239's production SDK matrix](../../reviews/239-model-approval-behavior.md)
+  subsequently exercised the required actions and Ask downgrades with independent
+  file, MCP and shell witnesses. It enables Auto/Full for Opus, Fable, Sol, Terra
+  and Luna, and Full for Haiku. Haiku Auto and unknown models remain unavailable.
+  The report records the pinned adapters, failed probe attempts, repeated
+  evidence, current Codex approval shapes and remaining platform limits.
 - **Newly enabled presets require behaviour tests**, not
   just a configuration acknowledgement. Exercise reads, edits, shell, network,
   MCP and denied tools where the binding exposes them, using the complete Nessa
   launch configuration. Test transitions back to `ask` as well as elevation.
-  The follow-up supplies direct-harness evidence for the named cases; production
-  Nessa regression coverage and the report's excluded boundaries remain separate.
+  The initial spike supplies direct-harness evidence; issue #239 additionally
+  exercises the production SDK bindings and adds controlled adapter regressions.
+  The report's excluded boundaries remain separate.
   Unsupported or unverified modes stay unavailable
   ([gate 7](../../../CODING_STANDARDS.md#gates)).
 - **OpenCode is deferred.** Keep its existing fixed `plan` launch policy. Its
