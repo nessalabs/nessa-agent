@@ -78,7 +78,7 @@ it("closing the view does not cancel a download or publish a late result to anot
   expect(source.install).toHaveBeenCalledTimes(1)
 })
 
-it.each(["download", "verification", "busy", "not-confirmed"] as const)(
+it.each(["download", "refused", "verification", "busy", "not-confirmed"] as const)(
   "reports %s without claiming success",
   async (reason) => {
     const container = document.createElement("div")
@@ -95,6 +95,11 @@ it.each(["download", "verification", "busy", "not-confirmed"] as const)(
     const status = requiredElement(container, '[role="status"]').textContent
     expect(status).not.toContain("Installed.")
     expect(status?.length).toBeGreaterThan(10)
+    if (reason === "refused") {
+      expect(status).toContain("release server refused")
+      expect(status).not.toMatch(/connection|try again/i)
+    }
+    if (reason === "download") expect(status).toContain("Check your connection")
     await React.act(async () => root.unmount())
   },
 )

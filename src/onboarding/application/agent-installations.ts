@@ -11,7 +11,13 @@ export type InstallationOutcome =
   | {
       status: "failed"
       reason:
-        "download" | "storage" | "verification" | "busy" | "unavailable" | "not-confirmed"
+        | "download"
+        | "refused"
+        | "storage"
+        | "verification"
+        | "busy"
+        | "unavailable"
+        | "not-confirmed"
     }
 
 /** The gateway owns publication; closing a view only abandons its wait. */

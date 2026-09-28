@@ -116,6 +116,10 @@ const image = schema.$defs.ImageAttachment.properties
 const linked = schema.$defs.LinkedFile.properties
 // Named for what a reader of the client says, not for the schema's field paths.
 const bounds = {
+  minAgentInstallRequestIdCharacters:
+    schema.$defs.AgentInstallParams.properties.requestId.minLength,
+  maxAgentInstallRequestIdBytes:
+    schema.$defs.AgentInstallParams.properties.requestId["x-utf8MaxBytes"],
   maxConfiguredAgents: schema.$defs.AgentsListResult.properties.agents.maxItems,
   maxAgentInstallVersionBytes: agreeing("native installation version bytes", [
     schema.$defs.AgentInstallOffer.properties.version["x-utf8MaxBytes"],
@@ -143,6 +147,12 @@ const bounds = {
     schema.$defs.ConversationSummary.properties.preview["x-utf8MaxBytes"],
   maxListedConversations:
     schema.$defs.ConversationListResult.properties.conversations.maxItems,
+}
+for (const name of [
+  "minAgentInstallRequestIdCharacters",
+  "maxAgentInstallRequestIdBytes",
+]) {
+  rs += `/// Published agent installation request bound from the product schema.\npub const ${snake(name).toUpperCase()}: usize = ${bounds[name]};\n`
 }
 ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",

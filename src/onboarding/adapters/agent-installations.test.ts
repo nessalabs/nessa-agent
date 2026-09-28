@@ -4,6 +4,7 @@ import { gatewayAgentInstallations } from "./agent-installations"
 
 it.each([
   ["agent_download_failed", "download"],
+  ["agent_download_refused", "refused"],
   ["agent_install_storage_failed", "storage"],
   ["agent_install_verification_failed", "verification"],
   ["agent_install_busy", "busy"],

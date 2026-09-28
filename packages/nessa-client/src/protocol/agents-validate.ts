@@ -132,3 +132,14 @@ export function agentInstallResult(value: unknown): AgentInstallResult {
     throw new Error("Invalid installation result")
   return value as AgentInstallResult
 }
+
+/** Validate the schema-owned invocation bound before sending a download command. */
+export function agentInstallRequestId(value: string): string {
+  if (
+    typeof value !== "string" ||
+    Array.from(value).length < bounds.minAgentInstallRequestIdCharacters ||
+    utf8.encode(value).byteLength > bounds.maxAgentInstallRequestIdBytes
+  )
+    throw new Error("Invalid agent installation request ID")
+  return value
+}

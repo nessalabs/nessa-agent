@@ -277,3 +277,25 @@ for (const name of ["AgentInstallOffer", "AgentInstallResult"]) {
   )
     throw new Error(`${name} must enforce its UTF-8 version boundary`)
 }
+
+const installParams = ajv.getSchema(`${schema.$id}#/$defs/AgentInstallParams`)
+const requestIdLimit =
+  schema.$defs.AgentInstallParams.properties.requestId["x-utf8MaxBytes"]
+for (const requestId of [
+  "",
+  "x".repeat(requestIdLimit + 1),
+  "é".repeat(Math.floor(requestIdLimit / 2)) + "x",
+]) {
+  if (installParams({ agent: "claude", requestId }))
+    throw new Error("Installation schema accepts invalid invocation ID")
+}
+for (const requestId of [
+  "x".repeat(requestIdLimit),
+  "é".repeat(Math.floor(requestIdLimit / 2)),
+  "\0".repeat(requestIdLimit),
+  "\u007f".repeat(requestIdLimit),
+  "\u0085".repeat(Math.floor(requestIdLimit / 2)),
+]) {
+  if (!installParams({ agent: "claude", requestId }))
+    throw new Error("Installation schema rejects bounded invocation ID")
+}
