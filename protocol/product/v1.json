@@ -2420,7 +2420,9 @@
         },
         "requestId": {
           "type": "string",
-          "description": "Opaque invocation identity; the installer validates the complete authenticated invocation identity."
+          "minLength": 1,
+          "x-utf8MaxBytes": 256,
+          "description": "Nonempty opaque invocation identity, bounded in UTF-8 bytes. Retained without truncation in the complete authenticated audit identity."
         }
       },
       "required": ["agent", "requestId"]

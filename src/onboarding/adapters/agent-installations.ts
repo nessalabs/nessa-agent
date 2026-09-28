@@ -30,6 +30,8 @@ export function gatewayAgentInstallations(
           switch (error.code) {
             case "agent_install_storage_failed":
               return { status: "failed", reason: "storage" }
+            case "agent_download_refused":
+              return { status: "failed", reason: "refused" }
             case "agent_download_failed":
               return { status: "failed", reason: "download" }
             case "agent_install_verification_failed":

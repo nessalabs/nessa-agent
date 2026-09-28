@@ -246,6 +246,10 @@ The following table connects these diagrams' failure orderings to regression evi
 | Successful explicit download | Verified publication and audit precede success; refresh readiness | installer tests; gateway/UI tests |
 | Runtime present, sign-in absent | Installation and authentication remain separate | readiness tests; native download smoke |
 | Offline / corrupt / disk failure | Typed failure; no claimed success | installer boundary tests; gateway/UI mappings |
+| Release server refuses download (including withdrawn archive) | Gateway preserves HTTP refusal separately from an unreachable server; UI reports refusal without connection/retry advice | failed_download_reports_a_typed_failure_and_releases_capacity; adapter and download UI tests |
+| Empty or oversized invocation ID | Schema owns nonempty / 256 UTF-8 byte bound; generated client and gateway checks reject before dispatch | protocol schema, client admission, gateway request-ID tests |
+| Invocation ID contains DEL or C1 controls | Gateway JSON-escapes remaining Unicode control characters without changing the decoded ID before audit identity validation | request_id_bounds_reject_before_install_and_preserve_valid_invocations; client/schema boundary tests |
+| Maximum invocation ID plus maximum authenticated identities | Complete JSON audit tuple fits the installer identity, including control-character escaping; no truncation | escaped_authenticated_invocations_fit_without_widening_account_identity |
 | Two clicks or competing connections | UI coalesces; gateway admits one worker | download UI and lost-waiter tests |
 | Caller disappears after admission | Worker keeps permit through completion; no cancellation claim | lost install waiter test |
 | Interrupted install / restart | Existing delivery recovery and atomic publication apply | installer delivery/recovery tests |

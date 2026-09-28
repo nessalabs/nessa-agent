@@ -7,6 +7,7 @@ import type {
 } from "../generated/product.js"
 
 const utf8 = new TextEncoder()
+const unpairedSurrogate = /\p{Surrogate}/u
 const modes = new Set(["ask", "auto", "full"])
 
 function object(value: unknown): Record<string, unknown> {
@@ -131,4 +132,16 @@ export function agentInstallResult(value: unknown): AgentInstallResult {
   )
     throw new Error("Invalid installation result")
   return value as AgentInstallResult
+}
+
+/** Validate the schema-owned invocation bound before sending a download command. */
+export function agentInstallRequestId(value: string): string {
+  if (
+    typeof value !== "string" ||
+    unpairedSurrogate.test(value) ||
+    Array.from(value).length < bounds.minAgentInstallRequestIdCharacters ||
+    utf8.encode(value).byteLength > bounds.maxAgentInstallRequestIdBytes
+  )
+    throw new Error("Invalid agent installation request ID")
+  return value
 }

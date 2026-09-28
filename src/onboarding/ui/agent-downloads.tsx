@@ -14,6 +14,8 @@ function outcomeText(outcome: InstallationOutcome | undefined): string | undefin
   switch (outcome.reason) {
     case "storage":
       return "Nessa could not save the runtime. Check available disk space and try again."
+    case "refused":
+      return "The release server refused this download. Check for a Nessa update or report this problem."
     case "download":
       return "The download failed. Check your connection and try again."
     case "verification":

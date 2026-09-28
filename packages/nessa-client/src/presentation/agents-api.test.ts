@@ -104,3 +104,44 @@ it("enforces the schema-owned configured-agent count for unique valid rows", asy
   agents.push({ ...offered.agents[0], agent: "one-too-many" })
   await expect(api.list()).rejects.toThrow("Invalid configured agents")
 })
+
+it("rejects invalid invocation IDs before dispatch and preserves bounded IDs", async () => {
+  const limit = bounds.maxAgentInstallRequestIdBytes
+  const result = {
+    agent: "claude",
+    version: "1",
+    downloaded: true,
+    cleanupPending: false,
+  }
+  const request = vi.fn().mockResolvedValue(result)
+  const api = createAgentsApi({ request })
+  for (const requestId of [
+    "",
+    "x".repeat(limit + 1),
+    "é".repeat(Math.floor(limit / 2)) + "x",
+    "x".repeat(4097),
+    "\uD800",
+    "\uDC00",
+  ]) {
+    await expect(api.install("claude", requestId)).rejects.toThrow(
+      "Invalid agent installation request ID",
+    )
+  }
+  expect(request).not.toHaveBeenCalled()
+  for (const requestId of [
+    "x".repeat(limit),
+    "é".repeat(Math.floor(limit / 2)),
+    "\0".repeat(limit),
+    "\u007f".repeat(limit),
+    "\u0085".repeat(Math.floor(limit / 2)),
+    "\\".repeat(limit),
+    "\uD83D\uDCA9",
+  ]) {
+    expect(await api.install("claude", requestId)).toEqual(result)
+    expect(request).toHaveBeenLastCalledWith(
+      "agents.install",
+      { agent: "claude", requestId },
+      { atLeastMs: 46 * 60 * 1000 },
+    )
+  }
+})

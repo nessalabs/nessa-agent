@@ -926,7 +926,7 @@ export interface ApprovalModeChange {
 export interface AgentInstallParams {
   /** Agent whose pinned native runtime is being installed or offered. */
   agent: InstallableAgent
-  /** Opaque invocation identity; the installer validates the complete authenticated invocation identity. */
+  /** Nonempty opaque invocation identity, bounded in UTF-8 bytes. Retained without truncation in the complete authenticated audit identity. */
   requestId: string
 }
 /** A native runtime this gateway can download for its host. */
@@ -965,6 +965,8 @@ export const InstallableAgent = {
 export type InstallableAgent = (typeof InstallableAgent)[keyof typeof InstallableAgent]
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
+  minAgentInstallRequestIdCharacters: 1,
+  maxAgentInstallRequestIdBytes: 256,
   maxConfiguredAgents: 3,
   maxAgentInstallVersionBytes: 128,
   maxImageBytes: 5242880,

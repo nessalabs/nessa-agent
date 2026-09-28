@@ -7,6 +7,8 @@ mod native_installs {
         },
         domain::{AgentName, InstallRequest, ReleaseVersion},
     };
+    use crate::product::generated::MAX_AGENT_INSTALL_REQUEST_ID_BYTES;
+    use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
     use std::sync::{atomic::AtomicUsize, mpsc};
 
     struct Installer {
@@ -14,7 +16,7 @@ mod native_installs {
         requests: Mutex<Vec<InstallRequest>>,
         started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
         wait: Mutex<Option<mpsc::Receiver<()>>>,
-        fail: bool,
+        failure: Option<SourceFailure>,
     }
     impl Installer {
         fn new() -> Self {
@@ -23,7 +25,7 @@ mod native_installs {
                 requests: Mutex::new(Vec::new()),
                 started: Mutex::new(None),
                 wait: Mutex::new(None),
-                fail: false,
+                failure: None,
             }
         }
     }
@@ -47,9 +49,9 @@ mod native_installs {
             if let Some(wait) = self.wait.lock().unwrap().take() {
                 wait.recv().unwrap();
             }
-            if self.fail {
+            if let Some(failure) = &self.failure {
                 return Err(GatewayInstallFailure::Install(Box::new(
-                    InstallFailure::Download(SourceFailure::Unreachable("offline".into())),
+                    InstallFailure::Download(failure.clone()),
                 )));
             }
             Ok(InstalledRuntime {
@@ -149,20 +151,30 @@ mod native_installs {
 
     #[tokio::test]
     async fn failed_download_reports_a_typed_failure_and_releases_capacity() {
-        let mut installer = Installer::new();
-        installer.fail = true;
-        let state = gateway::chat_state().with_agent_installations(Arc::new(installer));
-        let session = gateway::chat_session(&state, "owner-panel").await;
-        let response = gateway::chat_request(
-            &state,
-            &session,
-            "agents.install",
-            json!({"agent":"claude", "requestId":"first"}),
-        )
-        .await;
-        assert_eq!(response.error.unwrap().code, "agent_download_failed");
-        assert_eq!(state.installs.available_permits(), 1);
+        for (failure, code) in [
+            (
+                SourceFailure::Unreachable("offline".into()),
+                "agent_download_failed",
+            ),
+            (SourceFailure::Refused(404), "agent_download_refused"),
+            (SourceFailure::Refused(503), "agent_download_refused"),
+        ] {
+            let mut installer = Installer::new();
+            installer.failure = Some(failure);
+            let state = gateway::chat_state().with_agent_installations(Arc::new(installer));
+            let session = gateway::chat_session(&state, "owner-panel").await;
+            let response = gateway::chat_request(
+                &state,
+                &session,
+                "agents.install",
+                json!({"agent":"claude", "requestId":"first"}),
+            )
+            .await;
+            assert_eq!(response.error.unwrap().code, code);
+            assert_eq!(state.installs.available_permits(), 1);
+        }
     }
+
     #[tokio::test]
     async fn credential_rotation_changes_attribution_without_changing_installation_owner() {
         let installer = Arc::new(Installer::new());
@@ -183,11 +195,64 @@ mod native_installs {
         assert_ne!(requests[0].request_id(), requests[1].request_id());
     }
 
+    #[tokio::test]
+    async fn request_id_bounds_reject_before_install_and_preserve_valid_invocations() {
+        let installer = Arc::new(Installer::new());
+        let state = gateway::chat_state().with_agent_installations(installer.clone());
+        let session = gateway::chat_session(&state, "owner-panel").await;
+        let limit = MAX_AGENT_INSTALL_REQUEST_ID_BYTES;
+        for id in [
+            String::new(),
+            "x".repeat(limit + 1),
+            "é".repeat(limit / 2) + "x",
+            "x".repeat(4097),
+        ] {
+            let response = gateway::chat_request(
+                &state,
+                &session,
+                "agents.install",
+                json!({"agent":"claude", "requestId":id}),
+            )
+            .await;
+            assert_eq!(response.error.unwrap().code, "invalid_request");
+        }
+        assert_eq!(installer.calls.load(Ordering::SeqCst), 0);
+        for id in [
+            "x".repeat(limit),
+            "é".repeat(limit / 2),
+            "\u{0000}".repeat(limit),
+            "\u{007f}".repeat(limit),
+            "\u{0085}".repeat(limit / 2),
+            "\\".repeat(limit),
+        ] {
+            let response = gateway::chat_request(
+                &state,
+                &session,
+                "agents.install",
+                json!({"agent":"claude", "requestId":id}),
+            )
+            .await;
+            assert!(response.error.is_none());
+            let requests = installer.requests.lock().unwrap();
+            let invocation: serde_json::Value =
+                serde_json::from_str(requests.last().unwrap().request_id()).unwrap();
+            assert_eq!(invocation[5], id);
+        }
+        assert_eq!(installer.calls.load(Ordering::SeqCst), 6);
+    }
+
     #[test]
     fn escaped_authenticated_invocations_fit_without_widening_account_identity() {
         let id = "\\".repeat(256);
-        let invocation =
-            json!(["gateway", "claude", id, id, id, "\u{0000}".repeat(256)]).to_string();
+        let invocation = json!([
+            "gateway",
+            "claude",
+            OrganizationId::new(id.clone()).unwrap().as_str(),
+            PrincipalId::new(id.clone()).unwrap().as_str(),
+            CredentialId::new(id).unwrap().as_str(),
+            "\u{0000}".repeat(MAX_AGENT_INSTALL_REQUEST_ID_BYTES)
+        ])
+        .to_string();
         let request = InstallRequest::new("unix:test", invocation.clone()).unwrap();
         assert_eq!(request.request_id(), invocation);
         assert!(InstallRequest::new("a".repeat(256), "click").is_err());

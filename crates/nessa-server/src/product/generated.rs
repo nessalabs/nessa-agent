@@ -1011,3 +1011,7 @@ impl InstallableAgent {
         }
     }
 }
+/// Published agent installation request bound from the product schema.
+pub const MIN_AGENT_INSTALL_REQUEST_ID_CHARACTERS: usize = 1;
+/// Published agent installation request bound from the product schema.
+pub const MAX_AGENT_INSTALL_REQUEST_ID_BYTES: usize = 256;

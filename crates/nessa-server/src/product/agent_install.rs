@@ -3,6 +3,7 @@
 use super::{
     generated::{
         AgentInstallOffer, AgentInstallOptionsResult, AgentInstallParams, AgentInstallResult,
+        MAX_AGENT_INSTALL_REQUEST_ID_BYTES, MIN_AGENT_INSTALL_REQUEST_ID_CHARACTERS,
     },
     socket::{failure, success},
     state::ProductRouteState,
@@ -52,19 +53,23 @@ pub(super) async fn dispatch(
     let Ok(params) = serde_json::from_value::<AgentInstallParams>(frame.params) else {
         return failure(&frame.id, "invalid_request");
     };
+    if params.request_id.chars().count() < MIN_AGENT_INSTALL_REQUEST_ID_CHARACTERS
+        || params.request_id.len() > MAX_AGENT_INSTALL_REQUEST_ID_BYTES
+    {
+        return failure(&frame.id, "invalid_request");
+    }
     let Ok(agent) = AgentName::parse(params.agent.as_str()) else {
         return failure(&frame.id, "invalid_request");
     };
     let context = session.context();
-    let invocation = serde_json::json!([
+    let invocation = audit_invocation(serde_json::json!([
         "gateway",
         agent.as_str(),
         context.organization_id().as_str(),
         context.principal_id().as_str(),
         context.credential_id().as_str(),
         params.request_id
-    ])
-    .to_string();
+    ]));
     let Ok(request) = InstallRequest::new(installer.account_id(), invocation) else {
         return failure(&frame.id, "invalid_request");
     };
@@ -92,6 +97,21 @@ pub(super) async fn dispatch(
     }
 }
 
+// JSON permits raw DEL/C1 controls, but the audit identity is plain text.
+// Escape them losslessly, just as JSON already does for C0 controls.
+fn audit_invocation(value: serde_json::Value) -> String {
+    let json = value.to_string();
+    let mut escaped = String::with_capacity(json.len());
+    for character in json.chars() {
+        if character.is_control() {
+            escaped.push_str(&format!("\\u{:04x}", u32::from(character)));
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
+}
+
 fn code(error: &GatewayInstallFailure) -> &'static str {
     match error {
         GatewayInstallFailure::Unavailable => "agent_installer_unavailable",
@@ -107,6 +127,7 @@ fn code(error: &GatewayInstallFailure) -> &'static str {
             | InstallFailure::Store(StoreFailure::Unwritable(_) | StoreFailure::Unreadable(_)) => {
                 "agent_install_storage_failed"
             }
+            InstallFailure::Download(SourceFailure::Refused(_)) => "agent_download_refused",
             InstallFailure::Download(_) => "agent_download_failed",
             _ => "agent_install_not_confirmed",
         },
