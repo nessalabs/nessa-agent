@@ -11,7 +11,7 @@
 import { act, StrictMode, type ReactNode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ClockProvider } from "../../adapters/dom/clock"
 import { focusedPaneAttribute } from "../../adapters/dom/focus"
 import {
@@ -38,11 +38,15 @@ beforeEach(() => {
   host = document.createElement("div")
   document.body.append(host)
   root = createRoot(host)
+  // A browser stamps an event (`timeStamp`) on `performance.now()`'s clock;
+  // jsdom stamps it with `Date.now()`. One clock for both, as a browser has.
+  vi.spyOn(performance, "now").mockImplementation(() => Date.now())
 })
 
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
+  vi.restoreAllMocks()
 })
 
 /** Two approvals waiting, one session running, one resting. */
@@ -228,6 +232,30 @@ describe("the agents overview", () => {
     expect(answers).toEqual([["approve", "first", "first-ask", "once", "person"]])
     expect(document.activeElement).toBe(card("second"))
     expect(host.querySelector('[data-content="panes"]')).toBeNull()
+  })
+
+  it("measures the pause from when a key was pressed, not from when the page got to it", async () => {
+    const { source } = await mount()
+    await open()
+    await press(card("first") as HTMLElement, "Enter", { command: true })
+    // Pressed straight after the answer, and handled only once the pause has
+    // passed — the page busy meanwhile: still too soon to be a choice.
+    const early = new KeyboardEvent("keydown", {
+      code: "Enter",
+      key: "Enter",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    await act(async () => new Promise((done) => setTimeout(done, answerPause + 20)))
+    await act(async () => {
+      document.activeElement?.dispatchEvent(early)
+      await settle(10)
+    })
+    const answers = source.calls.filter(
+      (call) => call[0] === "approve" || call[0] === "deny",
+    )
+    expect(answers).toEqual([["approve", "first", "first-ask", "once", "person"]])
   })
 
   it("gives the region back when the preview is turned off, in this window or another", async () => {

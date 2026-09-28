@@ -199,6 +199,13 @@ const noFewer = async (page, than) =>
   ))
 
 /**
+ * How far apart the second press comes: well inside the answer pause
+ * (`answerPause`, 250ms, src/desktop/workspace/model/overview/walk.ts) — a
+ * third of it — so it is a press the person could not yet aim.
+ */
+const withinAnswerPause = 80
+
+/**
  * One press answers one request in the overview: a held ⌘↩'s repeats answer
  * nothing more, and a second press straight after the keyboard moved on is
  * not taken.
@@ -226,7 +233,7 @@ async function answerOnceInOverview(page) {
     )
   const next = await requestCount(page)
   await page.keyboard.press(keys.allow)
-  await page.waitForTimeout(80)
+  await page.waitForTimeout(withinAnswerPause)
   await page.keyboard.press(keys.allow)
   const twice = (await fewer(page, next - 1)) && (await noFewer(page, next - 1))
   trail.push({

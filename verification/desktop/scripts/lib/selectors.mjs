@@ -22,12 +22,13 @@ export const css = {
   // Panes (data-pane-key is the pane's identity; data-pane-focused marks the focused one)
   pane: "[data-pane-key]",
   focusedPane: "[data-pane-key][data-pane-focused]",
-  paneGrid: ".workspace-chat", // class: the grid the panes are laid out in
+  paneGrid: ".workspace-panes", // class: the grid the panes are laid out in — the box the drag measures
   paneHeader: ".workspace-pane-header", // class: a pane's header, which carries the drag
   paneDragHandle: "[data-drag-pane]",
   paneTitle: "[data-drag-pane] .workspace-pane-title", // class: where a pane is grabbed by its title
   composer: "[data-pane-key] textarea",
   transcript: ".workspace-transcript", // class
+  dragLayer: ".workspace-drag-layer", // class: what is carried is drawn in it, below the titlebar row
   dragGhost: ".workspace-drag-ghost", // class: the translucent copy the pointer carries
   dragCarrier: ".workspace-drag-carrier", // class: holds the copy at the pointer
   dragPlaceholder: ".workspace-drag-placeholder", // class: where a drop would land
@@ -84,7 +85,8 @@ export const css = {
 /**
  * What may sit under the window's controls: titlebar rows themselves (their
  * content starts at the safe area by the stylesheet's rule) and floating
- * layers. Nothing else — ADR 238, "The titlebar's safe area": nothing is
+ * layers. Nothing else — the drag's copy included, which its layer clips
+ * below the titlebar row — ADR 238, "The titlebar's safe area": nothing is
  * painted under the controls, decorative art (the picture band, the night
  * scene) included.
  */
@@ -93,7 +95,6 @@ export const safeAreaExempt = [
   ".settings-titlebar",
   "[data-slot='app-shell-titlebar']",
   ".desktop-tooltip",
-  ".workspace-drag-ghost",
   ".desktop-column-sizer",
 ].join(", ")
 
@@ -155,12 +156,12 @@ export const keys = {
 /**
  * How the drop announcer says a zone (`saying` in
  * src/desktop/workspace/adapters/dom/drag.ts): a vertical zone is "above" or
- * "below", a side zone "left of" or "right of".
+ * "below" the pane — never "above of" — a side zone "left of" or "right of".
  */
 export const zoneSaid = {
   any: /./,
   swap: /^Swap with /,
-  vertical: /^(Move|Split) (above|below) /,
+  vertical: /^(Move|Split) (above|below) (?!of )/,
   side: /^(Move|Split) (left|right) of /,
 }
 

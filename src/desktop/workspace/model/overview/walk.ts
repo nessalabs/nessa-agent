@@ -57,7 +57,8 @@ export const answerPause = 250
 
 /**
  * Whether a key press may answer (or open) the request it lands on: never a
- * held key's repeat — one press answers one request — and not within
+ * held key's repeat — one press, one act, the rule the approval card's
+ * answers and the composer's Return keep too — and not within
  * `answerPause` of the keyboard moving on by answering (`movedAt`, on the
  * same clock as `at`).
  */

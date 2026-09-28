@@ -240,7 +240,19 @@ export function pointerVelocity(
 export interface Targets {
   readonly grid: Rect
   readonly panes: readonly (readonly [PaneKey, Rect])[]
+  /**
+   * The side columns drawn as the press began — docked beside the grid, or
+   * revealed from the window's edge over it: never a target, whatever is
+   * under them.
+   */
+  readonly covered: readonly Rect[]
 }
+
+const within = (point: { readonly x: number; readonly y: number }, box: Rect) =>
+  point.x >= box.left &&
+  point.x <= box.left + box.width &&
+  point.y >= box.top &&
+  point.y <= box.top + box.height
 
 /** The pane and zone a drag aims at. */
 export interface Aim {
@@ -251,7 +263,8 @@ export interface Aim {
 /**
  * Where a drag aims: the pointer, and nothing else — what the eye follows
  * (the copy's centre, `model/drag.ts`) and what aims are one point. Off the
- * grid, or with no pane in sight, nothing; in a gutter, the nearest pane
+ * grid, over a side column, or with no pane in sight, nothing; in a gutter,
+ * the nearest pane
  * (`paneAt`); on a pane, its zone (`zoneAt`), weighed by where the pointer
  * heads at `now` (`pointerVelocity`) and held while it stays on the pane it
  * was aiming at (`was`).
@@ -264,14 +277,8 @@ export function aimAt(
 ): Aim | null {
   const pointer = path.at(-1)
   if (!pointer || !targets) return null
-  const { grid } = targets
-  if (
-    pointer.x < grid.left ||
-    pointer.x > grid.left + grid.width ||
-    pointer.y < grid.top ||
-    pointer.y > grid.top + grid.height
-  )
-    return null
+  if (!within(pointer, targets.grid)) return null
+  if (targets.covered.some((column) => within(pointer, column))) return null
   const over = paneAt(pointer, targets.panes)
   if (!over) return null
   return {

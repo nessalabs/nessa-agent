@@ -242,35 +242,52 @@ without a pick, or Settings, gives focus back to what opened it.
 browser's drag, and a pane's header carries the pane, never the window (no
 drag region in it). What a press becomes is one pure state machine,
 `model/drag.ts` (`stepDrag`); the adapter sends it every event and draws the
-phase it answers with. Its rules were patched through three review rounds and
-then redesigned to fewer: **one aim point, the pointer**; **nothing is read
-again while carrying — a change ends the drag instead**; **only panes a
-person can see are targets**; and **the zone settles at rest**.
+phase it answers with. What the page made for a press or a drag is held in
+the phase itself, so there is one answer to whether a drag is live. Its
+rules, few on purpose (_Keep patching the drag_, below): **one aim point, the
+pointer**; **nothing is read again while carrying — a change ends the drag
+instead**; **only panes a person can see are targets — never a side
+column**; **only a drop that was previewed commits**; **only the primary
+button carries**; and **the zone settles at rest**.
 
 | phase | event | next | what the window does |
 | --- | --- | --- | --- |
-| idle | press (primary button) on a pane's header or a session's row, not on a control inside it | pressed | nothing in the press's own frame; once it has painted, the copy is made unseen and the page read once — the grid, each pane's box and parts, the sidebar's room, and whether panes can be seen at all |
-| pressed | move under 4px (`liftDistance`) | pressed | — |
-| pressed | move 4px or more | carrying (aim: none yet) | the copy is shown under the pointer — once made, so a drag begun before the press's frame painted shows a frame later rather than read the page in the event — full size, and glides (`--desktop-base`, transform only) until its centre is under the pointer, where it stays; the zone waits for the next frame |
-| pressed | release | idle | a click; what was made goes |
-| pressed | Escape; any other key but a lone modifier; the pointer lost (`lostpointercapture`, `pointercancel`, the window's blur); a change (below) | idle | the press is let go: no later move can start a drag |
-| carrying | move | carrying | the copy moves with the pointer, one to one; the zone is decided from the pointer (below); the panes and the placeholder change only when the zone does, a frame later |
-| carrying | no move for 150ms (`restAfter`, `still`) | carrying | the pointer's heading has aged out: the zone is decided again as at rest |
-| carrying | release, with a zone that offers something (`dropOutcome`) | dropping | the zone under the release point — at rest if the pointer paused — is committed: the command (`movePane`, `dropSession`) gives what was previewed, and the copy flies into its rect |
-| carrying | release with no zone, or one that offers nothing (off the grid, the carried pane's own place, a side the room refuses, no pane in sight) | cancelling (home) | the copy flies home as the panes go back |
+| idle | press of the primary button on a pane's header or a session's row, not on a control inside it | pressed (no copy yet) | nothing in the press's own frame; in a task once it has painted, the copy is made unseen and the page read once — the grid, the room (`measure`), each pane's box and parts, the side columns drawn, and whether panes can be seen at all |
+| idle | any other press: another button, a control inside a header | idle | the press is not the drag's: nothing is made or held for it |
+| pressed (no copy yet) | the copy made (`ready`) | pressed (with its copy) | — |
+| pressed (no copy yet) | the copy cannot be made: no panes laid out | idle | — |
+| pressed (no copy yet) | move | pressed | nothing: a press becomes a drag only once its copy is made, so no event reads the page |
+| pressed | a move of another pointer, or of its own under 4px (`liftDistance`) | pressed | — |
+| pressed (with its copy) | move 4px or more | carrying (aim: none yet) | the copy is shown under the pointer, full size, and glides (`--desktop-base`, transform only) until its centre is under the pointer, where it stays; the zone waits for the next frame |
+| pressed | release of its pointer | idle | a click; what was made goes |
+| pressed | Escape; any other key but a lone modifier; another button (a move whose `buttons` is not the primary alone, or a press of the same pointer); `pointercancel`; the window's blur; a change (below) | idle | the press is let go: no later move can start a drag |
+| carrying | move of its pointer | carrying | the copy moves with the pointer, one to one; the zone is decided from the pointer (below); the panes and the placeholder change only when the zone does, a frame later (the preview) |
+| carrying | a move of another pointer, or to where it already is | carrying | — (resting is not restarted) |
+| carrying | no move for 150ms (`restAfter`, `still`) | carrying | the pointer's heading has aged out: the zone is decided again as at rest, and previewed a frame later |
+| carrying | release of its pointer in the zone the page has previewed, one that offers something (`dropOutcome`) | dropping | the command (`movePane`, `dropSession`) commits what was previewed, in the room read as the press began, and the copy flies into its rect; the click the release makes is swallowed |
+| carrying | release of its pointer anywhere else: before any preview was shown (a flick), in a zone not previewed yet, off the grid, over a side column, the carried pane's own place, a side the room refuses, no pane in sight | cancelling (home) | the copy flies home as the panes go back; the click is swallowed |
+| carrying | release of another pointer | carrying | — (no click is swallowed for it) |
 | carrying | Escape | cancelling (home) | as above; Escape goes no further |
-| carrying | the pointer lost (`lostpointercapture`, `pointercancel`, the window's blur) | cancelling (home) | as above; with the press let go, a later move starts nothing |
-| carrying | a change: any key but Escape or a lone modifier (a command — ⌘W, ⌘0, ⌘B, ⌘,, ⌘K, an arrow — ends the drag before it runs); a resize; the panes, the content view or the side columns changing in the store (an agent's dispatch, a session removed); the carried session no longer listed; the window going inert under Settings. A layout switch unmounts the shell, and the drag with it, taking everything it drew | cancelling (at once) | the copy and the preview go at once, nothing read again, and the change plays as it would with no drag |
+| carrying | another button, `lostpointercapture`, `pointercancel`, the window's blur | cancelling (home) | as above; with the press let go, a later move starts nothing |
+| carrying | a change: any key but Escape or a lone modifier (a command — ⌘W, ⌘0, ⌘B, ⌘,, ⌘K, an arrow — ends the drag before it runs); a resize; the panes, the content view or the side columns changing in the store (an agent's dispatch, a session removed); the carried session no longer listed; the window going inert under Settings, seen as it happens (a `MutationObserver` on `inert`). A layout switch unmounts the shell, and the drag with it, taking everything it drew | cancelling (at once) | the copy and the preview go at once, nothing read again, and the change plays as it would with no drag; a key that reaches the window while it is inert is never the drag's, so Settings keeps its Escape |
 | dropping | the drop's own change to the panes | dropping | (it is the drop) |
 | dropping, cancelling | the copy's flight ends (`landed`) | idle | — |
 | dropping, cancelling | anything else, a press included | unchanged | a press while the copy still flies starts nothing |
+
+The copy is drawn in a layer that begins below the titlebar row
+(`.workspace-drag-layer`), so nothing carried is ever painted under the
+window's controls, whatever it passes over. The folded sidebar revealed from
+the window's edge (the peek, `useEdgePeek`) neither shows nor hides while a
+pointer button is held: as a press found it, it stays until the release, and
+then where the pointer is decides.
 
 Where the pointer is decides the zone (`aimAt`, `model/drop.ts`):
 
 | the pointer | zone |
 | --- | --- |
 | anywhere, while the Agents overview (or Settings) covers the panes | none: no zone, no placeholder, a release changes nothing |
-| off the grid — over a side column, or out of the window | none |
+| over a side column, docked or revealed from the edge over the panes (`Targets.covered`) | none |
+| off the grid, or out of the window | none |
 | in a gutter between panes | the nearest pane's, the pointer held to its edge (`paneAt`) |
 | over a pane | each side reaches a third of the way in, held to 90–300px and never past the middle (`edgeReach`); the middle is what the sides leave, and where two reaches meet the diagonal between them decides (`zoneAt`) |
 | over a pane, heading mostly toward a side (the last tenth of a second, `pointerVelocity`) | that side reaches 1.4 times further, so a drag down a tall pane is "below" by two-thirds of the way |
@@ -292,18 +309,29 @@ of the pane itself — one screen of its conversation, moved to where it was
 scrolled by transform, its composer and chips, in a box of its own size
 (`contain: strict`); a session from a list is drawn from what the window holds
 of it. Nothing of the page is read after the press's frame: where a preview
-has drawn a pane is known from the preview's own motion, so beginning,
-previewing, dropping and letting go only write. A press on what can be
-carried, and the drag it becomes, select nothing (`selectstart`) and leave
-nothing selected; while carrying, one element over the page holds the
+has drawn a pane is known from the preview's own motion, and the preview and
+the drop's command are given the room read as the press began (a resize or a
+side column changing ends the drag, so it is still the room at the release),
+so beginning, previewing, dropping and letting go only write. What is read is
+read in a task after the press's frame has painted; a page written to in
+between is laid out by that read, once. That is accepted, not avoided: in
+Chrome at 4× CPU throttle, four panes, the task took a median 1.6ms (max
+3.0ms) on a clean page and 3.0ms (max 4.4ms) after a streamed paragraph was
+written into every pane in between, six runs each — well inside a frame. A
+press on what can be carried, and the drag it becomes, select nothing
+(`selectstart`) and leave nothing selected; while carrying, one element over the page holds the
 grabbing hand. Only transforms move; the zone is announced in a polite live
 region; with less motion, nothing but the copy moves. `model/drag.test.ts`
-has a test for each row above; `verification/desktop/scripts/drag.mjs` checks
-the rest in Chrome and WebKit, frame by frame — the copy's centre stays on the
-pointer, no pane leaves the grid or the window, panes move one way between
-zone changes, the zone settles at rest, nothing is a target under the
-overview, a resize or a command mid-drag leaves nothing lifted, and a lost
-pointer starts nothing again.
+has a test for each row above, and `adapters/dom/drag.test.tsx` for the page's
+side of them (the click a release makes, a control's own press, the carried
+session unlisted, Settings' Escape, nothing read after the press);
+`verification/desktop/scripts/drag.mjs` checks the rest in Chrome and WebKit,
+frame by frame — the copy's centre stays on the pointer, no pane leaves the
+grid or the window, panes move one way between zone changes, the zone settles
+at rest, nothing is a target under the overview or over the revealed sidebar
+(which stays revealed), a flick or a chord drops nothing, nothing carried is
+painted under the controls, a resize or a command mid-drag leaves nothing
+lifted, and a lost pointer starts nothing again.
 
 **What is typed and not sent** is product state: `composerText` in the
 workspace slice, by session or new session, written by the composer (and by an

@@ -402,10 +402,24 @@ html[data-workspace-resizing="y"] * {
  * (`drag.ts`). Translucent and lifted. On a drop its box scales into the
  * place it takes while its content counter-scales, so it never lays out again.
  */
-.workspace-drag-carrier {
+/*
+ * Everything carried is drawn in this layer, which begins below the titlebar
+ * row and clips what passes above it: nothing carried is painted under the
+ * window's controls (ADR 238 › _Drag and drop_). The carrier inside it is
+ * placed back at the window's origin, so it moves in the pointer's own
+ * coordinates.
+ */
+.workspace-drag-layer {
   position: fixed;
   z-index: 60;
-  top: 0;
+  inset: var(--desktop-titlebar-height) 0 0 0;
+  overflow: clip;
+  pointer-events: none;
+}
+
+.workspace-drag-carrier {
+  position: absolute;
+  top: calc(-1 * var(--desktop-titlebar-height));
   left: 0;
   width: 0;
   height: 0;

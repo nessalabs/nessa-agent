@@ -21,6 +21,15 @@
  *   command-mid-drag     ⌘W and ⌘0 while carrying end the drag first, then run: the same
  *   overview-session-drop  (sessions in the sidebar) a session carried while the overview
  *                        covers the panes offers no zone and no placeholder; the release changes nothing
+ *   flick                down, across and up in one task — before any copy, and again
+ *                        lifted but before any preview — changes nothing
+ *   chord-right-button   the right button pressed while carrying ends the drag: nothing
+ *                        left carried, the release after drops nothing
+ *   peek-session-no-zone (sidebar layout) a session carried inside the sidebar revealed
+ *                        from the edge offers no zone and no placeholder, the reveal stays
+ *                        for the whole drag, and the release changes nothing
+ *   copy-under-controls  the corner pane carried: nothing of its copy is painted under the
+ *                        window's controls, any frame
  */
 import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
@@ -44,10 +53,29 @@ import {
 } from "./lib/workspace.mjs"
 
 const tolerance = 2
-/** How long the copy's glide to its centre may take: `--desktop-base` and a frame. */
-const glideMs = 180 + 40
 
-function followsPointer(frames, liftedAt) {
+/**
+ * How long the copy's glide to its centre may take: `--desktop-base`, read
+ * where the drag reads it (the workspace, under its surface), and a frame.
+ */
+async function glideOf(page) {
+  const token = await page.evaluate(
+    (sel) =>
+      getComputedStyle(document.querySelector(sel))
+        .getPropertyValue("--desktop-base")
+        .trim(),
+    css.workspace,
+  )
+  const ms = token.endsWith("ms")
+    ? Number.parseFloat(token)
+    : token.endsWith("s")
+      ? Number.parseFloat(token) * 1000
+      : Number.NaN
+  if (!Number.isFinite(ms)) throw new CannotRun(`--desktop-base reads "${token}"`)
+  return ms + 40
+}
+
+function followsPointer(frames, liftedAt, glideMs) {
   const carried = frames.filter(
     (f) => f.ghost && f.pointer && f.t - liftedAt > glideMs && f.pointer.t > liftedAt,
   )
@@ -210,6 +238,7 @@ const checks = {
   "sweep-across-zones": async (page, layout) => {
     const list = await fourPanes(page, layout)
     const grid = await page.locator(css.paneGrid).first().boundingBox()
+    const glideMs = await glideOf(page)
     const recorder = await recordFrames(page)
     await lift(page, 0)
     const liftedAt = await liftedNow(page)
@@ -232,7 +261,7 @@ const checks = {
       panes: list.length,
       frames: during.length,
       failures: [
-        ...followsPointer(during, liftedAt).map((f) => `follows-pointer: ${f}`),
+        ...followsPointer(during, liftedAt, glideMs).map((f) => `follows-pointer: ${f}`),
         ...insideGrid(during).map((f) => `inside-grid: ${f}`),
         ...insideWindow(during).map((f) => `inside-window: ${f}`),
         ...oneWay(during).map((f) => `one-way: ${f}`),
@@ -400,7 +429,7 @@ const checks = {
     if (!lost)
       throw new CannotRun(`no drag shield (${css.dragShield}) to lose the pointer from`)
     await settled(page)
-    // The reviewer's order: the pointer moves on, then is released over a zone.
+    // Lost, then the pointer moves on and is released over a zone.
     await page.mouse.move(target.x + target.w / 2 + 20, target.y + target.h / 2, {
       steps: 5,
     })
@@ -500,6 +529,198 @@ const checks = {
     },
   },
 }
+
+Object.assign(checks, {
+  flick: async (page, layout) => {
+    const list = await threeColumns(page, layout)
+    const far = list[2]
+    const before = (await order(page)).join(",")
+    const title = await page.evaluate((sel) => {
+      const r = document.querySelector(sel).getBoundingClientRect()
+      return { x: r.left + Math.min(r.width / 2, 40), y: r.top + r.height / 2 }
+    }, css.paneTitle)
+    const to = { x: far.x + far.w / 2, y: far.y + far.h / 2 }
+    // Down, across and up in one task: no frame between them.
+    await page.evaluate(
+      ([sel, from, to]) => {
+        const at = (type, p, target = window) =>
+          target.dispatchEvent(
+            new PointerEvent(type, {
+              clientX: p.x,
+              clientY: p.y,
+              pointerId: 1,
+              isPrimary: true,
+              button: 0,
+              buttons: type === "pointerup" ? 0 : 1,
+              bubbles: true,
+              cancelable: true,
+            }),
+          )
+        const title =
+          document.elementFromPoint(from.x, from.y) ?? document.querySelector(sel)
+        at("pointerdown", from, title)
+        at("pointermove", to)
+        at("pointerup", to)
+      },
+      [css.paneTitle, title, to],
+    )
+    await settled(page)
+    await frames(page, 4)
+    const failures = residueFailures(await dragResidue(page)).map(
+      (f) => `before any copy: ${f}`,
+    )
+    const once = (await order(page)).join(",")
+    if (once !== before)
+      failures.push(`a flick before any copy dropped: ${before} → ${once}`)
+    // Lifted, then across and up in one task, before any preview is shown.
+    await page.evaluate(() =>
+      addEventListener("pointerdown", (e) => (window.__verifyPointerId = e.pointerId), {
+        capture: true,
+        once: true,
+      }),
+    )
+    await lift(page, 0)
+    await page.evaluate((to) => {
+      const at = (type) =>
+        dispatchEvent(
+          new PointerEvent(type, {
+            clientX: to.x,
+            clientY: to.y,
+            pointerId: window.__verifyPointerId,
+            isPrimary: true,
+            button: 0,
+            buttons: type === "pointerup" ? 0 : 1,
+            bubbles: true,
+            cancelable: true,
+          }),
+        )
+      at("pointermove")
+      at("pointerup")
+    }, to)
+    await page.mouse.up()
+    await settled(page)
+    await frames(page, 4)
+    failures.push(
+      ...residueFailures(await dragResidue(page)).map((f) => `before any preview: ${f}`),
+    )
+    const after = (await order(page)).join(",")
+    if (after !== before)
+      failures.push(`a release before any preview dropped: ${before} → ${after}`)
+    return { failures }
+  },
+  "chord-right-button": async (page, layout) => {
+    const list = await threeColumns(page, layout)
+    const target = list[2]
+    const before = (await order(page)).join(",")
+    await lift(page, 0)
+    await page.mouse.move(target.x + target.w / 2, target.y + target.h / 2, { steps: 6 })
+    if (!(await zoneSays(page, zoneSaid.any)))
+      throw new CannotRun("no zone was offered before the chord")
+    await page.mouse.down({ button: "right" })
+    await settled(page)
+    await frames(page, 2)
+    const during = await dragResidue(page)
+    await page.mouse.up({ button: "left" })
+    await page.mouse.up({ button: "right" })
+    await settled(page)
+    // A menu the right button opened is its own; close it before counting.
+    if (await page.locator(css.menu).count()) await page.keyboard.press(keys.escape)
+    const failures = []
+    if (during.copies || during.dragging)
+      failures.push("the copy was still carried after the right button joined the left")
+    failures.push(...residueFailures(await dragResidue(page)))
+    const after = (await order(page)).join(",")
+    if (after !== before)
+      failures.push(`the chord's release dropped: ${before} → ${after}`)
+    return { failures }
+  },
+  "peek-session-no-zone": {
+    layouts: ["sidebar"],
+    run: async (page) => {
+      await openPanes(page, 2)
+      await page.keyboard.press(keys.toggleSidebar)
+      await settled(page)
+      const size = page.viewportSize()
+      await page.mouse.move(3, size.height / 2)
+      const peeked = () =>
+        page.evaluate(
+          (sel) => "peek" in (document.querySelector(sel)?.dataset ?? {}),
+          css.workspace,
+        )
+      await page.waitForFunction(
+        (sel) => "peek" in (document.querySelector(sel)?.dataset ?? {}),
+        css.workspace,
+        { timeout: 2000 },
+      )
+      await settled(page)
+      const rows = await page.evaluate(
+        ([sidebar, row]) =>
+          [...document.querySelectorAll(`${sidebar} ${row}`)]
+            .map((e) => e.getBoundingClientRect())
+            .filter((r) => r.width > 0 && r.left >= 0)
+            .map((r) => ({ x: r.left, y: r.top, w: r.width, h: r.height })),
+        [css.sidebar, css.sessionRow],
+      )
+      if (!rows.length)
+        throw new CannotRun(`no session row in the revealed sidebar (${css.sessionRow})`)
+      const row = rows[Math.min(3, rows.length - 1)]
+      const before = (await order(page)).join(",")
+      const zones = await recordZones(page)
+      await page.mouse.move(row.x + 20, row.y + row.h / 2)
+      await page.mouse.down()
+      await page.waitForSelector(css.dragGhost, { state: "attached", timeout: 2000 })
+      for (let i = 1; i <= 8; i++)
+        await page.mouse.move(row.x + 20 + i * 4, row.y + row.h / 2 + i)
+      // Past `restAfter`, and past the reveal's own hide delay: pacing, not a wait for state.
+      await page.waitForTimeout(500)
+      const said = await zones.take()
+      const placeholders = await page.locator(css.dragPlaceholder).count()
+      const carried = (await dragResidue(page)).copies
+      const stayed = await peeked()
+      await page.mouse.up()
+      await settled(page)
+      await frames(page, 4)
+      const failures = []
+      if (!carried) failures.push("nothing was carried from the revealed sidebar")
+      if (said.length)
+        failures.push(`a zone was offered over the sidebar: ${said.join(" → ")}`)
+      if (placeholders) failures.push("a placeholder was drawn under the sidebar")
+      if (!stayed)
+        failures.push("the revealed sidebar hid while a session was carried in it")
+      const after = (await order(page)).join(",")
+      if (after !== before)
+        failures.push(
+          `the release over the sidebar changed the panes: ${before} → ${after}`,
+        )
+      failures.push(...residueFailures(await dragResidue(page)))
+      return { failures }
+    },
+  },
+  "copy-under-controls": async (page, layout) => {
+    await hideColumns(page, layout)
+    await openPanes(page, 2)
+    const sampler = safeArea(page)
+    await sampler.watch(
+      "carry the corner pane",
+      async () => {
+        await lift(page, 0)
+        // Held near where it was grabbed while the copy glides to its centre.
+        await page.waitForTimeout(300)
+        await page.keyboard.press(keys.escape)
+        await page.mouse.up()
+      },
+      2000,
+    )
+    await settled(page)
+    return {
+      frames: await sampler.frames(),
+      failures: [
+        ...summarize(await sampler.take()),
+        ...residueFailures(await dragResidue(page)),
+      ],
+    }
+  },
+})
 
 const meta = {
   name: "drag",

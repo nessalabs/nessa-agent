@@ -175,8 +175,8 @@ export function Composer({
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing)
               return
             event.preventDefault()
-            // A held Return sends once: its repeats — carried in from an
-            // approval answered by the same press, say — send nothing.
+            // One press, one act: a held key's repeats do nothing
+            // (`takesAnswerKey` in `workspace/model/overview/walk.ts` owns the rule).
             if (!event.repeat) send()
           }}
         />

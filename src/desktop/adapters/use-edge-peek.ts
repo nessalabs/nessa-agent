@@ -62,8 +62,41 @@ export function useEdgePeek(enabled: boolean, docked: boolean) {
     },
     [enabled],
   )
-  const enter = useCallback(() => held("pointer", true), [held])
-  const leave = useCallback(() => held("pointer", false), [held])
+  // While a pointer button is held — a pane or a session carried, a text
+  // selection — the pointer neither reveals nor hides the sidebar: as the
+  // press found it, it stays. Engines differ on whether a captured pointer
+  // enters and leaves at all; this does not (`use-edge-peek.test.tsx`, and
+  // `drag.mjs` › peek-session-no-zone in both). Once released, where the
+  // pointer last was decides, and a pointer that comes back enters again.
+  const whileHeld = useRef<boolean | null>(null)
+  const pointerAt = useCallback(
+    (now: boolean, event?: { buttons: number }) => {
+      if (event && event.buttons !== 0) whileHeld.current = now
+      else held("pointer", now)
+    },
+    [held],
+  )
+  useEffect(() => {
+    const onRelease = () => {
+      const last = whileHeld.current
+      whileHeld.current = null
+      if (last !== null) held("pointer", last)
+    }
+    window.addEventListener("pointerup", onRelease)
+    window.addEventListener("pointercancel", onRelease)
+    return () => {
+      window.removeEventListener("pointerup", onRelease)
+      window.removeEventListener("pointercancel", onRelease)
+    }
+  }, [held])
+  const enter = useCallback(
+    (event?: { buttons: number }) => pointerAt(true, event),
+    [pointerAt],
+  )
+  const leave = useCallback(
+    (event?: { buttons: number }) => pointerAt(false, event),
+    [pointerAt],
+  )
   const focusIn = useCallback(
     (event: { target: EventTarget }) => {
       if (event.target instanceof Element && event.target.matches(":focus-visible"))

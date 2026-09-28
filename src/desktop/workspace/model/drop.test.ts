@@ -219,7 +219,11 @@ describe("where a drag aims", () => {
     [2, { left: 1004, top: 0, width: 996, height: 646 }],
     [3, { left: 1004, top: 654, width: 996, height: 646 }],
   ]
-  const targets = { grid: { left: 0, top: 0, width: 2000, height: 1300 }, panes: grid }
+  const targets = {
+    grid: { left: 0, top: 0, width: 2000, height: 1300 },
+    panes: grid,
+    covered: [],
+  }
 
   it("reads a gutter as the pane nearest it, held to its edge", () => {
     expect(paneAt({ x: 1001, y: 300 }, grid)).toMatchObject({ key: 2, x: 0, y: 300 })
@@ -243,6 +247,20 @@ describe("where a drag aims", () => {
     expect(aimAt(still(1500, -5), 0, null, targets)).toBeNull()
     expect(aimAt(still(498, 650), 0, null, null)).toBeNull()
     expect(aimAt([], 0, null, targets)).toBeNull()
+  })
+
+  it("aims at nothing over a side column, docked or revealed over the panes", () => {
+    const still = (x: number, y: number) => [{ x, y, t: 0 }]
+    // The sidebar revealed from the edge, over pane 1's left.
+    const peeked = {
+      ...targets,
+      covered: [{ left: 8, top: 8, width: 256, height: 1284 }],
+    }
+    expect(aimAt(still(100, 650), 0, null, peeked)).toBeNull()
+    expect(aimAt(still(264, 650), 0, null, peeked)).toBeNull()
+    // Past its edge, the pane under the pointer as before.
+    expect(aimAt(still(265, 650), 0, null, peeked)).toMatchObject({ target: 1 })
+    expect(aimAt(still(100, 650), 0, null, targets)).toMatchObject({ target: 1 })
   })
 
   it("holds the zone it had only on the same pane", () => {

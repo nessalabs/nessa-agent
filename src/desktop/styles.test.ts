@@ -192,3 +192,20 @@ it("moves Settings' sidebar by transform, never by animating its width", () => {
   const body = sheet.slice(sheet.indexOf(".settings-sidebar {")).split("}")[0]
   expect(body).not.toMatch(/transition/)
 })
+
+it("draws everything carried in a layer that begins below the titlebar row and clips there", () => {
+  const chrome = readFileSync(
+    new URL("./workspace/ui/chrome/chrome.css", import.meta.url),
+    "utf8",
+  )
+  const body = (selector: string) => chrome.slice(chrome.indexOf(selector)).split("}")[0]
+  // Nothing carried is painted under the window's controls, whatever it passes over.
+  const layer = body(".workspace-drag-layer {")
+  expect(layer).toMatch(/inset:\s*var\(--desktop-titlebar-height\) 0 0 0/)
+  expect(layer).toMatch(/overflow:\s*clip/)
+  expect(layer).toMatch(/position:\s*fixed/)
+  // The carrier inside it is placed back at the window's origin, not fixed past the clip.
+  const carrier = body(".workspace-drag-carrier {")
+  expect(carrier).toMatch(/position:\s*absolute/)
+  expect(carrier).toMatch(/top:\s*calc\(-1 \* var\(--desktop-titlebar-height\)\)/)
+})

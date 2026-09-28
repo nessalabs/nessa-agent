@@ -15,14 +15,17 @@ import { useWorkspaceStore } from "../store/hooks"
 import {
   closePane,
   focusPane,
+  followWorkspace,
   loadWorkspace,
   openBeside,
   showContent,
 } from "../store/commands"
 import { panesOf } from "../../model/pane-layout"
-import { settle, testStore } from "../../testing"
+import { fakeSource, settle, testStore } from "../../testing"
 import { restAfter } from "../../model/drop"
-import { useWorkspaceDrag } from "./drag"
+import type { WorkspaceRoom } from "../../model/pane-sizing"
+import { measureWorkspace } from "./measure"
+import { saying, useWorkspaceDrag } from "./drag"
 
 let host: HTMLDivElement
 /** Every animation asked for, and of what. */
@@ -52,6 +55,7 @@ function Grid() {
   return (
     <div ref={root} data-workspace data-sidebar="closed">
       <div data-drag-session="d">Session d</div>
+      <nav className="workspace-sidebar" />
       <div className="workspace-panes">
         {(panes ? panesOf(panes) : []).map((pane) => (
           <article
@@ -61,6 +65,7 @@ function Grid() {
           >
             <header className="workspace-pane-header" data-drag-pane={pane.key}>
               {pane.sessionId}
+              <button type="button" aria-label="Close Pane" />
             </header>
             <div className="workspace-pane-body">
               <div className="workspace-transcript">
@@ -104,29 +109,56 @@ const press = async (x: number, y: number, target: EventTarget) => {
   pointer("pointerdown", x, y, target)
   await painted()
 }
-const pointer = (type: string, x: number, y: number, target: EventTarget = window) =>
+/** The primary button's pointer: held from its press to its release. */
+const pointer = (
+  type: string,
+  x: number,
+  y: number,
+  target: EventTarget = window,
+  init: PointerEventInit = {},
+) =>
   target.dispatchEvent(
-    new PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true }),
+    new PointerEvent(type, {
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons: type === "pointerup" ? 0 : 1,
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    }),
   )
 
-async function mounted() {
-  const store = testStore()
+/**
+ * Two panes, a and c, in an 1100 × 800 grid, laid out by hand: the room is
+ * the page's own measure of it (`measureWorkspace`) unless a test says
+ * otherwise.
+ */
+async function mounted(
+  measure: () => WorkspaceRoom | undefined = () => measureWorkspace(host),
+  source = fakeSource(),
+) {
+  const store = testStore(source, measure)
   await store.dispatch(loadWorkspace())
   await settle()
-  store.dispatch(openBeside({ sessionId: "c", side: "right" }))
   const root = createRoot(host)
-  await act(async () =>
-    root.render(
-      <Provider store={store}>
-        <Grid />
-      </Provider>,
-    ),
-  )
+  const render = () =>
+    act(async () =>
+      root.render(
+        <Provider store={store}>
+          <Grid />
+        </Provider>,
+      ),
+    )
+  await render()
   const grid = host.querySelector<HTMLElement>(".workspace-panes")
   if (!grid) throw new Error("no grid")
   Object.defineProperty(grid, "offsetWidth", { value: 1100 })
   Object.defineProperty(grid, "offsetHeight", { value: 800 })
   grid.getBoundingClientRect = () => new DOMRect(0, 0, 1100, 800)
+  // Opened beside in the room the page has, then drawn.
+  store.dispatch(openBeside({ sessionId: "c", side: "right" }))
+  await render()
   host.querySelectorAll<HTMLElement>("[data-pane-key]").forEach((pane, index) => {
     pane.getBoundingClientRect = () => new DOMRect(index * 554, 0, 546, 800)
   })
@@ -198,7 +230,12 @@ it("lets everything go on Escape, the layout untouched", async () => {
 })
 
 it("reads the page only as the press begins: beginning, previewing, dropping and letting go only write", async () => {
-  const { root } = await mounted()
+  // The page's own measure of the room, counted and not stubbed away.
+  let measured = 0
+  const { root, store } = await mounted(() => {
+    measured++
+    return measureWorkspace(host)
+  })
   let reads = 0
   const counted =
     <T,>(read: () => T) =>
@@ -244,16 +281,24 @@ it("reads the page only as the press begins: beginning, previewing, dropping and
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
     pointer("pointerup", 300, 400)
     await frames()
+    measured = 0
     await press(60, 16, header(1))
     const again = reads
+    // The room is measured once, as the press begins…
+    expect(measured).toBe(1)
     pointer("pointermove", 830, 400)
     pointer("pointermove", 827, 400)
     await frames()
     pointer("pointerup", 827, 400)
     await frames()
-    // The drop's command measures the room (`measure`), which the store's
-    // dependency does in tests; the drag itself read nothing after the press.
+    // …and the preview and the drop's command are given it: nothing after the press reads.
     expect(reads).toBe(again)
+    expect(measured).toBe(1)
+    const after = store.getState().workspace.panes
+    expect((after ? panesOf(after) : []).map((pane) => pane.sessionId)).toEqual([
+      "c",
+      "a",
+    ])
   } finally {
     window.getComputedStyle = style
     for (const [name, descriptor] of kept)
@@ -352,8 +397,9 @@ it("draws the copy in the frame the drag begins, and what the zone would do in t
   await act(async () => root.unmount())
 })
 
-it("shows a drag begun before the press's frame painted once its copy is made, reading nothing in the event", async () => {
+it("lifts only once its copy is made: a move before then reads nothing and lifts nothing", async () => {
   const { store, root } = await mounted()
+  const before = store.getState().workspace.panes
   const header1 = header(1)
   let reads = 0
   for (const element of host.querySelectorAll<HTMLElement>("*")) {
@@ -363,32 +409,243 @@ it("shows a drag begun before the press's frame painted once its copy is made, r
       return rect()
     }
   }
-  // A flick: pressed and moved within the press's own frame.
+  // Pressed and moved within the press's own frame.
   pointer("pointerdown", 60, 16, header1)
   pointer("pointermove", 90, 40)
   pointer("pointermove", 827, 400)
   expect(reads).toBe(0)
   expect(carrier()).toBeNull()
-  // Made once the frame has painted, and shown then, where the pointer is.
+  // Made once the frame has painted, unseen: the next move lifts it where the pointer is.
   await painted()
-  expect(carrier()?.style.transform).toBe("translate(827px, 400px)")
   expect(reads).toBeGreaterThan(0)
+  expect(host.querySelector(".workspace-drag-ghost")?.hasAttribute("data-waiting")).toBe(
+    true,
+  )
   pointer("pointermove", 826, 400)
+  expect(carrier()?.style.transform).toBe("translate(826px, 400px)")
+  pointer("pointermove", 825, 400)
   await frames()
   expect(said()).toBe("Swap with Session c")
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 826, 400)
   await frames()
-  const after = store.getState().workspace.panes
-  expect((after ? panesOf(after) : []).map((pane) => pane.sessionId)).toEqual(["c", "a"])
-  // Let go before it was ever shown: nothing is left, nothing dropped.
-  pointer("pointerdown", 60, 16, header1)
-  pointer("pointermove", 400, 400)
-  pointer("pointerup", 400, 400)
+  expect(store.getState().workspace.panes).toBe(before)
+  await act(async () => root.unmount())
+})
+
+it("commits only a drop that was previewed: a flick, in any engine's timing, changes nothing", async () => {
+  const { store, root } = await mounted()
+  const before = store.getState().workspace.panes
+  // Down, across and up in one task: a click, nothing made, nothing dropped.
+  pointer("pointerdown", 60, 16, header(1))
+  pointer("pointermove", 827, 400)
+  pointer("pointerup", 827, 400)
   await painted()
   await frames()
   nothingLeft()
   expect(host.querySelector(".workspace-drag-ghost")).toBeNull()
+  expect(store.getState().workspace.panes).toBe(before)
+  // Lifted, and let go over a zone before its preview was shown: home.
+  await press(60, 16, header(1))
+  pointer("pointermove", 90, 40)
+  pointer("pointermove", 827, 400)
+  pointer("pointerup", 827, 400)
+  await frames()
+  nothingLeft()
+  expect(store.getState().workspace.panes).toBe(before)
+  // Previewed, then let go in a zone not shown yet: home too.
+  await press(60, 16, header(1))
+  pointer("pointermove", 90, 40)
+  pointer("pointermove", 827, 400)
+  await frames()
+  expect(said()).toBe("Swap with Session c")
+  pointer("pointermove", 1090, 400)
+  pointer("pointerup", 1090, 400)
+  await frames()
+  nothingLeft()
+  expect(store.getState().workspace.panes).toBe(before)
   await act(async () => root.unmount())
+})
+
+it("carries with the primary button alone: another button ends the press or the drag, and none other presses one", async () => {
+  const { store, root } = await mounted()
+  const before = store.getState().workspace.panes
+  // A press of another button starts nothing — made nothing, holds nothing:
+  // its release taken by the menu it opens, the next primary press still carries.
+  pointer("pointerdown", 60, 16, header(1), { button: 2, buttons: 2 })
+  await painted()
+  expect(host.querySelector(".workspace-drag-ghost")).toBeNull()
+  await press(60, 16, header(1))
+  pointer("pointermove", 90, 40)
+  expect(carrier()).not.toBeNull()
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+  pointer("pointerup", 90, 40)
+  await frames()
+  // Carrying, a chord — the right button joining the left — ends it: home, nothing dropped.
+  for (const chord of [
+    () => pointer("pointermove", 828, 400, window, { button: 2, buttons: 3 }),
+    () =>
+      pointer(
+        "pointerdown",
+        828,
+        400,
+        host.querySelector(".workspace-drag-shield") ?? host,
+        {
+          button: 2,
+          buttons: 3,
+        },
+      ),
+  ]) {
+    await press(60, 16, header(1))
+    pointer("pointermove", 90, 40)
+    pointer("pointermove", 827, 400)
+    await frames()
+    expect(said()).toBe("Swap with Session c")
+    chord()
+    await frames()
+    nothingLeft()
+    pointer("pointermove", 830, 400, window, { buttons: 1 })
+    pointer("pointerup", 830, 400)
+    await frames()
+    expect(carrier()).toBeNull()
+    expect(store.getState().workspace.panes).toBe(before)
+  }
+  // Pressed, a move with no button held lets the press go.
+  await press(60, 16, header(1))
+  pointer("pointermove", 90, 40, window, { buttons: 0 })
+  pointer("pointermove", 827, 400)
+  await frames()
+  expect(carrier()).toBeNull()
+  pointer("pointerup", 827, 400)
+  await act(async () => root.unmount())
+})
+
+it("leaves a press on a control inside a header to the control", async () => {
+  const { root } = await mounted()
+  const close = header(1).querySelector("button")
+  if (!close) throw new Error("no control")
+  pointer("pointerdown", 500, 16, close)
+  await painted()
+  pointer("pointermove", 827, 400)
+  await frames()
+  expect(carrier()).toBeNull()
+  expect(host.querySelector(".workspace-drag-ghost")).toBeNull()
+  pointer("pointerup", 827, 400)
+  await act(async () => root.unmount())
+})
+
+it("swallows the click its own release makes, and nothing for another pointer's", async () => {
+  const { root } = await mounted()
+  const clicks: EventTarget[] = []
+  const heard = (event: Event) => clicks.push(event.target as EventTarget)
+  host.addEventListener("click", heard)
+  await press(60, 16, header(1))
+  pointer("pointermove", 90, 40)
+  pointer("pointermove", 827, 400)
+  await frames()
+  // Another pointer lets go: its click is its own.
+  pointer("pointerup", 300, 300, window, { pointerId: 7 })
+  header(2).dispatchEvent(new MouseEvent("click", { bubbles: true }))
+  expect(clicks).toHaveLength(1)
+  expect(carrier()).not.toBeNull()
+  // The drag's own release: the click after it is not a click on what it started from.
+  pointer("pointerup", 827, 400)
+  header(2).dispatchEvent(new MouseEvent("click", { bubbles: true }))
+  expect(clicks).toHaveLength(1)
+  await frames()
+  host.removeEventListener("click", heard)
+  await act(async () => root.unmount())
+})
+
+it("never aims over a side column: the sidebar revealed over the panes is no zone", async () => {
+  const { store, root } = await mounted()
+  const before = store.getState().workspace.panes
+  const scope = host.querySelector<HTMLElement>("[data-workspace]")
+  const sidebar = host.querySelector<HTMLElement>(".workspace-sidebar")
+  if (!scope || !sidebar) throw new Error("no sidebar")
+  // Revealed from the edge, over pane 1's left and the gutter's side of pane c? No: 8–264.
+  scope.dataset.peek = ""
+  sidebar.getBoundingClientRect = () => new DOMRect(8, 8, 256, 784)
+  host.querySelectorAll<HTMLElement>("[data-pane-key]").forEach((pane, index) => {
+    pane.getBoundingClientRect = () => new DOMRect(index * 554, 0, 546, 800)
+  })
+  const row = host.querySelector("[data-drag-session]")
+  if (!row) throw new Error("no row")
+  await press(10, 10, row)
+  pointer("pointermove", 40, 40)
+  pointer("pointermove", 100, 400)
+  await act(async () => new Promise((resolve) => setTimeout(resolve, restAfter + 30)))
+  await frames()
+  expect(said()).toBe("")
+  expect(host.querySelector(".workspace-drag-placeholder")).toBeNull()
+  // Past its edge, pane a is a target as ever.
+  pointer("pointermove", 300, 400)
+  await frames()
+  expect(said()).toMatch(/Session a$/)
+  pointer("pointermove", 100, 400)
+  await frames()
+  expect(said()).toBe("")
+  pointer("pointerup", 100, 400)
+  await frames()
+  expect(store.getState().workspace.panes).toBe(before)
+  nothingLeft()
+  await act(async () => root.unmount())
+})
+
+it("ends at once when the carried session is no longer listed", async () => {
+  const source = fakeSource()
+  const { store, root } = await mounted(undefined, source)
+  const stop = store.dispatch(followWorkspace())
+  const before = store.getState().workspace.panes
+  const row = host.querySelector("[data-drag-session]")
+  if (!row) throw new Error("no row")
+  await press(10, 10, row)
+  pointer("pointermove", 40, 40)
+  pointer("pointermove", 827, 400)
+  await frames()
+  expect(carrier()).not.toBeNull()
+  // The session is removed by the source; the panes and the view are untouched.
+  await act(async () =>
+    source.emit({ kind: "session-removed", sessionId: "d", revision: 9 }),
+  )
+  expect(store.getState().workspace.panes).toBe(before)
+  await frames()
+  nothingLeft()
+  pointer("pointerup", 827, 400)
+  await frames()
+  expect(store.getState().workspace.panes).toBe(before)
+  stop()
+  await act(async () => root.unmount())
+})
+
+it("never takes Settings' Escape: under an inert window the keys are not the drag's", async () => {
+  const { root } = await mounted()
+  await press(60, 16, header(1))
+  pointer("pointermove", 90, 40)
+  pointer("pointermove", 827, 400)
+  await frames()
+  // Settings opens over the window, and its Escape comes before anything else runs.
+  host.setAttribute("inert", "")
+  const escape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true })
+  window.dispatchEvent(escape)
+  expect(escape.defaultPrevented).toBe(false)
+  await frames()
+  nothingLeft()
+  host.removeAttribute("inert")
+  pointer("pointerup", 827, 400)
+  await act(async () => root.unmount())
+})
+
+it("says each zone as a person would: above and below, left of and right of", () => {
+  const outcome = (does: "move" | "split") =>
+    ({ does, lands: 1, layout: null, foldSidebar: false }) as unknown as Parameters<
+      typeof saying
+    >[0]
+  expect(saying(outcome("split"), "top", "Notes")).toBe("Split above Notes")
+  expect(saying(outcome("split"), "bottom", "Notes")).toBe("Split below Notes")
+  expect(saying(outcome("split"), "left", "Notes")).toBe("Split left of Notes")
+  expect(saying(outcome("move"), "top", "Notes")).toBe("Move above Notes")
+  expect(saying(outcome("move"), "right", "Notes")).toBe("Move right of Notes")
 })
 
 it("takes the zone the pointer heads for: sideways near the top is the side, upward the top", async () => {
@@ -489,7 +746,7 @@ it("ends press and drag when the page loses the pointer: a later move and releas
     ?.dispatchEvent(new PointerEvent("lostpointercapture"))
   await frames()
   nothingLeft()
-  // The reviewer's order: the pointer keeps moving, then is released over a zone.
+  // Lost, then the pointer keeps moving and is released over a zone.
   pointer("pointermove", 800, 410)
   await frames()
   expect(carrier()).toBeNull()
@@ -535,8 +792,7 @@ it("ends at once on a change: a command key, a resize, the store, Settings", asy
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Meta", metaKey: true }))
     expect(carrier(), name).not.toBeNull()
     change()
-    // Settings is seen at the next move of the pointer.
-    pointer("pointermove", 826, 401)
+    // Seen as it happens — Settings included — with no move of the pointer.
     await frames()
     // Gone at once, not flown home: nothing lifted, nothing previewed, no copy.
     expect(carrier(), name).toBeNull()

@@ -126,7 +126,28 @@ export async function openPage(browser, o) {
         (errors.length ? `\n  page errors: ${errors.join("; ")}` : ""),
     )
   }
-  await page.waitForTimeout(o.settle ?? 1000)
+  // Ready once its fonts are in and its opening motion has run: a condition,
+  // not a guess at how long that takes.
+  try {
+    await page.waitForFunction(
+      () =>
+        document.fonts.status === "loaded" &&
+        !document
+          .getAnimations()
+          .some(
+            (a) =>
+              (a.playState === "running" || a.playState === "pending") &&
+              a.effect?.getTiming?.().iterations !== Infinity,
+          ),
+      null,
+      { timeout: o.readyTimeout ?? 30_000, polling: "raf" },
+    )
+  } catch (error) {
+    await context.close()
+    throw new CannotRun(
+      `the desktop page never settled at ${o.url}: ${error.message.split("\n")[0]}`,
+    )
+  }
   return { context, page, errors, harmless, close: () => context.close() }
 }
 

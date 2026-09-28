@@ -39,7 +39,11 @@ import {
 } from "../../application/workspace-state"
 import * as panesUseCases from "../../application/usecases/panes"
 import { dropOutcome, type Carried, type DropOutcome } from "../../model/drop"
-import { edgeSides as edgeSidesIn, type PaneEdge } from "../../model/pane-sizing"
+import {
+  edgeSides as edgeSidesIn,
+  type PaneEdge,
+  type WorkspaceRoom,
+} from "../../model/pane-sizing"
 import { workspaceActions } from "./slice"
 
 export const {
@@ -183,29 +187,33 @@ export function openBeside(options: {
 
 /**
  * A session dropped on a pane's zone: the middle opens it there, a side
- * beside it there if the room allows, else nothing.
+ * beside it there if `room` allows, else nothing. The room is the one the
+ * drag read as its press began and previewed in (`measureRoom`), so the drop
+ * reads nothing of the page.
  */
 export function dropSession(options: {
   sessionId: string
   target: PaneKey
   zone: Zone
+  room: WorkspaceRoom | undefined
 }): WorkspaceCommand {
-  return (dispatch, _getState, { measure }) => {
-    dispatch(sessionDropped({ ...options, room: measure() }))
+  return (dispatch) => {
+    dispatch(sessionDropped(options))
   }
 }
 
 /**
  * Moves a pane to a zone of another: the middle swaps them; a side only where
- * the room allows.
+ * `room` allows — the room the drag previewed in, as `dropSession` takes it.
  */
 export function movePane(options: {
   pane: PaneKey
   target: PaneKey
   zone: Zone
+  room: WorkspaceRoom | undefined
 }): WorkspaceCommand {
-  return (dispatch, _getState, { measure }) => {
-    dispatch(paneMoved({ ...options, room: measure() }))
+  return (dispatch) => {
+    dispatch(paneMoved(options))
   }
 }
 
@@ -248,23 +256,31 @@ export function edgeSides(
   }
 }
 
+/** The panes' room as the page measures it now: what a drag reads once, as its press begins. */
+export function measureRoom(): WorkspaceCommand<WorkspaceRoom | undefined> {
+  return (_dispatch, _getState, { measure }) => measure()
+}
+
 /**
- * What dropping what is carried on `zone` of `target` would leave, in the
- * room the page measures now: the outcome a drag previews, which the drop's
- * command then commits (`dropOutcome`, one function for both).
+ * What dropping what is carried on `zone` of `target` would leave, in `room`
+ * (`measureRoom`, read as the drag's press began): the outcome a drag
+ * previews, which the drop's command then commits in the same room
+ * (`dropOutcome`, one function for both).
  */
 export function previewDrop({
   carried,
   target,
   zone,
+  room,
 }: {
   carried: Carried
   target: PaneKey
   zone: Zone
+  room: WorkspaceRoom | undefined
 }): WorkspaceCommand<DropOutcome | null> {
-  return (_dispatch, getState, { measure }) => {
+  return (_dispatch, getState) => {
     const panes = getState().workspace.panes
-    return panes ? dropOutcome(panes, carried, target, zone, measure()) : null
+    return panes ? dropOutcome(panes, carried, target, zone, room) : null
   }
 }
 

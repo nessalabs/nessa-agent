@@ -184,11 +184,13 @@ export function AgentsOverview({
   }, [])
 
   // When the keyboard last moved on by answering: a press before the person
-  // could see where it went is not taken (`takesAnswerKey`).
+  // could see where it went is not taken (`takesAnswerKey`). A press is timed
+  // from when it was made (`timeStamp`, on `performance.now()`'s clock), not
+  // from when the page got to it, so one queued behind other work still counts.
   const movedAt = useRef<number | null>(null)
   const takesKey = useCallback(
     (event: KeyboardEvent) =>
-      takesAnswerKey({ repeat: event.repeat, at: performance.now() }, movedAt.current),
+      takesAnswerKey({ repeat: event.repeat, at: event.timeStamp }, movedAt.current),
     [],
   )
 

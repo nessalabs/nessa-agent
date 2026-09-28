@@ -59,10 +59,11 @@ controls — text, icons, images, code, or decorative art — in any frame.
 - [ ] **A column's titlebar action hides at once as it folds, shows once it
   has slid in; a pane's header hides while it flies.** _Check:_ manual, with
   `--headed` and a slowed animation (DevTools › Animations at 10%).
-- _Harmless (exempt by design):_ titlebar rows themselves, tooltips, the drag
-  copy and the hidden title sizer. Decorative art is **not** exempt: the
-  picture band (`[data-sliver]`) and the night scene begin after the controls
-  in the corner pane and wait out of sight while panes travel.
+- _Harmless (exempt by design):_ titlebar rows themselves, tooltips and the
+  hidden title sizer. Decorative art is **not** exempt: the picture band
+  (`[data-sliver]`) and the night scene begin after the controls in the corner
+  pane and wait out of sight while panes travel. Nor is the drag's copy: its
+  layer clips it below the titlebar row (`drag.mjs`, `copy-under-controls`).
 
 ## Drag and drop
 
@@ -101,6 +102,19 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
 - [ ] **Only panes a person can see are targets**: a session carried while
   the overview covers the panes offers no zone and no placeholder, and its
   release changes nothing. _Check:_ `drag.mjs` (`overview-session-drop`, sessions in the sidebar).
+- [ ] **A side column is never a target, and the revealed sidebar stays for
+  the drag**: a session carried inside the sidebar revealed from the edge
+  offers no zone and no placeholder, the reveal does not hide while the button
+  is held, and the release changes nothing. _Check:_ `drag.mjs`
+  (`peek-session-no-zone`, sidebar layout, both engines).
+- [ ] **Only a drop that was previewed commits**: down, across and up in one
+  task — before the copy is made, or lifted but before any preview — changes
+  nothing. _Check:_ `drag.mjs` (`flick`).
+- [ ] **Only the primary button carries**: the right button joining the left
+  mid-drag ends the drag; nothing is carried after it and its release drops
+  nothing. _Check:_ `drag.mjs` (`chord-right-button`).
+- [ ] **Nothing carried is painted under the window's controls**, the corner
+  pane's copy included, every frame. _Check:_ `drag.mjs` (`copy-under-controls`).
 - [ ] **No text selection is left behind**, during or after a drag. _Check:_
   `drag.mjs` (`sweep-across-zones`, `outside-cancels`).
 - [ ] **Preview equals commit** — the placeholder marks exactly the rect the

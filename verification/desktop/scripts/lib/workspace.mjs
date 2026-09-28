@@ -221,9 +221,15 @@ export async function lift(page, index = 0) {
     )
   await page.mouse.move(at.x, at.y)
   await page.mouse.down()
+  // A press becomes a drag once its copy is made, after the press's frame
+  // has painted (ADR 238, "Drag and drop"): a person's hand is that slow.
+  await page.waitForSelector(css.dragGhost, { state: "attached", timeout: 2000 })
   for (let i = 1; i <= 6; i++) await page.mouse.move(at.x + i * 5, at.y + i * 5)
   try {
-    await page.waitForSelector(css.dragGhost, { state: "visible", timeout: 2000 })
+    await page.waitForSelector(`${css.dragGhost}:not([data-waiting])`, {
+      state: "visible",
+      timeout: 2000,
+    })
   } catch {
     throw new CannotRun(
       `pressing and moving pane ${index}'s title did not lift a copy (${css.dragGhost})`,

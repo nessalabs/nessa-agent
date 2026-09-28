@@ -106,8 +106,9 @@ export function ApprovalActions({
     <div
       className="workspace-approval-answers"
       onKeyDown={(event) => {
-        // A held key answers once: its repeats press nothing more — not these
-        // buttons, nor whatever the keyboard lands on once they go.
+        // One press, one act: a held key's repeats press nothing — not these
+        // buttons, nor what the keyboard lands on once they go (`takesAnswerKey`
+        // in `model/overview/walk.ts` owns the rule).
         if (event.repeat) event.preventDefault()
       }}
     >
