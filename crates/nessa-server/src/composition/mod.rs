@@ -4,7 +4,8 @@
 //! ```text
 //! Environment -> private runtime config -> auth + ConversationService
 //!                                   -> fixed providers + OpenCode static profile
-//!                                   -> current-agent resolver
+//!                                   -> current-agent resolver -> managed adapter + native store
+//!                                   -> shared CLI/gateway native installer
 //!                                   -> storage / audit
 //!                                   -> attachments (one store, shared)
 //!                                   -> fixed AgentWarmUp + current OpenCode lane
@@ -29,6 +30,8 @@ mod install_command;
 #[cfg(unix)]
 mod installed_launch;
 mod local_auth;
+#[cfg(unix)]
+mod managed_adapter;
 #[cfg(unix)]
 mod opencode_profile;
 

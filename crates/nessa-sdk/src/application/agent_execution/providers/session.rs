@@ -49,6 +49,12 @@ pub struct ProviderSession {
     capabilities: EffectiveCapabilities,
 }
 impl ProviderSession {
+    pub(crate) fn set_approval_mode(
+        &self,
+        mode: super::ApprovalMode,
+    ) -> super::ProviderOperationFuture<'_, ()> {
+        self.backend.set_approval_mode(mode)
+    }
     /// Wrap `backend` with its provider context `id` and immutable model admission
     /// `capabilities`. Construction performs no I/O and opens no provider context.
     /// The provider backend retains the audit sink used for provider effects; the

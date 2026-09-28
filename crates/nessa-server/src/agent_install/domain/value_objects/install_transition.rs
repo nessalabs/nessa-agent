@@ -66,8 +66,8 @@ impl InstallRequest {
         account_id: impl Into<String>,
         request_id: impl Into<String>,
     ) -> Result<Self, InstallRequestError> {
-        let account_id = plain(account_id.into()).ok_or(InstallRequestError::AccountId)?;
-        let request_id = plain(request_id.into()).ok_or(InstallRequestError::RequestId)?;
+        let account_id = plain(account_id.into(), 255).ok_or(InstallRequestError::AccountId)?;
+        let request_id = plain(request_id.into(), 4096).ok_or(InstallRequestError::RequestId)?;
         Ok(Self {
             account_id,
             request_id,
@@ -79,14 +79,16 @@ impl InstallRequest {
         &self.account_id
     }
 
-    /// Return the invocation identity assigned by composition.
+    /// Return the invocation identity assigned by composition. Gateway identities
+    /// encode the authenticated organization, principal, credential, agent and
+    /// invocation as a JSON tuple; the OS account remains the storage owner.
     pub fn request_id(&self) -> &str {
         &self.request_id
     }
 }
 
-fn plain(value: String) -> Option<String> {
-    (!value.is_empty() && value.len() <= 255 && !value.chars().any(char::is_control))
+fn plain(value: String, maximum: usize) -> Option<String> {
+    (!value.is_empty() && value.len() <= maximum && !value.chars().any(char::is_control))
         .then_some(value)
 }
 

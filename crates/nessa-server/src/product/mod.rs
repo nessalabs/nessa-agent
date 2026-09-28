@@ -1,7 +1,7 @@
 //! Mandatory authenticated product WebSocket profile served at `/session`.
 
 mod attachment;
-mod generated;
+pub(crate) mod generated;
 mod socket;
 mod state;
 mod wire;
@@ -11,3 +11,5 @@ pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, 
 pub use wire::{SessionAuthenticateParams, SessionChallenge, SessionReady};
 
 mod conversation;
+
+mod agent_install;

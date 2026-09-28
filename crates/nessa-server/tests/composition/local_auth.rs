@@ -65,3 +65,62 @@ fn an_agent_this_run_cannot_start_is_not_one_readiness_answers_for() {
 fn a_gateway_configured_with_no_agents_answers_for_none() {
     assert!(launch_files(None, &HashSet::new()).is_empty());
 }
+
+#[test]
+fn agent_catalog_uses_binding_choices_for_each_catalog_model() {
+    let catalog = Path::new(env!("CARGO_MANIFEST_DIR")).join("../nessa-sdk/data/models.json");
+    let config: AgentsConfig = serde_json::from_value(serde_json::json!({
+        "catalog": catalog,
+        "workspace": "/workspace",
+        "selected": "claude",
+        "runtimes": {
+            "claude": {"command": "/claude", "model": "claude-sonnet-5", "toolsEnabled": true},
+            "codex": {"command": "/codex", "model": "gpt-6-astra", "toolsEnabled": true}
+        }
+    }))
+    .unwrap();
+    let offered = agent_catalog(
+        &config,
+        &HashSet::from([AgentId::Claude, AgentId::Codex]),
+        None,
+    )
+    .unwrap();
+    assert_eq!(offered.agents.len(), 2);
+    for agent in &offered.agents {
+        let selected = agent
+            .models
+            .iter()
+            .find(|model| model.model_id == agent.default_model)
+            .unwrap();
+        assert_eq!(selected.approval_modes.len(), 3);
+        assert_eq!(selected.approval_modes[0].id, WireApprovalMode::Ask);
+        assert_eq!(selected.approval_modes[1].id, WireApprovalMode::Auto);
+        assert_eq!(selected.approval_modes[2].id, WireApprovalMode::Full);
+    }
+    assert_eq!(offered.agents[0].agent, "claude");
+    assert_eq!(offered.agents[1].agent, "codex");
+    for agent in &offered.agents {
+        for model in &agent.models {
+            let ids: Vec<_> = model
+                .approval_modes
+                .iter()
+                .map(|choice| choice.id)
+                .collect();
+            let expected = match model.model_id.as_str() {
+                "claude-sonnet-5" | "gpt-6-astra" => vec![
+                    WireApprovalMode::Ask,
+                    WireApprovalMode::Auto,
+                    WireApprovalMode::Full,
+                ],
+                _ if !cfg!(target_os = "macos") => vec![WireApprovalMode::Ask],
+                "claude-haiku-4-5-20251001" => vec![WireApprovalMode::Ask, WireApprovalMode::Full],
+                _ => vec![
+                    WireApprovalMode::Ask,
+                    WireApprovalMode::Auto,
+                    WireApprovalMode::Full,
+                ],
+            };
+            assert_eq!(ids, expected, "{} {}", agent.agent, model.model_id);
+        }
+    }
+}

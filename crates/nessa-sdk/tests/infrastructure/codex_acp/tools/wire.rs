@@ -27,14 +27,14 @@ fn terminal_command(id: &str) -> Value {
 fn permission(tool: Value, meta: Option<Value>) -> Value {
     let mut request = json!({"sessionId": "session-1", "toolCall": tool});
     if let Some(meta) = meta {
-        request["_meta"] = json!({"codex": meta});
+        request["_meta"] = meta;
     }
     request
 }
 
 #[test]
 fn a_terminal_pointer_is_replaced_by_the_output_it_pointed_at() {
-    let mut tools = HashMap::new();
+    let mut tools = ObservedTools::default();
     // The command itself: a pointer to a terminal this binding does not
     // implement, and nothing else. Dropping the pointer must not drop the call.
     let started = tool_call(&terminal_command("command-1"), &mut tools).unwrap();
@@ -75,14 +75,14 @@ fn a_terminal_pointer_is_replaced_by_the_output_it_pointed_at() {
 /// return values one at a time hides that entirely — each one looks right.
 #[test]
 fn every_streamed_chunk_survives_the_observation_that_replaces_content() {
-    let mut tools = HashMap::new();
+    let mut tools = ObservedTools::default();
     let mut observed = ToolObservation::default();
     // The path a real update takes: the mapper's result applied to the
     // observation the session keeps, not read on its own.
     fn observe(
         observed: ToolObservation,
         frame: &Value,
-        tools: &mut HashMap<String, ObservedTool>,
+        tools: &mut ObservedTools,
     ) -> ToolObservation {
         observed.with_update(tool_call(frame, tools).unwrap())
     }
@@ -122,7 +122,7 @@ fn every_streamed_chunk_survives_the_observation_that_replaces_content() {
 /// without limit, and what it keeps must stay valid text.
 #[test]
 fn a_command_that_outruns_the_window_keeps_its_most_recent_output() {
-    let mut tools = HashMap::new();
+    let mut tools = ObservedTools::default();
     tool_call(&terminal_command("command-4"), &mut tools).unwrap();
     // Multi-byte, so a window that cut bytes rather than characters would panic
     // or retain a fragment of one.
@@ -150,7 +150,7 @@ fn a_command_that_outruns_the_window_keeps_its_most_recent_output() {
 
 #[test]
 fn output_a_tool_call_never_streamed_is_carried_from_its_completion() {
-    let mut tools = HashMap::new();
+    let mut tools = ObservedTools::default();
     tool_call(&terminal_command("command-2"), &mut tools).unwrap();
     let completed = tool_call(
         &json!({"sessionUpdate":"tool_call_update","toolCallId":"command-2","status":"completed",
@@ -178,7 +178,7 @@ fn output_a_tool_call_never_streamed_is_carried_from_its_completion() {
 
 #[test]
 fn diffs_and_links_survive_translation_and_unknown_shapes_do_not_pass_as_empty() {
-    let mut tools = HashMap::new();
+    let mut tools = ObservedTools::default();
     let edit = tool_call(
         &json!({"toolCallId":"file-1","kind":"edit","status":"pending","content":[
             {"type":"diff","path":"/a","oldText":null,"newText":"new"},
@@ -203,13 +203,16 @@ fn diffs_and_links_survive_translation_and_unknown_shapes_do_not_pass_as_empty()
         json!({"toolCallId":"file-2","rawOutput":{"formatted_output":7}}),
         json!({"toolCallId":"file-2","_meta":{"terminal_output":{"data":[]}}}),
     ] {
-        assert!(tool_call(&frame, &mut HashMap::new()).is_err(), "{frame}");
+        assert!(
+            tool_call(&frame, &mut ObservedTools::default()).is_err(),
+            "{frame}"
+        );
     }
 }
 
 #[test]
 fn provider_identity_is_retained_and_bounded_and_never_silently_replaced() {
-    let mut tools = HashMap::new();
+    let mut tools = ObservedTools::default();
     tool_call(&terminal_command("command-3"), &mut tools).unwrap();
     // A later frame restating only the kind is not a second identity.
     tool_call(
@@ -244,7 +247,7 @@ fn provider_identity_is_retained_and_bounded_and_never_silently_replaced() {
     assert_eq!(
         tool_call(
             &json!({"toolCallId":"command-4","name":long,"kind":"execute"}),
-            &mut HashMap::new()
+            &mut ObservedTools::default()
         ),
         Err(AgentError::Unsupported(
             "tool name is not a reviewable identity".into()
@@ -253,7 +256,7 @@ fn provider_identity_is_retained_and_bounded_and_never_silently_replaced() {
     for name in [json!(""), json!("has space"), json!(7)] {
         assert!(tool_call(
             &json!({"toolCallId":"command-5","name":name,"kind":"execute"}),
-            &mut HashMap::new()
+            &mut ObservedTools::default()
         )
         .is_err());
     }
@@ -261,7 +264,7 @@ fn provider_identity_is_retained_and_bounded_and_never_silently_replaced() {
 
 #[test]
 fn retained_identities_are_bounded_and_cleared_between_executions() {
-    let mut tools = HashMap::new();
+    let mut tools = ObservedTools::default();
     for index in 0..4096 {
         tool_call(
             &json!({"toolCallId":format!("call-{index}"),"kind":"execute"}),
@@ -286,22 +289,21 @@ fn retained_identities_are_bounded_and_cleared_between_executions() {
 
 #[test]
 fn an_approval_asked_with_no_arguments_is_still_reviewed_with_what_codex_said() {
-    let mut tools = HashMap::new();
-    // Codex asks for a file change with an identifier, a kind, and a status. The
-    // facts it is asking about are in the request's own metadata.
+    let mut tools = ObservedTools::default();
+    // Captured pinned-adapter shape: the edit locations are on the tool call.
     let request = permission(
-        json!({"toolCallId":"file-change-1","kind":"edit","status":"pending"}),
-        Some(json!({"params":{"itemId":"file-change-1","reason":"Modifying config file"}})),
+        json!({"toolCallId":"file-change-1","kind":"edit","status":"pending","locations":[{"path":"/workspace/config.txt"}]}),
+        Some(json!({"permission":{"version":1,"title":"Make edits?"}})),
     );
     let review = permission_input(&request, &tools).unwrap();
     assert_eq!(review.name, "edit");
     assert_eq!(
         serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
-        json!({"params":{"itemId":"file-change-1","reason":"Modifying config file"}})
+        json!({"toolCall":request["toolCall"],"metadata":request["_meta"]})
     );
 
     // Arguments on the tool call itself are preferred over that fallback.
-    let arguments = json!({"command":"npm install","cwd":"/workspace"});
+    let arguments = json!({"command":"npm test","cwd":"/workspace"});
     let review = permission_input(
         &permission(
             json!({"toolCallId":"command-6","kind":"execute","status":"pending","rawInput":arguments}),
@@ -334,11 +336,23 @@ fn an_approval_asked_with_no_arguments_is_still_reviewed_with_what_codex_said() 
 
 #[test]
 fn a_permission_nothing_can_be_said_about_is_refused_rather_than_reviewed_empty() {
-    let tools = HashMap::new();
+    let tools = ObservedTools::default();
     for request in [
         json!({"sessionId":"session-1"}),
         json!({"sessionId":"session-1","toolCall":{"kind":"edit"}}),
         // Named, but with nothing said about what it would do.
+        permission(
+            json!({"toolCallId":"file-2","kind":"edit","locations":[]}),
+            None,
+        ),
+        permission(
+            json!({"toolCallId":"file-2","kind":"edit","locations":[{"path":""}]}),
+            None,
+        ),
+        permission(
+            json!({"toolCallId":"file-2","kind":"execute","locations":[{"path":"/a"}]}),
+            None,
+        ),
         permission(json!({"toolCallId":"file-2","kind":"edit"}), None),
         permission(
             json!({"toolCallId":"file-2","kind":"edit","rawInput":null}),
@@ -356,4 +370,116 @@ fn a_permission_nothing_can_be_said_about_is_refused_rather_than_reviewed_empty(
     ] {
         assert!(permission_input(&request, &tools).is_err(), "{request}");
     }
+}
+
+#[test]
+fn sparse_mcp_review_uses_only_the_original_input_for_its_tool_id() {
+    let mut tools = ObservedTools::default();
+    let input = json!({"server":"probe","tool":"record_probe","arguments":{"marker":"one"}});
+    let frame = json!({"toolCallId":"mcp-1","kind":"execute","title":"mcp.probe.record_probe","rawInput":input});
+    tool_call(&frame, &mut tools).unwrap();
+    let charged = tools.input_bytes;
+    tool_call(&frame, &mut tools).unwrap();
+    tool_call(
+        &json!({"toolCallId":"mcp-1","rawInput":null,"status":"pending"}),
+        &mut tools,
+    )
+    .unwrap();
+    assert_eq!(tools.input_bytes, charged);
+    let request = permission(
+        json!({"toolCallId":"mcp-1","kind":"execute"}),
+        Some(json!({"is_mcp_tool_approval":true})),
+    );
+    let review = permission_input(&request, &tools).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&review.arguments_json).unwrap(),
+        input
+    );
+    let changed =
+        json!({"server":"probe","tool":"record_probe","arguments":{"marker":"different"}});
+    for incoming in [json!("malformed"), changed] {
+        assert!(matches!(
+            tool_call(
+                &json!({"toolCallId":"mcp-1","rawInput":incoming}),
+                &mut tools
+            ),
+            Err(AgentError::Protocol(_))
+        ));
+        assert!(matches!(
+            permission_input(
+                &permission(
+                    json!({"toolCallId":"mcp-1","kind":"execute","rawInput":incoming}),
+                    None
+                ),
+                &tools
+            ),
+            Err(AgentError::Protocol(_))
+        ));
+        assert_eq!(tools.input_bytes, charged);
+        assert_eq!(permission_input(&request, &tools).unwrap(), review);
+    }
+    assert!(permission_input(
+        &permission(json!({"toolCallId":"other","kind":"execute"}), None),
+        &tools
+    )
+    .is_err());
+    tools.clear();
+    assert_eq!(tools.input_bytes, 0);
+    assert!(permission_input(&request, &tools).is_err());
+    tool_call(&frame, &mut tools).unwrap();
+    assert_eq!(permission_input(&request, &tools).unwrap(), review);
+}
+
+#[test]
+fn original_input_cache_checks_the_aggregate_encoded_bound_before_retaining() {
+    let mut tools = ObservedTools::default();
+    let first = json!({"text":"é".repeat(1024)});
+    tool_call(
+        &json!({"toolCallId":"one","kind":"execute","rawInput":first}),
+        &mut tools,
+    )
+    .unwrap();
+    let overhead = json!({"text":""}).to_string().len();
+    let remaining = MAX_RETAINED_INPUT_BYTES - tools.input_bytes - overhead;
+    let exact = json!({"text":"x".repeat(remaining)});
+    let frame = json!({"toolCallId":"two","kind":"execute","rawInput":exact});
+    tool_call(&frame, &mut tools).unwrap();
+    assert_eq!(tools.input_bytes, MAX_RETAINED_INPUT_BYTES);
+    tool_call(&frame, &mut tools).unwrap();
+    let error = tool_call(
+        &json!({"toolCallId":"three","kind":"execute","rawInput":{}}),
+        &mut tools,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        AgentError::Protocol("tool input retention limit exceeded".into())
+    );
+    assert!(!tools.entries.contains_key("three"));
+    tools.clear();
+    tool_call(&frame, &mut tools).unwrap();
+    assert_eq!(tools.input_bytes, exact.to_string().len());
+}
+
+#[test]
+fn rejected_observations_do_not_retain_input_or_charge_its_budget() {
+    let mut tools = ObservedTools::default();
+    for frame in [
+        json!({"toolCallId":"bad","rawInput":"malformed"}),
+        json!({"toolCallId":"bad","kind":"invalid","rawInput":{"text":"one"}}),
+        json!({"toolCallId":"bad","name":7,"rawInput":{"text":"one"}}),
+    ] {
+        assert!(matches!(
+            tool_call(&frame, &mut tools),
+            Err(AgentError::Protocol(_))
+        ));
+        assert!(tools.entries.is_empty());
+        assert_eq!(tools.input_bytes, 0);
+    }
+    tool_call(
+        &json!({"toolCallId":"bad","kind":"execute","rawInput":{"text":"valid"}}),
+        &mut tools,
+    )
+    .unwrap();
+    assert_eq!(tools.input_bytes, json!({"text":"valid"}).to_string().len());
 }

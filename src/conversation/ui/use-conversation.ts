@@ -1,6 +1,11 @@
 import { pollConversation } from "../adapters/gateway/polling"
 import { useEffect, useEffectEvent, useState } from "react"
-import { type FileAttachment, type MessageContent } from "../model"
+import {
+  type ApprovalMode,
+  type ConversationSelection,
+  type FileAttachment,
+  type MessageContent,
+} from "../model"
 import type { UploadChange, UploadedFile } from "../application/ports"
 import { activeConversation } from "../application/queries/active-conversation"
 import {
@@ -11,11 +16,14 @@ import {
   takeUploadStep,
   closeTab,
   openConversation,
+  chooseModel,
   openListed,
   sendDraft,
   setActive,
   moveActive,
   setDraft,
+  setSelection,
+  controlConversation,
   stopGenerating,
   refreshConversation,
   invalidateRead,
@@ -50,6 +58,10 @@ export function useConversation() {
   }, [dispatch, active.id, active.serverReady, gatewayAvailable])
 
   return {
+    setApprovalMode: (id: string, mode: ApprovalMode) =>
+      dispatch(controlConversation({ id, control: { kind: "setApprovalMode", mode } })),
+    setSelection: (id: string, selection: ConversationSelection) =>
+      dispatch(setSelection({ id, selection })),
     rename: (id: string, title: string) => dispatch(renameConversation({ id, title })),
     deliveryMode,
     setDeliveryMode,
@@ -128,6 +140,10 @@ export function useConversation() {
     },
     openConversation: () => {
       dispatch(openConversation())
+    },
+    chooseModel: (agent: string, model: string) => {
+      const selection: ConversationSelection = { agent, model, approvalMode: "ask" }
+      dispatch(chooseModel(selection))
     },
     closeConversation: (id: string) => {
       void dispatch(closeTab(id))

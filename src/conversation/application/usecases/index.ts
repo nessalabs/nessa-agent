@@ -1,6 +1,6 @@
 export { closeConversation } from "./close-conversation"
 export { controlFailureMessage, deletedAnyway, deletedMessage } from "./control-failure"
-export { openConversation } from "./open-conversation"
+export { openConversation, chooseModel } from "./open-conversation"
 export { openListed } from "./open-listed"
 export { forgetDeleted } from "./forget-deleted"
 export { beginSend, failSend } from "./send-draft"

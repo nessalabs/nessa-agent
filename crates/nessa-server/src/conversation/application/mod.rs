@@ -11,6 +11,11 @@
 //! Service -> ConversationFileLinkAudit: a message may also point at files on
 //! this machine by path. Nothing is uploaded and nothing is held for those, so
 //! what is recorded is who pointed the agent at them.
+//! Model and approval choices come from the configured binding through
+//! `ConversationAgents`. A mode change is serialized with turn admission:
+//! repository intent -> attached Agent verification (or deferred cold choice)
+//! -> ConversationModeAudit -> atomic repository result. Uncertain application
+//! retires the old session and restores the last committed choice before a turn.
 //! Archive and delete: archiving is a flag in the summary, written as a
 //! person's decision and so failing visibly. Deleting runs in one order —
 //! authorize, fence (a tombstone in the repository, under the creation lock),
@@ -73,9 +78,10 @@ pub use ports::{
     ConversationCreationDisposition, ConversationDeletionAudit, ConversationDeletionAuditRecord,
     ConversationDeletionCause, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
     ConversationFileLinkCause, ConversationFileLinkState, ConversationFuture, ConversationListing,
-    ConversationOwnershipState, ConversationRepository, ConversationSummaries, ListedConversation,
-    ListedConversations, RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage,
-    UnfinishedDeletions,
+    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
+    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
+    ConversationRepository, ConversationSummaries, ListedConversation, ListedConversations,
+    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, UnfinishedDeletions,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
@@ -83,8 +89,8 @@ pub use provider_sessions::{
 pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
     ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
-    ConversationService, DeletionsLeft, QuestionChoiceInput, RequestedAgent, SubmissionMode,
-    MAX_LISTED_CONVERSATIONS,
+    ConversationService, DeletionsLeft, QuestionChoiceInput, RequestedAgent, RequestedConversation,
+    SubmissionMode, MAX_LISTED_CONVERSATIONS,
 };
 pub use view::{
     CompactionReportingSupport, ConversationAgentFeatures, ConversationAttachment,

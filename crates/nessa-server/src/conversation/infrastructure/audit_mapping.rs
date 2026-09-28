@@ -45,6 +45,8 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                 "sessionId":record.session_id().as_str(),
                 "executionId":record.execution_id().as_str(),
                 "mode":submission_mode(record.mode()),
+                "approvalMode":record.approval_mode().map(|mode| mode.as_str()),
+                "admissionGeneration":record.admission_generation(),
                 "before":admission_stage(record.before()),
                 "after":admission_stage(record.after()),
                 "cause":match record.cause() { AdmissionAuditCause::Submitted => "submitted" },

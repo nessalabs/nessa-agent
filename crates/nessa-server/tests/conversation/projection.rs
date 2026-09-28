@@ -526,7 +526,11 @@ async fn assert_terminal_failure_round_trip(
     *provider.execution_gate.lock().unwrap() = Some(execution_gate);
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     service
-        .create(id.clone(), caller("create"), None)
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
@@ -617,6 +621,8 @@ async fn assert_terminal_failure_round_trip(
             agents: only(Arc::new(Provider::new(provider))),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,

@@ -19,6 +19,14 @@ function view() {
     conversationId: "conversation",
     title: null,
     revision: "1",
+    approvalMode: "ask",
+    approvalModes: [
+      {
+        id: "ask",
+        name: "Provider asks",
+        description: "Uses the provider's native prompts.",
+      },
+    ],
     truncated: false,
     queueComplete: true,
     messages: [
@@ -102,6 +110,28 @@ describe("conversation view agreement", () => {
 
   it("accepts complete matching pending and tool evidence", () => {
     expect(conversationView(view(), "conversation").revision).toBe("1")
+  })
+
+  it("keeps the committed approval mode separate from a pending request", () => {
+    const value = {
+      ...view(),
+      approvalModes: [
+        { id: "ask", name: "Provider asks", description: "Native prompts." },
+        { id: "auto", name: "Automatic review", description: "Provider review." },
+      ],
+      approvalModeChange: {
+        requestId: "mode-auto",
+        requestedMode: "auto",
+        status: "recovery_required",
+      },
+    }
+    const parsed = conversationView(value, "conversation")
+    expect(parsed.approvalMode).toBe("ask")
+    expect(parsed.approvalModeChange?.requestedMode).toBe("auto")
+    value.approvalModeChange.status = "complete"
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "Invalid conversation state",
+    )
   })
 
   it("accepts one bounded local notice and rejects a repeated identity", () => {

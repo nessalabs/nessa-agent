@@ -7,6 +7,7 @@ use crate::infrastructure::json_rpc::protocol;
 use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::io::{self, Write};
 
 /// The most tool calls one execution keeps an identity for. Matches the Claude
 /// profile's bound: with 256-byte identifiers and [`MAX_NAME_BYTES`] names, this
@@ -32,8 +33,8 @@ const MAX_STREAMED_OUTPUT_BYTES: usize = 1024 * 1024;
 ///
 /// Codex names some of its tool calls (`exec_command`, `view_image`, an MCP
 /// tool) and identifies the rest only by ACP kind. Both are retained, because a
-/// permission request arrives carrying neither reliably: a file-change approval
-/// is asked with nothing but a tool call identifier, a kind, and a status.
+/// permission request arrives carrying neither reliably: a sparse MCP approval
+/// carries a tool call identifier, a kind, and a status.
 #[derive(Clone)]
 pub(in crate::infrastructure::codex_acp) struct ObservedTool {
     /// The provider's own tool name, when it gave one.
@@ -53,6 +54,75 @@ pub(in crate::infrastructure::codex_acp) struct ObservedTool {
     ///
     /// [`ToolObservation::with_update`]: crate::domain::agent_execution::tools::ToolObservation::with_update
     output: String,
+    /// Original action input, needed by sparse MCP approval requests.
+    input: Option<Box<str>>,
+}
+
+/// Execution-scoped provider observations and their retained input accounting.
+#[derive(Clone, Default)]
+pub(in crate::infrastructure::codex_acp) struct ObservedTools {
+    entries: HashMap<String, ObservedTool>,
+    input_bytes: usize,
+}
+impl ObservedTools {
+    pub(in crate::infrastructure::codex_acp) fn clear(&mut self) {
+        self.entries.clear();
+        self.input_bytes = 0;
+    }
+}
+
+// This bounds the adapter's original-input cache, independently of the
+// controller's permission and tool-observation retention budgets.
+const MAX_RETAINED_INPUT_BYTES: usize = 1024 * 1024;
+
+struct InputSize {
+    remaining: usize,
+}
+impl Write for InputSize {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > self.remaining {
+            return Err(io::Error::other("tool input retention limit exceeded"));
+        }
+        self.remaining -= bytes.len();
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn same_input(retained: &str, incoming: &Value) -> Result<(), AgentError> {
+    let original: Value =
+        serde_json::from_str(retained).map_err(|_| protocol("invalid retained tool input"))?;
+    if original != *incoming {
+        return Err(protocol("tool input changed"));
+    }
+    Ok(())
+}
+
+fn new_input(
+    value: &Value,
+    retained: Option<&str>,
+    used: usize,
+) -> Result<Option<Box<str>>, AgentError> {
+    let input = match value.get("rawInput") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(input) if input.is_object() => input,
+        Some(_) => return Err(protocol("invalid tool input")),
+    };
+    if let Some(retained) = retained {
+        same_input(retained, input)?;
+        return Ok(None);
+    }
+    // Count encoded bytes before allocating the retained copy. Box<str> keeps
+    // capacity equal to its charged length rather than retaining spare capacity.
+    let mut size = InputSize {
+        remaining: MAX_RETAINED_INPUT_BYTES - used,
+    };
+    serde_json::to_writer(&mut size, input)
+        .map_err(|_| protocol("tool input retention limit exceeded"))?;
+    let encoded = serde_json::to_string(input).map_err(|_| protocol("invalid tool input"))?;
+    Ok(Some(encoded.into_boxed_str()))
 }
 
 /// The last `bytes` bytes of `text`, moved forward to the next character
@@ -240,16 +310,28 @@ fn normalize<'a>(
 
 pub(in crate::infrastructure::codex_acp) fn tool_call(
     value: &Value,
-    tools: &mut HashMap<String, ObservedTool>,
+    tools: &mut ObservedTools,
 ) -> Result<ToolCallUpdate, AgentError> {
     let id = identifier(value, "toolCallId")?.to_owned();
-    let streamed = tools.get(&id).map_or("", |tool| tool.output.as_str());
+    if !tools.entries.contains_key(&id) && tools.entries.len() >= MAX_TOOLS {
+        return Err(protocol("tool count limit exceeded"));
+    }
+    let retained = tools
+        .entries
+        .get(&id)
+        .and_then(|tool| tool.input.as_deref());
+    let input = new_input(value, retained, tools.input_bytes)?;
+    let added_bytes = input.as_ref().map_or(0, |input| input.len());
+    let streamed = tools
+        .entries
+        .get(&id)
+        .map_or("", |tool| tool.output.as_str());
     let (frame, accumulated) = normalize(value, streamed)?;
     // Validate the complete representation before retaining provider identity.
     let update = acp_tool_call(frame.as_ref())?;
     let name = declared_name(value)?;
     let kind = value.get("kind").and_then(Value::as_str);
-    match tools.get_mut(&id) {
+    match tools.entries.get_mut(&id) {
         Some(tool) => {
             match (&tool.name, name) {
                 (Some(retained), Some(name)) if retained != name => {
@@ -261,24 +343,26 @@ pub(in crate::infrastructure::codex_acp) fn tool_call(
             if tool.kind.is_none() {
                 tool.kind = kind.map(str::to_owned);
             }
+            if let Some(input) = input {
+                tool.input = Some(input);
+            }
             if let Some(accumulated) = accumulated {
                 tool.output = accumulated;
             }
         }
         None => {
-            if tools.len() >= MAX_TOOLS {
-                return Err(protocol("tool count limit exceeded"));
-            }
-            tools.insert(
+            tools.entries.insert(
                 id,
                 ObservedTool {
                     name: name.map(str::to_owned),
                     kind: kind.map(str::to_owned),
                     output: accumulated.unwrap_or_default(),
+                    input,
                 },
             );
         }
     }
+    tools.input_bytes += added_bytes;
     Ok(update)
 }
 
@@ -302,29 +386,42 @@ fn review_name(tool: &Value, observed: Option<&ObservedTool>) -> Result<String, 
 
 pub(in crate::infrastructure::codex_acp) fn permission_input(
     request: &Value,
-    tools: &HashMap<String, ObservedTool>,
+    tools: &ObservedTools,
 ) -> Result<ToolReviewInput, AgentError> {
     let tool = request
         .get("toolCall")
         .ok_or_else(|| protocol("missing permission tool"))?;
     let id = identifier(tool, "toolCallId")?;
-    let name = review_name(tool, tools.get(id))?;
-    // `rawInput` is the action's own arguments and is preferred. Codex asks some
-    // approvals — a file change is the common one — with no arguments on the
-    // tool call at all, and puts what it is asking about in the request's own
-    // metadata instead. Reviewing the second is not as good as reviewing the
-    // first, but it is the provider's complete account of the action, and a
-    // review with nothing in it would be worse than either.
-    let arguments = match tool.get("rawInput") {
-        Some(arguments) if arguments.is_object() => arguments,
-        _ => request
-            .pointer("/_meta/codex")
-            .filter(|meta| meta.is_object())
-            .ok_or_else(|| protocol("permission request carries no reviewable input"))?,
+    let name = review_name(tool, tools.entries.get(id))?;
+    // File-edit approvals in the pinned adapter carry locations on toolCall,
+    // not rawInput. Preserve that request as evidence; the execution's existing
+    // observation retains the previously streamed diff for the same tool ID.
+    let retained = tools.entries.get(id).and_then(|tool| tool.input.as_deref());
+    let arguments_json = match tool.get("rawInput") {
+        Some(arguments) if arguments.is_object() => {
+            if let Some(retained) = retained {
+                same_input(retained, arguments)?;
+            }
+            arguments.to_string()
+        }
+        None | Some(Value::Null) => {
+            if let Some(retained) = retained {
+                retained.to_owned()
+            } else if tool.get("kind").and_then(Value::as_str) == Some("edit") {
+                let update = acp_tool_call(tool)?;
+                if update.locations().as_ref().is_none_or(Vec::is_empty) {
+                    return Err(protocol("file approval carries no locations"));
+                }
+                json!({"toolCall":tool,"metadata":request.get("_meta")}).to_string()
+            } else {
+                return Err(protocol("permission request carries no reviewable input"));
+            }
+        }
+        _ => return Err(protocol("invalid tool input")),
     };
     Ok(ToolReviewInput {
         name,
-        arguments_json: arguments.to_string(),
+        arguments_json,
     })
 }
 

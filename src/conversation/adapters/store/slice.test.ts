@@ -11,6 +11,7 @@ import {
   sendDraft,
   setActive,
   setDraft,
+  setSelection,
   stopGenerating,
   controlConversation,
   refreshConversation,
@@ -31,6 +32,10 @@ function deferred<T>() {
 }
 const view = (id: string, text = ""): ConversationView => ({
   conversationId: id,
+  approvalMode: "ask",
+  approvalModes: [
+    { id: "ask", name: "Provider asks", description: "Provider asks where required." },
+  ],
   title: null,
   revision: text,
   messages: [],
@@ -401,6 +406,25 @@ it("retains a custom title across the first send and later replacement views", a
   store.dispatch(renameConversation({ id: "c0", title: " My chat " }))
   await store.dispatch(sendDraft({ content: textContent("First message") }))
   expect(store.getState().conversation.conversations[0]?.title).toBe("My chat")
+})
+
+it("freezes a draft's catalog selection at its first gateway identity", async () => {
+  const effects = scenarioEffects("echo")
+  const create = vi.fn((id: string, selection?: Parameters<typeof effects.create>[1]) =>
+    effects.create(id, selection),
+  )
+  const store = makeStore(createDependencies({ conversation: { ...effects, create } }))
+  const selected = { agent: "codex", model: "astra", approvalMode: "auto" } as const
+  store.dispatch(setSelection({ id: "c0", selection: selected }))
+  await store.dispatch(sendDraft({ content: textContent("Hello") }))
+  expect(create.mock.calls[0]?.[1]).toEqual(selected)
+  store.dispatch(
+    setSelection({
+      id: "c0",
+      selection: { agent: "claude", model: "sonnet", approvalMode: "ask" },
+    }),
+  )
+  expect(store.getState().conversation.conversations[0]?.selection).toEqual(selected)
 })
 
 it("shows cancelling until close acknowledgement and does not claim cancellation after failure", async () => {

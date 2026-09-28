@@ -8,15 +8,947 @@ use super::{
     ConversationStartupFailureCode, ProviderSessionErasers, RequestedAgent, RuntimeReadiness,
     SubmissionMode, SubmittedMessage, UnfinishedDeletions,
 };
+use crate::conversation::domain::ConversationApprovalMode;
 use crate::{
     agents::domain::AgentId,
     conversation::domain::{Conversation, ConversationDeletion, ConversationId},
     conversation_test_support::{
-        capabilities, fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit,
+        capabilities, fixture, mode_fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit,
         MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit,
         TestClock, Unlisted, DELETION_BUDGETS,
     },
 };
+use nessa_sdk::application::agent_execution::providers::ApprovalMode as ProviderApprovalMode;
+
+#[tokio::test]
+async fn an_idle_mode_change_commits_once_and_an_uncertain_change_recovers_prior_mode() {
+    let (service, provider, records, audit, _) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "mode-auto"),
+                ConversationApprovalMode::Auto
+            )
+            .await
+            .unwrap(),
+        ConversationApprovalMode::Auto
+    );
+    assert_eq!(
+        records
+            .load(&conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .approval_mode(),
+        ConversationApprovalMode::Auto
+    );
+    assert_eq!(
+        provider.mode_updates.lock().unwrap().as_slice(),
+        &[ProviderApprovalMode::Auto]
+    );
+    service
+        .set_approval_mode(
+            conversation_id.clone(),
+            caller("panel", "mode-auto"),
+            ConversationApprovalMode::Auto,
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.mode_updates.lock().unwrap().len(), 1);
+    service
+        .set_approval_mode(
+            conversation_id.clone(),
+            caller("panel", "same-auto-new-request"),
+            ConversationApprovalMode::Auto,
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.mode_updates.lock().unwrap().len(), 1);
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "mode-auto"),
+                ConversationApprovalMode::Full,
+            )
+            .await,
+        Err(ConversationError::RequestConflict)
+    ));
+    assert_eq!(provider.mode_updates.lock().unwrap().len(), 1);
+    *provider.mode_failure.lock().unwrap() = Some(AgentError::Protocol("lost mode reply".into()));
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "mode-full"),
+                ConversationApprovalMode::Full
+            )
+            .await,
+        Err(ConversationError::ApprovalModeUncertain)
+    ));
+    assert_eq!(
+        records
+            .load(&conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .approval_mode(),
+        ConversationApprovalMode::Auto
+    );
+    assert!(records
+        .pending_mode_change(&conversation_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        provider.mode_updates.lock().unwrap().as_slice(),
+        &[ProviderApprovalMode::Auto, ProviderApprovalMode::Full]
+    );
+    service
+        .submit(
+            conversation_id.clone(),
+            caller("panel", "mode-turn"),
+            "mode-turn".into(),
+            SubmittedMessage {
+                text: "After recovery".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let admitted = audit.records.lock().unwrap().iter().find_map(|record| match record {
+        nessa_sdk::application::agent_execution::executions::ExecutionAuditRecord::QueueAdmitted(record)
+            if record.execution_id().as_str() == "mode-turn" => Some(record.clone()),
+        _ => None,
+    }).unwrap();
+    assert_eq!(admitted.approval_mode(), Some(ProviderApprovalMode::Auto));
+    assert!(admitted
+        .admission_generation()
+        .is_some_and(|generation| generation.contains(':')));
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn lost_mode_intent_acknowledgement_never_dispatches_a_provider_change() {
+    let (service, provider, records, _, _) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    records.lose_mode_intent_ack.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "lost-intent"),
+                ConversationApprovalMode::Auto,
+            )
+            .await,
+        Err(ConversationError::ApprovalModeUncertain)
+    ));
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    assert_eq!(
+        records
+            .pending_mode_change(&conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .request_id,
+        "lost-intent"
+    );
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "lost-intent"),
+                ConversationApprovalMode::Auto,
+            )
+            .await,
+        Err(ConversationError::ApprovalModeUncertain)
+    ));
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    let view = service
+        .read(
+            conversation_id.clone(),
+            caller("panel", "recover-lost-intent"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        view.selection.unwrap().approval_mode,
+        ConversationApprovalMode::Ask
+    );
+    assert!(records
+        .pending_mode_change(&conversation_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn another_owner_cannot_trigger_pending_mode_recovery_by_reading() {
+    let (service, provider, records, _, _) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    records.lose_mode_intent_ack.store(true, Ordering::SeqCst);
+    let _ = service
+        .set_approval_mode(
+            conversation_id.clone(),
+            caller("panel", "lost-intent"),
+            ConversationApprovalMode::Auto,
+        )
+        .await;
+    let mut stranger = caller("panel", "stranger-read");
+    stranger.principal_id = PrincipalId::new("stranger").unwrap();
+    assert!(matches!(
+        service.read(conversation_id.clone(), stranger).await,
+        Err(ConversationError::NotFound)
+    ));
+    assert!(records
+        .pending_mode_change(&conversation_id)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn audit_failure_after_live_application_restores_the_prior_mode() {
+    let (service, provider, records, _, mode_audit) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    mode_audit
+        .fail_application_once
+        .store(true, Ordering::SeqCst);
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "mode-auto"),
+                ConversationApprovalMode::Auto,
+            )
+            .await,
+        Err(ConversationError::Audit)
+    ));
+    assert_eq!(
+        records
+            .load(&conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .approval_mode(),
+        ConversationApprovalMode::Ask
+    );
+    assert!(records
+        .pending_mode_change(&conversation_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        provider.mode_updates.lock().unwrap().as_slice(),
+        &[ProviderApprovalMode::Auto]
+    );
+    assert!(mode_audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(_, phase)| { *phase == super::ConversationModeAuditPhase::RecoveryRestored }));
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_pending_recovery_view_keeps_the_committed_mode_separate_from_the_request() {
+    let (service, _, records, _, mode_audit) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let before = service
+        .read(conversation_id.clone(), caller("panel", "before-mode"))
+        .await
+        .unwrap();
+    mode_audit
+        .fail_application_once
+        .store(true, Ordering::SeqCst);
+    mode_audit.refuse_recovery.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "mode-auto"),
+                ConversationApprovalMode::Auto,
+            )
+            .await,
+        Err(ConversationError::Audit)
+    ));
+    let pending = service
+        .read(conversation_id.clone(), caller("panel", "pending-mode"))
+        .await
+        .unwrap();
+    assert_ne!(pending.revision, before.revision);
+    assert_eq!(
+        pending.selection.as_ref().unwrap().approval_mode,
+        ConversationApprovalMode::Ask
+    );
+    assert!(!pending.capabilities.queue);
+    let status = pending.approval_mode_change.unwrap();
+    assert_eq!(status.request_id, "mode-auto");
+    assert_eq!(status.requested_mode, "auto");
+    assert!(matches!(
+        status.status,
+        super::view::ConversationApprovalModeChangeStatus::RecoveryRequired
+    ));
+    assert!(records
+        .pending_mode_change(&conversation_id)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "second-during-recovery"),
+                ConversationApprovalMode::Full,
+            )
+            .await,
+        Err(ConversationError::ApprovalModeUncertain)
+    ));
+    mode_audit.refuse_recovery.store(false, Ordering::SeqCst);
+    let recovered = service
+        .read(conversation_id.clone(), caller("panel", "recovered-mode"))
+        .await
+        .unwrap();
+    assert!(recovered.approval_mode_change.is_none());
+    assert_eq!(
+        recovered.selection.unwrap().approval_mode,
+        ConversationApprovalMode::Ask
+    );
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_session_retirement_keeps_mode_recovery_pending_without_a_second_open() {
+    let (service, provider, records, _, _) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    *provider.mode_failure.lock().unwrap() = Some(AgentError::Protocol("lost mode reply".into()));
+    *provider.close_failure.lock().unwrap() = Some(AgentError::CleanupUncertain);
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "uncertain-mode"),
+                ConversationApprovalMode::Auto,
+            )
+            .await,
+        Err(ConversationError::ApprovalModeUncertain)
+    ));
+    let pending = service
+        .read(conversation_id.clone(), caller("panel", "read-pending"))
+        .await
+        .unwrap();
+    assert!(pending.approval_mode_change.is_some());
+    assert!(!pending.capabilities.queue);
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    assert!(records
+        .pending_mode_change(&conversation_id)
+        .await
+        .unwrap()
+        .is_some());
+    *provider.close_failure.lock().unwrap() = None;
+    let recovered = service
+        .read(conversation_id.clone(), caller("panel", "read-recovered"))
+        .await
+        .unwrap();
+    assert!(recovered.approval_mode_change.is_none());
+    assert_eq!(
+        recovered.selection.unwrap().approval_mode,
+        ConversationApprovalMode::Ask
+    );
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_context_restoration_keeps_mode_recovery_pending_until_retry() {
+    let (service, provider, records, _, _) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    *provider.mode_failure.lock().unwrap() = Some(AgentError::Protocol("lost mode reply".into()));
+    *provider.open_failure.lock().unwrap() = Some(AgentError::Protocol("restore failed".into()));
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "uncertain-mode"),
+                ConversationApprovalMode::Auto,
+            )
+            .await,
+        Err(ConversationError::ApprovalModeUncertain)
+    ));
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
+    assert!(records
+        .pending_mode_change(&conversation_id)
+        .await
+        .unwrap()
+        .is_some());
+    let recovered = service
+        .read(conversation_id.clone(), caller("panel", "retry-recovery"))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 3);
+    assert!(recovered.approval_mode_change.is_none());
+    assert_eq!(
+        recovered.selection.unwrap().approval_mode,
+        ConversationApprovalMode::Ask
+    );
+    assert!(records
+        .pending_mode_change(&conversation_id)
+        .await
+        .unwrap()
+        .is_none());
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_lost_commit_acknowledgement_uses_the_durable_terminal_result() {
+    let (service, provider, records, _, _) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    records.lose_mode_commit_ack.store(true, Ordering::SeqCst);
+    assert_eq!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "mode-auto"),
+                ConversationApprovalMode::Auto,
+            )
+            .await
+            .unwrap(),
+        ConversationApprovalMode::Auto
+    );
+    assert_eq!(
+        records
+            .load(&conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .approval_mode(),
+        ConversationApprovalMode::Auto
+    );
+    assert_eq!(
+        provider.mode_updates.lock().unwrap().as_slice(),
+        &[ProviderApprovalMode::Auto]
+    );
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_uncommitted_mode_change_recovers_the_prior_choice() {
+    let (service, provider, records, _, _) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    records
+        .refuse_mode_commit_once
+        .store(true, Ordering::SeqCst);
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "mode-auto"),
+                ConversationApprovalMode::Auto,
+            )
+            .await,
+        Err(ConversationError::ApprovalModeUncertain)
+    ));
+    assert_eq!(
+        records
+            .load(&conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .approval_mode(),
+        ConversationApprovalMode::Ask
+    );
+    assert!(records
+        .pending_mode_change(&conversation_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        provider.mode_updates.lock().unwrap().as_slice(),
+        &[ProviderApprovalMode::Auto]
+    );
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_turn_waits_for_an_admitted_mode_change_and_uses_its_committed_mode() {
+    let (service, provider, _, audit, _) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let (release, gate) = oneshot::channel();
+    *provider.mode_gate.lock().unwrap() = Some(gate);
+    let changing = tokio::spawn({
+        let service = service.clone();
+        let id = conversation_id.clone();
+        async move {
+            service
+                .set_approval_mode(
+                    id,
+                    caller("panel", "mode-auto"),
+                    ConversationApprovalMode::Auto,
+                )
+                .await
+        }
+    });
+    provider.mode_started.notified().await;
+    let sending = tokio::spawn({
+        let service = service.clone();
+        let id = conversation_id.clone();
+        async move {
+            service
+                .submit(
+                    id,
+                    caller("panel", "turn-after-mode"),
+                    "turn-after-mode".into(),
+                    SubmittedMessage {
+                        text: "After mode change".into(),
+                        ..SubmittedMessage::default()
+                    },
+                    SubmissionMode::Queue,
+                )
+                .await
+        }
+    });
+    tokio::task::yield_now().await;
+    assert!(provider.executions.lock().unwrap().is_empty());
+    release.send(()).unwrap();
+    assert_eq!(
+        changing.await.unwrap().unwrap(),
+        ConversationApprovalMode::Auto
+    );
+    sending.await.unwrap().unwrap();
+    completed(&service, &conversation_id, 1).await;
+    let admitted = audit.records.lock().unwrap().iter().find_map(|record| match record {
+        nessa_sdk::application::agent_execution::executions::ExecutionAuditRecord::QueueAdmitted(record)
+            if record.execution_id().as_str() == "turn-after-mode" => Some(record.clone()),
+        _ => None,
+    }).unwrap();
+    assert_eq!(admitted.approval_mode(), Some(ProviderApprovalMode::Auto));
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn caller_loss_does_not_cancel_a_mode_change_or_let_close_pass_its_commit() {
+    let (service, provider, records, _, mode_audit) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let (release, gate) = oneshot::channel();
+    *provider.mode_gate.lock().unwrap() = Some(gate);
+    let changing = tokio::spawn({
+        let service = service.clone();
+        let id = conversation_id.clone();
+        async move {
+            service
+                .set_approval_mode(
+                    id,
+                    caller("panel", "disconnected-mode"),
+                    ConversationApprovalMode::Auto,
+                )
+                .await
+        }
+    });
+    provider.mode_started.notified().await;
+    changing.abort();
+    let closing = tokio::spawn({
+        let service = service.clone();
+        let id = conversation_id.clone();
+        async move { service.close(id, caller("panel", "close-after-mode")).await }
+    });
+    tokio::task::yield_now().await;
+    assert!(!closing.is_finished());
+    release.send(()).unwrap();
+    closing.await.unwrap().unwrap();
+    assert_eq!(
+        records
+            .load(&conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .approval_mode(),
+        ConversationApprovalMode::Auto
+    );
+    assert_eq!(
+        provider.mode_updates.lock().unwrap().as_slice(),
+        &[ProviderApprovalMode::Auto]
+    );
+    assert!(mode_audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(request, phase)| {
+            request.request_id == "disconnected-mode"
+                && *phase == super::ConversationModeAuditPhase::Application
+        }));
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_mode_change_after_a_turn_is_running_is_audited_and_refused() {
+    let (service, provider, _, _, mode_audit) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let (release, gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    service
+        .submit(
+            conversation_id.clone(),
+            caller("panel", "running-turn"),
+            "running-turn".into(),
+            SubmittedMessage {
+                text: "Keep running".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    provider.execution_started.notified().await;
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "mode-auto"),
+                ConversationApprovalMode::Auto,
+            )
+            .await,
+        Err(ConversationError::TurnRunning)
+    ));
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    assert!(mode_audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(request, phase)| {
+            request.request_id == "mode-auto"
+                && *phase == super::ConversationModeAuditPhase::AdmissionRefused
+        }));
+    release.send(()).unwrap();
+    completed(&service, &conversation_id, 1).await;
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_pending_permission_keeps_mode_changes_out_of_the_provider() {
+    let (service, provider, _, _, mode_audit) = mode_fixture();
+    provider.request_permission.store(1, Ordering::SeqCst);
+    let (release, gate) = oneshot::channel();
+    *provider.permission_gate.lock().unwrap() = Some(gate);
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .submit(
+            conversation_id.clone(),
+            caller("panel", "permission-turn"),
+            "permission-turn".into(),
+            SubmittedMessage {
+                text: "Review this edit".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if !service
+                .read(conversation_id.clone(), caller("panel", "read-permission"))
+                .await
+                .unwrap()
+                .permissions
+                .is_empty()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "change-during-permission"),
+                ConversationApprovalMode::Auto,
+            )
+            .await,
+        Err(ConversationError::TurnRunning)
+    ));
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    assert!(mode_audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(request, phase)| {
+            request.request_id == "change-during-permission"
+                && *phase == super::ConversationModeAuditPhase::AdmissionRefused
+        }));
+    release.send(()).unwrap();
+    completed(&service, &conversation_id, 1).await;
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_cold_open_recovers_an_unfinished_intent_from_the_committed_mode() {
+    let (service, provider, records, _, _) = mode_fixture();
+    *provider.mode_failure.lock().unwrap() = Some(AgentError::Unsupported(
+        "fixed provider has no live mode mutation".into(),
+    ));
+    let conversation_id = id();
+    records.records.lock().unwrap().insert(
+        conversation_id.clone(),
+        Conversation::new(
+            conversation_id.clone(),
+            OrganizationId::new("org").unwrap(),
+            PrincipalId::new("person").unwrap(),
+            "panel".into(),
+            "create-mode-chat".into(),
+            1_700_000_000_123,
+            AgentId::Claude,
+            crate::conversation::domain::ConversationModelId::new("test").unwrap(),
+            ConversationApprovalMode::Ask,
+        )
+        .unwrap(),
+    );
+    records
+        .begin_mode_change(super::ConversationModeRequest {
+            conversation_id: conversation_id.clone(),
+            organization_id: OrganizationId::new("org").unwrap(),
+            request_id: "unfinished-mode".into(),
+            initiator_principal_id: PrincipalId::new("person").unwrap(),
+            initiator_surface_id: "panel".into(),
+            prior: ConversationApprovalMode::Ask,
+            requested: ConversationApprovalMode::Auto,
+            state: super::ConversationModeRequestState::Pending,
+            application: None,
+            requested_at_ms: 1_700_000_000_124,
+        })
+        .await
+        .unwrap();
+    records
+        .observe_mode_application(
+            &conversation_id,
+            "unfinished-mode",
+            super::ConversationModeApplication::Uncertain,
+        )
+        .await
+        .unwrap();
+    let view = service
+        .read(conversation_id.clone(), caller("panel", "cold-read"))
+        .await
+        .unwrap();
+    assert_eq!(
+        view.selection.unwrap().approval_mode,
+        ConversationApprovalMode::Ask
+    );
+    assert!(records
+        .pending_mode_change(&conversation_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    assert!(provider.mode_failure.lock().unwrap().is_some());
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_deferred_mode_is_committed_but_a_wrong_cold_profile_cannot_admit_a_turn() {
+    let (service, provider, records, _, _) = mode_fixture();
+    let conversation_id = id();
+    service
+        .create(
+            conversation_id.clone(),
+            caller("panel", "create-mode-chat"),
+            super::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .close(
+            conversation_id.clone(),
+            caller("panel", "close-before-mode"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "mode-auto"),
+                ConversationApprovalMode::Auto,
+            )
+            .await
+            .unwrap(),
+        ConversationApprovalMode::Auto
+    );
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    assert_eq!(
+        records
+            .load(&conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .approval_mode(),
+        ConversationApprovalMode::Auto
+    );
+    assert_eq!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "same-cold-mode"),
+                ConversationApprovalMode::Auto,
+            )
+            .await
+            .unwrap(),
+        ConversationApprovalMode::Auto
+    );
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    provider.force_ask_mode.store(true, Ordering::SeqCst);
+    service
+        .read(
+            conversation_id.clone(),
+            caller("panel", "open-wrong-profile"),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        service
+            .set_approval_mode(
+                conversation_id.clone(),
+                caller("panel", "same-deferred-mode"),
+                ConversationApprovalMode::Auto,
+            )
+            .await,
+        Err(ConversationError::ApprovalModeNotApplied)
+    ));
+    assert!(matches!(
+        service
+            .submit(
+                conversation_id.clone(),
+                caller("panel", "deferred-turn"),
+                "deferred-turn".into(),
+                SubmittedMessage {
+                    text: "Should not run under Ask".into(),
+                    ..SubmittedMessage::default()
+                },
+                SubmissionMode::Queue,
+            )
+            .await,
+        Err(ConversationError::ApprovalModeNotApplied)
+    ));
+    assert!(provider.executions.lock().unwrap().is_empty());
+    service.shutdown().await.unwrap();
+}
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
     application::agent_execution::{
@@ -213,6 +1145,8 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -230,7 +1164,11 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
     let id = id();
     assert!(matches!(
         service
-            .create(id.clone(), caller("panel", "create-1"), None)
+            .create(
+                id.clone(),
+                caller("panel", "create-1"),
+                crate::conversation::application::RequestedConversation::default()
+            )
             .await,
         Err(ConversationError::Audit)
     ));
@@ -272,6 +1210,8 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -290,7 +1230,11 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
 
     assert!(matches!(
         service
-            .create(id.clone(), caller("panel", "create-original"), None)
+            .create(
+                id.clone(),
+                caller("panel", "create-original"),
+                crate::conversation::application::RequestedConversation::default()
+            )
             .await,
         Err(ConversationError::Audit)
     ));
@@ -298,7 +1242,11 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
 
     service
-        .create(id, caller("phone", "create-retry"), None)
+        .create(
+            id,
+            caller("phone", "create-retry"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
 
@@ -374,6 +1322,8 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -391,7 +1341,11 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
     let id = id();
     assert!(matches!(
         service
-            .create(id.clone(), caller("panel", "create-1"), None)
+            .create(
+                id.clone(),
+                caller("panel", "create-1"),
+                crate::conversation::application::RequestedConversation::default()
+            )
             .await,
         Err(ConversationError::Audit)
     ));
@@ -487,6 +1441,8 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -503,7 +1459,11 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     .unwrap();
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create-1"), None)
+        .create(
+            id.clone(),
+            caller("panel", "create-1"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     opened(&provider, 1).await;
@@ -515,6 +1475,8 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: Arc::new(InMemoryStorage::new()),
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -534,7 +1496,11 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     audit.reject_reopen.store(true, Ordering::SeqCst);
     assert!(matches!(
         service
-            .create(id.clone(), caller("phone", "create-2"), None)
+            .create(
+                id.clone(),
+                caller("phone", "create-2"),
+                crate::conversation::application::RequestedConversation::default()
+            )
             .await,
         Err(ConversationError::Audit)
     ));
@@ -544,7 +1510,11 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
 
     audit.reject_reopen.store(false, Ordering::SeqCst);
     service
-        .create(id, caller("phone", "create-3"), None)
+        .create(
+            id,
+            caller("phone", "create-3"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     opened(&provider, 2).await;
@@ -584,6 +1554,8 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -604,7 +1576,11 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
         let id = id.clone();
         async move {
             service
-                .create(id, caller("panel", "caller-lost"), None)
+                .create(
+                    id,
+                    caller("panel", "caller-lost"),
+                    crate::conversation::application::RequestedConversation::default(),
+                )
                 .await
         }
     });
@@ -638,6 +1614,8 @@ async fn malformed_controls_do_not_open_a_dormant_owned_provider() {
             "create".into(),
             1_700_000_000_123,
             AgentId::Claude,
+            crate::conversation::domain::ConversationModelId::new("test").unwrap(),
+            crate::conversation::domain::ConversationApprovalMode::Ask,
         )
         .unwrap(),
     );
@@ -687,7 +1665,11 @@ async fn consumed_permission_failure_is_not_reoffered_on_the_immediate_read() {
     *provider.permission_gate.lock().unwrap() = Some(execution_gate);
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"), None)
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
@@ -776,6 +1758,8 @@ fn ownership_and_creation_context_are_domain_state() {
         "create".into(),
         1_700_000_000_123,
         AgentId::Claude,
+        crate::conversation::domain::ConversationModelId::new("test").unwrap(),
+        crate::conversation::domain::ConversationApprovalMode::Ask,
     )
     .unwrap();
     assert!(record.allows(
@@ -801,6 +1785,8 @@ fn ownership_and_creation_context_are_domain_state() {
         "create".into(),
         1_700_000_000_123,
         AgentId::Claude,
+        crate::conversation::domain::ConversationModelId::new("test").unwrap(),
+        crate::conversation::domain::ConversationApprovalMode::Ask,
     )
     .is_err());
 }
@@ -809,8 +1795,16 @@ async fn surfaces_share_one_agent_and_keep_original_creator() {
     let (service, provider, repository, _) = fixture(ConversationLimits::default());
     let id = id();
     let (a, b) = tokio::join!(
-        service.create(id.clone(), caller("panel", "original"), None),
-        service.create(id.clone(), caller("phone", "retry"), None)
+        service.create(
+            id.clone(),
+            caller("panel", "original"),
+            crate::conversation::application::RequestedConversation::default()
+        ),
+        service.create(
+            id.clone(),
+            caller("phone", "retry"),
+            crate::conversation::application::RequestedConversation::default()
+        )
     );
     a.unwrap();
     b.unwrap();
@@ -841,7 +1835,11 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
     });
     let id = id();
     service
-        .create(id.clone(), caller("panel", "original"), None)
+        .create(
+            id.clone(),
+            caller("panel", "original"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service.shutdown().await.unwrap();
@@ -853,6 +1851,8 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -873,13 +1873,23 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
     let mut foreign = caller("other-surface", "foreign-reopen");
     foreign.principal_id = PrincipalId::new("intruder").unwrap();
     assert!(matches!(
-        restarted.create(id.clone(), foreign, None).await,
+        restarted
+            .create(
+                id.clone(),
+                foreign,
+                crate::conversation::application::RequestedConversation::default()
+            )
+            .await,
         Err(ConversationError::NotFound)
     ));
     opened(&provider, 1).await;
 
     restarted
-        .create(id, caller("phone", "owner-reopen"), None)
+        .create(
+            id,
+            caller("phone", "owner-reopen"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     opened(&provider, 2).await;
@@ -890,7 +1900,11 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"), None)
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let (release, gate) = oneshot::channel();
@@ -973,7 +1987,15 @@ async fn caller_loss_does_not_cancel_initialization() {
     let task = tokio::spawn({
         let service = service.clone();
         let id = id.clone();
-        async move { service.create(id, caller("panel", "create"), None).await }
+        async move {
+            service
+                .create(
+                    id,
+                    caller("panel", "create"),
+                    crate::conversation::application::RequestedConversation::default(),
+                )
+                .await
+        }
     });
     provider.opening.notified().await;
     task.abort();
@@ -996,6 +2018,8 @@ async fn first_read_caller_loss_cannot_leave_an_unstarted_shutdown_slot() {
             "create".into(),
             1_700_000_000_123,
             AgentId::Claude,
+            crate::conversation::domain::ConversationModelId::new("test").unwrap(),
+            crate::conversation::domain::ConversationApprovalMode::Ask,
         )
         .unwrap(),
     );
@@ -1045,6 +2069,8 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1062,12 +2088,20 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
     let id = id();
     assert!(matches!(
         service
-            .create(id.clone(), caller("panel", "create"), None)
+            .create(
+                id.clone(),
+                caller("panel", "create"),
+                crate::conversation::application::RequestedConversation::default()
+            )
             .await,
         Err(ConversationError::Storage(StorageError::Io(_)))
     ));
     service
-        .create(id, caller("panel", "retry"), None)
+        .create(
+            id,
+            caller("panel", "retry"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     assert_eq!(storage.attempts.load(Ordering::SeqCst), 2);
@@ -1098,6 +2132,47 @@ impl ConversationRepository for GatedCreateRepository {
             inner.create(conversation).await
         })
     }
+    fn begin_mode_change(
+        &self,
+        request: crate::conversation::application::ConversationModeRequest,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationModeRequest> {
+        self.inner.begin_mode_change(request)
+    }
+    fn pending_mode_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationModeRequest>>
+    {
+        self.inner.pending_mode_change(id)
+    }
+    fn mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationModeRequest>>
+    {
+        self.inner.mode_change(id, request_id)
+    }
+    fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
+        self.inner.requires_mode_verification(id)
+    }
+    fn observe_mode_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: crate::conversation::application::ConversationModeApplication,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationModeRequest> {
+        self.inner
+            .observe_mode_application(id, request_id, application)
+    }
+    fn finish_mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: crate::conversation::application::ConversationModeRequestState,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationModeRequest> {
+        self.inner.finish_mode_change(id, request_id, state)
+    }
     fn record_deletion(
         &self,
         id: &ConversationId,
@@ -1121,6 +2196,8 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
             agents: only(Arc::new(Provider::new(provider))),
             storage,
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1137,7 +2214,11 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
     .unwrap();
     let first = id();
     service
-        .create(first.clone(), caller("panel", "first"), None)
+        .create(
+            first.clone(),
+            caller("panel", "first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     *repository.gate.lock().unwrap() = Some(gate);
@@ -1146,7 +2227,11 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
         let service = service.clone();
         async move {
             service
-                .create(second, caller("phone", "second"), None)
+                .create(
+                    second,
+                    caller("phone", "second"),
+                    crate::conversation::application::RequestedConversation::default(),
+                )
                 .await
         }
     });
@@ -1194,6 +2279,8 @@ async fn resource_free_provider_failure_waits_for_explicit_close_before_retry() 
             agents: only(provider.clone()),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1210,7 +2297,11 @@ async fn resource_free_provider_failure_waits_for_explicit_close_before_retry() 
     .unwrap();
     let id = id();
     service
-        .create(id.clone(), caller("panel", "first"), None)
+        .create(
+            id.clone(),
+            caller("panel", "first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let failed = lifecycle(&service, &id, ConversationLifecyclePhase::Failed).await;
@@ -1219,7 +2310,11 @@ async fn resource_free_provider_failure_waits_for_explicit_close_before_retry() 
         ConversationStartupFailureCode::Provider
     );
     service
-        .create(id.clone(), caller("panel", "same-generation"), None)
+        .create(
+            id.clone(),
+            caller("panel", "same-generation"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     assert_eq!(provider.attempts.load(Ordering::SeqCst), 1);
@@ -1228,7 +2323,11 @@ async fn resource_free_provider_failure_waits_for_explicit_close_before_retry() 
         .await
         .unwrap();
     service
-        .create(id.clone(), caller("panel", "retry"), None)
+        .create(
+            id.clone(),
+            caller("panel", "retry"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     lifecycle(&service, &id, ConversationLifecyclePhase::Attached).await;
@@ -1345,6 +2444,8 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1361,7 +2462,11 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
     .unwrap();
     let id = id();
     service
-        .create(id.clone(), caller("panel", "first"), None)
+        .create(
+            id.clone(),
+            caller("panel", "first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     // The retained attachment owner is held at the gate, while the command is
@@ -1408,6 +2513,8 @@ async fn close_releases_only_its_waiting_attachment_owner_and_stale_authorizatio
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1426,11 +2533,19 @@ async fn close_releases_only_its_waiting_attachment_owner_and_stale_authorizatio
     let second = id();
 
     service
-        .create(first.clone(), caller("panel", "create-first"), None)
+        .create(
+            first.clone(),
+            caller("panel", "create-first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
-        .create(second.clone(), caller("panel", "create-second"), None)
+        .create(
+            second.clone(),
+            caller("panel", "create-second"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     readiness_waiters(&readiness, 2).await;
@@ -1456,7 +2571,11 @@ async fn close_releases_only_its_waiting_attachment_owner_and_stale_authorizatio
     // The old Agent and its storage lease are gone, so the same durable
     // conversation can prepare a fresh generation while readiness stays held.
     service
-        .create(first.clone(), caller("panel", "recreate-first"), None)
+        .create(
+            first.clone(),
+            caller("panel", "recreate-first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     readiness_waiters(&readiness, 3).await;
@@ -1496,6 +2615,8 @@ async fn bounded_queue_controls_complete_while_attachment_waits_for_runtime() {
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1512,7 +2633,11 @@ async fn bounded_queue_controls_complete_while_attachment_waits_for_runtime() {
     .unwrap();
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"), None)
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     readiness_waiters(&readiness, 1).await;
@@ -1588,6 +2713,8 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1604,7 +2731,11 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
     .unwrap();
     let id = id();
     service
-        .create(id.clone(), caller("panel", "first"), None)
+        .create(
+            id.clone(),
+            caller("panel", "first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
@@ -1630,7 +2761,11 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
     // conversation this released can be opened again afterwards.
     *readiness.release.lock().unwrap() = None;
     service
-        .create(id, caller("panel", "after-quit"), None)
+        .create(
+            id,
+            caller("panel", "after-quit"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
@@ -1661,6 +2796,8 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
             agents: prepared(Arc::new(Provider::new(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1676,7 +2813,11 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
     )
     .unwrap();
     service
-        .create(id(), caller("panel", "first"), None)
+        .create(
+            id(),
+            caller("panel", "first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
@@ -1736,6 +2877,8 @@ async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
             agents: only(provider.clone()),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1752,7 +2895,11 @@ async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
     .unwrap();
     let id = id();
     service
-        .create(id.clone(), caller("panel", "first"), None)
+        .create(
+            id.clone(),
+            caller("panel", "first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let failed = lifecycle(&service, &id, ConversationLifecyclePhase::Failed).await;
@@ -1764,7 +2911,11 @@ async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
     // Re-reading and reconnect-style creation retain one failed generation;
     // diagnostics do not authorize a replay.
     service
-        .create(id.clone(), caller("phone", "reconnect"), None)
+        .create(
+            id.clone(),
+            caller("phone", "reconnect"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let repeated = service
@@ -1779,7 +2930,11 @@ async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
         .await
         .unwrap();
     service
-        .create(id.clone(), caller("panel", "retry"), None)
+        .create(
+            id.clone(),
+            caller("panel", "retry"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     lifecycle(&service, &id, ConversationLifecyclePhase::Attached).await;
@@ -1823,6 +2978,8 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
             agents: only(provider.clone()),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1839,7 +2996,11 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
     .unwrap();
     let id = id();
     service
-        .create(id.clone(), caller("panel", "first"), None)
+        .create(
+            id.clone(),
+            caller("panel", "first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let failed = lifecycle(&service, &id, ConversationLifecyclePhase::Failed).await;
@@ -1848,7 +3009,11 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
         ConversationStartupFailureCode::Provider
     );
     service
-        .create(id, caller("panel", "retry"), None)
+        .create(
+            id,
+            caller("panel", "retry"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     assert_eq!(provider.attempts.load(Ordering::SeqCst), 1);
@@ -1867,6 +3032,8 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
             agents: only(provider.clone()),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1883,7 +3050,11 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
     .unwrap();
     let id = id();
     service
-        .create(id.clone(), caller("panel", "first"), None)
+        .create(
+            id.clone(),
+            caller("panel", "first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let failed = lifecycle(&service, &id, ConversationLifecyclePhase::Failed).await;
@@ -1892,7 +3063,11 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
         ConversationStartupFailureCode::Provider
     );
     service
-        .create(id, caller("panel", "retry"), None)
+        .create(
+            id,
+            caller("panel", "retry"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     assert_eq!(provider.attempts.load(Ordering::SeqCst), 1);
@@ -1906,14 +3081,28 @@ async fn rejected_capacity_does_not_write_metadata_even_with_concurrent_creates(
         ..ConversationLimits::default()
     });
     let (a, b) = tokio::join!(
-        service.create(id(), caller("panel", "a"), None),
-        service.create(id(), caller("phone", "b"), None)
+        service.create(
+            id(),
+            caller("panel", "a"),
+            crate::conversation::application::RequestedConversation::default()
+        ),
+        service.create(
+            id(),
+            caller("phone", "b"),
+            crate::conversation::application::RequestedConversation::default()
+        )
     );
     assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
     assert_eq!(repository.records.lock().unwrap().len(), 1);
     opened(&provider, 1).await;
     assert!(matches!(
-        service.create(id(), caller("panel", "c"), None).await,
+        service
+            .create(
+                id(),
+                caller("panel", "c"),
+                crate::conversation::application::RequestedConversation::default()
+            )
+            .await,
         Err(ConversationError::Capacity)
     ));
     assert_eq!(repository.records.lock().unwrap().len(), 1);
@@ -1924,7 +3113,11 @@ async fn restart_restores_saved_messages_without_replaying_input() {
     let (service, provider, repository, storage) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"), None)
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
@@ -1951,6 +3144,8 @@ async fn restart_restores_saved_messages_without_replaying_input() {
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1993,6 +3188,8 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
             agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(PanickingStorage),
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -2010,7 +3207,11 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
     assert!(matches!(
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            service.create(id(), caller("panel", "create"), None)
+            service.create(
+                id(),
+                caller("panel", "create"),
+                crate::conversation::application::RequestedConversation::default()
+            )
         )
         .await
         .unwrap(),
@@ -2036,6 +3237,8 @@ async fn delete_after_a_held_opening(
             agents,
             storage,
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -2051,7 +3254,11 @@ async fn delete_after_a_held_opening(
     )
     .unwrap();
     let _ = service
-        .create(id.clone(), caller("panel", "create"), None)
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await;
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let Err(ConversationError::DeletionIncomplete(failures)) =
@@ -2102,7 +3309,11 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"), None)
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let (release, gate) = oneshot::channel();
@@ -2164,7 +3375,11 @@ async fn close_then_replay_recovers_without_redispatch_and_new_input_still_works
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"), None)
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
@@ -2250,6 +3465,8 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
             agents: only(Arc::new(Provider::new(provider))),
             storage: Arc::new(HostileStorage),
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -2267,7 +3484,11 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
     assert!(matches!(
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            service.create(id(), caller("panel", "create"), None)
+            service.create(
+                id(),
+                caller("panel", "create"),
+                crate::conversation::application::RequestedConversation::default()
+            )
         )
         .await
         .unwrap(),
@@ -2293,6 +3514,8 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
             "create".into(),
             1_700_000_000_123,
             AgentId::Claude,
+            crate::conversation::domain::ConversationModelId::new("test").unwrap(),
+            crate::conversation::domain::ConversationApprovalMode::Ask,
         )
         .unwrap(),
     );
@@ -2338,13 +3561,21 @@ async fn desktop_quit_keeps_gateway_admission_open() {
     let (service, _, _, _) = fixture(ConversationLimits::default());
     let first = id();
     service
-        .create(first, caller("panel", "create-first"), None)
+        .create(
+            first,
+            caller("panel", "create-first"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service.stop_active_agents().await.unwrap();
     let next = id();
     service
-        .create(next.clone(), caller("panel", "create-next"), None)
+        .create(
+            next.clone(),
+            caller("panel", "create-next"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
@@ -2405,6 +3636,8 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
             agents: both(),
             storage: storage.clone(),
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -2424,7 +3657,11 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
         .create(
             id.clone(),
             caller("panel", "create"),
-            Some(RequestedAgent::Known(AgentId::Codex)),
+            crate::conversation::application::RequestedConversation {
+                agent: Some(RequestedAgent::Known(AgentId::Codex)),
+                model: None,
+                approval_mode: None,
+            },
         )
         .await
         .unwrap();
@@ -2445,6 +3682,8 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
             agents: both(),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -2460,7 +3699,11 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
     )
     .unwrap();
     restarted
-        .create(id.clone(), caller("panel", "reopen"), None)
+        .create(
+            id.clone(),
+            caller("panel", "reopen"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     opened(&codex, 2).await;
@@ -2501,6 +3744,8 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
             .unwrap(),
             storage: storage.clone(),
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -2520,7 +3765,11 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
         .create(
             id.clone(),
             caller("panel", "create"),
-            Some(RequestedAgent::Known(AgentId::Codex)),
+            crate::conversation::application::RequestedConversation {
+                agent: Some(RequestedAgent::Known(AgentId::Codex)),
+                model: None,
+                approval_mode: None,
+            },
         )
         .await
         .unwrap();
@@ -2538,6 +3787,8 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
             .unwrap(),
             storage: storage.clone(),
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -2554,7 +3805,11 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
     .unwrap();
     assert!(matches!(
         without_codex
-            .create(id.clone(), caller("panel", "reopen"), None)
+            .create(
+                id.clone(),
+                caller("panel", "reopen"),
+                crate::conversation::application::RequestedConversation::default()
+            )
             .await,
         Err(ConversationError::AgentNotConfigured)
     ));
@@ -2609,6 +3864,8 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
                 .unwrap(),
                 storage: storage.clone(),
                 metadata: repository.clone(),
+                mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
                 attachments: None,
@@ -2627,7 +3884,11 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
             .create(
                 stranded.clone(),
                 caller("panel", "create"),
-                Some(RequestedAgent::Known(AgentId::Codex)),
+                crate::conversation::application::RequestedConversation {
+                    agent: Some(RequestedAgent::Known(AgentId::Codex)),
+                    model: None,
+                    approval_mode: None,
+                },
             )
             .await
             .unwrap();
@@ -2644,6 +3905,8 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
             .unwrap(),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -2676,7 +3939,11 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
     let fresh = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     assert!(
         without_codex
-            .create(fresh, caller("panel", "create"), None)
+            .create(
+                fresh,
+                caller("panel", "create"),
+                crate::conversation::application::RequestedConversation::default()
+            )
             .await
             .is_ok(),
         "a refusal that acquired nothing still held its slot",
@@ -2718,6 +3985,8 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
                 .unwrap(),
                 storage: storage.clone(),
                 metadata: repository.clone(),
+                mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
                 attachments: None,
@@ -2736,7 +4005,11 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
             .create(
                 id.clone(),
                 caller("panel", "create"),
-                Some(RequestedAgent::Known(AgentId::Codex)),
+                crate::conversation::application::RequestedConversation {
+                    agent: Some(RequestedAgent::Known(AgentId::Codex)),
+                    model: None,
+                    approval_mode: None,
+                },
             )
             .await
             .unwrap();
@@ -2759,6 +4032,8 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
             .unwrap(),
             storage: storage.clone(),
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -2774,7 +4049,11 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
     )
     .unwrap();
     let refusal = without_codex
-        .create(id.clone(), caller("panel", "reopen"), None)
+        .create(
+            id.clone(),
+            caller("panel", "reopen"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await;
     assert!(
         matches!(refusal, Err(ConversationError::AgentNotConfigured)),
@@ -2792,7 +4071,11 @@ async fn an_agent_this_server_cannot_start_is_refused_before_anything_is_written
             .create(
                 id.clone(),
                 caller("panel", "create"),
-                Some(RequestedAgent::Known(AgentId::Codex))
+                crate::conversation::application::RequestedConversation {
+                    agent: Some(RequestedAgent::Known(AgentId::Codex)),
+                    model: None,
+                    approval_mode: None
+                }
             )
             .await,
         Err(ConversationError::AgentNotConfigured)
@@ -2810,14 +4093,22 @@ async fn reopening_is_never_refused_over_an_agent_that_conversation_does_not_nee
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"), None)
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
         .create(
             id.clone(),
             caller("panel", "reopen"),
-            Some(RequestedAgent::Known(AgentId::Codex)),
+            crate::conversation::application::RequestedConversation {
+                agent: Some(RequestedAgent::Known(AgentId::Codex)),
+                model: None,
+                approval_mode: None,
+            },
         )
         .await
         .unwrap();
@@ -2838,14 +4129,22 @@ async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reop
     let existing = id();
     let fresh = id();
     service
-        .create(existing.clone(), caller("panel", "create"), None)
+        .create(
+            existing.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     service
         .create(
             existing,
             caller("panel", "reopen"),
-            Some(RequestedAgent::Unknown),
+            crate::conversation::application::RequestedConversation {
+                agent: Some(RequestedAgent::Unknown),
+                model: None,
+                approval_mode: None,
+            },
         )
         .await
         .unwrap();
@@ -2859,7 +4158,11 @@ async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reop
             .create(
                 fresh,
                 caller("panel", "create-unknown"),
-                Some(RequestedAgent::Unknown),
+                crate::conversation::application::RequestedConversation {
+                    agent: Some(RequestedAgent::Unknown),
+                    model: None,
+                    approval_mode: None
+                },
             )
             .await,
         Err(ConversationError::InvalidInput)
@@ -2893,6 +4196,8 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -2910,7 +4215,11 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
     let existing = id();
     let fresh = id();
     service
-        .create(existing.clone(), caller("panel", "create"), None)
+        .create(
+            existing.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     // Whatever an accepted creation writes is the baseline; the claim is that a
@@ -2918,14 +4227,26 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
     let before = audit.records.lock().unwrap().len();
     let wiped = "reopen\u{0}\u{1b}[2Jwiped";
     assert!(matches!(
-        service.create(existing, caller("panel", wiped), None).await,
+        service
+            .create(
+                existing,
+                caller("panel", wiped),
+                crate::conversation::application::RequestedConversation::default()
+            )
+            .await,
         Err(ConversationError::InvalidInput)
     ));
     // Refused before anything was reopened, so the record never existed to be
     // written: the same answer this context gets for a new conversation.
     opened(&provider, 1).await;
     assert!(matches!(
-        service.create(fresh, caller("panel", wiped), None).await,
+        service
+            .create(
+                fresh,
+                caller("panel", wiped),
+                crate::conversation::application::RequestedConversation::default()
+            )
+            .await,
         Err(ConversationError::InvalidInput)
     ));
     // The evidence the finding was actually about: prior evidence unchanged,
@@ -2962,7 +4283,11 @@ async fn a_caller_context_too_damaged_to_record_is_refused_by_every_command() {
     let (service, _, _, _) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"), None)
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let wiped = "send\u{0}\u{1b}[2Jwiped";
@@ -3099,6 +4424,8 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
             .expect("the default is among the configured agents"),
             storage,
             metadata: repository,
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -3121,7 +4448,11 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
         service.create(
             id(),
             caller("panel", "first"),
-            Some(RequestedAgent::Known(AgentId::Codex)),
+            crate::conversation::application::RequestedConversation {
+                agent: Some(RequestedAgent::Known(AgentId::Codex)),
+                model: None,
+                approval_mode: None,
+            },
         ),
     )
     .await

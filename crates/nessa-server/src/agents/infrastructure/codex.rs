@@ -30,9 +30,16 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::ErrorKind;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
+#[cfg(unix)]
+use std::{
+    process::{Child, ExitStatus},
+    time::Instant,
+};
 
 use crate::agents::application::ProbeFailure;
 use crate::agents::infrastructure::credentials;
@@ -96,7 +103,12 @@ pub(super) fn sign_in_status(
     entry: &Path,
     environment: &BTreeMap<OsString, OsString>,
 ) -> Result<bool, ProbeFailure> {
-    let mut child = match Command::new(command)
+    let mut process = Command::new(command);
+    #[cfg(unix)]
+    {
+        process.process_group(0);
+    }
+    let mut child = match process
         .arg(entry)
         .args(SIGN_IN_QUERY)
         // Asked under exactly the launch's environment, not this server's.
@@ -117,7 +129,11 @@ pub(super) fn sign_in_status(
         }
         Err(_) => return Err(ProbeFailure::Unanswered),
     };
-    match credentials::wait_or_kill(&mut child, SIGN_IN_DEADLINE) {
+    #[cfg(unix)]
+    let status = wait_status_group(&mut child, SIGN_IN_DEADLINE)?;
+    #[cfg(not(unix))]
+    let status = credentials::wait_or_kill(&mut child, SIGN_IN_DEADLINE);
+    match status {
         Some(status) if status.success() => Ok(true),
         Some(status) if status.code() == Some(NOT_SIGNED_IN) => Ok(false),
         // A tool that failed, and a tool that never finished and was killed.
@@ -128,3 +144,65 @@ pub(super) fn sign_in_status(
 #[cfg(test)]
 #[path = "../../../tests/agents/codex.rs"]
 mod tests;
+
+/// Keep the root unreaped until signaling its restricted, non-detaching group.
+/// WNOWAIT prevents the group ID being recycled before that single signal.
+/// Unknown cleanup does not authorize release of a managed runtime.
+#[cfg(unix)]
+fn wait_status_group(
+    child: &mut Child,
+    limit: Duration,
+) -> Result<Option<ExitStatus>, ProbeFailure> {
+    let group = child.id();
+    let deadline = Instant::now() + limit;
+    let answered = loop {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                group,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+            )
+        };
+        if result != 0 {
+            return Err(ProbeFailure::CleanupUnconfirmed);
+        }
+        if unsafe { info.si_pid() } != 0 {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let killed = unsafe { libc::kill(-(group as i32), libc::SIGKILL) };
+    // macOS may return EPERM for a group containing only its zombie root.
+    // If waitid confirmed exit, reap it and judge the remaining group below.
+    if killed != 0
+        && !answered
+        && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    {
+        return Err(ProbeFailure::CleanupUnconfirmed);
+    }
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let mut status = None;
+    loop {
+        if status.is_none() {
+            status = child
+                .try_wait()
+                .map_err(|_| ProbeFailure::CleanupUnconfirmed)?;
+        }
+        let result = unsafe { libc::kill(-(group as i32), 0) };
+        if status.is_some()
+            && result == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        {
+            return Ok(if answered { status } else { None });
+        }
+        if Instant::now() >= deadline {
+            return Err(ProbeFailure::CleanupUnconfirmed);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

@@ -1,6 +1,7 @@
 use super::ConversationError;
 use crate::conversation::domain::{
-    Conversation, ConversationDeletion, ConversationId, ConversationSummary, ProviderSessionErasure,
+    Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
+    ConversationSummary, ProviderSessionErasure,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::domain::agent_execution::{prompts::ImageReference, sessions::ExecutionSessionId};
@@ -57,6 +58,50 @@ pub enum ConversationCreationCause {
 /// an interrupted first audit delivery can be safely retried from stored evidence.
 pub trait ConversationCreationAudit: Send + Sync {
     fn record(&self, record: ConversationCreationAuditRecord) -> ConversationFuture<'_, ()>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationModeRequestState {
+    Pending,
+    Applied,
+    NotApplied,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationModeApplication {
+    Deferred,
+    Applied,
+    Refused,
+    Uncertain,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationModeRequest {
+    pub conversation_id: ConversationId,
+    pub organization_id: OrganizationId,
+    pub request_id: String,
+    pub initiator_principal_id: PrincipalId,
+    pub initiator_surface_id: String,
+    pub prior: ConversationApprovalMode,
+    pub requested: ConversationApprovalMode,
+    pub state: ConversationModeRequestState,
+    pub application: Option<ConversationModeApplication>,
+    pub requested_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationModeAuditPhase {
+    AdmissionRefused,
+    Application,
+    RecoveryRestored,
+}
+
+pub trait ConversationModeAudit: Send + Sync {
+    fn record(
+        &self,
+        request: ConversationModeRequest,
+        phase: ConversationModeAuditPhase,
+    ) -> ConversationFuture<'_, ()>;
 }
 
 /// Immutable evidence that a conversation was deleted, committed before any of
@@ -153,6 +198,41 @@ pub trait ConversationRepository: Send + Sync {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>>;
     /// Create once, or return the existing owner without changing it.
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation>;
+    /// Persist intent under the conversation row's write lock. An existing
+    /// request is returned unchanged; a different request cannot supersede a
+    /// pending one. No provider call precedes acknowledgement of this write.
+    fn begin_mode_change(
+        &self,
+        request: ConversationModeRequest,
+    ) -> ConversationFuture<'_, ConversationModeRequest>;
+    /// Read the one unfinished request before opening or admitting work.
+    fn pending_mode_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationModeRequest>>;
+    fn mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationModeRequest>>;
+    /// Whether a committed choice was made without an open provider session.
+    /// A cold owner must verify its attachment before admitting a turn.
+    fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool>;
+    /// Retain the observed provider/deferred outcome before delivering it to
+    /// the independent audit sink. Repeated identical observations agree.
+    fn observe_mode_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: ConversationModeApplication,
+    ) -> ConversationFuture<'_, ConversationModeRequest>;
+    /// Commit the chosen mode and the request's terminal state atomically.
+    fn finish_mode_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationModeRequestState,
+    ) -> ConversationFuture<'_, ConversationModeRequest>;
     /// Write the conversation's tombstone, or carry the one it has further,
     /// and return the conversation as it now stands.
     ///

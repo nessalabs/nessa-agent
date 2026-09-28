@@ -2,13 +2,16 @@
 //! The socket has already checked current access and the conversation action grant.
 use super::{
     generated::{
-        ConversationAnswerParams, ConversationAnswerQuestionParams, ConversationArchiveParams,
-        ConversationCancelParams, ConversationCloseParams, ConversationCreateParams,
-        ConversationCreateResult, ConversationDeleteParams, ConversationErrorCode,
-        ConversationListParams, ConversationListResult, ConversationMutationResult,
+        ApprovalMode as WireApprovalMode, ConversationAnswerParams,
+        ConversationAnswerQuestionParams, ConversationArchiveParams, ConversationCancelParams,
+        ConversationCloseParams, ConversationCreateParams, ConversationCreateResult,
+        ConversationDeleteParams, ConversationErrorCode, ConversationListParams,
+        ConversationListResult, ConversationMutationResult,
         ConversationPermissionAnswerErrorDetails, ConversationPermissionSelectionState,
         ConversationReadParams, ConversationRemoveParams, ConversationReorderParams,
-        ConversationSendParams, ConversationSummary,
+        ConversationSendParams, ConversationSetApprovalModeParams,
+        ConversationSetApprovalModeResult, ConversationSummary,
+        ConversationView as WireConversationView,
     },
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
@@ -17,11 +20,12 @@ use crate::{
     agents::domain::AgentId,
     conversation::{
         application::{
-            ConversationCaller, ConversationError, ConversationList, DeletionFailures,
-            QuestionChoiceInput, RequestedAgent, SubmissionMode, SubmittedFile, SubmittedImage,
+            ConversationCaller, ConversationError, ConversationList,
+            ConversationView as ApplicationConversationView, DeletionFailures, QuestionChoiceInput,
+            RequestedAgent, RequestedConversation, SubmissionMode, SubmittedFile, SubmittedImage,
             SubmittedMessage,
         },
-        domain::ConversationId,
+        domain::{ConversationApprovalMode, ConversationId},
     },
     protocol::{OutgoingMessage, RequestFrame},
 };
@@ -32,6 +36,7 @@ use nessa_sdk::application::agent_execution::{
     providers::ImageInputRefusal,
     sessions::StorageError,
 };
+use serde_json::{json, Value};
 
 pub(super) async fn dispatch(
     state: &ProductRouteState,
@@ -76,7 +81,15 @@ pub(super) async fn dispatch(
                     .create(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id),
-                        requested_agent(params.agent.as_deref()),
+                        RequestedConversation {
+                            agent: requested_agent(params.agent.as_deref()),
+                            model: params.model,
+                            approval_mode: params.approval_mode.map(|mode| match mode {
+                                WireApprovalMode::Ask => ConversationApprovalMode::Ask,
+                                WireApprovalMode::Auto => ConversationApprovalMode::Auto,
+                                WireApprovalMode::Full => ConversationApprovalMode::Full,
+                            }),
+                        },
                     )
                     .await?;
                 Ok(success(
@@ -94,7 +107,32 @@ pub(super) async fn dispatch(
                         caller(frame.id.clone()),
                     )
                     .await?;
-                Ok(success(&frame.id, &view))
+                Ok(success(&frame.id, &wire_view(state, view)?))
+            }
+            "conversation.setApprovalMode" => {
+                let params = params!(ConversationSetApprovalModeParams);
+                let selected = service
+                    .set_approval_mode(
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        match params.mode {
+                            WireApprovalMode::Ask => ConversationApprovalMode::Ask,
+                            WireApprovalMode::Auto => ConversationApprovalMode::Auto,
+                            WireApprovalMode::Full => ConversationApprovalMode::Full,
+                        },
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationSetApprovalModeResult {
+                        request_id: params.request_id,
+                        mode: match selected {
+                            ConversationApprovalMode::Ask => WireApprovalMode::Ask,
+                            ConversationApprovalMode::Auto => WireApprovalMode::Auto,
+                            ConversationApprovalMode::Full => WireApprovalMode::Full,
+                        },
+                    },
+                ))
             }
             "conversation.list" => {
                 let ConversationListParams { archived } = params!(ConversationListParams);
@@ -340,6 +378,14 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::DeletionIncomplete(failures) => deletion_incomplete(failures),
         ConversationError::AgentNotConfigured => ConversationErrorCode::AgentNotConfigured,
         ConversationError::AgentUnsupported => ConversationErrorCode::AgentUnsupported,
+        ConversationError::ModelUnavailable => ConversationErrorCode::ModelUnavailable,
+        ConversationError::ApprovalModeUnavailable => {
+            ConversationErrorCode::ApprovalModeUnavailable
+        }
+        ConversationError::RequestConflict => ConversationErrorCode::ApprovalRequestConflict,
+        ConversationError::TurnRunning => ConversationErrorCode::TurnRunning,
+        ConversationError::ApprovalModeNotApplied => ConversationErrorCode::ApprovalModeNotApplied,
+        ConversationError::ApprovalModeUncertain => ConversationErrorCode::ApprovalModeUncertain,
         ConversationError::Capacity => ConversationErrorCode::ConversationCapacity,
         ConversationError::Unavailable
         | ConversationError::Retirement(_)
@@ -464,6 +510,66 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
 
 fn conversation_id(value: &str) -> Result<ConversationId, ConversationError> {
     ConversationId::new(value).map_err(|_| ConversationError::InvalidInput)
+}
+
+/// The authenticated catalog owns display facts and preset descriptions. The
+/// application view owns the committed selection; the wire joins them once.
+fn wire_view(
+    state: &ProductRouteState,
+    view: ApplicationConversationView,
+) -> Result<WireConversationView, ConversationError> {
+    let selection = view
+        .selection
+        .clone()
+        .ok_or(ConversationError::Unavailable)?;
+    let model = state
+        .agents_catalog
+        .as_ref()
+        .and_then(|catalog| {
+            catalog
+                .agents
+                .iter()
+                .find(|agent| agent.agent == selection.agent.name())
+        })
+        .and_then(|agent| {
+            agent
+                .models
+                .iter()
+                .find(|model| model.model_id == selection.model)
+        })
+        .ok_or(ConversationError::ModelUnavailable)?;
+    if !model
+        .approval_modes
+        .iter()
+        .any(|mode| mode.id.as_str() == selection.approval_mode.as_str())
+    {
+        return Err(ConversationError::ApprovalModeUnavailable);
+    }
+    let mut value = serde_json::to_value(view).map_err(|_| ConversationError::Unavailable)?;
+    let fields = value
+        .as_object_mut()
+        .ok_or(ConversationError::Unavailable)?;
+    fields.insert(
+        "approvalMode".into(),
+        json!(selection.approval_mode.as_str()),
+    );
+    fields.insert(
+        "approvalModes".into(),
+        serde_json::to_value(&model.approval_modes).map_err(|_| ConversationError::Unavailable)?,
+    );
+    if let Some(runtime) = fields.get_mut("runtime") {
+        let runtime = runtime
+            .as_object_mut()
+            .ok_or(ConversationError::Unavailable)?;
+        runtime.insert("agent".into(), json!(selection.agent.name()));
+        runtime.insert("modelName".into(), json!(model.display_name));
+        runtime.insert(
+            "contextWindowTokens".into(),
+            json!(model.max_context_window_tokens),
+        );
+        runtime.insert("reasoning".into(), Value::Bool(model.reasoning));
+    }
+    serde_json::from_value(value).map_err(|_| ConversationError::Unavailable)
 }
 
 /// The agent a creation names, if it names one.

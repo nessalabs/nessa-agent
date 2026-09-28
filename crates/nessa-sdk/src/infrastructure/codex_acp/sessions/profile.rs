@@ -1,6 +1,7 @@
-use super::super::tools::wire::{self, ObservedTool};
+use super::super::tools::wire::{self, ObservedTools};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
+use crate::application::agent_execution::providers::{ApprovalMode, ApprovalModeChoice};
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
@@ -9,7 +10,6 @@ use crate::infrastructure::acp::profile::AcpProfile;
 use crate::infrastructure::acp::sessions::{configuration, AcpConfig};
 use crate::infrastructure::json_rpc::protocol;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 
 /// The npm package this profile is written against. Codex's adapter is not the
 /// only one publishing an ACP server for Codex, and a fork's wire behavior is
@@ -30,17 +30,55 @@ pub(super) const VERSION: &str = "1.12.0";
 /// Codex does inside the sandbox arrives as observations either way.
 pub(super) const MODE: &str = "read-only";
 
+const ASK: ApprovalModeChoice = ApprovalModeChoice {
+    id: ApprovalMode::Ask,
+    name: "Codex asks for escalation",
+    description: "Codex may work in the workspace and requests approval for tested escalations.",
+};
+const AUTO: ApprovalModeChoice = ApprovalModeChoice {
+    id: ApprovalMode::Auto,
+    name: "Codex automatic review",
+    description: "Codex's Guardian reviews escalations and may approve them without asking.",
+};
+const FULL: ApprovalModeChoice = ApprovalModeChoice {
+    id: ApprovalMode::Full,
+    name: "Codex full access",
+    description: "Codex runs in its native full-access preset without user approval requests.",
+};
+
+/// Additional presets are verified on macOS only (review report #239).
+pub(super) fn approval_modes(model_id: &str) -> &'static [ApprovalModeChoice] {
+    match model_id {
+        "gpt-6-astra" => &[ASK, AUTO, FULL],
+        "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" if cfg!(target_os = "macos") => {
+            &[ASK, AUTO, FULL]
+        }
+        _ => &[ASK],
+    }
+}
+
+/// Translate a published product choice into the exact ACP mode identifier.
+pub(super) fn native_mode(mode: ApprovalMode) -> &'static str {
+    match mode {
+        ApprovalMode::Ask => MODE,
+        ApprovalMode::Auto => "agent",
+        ApprovalMode::Full => "agent-full-access",
+    }
+}
+
 /// Codex's session contract: what this binding selects, checks, and retains.
 #[derive(Clone)]
 pub(super) struct CodexProfile {
     model: String,
-    tools: HashMap<String, ObservedTool>,
+    approval_mode: ApprovalMode,
+    tools: ObservedTools,
 }
 impl CodexProfile {
-    pub(super) fn new(model: &str) -> Self {
+    pub(super) fn new(model: &str, approval_mode: ApprovalMode) -> Self {
         Self {
             model: model.to_owned(),
-            tools: HashMap::new(),
+            approval_mode,
+            tools: ObservedTools::default(),
         }
     }
 }
@@ -104,8 +142,16 @@ impl AcpProfile for CodexProfile {
         // set would leave a session configured half the way this binding asked.
         vec![
             json!({"sessionId":session_id,"configId":"model","value":self.model}),
-            json!({"sessionId":session_id,"configId":"mode","value":MODE}),
+            json!({"sessionId":session_id,"configId":"mode","value":native_mode(self.approval_mode)}),
         ]
+    }
+    fn change_approval_mode(
+        &mut self,
+        session_id: &str,
+        mode: ApprovalMode,
+    ) -> Result<Value, AgentError> {
+        self.approval_mode = mode;
+        Ok(json!({"sessionId":session_id,"configId":"mode","value":native_mode(mode)}))
     }
 
     fn verify_session(
@@ -114,7 +160,11 @@ impl AcpProfile for CodexProfile {
         _: &EffectiveCapabilities,
         configured: bool,
     ) -> Result<(), AgentError> {
-        configuration::verify_config(result, &self.model, configured.then_some(MODE))
+        configuration::verify_config(
+            result,
+            &self.model,
+            configured.then_some(native_mode(self.approval_mode)),
+        )
     }
 
     fn verify_update(
@@ -129,14 +179,24 @@ impl AcpProfile for CodexProfile {
             // higher: this profile sets the model before the mode, so between
             // those two requests a provider reporting its options is correct to
             // say the mode is not `read-only` yet.
-            "config_option_update" => {
-                configuration::verify_config(update, &self.model, configured.then_some(MODE))
-            }
+            "config_option_update" => configuration::verify_config(
+                update,
+                &self.model,
+                configured.then_some(native_mode(self.approval_mode)),
+            ),
             // A mode this binding has already put the session into, changing
             // afterwards, is a different matter: that is the session leaving
             // the approval policy it was given, whenever it arrives.
-            "current_mode_update" if string(update, "currentModeId")? != MODE => {
-                Err(protocol("approval mode changed"))
+            "current_mode_update" => {
+                let reported = string(update, "currentModeId")?;
+                let selected = native_mode(self.approval_mode);
+                if reported == selected
+                    || (!configured && reported == native_mode(ApprovalMode::Ask))
+                {
+                    Ok(())
+                } else {
+                    Err(protocol("approval mode changed"))
+                }
             }
             _ => Ok(()),
         }

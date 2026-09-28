@@ -15,9 +15,27 @@ CREATE TABLE conversations (
     creator_surface TEXT NOT NULL,
     creation_action TEXT NOT NULL,
     creation_requested_at_ms INTEGER NOT NULL,
-    agent TEXT NOT NULL
+    agent TEXT NOT NULL,
+    model TEXT NOT NULL,
+    approval_mode TEXT NOT NULL CHECK (approval_mode IN ('ask', 'auto', 'full'))
 ) STRICT;
 CREATE INDEX conversations_by_owner ON conversations (organization, owner);
+
+-- One correlated approval-mode decision. The pending row fences turn
+-- admission until recovery has established the authoritative committed mode.
+CREATE TABLE mode_requests (
+    conversation_id TEXT NOT NULL REFERENCES conversations (id),
+    request_id TEXT NOT NULL,
+    initiator TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    prior_mode TEXT NOT NULL CHECK (prior_mode IN ('ask', 'auto', 'full')),
+    requested_mode TEXT NOT NULL CHECK (requested_mode IN ('ask', 'auto', 'full')),
+    state TEXT NOT NULL CHECK (state IN ('pending', 'applied', 'not_applied')),
+    application TEXT CHECK (application IN ('deferred', 'applied', 'refused', 'uncertain')),
+    requested_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (conversation_id, request_id)
+) STRICT;
+CREATE UNIQUE INDEX one_pending_mode_request ON mode_requests (conversation_id) WHERE state = 'pending';
 
 -- A deleted conversation's tombstone. Written at the fence and carried
 -- further until `erased`; never removed.
@@ -48,4 +66,4 @@ CREATE TABLE summaries (
     archived INTEGER NOT NULL CHECK (archived IN (0, 1))
 ) STRICT;
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;

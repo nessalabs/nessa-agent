@@ -126,6 +126,21 @@ pub struct OpencodeAcpProvider {
 }
 
 impl OpencodeAcpProvider {
+    /// The existing fixed plan policy exposed for a configured OpenCode model.
+    /// OpenCode mode switching remains unavailable until its approval behavior
+    /// is verified with this binding's complete launch profile.
+    pub fn approval_modes(
+    ) -> &'static [crate::application::agent_execution::providers::ApprovalModeChoice] {
+        use crate::application::agent_execution::providers::{ApprovalMode, ApprovalModeChoice};
+        const FIXED: ApprovalModeChoice = ApprovalModeChoice {
+            id: ApprovalMode::Ask,
+            name: "Fixed plan policy",
+            description:
+                "OpenCode's fixed plan policy may deny operations instead of offering approval.",
+        };
+        &[FIXED]
+    }
+
     /// Check the model, token ceilings, and tool policy without constructing a
     /// process factory or performing effects.
     ///
@@ -394,6 +409,11 @@ fn capabilities(
 }
 
 impl AgentProvider for OpencodeAcpProvider {
+    fn approval_mode(
+        &self,
+    ) -> Option<crate::application::agent_execution::providers::ApprovalMode> {
+        Some(crate::application::agent_execution::providers::ApprovalMode::Ask)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
             "opencode-acp",

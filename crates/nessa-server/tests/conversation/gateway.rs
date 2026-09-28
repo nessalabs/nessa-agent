@@ -101,7 +101,27 @@ mod gateway {
         let authority = Arc::new(ChatAuthority { snapshots });
         state.access = authority.clone();
         state.verifier = authority;
-        state
+        state.with_agents_catalog(
+            serde_json::from_value(serde_json::json!({
+                "agents": [{
+                    "agent": "claude",
+                    "defaultModel": "test",
+                    "models": [{
+                        "modelId": "test",
+                        "displayName": "Test model",
+                        "maxContextWindowTokens": 100000,
+                        "reasoning": false,
+                        "imageInput": false,
+                        "approvalModes": [{
+                            "id": "ask",
+                            "name": "Provider asks",
+                            "description": "The provider requests approval where required."
+                        }]
+                    }]
+                }]
+            }))
+            .unwrap(),
+        )
     }
     pub(super) async fn chat_session(state: &ProductRouteState, credential: &str) -> AuthenticatedSession {
         AuthenticateSession {
@@ -152,6 +172,7 @@ mod gateway {
                 "conversation.archive",
                 "conversation.unarchive",
                 "conversation.delete",
+                "conversation.setApprovalMode",
             ] {
                 let response = chat_request(&state, &session, method, json!({})).await;
                 assert!(!response.ok);
@@ -161,6 +182,24 @@ mod gateway {
                     expected,
                     "{credential} {method}"
                 );
+            }
+        }
+    }
+    #[tokio::test]
+    async fn the_agent_catalog_requires_the_gateway_read_grant() {
+        let state = chat_state();
+        for (credential, allowed) in [
+            ("reader", true),
+            ("owner-phone", true),
+            ("foreign", false),
+        ] {
+            let session = chat_session(&state, credential).await;
+            let response = chat_request(&state, &session, "agents.list", json!({})).await;
+            assert_eq!(response.ok, allowed, "{credential}");
+            if allowed {
+                assert_eq!(response.payload.unwrap()["agents"][0]["agent"], "claude");
+            } else {
+                assert_eq!(response.error.unwrap().code, "forbidden");
             }
         }
     }
@@ -377,6 +416,61 @@ mod gateway {
     }
 
     #[tokio::test]
+    async fn read_joins_the_fixed_selection_to_the_authenticated_catalog() {
+        let (_, provider, repository, storage) =
+            conversation_support::fixture(ConversationLimits::default());
+        let service = crate::conversation::application::ConversationService::new(
+            crate::conversation::application::ConversationDependencies {
+                agents: conversation_support::only(Arc::new(conversation_support::Provider::new(
+                    provider,
+                ))),
+                storage,
+                metadata: repository.clone(),
+                creation_audit: Arc::new(conversation_support::AcceptingCreationAudit),
+                mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+                file_link_audit: Arc::new(
+                    conversation_support::RecordingFileLinkAudit::default(),
+                ),
+                deletion_audit: Arc::new(conversation_support::AcceptingDeletionAudit),
+                attachments: None,
+                summaries: Arc::new(conversation_support::MemorySummaries::default()),
+                listing: Arc::new(conversation_support::Unlisted),
+                provider_sessions:
+                    crate::conversation::application::ProviderSessionErasers::default(),
+                deletion_budgets: conversation_support::DELETION_BUDGETS,
+                clock: Arc::new(conversation_support::TestClock),
+            },
+            ConversationLimits::default(),
+            Some("/workspace".into()),
+        )
+        .unwrap();
+        let state = chat_state().with_conversations(Arc::new(service));
+        let owner = chat_session(&state, "owner-phone").await;
+        let id = "00000000-0000-4000-8000-000000000010";
+        assert!(chat_request(
+            &state,
+            &owner,
+            "conversation.create",
+            json!({"conversationId": id, "requestId": "create"}),
+        )
+        .await
+        .ok);
+        let response = chat_request(
+            &state,
+            &owner,
+            "conversation.read",
+            json!({"conversationId": id}),
+        )
+        .await;
+        let runtime = &response.payload.unwrap()["runtime"];
+        assert_eq!(runtime["agent"], "claude");
+        assert_eq!(runtime["model"], "test");
+        assert_eq!(runtime["modelName"], "Test model");
+        assert_eq!(runtime["contextWindowTokens"], 100000);
+        assert_eq!(runtime["reasoning"], false);
+    }
+
+    #[tokio::test]
     async fn listing_answers_each_caller_with_their_own_conversations_only() {
         let (service, provider, _, _) =
             conversation_support::fixture(ConversationLimits::default());
@@ -401,7 +495,10 @@ mod gateway {
             json!({"conversations": [], "complete": true})
         );
         let read = chat_request(&state, &owner, "conversation.read", json!({"conversationId":id})).await;
-        assert_eq!(read.payload.unwrap()["title"], serde_json::Value::Null);
+        let view = read.payload.unwrap();
+        assert_eq!(view["title"], serde_json::Value::Null);
+        assert_eq!(view["approvalMode"], "ask");
+        assert_eq!(view["approvalModes"][0]["name"], "Provider asks");
         assert!(
             chat_request(
                 &state,

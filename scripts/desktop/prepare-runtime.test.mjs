@@ -103,6 +103,10 @@ test("assembly publishes one complete relocatable runtime manifest", (t) => {
     },
   })
 
+  for (const call of calls.filter(({ command }) => command === "npm")) {
+    assert.ok(call.args.includes("--omit=optional"))
+    assert.ok(call.args.includes("--ignore-scripts"))
+  }
   assert.deepEqual(manifest, {
     node: "26.8.1",
     claudeAcp: "0.76.0",

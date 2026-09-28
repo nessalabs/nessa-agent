@@ -10,6 +10,7 @@ import time
 mode = sys.argv[1]
 root = pathlib.Path.cwd()
 model = os.environ["ANTHROPIC_MODEL"]
+approval_mode = {"approval-auto": "auto", "approval-auto-fallback": "auto", "approval-full": "bypassPermissions"}.get(mode, "default")
 assert model == os.environ["ANTHROPIC_CUSTOM_MODEL_OPTION"]
 assert os.environ["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "100"
 session = str(os.getpid())
@@ -132,6 +133,8 @@ for line in sys.stdin:
             assert "systemPrompt" not in msg["params"]["_meta"]
         options = msg["params"]["_meta"]["claudeCode"]["options"]
         assert options["model"] == model
+        assert options["permissionMode"] == approval_mode
+        assert options["settings"]["permissions"]["defaultMode"] == approval_mode
         assert options["settingSources"] == []
         assert options["tools"] == ([] if mode == "questions-disabled" else {"type": "preset", "preset": "claude_code"})
         assert "Bash" in options["disallowedTools"]
@@ -142,19 +145,32 @@ for line in sys.stdin:
         for historical in ("BashOutput", "KillShell"):
             assert historical not in options["disallowedTools"]
             assert historical not in options["settings"]["permissions"]["deny"]
-        # Every tool the harness offers is reviewed by Nessa's permission owner;
-        # naming them one by one left unnamed tools running unreviewed and
-        # failed the execution when one of them was called.
-        assert options["settings"]["permissions"]["ask"] == ["*"]
+        # Native approval presets own their asks; explicit Nessa denials stay fixed.
+        assert "ask" not in options["settings"]["permissions"]
         assert options["settings"]["disableAllHooks"] is True
         assert options["settings"]["allowedMcpServers"] == []
-        response = configs("alias" if mode == "wrong-model" else model)
+        response = configs("alias" if mode == "wrong-model" else model, approval_mode)
         if mode.startswith("duplicate-session-"):
             response = duplicate_configs(mode.removeprefix("duplicate-session-"))
         if method == "session/new" or mode != "resume-no-id":
             response["sessionId"] = "s" * 257 if mode == "oversized-session-id" else session
         result(msg["id"], response)
     elif method == "session/set_config_option":
+        if mode.startswith("live-approval"):
+            requested = msg["params"]["value"]
+            assert requested in ("default", "auto", "bypassPermissions")
+            if requested != "default":
+                # Claude may publish its mode before answering the RPC.
+                update({"sessionUpdate": "current_mode_update", "currentModeId": requested})
+            effective = (
+                "acceptEdits"
+                if mode == "live-approval-fallback" and requested == "auto"
+                else requested
+            )
+            result(msg["id"], configs(permission_mode=effective))
+            if mode == "live-approval-stale-update" and requested == "auto":
+                update({"sessionUpdate": "current_mode_update", "currentModeId": "default"})
+            continue
         if mode in ("startup-permission-missing-id", "startup-permission-null-id"):
             request = {"method": "session/request_permission", "params": {"sessionId": session}}
             if mode == "startup-permission-null-id":
@@ -178,7 +194,7 @@ for line in sys.stdin:
             update({"sessionUpdate": "config_option_update", **configs()})
             update({"sessionUpdate": "current_mode_update", "currentModeId": "default"})
             update({"sessionUpdate": "available_commands_update", "availableCommands": []})
-        assert msg["params"]["value"] == "default"
+        assert msg["params"]["value"] == approval_mode
         if mode == "configuration-stall" or (mode == "configuration-stall-on-resume" and len(launches) > 1):
             record("configuration-wait", session)
             time.sleep(20)
@@ -186,7 +202,11 @@ for line in sys.stdin:
         if mode == "configuration-error":
             send({"id": msg["id"], "error": {"code": -32042, "message": "configuration failed"}})
             continue
-        response = configs(permission_mode="bypassPermissions" if mode == "wrong-mode" else "default")
+        response = configs(permission_mode=(
+            "bypassPermissions" if mode == "wrong-mode"
+            else "acceptEdits" if mode == "approval-auto-fallback"
+            else approval_mode
+        ))
         if mode.startswith("duplicate-config-"):
             response = duplicate_configs(mode.removeprefix("duplicate-config-"))
         result(msg["id"], response)

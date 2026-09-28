@@ -145,6 +145,8 @@ async fn ownership_is_the_conversation_contexts_own_rule_read_without_opening_an
                 "create".into(),
                 1,
                 AgentId::Claude,
+                crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+                crate::conversation::domain::ConversationApprovalMode::Ask,
             )
             .unwrap(),
         )

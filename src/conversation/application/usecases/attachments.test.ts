@@ -85,6 +85,14 @@ const capabilities: ConversationCapabilities = {
 }
 /** A view has arrived for this conversation, and it said the agent takes images. */
 const remote = {
+  approvalMode: "ask" as const,
+  approvalModes: [
+    {
+      id: "ask" as const,
+      name: "Provider asks",
+      description: "Provider asks where required.",
+    },
+  ],
   running: false,
   permissions: [],
   questions: [],

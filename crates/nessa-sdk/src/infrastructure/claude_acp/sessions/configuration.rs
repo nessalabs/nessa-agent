@@ -4,7 +4,7 @@ use serde_json::Value;
 pub(super) fn verify_config(
     result: &Value,
     model: &str,
-    require_mode: bool,
+    expected_mode: Option<&str>,
 ) -> Result<(), AgentError> {
     let options = result
         .get("configOptions")
@@ -29,8 +29,8 @@ pub(super) fn verify_config(
             "provider did not select the exact configured model",
         ));
     }
-    if require_mode && current(mode_option) != Some("default") {
-        return Err(protocol("provider permission mode is not default"));
+    if expected_mode.is_some_and(|expected| current(mode_option) != Some(expected)) {
+        return Err(protocol("provider permission mode did not match selection"));
     }
     Ok(())
 }

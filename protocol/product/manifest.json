@@ -22,7 +22,11 @@
     "conversation.unarchive": "ConversationArchiveParams",
     "conversation.delete": "ConversationDeleteParams",
     "conversation.reorder": "ConversationReorderParams",
-    "attachment.begin": "AttachmentBeginParams"
+    "attachment.begin": "AttachmentBeginParams",
+    "agents.list": null,
+    "conversation.setApprovalMode": "ConversationSetApprovalModeParams",
+    "agents.installOptions": null,
+    "agents.install": "AgentInstallParams"
   },
   "events": {
     "session.challenge": "SessionChallenge"

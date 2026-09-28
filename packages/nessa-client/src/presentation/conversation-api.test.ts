@@ -12,6 +12,14 @@ const conversationId = "00000000-0000-4000-8000-000000000001"
 
 const view: ConversationView = {
   conversationId,
+  approvalMode: "ask",
+  approvalModes: [
+    {
+      id: "ask",
+      name: "Provider asks",
+      description: "The provider requests approval where required.",
+    },
+  ],
   title: "Flights to Lisbon",
   revision: "opaque-1",
   messages: [],
@@ -42,6 +50,44 @@ const view: ConversationView = {
   truncated: false,
   queueComplete: true,
 }
+it("passes a fixed model and initial mode only on creation", async () => {
+  const request = vi.fn().mockResolvedValue({ conversationId })
+  const api = createConversationApi({ request }, () => "generated")
+  await api.create({
+    conversationId,
+    requestId: "create-model",
+    agent: "claude",
+    model: "claude-sonnet-5",
+    approvalMode: "auto",
+  })
+  expect(request).toHaveBeenCalledWith("conversation.create", {
+    conversationId,
+    requestId: "create-model",
+    agent: "claude",
+    model: "claude-sonnet-5",
+    approvalMode: "auto",
+  })
+})
+
+it("correlates an acknowledged mode change and rejects a mismatched reply", async () => {
+  const request = vi.fn().mockResolvedValue({ requestId: "mode-1", mode: "auto" })
+  const api = createConversationApi({ request }, () => "generated")
+  await expect(
+    api.setApprovalMode(conversationId, "auto", { requestId: "mode-1" }),
+  ).resolves.toEqual({
+    requestId: "mode-1",
+    mode: "auto",
+  })
+  expect(request).toHaveBeenCalledWith("conversation.setApprovalMode", {
+    conversationId,
+    requestId: "mode-1",
+    mode: "auto",
+  })
+  request.mockResolvedValue({ requestId: "mode-1", mode: "ask" })
+  await expect(
+    api.setApprovalMode(conversationId, "auto", { requestId: "mode-1" }),
+  ).rejects.toBeInstanceOf(NessaConversationControlError)
+})
 it("validates attachment lifecycle fields and their cross-field agreement", async () => {
   const api = createConversationApi(
     { request: vi.fn().mockResolvedValue(view) },

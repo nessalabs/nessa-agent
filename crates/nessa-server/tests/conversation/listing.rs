@@ -77,6 +77,8 @@ fn listing(limits: ConversationLimits) -> Listing {
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: Arc::new(CountingStorage::default()),
             metadata: repository.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -125,6 +127,8 @@ fn stored(limits: ConversationLimits) -> Stored {
             agents: only(Arc::new(Provider::new(provider.clone()))),
             storage: storage.clone(),
             metadata: store.clone(),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -166,7 +170,7 @@ fn stored_many(
             let conversation = id();
             transaction
                 .execute(
-                    "INSERT INTO conversations VALUES (?1, ?2, ?3, 'panel', 'create', ?4, 'claude')",
+                    "INSERT INTO conversations VALUES (?1, ?2, ?3, 'panel', 'create', ?4, 'claude', 'test-model', 'ask')",
                     params![conversation.to_string(), organization, principal, at(n) as i64],
                 )
                 .unwrap();
@@ -197,6 +201,8 @@ async fn stored_put(
         "create".into(),
         at,
         AgentId::Claude,
+        crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+        crate::conversation::domain::ConversationApprovalMode::Ask,
     )
     .unwrap();
     ConversationRepository::create(stored.store.as_ref(), record)
@@ -242,6 +248,8 @@ fn put(listing: &Listing, id: &ConversationId, organization: &str, principal: &s
         "create".into(),
         at,
         AgentId::Claude,
+        crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+        crate::conversation::domain::ConversationApprovalMode::Ask,
     )
     .unwrap();
     listing
@@ -354,7 +362,11 @@ async fn listing_shows_only_the_callers_conversations_and_opens_nothing() {
     let created = id();
     listing
         .service
-        .create(created.clone(), owner(), None)
+        .create(
+            created.clone(),
+            owner(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     stored_say(&listing, &created, "live", 60).await;
@@ -435,7 +447,11 @@ async fn a_read_carries_the_title_the_list_shows() {
     let conversation = id();
     listing
         .service
-        .create(conversation.clone(), owner(), None)
+        .create(
+            conversation.clone(),
+            owner(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     // Nothing said yet: no title, in either.
@@ -633,7 +649,11 @@ async fn sending_titles_a_conversation_once_and_previews_what_was_said_last() {
     let conversation = id();
     listing
         .service
-        .create(conversation.clone(), owner(), None)
+        .create(
+            conversation.clone(),
+            owner(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let (release, gate) = oneshot::channel();
@@ -716,7 +736,11 @@ async fn a_message_of_files_alone_is_titled_by_its_first_file() {
     let conversation = id();
     listing
         .service
-        .create(conversation.clone(), owner(), None)
+        .create(
+            conversation.clone(),
+            owner(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let (release, gate) = oneshot::channel::<()>();
@@ -762,7 +786,11 @@ async fn a_summary_that_cannot_be_written_does_not_fail_the_message() {
     let conversation = id();
     listing
         .service
-        .create(conversation.clone(), owner(), None)
+        .create(
+            conversation.clone(),
+            owner(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     listing
@@ -829,7 +857,11 @@ async fn archiving_moves_a_conversation_between_the_lists_and_a_new_message_brin
     let conversation = id();
     listing
         .service
-        .create(conversation.clone(), owner(), None)
+        .create(
+            conversation.clone(),
+            owner(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
         .await
         .unwrap();
     let service = &listing.service;
@@ -1162,6 +1194,8 @@ async fn a_list_asks_for_one_row_past_its_bound_and_no_more() {
             ))),
             storage: Arc::new(CountingStorage::default()),
             metadata: Arc::new(MemoryRepository::default()),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -1216,6 +1250,8 @@ async fn a_list_shows_only_what_the_domain_lets_the_caller_see() {
             "create".into(),
             1,
             AgentId::Claude,
+            crate::conversation::domain::ConversationModelId::new("test-model").unwrap(),
+            crate::conversation::domain::ConversationApprovalMode::Ask,
         )
         .unwrap()
     };
@@ -1252,6 +1288,8 @@ async fn a_list_shows_only_what_the_domain_lets_the_caller_see() {
             ))),
             storage: Arc::new(CountingStorage::default()),
             metadata: Arc::new(MemoryRepository::default()),
+            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,

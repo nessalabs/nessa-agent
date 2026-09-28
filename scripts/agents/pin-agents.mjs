@@ -173,16 +173,11 @@ export const EXECUTABLE = "package/bin/opencode"
 //                 kept.
 //
 // Claude's package is one program and three documents and would be correct
-// either way; it is pinned as a package because that is what it is, and because
-// the bundled wrapper resolves it as a package directory rather than as a path
-// to a binary.
+// either way; pinning the complete package preserves the measured archive.
+// The bundled adapter receives its native executable via CLAUDE_CODE_EXECUTABLE.
 //
-// What no build here says is which *platform* other than macOS on Apple silicon
-// Claude and Codex are pinned for, and the answer is none. The 467 MB measured
-// for this change was measured on a darwin-arm64 build, and no other platform's
-// archive has been fetched, listed or checked. Adding one is a line in this
-// table and a run of this script; claiming one without that would be claiming a
-// measurement nobody took. Opencode keeps its six because they were measured.
+// Native pins cover the desktop release targets. Each coordinate is read from
+// its own lockfile entry and measured below. Other targets remain unsupported.
 export const AGENTS = [
   {
     name: "opencode",
@@ -210,6 +205,22 @@ export const AGENTS = [
         requiresAvx2: false,
         package: "@anthropic-ai/claude-agent-sdk-darwin-arm64",
       },
+      {
+        operatingSystem: "macos",
+        architecture: "x86_64",
+        libc: null,
+        requiresAvx2: true,
+        package: "@anthropic-ai/claude-agent-sdk-darwin-x64",
+        dependency: "@anthropic-ai/claude-agent-sdk-darwin-x64",
+      },
+      {
+        operatingSystem: "linux",
+        architecture: "x86_64",
+        libc: "gnu",
+        requiresAvx2: true,
+        package: "@anthropic-ai/claude-agent-sdk-linux-x64",
+        dependency: "@anthropic-ai/claude-agent-sdk-linux-x64",
+      },
     ],
   },
   {
@@ -234,6 +245,24 @@ export const AGENTS = [
         libc: null,
         requiresAvx2: false,
         package: "@openai/codex",
+      },
+      {
+        operatingSystem: "macos",
+        architecture: "x86_64",
+        libc: null,
+        requiresAvx2: false,
+        package: "@openai/codex",
+        dependency: "@openai/codex-darwin-x64",
+        launch: "package/vendor/x86_64-apple-darwin/bin/codex",
+      },
+      {
+        operatingSystem: "linux",
+        architecture: "x86_64",
+        libc: "gnu",
+        requiresAvx2: false,
+        package: "@openai/codex",
+        dependency: "@openai/codex-linux-x64",
+        launch: "package/vendor/x86_64-unknown-linux-musl/bin/codex",
       },
     ],
   },
@@ -566,7 +595,7 @@ export function lockedDependency(document, dependency) {
 }
 
 // The version to pin for one agent, and what the lockfile said about it.
-async function versionOf(agent) {
+async function versionOf(agent, build) {
   if (agent.version.from === "registry") {
     // Encoded, so that an argument with a slash in it asks the registry about a
     // version of this package and not about a different package entirely.
@@ -583,7 +612,7 @@ async function versionOf(agent) {
   )
   const locked = lockedDependency(
     JSON.parse(readFileSync(lockfile, "utf8")),
-    agent.version.dependency,
+    build.dependency ?? agent.version.dependency,
   )
   return { version: locked.version, locked }
 }
@@ -612,13 +641,14 @@ async function pin() {
 
   const agents = {}
   for (const agent of AGENTS) {
-    const { version, locked } = await versionOf(agent)
     const releases = []
     // What each package's launched program actually is, so the claims each pin
     // makes can be checked against the bytes rather than against the package's
     // name.
     const measured = []
     for (const build of agent.builds) {
+      const { version, locked } = await versionOf(agent, build)
+      const launch = build.launch ?? agent.launch
       const named = `${build.package}@${version}`
       const detail = await json(
         `${registry}/${build.package}/${encodeURIComponent(version)}`,
@@ -646,9 +676,9 @@ async function pin() {
       // number, so it has to be the length of the bytes that were hashed.
       const archiveBytes = statSync(scratch).size
       const listing = execFileSync("tar", ["-tvzf", scratch], { encoding: "utf8" })
-      const contents = releaseFiles(listing, agent)
+      const contents = releaseFiles(listing, { ...agent, launch })
       if (contents.refusal) throw new Error(`${named} ${contents.refusal}`)
-      const program = executableDigest(scratch, agent.launch)
+      const program = executableDigest(scratch, launch)
       if (program.refusal) throw new Error(`${named} ${program.refusal}`)
       rmSync(scratch, { force: true })
       measured.push({
@@ -675,9 +705,7 @@ async function pin() {
     }
     sameBinaryUnderDifferentClaims(measured)
     agents[agent.name] = releases
-    process.stderr.write(
-      `pinned ${agent.name} ${version} across ${releases.length} builds\n`,
-    )
+    process.stderr.write(`pinned ${agent.name} across ${releases.length} builds\n`)
   }
 
   const destination = join(root, "crates/nessa-server/data/agent-releases.json")

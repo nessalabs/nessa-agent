@@ -4,7 +4,7 @@ use super::profile::ClaudeProfile;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
-    AgentProvider, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
+    AgentProvider, ApprovalMode, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
 };
 use crate::domain::agent_execution::permissions::PermissionScope;
 use crate::domain::agent_execution::prompts::SystemPrompt;
@@ -27,6 +27,7 @@ pub struct ClaudeAcpProvider {
     config: AcpConfig,
     capabilities: EffectiveCapabilities,
     system_prompt: Option<SystemPrompt>,
+    approval_mode: ApprovalMode,
     audit: Arc<dyn ExecutionAudit>,
     /// Deletions this binding started that are still stopping their process.
     deletions: DeletionCleanups,
@@ -34,6 +35,12 @@ pub struct ClaudeAcpProvider {
     process: Option<acp_binding::ProcessFactory>,
 }
 impl ClaudeAcpProvider {
+    /// Presets this binding has verified for an exact catalog model ID.
+    pub fn approval_modes(
+        model_id: &str,
+    ) -> &'static [crate::application::agent_execution::providers::ApprovalModeChoice] {
+        super::profile::approval_modes(model_id)
+    }
     /// Configure a Claude ACP execution factory without starting a process.
     ///
     /// `config` supplies the executable, isolated environment, workspace, permission
@@ -94,6 +101,7 @@ impl ClaudeAcpProvider {
             config,
             capabilities,
             system_prompt: None,
+            approval_mode: ApprovalMode::Ask,
             audit,
             deletions: DeletionCleanups::default(),
             #[cfg(test)]
@@ -110,6 +118,23 @@ impl ClaudeAcpProvider {
     pub fn with_system_prompt(mut self, prompt: SystemPrompt) -> Self {
         self.system_prompt = Some(prompt);
         self
+    }
+    /// Select one binding-verified native preset for every session this factory opens.
+    ///
+    /// # Errors
+    /// Returns [`AgentError::Unsupported`] when the exact model has not been
+    /// verified for this preset. The factory is unchanged on failure.
+    pub fn with_approval_mode(mut self, mode: ApprovalMode) -> Result<Self, AgentError> {
+        if !Self::approval_modes(self.capabilities.model().model_id())
+            .iter()
+            .any(|choice| choice.id == mode)
+        {
+            return Err(AgentError::Unsupported(
+                "Claude approval preset is unavailable for this model".into(),
+            ));
+        }
+        self.approval_mode = mode;
+        Ok(self)
     }
     /// Borrow the configured override and its contribution provenance, or None
     /// when opening should retain the harness default prompt.
@@ -139,6 +164,9 @@ impl ClaudeAcpProvider {
     }
 }
 impl AgentProvider for ClaudeAcpProvider {
+    fn approval_mode(&self) -> Option<ApprovalMode> {
+        Some(self.approval_mode)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
             "claude-acp",
@@ -189,6 +217,7 @@ impl ClaudeAcpProvider {
         Arc::new(move || ProcessScope::spawn(factory.launch_command()).map_err(Into::into))
     }
     pub(super) fn profile(&self) -> ClaudeProfile {
-        ClaudeProfile::new(self.system_prompt.clone()).with_mcp_servers(&self.config)
+        ClaudeProfile::new(self.system_prompt.clone(), self.approval_mode)
+            .with_mcp_servers(&self.config)
     }
 }

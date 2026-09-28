@@ -1,10 +1,13 @@
 import {
+  type ApprovalMode,
   contentText,
+  conversationSelectionOpen,
   MAX_SENT_PREVIEW_BYTES,
   messageFiles,
   messageImages,
   storedImages,
   type CommandFailure,
+  type ConversationSelection,
   type FileAttachment,
   type MessageContent,
   type ReadFailure,
@@ -164,7 +167,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     )
     let admissionAttempted = false
     try {
-      const created = await extra.conversation.create(serverId)
+      const created = await extra.conversation.create(serverId, conv.selection)
       if (created.conversationId !== serverId)
         throw new Error("Gateway returned a different conversation identity.")
       dispatch(conversationReady(id))
@@ -243,7 +246,7 @@ export const stageAttachment = createAsyncThunk<
     const serverId = current.serverConversationId ?? crypto.randomUUID()
     dispatch(bindConversation({ id: input.id, serverId }))
     try {
-      const created = await extra.conversation.create(serverId)
+      const created = await extra.conversation.create(serverId, current.selection)
       if (created.conversationId !== serverId)
         throw new Error("Gateway returned a different conversation identity.")
       dispatch(conversationReady(input.id))
@@ -339,6 +342,7 @@ export const refreshConversation = createAsyncThunk<void, string, ThunkConfig>(
 )
 
 export type Control =
+  | { kind: "setApprovalMode"; mode: ApprovalMode }
   | { kind: "close" }
   | { kind: "reorder"; executionIds: string[] }
   | { kind: "remove"; executionId: string }
@@ -365,11 +369,14 @@ export const controlConversation = createAsyncThunk<
   if (control.kind === "close")
     dispatch(cancellationChanged({ id, status: "cancelling" }))
   try {
-    const created = await extra.conversation.create(serverId)
+    const created = await extra.conversation.create(serverId, current.selection)
     if (created.conversationId !== serverId)
       throw new Error("Gateway returned a different conversation identity.")
     dispatch(conversationReady(id))
     switch (control.kind) {
+      case "setApprovalMode":
+        await extra.conversation.setApprovalMode(serverId, control.mode)
+        break
       case "close":
         await extra.conversation.close(serverId)
         dispatch(cancellationChanged({ id, status: "cancelled" }))
@@ -560,8 +567,20 @@ const conversationSlice = createSlice({
     setDraft(state, action: PayloadAction<{ draft: MessageContent; id?: string }>) {
       return gateway.setDraft(state, action.payload)
     },
+    setSelection(
+      state,
+      action: PayloadAction<{ id: string; selection: ConversationSelection }>,
+    ) {
+      const current = state.conversations.find((item) => item.id === action.payload.id)
+      if (current && conversationSelectionOpen(current)) {
+        current.selection = action.payload.selection
+      }
+    },
     openConversation(state) {
       return gateway.openConversation(state)
+    },
+    chooseModel(state, action: PayloadAction<ConversationSelection>) {
+      return gateway.chooseModel(state, action.payload)
     },
     openListed(
       state,
@@ -704,7 +723,9 @@ export const {
   setActive,
   moveActive,
   setDraft,
+  setSelection,
   openConversation,
+  chooseModel,
   openListed,
   closeConversation,
   bindConversation,

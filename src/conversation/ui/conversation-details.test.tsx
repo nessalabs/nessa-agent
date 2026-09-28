@@ -22,9 +22,15 @@ afterEach(() => {
   container.remove()
 })
 
-it("describes scoped support without implying missing policy integrations", () => {
+function attached(
+  overrides: Partial<NonNullable<ReturnType<typeof conversation>["remote"]>> = {},
+) {
   const item = conversation("conversation")
   item.remote = {
+    approvalMode: "ask",
+    approvalModes: [
+      { id: "ask", name: "Provider asks", description: "The provider asks." },
+    ],
     questions: [],
     running: false,
     permissions: [],
@@ -52,8 +58,12 @@ it("describes scoped support without implying missing policy integrations", () =
       },
     },
     lifecycle: { phase: "attached" },
+    ...overrides,
   }
+  return item
+}
 
+function show(item: ReturnType<typeof conversation>) {
   act(() => {
     root.render(
       <ConversationDetails
@@ -64,39 +74,100 @@ it("describes scoped support without implying missing policy integrations", () =
       />,
     )
   })
+}
 
-  expect(document.body.textContent).toContain(
-    "Deny requested tool accessAvailable when the agent offers a deny choice",
+function group(title: string) {
+  const section = [...document.body.querySelectorAll("section")].find(
+    (item) =>
+      document.getElementById(item.getAttribute("aria-labelledby") ?? "")?.textContent ===
+      title,
   )
-  expect(document.body.textContent).toContain("Isolate user hooksNot verified")
-  expect(document.body.textContent).toContain(
-    "Explicitly defer permission decisionsExplicit later-answer outcomes are not implemented in Nessa",
+  return section?.textContent ?? null
+}
+
+it("names each group by an h3 under the sheet's h2", () => {
+  show(attached())
+  const headings = [...document.body.querySelectorAll("section > h3")].map(
+    (heading) => heading.textContent,
   )
-  expect(document.body.textContent).toContain(
-    "Apply policies before tools runNot implemented in Nessa",
+  expect(headings).toEqual(["Model", "Approvals"])
+  expect(document.body.querySelector("section h4")).toBeNull()
+})
+
+it("says in a word whether approvals work here, without the capability jargon", () => {
+  show(attached())
+
+  expect(group("Approvals")).toBe(
+    "ApprovalsTool callsProvider asksDeny a requestSupportedAnswer laterNot yet in Nessa",
   )
-  expect(document.body.textContent).toContain(
-    "End a turn from policyNot implemented in Nessa",
-  )
-  expect(document.body.textContent).toContain(
-    "Close a session from policyNot implemented in Nessa",
-  )
-  expect(document.body.textContent).toContain(
-    "Answer incoming questions in NessaAvailable",
+  expect(group("Model")).toBe("ModelImagesNot supported")
+  expect(document.body.textContent).not.toContain("turn correlation")
+})
+
+it("names the model and its agent once the gateway reports them", () => {
+  show(
+    attached({
+      runtime: {
+        model: "claude-sonnet-5",
+        provider: "claude-acp",
+        workspace: "/work/nessa",
+        agent: "claude",
+        modelName: "Sonnet 5",
+        contextWindowTokens: 1_000_000,
+        reasoning: true,
+      },
+      approvalMode: "auto",
+      approvalModes: [
+        { id: "ask", name: "Provider asks", description: "The provider asks." },
+        { id: "auto", name: "Automatic review", description: "The provider reviews." },
+      ],
+    }),
   )
 
-  item.remote.capabilities.agentFeatures.incomingElicitation = "unsupported"
-  act(() => {
-    root.render(
-      <ConversationDetails
-        conversation={item}
-        rename={false}
-        onClose={() => {}}
-        onRename={() => {}}
-      />,
-    )
-  })
-  expect(document.body.textContent).toContain(
-    "Answer incoming questions in NessaUnavailable",
+  expect(document.body.textContent).toContain("Sonnet 5Claude")
+  expect(document.body.querySelector("p > svg")).not.toBeNull()
+  expect(group("Approvals")).toContain("Tool callsAutomatic review")
+  expect(group("Workspace")).toBe("Workspace/work/nessa")
+  expect(group("Model")).toBe(
+    "ModelModel max context1 million tokensReasoningOnImagesNot supported",
   )
+})
+
+it("writes a context window that is not a round million as a plain count", () => {
+  show(
+    attached({
+      runtime: {
+        model: "m",
+        modelName: "Model M",
+        agent: "codex",
+        provider: "p",
+        workspace: "/w",
+        contextWindowTokens: 1_050_000,
+        reasoning: false,
+      },
+    }),
+  )
+
+  expect(group("Model")).toBe(
+    "ModelModel max context1,050,000 tokensReasoningOffImagesNot supported",
+  )
+})
+
+it("names no agent for an id setup does not list", () => {
+  show(
+    attached({
+      runtime: {
+        model: "m",
+        modelName: "Model M",
+        provider: "p",
+        workspace: "/w",
+        agent: "constructor",
+        contextWindowTokens: 100_000,
+        reasoning: false,
+      },
+    }),
+  )
+
+  expect(document.body.querySelector("p > svg")).toBeNull()
+  expect(document.body.textContent).toContain("Model Mp")
 })

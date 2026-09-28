@@ -5,7 +5,9 @@ import type {
   SubmissionReceipt,
 } from "./view"
 import {
+  type ApprovalMode,
   type CommandFailure,
+  type ConversationSelection,
   type FileAttachment,
   type ImageReference,
   type MessageContent,
@@ -20,7 +22,8 @@ export interface ConversationGateway {
   removeFile(tabs: LocalTabs, id: string): LocalTabs
   changeUpload(tabs: LocalTabs, change: UploadChange): LocalTabs
   forgetStoredUploads(tabs: LocalTabs, conversationId: string): LocalTabs
-  openConversation(tabs: LocalTabs): LocalTabs
+  openConversation(tabs: LocalTabs, selection?: ConversationSelection): LocalTabs
+  chooseModel(tabs: LocalTabs, selection: ConversationSelection): LocalTabs
   openListed(
     tabs: LocalTabs,
     listed: { serverConversationId: string; title: string | null },
@@ -33,7 +36,12 @@ export interface ConversationGateway {
 
 /** External effects consumed by conversation commands. */
 export interface ConversationEffects {
-  create(conversationId: string): Promise<{ conversationId: string }>
+  /** Apply an offered preset on an idle conversation and return the committed choice. */
+  setApprovalMode(conversationId: string, mode: ApprovalMode): Promise<ApprovalMode>
+  create(
+    conversationId: string,
+    selection?: ConversationSelection,
+  ): Promise<{ conversationId: string }>
   /**
    * Read the gateway's current bounded view of a conversation. Rejects with
    * {@link ConversationReadFailedError}, so no caller has to look at a wire code

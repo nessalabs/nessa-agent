@@ -147,6 +147,9 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     failure: retainedError === undefined ? undefined : current.failure,
     remote: {
       runtime: view.runtime,
+      approvalMode: view.approvalMode,
+      approvalModes: view.approvalModes,
+      approvalModeChange: view.approvalModeChange,
       running: view.messages.some((message) => message.status === "running"),
       truncated: view.truncated,
       queueComplete: view.queueComplete,

@@ -13,6 +13,8 @@ import type {
   ConversationMutationResult,
   ConversationQuestionChoice,
   ConversationReorderResult,
+  ConversationSetApprovalModeResult,
+  ApprovalMode,
   ImageAttachment,
   LinkedFile,
 } from "../generated/product.js"
@@ -28,6 +30,7 @@ import {
   conversationReceipt,
   conversationMutation,
   conversationReorder,
+  conversationApprovalMode,
 } from "../protocol/conversation-validate.js"
 
 /** Which of the caller's conversations `list()` returns. */
@@ -56,6 +59,10 @@ export type ConversationCreateOptions = ConversationActionOptions & {
    * this gateway does not run is refused by the gateway, as a
    * NessaConversationMutationError with `uncertain` false. */
   agent?: string
+  /** Exact catalog model fixed when a new conversation is created. */
+  model?: string
+  /** Initial provider preset; omitted selects ask. */
+  approvalMode?: ApprovalMode
 }
 /** Message admission receipt with the client-owned action identity. */
 export type ConversationSubmission = ConversationReceipt & {
@@ -66,6 +73,12 @@ export type ConversationSubmission = ConversationReceipt & {
 export type ConversationApi = {
   /** Create or reopen a conversation and start provider attachment in the background. IDs are generated when options are omitted; read `lifecycle` for attachment progress. */
   create: (options?: ConversationCreateOptions) => Promise<ConversationCreateResult>
+  /** Change the provider preset only while this conversation has no running turn. */
+  setApprovalMode: (
+    conversationId: string,
+    mode: ApprovalMode,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationSetApprovalModeResult>
   /** Read current provider lifecycle, output, queue, tools, and complete actionable permission choices. */
   read: (conversationId: string) => Promise<ConversationView>
   /**
@@ -325,10 +338,23 @@ export function createConversationApi(
       // usually remembered rather than typed, which made one bad remembered
       // name fail the launch. One refuser, one shape of refusal.
       const agent = options.agent === undefined ? {} : { agent: options.agent }
+      const model = options.model === undefined ? {} : { model: options.model }
+      const approvalMode =
+        options.approvalMode === undefined ? {} : { approvalMode: options.approvalMode }
       return mutate(
         ProductMethod.ConversationCreate,
-        { conversationId: id, requestId, ...agent },
+        { conversationId: id, requestId, ...agent, ...model, ...approvalMode },
         (value) => conversationId(value, id),
+      )
+    },
+    setApprovalMode: (id, mode, options = {}) => {
+      validConversationId(id)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      return mutate(
+        ProductMethod.ConversationSetApprovalMode,
+        { conversationId: id, requestId, mode },
+        (value) => conversationApprovalMode(value, requestId, mode),
+        false,
       )
     },
     list: async (options = {}) =>

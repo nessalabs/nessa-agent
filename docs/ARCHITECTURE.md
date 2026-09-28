@@ -478,8 +478,8 @@ Chat adapters receive the composition-owned session handle; they do not open ano
 | `application/link-notice.ts`, `adapters/use-link-notice.ts` | The sentence for a link the host did not open, and the subscription that carries it. The decision is the host's, in `src-tauri/src/links.rs`; this is what the person reads when a click went nowhere. |
 | `ui/use-file-attachments.ts` | Remote pending previews, originating conversation, viewer state, and the last refusal — a typed reason, never a sentence, kept with the conversation it was said to. It is put down by the things that answer it, named as calls rather than worked out from the draft afterwards: files actually attached, a file removed, and `useComposer` reporting a draft that has gone. Local files use synchronous object URLs. Uploading is not its job. `chooseFiles` asks the host's picker for paths and falls back to the page's own file input when there is no host; `pickerRefusal` turns what the host would not hand over into one of this composer's typed reasons, so a selection is never quietly one file short. |
 | `adapters/dropped-folder.ts`, `ui/use-folder-drop.ts` | Bounded sequential folder traversal, cancellation, originating draft and pending-send guard. |
-| `ui/use-content-drop.ts`, `ui/use-attachment-menu.ts` | Drop acceptance/routing and menu geometry lifecycle, separate from rendering. |
-| `ui/attachment-preview.tsx`, `ui/attachment-icon.tsx`, `ui/add-attachment-menu.tsx` | Lazy shared file preview, file-kind icons, and composer Add menu. |
+| `ui/use-content-drop.ts` | Drop acceptance/routing, separate from rendering. |
+| `ui/attachment-preview.tsx`, `ui/attachment-icon.tsx`, `ui/composer-tray.tsx` | Lazy shared file preview, file-kind icons, and the composer's + tray (files, tool approval, sign out). |
 | `ui/waveform-icon.tsx` | The voice glyph in the composer. |
 
 The composition root injects an attachment resource store into the panel. Redux

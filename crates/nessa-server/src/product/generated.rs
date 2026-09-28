@@ -594,6 +594,10 @@ pub struct ConversationView {
     pub runtime: Option<ConversationRuntime>,
     pub title: Option<String>,
     pub questions: Vec<ConversationQuestion>,
+    pub approval_mode: ApprovalMode,
+    pub approval_modes: Vec<ApprovalModeChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_mode_change: Option<ApprovalModeChange>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -602,6 +606,10 @@ pub struct ConversationCreateParams {
     pub request_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_mode: Option<ApprovalMode>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -759,6 +767,10 @@ pub struct ConversationRuntime {
     pub model: String,
     pub provider: String,
     pub workspace: String,
+    pub agent: String,
+    pub model_name: String,
+    pub context_window_tokens: u64,
+    pub reasoning: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -776,6 +788,12 @@ pub struct ConversationPart {
 pub enum ConversationErrorCode {
     AgentNotConfigured,
     AgentUnsupported,
+    ModelUnavailable,
+    ApprovalModeUnavailable,
+    ApprovalModeNotApplied,
+    ApprovalModeUncertain,
+    ApprovalRequestConflict,
+    TurnRunning,
     ConversationsNotConfigured,
     UnknownMethod,
     InvalidRequest,
@@ -806,6 +824,12 @@ impl ConversationErrorCode {
         match self {
             Self::AgentNotConfigured => "agent_not_configured",
             Self::AgentUnsupported => "agent_unsupported",
+            Self::ModelUnavailable => "model_unavailable",
+            Self::ApprovalModeUnavailable => "approval_mode_unavailable",
+            Self::ApprovalModeNotApplied => "approval_mode_not_applied",
+            Self::ApprovalModeUncertain => "approval_mode_uncertain",
+            Self::ApprovalRequestConflict => "approval_request_conflict",
+            Self::TurnRunning => "turn_running",
             Self::ConversationsNotConfigured => "conversations_not_configured",
             Self::UnknownMethod => "unknown_method",
             Self::InvalidRequest => "invalid_request",
@@ -878,4 +902,112 @@ pub struct ConversationAnswerQuestionParams {
     pub question_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<ConversationQuestionChoice>>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalMode {
+    Ask,
+    Auto,
+    Full,
+}
+impl ApprovalMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Auto => "auto",
+            Self::Full => "full",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApprovalModeChoice {
+    pub id: ApprovalMode,
+    pub name: String,
+    pub description: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentModelOption {
+    pub model_id: String,
+    pub display_name: String,
+    pub max_context_window_tokens: u64,
+    pub reasoning: bool,
+    pub image_input: bool,
+    pub approval_modes: Vec<ApprovalModeChoice>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentOption {
+    pub agent: String,
+    pub default_model: String,
+    pub models: Vec<AgentModelOption>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentsListResult {
+    pub agents: Vec<AgentOption>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSetApprovalModeParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub mode: ApprovalMode,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSetApprovalModeResult {
+    pub request_id: String,
+    pub mode: ApprovalMode,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApprovalModeChange {
+    pub request_id: String,
+    pub requested_mode: ApprovalMode,
+    pub status: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentInstallParams {
+    pub agent: InstallableAgent,
+    pub request_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentInstallOffer {
+    pub agent: InstallableAgent,
+    pub version: String,
+    pub archive_bytes: u64,
+    pub installed: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentInstallOptionsResult {
+    pub agents: Vec<AgentInstallOffer>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentInstallResult {
+    pub agent: InstallableAgent,
+    pub version: String,
+    pub downloaded: bool,
+    pub cleanup_pending: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallableAgent {
+    Claude,
+    Codex,
+    Opencode,
+}
+impl InstallableAgent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Opencode => "opencode",
+        }
+    }
 }

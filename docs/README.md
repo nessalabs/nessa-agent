@@ -19,6 +19,7 @@ instead of creating a competing copy.
 | [Agent execution design](design/agent_execution/README.md) | Ownership review and separately labeled future gateway/conversation proposals. |
 | [Authentication](design/auth/README.md) | Design references; [local usage](guides/local-auth.md) and [gateway review](reviews/local-auth-gateway.md). |
 | [Gateway alpha review](reviews/gateway-alpha-review.md) | Local architecture review, fixed findings, external comparisons, validation, and remaining release limits. |
+| [Runtime staging profile](reviews/runtime-staging-profile.md) | Reproducible macOS measurements of packaged runtime copy, sync, validation, publication, and reuse costs (issue 109). |
 | [todo/](todo/README.md) | Pending implementation tasks, including SDK context-first organization and caller updates. |
 | [adr/](adr/README.md) | Architecture decisions by implementation progress: [done](adr/done) and [todo](adr/todo). See the index for current scope and external work. |
 

@@ -1,3 +1,4 @@
+import { gatewayAgentInstallations } from "../onboarding/adapters/agent-installations"
 import { gatewayEffects } from "../conversation/adapters/gateway/effects"
 import { createAttachmentResources } from "../panel/adapters/attachment-resources"
 import { sha256Digest } from "../panel/adapters/sha256"
@@ -5,7 +6,12 @@ import {
   nativeCredentialSource,
   nativeGatewayEndpointSource,
 } from "../session/adapters/client/credential-source"
-import type { CredentialSource, GatewayEndpointSource, NessaClient } from "@nessa/client"
+import type {
+  AgentsListResult,
+  CredentialSource,
+  GatewayEndpointSource,
+  NessaClient,
+} from "@nessa/client"
 import { loadEnvironment, type Environment } from "../env/environment"
 import { scenarioEffects } from "../conversation/adapters/scenario/effects"
 import { createSessionHandle } from "../session/adapters/client/handle"
@@ -86,6 +92,20 @@ export function createDependencies(
   }
   const chosenAgent = () => (chosen ??= ask())
   return {
+    agentInstallations: gatewayAgentInstallations(
+      () => session.get()?.agents,
+      () => globalThis.crypto.randomUUID(),
+      session.subscribe,
+    ),
+    loadConversationChoices: async (): Promise<{
+      catalog: AgentsListResult
+      chosenAgent: string | undefined
+    }> => {
+      const current = session.get()
+      if (!current) throw new Error("Gateway is not connected")
+      const [catalog, agent] = await Promise.all([current.agents.list(), chosenAgent()])
+      return { catalog, chosenAgent: agent }
+    },
     session,
     attachments: createAttachmentResources(),
     /**

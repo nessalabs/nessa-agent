@@ -15,6 +15,10 @@ function deferred<T>() {
 function view(ids: string[]): ConversationView {
   return {
     conversationId: "server",
+    approvalMode: "ask",
+    approvalModes: [
+      { id: "ask", name: "Provider asks", description: "Provider asks where required." },
+    ],
     title: null,
     revision: ids.join(","),
     truncated: false,

@@ -50,6 +50,8 @@ export {
 } from "./application/usecases/upload-failure"
 
 export { ConversationTabMenu, ConversationDetails } from "./ui/conversation-details"
+// The approval modes' words, shared by the details sheet and the composer tray.
+export type { ApprovalMode, ApprovalModeChoice, ConversationSelection } from "./model"
 export { restoreConversations } from "./adapters/store/slice"
 export {
   conversationTabSnapshot,

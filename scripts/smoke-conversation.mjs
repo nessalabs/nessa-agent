@@ -174,7 +174,11 @@ try {
     "Claude image and steering capabilities",
   )
   assert.deepEqual(ready.runtime, {
+    agent: "claude",
     model: "claude-haiku-4-5-20251001",
+    modelName: "Claude Haiku 4.5",
+    contextWindowTokens: 200000,
+    reasoning: true,
     provider: "claude-acp",
     workspace,
   })

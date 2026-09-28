@@ -105,6 +105,10 @@ function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.ImageInputUnsupported:
     case ConversationErrorCode.AttachmentNotFound:
     case ConversationErrorCode.AttachmentUnavailable:
+    case ConversationErrorCode.ModelUnavailable:
+    case ConversationErrorCode.ApprovalModeUnavailable:
+    case ConversationErrorCode.ApprovalRequestConflict:
+    case ConversationErrorCode.TurnRunning:
       return true
     // The gateway could not read what it saved for this conversation. It caches
     // that and answers every later command from it without opening an agent, so
@@ -135,6 +139,8 @@ function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.AttachmentStorageUnavailable:
     case ConversationErrorCode.AttachmentCleanupUnavailable:
     case ConversationErrorCode.ConversationErasureIncomplete:
+    case ConversationErrorCode.ApprovalModeNotApplied:
+    case ConversationErrorCode.ApprovalModeUncertain:
       return false
   }
 }

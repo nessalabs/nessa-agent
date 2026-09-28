@@ -187,6 +187,9 @@ pub(super) struct AttachmentStart {
     pub(super) started_evidence: watch::Sender<Option<Result<(), AgentError>>>,
 }
 impl WorkPermit {
+    pub(super) fn provider_generation(&self) -> u64 {
+        self.provider_generation_value().0
+    }
     fn provider_generation_value(&self) -> ProviderGeneration {
         self.binding.lock().expect("work binding").1
     }

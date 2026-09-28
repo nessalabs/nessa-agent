@@ -1021,18 +1021,20 @@ context and the published protocol schema must agree on (`agreement.rs`).
 
 ## Installing an agent runtime
 
-`crates/nessa-server/src/agent_install/` puts an agent's own runtime on the
-machine at the version Nessa has tested. All three agents are pinned, and
-`install-agent` fetches and verifies any of them; Opencode is the only one that
-is also *launched* from what was fetched, because the desktop still resolves
-Claude and Codex inside the bundle. Their pins cover macOS on Apple silicon and
-no other platform, which is where the 467 MB was measured and the only archives
-anybody has listed. The packaged OpenCode profile starts only with a saved API
-key and selects the metered `opencode/minimax-m3` Zen model; Nessa does not infer
-account validity or make a paid call during setup. The broader reason applies to
-every agent equally: telling somebody to go and install something before they
-can use Nessa is the thing this context exists to avoid. [ADR 173](adr/todo/173-fetch-agent-runtimes.md) is the decision to
-fetch all three and ship none.
+`crates/nessa-server/src/agent_install/` installs pinned native runtimes into the
+private stage/instance namespace. The desktop bundles Node and JavaScript ACP
+adapters; Claude, Codex and OpenCode native programs are downloaded explicitly.
+`application/gateway.rs` defines the authenticated installation port;
+`composition/install_command.rs` supplies the same audited installer to the CLI
+and packaged gateway. `product/agent_install.rs` owns wire mapping and worker
+admission. `src/onboarding/application/agent-installations.ts`, its gateway
+adapter and `ui/agent-downloads.tsx` supply setup and panel download controls.
+
+`composition/managed_adapter.rs` joins a verified native snapshot to the bundled
+Node adapter and its environment override. `CurrentAgentResolver` refreshes the
+managed snapshot for readiness and cold provider construction. Existing
+conversations retain their provider generation. See [ADR 173](adr/todo/173-fetch-agent-runtimes.md)
+for download ordering, failure behavior and the chosen scope.
 
 `domain/value_objects/` owns what is true before any file exists: `AgentName`,
 which is the identity in this context and is constrained to what can also be a

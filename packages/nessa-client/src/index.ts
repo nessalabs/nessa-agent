@@ -23,6 +23,7 @@ export {
   type IssueCredentialParams,
   type IssueCredentialResult,
   type ServerApi,
+  type AgentsApi,
 } from "./presentation/index.js"
 export type {
   NessaClientConnectOptions,
@@ -158,6 +159,16 @@ export {
 } from "./protocol/attachment-validate.js"
 export type {
   ConversationView,
+  ApprovalMode,
+  ApprovalModeChoice,
+  AgentModelOption,
+  AgentOption,
+  InstallableAgent,
+  AgentInstallOffer,
+  AgentInstallOptionsResult,
+  AgentInstallResult,
+  AgentsListResult,
+  ConversationSetApprovalModeResult,
   ConversationListResult,
   ConversationSummary,
   ConversationLifecycle,

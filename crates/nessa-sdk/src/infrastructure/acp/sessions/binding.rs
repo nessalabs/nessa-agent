@@ -71,7 +71,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         process,
         config,
         capabilities: capabilities.clone(),
-        profile,
+        profile: ControlMutex::new(profile),
         audit,
         permission_sequence: Arc::new(AtomicU64::new(0)),
         question_sequence: Arc::new(AtomicU64::new(0)),
@@ -141,7 +141,7 @@ struct WorkerFactory<P> {
     process: ProcessFactory,
     config: AcpConfig,
     capabilities: EffectiveCapabilities,
-    profile: P,
+    profile: ControlMutex<P>,
     audit: Arc<dyn ExecutionAudit>,
     permission_sequence: Arc<AtomicU64>,
     /// Question identities, minted here for the same reason review identities
@@ -225,7 +225,10 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
         tokio::spawn(
             worker::run(
                 scope,
-                self.profile.clone(),
+                self.profile
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone(),
                 self.config.clone(),
                 self.capabilities.clone(),
                 receiver,
@@ -628,12 +631,51 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
     }
 }
 impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
+    fn set_approval_mode(
+        &self,
+        mode: crate::application::agent_execution::providers::ApprovalMode,
+    ) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async move {
+            let (sender, receiver) = oneshot::channel();
+            let commands = {
+                let generation = self.live_generation().await.map_err(|error| {
+                    ProviderOperationFailure::new(
+                        error.cause,
+                        ProviderSessionState::CleanupRequired,
+                    )
+                })?;
+                generation.commands.clone()
+            };
+            enqueue(&commands, Command::SetApprovalMode(mode, sender)).map_err(|error| {
+                ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+            })?;
+            let outcome = receiver
+                .await
+                .unwrap_or(Err(AgentError::Closed))
+                .map_err(|error| {
+                    ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+                });
+            if outcome.is_ok() {
+                self.factory
+                    .profile
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .change_approval_mode(self.id.as_str(), mode)
+                    .map_err(|error| {
+                        ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+                    })?;
+            }
+            outcome
+        })
+    }
     fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         *self.factory.operation_capabilities.borrow()
     }
     fn validate_input(&self, input: &ExecutionRequest) -> Result<(), AgentError> {
         self.factory
             .profile
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .validate_execution(input, &self.factory.capabilities)?;
         fits_one_frame(&input.user_message, self.factory.config.max_frame_bytes)
     }
@@ -1001,6 +1043,10 @@ pub(crate) struct DispatchedPrompt {
 }
 
 pub(crate) enum Command {
+    SetApprovalMode(
+        crate::application::agent_execution::providers::ApprovalMode,
+        oneshot::Sender<Result<(), AgentError>>,
+    ),
     /// Native steering for the identified execution.
     Steer(
         ExecutionId,

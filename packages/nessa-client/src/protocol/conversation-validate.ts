@@ -5,6 +5,8 @@ import type {
   ConversationReceipt,
   ConversationMutationResult,
   ConversationReorderResult,
+  ConversationSetApprovalModeResult,
+  ApprovalMode,
   ImageAttachment,
   LinkedFile,
 } from "../generated/product.js"
@@ -22,6 +24,7 @@ import {
   PreToolPolicySupport,
 } from "../generated/product.js"
 import { imageAttachments, linkedFiles } from "./attachment-validate.js"
+import { approvalModeChoices } from "./agents-validate.js"
 
 const utf8 = new TextEncoder()
 
@@ -113,6 +116,18 @@ export function conversationMutation(
   flag(item, "applied")
   return item as unknown as ConversationMutationResult
 }
+/** Confirm the reply belongs to the requested change and names the exact preset. */
+export function conversationApprovalMode(
+  value: unknown,
+  requestId: string,
+  requested: ApprovalMode,
+): ConversationSetApprovalModeResult {
+  const item = record(value)
+  exact(item, ["requestId", "mode"])
+  if (identity(item, "requestId") !== requestId || text(item, "mode") !== requested)
+    throw new Error("Conversation mode result contradicts the requested change")
+  return item as unknown as ConversationSetApprovalModeResult
+}
 export function conversationView(value: unknown, expected: string): ConversationView {
   const item = record(value)
   exact(item, [
@@ -130,6 +145,9 @@ export function conversationView(value: unknown, expected: string): Conversation
     "queueComplete",
     "runtime",
     "title",
+    "approvalMode",
+    "approvalModes",
+    "approvalModeChange",
   ])
   if (identity(item, "conversationId") !== expected)
     throw new Error("Conversation response belongs to another conversation")
@@ -137,6 +155,19 @@ export function conversationView(value: unknown, expected: string): Conversation
   optionalText(item, "title", bounds.maxConversationTitleBytes)
   flag(item, "truncated")
   flag(item, "queueComplete")
+  const committedMode = text(item, "approvalMode", 4, false)
+  const offeredModes = approvalModeChoices(item.approvalModes)
+  if (!offeredModes.some((choice) => choice.id === committedMode))
+    throw new Error("Conversation mode is unavailable for its model")
+  if (item.approvalModeChange !== undefined) {
+    const change = record(item.approvalModeChange)
+    exact(change, ["requestId", "requestedMode", "status"])
+    identity(change, "requestId")
+    const requested = text(change, "requestedMode", 4, false)
+    if (!offeredModes.some((choice) => choice.id === requested))
+      throw new Error("Conversation requested mode is unavailable")
+    oneOf(text(change, "status"), ["changing", "recovery_required"])
+  }
   if (item.permissionViewError !== undefined)
     text(item, "permissionViewError", 2048, false)
   const messages = items(item, "messages", 128)
@@ -396,8 +427,25 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   if (item.runtime !== undefined) {
     const runtime = record(item.runtime)
-    exact(runtime, ["model", "provider", "workspace"])
+    exact(runtime, [
+      "model",
+      "provider",
+      "workspace",
+      "agent",
+      "modelName",
+      "contextWindowTokens",
+      "reasoning",
+    ])
     for (const key of ["model", "provider", "workspace"]) text(runtime, key, 4096)
+    text(runtime, "agent", 32, false)
+    text(runtime, "modelName", 256, false)
+    if (
+      !Number.isSafeInteger(runtime.contextWindowTokens) ||
+      (runtime.contextWindowTokens as number) < 1 ||
+      (runtime.contextWindowTokens as number) > 4294967295
+    )
+      throw new Error("Invalid conversation model context window")
+    flag(runtime, "reasoning")
   }
   const capabilities = record(item.capabilities)
   const capabilityKeys = [

@@ -38,13 +38,16 @@ if (!container) throw new Error("missing #root")
 // The host opens setup in its own window; that window paints setup and nothing
 // else, and the panel window paints the panel and nothing else. So the setup
 // branch is given no children: the panel tree below belongs to the other window
-// and mounting it here would start a second session in a window that is closing.
+// and mounting it here would create a panel in a window that is closing.
+// Setup owns an authenticated session for explicit native-runtime downloads.
 const panel = (
   <Provider store={store}>
     <App
       attachmentResources={dependencies.attachments}
       canChoosePaths={dependencies.canChoosePaths}
       digest={dependencies.digest}
+      loadConversationChoices={dependencies.loadConversationChoices}
+      agentInstallations={dependencies.agentInstallations}
     />
     {dependencies.usesLocalSession && <SessionLifecycle dependencies={dependencies} />}
   </Provider>
@@ -78,7 +81,14 @@ function renderApplication() {
   root.render(
     <React.StrictMode>
       {windowSurface() === "setup" ? (
-        <SetupGate agents={dependencies.agents} apiKeys={nativeAgentApiKeys} />
+        <Provider store={store}>
+          <SetupGate
+            agents={dependencies.agents}
+            apiKeys={nativeAgentApiKeys}
+            installations={dependencies.agentInstallations}
+          />
+          <SessionLifecycle dependencies={dependencies} />
+        </Provider>
       ) : !hasNativeHost() && environment.conversation.backend === "local" ? (
         <BrowserApplication environment={environment} />
       ) : (

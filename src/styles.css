@@ -969,6 +969,117 @@ body {
   color: var(--accent-foreground);
 }
 
+/* The composer's model picker: its provider tabs take the same soft fill for
+   keyboard focus as the composer's controls, instead of an outer ring that
+   stays after a click. */
+.nessa-composer-model-content [role="tab"]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
+/* The picker is portalled to the page, which on a desktop host is larger than
+   the window, so its collision checks cannot keep it inside the panel. Its
+   size is held to the window instead: narrow enough to open leftwards from the
+   trigger near the panel's right edge without passing the panel's left, and
+   its list short enough to fit above the composer in a short window. */
+.nessa-composer-model-content {
+  width: min(24rem, calc(var(--nessa-window-width, 100vw) - 6rem));
+}
+.nessa-composer-model-content [role="listbox"] {
+  max-height: min(20rem, calc(var(--nessa-window-height, 100vh) - 12rem));
+}
+
+/* The model's name above its mark, at once on hover or keyboard focus, and
+   not while the picker it opens is showing. */
+.nessa-model-hint-label {
+  position: absolute;
+  right: 0;
+  /* Clear of the composer's edge, so it reads as its own label. */
+  bottom: calc(100% + 16px);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 0 0 1px var(--border);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(2px);
+  transition:
+    opacity 120ms ease-out,
+    transform 120ms ease-out;
+}
+/* Hover only where there is a pointer that hovers: a touch screen's sticky
+   :hover would leave the label up after a tap. */
+@media (hover: hover) {
+  .nessa-model-hint:hover .nessa-model-hint-label {
+    opacity: 1;
+    transform: none;
+  }
+}
+.nessa-model-hint:has(:focus-visible) .nessa-model-hint-label {
+  opacity: 1;
+  transform: none;
+}
+.nessa-model-hint[data-dismissed] .nessa-model-hint-label,
+.nessa-model-hint:has([aria-expanded="true"]) .nessa-model-hint-label {
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nessa-model-hint-label {
+    transition: none;
+  }
+}
+
+/* The + tray rises from the composer's corner; a page it switches to settles
+   in from the side it came from. Both are skipped for reduced motion. */
+@keyframes nessa-composer-tray-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+@keyframes nessa-composer-tray-page {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+}
+.nessa-composer-tray {
+  transform-origin: bottom left;
+  animation: nessa-composer-tray-rise 180ms ease-out;
+}
+.nessa-composer-tray-page {
+  animation: nessa-composer-tray-page 180ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nessa-composer-tray,
+  .nessa-composer-tray-page {
+    animation: none;
+  }
+}
+
+/* WebKitGTK's layout compositor paints transformed layers from the panel
+   origin (see the compositor rules above), so there the tray, its pages, the
+   + and the hover label appear and disappear without moving. The picker is
+   portalled outside the panel, so it is reached through the document. */
+.nessa-panel[data-compositor="layout"] .nessa-composer-tray,
+.nessa-panel[data-compositor="layout"] .nessa-composer-tray-page,
+html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
+  animation: none;
+}
+.nessa-panel[data-compositor="layout"] .nessa-model-hint-label,
+.nessa-panel[data-compositor="layout"] [data-slot="composer-tray-plus"] {
+  transform: none;
+  transition: opacity 120ms ease-out;
+}
+
 .nessa-browser-login {
   height: 100%;
   overflow: auto;

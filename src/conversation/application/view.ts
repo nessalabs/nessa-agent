@@ -1,8 +1,22 @@
-import type { ConversationCapabilities, ImageReference, LinkedFile } from "../model"
+import type {
+  ApprovalMode,
+  ApprovalModeChoice,
+  ConversationCapabilities,
+  ConversationRuntime,
+  ImageReference,
+  LinkedFile,
+} from "../model"
 import type { AgentPart } from "../model/types"
 /** Authorized bounded gateway projection. It does not own execution scheduling. */
 export type ConversationView = {
-  runtime?: { model: string; provider: string; workspace: string }
+  runtime?: ConversationRuntime
+  approvalMode: ApprovalMode
+  approvalModes: ApprovalModeChoice[]
+  approvalModeChange?: {
+    requestId: string
+    requestedMode: ApprovalMode
+    status: string
+  }
   /**
    * What the gateway calls the conversation — the one title rule, the one the
    * Messages list shows — or null before anything was said in it.
@@ -83,7 +97,7 @@ export type ConversationView = {
 
 /** Stable logical identities survive an uncertain acknowledgement and explicit retry. */
 export type Submission = {
-  runtime?: { model: string; provider: string; workspace: string }
+  runtime?: ConversationRuntime
   conversationId: string
   executionId: string
   actionId: string

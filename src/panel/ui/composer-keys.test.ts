@@ -25,8 +25,11 @@ import {
   type ConversationView,
 } from "../../conversation/testing"
 import { makeStore, type AppStore } from "../../store"
+import { sessionReady } from "../../session/adapters/store/slice"
+import { setSelection } from "../../conversation/adapters/store/slice"
 import { createAttachmentResources } from "../adapters/attachment-resources"
 import { App } from "./app"
+import type { ConversationChoices } from "./use-agent-choices"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -44,6 +47,10 @@ function view(
   return {
     questions: [],
     conversationId,
+    approvalMode: "ask",
+    approvalModes: [
+      { id: "ask", name: "Provider asks", description: "Provider asks where required." },
+    ],
     title: null,
     revision,
     queueComplete: true,
@@ -95,7 +102,7 @@ function queue(conversationId: string, count: number, revision: string) {
   )
 }
 
-function panel() {
+function panel(choices?: ConversationChoices) {
   return React.createElement(
     React.StrictMode,
     null,
@@ -105,10 +112,121 @@ function panel() {
         attachmentResources,
         canChoosePaths: false,
         digest: async () => "digest",
+        loadConversationChoices: async () => ({
+          catalog: choices?.catalog ?? { agents: [] },
+          chosenAgent: choices?.chosenAgent,
+        }),
       }),
     }),
   )
 }
+
+it("shows the catalog model beside the voice control on a new draft", async () => {
+  store.dispatch(
+    sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
+  )
+  const choices: ConversationChoices = {
+    chosenAgent: "claude",
+    catalog: {
+      agents: [
+        {
+          agent: "claude",
+          defaultModel: "claude-sonnet-5",
+          models: [
+            {
+              modelId: "claude-sonnet-5",
+              displayName: "Sonnet 5",
+              maxContextWindowTokens: 1_000_000,
+              reasoning: true,
+              imageInput: true,
+              approvalModes: [
+                {
+                  id: "ask",
+                  name: "Provider asks",
+                  description: "Claude asks where required.",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  }
+  await act(async () => root.render(panel(choices)))
+  const picker = host.querySelector<HTMLButtonElement>(
+    '[data-slot="model-picker-trigger"]',
+  )
+  expect(picker?.getAttribute("aria-label")).toBe("Model: Sonnet 5")
+  expect(store.getState().conversation.conversations[0]?.selection).toEqual({
+    agent: "claude",
+    model: "claude-sonnet-5",
+    approvalMode: "ask",
+  })
+  expect(picker?.classList.contains("nessa-composer-model")).toBe(true)
+  expect(picker?.parentElement?.nextElementSibling?.getAttribute("aria-label")).toBe(
+    "Start voice input",
+  )
+
+  act(() => {
+    store.dispatch(
+      setSelection({
+        id: "c0",
+        selection: {
+          agent: "claude",
+          model: "claude-retired-4",
+          approvalMode: "ask",
+        },
+      }),
+    )
+    store.dispatch(bindConversation({ id: "c0", serverId: "saved" }))
+  })
+  await act(async () => root.render(panel(choices)))
+  expect(
+    host
+      .querySelector<HTMLButtonElement>('[data-slot="model-picker-trigger"]')
+      ?.getAttribute("aria-label"),
+  ).toBe("Model: claude-retired-4")
+})
+
+it("binds the displayed catalog fallback when the host choice is stale", async () => {
+  store.dispatch(
+    sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
+  )
+  const choices: ConversationChoices = {
+    chosenAgent: "removed-agent",
+    catalog: {
+      agents: [
+        {
+          agent: "codex",
+          defaultModel: "astra",
+          models: [
+            {
+              modelId: "astra",
+              displayName: "Astra",
+              maxContextWindowTokens: 100_000,
+              reasoning: true,
+              imageInput: false,
+              approvalModes: [
+                { id: "ask", name: "Ask", description: "Ask before changes." },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  }
+  await act(async () => root.render(panel(choices)))
+  expect(
+    host
+      .querySelector<HTMLButtonElement>('[data-slot="model-picker-trigger"]')
+      ?.getAttribute("aria-label"),
+  ).toBe("Model: Astra")
+  expect(store.getState().conversation.conversations[0]?.selection).toEqual({
+    agent: "codex",
+    model: "astra",
+    approvalMode: "ask",
+  })
+})
 
 function chips() {
   return host.querySelectorAll('[data-slot="composer-queue-badge"]')
