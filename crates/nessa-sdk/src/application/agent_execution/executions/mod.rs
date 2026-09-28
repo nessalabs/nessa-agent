@@ -3,6 +3,7 @@
 //! owns admission, observations, and permission transitions. The mandatory audit
 //! port retains queue order, session closure, and permission evidence independently
 //! of events.
+//! The controller reserves admitted question IDs until execution settlement.
 //! Shared identity limits keep live admission and restored observations consistent.
 //!
 //! ```text

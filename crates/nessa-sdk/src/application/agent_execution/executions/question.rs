@@ -13,7 +13,8 @@ use crate::domain::agent_execution::sessions::ExecutionSessionId;
 /// [`crate::application::agent_execution::permissions::QuestionAnswerRecord`]
 /// for answer or cancellation evidence. Clones retain the same admission; they
 /// do not admit another ask or claim that an event or answer was delivered.
-/// The adapter owns ID uniqueness, open-question limits and resolution ordering.
+/// The controller reserves the ID until execution settlement; the adapter owns
+/// open-question limits and resolution ordering.
 /// This value performs no I/O and remains usable for evidence after teardown.
 ///
 /// Private fields prevent replacing the original question independently:

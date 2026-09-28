@@ -19,7 +19,7 @@ use crate::domain::agent_execution::{
     tools::*,
     ExecutionError,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const MAX_TOOLS: usize = 4096;
 const MAX_PERMISSIONS: usize = 128;
@@ -33,16 +33,22 @@ const MAX_RETAINED_BYTES: usize = 32 * 1024 * 1024;
 pub struct ExecutionController {
     session: ExecutionSession,
     review_inputs: HashMap<PermissionId, (ToolReviewInput, usize)>,
+    admitted_question_ids: HashSet<QuestionId>,
     retained_tool_bytes: usize,
     retained_review_bytes: usize,
 }
 impl ExecutionController {
+    /// Maximum distinct question admissions in one execution, including answered
+    /// and cancelled asks. Compact identities remain reserved until settlement.
+    pub const MAX_QUESTIONS_PER_EXECUTION: usize = 4096;
+
     /// Creates an idle live aggregate for provider context `id`, with empty tool
     /// and permission observations. This does not open a provider or load history.
     pub fn new(id: ExecutionSessionId) -> Self {
         Self {
             session: ExecutionSession::new(id),
             review_inputs: HashMap::new(),
+            admitted_question_ids: HashSet::new(),
             retained_tool_bytes: 0,
             retained_review_bytes: 0,
         }
@@ -121,19 +127,38 @@ impl ExecutionController {
     /// Bind an adapter-minted ask identity and question to this active execution.
     ///
     /// Returns an immutable admission from which the adapter derives events and
-    /// audit records. The adapter owns ID uniqueness and open-question limits;
-    /// this method publishes nothing and retains no question lifetime. It rejects
-    /// an inactive/different execution with InvalidInput and invalid identity or
-    /// payload size with the event validator's typed error before returning a value.
+    /// audit records. The controller reserves `id` until successful execution
+    /// settlement, including after answer/cancellation; the adapter owns open-ask
+    /// limits and delivery ordering. This method publishes nothing.
+    ///
+    /// # Errors
+    /// Returns Closed after session closure, InvalidInput for an inactive/different
+    /// execution or an already admitted ID, and Protocol at
+    /// [`Self::MAX_QUESTIONS_PER_EXECUTION`] or for invalid event payload size.
+    /// Rejection leaves identity history and earlier admissions unchanged.
     pub fn ask_question(
         &mut self,
         execution: &ExecutionId,
         id: QuestionId,
         question: AgentQuestion,
     ) -> Result<AdmittedQuestion, AgentError> {
+        if self.session.is_closed() {
+            return Err(AgentError::Closed);
+        }
         self.check_execution(execution)?;
+        if self.admitted_question_ids.contains(&id) {
+            return Err(AgentError::InvalidInput(
+                "question ID was already admitted".into(),
+            ));
+        }
+        if self.admitted_question_ids.len() >= Self::MAX_QUESTIONS_PER_EXECUTION {
+            return Err(AgentError::Protocol(
+                "execution question limit exceeded".into(),
+            ));
+        }
         let admitted = AdmittedQuestion::new(self.id().clone(), execution.clone(), id, question);
         admitted.event().validate_payload_size()?;
+        self.admitted_question_ids.insert(admitted.id().clone());
         Ok(admitted)
     }
     /// Admits review `id` for the observed `tool`, retaining its exact `input` and
@@ -414,7 +439,8 @@ impl ExecutionController {
         }));
         Ok(records)
     }
-    /// Settles the matching `execution`, releasing retained tools and review identities.
+    /// Settles the matching `execution`, releasing retained tools, review identities,
+    /// and admitted question identities. Returned question evidence remains valid.
     /// The terminal `result` is retained even without reviews. Any remaining permission
     /// is cancelled with its failure cause or ExecutionFinished and a runtime origin;
     /// every returned record must be audited. A stale or idle target returns an error
@@ -434,6 +460,7 @@ impl ExecutionController {
             ExecutionAuditRecord::Cancelled(self.cancellation(request, CancellationOrigin::Runtime))
         }));
         self.retained_tool_bytes = 0;
+        self.admitted_question_ids.clear();
         Ok(records)
     }
     fn check_execution(&self, execution: &ExecutionId) -> Result<(), AgentError> {

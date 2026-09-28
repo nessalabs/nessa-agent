@@ -218,7 +218,15 @@ The adapter retains that value, publishes its `event()`, and supplies it to
 `QuestionAnswerRecord::chosen` or `::ended`. The record retains the value;
 there is no public constructor or mutator for rebuilding its fields separately.
 
-The adapter still owns ID allocation, uniqueness, open-question capacity, and
+The controller reserves each admitted question ID until successful execution
+settlement. Re-admission of that ID is rejected even after an answer or
+cancellation; an immutable admission therefore cannot be minted with replacement
+contents in the same execution. Only identities are retained by the controller;
+the returned value retains the original question. Identity retention is bounded by
+`ExecutionController::MAX_QUESTIONS_PER_EXECUTION`, with compact `QuestionId`
+values. Successful settlement releases that history; the session aggregate
+prevents reuse of the execution ID. Closed controllers reject new admissions.
+The adapter still owns ID allocation, open-question capacity, and
 answer/withdrawal ordering. Admission does not publish an event or write an audit
 record. The value is evidence of admission, not a consumable authorization token:
 cloning it supports selection/write records and teardown after caller loss.
@@ -228,6 +236,11 @@ Existing stored event and gateway audit formats stay the same.
 | --- | --- |
 | Active execution, valid question and identity | One admitted value derives the asked event and record correlation. |
 | Inactive or different execution; invalid event payload | Refuse admission before an admitted value is returned. |
+| Repeated ID with identical or different contents, before or after answer/cancellation | Reject without replacing the first admission or consuming another identity slot. |
+| Execution admission count at its limit | Reject the next distinct ID without retaining it; previously admitted evidence remains usable. |
+| Invalid or stale settlement | Preserve reserved question IDs and the active execution. |
+| Successful settlement followed by a distinct execution | Release the old identity history; the same question ID can identify a new ask only under the new execution ID. |
+| Session closed while execution remains for settlement | Reject admission; retain prior evidence and reservations until settlement/drop. |
 | Choices from ask B supplied for admitted ask A | Validate against A; reject unoffered choices without altering A. |
 | Valid answer or decline | Preserve admitted session/execution/ID/question and verified actor. |
 | Selected then written or failed delivery | Change only delivery; retain the original admitted value and decision. |
