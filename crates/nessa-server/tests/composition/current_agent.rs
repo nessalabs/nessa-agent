@@ -50,7 +50,7 @@ use crate::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
     application::agent_execution::providers::{
-        ExecutableUseSnapshot, UserImageFuture, UserImageSource,
+        ExecutableUseError, ExecutableUseSnapshot, UserImageFuture, UserImageSource,
     },
     domain::agent_execution::prompts::ImageReference,
     infrastructure::session_storage::InMemoryStorage,
@@ -296,6 +296,7 @@ fn resolver_from(root: &Path, input: ResolverTestInput) -> CurrentAgentResolver 
     } = input;
     let opencode = EffectiveOpenCodeProfile::decide(&config, packaged, &host, captured_environment);
     CurrentAgentResolver::new(CurrentAgentResolverInput {
+        managed_adapters: HashSet::new(),
         fixed,
         fixed_probe: LocalAgentProbe::from_environment(HashMap::new(), credentials.clone()),
         opencode,
@@ -692,7 +693,7 @@ async fn opencode_is_asked_to_delete_a_session_by_its_current_generation() {
         credentials,
         HashMap::new(),
     ));
-    let eraser = CurrentOpenCodeEraser::new(resolver);
+    let eraser = CurrentAgentEraser::new(resolver, AgentId::Opencode);
     let session = || ExecutionSessionId::new("provider-session").unwrap();
     // Not installed now: a known agent not built, so the deletion waits.
     assert!(matches!(
@@ -1497,4 +1498,291 @@ async fn stopping_during_native_resolution_prevents_provider_launch_and_preserve
         resolver.evidence(AgentId::Opencode).unwrap().installed,
         Ok(true)
     );
+}
+
+#[tokio::test]
+async fn managed_adapter_observes_installation_and_removal_without_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(StoreAnswer::Missing));
+    let credentials = Arc::new(ClaudeCredentials);
+    let mut source = resolver(root.path(), store.clone(), credentials, HashMap::new());
+    source.managed_adapters.insert(AgentId::Claude);
+    source.config.selected = Some("claude".into());
+    std::fs::write(root.path().join("claude"), "adapter").unwrap();
+    assert_eq!(source.default_agent().unwrap(), AgentId::Claude);
+    assert!(!source.evidence(AgentId::Claude).unwrap().installed.unwrap());
+    assert!(source.resolve(AgentId::Claude).await.unwrap().is_none());
+    store.answer(StoreAnswer::Ready(executable(root.path())));
+    assert!(source.evidence(AgentId::Claude).unwrap().installed.unwrap());
+    let provider = source.resolve(AgentId::Claude).await.unwrap().unwrap();
+    assert_eq!(provider.provider.identity().model_id(), "claude-sonnet-5");
+    store.answer(StoreAnswer::Missing);
+    assert!(source.resolve(AgentId::Claude).await.unwrap().is_none());
+    // The already-created provider retains the generation it observed.
+    assert_eq!(provider.provider.identity().model_id(), "claude-sonnet-5");
+}
+
+#[tokio::test]
+async fn managed_adapter_store_failures_are_unknown_not_missing() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(StoreAnswer::Missing));
+    let credentials = Arc::new(Credentials::new(CredentialAnswer::Missing));
+    let mut source = resolver(root.path(), store.clone(), credentials, HashMap::new());
+    source.managed_adapters.insert(AgentId::Claude);
+    store.answer(StoreAnswer::Failed(StoreFailure::Unreadable(
+        "unreadable".into(),
+    )));
+    assert!(source.evidence(AgentId::Claude).unwrap().installed.is_err());
+    assert!(matches!(
+        source.resolve(AgentId::Claude).await,
+        Err(ConversationError::Unavailable)
+    ));
+}
+
+struct ClaudeCredentials;
+impl AgentCredentialSource for ClaudeCredentials {
+    fn read(&self, agent: AgentId) -> Result<Option<AgentCredential>, AgentCredentialFailure> {
+        assert_eq!(agent, AgentId::Claude);
+        Ok(Some(
+            AgentCredential::new(AgentCredentialKind::ApiKey, b"test-key".to_vec()).unwrap(),
+        ))
+    }
+}
+
+struct ProbeGuard {
+    calls: Arc<AtomicUsize>,
+    fail: bool,
+}
+impl ExecutableUseGuard for ProbeGuard {
+    fn release(&mut self) -> Result<(), ExecutableUseError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail {
+            self.fail = false;
+            Err(ExecutableUseError::new("disk unavailable"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn managed_probe_retries_the_same_release_before_observing_another_runtime() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(StoreAnswer::Missing));
+    let mut source = resolver(
+        root.path(),
+        store.clone(),
+        Arc::new(ClaudeCredentials),
+        HashMap::new(),
+    );
+    source.managed_adapters.insert(AgentId::Claude);
+    let calls = Arc::new(AtomicUsize::new(0));
+    source.probe_cleanup.lock().unwrap().insert(
+        AgentId::Claude,
+        ProbeCleanup::Release(Box::new(ProbeGuard {
+            calls: calls.clone(),
+            fail: true,
+        })),
+    );
+    assert!(source.managed_evidence(AgentId::Claude).installed.is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        source.managed_evidence(AgentId::Claude).installed,
+        Ok(false)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(source.probe_cleanup.lock().unwrap().is_empty());
+}
+
+#[test]
+fn unknown_probe_cleanup_retains_one_owner_without_releasing_or_admitting_again() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::new(StoreAnswer::Missing));
+    let source = resolver(
+        root.path(),
+        store.clone(),
+        Arc::new(ClaudeCredentials),
+        HashMap::new(),
+    );
+    let calls = Arc::new(AtomicUsize::new(0));
+    source.probe_cleanup.lock().unwrap().insert(
+        AgentId::Codex,
+        ProbeCleanup::UnknownProcess {
+            _guard: Box::new(ProbeGuard {
+                calls: calls.clone(),
+                fail: false,
+            }),
+        },
+    );
+    for _ in 0..3 {
+        assert!(source.managed_evidence(AgentId::Codex).installed.is_err());
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(store.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(source.probe_cleanup.lock().unwrap().len(), 1);
+}
+
+struct ProbeAdmission {
+    admissions: Arc<AtomicUsize>,
+    releases: Arc<AtomicUsize>,
+    partial: Option<bool>,
+    fail_release: bool,
+}
+struct ProbeRelease {
+    releases: Arc<AtomicUsize>,
+    fail: bool,
+}
+impl ManagedExecutableUseGuard for ProbeRelease {
+    fn release(&mut self) -> Result<(), ManagedExecutableUseFailure> {
+        self.releases.fetch_add(1, Ordering::SeqCst);
+        if std::mem::take(&mut self.fail) {
+            Err(ManagedExecutableUseFailure::new("release write failed"))
+        } else {
+            Ok(())
+        }
+    }
+}
+impl ManagedExecutableUse for ProbeAdmission {
+    fn admit(
+        &self,
+    ) -> Result<Box<dyn ManagedExecutableUseGuard>, ManagedExecutableUseAdmissionFailure> {
+        self.admissions.fetch_add(1, Ordering::SeqCst);
+        let guard = Box::new(ProbeRelease {
+            releases: self.releases.clone(),
+            fail: self.fail_release,
+        });
+        let failure = ManagedExecutableUseFailure::new("admission write failed");
+        match self.partial {
+            Some(true) => {
+                Err(ManagedExecutableUseAdmissionFailure::with_confirmed_generation(failure, guard))
+            }
+            Some(false) => {
+                Err(ManagedExecutableUseAdmissionFailure::with_uncertain_generation(failure, guard))
+            }
+            None => Ok(guard),
+        }
+    }
+}
+
+#[test]
+fn managed_probe_failure_transitions_retain_the_admitted_owner_until_its_release() {
+    // Both partial admission kinds, successful observation with failed release,
+    // and uncertain process cleanup enter through the production observation path.
+    for (partial, unknown) in [
+        (Some(true), false),
+        (Some(false), false),
+        (None, false),
+        (None, true),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let admissions = Arc::new(AtomicUsize::new(0));
+        let releases = Arc::new(AtomicUsize::new(0));
+        let store = Arc::new(Store::new(StoreAnswer::Ready(ManagedLaunchSnapshot::new(
+            root.path().join("native"),
+            Arc::new(ProbeAdmission {
+                admissions: admissions.clone(),
+                releases: releases.clone(),
+                partial,
+                fail_release: !unknown,
+            }),
+        ))));
+        let source = resolver(
+            root.path(),
+            store.clone(),
+            Arc::new(ClaudeCredentials),
+            HashMap::new(),
+        );
+        let observed = AtomicUsize::new(0);
+        let evidence = source.managed_evidence_with(AgentId::Claude, |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Some(AgentProbeEvidence {
+                installed: Ok(true),
+                authenticated: Some(if unknown {
+                    Err(ProbeFailure::CleanupUnconfirmed)
+                } else {
+                    Ok(true)
+                }),
+            })
+        });
+        assert_eq!(admissions.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            observed.load(Ordering::SeqCst),
+            usize::from(partial.is_none())
+        );
+        assert_eq!(source.probe_cleanup.lock().unwrap().len(), 1);
+        if unknown {
+            assert_eq!(
+                evidence.authenticated,
+                Some(Err(ProbeFailure::CleanupUnconfirmed))
+            );
+            assert_eq!(releases.load(Ordering::SeqCst), 0);
+            for _ in 0..2 {
+                assert!(source
+                    .managed_evidence_with(AgentId::Claude, |_| panic!(
+                        "uncertain child must block another observation"
+                    ))
+                    .installed
+                    .is_err());
+            }
+            assert_eq!(admissions.load(Ordering::SeqCst), 1);
+            assert_eq!(releases.load(Ordering::SeqCst), 0);
+        } else {
+            assert!(evidence.installed.is_err());
+            assert_eq!(releases.load(Ordering::SeqCst), 1);
+            store.answer(StoreAnswer::Missing);
+            assert_eq!(
+                source.managed_evidence(AgentId::Claude).installed,
+                Ok(false)
+            );
+            assert_eq!(releases.load(Ordering::SeqCst), 2);
+            assert_eq!(admissions.load(Ordering::SeqCst), 1);
+            assert!(source.probe_cleanup.lock().unwrap().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn managed_model_and_mode_refusals_match_fixed_provider_semantics() {
+    for (agent, model) in [
+        (AgentId::Claude, "claude-sonnet-5"),
+        (AgentId::Codex, "gpt-6-astra"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::new(StoreAnswer::Ready(executable(root.path()))));
+        let mut source = resolver(
+            root.path(),
+            store.clone(),
+            Arc::new(ClaudeCredentials),
+            HashMap::new(),
+        );
+        let mut runtime = source.config.runtime(AgentId::Claude).unwrap().clone();
+        runtime.model = model.into();
+        runtime.tools_enabled = agent == AgentId::Codex;
+        std::fs::write(runtime.command.executable(), "adapter fixture").unwrap();
+        source.config.runtimes.insert(agent.name().into(), runtime);
+        source.managed_adapters.insert(agent);
+        assert!(source
+            .resolve_for(agent, model, ConversationApprovalMode::Ask)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(matches!(
+            source
+                .resolve_for(agent, "not-a-model", ConversationApprovalMode::Ask)
+                .await,
+            Err(ConversationError::ModelUnavailable)
+        ));
+        let reads = store.reads.load(Ordering::SeqCst);
+        assert!(matches!(
+            source
+                .resolve_for(agent, "not-a-model", ConversationApprovalMode::Auto)
+                .await,
+            Err(ConversationError::ApprovalModeUnavailable)
+        ));
+        assert_eq!(
+            store.reads.load(Ordering::SeqCst),
+            reads,
+            "unsupported presets are refused before managed-store lookup"
+        );
+    }
 }

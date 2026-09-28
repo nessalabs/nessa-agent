@@ -1,4 +1,5 @@
 use super::generated::AgentsListResult;
+use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::attachments::{application::AttachmentService, entrypoint::http::UploadRoute};
 use crate::conversation::application::ConversationService;
@@ -48,6 +49,8 @@ pub struct ProductRouteState {
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) policy: Arc<dyn PolicyEvaluator>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
+    pub(crate) agent_installations: Option<Arc<dyn AgentInstallations>>,
+    pub(crate) installs: Arc<Semaphore>,
     pub(crate) agents_catalog: Option<Arc<AgentsListResult>>,
     pub(crate) attachments: Option<AttachmentService>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
@@ -123,6 +126,8 @@ impl ProductRouteState {
             admin: None,
             conversations: None,
             agents_catalog: None,
+            agent_installations: None,
+            installs: Arc::new(Semaphore::new(1)),
             attachments: None,
             uptime_clock: dependencies.uptime_clock,
             agent_readiness: Arc::new(SharedAgentReadiness::new(dependencies.agent_probe)),
@@ -151,6 +156,12 @@ impl ProductRouteState {
     /// Share server-owned Agents across authenticated sockets. No socket owns cleanup.
     pub fn with_conversations(mut self, service: Arc<ConversationService>) -> Self {
         self.conversations = Some(service);
+        self
+    }
+
+    /// Install only composition-selected pinned releases through the authenticated gateway.
+    pub fn with_agent_installations(mut self, installations: Arc<dyn AgentInstallations>) -> Self {
+        self.agent_installations = Some(installations);
         self
     }
 

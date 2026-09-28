@@ -284,5 +284,31 @@
   "ConversationSetApprovalModeResult": {
     "requestId": "mode-1",
     "mode": "ask"
+  },
+  "AgentInstallParams": {
+    "agent": "claude",
+    "requestId": "install-test"
+  },
+  "AgentInstallOffer": {
+    "agent": "claude",
+    "version": "0.3.257",
+    "archiveBytes": 86966377,
+    "installed": false
+  },
+  "AgentInstallOptionsResult": {
+    "agents": [
+      {
+        "agent": "claude",
+        "version": "0.3.257",
+        "archiveBytes": 86966377,
+        "installed": false
+      }
+    ]
+  },
+  "AgentInstallResult": {
+    "agent": "claude",
+    "version": "0.3.257",
+    "downloaded": true,
+    "cleanupPending": false
   }
 }

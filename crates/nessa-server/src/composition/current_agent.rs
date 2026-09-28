@@ -18,7 +18,7 @@
 //! Arrows are calls. OpenCode's blocking observation has one bounded lane.
 //! Deleting OpenCode's own record of a session observes the current generation
 //! the same way, in the same lane, and asks that generation's binding
-//! ([`CurrentOpenCodeEraser`]). The
+//! ([`CurrentAgentEraser`]). The
 //! blocking task owns its permit through actual completion, even when its
 //! awaiting caller times out or is dropped. A different warm-up fingerprint
 //! waits without retaining that observation, then resolves every external fact
@@ -31,13 +31,15 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
 
 use nessa_auth::application::ports::Clock;
-use nessa_sdk::application::agent_execution::providers::{ApprovalMode, UserImageSource};
+use nessa_sdk::application::agent_execution::providers::{
+    ApprovalMode, ExecutableUseGuard, ExecutableUseSnapshot, UserImageSource,
+};
 use nessa_sdk::infrastructure::{
     claude_acp::sessions::ClaudeAcpProvider, codex_acp::sessions::CodexAcpProvider,
 };
@@ -45,7 +47,8 @@ use tokio::sync::Semaphore;
 
 use super::{
     agent::{self, AgentRuntime, AgentsConfig, ProviderDependencies},
-    installed_launch::{installed_launch, InstalledLaunch},
+    installed_launch::{installed_launch, supports_installed_launch, InstalledLaunch},
+    managed_adapter::ManagedAdapter,
     opencode_profile::{
         captured_credential_environment, EffectiveOpenCodeProfile, OpenCodeCredentialMode,
         OpenCodeProfile,
@@ -60,7 +63,7 @@ use crate::{
             ProbeFailure,
         },
         domain::AgentId,
-        infrastructure::LocalAgentProbe,
+        infrastructure::{AgentLaunchFiles, LocalAgentProbe},
     },
     conversation::{
         application::{
@@ -77,6 +80,8 @@ const RESOLUTION_DEADLINE: Duration = Duration::from_secs(5);
 #[derive(Clone)]
 pub(super) struct CurrentAgentResolver {
     fixed: HashMap<AgentId, ConversationAgent>,
+    managed_adapters: HashSet<AgentId>,
+    probe_cleanup: Arc<Mutex<HashMap<AgentId, ProbeCleanup>>>,
     fixed_probe: Arc<LocalAgentProbe>,
     config: AgentsConfig,
     opencode: Arc<EffectiveOpenCodeProfile>,
@@ -92,6 +97,7 @@ pub(super) struct CurrentAgentResolver {
 
 pub(super) struct CurrentAgentResolverInput {
     pub(super) fixed: HashMap<AgentId, ConversationAgent>,
+    pub(super) managed_adapters: HashSet<AgentId>,
     pub(super) fixed_probe: LocalAgentProbe,
     pub(super) config: AgentsConfig,
     pub(super) opencode: EffectiveOpenCodeProfile,
@@ -114,6 +120,8 @@ impl CurrentAgentResolver {
     pub(super) fn new(input: CurrentAgentResolverInput) -> Self {
         Self {
             fixed: input.fixed,
+            managed_adapters: input.managed_adapters,
+            probe_cleanup: Arc::new(Mutex::new(HashMap::new())),
             fixed_probe: Arc::new(input.fixed_probe),
             config: input.config,
             opencode: Arc::new(input.opencode),
@@ -133,7 +141,12 @@ impl CurrentAgentResolver {
     }
 
     pub(super) fn configured(&self) -> HashSet<AgentId> {
-        let mut configured: HashSet<_> = self.fixed.keys().copied().collect();
+        let mut configured: HashSet<_> = self
+            .fixed
+            .keys()
+            .copied()
+            .chain(self.managed_adapters.iter().copied())
+            .collect();
         if self.opencode.configured().is_some() {
             configured.insert(AgentId::Opencode);
         }
@@ -150,13 +163,177 @@ impl CurrentAgentResolver {
         if self.opencode.configured().is_some() {
             erasers.register(
                 AgentId::Opencode,
-                Arc::new(CurrentOpenCodeEraser::new(self.clone())),
+                Arc::new(CurrentAgentEraser::new(self.clone(), AgentId::Opencode)),
+            );
+        }
+        for agent in &self.managed_adapters {
+            erasers.register(
+                *agent,
+                Arc::new(CurrentAgentEraser::new(self.clone(), *agent)),
             );
         }
     }
 
     pub(super) fn default_agent(&self) -> Result<AgentId, RunError> {
         self.config.selected_from(&self.configured())
+    }
+
+    fn managed_native(
+        &self,
+        agent: AgentId,
+    ) -> Result<Option<ExecutableUseSnapshot>, ConversationError> {
+        match installed_launch(agent, &self.host, self.store.as_ref()) {
+            Ok(InstalledLaunch::Ready(native)) => Ok(Some(native)),
+            Ok(InstalledLaunch::Missing | InstalledLaunch::UnsupportedHost) => Ok(None),
+            Ok(InstalledLaunch::Unknown(_)) | Err(_) => Err(ConversationError::Unavailable),
+        }
+    }
+
+    fn managed_provider(
+        &self,
+        agent: AgentId,
+        model: &str,
+        mode: ApprovalMode,
+    ) -> Result<Option<agent::build::ProviderComposition>, ConversationError> {
+        let Some(native) = self.managed_native(agent)? else {
+            return Ok(None);
+        };
+        agent::provider_for_managed_adapter(
+            agent,
+            &self.config,
+            model,
+            mode,
+            &self.provider,
+            native,
+        )
+        .map(Some)
+        .map_err(|error| {
+            tracing::warn!(%error, "managed agent adapter could not be composed");
+            ConversationError::ModelUnavailable
+        })
+    }
+
+    fn managed_evidence(&self, agent: AgentId) -> AgentProbeEvidence {
+        self.managed_evidence_with(agent, |probe| probe.evidence(agent))
+    }
+
+    fn managed_evidence_with(
+        &self,
+        agent: AgentId,
+        observe: impl FnOnce(LocalAgentProbe) -> Option<AgentProbeEvidence>,
+    ) -> AgentProbeEvidence {
+        let unavailable = || AgentProbeEvidence {
+            installed: Err(ProbeFailure::Unanswered),
+            authenticated: Some(Err(ProbeFailure::Unanswered)),
+        };
+        let Ok(mut pending) = self.probe_cleanup.lock() else {
+            return unavailable();
+        };
+        if let Some(cleanup) = pending.get_mut(&agent) {
+            match cleanup {
+                ProbeCleanup::Release(guard) => {
+                    if guard.release().is_err() {
+                        return unavailable();
+                    }
+                }
+                _ => return unavailable(),
+            }
+            pending.remove(&agent);
+        }
+        let native = match self.managed_native(agent) {
+            Ok(Some(native)) => native,
+            Ok(None) => {
+                return AgentProbeEvidence {
+                    installed: Ok(false),
+                    authenticated: None,
+                }
+            }
+            Err(_) => return unavailable(),
+        };
+        let Some(runtime) = self.config.runtime(agent) else {
+            return unavailable();
+        };
+        let Ok(launch) = ManagedAdapter::new(agent, runtime, native) else {
+            return unavailable();
+        };
+        let mut environment = agent::launch_environment(agent);
+        environment.extend(launch.environment);
+        let files = AgentLaunchFiles {
+            command: launch.runtime.command.executable().to_owned(),
+            paths: launch.runtime.paths(),
+            environment,
+        };
+        // Readiness may run the adapter's account-status command. Its native
+        // dependency has the same process-use admission as a conversation.
+        let mut guard = match launch.runtime.command.admit() {
+            Ok(guard) => guard,
+            Err(failure) => {
+                if let Some(owner) = failure.into_parts().1 {
+                    let mut guard = owner.into_guard();
+                    if guard.release().is_err() {
+                        pending.insert(agent, ProbeCleanup::Release(guard));
+                    }
+                }
+                return unavailable();
+            }
+        };
+        let evidence = observe(
+            self.fixed_probe
+                .with_launch_files(HashMap::from([(agent, files)])),
+        )
+        .unwrap_or_else(unavailable);
+        if matches!(
+            evidence.authenticated,
+            Some(Err(ProbeFailure::CleanupUnconfirmed))
+        ) {
+            // Preserve one exact owner, without admitting more probes for this
+            // agent. Durable use evidence continues to block reclamation after
+            // restart; uncertain process cleanup cannot be guessed away.
+            pending.insert(agent, ProbeCleanup::UnknownProcess { _guard: guard });
+            return evidence;
+        }
+        if guard.release().is_err() {
+            pending.insert(agent, ProbeCleanup::Release(guard));
+            return unavailable();
+        }
+        evidence
+    }
+
+    async fn resolve_managed(
+        &self,
+        agent: AgentId,
+        model: String,
+        mode: ApprovalMode,
+    ) -> Result<Option<ConversationAgent>, ConversationError> {
+        tokio::time::timeout(RESOLUTION_DEADLINE, async {
+            let permit = self
+                .slots
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| ConversationError::Unavailable)?;
+            let source = self.clone();
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                let Some(built) = source.managed_provider(agent, &model, mode)? else {
+                    return Ok(None);
+                };
+                Ok(Some(ConversationAgent {
+                    provider: built.provider,
+                    execution_audit: built.execution_audit,
+                    reserved_output_tokens: source
+                        .config
+                        .runtime(agent)
+                        .expect("configured managed adapter")
+                        .output_tokens,
+                    readiness: None,
+                }))
+            })
+            .await
+            .map_err(|_| ConversationError::Unavailable)?
+        })
+        .await
+        .map_err(|_| ConversationError::Unavailable)?
     }
 
     fn observe_opencode(&self) -> Observation {
@@ -369,6 +546,17 @@ impl CurrentAgentResolver {
 
 impl AgentProbe for CurrentAgentResolver {
     fn evidence(&self, agent: AgentId) -> Option<AgentProbeEvidence> {
+        if self.managed_adapters.contains(&agent) {
+            match supports_installed_launch(agent, &self.host) {
+                Ok(false) => return None,
+                Err(_) => return Some(unknown_probe()),
+                Ok(true) => {}
+            }
+            let Ok(_permit) = self.slots.clone().try_acquire_owned() else {
+                return Some(unknown_probe());
+            };
+            return Some(self.managed_evidence(agent));
+        }
         if agent != AgentId::Opencode {
             return self.fixed_probe.evidence(agent);
         }
@@ -387,6 +575,15 @@ impl AgentProbe for CurrentAgentResolver {
 
 impl ConversationAgentSource for CurrentAgentResolver {
     fn resolve(&self, agent: AgentId) -> ConversationAgentFuture<'_> {
+        if self.managed_adapters.contains(&agent) {
+            let model = self
+                .config
+                .runtime(agent)
+                .expect("configured managed adapter")
+                .model
+                .clone();
+            return Box::pin(self.resolve_managed(agent, model, ApprovalMode::Ask));
+        }
         if agent != AgentId::Opencode {
             let configured = self.fixed.get(&agent).cloned();
             return Box::pin(async move { Ok(configured) });
@@ -427,9 +624,10 @@ impl ConversationAgentSource for CurrentAgentResolver {
                 }
             });
         }
-        let Some(default) = self.fixed.get(&agent) else {
+        let managed = self.managed_adapters.contains(&agent);
+        if !managed && !self.fixed.contains_key(&agent) {
             return Box::pin(async { Ok(None) });
-        };
+        }
         let offered = match agent {
             AgentId::Claude => ClaudeAcpProvider::approval_modes(model),
             AgentId::Codex => CodexAcpProvider::approval_modes(model),
@@ -438,6 +636,10 @@ impl ConversationAgentSource for CurrentAgentResolver {
         if !offered.iter().any(|choice| choice.id == selected) {
             return Box::pin(async { Err(ConversationError::ApprovalModeUnavailable) });
         }
+        if managed {
+            return Box::pin(self.resolve_managed(agent, model.to_owned(), selected));
+        }
+        let default = self.fixed.get(&agent).expect("configured fixed agent");
         if mode == ConversationApprovalMode::Ask && default.provider.identity().model_id() == model
         {
             let configured = default.clone();
@@ -469,26 +671,29 @@ impl ConversationAgentSource for CurrentAgentResolver {
 /// credential now, is [`ConversationError::AgentNotConfigured`] — a known agent
 /// not built this run, whose deletion stays unfinished until it is. Every
 /// binding it launched is kept until it has settled.
-pub(super) struct CurrentOpenCodeEraser {
+pub(super) struct CurrentAgentEraser {
+    agent: AgentId,
     resolver: Arc<CurrentAgentResolver>,
     launched: crate::conversation::infrastructure::LaunchedDeletions<dyn ProviderSessionEraser>,
 }
 
-impl CurrentOpenCodeEraser {
-    pub(super) fn new(resolver: Arc<CurrentAgentResolver>) -> Self {
+impl CurrentAgentEraser {
+    pub(super) fn new(resolver: Arc<CurrentAgentResolver>, agent: AgentId) -> Self {
         Self {
+            agent,
             resolver,
             launched: crate::conversation::infrastructure::LaunchedDeletions::default(),
         }
     }
 }
 
-impl ProviderSessionEraser for CurrentOpenCodeEraser {
+impl ProviderSessionEraser for CurrentAgentEraser {
     fn erase(
         &self,
         session: nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId,
     ) -> ConversationFuture<'_, ProviderSessionErasure> {
         Box::pin(async move {
+            let agent = self.agent;
             let resolver = self.resolver.clone();
             let permit = resolver
                 .slots
@@ -498,7 +703,17 @@ impl ProviderSessionEraser for CurrentOpenCodeEraser {
                 .map_err(|_| ConversationError::Unavailable)?;
             let eraser = tokio::task::spawn_blocking(move || {
                 let _permit = permit;
-                resolver.opencode_session_eraser()
+                if agent == AgentId::Opencode {
+                    resolver.opencode_session_eraser()
+                } else {
+                    let runtime = resolver
+                        .config
+                        .runtime(agent)
+                        .ok_or(ConversationError::AgentNotConfigured)?;
+                    resolver
+                        .managed_provider(agent, &runtime.model, ApprovalMode::Ask)
+                        .map(|built| built.map(|value| value.session_eraser))
+                }
             })
             .await
             .map_err(|_| ConversationError::Unavailable)??
@@ -539,3 +754,16 @@ fn path_exists(path: &Path) -> Result<bool, ProbeFailure> {
 #[cfg(test)]
 #[path = "../../tests/composition/current_agent.rs"]
 mod tests;
+
+/// Only confirmed process cleanup permits retrying durable release.
+enum ProbeCleanup {
+    Release(Box<dyn ExecutableUseGuard>),
+    UnknownProcess { _guard: Box<dyn ExecutableUseGuard> },
+}
+
+fn unknown_probe() -> AgentProbeEvidence {
+    AgentProbeEvidence {
+        installed: Err(ProbeFailure::Unanswered),
+        authenticated: Some(Err(ProbeFailure::Unanswered)),
+    }
+}

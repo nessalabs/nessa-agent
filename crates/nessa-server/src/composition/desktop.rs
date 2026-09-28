@@ -19,12 +19,12 @@ use std::path::{Path, PathBuf};
 /// belongs to.
 const DEFAULT_AGENT: AgentId = AgentId::Claude;
 
-/// How the desktop launches one bundled agent, relative to the bundle root, or
-/// nothing for an agent the desktop does not ship.
+/// How the desktop launches a bundled JavaScript adapter, relative to the
+/// resource root. Managed composition supplies its native runtime separately.
 ///
 /// A command and its arguments, so an agent that speaks ACP through the bundled
 /// Node runtime and one that ships as its own executable are both sayable here.
-/// Both agents Nessa bundles today are the first kind.
+/// Claude and Codex use the bundled Node adapters.
 ///
 /// Opencode is not bundled. It is a whole runtime of its own — nearly two
 /// hundred megabytes, against a few for a Node adapter — and shipping it would
@@ -71,7 +71,7 @@ pub(super) fn configure(
     }
     let catalog = bundle.join("models.json");
     let mcp = bundle.join("nessa-mcp");
-    // Only the agents this desktop ships. A bundle checked for files it was
+    // Only the adapters this desktop ships. A bundle checked for files it was
     // never meant to contain would refuse to start, so an agent with no bundled
     // launch is skipped here rather than looked for. Current-agent composition
     // independently decides whether that agent has a verified launch on this

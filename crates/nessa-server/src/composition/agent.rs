@@ -36,6 +36,8 @@
 //! up here, which is a fact about this installation and not about the machine —
 //! rather than substituted for at startup.
 #[cfg(unix)]
+use super::managed_adapter::ManagedAdapter;
+#[cfg(unix)]
 use crate::agents::application::AgentCredentialSource;
 use crate::agents::domain::AgentId;
 #[cfg(unix)]
@@ -52,7 +54,7 @@ use nessa_sdk::{
 };
 #[cfg(unix)]
 use nessa_sdk::{
-    application::agent_execution::providers::UserImageSource,
+    application::agent_execution::providers::{ApprovalMode, UserImageSource},
     domain::{
         common::value_objects::TokenLimits,
         model_metadata::{entities::ModelMetadata, value_objects::ImageInputLimits},
@@ -643,7 +645,7 @@ pub(super) fn providers(
         credentials,
     };
     for (agent, runtime) in config.agents() {
-        if agent == AgentId::Opencode {
+        if agent == AgentId::Opencode || deferred.contains(&agent) {
             continue;
         }
         // Every agent is given the source, not only the one whose profile is
@@ -658,9 +660,9 @@ pub(super) fn providers(
             agent,
             config,
             runtime,
-            nessa_sdk::application::agent_execution::providers::ApprovalMode::Ask,
+            ApprovalMode::Ask,
             &dependencies,
-            credential_environment(agent),
+            build::environment(agent, credential_environment(agent)),
             None,
         ) {
             Ok(provider) => provider,
@@ -729,9 +731,9 @@ pub(super) fn provider_for(
         agent,
         config,
         runtime,
-        nessa_sdk::application::agent_execution::providers::ApprovalMode::Ask,
+        ApprovalMode::Ask,
         dependencies,
-        credential_environment,
+        build::environment(agent, credential_environment),
         Some(policy),
     )?;
     Ok(ConversationAgent {
@@ -749,7 +751,7 @@ pub(super) fn provider_for_fixed(
     agent: AgentId,
     config: &AgentsConfig,
     model: &str,
-    mode: nessa_sdk::application::agent_execution::providers::ApprovalMode,
+    mode: ApprovalMode,
     dependencies: &ProviderDependencies,
 ) -> Result<ConversationAgent, RunError> {
     if agent == AgentId::Opencode {
@@ -772,7 +774,7 @@ pub(super) fn provider_for_fixed(
         &runtime,
         mode,
         dependencies,
-        credential_environment(agent),
+        build::environment(agent, credential_environment(agent)),
         None,
     )?;
     Ok(ConversationAgent {
@@ -781,6 +783,38 @@ pub(super) fn provider_for_fixed(
         reserved_output_tokens: runtime.output_tokens,
         readiness: None,
     })
+}
+
+/// Build a bundled adapter around one verified native dependency. The same
+/// snapshot supplies both the environment override and process-use authority.
+#[cfg(unix)]
+pub(super) fn provider_for_managed_adapter(
+    agent: AgentId,
+    config: &AgentsConfig,
+    model: &str,
+    mode: ApprovalMode,
+    dependencies: &ProviderDependencies,
+    native: ExecutableUseSnapshot,
+) -> Result<build::ProviderComposition, RunError> {
+    let configured = config
+        .runtime(agent)
+        .ok_or_else(|| RunError::Agent("agent adapter missing".into()))?;
+    let launch = ManagedAdapter::new(agent, configured, native)?;
+    let runtime = AgentRuntime {
+        model: model.into(),
+        ..launch.runtime
+    };
+    let mut environment = build::environment(agent, credential_environment(agent));
+    environment.process.extend(launch.environment);
+    build::provider(
+        agent,
+        config,
+        &runtime,
+        mode,
+        dependencies,
+        environment,
+        None,
+    )
 }
 
 /// How one agent built from a current observation deletes its own record of a
@@ -799,9 +833,9 @@ pub(super) fn session_eraser_for(
         agent,
         config,
         runtime,
-        nessa_sdk::application::agent_execution::providers::ApprovalMode::Ask,
+        ApprovalMode::Ask,
         dependencies,
-        credential_environment,
+        build::environment(agent, credential_environment),
         Some(policy),
     )
     .map(|built| built.session_eraser)
@@ -845,7 +879,7 @@ pub(super) struct ProviderDependencies {
     pub(super) credentials: Arc<dyn AgentCredentialSource>,
 }
 #[cfg(unix)]
-mod build {
+pub(super) mod build {
     use super::super::agent_budgets as budgets;
     use super::{
         AgentId, AgentRuntime, AgentsConfig, CredentialedClaudeProvider, ProviderDependencies,
@@ -877,12 +911,12 @@ mod build {
     };
     use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc};
 
-    pub(super) struct ProviderComposition {
-        pub(super) provider: Arc<dyn AgentProvider>,
-        pub(super) execution_audit: Arc<dyn ExecutionAudit>,
+    pub(in crate::composition) struct ProviderComposition {
+        pub(in crate::composition) provider: Arc<dyn AgentProvider>,
+        pub(in crate::composition) execution_audit: Arc<dyn ExecutionAudit>,
         /// How this agent deletes its own record of a session: its binding,
         /// whose own module says what a delete means for it.
-        pub(super) session_eraser: Arc<dyn ProviderSessionEraser>,
+        pub(in crate::composition) session_eraser: Arc<dyn ProviderSessionEraser>,
     }
 
     /// The largest ACP frame, derived from the largest message rather than
@@ -985,13 +1019,28 @@ mod build {
         }
     }
 
+    pub(super) struct LaunchEnvironment {
+        pub process: BTreeMap<OsString, OsString>,
+        credentials: BTreeMap<OsString, OsString>,
+    }
+
+    pub(super) fn environment(
+        agent: AgentId,
+        credentials: BTreeMap<OsString, OsString>,
+    ) -> LaunchEnvironment {
+        LaunchEnvironment {
+            process: super::process_environment(agent),
+            credentials,
+        }
+    }
+
     pub(super) fn provider(
         agent: AgentId,
         config: &AgentsConfig,
         runtime: &AgentRuntime,
         approval_mode: ApprovalMode,
         dependencies: &ProviderDependencies,
-        credential_environment: BTreeMap<OsString, OsString>,
+        environment: LaunchEnvironment,
         validated_opencode: Option<&ValidatedOpenCodePolicy>,
     ) -> Result<ProviderComposition, RunError> {
         let invalid = |error| RunError::Agent(format!("{error}"));
@@ -1030,8 +1079,8 @@ mod build {
             config,
             runtime,
             workspace,
-            super::process_environment(agent),
-            credential_environment,
+            environment.process,
+            environment.credentials,
             Some(dependencies.images.clone()),
         );
         let prompt = system_prompt()?;

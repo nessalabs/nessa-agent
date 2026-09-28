@@ -34,6 +34,8 @@ pub enum ProbeFailure {
     /// Something was there to ask and did not answer: an unreadable file, a
     /// locked keychain, a tool that failed.
     Unanswered,
+    /// A status subprocess may still be using its runtime; release is unconfirmed.
+    CleanupUnconfirmed,
 }
 
 /// One internally coherent observation of an agent on this host.

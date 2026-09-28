@@ -9,16 +9,18 @@ use nessa_local_storage::create_directory;
 use serde_json::{json, Value};
 
 use crate::agent_install::application::{
-    InstallAgentRuntime, InstallFailure, InstalledRuntime, ReclamationWarning,
-    RuntimeStateEvidence, SourceFailure, StoreFailure,
+    AgentInstallations, GatewayInstallFailure, InstallAgentRuntime, InstallFailure,
+    InstallationOffer, InstalledRuntime, ReclamationWarning, RuntimeStateEvidence, RuntimeStore,
+    SourceFailure, StoreFailure,
 };
 use crate::agent_install::domain::{
-    preferred_release, AgentName, HostPlatform, InstallRequest, PinnedRelease,
+    preferred_release, AgentName, HostPlatform, InstallRequest, PinnedRelease, ReclamationEvent,
 };
 use crate::agent_install::infrastructure::{
     host_platform, releases_for, DurableInstallAudit, DurableInstallationDelivery,
     DurableReclamationAudit, HttpsArchives, ManagedRuntimes, UuidReclamationOperationIds,
 };
+use crate::agents::domain::AgentId;
 use crate::core::RunError;
 use crate::env::Environment;
 
@@ -62,17 +64,30 @@ fn install(
     root: &Path,
     request: &InstallRequest,
 ) -> Result<InstalledRuntime, RunError> {
+    install_runtime(agent, root, request).map_err(|failure| match failure {
+        GatewayInstallFailure::Install(failure) => RunError::Agent(explain(&failure)),
+        GatewayInstallFailure::Unsupported => pinned(agent, &host_platform())
+            .err()
+            .unwrap_or_else(|| RunError::Agent("unsupported runtime".into())),
+        GatewayInstallFailure::Unavailable => RunError::Agent("agent installer unavailable".into()),
+    })
+}
+
+fn install_runtime(
+    agent: &AgentName,
+    root: &Path,
+    request: &InstallRequest,
+) -> Result<InstalledRuntime, GatewayInstallFailure> {
     let host = host_platform();
-    let release = pinned(agent, &host)?;
-    let data_root = root
-        .parent()
-        .ok_or_else(|| RunError::Agent("invalid agent runtime directory".into()))?;
-    let audit = install_audit(data_root)?;
-    let delivery = install_delivery(data_root)?;
+    let releases = releases_for(agent).map_err(installer_unavailable)?;
+    let release = preferred_release(releases, &host).ok_or(GatewayInstallFailure::Unsupported)?;
+    let data_root = root.parent().ok_or(GatewayInstallFailure::Unavailable)?;
+    let audit = install_audit(data_root).map_err(installer_unavailable)?;
+    let delivery = install_delivery(data_root).map_err(installer_unavailable)?;
     let reclamation_audit =
         DurableReclamationAudit::new(data_root.join("audit/agent-runtime-reclamation"))
-            .map_err(|error| RunError::Agent(error.to_string()))?;
-    let source = HttpsArchives::new().map_err(|error| RunError::Agent(error.to_string()))?;
+            .map_err(installer_unavailable)?;
+    let source = HttpsArchives::new().map_err(installer_unavailable)?;
     let store = ManagedRuntimes::new(root);
     let installed = InstallAgentRuntime {
         source: &source,
@@ -82,22 +97,8 @@ fn install(
         reclamation_audit: &reclamation_audit,
         reclamation_operation_ids: &UuidReclamationOperationIds,
     }
-    // Flattening the typed failure into prose is this surface's limitation,
-    // not the design. `explain` already knows which failures are worth trying
-    // again; a caller of the command — `scripts/smoke-install-agent.mjs` is
-    // one — sees exit 25 and a sentence either way, which is one bit where the
-    // use case has six.
-    //
-    // The decided direction is to carry `InstallFailure` to a surface that can
-    // act on it, and that surface is a gateway mutation rather than a second
-    // copy of this process: the desktop bootstraps the gateway under launchd
-    // and talks to it over the protocol, so in-process composition is not
-    // available to it. That is a protocol change, the client, the panel and
-    // the check scripts, so it is not done here — and the machine-readable
-    // half of this command is deliberately left to be shaped against that
-    // mutation rather than given a second vocabulary now.
     .execute(agent, &release, &host, request)
-    .map_err(|failure| RunError::Agent(explain(&failure)))?;
+    .map_err(|failure| GatewayInstallFailure::Install(Box::new(failure)))?;
     tracing::info!(
         agent = agent.as_str(),
         version = %installed.version,
@@ -135,12 +136,6 @@ fn install_delivery(data_root: &Path) -> Result<DurableInstallationDelivery, Run
 /// not this one. The first is the agent being wrong, the second is the machine
 /// being wrong, and a single failure would read as a download that went astray.
 ///
-/// All three agents are pinned now — Claude and Codex were not when this was
-/// written, and the paragraph here said so. What that means for this command is
-/// not yet what it should be: `nessa install-agent claude` fetches and verifies
-/// a runtime that nothing launches, because the desktop still starts Claude and
-/// Codex from the bundle. The install is real and the launch has not moved yet.
-/// See `docs/adr/todo/173-fetch-agent-runtimes.md`.
 fn pinned(agent: &AgentName, host: &HostPlatform) -> Result<PinnedRelease, RunError> {
     let releases = releases_for(agent).map_err(|error| RunError::Agent(error.to_string()))?;
     if releases.is_empty() {
@@ -240,7 +235,7 @@ fn explain(failure: &InstallFailure) -> String {
 }
 
 #[cfg(unix)]
-fn local_account_id() -> String {
+pub(super) fn local_account_id() -> String {
     // The process runs with the account whose private data directory receives
     // the runtime and audit records. The effective uid is the verified OS
     // identity behind those permissions; no human name is guessed from it.
@@ -248,7 +243,7 @@ fn local_account_id() -> String {
 }
 
 #[cfg(not(unix))]
-fn local_account_id() -> String {
+pub(super) fn local_account_id() -> String {
     // No runtime is pinned for a non-Unix host. Kept explicit so an eventual
     // Windows pin cannot silently claim a human identity it has not verified.
     "unsupported-process-account".to_owned()
@@ -313,11 +308,7 @@ fn reclamation_warning(warning: &ReclamationWarning) -> Value {
     }
 }
 
-fn reclamation_event(
-    kind: &str,
-    event: &crate::agent_install::domain::ReclamationEvent,
-    detail: Option<&str>,
-) -> Value {
+fn reclamation_event(kind: &str, event: &ReclamationEvent, detail: Option<&str>) -> Value {
     let admission = event.admission();
     json!({
         "kind": kind,
@@ -347,3 +338,48 @@ fn write_report(out: &mut impl Write, report: &Value) -> Result<(), RunError> {
 #[cfg(test)]
 #[path = "../../tests/agent_install/install_command.rs"]
 mod tests;
+
+/// Gateway composition shares the CLI's installer and exact-pin policy.
+pub(super) struct GatewayInstaller {
+    pub root: PathBuf,
+    pub account_id: String,
+}
+impl AgentInstallations for GatewayInstaller {
+    fn account_id(&self) -> &str {
+        &self.account_id
+    }
+    fn offers(&self) -> Result<Vec<InstallationOffer>, GatewayInstallFailure> {
+        let host = host_platform();
+        let store = ManagedRuntimes::new(&self.root);
+        let mut offers = Vec::new();
+        for id in AgentId::ALL {
+            let agent = AgentName::parse(id.name()).map_err(installer_unavailable)?;
+            let releases = releases_for(&agent).map_err(installer_unavailable)?;
+            if let Some(release) = preferred_release(releases, &host) {
+                let installed = store
+                    .installed(&agent, &release)
+                    .map_err(installer_unavailable)?
+                    .is_some();
+                offers.push(InstallationOffer {
+                    agent,
+                    version: release.version().as_str().into(),
+                    archive_bytes: release.archive_size().bytes(),
+                    installed,
+                });
+            }
+        }
+        Ok(offers)
+    }
+    fn install(
+        &self,
+        agent: &AgentName,
+        request: &InstallRequest,
+    ) -> Result<InstalledRuntime, GatewayInstallFailure> {
+        install_runtime(agent, &self.root, request)
+    }
+}
+
+fn installer_unavailable(error: impl std::fmt::Display) -> GatewayInstallFailure {
+    tracing::warn!(%error, "agent installer could not access a required dependency");
+    GatewayInstallFailure::Unavailable
+}

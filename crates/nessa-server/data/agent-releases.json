@@ -29,6 +29,62 @@
             "role": "document"
           }
         ]
+      },
+      {
+        "operatingSystem": "macos",
+        "architecture": "x86_64",
+        "libc": null,
+        "requiresAvx2": true,
+        "version": "0.3.257",
+        "archiveUrl": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-x64/-/claude-agent-sdk-darwin-x64-0.3.257.tgz",
+        "archiveBytes": 90952894,
+        "archiveDigest": "0fa1210b7d18f707ec6aa21b6c7ab385cc8c70994c4823ced87f789017dc5504",
+        "files": [
+          {
+            "path": "package/LICENSE.md",
+            "role": "document"
+          },
+          {
+            "path": "package/README.md",
+            "role": "document"
+          },
+          {
+            "path": "package/claude",
+            "role": "launch"
+          },
+          {
+            "path": "package/package.json",
+            "role": "document"
+          }
+        ]
+      },
+      {
+        "operatingSystem": "linux",
+        "architecture": "x86_64",
+        "libc": "gnu",
+        "requiresAvx2": true,
+        "version": "0.3.257",
+        "archiveUrl": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64/-/claude-agent-sdk-linux-x64-0.3.257.tgz",
+        "archiveBytes": 96662870,
+        "archiveDigest": "c66fc47dc933b5585628dd342bddfca3576907519465336ed57ea1620676d1ee",
+        "files": [
+          {
+            "path": "package/LICENSE.md",
+            "role": "document"
+          },
+          {
+            "path": "package/README.md",
+            "role": "document"
+          },
+          {
+            "path": "package/claude",
+            "role": "launch"
+          },
+          {
+            "path": "package/package.json",
+            "role": "document"
+          }
+        ]
       }
     ],
     "codex": [
@@ -68,6 +124,90 @@
           },
           {
             "path": "package/vendor/aarch64-apple-darwin/codex-resources/zsh/bin/zsh",
+            "role": "helper"
+          }
+        ]
+      },
+      {
+        "operatingSystem": "macos",
+        "architecture": "x86_64",
+        "libc": null,
+        "requiresAvx2": false,
+        "version": "0.154.0-darwin-x64",
+        "archiveUrl": "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-darwin-x64.tgz",
+        "archiveBytes": 124308807,
+        "archiveDigest": "92c493533c53c433c4d94252251daba4f379ccba06a9964d260abb47a535dce1",
+        "files": [
+          {
+            "path": "package/README.md",
+            "role": "document"
+          },
+          {
+            "path": "package/package.json",
+            "role": "document"
+          },
+          {
+            "path": "package/vendor/x86_64-apple-darwin/bin/codex",
+            "role": "launch"
+          },
+          {
+            "path": "package/vendor/x86_64-apple-darwin/bin/codex-code-mode-host",
+            "role": "helper"
+          },
+          {
+            "path": "package/vendor/x86_64-apple-darwin/codex-package.json",
+            "role": "document"
+          },
+          {
+            "path": "package/vendor/x86_64-apple-darwin/codex-path/rg",
+            "role": "helper"
+          },
+          {
+            "path": "package/vendor/x86_64-apple-darwin/codex-resources/zsh/bin/zsh",
+            "role": "helper"
+          }
+        ]
+      },
+      {
+        "operatingSystem": "linux",
+        "architecture": "x86_64",
+        "libc": "gnu",
+        "requiresAvx2": false,
+        "version": "0.154.0-linux-x64",
+        "archiveUrl": "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-linux-x64.tgz",
+        "archiveBytes": 129654638,
+        "archiveDigest": "e27c83a49e6031685ee7f956c12aad5f16484d3a80181dd3fea930fb96b3832b",
+        "files": [
+          {
+            "path": "package/README.md",
+            "role": "document"
+          },
+          {
+            "path": "package/package.json",
+            "role": "document"
+          },
+          {
+            "path": "package/vendor/x86_64-unknown-linux-musl/bin/codex",
+            "role": "launch"
+          },
+          {
+            "path": "package/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host",
+            "role": "helper"
+          },
+          {
+            "path": "package/vendor/x86_64-unknown-linux-musl/codex-package.json",
+            "role": "document"
+          },
+          {
+            "path": "package/vendor/x86_64-unknown-linux-musl/codex-path/rg",
+            "role": "helper"
+          },
+          {
+            "path": "package/vendor/x86_64-unknown-linux-musl/codex-resources/bwrap",
+            "role": "helper"
+          },
+          {
+            "path": "package/vendor/x86_64-unknown-linux-musl/codex-resources/zsh/bin/zsh",
             "role": "helper"
           }
         ]

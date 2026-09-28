@@ -266,3 +266,14 @@ const result = spawnSync(
 )
 if (result.status !== 0) process.exit(result.status ?? 1)
 console.log("Product protocol schema, fixtures, and generated types match")
+
+for (const name of ["AgentInstallOffer", "AgentInstallResult"]) {
+  const fixture = read("fixtures.json")[name]
+  const limit = schema.$defs[name].properties.version["x-utf8MaxBytes"]
+  const validate = ajv.getSchema(`${schema.$id}#/$defs/${name}`)
+  if (
+    !validate({ ...fixture, version: "é".repeat(limit / 2) }) ||
+    validate({ ...fixture, version: "é".repeat(limit / 2 + 1) })
+  )
+    throw new Error(`${name} must enforce its UTF-8 version boundary`)
+}

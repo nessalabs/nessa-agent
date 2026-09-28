@@ -1,3 +1,4 @@
+import { AgentDownloads, type AgentInstallations } from "../../onboarding"
 import * as React from "react"
 import { Check, ChevronLeft, ChevronRight, Plus } from "lucide-react"
 import { ChatComposerAction } from "@nessa-ui/react/chat-composer"
@@ -13,7 +14,7 @@ export interface TrayApproval {
   status?: string
 }
 
-type Page = "root" | "approval" | "confirm-full"
+type Page = "root" | "approval" | "confirm-full" | "agents"
 
 export function approvalLabel(mode: ApprovalMode): string {
   switch (mode) {
@@ -132,12 +133,14 @@ export function ComposerTray({
   onChoose,
   onSignOut,
   approval,
+  agentInstallations,
 }: {
   /** Files cannot be added while earlier ones are still being read. */
   disabled: boolean
   onChoose: () => void
   onSignOut?: () => void
   approval?: TrayApproval
+  agentInstallations?: AgentInstallations
 }) {
   const [open, setOpen] = React.useState(false)
   const [page, setPage] = React.useState<Page>("root")
@@ -150,7 +153,12 @@ export function ComposerTray({
   const placement = useTrayPlacement(open, root, tray)
   // A page that needs approval falls back to the first page if approval goes
   // away while it shows, rather than leaving an empty tray.
-  const shown: Page = approval && approval.modes.length > 1 ? page : "root"
+  const shown: Page =
+    page === "agents" && agentInstallations
+      ? "agents"
+      : approval && approval.modes.length > 1
+        ? page
+        : "root"
 
   const go = React.useCallback((next: Page, focus?: string) => {
     setPage(next)
@@ -182,6 +190,7 @@ export function ComposerTray({
       if (event.key !== "Escape") return
       event.preventDefault()
       if (shown === "confirm-full") go("approval", "mode-full")
+      else if (shown === "agents") go("root", "agents-row")
       else if (shown === "approval") go("root", "approval-row")
       else close(true)
     }
@@ -193,7 +202,8 @@ export function ComposerTray({
     }
   }, [open, shown, close, go])
 
-  const label = onSignOut || approval ? "More options" : "Add attachment"
+  const label =
+    onSignOut || approval || agentInstallations ? "More options" : "Add attachment"
   return (
     <div
       ref={root}
@@ -213,7 +223,7 @@ export function ComposerTray({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? trayId : undefined}
-        disabled={disabled && !onSignOut && !approval}
+        disabled={disabled && !onSignOut && !approval && !agentInstallations}
         onClick={() => (open ? close(false) : setOpen(true))}
       >
         <Plus
@@ -279,6 +289,17 @@ export function ComposerTray({
                   />
                 </button>
               ) : null}
+              {agentInstallations ? (
+                <button
+                  type="button"
+                  data-tray-focus="agents-row"
+                  className={ROW}
+                  onClick={() => go("agents")}
+                >
+                  <span className="flex-1">Agent downloads</span>
+                  <ChevronRight aria-hidden="true" className="size-4" />
+                </button>
+              ) : null}
               {onSignOut ? (
                 <button
                   type="button"
@@ -291,6 +312,21 @@ export function ComposerTray({
                   <span className="flex-1">Sign out</span>
                 </button>
               ) : null}
+            </div>
+          ) : shown === "agents" && agentInstallations ? (
+            <div
+              key="agents"
+              className="nessa-composer-tray-page flex flex-col gap-3 p-2"
+            >
+              <button
+                type="button"
+                className={ROW}
+                onClick={() => go("root", "agents-row")}
+              >
+                <ChevronLeft aria-hidden="true" className="size-4" />
+                Back
+              </button>
+              <AgentDownloads source={agentInstallations} />
             </div>
           ) : shown === "approval" && approval ? (
             <div key="approval" className="nessa-composer-tray-page flex flex-col">

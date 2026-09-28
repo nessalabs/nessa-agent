@@ -2408,6 +2408,97 @@
         }
       },
       "required": ["requestId", "requestedMode", "status"]
+    },
+    "AgentInstallParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Request installation of one pinned native runtime. The caller cannot select executable bytes.",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/InstallableAgent",
+          "description": "Agent whose pinned native runtime is being installed or offered."
+        },
+        "requestId": {
+          "type": "string",
+          "description": "Opaque invocation identity; the installer validates the complete authenticated invocation identity."
+        }
+      },
+      "required": ["agent", "requestId"]
+    },
+    "AgentInstallOffer": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A native runtime this gateway can download for its host.",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/InstallableAgent",
+          "description": "Agent whose pinned native runtime is being installed or offered."
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact version verified by this Nessa build.",
+          "x-utf8MaxBytes": 128
+        },
+        "archiveBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Compressed download size in bytes."
+        },
+        "installed": {
+          "type": "boolean",
+          "description": "The managed store currently verifies this release as installed."
+        }
+      },
+      "required": ["agent", "version", "archiveBytes", "installed"]
+    },
+    "AgentInstallOptionsResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Current installation observations, independent of authentication.",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentInstallOffer"
+          },
+          "maxItems": 3,
+          "description": "Supported native downloads; unsupported agents are absent."
+        }
+      },
+      "required": ["agents"]
+    },
+    "AgentInstallResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Acknowledged installation outcome. Authentication is checked separately.",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/InstallableAgent",
+          "description": "Agent whose pinned native runtime is being installed or offered."
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Installed pinned version.",
+          "x-utf8MaxBytes": 128
+        },
+        "downloaded": {
+          "type": "boolean",
+          "description": "This attempt fetched an archive."
+        },
+        "cleanupPending": {
+          "type": "boolean",
+          "description": "Installation succeeded but superseded-runtime cleanup has warnings."
+        }
+      },
+      "required": ["agent", "version", "downloaded", "cleanupPending"]
+    },
+    "InstallableAgent": {
+      "type": "string",
+      "enum": ["claude", "codex", "opencode"],
+      "description": "Native runtimes the authenticated installer can offer."
     }
   }
 }

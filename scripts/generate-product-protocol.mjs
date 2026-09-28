@@ -116,6 +116,11 @@ const image = schema.$defs.ImageAttachment.properties
 const linked = schema.$defs.LinkedFile.properties
 // Named for what a reader of the client says, not for the schema's field paths.
 const bounds = {
+  maxConfiguredAgents: schema.$defs.AgentsListResult.properties.agents.maxItems,
+  maxAgentInstallVersionBytes: agreeing("native installation version bytes", [
+    schema.$defs.AgentInstallOffer.properties.version["x-utf8MaxBytes"],
+    schema.$defs.AgentInstallResult.properties.version["x-utf8MaxBytes"],
+  ]),
   maxImageBytes: image.size.maximum,
   imageMimeTypes: image.mimeType.enum,
   maxMessageImages: arrayBound("attachments", "ImageAttachment", "maxItems"),

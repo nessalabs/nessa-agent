@@ -922,8 +922,51 @@ export interface ApprovalModeChange {
   /** Turn admission state. */
   status: "changing" | "recovery_required"
 }
+/** Request installation of one pinned native runtime. The caller cannot select executable bytes. */
+export interface AgentInstallParams {
+  /** Agent whose pinned native runtime is being installed or offered. */
+  agent: InstallableAgent
+  /** Opaque invocation identity; the installer validates the complete authenticated invocation identity. */
+  requestId: string
+}
+/** A native runtime this gateway can download for its host. */
+export interface AgentInstallOffer {
+  /** Agent whose pinned native runtime is being installed or offered. */
+  agent: InstallableAgent
+  /** Exact version verified by this Nessa build. */
+  version: string
+  /** Compressed download size in bytes. */
+  archiveBytes: number
+  /** The managed store currently verifies this release as installed. */
+  installed: boolean
+}
+/** Current installation observations, independent of authentication. */
+export interface AgentInstallOptionsResult {
+  /** Supported native downloads; unsupported agents are absent. */
+  agents: AgentInstallOffer[]
+}
+/** Acknowledged installation outcome. Authentication is checked separately. */
+export interface AgentInstallResult {
+  /** Agent whose pinned native runtime is being installed or offered. */
+  agent: InstallableAgent
+  /** Installed pinned version. */
+  version: string
+  /** This attempt fetched an archive. */
+  downloaded: boolean
+  /** Installation succeeded but superseded-runtime cleanup has warnings. */
+  cleanupPending: boolean
+}
+/** Native runtimes the authenticated installer can offer. */
+export const InstallableAgent = {
+  Claude: "claude",
+  Codex: "codex",
+  Opencode: "opencode",
+} as const
+export type InstallableAgent = (typeof InstallableAgent)[keyof typeof InstallableAgent]
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
+  maxConfiguredAgents: 3,
+  maxAgentInstallVersionBytes: 128,
   maxImageBytes: 5242880,
   imageMimeTypes: ["image/png", "image/jpeg", "image/gif", "image/webp"],
   maxMessageImages: 10,
@@ -962,5 +1005,7 @@ export const ProductMethod = {
   AttachmentBegin: "attachment.begin",
   AgentsList: "agents.list",
   ConversationSetApprovalMode: "conversation.setApprovalMode",
+  AgentsInstallOptions: "agents.installOptions",
+  AgentsInstall: "agents.install",
 } as const
 export const ProductEvent = { SessionChallenge: "session.challenge" } as const

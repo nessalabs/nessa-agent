@@ -1,3 +1,5 @@
+import { AgentDownloads } from "./agent-downloads"
+import type { AgentInstallations } from "../application/agent-installations"
 import * as React from "react"
 import {
   AgentApiKeySaveUncertain,
@@ -334,6 +336,7 @@ function AgentOption({
 export function Onboarding({
   state,
   apiKeys,
+  installations,
   gatewayStartup,
   accelerator,
   onBegin,
@@ -348,6 +351,7 @@ export function Onboarding({
   state: OnboardingState
   /** Secure-store effect injected by native setup composition. */
   apiKeys?: AgentApiKeySink
+  installations?: AgentInstallations
   gatewayStartup: GatewayStartupStatus
   accelerator?: string
   /** The keyboard conventions this device writes shortcuts in. */
@@ -572,6 +576,9 @@ export function Onboarding({
             )
           })}
         </div>
+        {installations ? (
+          <AgentDownloads source={installations} onInstalled={onRecheck} />
+        ) : null}
         {credentialAuditFailure ? (
           <p role="alert" className="nessa-text-2 text-destructive">
             {credentialAuditFailure === "saved"

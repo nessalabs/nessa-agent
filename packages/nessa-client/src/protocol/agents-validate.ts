@@ -1,4 +1,10 @@
-import type { AgentsListResult, ApprovalModeChoice } from "../generated/product.js"
+import { InstallableAgent, bounds } from "../generated/product.js"
+import type {
+  AgentInstallOptionsResult,
+  AgentInstallResult,
+  AgentsListResult,
+  ApprovalModeChoice,
+} from "../generated/product.js"
 
 const utf8 = new TextEncoder()
 const modes = new Set(["ask", "auto", "full"])
@@ -43,7 +49,7 @@ export function approvalModeChoices(value: unknown): ApprovalModeChoice[] {
 export function agentsList(value: unknown): AgentsListResult {
   const result = object(value)
   exact(result, ["agents"])
-  if (!Array.isArray(result.agents) || result.agents.length > 3)
+  if (!Array.isArray(result.agents) || result.agents.length > bounds.maxConfiguredAgents)
     throw new Error("Invalid configured agents")
   const agents = new Set<string>()
   for (const entry of result.agents) {
@@ -83,4 +89,46 @@ export function agentsList(value: unknown): AgentsListResult {
     if (!models.has(defaultModel)) throw new Error("Agent default model is unavailable")
   }
   return result as unknown as AgentsListResult
+}
+
+const installAgents = new Set<string>(Object.values(InstallableAgent))
+
+/** Validate supported offers before presenting download sizes or actions. */
+export function agentInstallOptions(value: unknown): AgentInstallOptionsResult {
+  const result = object(value)
+  exact(result, ["agents"])
+  if (!Array.isArray(result.agents)) throw new Error("Invalid installation offers")
+  const seen = new Set<string>()
+  for (const entry of result.agents) {
+    const offer = object(entry)
+    exact(offer, ["agent", "version", "archiveBytes", "installed"])
+    const agent = text(offer, "agent", 32)
+    if (!installAgents.has(agent) || seen.has(agent))
+      throw new Error("Invalid installation agent")
+    seen.add(agent)
+    text(offer, "version", bounds.maxAgentInstallVersionBytes)
+    if (
+      typeof offer.installed !== "boolean" ||
+      typeof offer.archiveBytes !== "number" ||
+      !Number.isSafeInteger(offer.archiveBytes) ||
+      offer.archiveBytes < 1
+    )
+      throw new Error("Invalid installation offer")
+  }
+  return value as AgentInstallOptionsResult
+}
+
+/** Validate confirmed installation independently of agent authentication. */
+export function agentInstallResult(value: unknown): AgentInstallResult {
+  const result = object(value)
+  exact(result, ["agent", "version", "downloaded", "cleanupPending"])
+  if (!installAgents.has(text(result, "agent", 32)))
+    throw new Error("Invalid installation agent")
+  text(result, "version", bounds.maxAgentInstallVersionBytes)
+  if (
+    typeof result.downloaded !== "boolean" ||
+    typeof result.cleanupPending !== "boolean"
+  )
+    throw new Error("Invalid installation result")
+  return value as AgentInstallResult
 }

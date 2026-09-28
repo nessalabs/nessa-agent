@@ -968,3 +968,46 @@ pub struct ApprovalModeChange {
     pub requested_mode: ApprovalMode,
     pub status: String,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentInstallParams {
+    pub agent: InstallableAgent,
+    pub request_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentInstallOffer {
+    pub agent: InstallableAgent,
+    pub version: String,
+    pub archive_bytes: u64,
+    pub installed: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentInstallOptionsResult {
+    pub agents: Vec<AgentInstallOffer>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentInstallResult {
+    pub agent: InstallableAgent,
+    pub version: String,
+    pub downloaded: bool,
+    pub cleanup_pending: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallableAgent {
+    Claude,
+    Codex,
+    Opencode,
+}
+impl InstallableAgent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Opencode => "opencode",
+        }
+    }
+}

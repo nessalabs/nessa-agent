@@ -29,3 +29,76 @@ fn the_path_is_taken_from_codexs_own_variable_before_its_default() {
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn status_answers_are_returned_after_the_restricted_process_group_is_gone() {
+    let root = tempfile::tempdir().unwrap();
+    let script = root.path().join("status.sh");
+    for (code, expected) in [
+        (0, Ok(true)),
+        (1, Ok(false)),
+        (2, Err(ProbeFailure::Unanswered)),
+    ] {
+        std::fs::write(&script, format!("exit {code}\n")).unwrap();
+        assert_eq!(
+            sign_in_status(Path::new("/bin/sh"), &script, &BTreeMap::new()),
+            expected
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_status_timeout_kills_and_reaps_its_root_before_reporting_an_unanswered_probe() {
+    let mut child = Command::new("/bin/sleep")
+        .arg("20")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    assert_eq!(
+        wait_status_group(&mut child, Duration::from_millis(20)),
+        Ok(None)
+    );
+    assert!(child.try_wait().unwrap().is_some());
+    assert_eq!(unsafe { libc::kill(-(group as i32), 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn status_cleanup_removes_descendants_after_root_exit_and_after_timeout() {
+    for wait_for_child in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let marker = root.path().join("child-ready");
+        let script = if wait_for_child {
+            "sleep 20 & echo $! > \"$1\"; wait"
+        } else {
+            "sleep 20 & echo $! > \"$1\"; exit 0"
+        };
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", script, "status-fixture"])
+            .arg(&marker)
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let group = child.id();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !marker.exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let answer = wait_status_group(&mut child, Duration::from_millis(30)).unwrap();
+        assert_eq!(answer.is_some(), !wait_for_child);
+        assert!(child.try_wait().unwrap().is_some());
+        assert_eq!(unsafe { libc::kill(-(group as i32), 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
+}
