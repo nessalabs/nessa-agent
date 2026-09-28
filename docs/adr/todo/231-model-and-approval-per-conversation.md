@@ -231,7 +231,8 @@ fixed profile; new OpenCode mode switching and paid-provider probes are deferred
   for Sonnet and Astra. [Issue #239's production SDK matrix](../../reviews/239-model-approval-behavior.md)
   subsequently exercised the required actions and Ask downgrades with independent
   file, MCP and shell witnesses. It enables Auto/Full for Opus, Fable, Sol, Terra
-  and Luna, and Full for Haiku. Haiku Auto and unknown models remain unavailable.
+  and Luna, and Full for Haiku, on macOS only. Other targets retain Ask for
+  these models until their own matrix is verified. Haiku Auto and unknown models remain unavailable.
   The report records the pinned adapters, failed probe attempts, repeated
   evidence, current Codex approval shapes and remaining platform limits.
 - **Newly enabled presets require behaviour tests**, not

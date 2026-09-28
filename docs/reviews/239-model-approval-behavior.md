@@ -51,6 +51,21 @@ them at the end. It preserves JSONL observations and Nessa shell audit records i
 the evidence directory. Reports may contain local paths and should be normalized
 and inspected before publication. Credentials are never deliberately recorded.
 
+## Platform availability
+
+The additional choices in this report are published only on macOS. Linux,
+Windows and other targets retain Ask for those models until their behavioral
+matrix is verified. Existing Sonnet/Astra choices are unchanged. Provider
+bindings own this target-dependent rule; construction and catalog publication
+consume the same choices.
+
+| Target/model | Published choices and construction |
+| --- | --- |
+| macOS, newly verified Auto/Full model | Ask, Auto, Full |
+| macOS, Haiku | Ask, Full; reject Auto |
+| Other target, newly verified model (including Haiku) | Ask; reject Auto and Full before process launch |
+| Unknown model | Ask; reject Auto and Full |
+
 ## Results
 
 Existing Sonnet and Astra presets retain the original ADR 231 evidence; this
@@ -165,3 +180,18 @@ with their default concurrency; the final Terra live probe overlapped part of
 the build/test run. Rust formatting, architecture checks, SDK documentation
 checks and `git diff --check` also passed. Live provider tests remain opt-in;
 no CI jobs are added.
+
+## PR #240 CI follow-up
+
+The first Linux/Windows CI run found two existing Node archive identity test
+failures. Windows inode values exceeded JavaScript's safe integer precision;
+identity-carrying filesystem stats now require BigInt. The Linux substitution
+fixture had deleted the sole link before creating a replacement, allowing inode
+recycling; it must retain the original file to establish a distinct replacement.
+The cooperative-writer and verified-returned-bytes contract stays unchanged.
+
+| Case | Required result |
+| --- | --- |
+| Same hard-linked file with identity above 2^53 | Accept its verified publication |
+| Distinct files whose IDs round to the same Number | Refuse the claimed publication, preserving the foreign destination |
+| Source renamed away then replaced by a symlink | Report publication and cleanup failures, preserve the retained source and symlink target |

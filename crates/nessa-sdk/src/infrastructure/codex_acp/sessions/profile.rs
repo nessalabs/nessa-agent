@@ -46,10 +46,13 @@ const FULL: ApprovalModeChoice = ApprovalModeChoice {
     description: "Codex runs in its native full-access preset without user approval requests.",
 };
 
-/// Catalog presets covered by the SDK live matrix in review report #239.
+/// Additional presets are verified on macOS only (review report #239).
 pub(super) fn approval_modes(model_id: &str) -> &'static [ApprovalModeChoice] {
     match model_id {
-        "gpt-6-astra" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => &[ASK, AUTO, FULL],
+        "gpt-6-astra" => &[ASK, AUTO, FULL],
+        "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" if cfg!(target_os = "macos") => {
+            &[ASK, AUTO, FULL]
+        }
         _ => &[ASK],
     }
 }

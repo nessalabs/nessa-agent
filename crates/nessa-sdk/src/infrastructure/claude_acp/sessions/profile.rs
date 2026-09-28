@@ -31,12 +31,13 @@ const FULL: ApprovalModeChoice = ApprovalModeChoice {
     description: "Claude may run allowed actions without asking; Nessa's fixed denied tools remain unavailable.",
 };
 
-/// Catalog presets covered by the SDK live matrix in review report #239.
+/// Additional presets are verified on macOS only (review report #239).
 /// Haiku's advertised `auto` falls back to `acceptEdits`, which is not Auto.
 pub(super) fn approval_modes(model_id: &str) -> &'static [ApprovalModeChoice] {
     match model_id {
-        "claude-fable-5-1" | "claude-opus-5" | "claude-sonnet-5" => &[ASK, AUTO, FULL],
-        "claude-haiku-4-5-20251001" => &[ASK, FULL],
+        "claude-sonnet-5" => &[ASK, AUTO, FULL],
+        "claude-fable-5-1" | "claude-opus-5" if cfg!(target_os = "macos") => &[ASK, AUTO, FULL],
+        "claude-haiku-4-5-20251001" if cfg!(target_os = "macos") => &[ASK, FULL],
         _ => &[ASK],
     }
 }

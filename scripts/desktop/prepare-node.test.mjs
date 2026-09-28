@@ -1,4 +1,6 @@
 import assert from "node:assert/strict"
+import fs from "node:fs"
+import { syncBuiltinESMExports } from "node:module"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
@@ -272,8 +274,8 @@ test("an absent digest object is exclusively published and reopened", (t) => {
     },
     publish(source, destination) {
       linkSync(source, destination)
-      const sourceStat = lstatSync(source)
-      const destinationStat = lstatSync(destination)
+      const sourceStat = lstatSync(source, { bigint: true })
+      const destinationStat = lstatSync(destination, { bigint: true })
       publishedIdentity = [sourceStat.dev, sourceStat.ino]
       assert.deepEqual([destinationStat.dev, destinationStat.ino], publishedIdentity)
     },
@@ -282,7 +284,7 @@ test("an absent digest object is exclusively published and reopened", (t) => {
   assert.deepEqual(readFileSync(cacheObject(cache, release)), good)
   assert.deepEqual(readdirSync(cache), [nodeCacheObjectName(release)])
   assert.equal(existsSync(join(cache, release.archive)), false)
-  const published = lstatSync(cacheObject(cache, release))
+  const published = lstatSync(cacheObject(cache, release), { bigint: true })
   assert.deepEqual([published.dev, published.ino], publishedIdentity)
 })
 
@@ -334,7 +336,7 @@ test("invalid regular digest objects refuse unchanged without download", async (
         writeFileSync(archive, "")
         truncateSync(archive, MAX_NODE_ARCHIVE_BYTES + 1)
       }
-      const before = lstatSync(archive)
+      const before = lstatSync(archive, { bigint: true })
       let downloaded = false
       const error = captureError(() =>
         acquireVerifiedNodeArchive({
@@ -351,7 +353,7 @@ test("invalid regular digest objects refuse unchanged without download", async (
         error.cause.message,
         kind === "digest" ? /does not match its pinned digest/ : /compressed-size limit/,
       )
-      const after = lstatSync(archive)
+      const after = lstatSync(archive, { bigint: true })
       assert.equal(downloaded, false)
       assert.deepEqual(
         [after.dev, after.ino, after.size],
@@ -654,8 +656,14 @@ test("a verified publication winner is accepted without overwrite", (t) => {
     publish(source, destination) {
       writeFileSync(destination, good)
       assert.notDeepEqual(
-        [lstatSync(source).dev, lstatSync(source).ino],
-        [lstatSync(destination).dev, lstatSync(destination).ino],
+        [
+          lstatSync(source, { bigint: true }).dev,
+          lstatSync(source, { bigint: true }).ino,
+        ],
+        [
+          lstatSync(destination, { bigint: true }).dev,
+          lstatSync(destination, { bigint: true }).ino,
+        ],
       )
       const error = new Error("destination appeared")
       error.code = "EEXIST"
@@ -705,8 +713,14 @@ test("a publisher reporting success with a valid different inode is refused", (t
       publish(source, destination) {
         writeFileSync(destination, good)
         assert.notDeepEqual(
-          [lstatSync(source).dev, lstatSync(source).ino],
-          [lstatSync(destination).dev, lstatSync(destination).ino],
+          [
+            lstatSync(source, { bigint: true }).dev,
+            lstatSync(source, { bigint: true }).ino,
+          ],
+          [
+            lstatSync(destination, { bigint: true }).dev,
+            lstatSync(destination, { bigint: true }).ino,
+          ],
         )
       },
     }),
@@ -733,12 +747,12 @@ test("verified publication retains an exact staged inode when unlink is denied",
       },
       publish(source, destination) {
         stage = dirname(source)
-        const stat = lstatSync(source)
+        const stat = lstatSync(source, { bigint: true })
         stagedIdentity = [stat.dev, stat.ino]
         linkSync(source, destination)
       },
       removeDownloaded(path) {
-        const stat = lstatSync(path)
+        const stat = lstatSync(path, { bigint: true })
         assert.deepEqual([stat.dev, stat.ino], stagedIdentity)
         const denied = new Error("permission denied while removing staged archive")
         denied.code = "EACCES"
@@ -751,12 +765,12 @@ test("verified publication retains an exact staged inode when unlink is denied",
   assert.equal(error.cause.code, "EACCES")
   assert.match(error.cause.message, /permission denied while removing staged archive/)
   const staged = join(stage, release.archive)
-  const after = lstatSync(staged)
+  const after = lstatSync(staged, { bigint: true })
   assert.deepEqual([after.dev, after.ino], stagedIdentity)
   assert.deepEqual(readdirSync(stage), [release.archive])
   assert.deepEqual(readFileSync(staged), good)
   assert.deepEqual(readFileSync(archive), good)
-  const published = lstatSync(archive)
+  const published = lstatSync(archive, { bigint: true })
   assert.deepEqual([published.dev, published.ino], stagedIdentity)
 })
 
@@ -774,7 +788,7 @@ test("acquisition and cleanup failures retain unchanged pre-identity stage evide
       release,
       download({ destination }) {
         stage = dirname(destination)
-        const stat = lstatSync(stage)
+        const stat = lstatSync(stage, { bigint: true })
         stageIdentity = [stat.dev, stat.ino]
         writeFileSync(join(stage, "unowned-marker"), "preserve")
         throw new Error("download failed before identity capture")
@@ -787,7 +801,7 @@ test("acquisition and cleanup failures retain unchanged pre-identity stage evide
   assert.equal(error.errors.length, 2)
   assert.match(error.errors[0].message, /download failed before identity capture/)
   assert.match(error.errors[1].message, /stage contains an unowned entry/)
-  const after = lstatSync(stage)
+  const after = lstatSync(stage, { bigint: true })
   assert.deepEqual([after.dev, after.ino], stageIdentity)
   assert.deepEqual(readdirSync(stage), ["unowned-marker"])
   assert.equal(readFileSync(join(stage, "unowned-marker"), "utf8"), "preserve")
@@ -825,7 +839,7 @@ test("a substituted download stage is preserved without following it", (t) => {
   assert.equal(error.errors.length, 2)
   assert.match(error.errors[0].message, /stage identity changed/)
   assert.match(error.errors[1].message, /stage identity changed/)
-  assert.equal(lstatSync(stage).isSymbolicLink(), true)
+  assert.equal(lstatSync(stage, { bigint: true }).isSymbolicLink(), true)
   assert.deepEqual(readFileSync(join(moved, release.archive)), good)
   assert.equal(readFileSync(join(external, "marker"), "utf8"), "preserve")
 })
@@ -856,7 +870,7 @@ test("a substituted staged path is preserved without following it", (t) => {
   assert.equal(error.errors.length, 2)
   assert.match(error.errors[0].message, /symbolic link/)
   assert.match(error.errors[1].message, /stage contains an unowned entry/)
-  assert.equal(lstatSync(destination).isSymbolicLink(), true)
+  assert.equal(lstatSync(destination, { bigint: true }).isSymbolicLink(), true)
   assert.equal(readFileSync(external, "utf8"), "preserve")
 })
 
@@ -869,6 +883,7 @@ test("a source substituted during publication is preserved and never followed", 
   writeFileSync(external, "preserve")
   const good = tar(selected)
   const release = fixtureRelease(good)
+  const retained = join(root, "retained-source")
   let source
   const error = captureError(() =>
     acquireVerifiedNodeArchive({
@@ -879,7 +894,7 @@ test("a source substituted during publication is preserved and never followed", 
       },
       publish(staged, destination) {
         source = staged
-        unlinkSync(staged)
+        renameSync(staged, retained)
         symlinkSync(external, staged)
         writeFileSync(destination, good)
       },
@@ -891,9 +906,10 @@ test("a source substituted during publication is preserved and never followed", 
   assert.equal(error.errors.length, 2)
   assert.match(error.errors[0].message, /path identity changed/)
   assert.match(error.errors[1].message, /download path identity changed/)
-  assert.equal(lstatSync(source).isSymbolicLink(), true)
+  assert.equal(lstatSync(source, { bigint: true }).isSymbolicLink(), true)
   assert.deepEqual(readFileSync(cacheObject(cache, release)), good)
   assert.equal(readFileSync(external, "utf8"), "preserve")
+  assert.deepEqual(readFileSync(retained), good)
 })
 
 test("a redirected cache is refused before download or external writes", (t) => {
@@ -922,4 +938,56 @@ test("a redirected cache is refused before download or external writes", (t) => 
   )
   assert.equal(downloaded, false)
   assert.equal(readFileSync(join(external, "marker"), "utf8"), "unchanged")
+})
+
+test("archive identities above Number precision distinguish replacements from hard links", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "nessa-node-bigint-identity-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const identities = new Map()
+  // Distinct live inode IDs deliberately collapse when read as Number.
+  let nextIdentity = 2n ** 60n
+  for (const method of ["lstatSync", "fstatSync"]) {
+    const original = fs[method]
+    t.mock.method(fs, method, (target, options) => {
+      const exact = original(target, { bigint: true })
+      const key = `${exact.dev}:${exact.ino}`
+      if (!identities.has(key)) identities.set(key, nextIdentity++)
+      const stat = options?.bigint ? exact : original(target, options)
+      stat.ino = options?.bigint ? identities.get(key) : Number(identities.get(key))
+      return stat
+    })
+  }
+  syncBuiltinESMExports()
+  t.after(() => {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
+  const good = tar(selected)
+  const release = fixtureRelease(good)
+  const download = ({ destination }) => writeFileSync(destination, good)
+  assert.deepEqual(
+    acquireVerifiedNodeArchive({
+      cache: join(root, "linked"),
+      release,
+      download,
+    }),
+    good,
+  )
+  const cache = join(root, "substituted")
+  const error = captureError(() =>
+    acquireVerifiedNodeArchive({
+      cache,
+      release,
+      download,
+      publish(source, destination) {
+        writeFileSync(destination, good)
+        const sourceId = lstatSync(source, { bigint: true }).ino
+        const destinationId = lstatSync(destination, { bigint: true }).ino
+        assert.notEqual(sourceId, destinationId)
+        assert.equal(Number(sourceId), Number(destinationId))
+      },
+    }),
+  )
+  assert.match(error.cause.message, /path identity changed/)
+  assert.deepEqual(readFileSync(cacheObject(cache, release)), good)
 })

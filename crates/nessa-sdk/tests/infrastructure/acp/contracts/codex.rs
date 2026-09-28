@@ -29,8 +29,13 @@ async fn codex_verified_presets_are_selected_on_open_and_resume() {
             Arc::new(RecordingAudit::default()),
         )
         .unwrap()
-        .with_approval_mode(choice)
-        .unwrap();
+        .with_approval_mode(choice);
+        if !cfg!(target_os = "macos") && model_id != "gpt-6-astra" {
+            assert!(matches!(binding, Err(AgentError::Unsupported(_))));
+            assert!(!root.path().join("pid").exists());
+            continue;
+        }
+        let binding = binding.unwrap();
         let opened = binding
             .open(ProviderOpenRequest::without_startup_control(None))
             .await

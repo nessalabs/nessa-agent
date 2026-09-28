@@ -107,6 +107,12 @@ fn agent_catalog_uses_binding_choices_for_each_catalog_model() {
                 .map(|choice| choice.id)
                 .collect();
             let expected = match model.model_id.as_str() {
+                "claude-sonnet-5" | "gpt-6-astra" => vec![
+                    WireApprovalMode::Ask,
+                    WireApprovalMode::Auto,
+                    WireApprovalMode::Full,
+                ],
+                _ if !cfg!(target_os = "macos") => vec![WireApprovalMode::Ask],
                 "claude-haiku-4-5-20251001" => vec![WireApprovalMode::Ask, WireApprovalMode::Full],
                 _ => vec![
                     WireApprovalMode::Ask,
