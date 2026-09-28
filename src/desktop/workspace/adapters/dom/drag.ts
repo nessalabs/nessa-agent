@@ -57,6 +57,7 @@ import {
   type Size,
 } from "../../model/drag"
 import {
+  refusedZones,
   restAfter,
   type Aim,
   type Carried,
@@ -320,10 +321,7 @@ interface Made {
   /** What the drag may aim at; `null` while no pane can be seen. */
   readonly targets: Targets | null
   /** Each pane's parts and where each sits in it: what a preview counter-scales. */
-  readonly parts: ReadonlyMap<
-    HTMLElement,
-    readonly { element: HTMLElement; top: number }[]
-  >
+  readonly parts: ReadonlyMap<HTMLElement, readonly PanePart[]>
   readonly motion: { duration: number; easing: string }
   /** What is drawn now, written as the drag goes. */
   readonly drawing: {
@@ -345,6 +343,64 @@ interface Made {
     /** Where the drop would land, if it would. */
     landing: Box | null
   }
+}
+
+/**
+ * A part of a pane a preview draws at its own size, and what of the pane's
+ * would-be box it keeps to, as a pane that shape would lay it out: the
+ * header its top left, where it steps past the window's controls; the
+ * composer its foot; a new session's home its middle; the rest its top.
+ * Across, the rest keeps to the middle where the pane grows — a pane
+ * centres its conversation — and to the left where it shrinks, so what is
+ * cut is the end of its lines, never their start.
+ */
+interface PanePart {
+  readonly element: HTMLElement
+  /** Where it sits in its pane, from the pane's top left, in pixels. */
+  readonly left: number
+  readonly top: number
+  readonly keeps: "top-left" | "top" | "foot" | "middle"
+}
+
+/** A pane's parts, read as the press begins: its conversation's transcript and composer apart. */
+function partsOf(pane: HTMLElement): PanePart[] {
+  // Laid out, not drawn: offsets, summed up to the pane, ignore any transform.
+  const offset = (element: HTMLElement) => {
+    let left = 0
+    let top = 0
+    for (
+      let at: HTMLElement | null = element;
+      at && at !== pane;
+      at = at.offsetParent as HTMLElement | null
+    ) {
+      left += at.offsetLeft
+      top += at.offsetTop
+    }
+    return { left, top }
+  }
+  const part = (element: HTMLElement): PanePart => {
+    const { left, top } = offset(element)
+    return {
+      element,
+      left,
+      top,
+      keeps: element.classList.contains("workspace-pane-header")
+        ? "top-left"
+        : element.classList.contains("workspace-dock")
+          ? "foot"
+          : element.classList.contains("workspace-pane-home")
+            ? "middle"
+            : "top",
+    }
+  }
+  const within = (element: Element): HTMLElement[] =>
+    Array.from(element.children, (child) =>
+      child.classList.contains("workspace-pane-body") ||
+      child.classList.contains("workspace-conversation")
+        ? within(child)
+        : [child as HTMLElement],
+    ).flat()
+  return within(pane).map(part)
 }
 
 export function useWorkspaceDrag(
@@ -441,8 +497,13 @@ export function useWorkspaceDrag(
       const leaving = steppedAside(pane) && !resting
       letGo(pane)
       markCorner(scope, pane, resting || leaving)
+      const parts = made.parts.get(pane) ?? []
+      // What keeps to the top ends where a composer at the foot begins: cut
+      // by as much as the pane is shorter, it never runs under the composer.
+      const docked = parts.some(({ keeps }) => keeps === "foot")
       const box: Keyframe[] = []
       const counter: Keyframe[] = []
+      const cut: Keyframe[] = []
       for (let step = 0; step <= shapeSteps; step++) {
         const progress = step / shapeSteps
         const drawing = between(
@@ -451,27 +512,35 @@ export function useWorkspaceDrag(
           lerp(opacity.from, opacity.to, progress),
         )
         box.push({ transform: transformOf(drawing), opacity: drawing.opacity })
-        counter.push({ transform: `scale(${1 / drawing.sx}, ${1 / drawing.sy})` })
+        const scale = `scale(${1 / drawing.sx}, ${1 / drawing.sy})`
+        counter.push({ transform: scale })
+        cut.push({
+          transform: scale,
+          clipPath: `inset(0 0 ${Math.max(0, real.height * (1 - drawing.sy))}px 0)`,
+        })
       }
-      const parts = made.parts.get(pane) ?? []
       pane.style.transformOrigin = "50% 50%"
       const motion = track(
         scope,
         pane.animate(box, { ...made.motion, fill: "forwards", id: dragPreview }),
       )
       // The content keeps its size, as in a flight (`flip.tsx`), scaled back
-      // as a pane that shape would lay it out: its header held to the top
-      // left, where it steps past the window's controls; the rest held to
-      // the top and centred across, as a pane centres its conversation —
-      // cut to the shape where it is smaller.
-      const undone = parts.map(({ element, top }) => {
-        const across = element.classList.contains("workspace-pane-header")
-          ? 0
-          : real.width / 2
-        element.style.transformOrigin = `${across}px ${-top}px`
+      // about the point of the pane each part keeps to (`PanePart`) — cut to
+      // the shape where it is smaller.
+      const shrinks = target.width < real.width
+      const undone = parts.map(({ element, left, top, keeps }) => {
+        const across =
+          keeps === "top-left" || (keeps !== "middle" && shrinks) ? 0 : real.width / 2
+        const down =
+          keeps === "foot" ? real.height : keeps === "middle" ? real.height / 2 : 0
+        element.style.transformOrigin = `${across - left}px ${down - top}px`
         return track(
           scope,
-          element.animate(counter, { ...made.motion, fill: "forwards", id: dragPreview }),
+          element.animate(docked && keeps === "top" ? cut : counter, {
+            ...made.motion,
+            fill: "forwards",
+            id: dragPreview,
+          }),
         )
       })
       together([motion, ...undone])
@@ -880,10 +949,7 @@ export function useWorkspaceDrag(
       const parts = new Map(
         Array.from(scope.querySelectorAll<HTMLElement>("[data-pane-key]"), (pane) => [
           pane,
-          Array.from(pane.children, (child) => ({
-            element: child as HTMLElement,
-            top: (child as HTMLElement).offsetTop,
-          })),
+          partsOf(pane),
         ]),
       )
       const motion = {
@@ -893,7 +959,12 @@ export function useWorkspaceDrag(
       // Only panes a person can see are aimed at: none under the Agents overview.
       const targets: Targets | null =
         store.getState().workspace.content === "panes"
-          ? { grid, panes: [...boxes(layout, grid)], covered }
+          ? {
+              grid,
+              panes: [...boxes(layout, grid)],
+              covered,
+              refused: refusedZones(layout, carried, room),
+            }
           : null
       const { ghost, inner } = ghostFor(carried, source, size)
       const grab = { x: x - home.left, y: y - home.top }

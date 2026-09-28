@@ -4,10 +4,13 @@ import {
   dropOutcome,
   edgeHug,
   edgeReach,
+  headingReach,
   paneAt,
   headingWindow,
   pointerVelocity,
+  refusedZones,
   restAfter,
+  travelled,
   zoneAt,
   zoneHold,
 } from "./drop"
@@ -17,7 +20,19 @@ const room = { width: 1100, height: 800, spare: 0 }
 const zones: readonly Zone[] = ["left", "right", "top", "bottom", "center"]
 
 const still = { x: 0, y: 0 }
-const at = (x: number, y: number, velocity = still) => ({ x, y, velocity })
+/** `aimAt`, pressed where the path starts: a pane that has come no way yet. */
+const aimStill = (
+  path: Parameters<typeof aimAt>[0],
+  now: number,
+  was: Parameters<typeof aimAt>[2],
+  targets: Parameters<typeof aimAt>[3],
+) => aimAt(path, now, was, targets, path[0])
+const at = (x: number, y: number, velocity = still, travel = { x: 0, y: 0 }) => ({
+  x,
+  y,
+  velocity,
+  travel,
+})
 const tall = { width: 320, height: 900 }
 const wide = { width: 1200, height: 300 }
 const square = { width: 600, height: 600 }
@@ -190,7 +205,34 @@ describe("where on a pane a drop lands", () => {
     const reach = edgeReach(square, "top")
     expect(zoneAt(at(300, reach - 4), square, "center")).toBe("center")
     expect(zoneAt(at(300, reach + 4), square, "top")).toBe("top")
-    expect(zoneAt(at(300, reach + zoneHold + 1), square, "top")).toBe("center")
+    // The side it is in keeps the reach a heading gave it, at rest too.
+    const held = Math.min(reach * headingReach, square.height / 2) + zoneHold
+    expect(zoneAt(at(300, held - 1), square, "top")).toBe("top")
+    expect(zoneAt(at(300, held + 1), square, "top")).toBe("center")
+  })
+
+  it("holds the side it is in while the hand settles, and lets go as it sweeps", () => {
+    // 330px in from the right of a 900px pane: past the right's own reach
+    // (300px, 12 held), inside the reach a heading gives it (420px).
+    const wide = { width: 900, height: 900 }
+    expect(zoneAt(at(570, 450), wide, "right")).toBe("right")
+    // A slow nudge away keeps it; a sweep away lets it go.
+    expect(zoneAt(at(570, 450, { x: -0.1, y: 0 }), wide, "right")).toBe("right")
+    expect(zoneAt(at(570, 450, { x: -0.8, y: 0 }), wide, "right")).toBe("center")
+  })
+
+  it("never aims at a zone it refuses: the one beside it is aimed at instead", () => {
+    // Near the right edge, just under the top: the top, were it offered.
+    expect(zoneAt(at(570, 12), square)).toBe("top")
+    expect(zoneAt(at(570, 12), square, null, new Set(["top"]))).toBe("right")
+    // Nothing near but a refused side: the middle.
+    expect(zoneAt(at(300, 20), square, null, new Set(["top"]))).toBe("center")
+    // Heading straight down the right edge, in the refused top's ground: still the right.
+    expect(zoneAt(at(580, 30, { x: 0.1, y: 0.8 }), square, "top", new Set(["top"]))).toBe(
+      "right",
+    )
+    // On a refused side's edge, well away from the corner: the middle, not the side beside it.
+    expect(zoneAt(at(600, 90), square, null, new Set(["right"]))).toBe("center")
   })
 
   it("reads the pointer's heading from the last tenth of a second, and none once it has rested", () => {
@@ -223,6 +265,7 @@ describe("where a drag aims", () => {
     grid: { left: 0, top: 0, width: 2000, height: 1300 },
     panes: grid,
     covered: [],
+    refused: new Map(),
   }
 
   it("reads a gutter as the pane nearest it, held to its edge", () => {
@@ -234,19 +277,19 @@ describe("where a drag aims", () => {
   it("aims at the pointer: the pane and zone under it, nothing off the grid or with no pane in sight", () => {
     const still = (x: number, y: number) => [{ x, y, t: 0 }]
     // The middle of a tall pane is its middle: the copy's centre is the pointer.
-    expect(aimAt(still(498, 650), 0, null, targets)).toEqual({
+    expect(aimStill(still(498, 650), 0, null, targets)).toMatchObject({
       target: 1,
       zone: "center",
     })
-    expect(aimAt(still(1500, 1250), 0, null, targets)).toEqual({
+    expect(aimStill(still(1500, 1250), 0, null, targets)).toMatchObject({
       target: 3,
       zone: "bottom",
     })
-    expect(aimAt(still(1001, 300), 0, null, targets)).toMatchObject({ target: 2 })
-    expect(aimAt(still(2100, 300), 0, null, targets)).toBeNull()
-    expect(aimAt(still(1500, -5), 0, null, targets)).toBeNull()
-    expect(aimAt(still(498, 650), 0, null, null)).toBeNull()
-    expect(aimAt([], 0, null, targets)).toBeNull()
+    expect(aimStill(still(1001, 300), 0, null, targets)).toMatchObject({ target: 2 })
+    expect(aimStill(still(2100, 300), 0, null, targets)).toBeNull()
+    expect(aimStill(still(1500, -5), 0, null, targets)).toBeNull()
+    expect(aimStill(still(498, 650), 0, null, null)).toBeNull()
+    expect(aimStill([], 0, null, targets)).toBeNull()
   })
 
   it("aims at nothing over a side column, docked or revealed over the panes", () => {
@@ -256,22 +299,26 @@ describe("where a drag aims", () => {
       ...targets,
       covered: [{ left: 8, top: 8, width: 256, height: 1284 }],
     }
-    expect(aimAt(still(100, 650), 0, null, peeked)).toBeNull()
-    expect(aimAt(still(264, 650), 0, null, peeked)).toBeNull()
+    expect(aimStill(still(100, 650), 0, null, peeked)).toBeNull()
+    expect(aimStill(still(264, 650), 0, null, peeked)).toBeNull()
     // Past its edge, the pane under the pointer as before.
-    expect(aimAt(still(265, 650), 0, null, peeked)).toMatchObject({ target: 1 })
-    expect(aimAt(still(100, 650), 0, null, targets)).toMatchObject({ target: 1 })
+    expect(aimStill(still(265, 650), 0, null, peeked)).toMatchObject({ target: 1 })
+    expect(aimStill(still(100, 650), 0, null, targets)).toMatchObject({ target: 1 })
   })
 
   it("holds the zone it had only on the same pane", () => {
     // 200px in from pane 1's left, at rest, is its middle — unless it was its left.
     const path = [{ x: 305, y: 650, t: 0 }]
-    expect(aimAt(path, 0, null, targets)).toEqual({ target: 1, zone: "center" })
-    expect(aimAt(path, 0, { target: 1, zone: "left" }, targets)).toEqual({
+    expect(aimStill(path, 0, null, targets)).toMatchObject({ target: 1, zone: "center" })
+    expect(
+      aimStill(path, 0, { target: 1, zone: "left", within: "left" }, targets),
+    ).toMatchObject({
       target: 1,
       zone: "left",
     })
-    expect(aimAt(path, 0, { target: 2, zone: "left" }, targets)).toEqual({
+    expect(
+      aimStill(path, 0, { target: 2, zone: "left", within: "left" }, targets),
+    ).toMatchObject({
       target: 1,
       zone: "center",
     })
@@ -318,5 +365,73 @@ describe("what a drop leaves", () => {
       dropOutcome(two, { kind: "session", sessionId: "c" }, 1, "left", narrow),
     ).toBeNull()
     expect(dropOutcome(two, { kind: "pane", pane: 1 }, 1, "left", room)).toBeNull()
+  })
+})
+
+describe("the zones a drag refuses", () => {
+  // Two panes, the second split below the first: one column, a over b.
+  const one = singlePane("a")
+  const stacked = splitPane(one, one.focused, "bottom", "b")
+  const [top, bottom] = stacked.columns[0].panes.map((pane) => pane.key)
+
+  it("refuses the side of a pane the carried one already sits on, and nothing else there", () => {
+    const refused = refusedZones(stacked, { kind: "pane", pane: top }, room)
+    expect([...(refused.get(bottom) ?? [])]).toEqual(["top"])
+  })
+
+  it("refuses every zone of the carried pane itself", () => {
+    const refused = refusedZones(stacked, { kind: "pane", pane: top }, room)
+    expect(refused.get(top)?.size).toBe(5)
+  })
+
+  it("aims beside a refused zone: at the right edge just under the carried pane, the right", () => {
+    const targets = {
+      grid: { left: 0, top: 0, width: 800, height: 900 },
+      panes: [
+        [top, { left: 0, top: 0, width: 800, height: 446 }],
+        [bottom, { left: 0, top: 454, width: 800, height: 446 }],
+      ] as [number, { left: number; top: number; width: number; height: number }][],
+      covered: [],
+      refused: refusedZones(stacked, { kind: "pane", pane: top }, room),
+    }
+    const path = [{ x: 790, y: 470, t: 0 }]
+    expect(aimStill(path, 1000, null, targets)).toEqual({
+      target: bottom,
+      zone: "right",
+      within: "right",
+    })
+    // Over its own place, nothing.
+    expect(aimStill([{ x: 400, y: 200, t: 0 }], 1000, null, targets)).toBeNull()
+  })
+})
+
+describe("the way the pane has come", () => {
+  // A pane moved up into another's lower half reaches its top side further;
+  // moved sideways, its left or right.
+  const pane = { width: 900, height: 900 }
+  it("moved up, the top reaches as a heading does", () => {
+    // 380px down: past the top's own reach (300px), inside a heading's (420px).
+    expect(zoneAt(at(450, 380), pane)).toBe("center")
+    expect(zoneAt(at(450, 380, still, { x: 0, y: -200 }), pane)).toBe("top")
+  })
+  it("moved sideways, the left or right does, and the top does not", () => {
+    // Moved right, 380px down and from the left: the top stays out of reach.
+    expect(zoneAt(at(450, 380, still, { x: 300, y: -20 }), pane)).toBe("center")
+    expect(zoneAt(at(380, 450, still, { x: -300, y: 20 }), pane)).toBe("left")
+  })
+  it("never puts a pane moved sideways above or below, at a refused side's corner", () => {
+    // Moved left onto a pane whose right is refused, 30px under its top.
+    const refused = new Set<Zone>(["right"])
+    expect(zoneAt(at(890, 30, still, { x: -300, y: 10 }), pane, null, refused)).toBe(
+      "center",
+    )
+    // Moved down onto it instead: the top beside the refused right takes it.
+    expect(zoneAt(at(890, 30, still, { x: 10, y: 300 }), pane, null, refused)).toBe("top")
+  })
+
+  it("counts only once it has come far enough", () => {
+    expect(zoneAt(at(450, 380, still, { x: 0, y: -(travelled - 1) }), pane)).toBe(
+      "center",
+    )
   })
 })

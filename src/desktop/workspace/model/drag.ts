@@ -49,6 +49,8 @@ export type DragPhase<Made = unknown> =
       readonly kind: "carrying"
       readonly carried: Carried
       readonly pointerId: number
+      /** Where the press was: which way the pane has come since. */
+      readonly from: PointerSample
       /** Where the pointer has been lately, newest last: where it is and where it heads. */
       readonly path: readonly PointerSample[]
       /** What a release now would drop on (`aimAt`). */
@@ -160,6 +162,7 @@ export function stepDrag<Made>(
             kind: "carrying",
             carried: phase.carried,
             pointerId: phase.pointerId,
+            from: phase.from,
             path: [event.at],
             aim: null,
             made: phase.made,
@@ -186,12 +189,14 @@ export function stepDrag<Made>(
           return {
             ...phase,
             path,
-            aim: aimAt(path, event.at.t, phase.aim, event.targets),
+            aim: aimAt(path, event.at.t, phase.aim, event.targets, phase.from),
           }
         }
         case "still": {
-          const aim = aimAt(phase.path, event.t, phase.aim, event.targets)
-          return sameAim(aim, phase.aim) ? phase : { ...phase, aim }
+          const aim = aimAt(phase.path, event.t, phase.aim, event.targets, phase.from)
+          return sameAim(aim, phase.aim) && aim?.within === phase.aim?.within
+            ? phase
+            : { ...phase, aim }
         }
         case "release":
           if (event.pointerId !== phase.pointerId) return phase

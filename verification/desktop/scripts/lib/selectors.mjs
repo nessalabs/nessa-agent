@@ -30,6 +30,7 @@ export const css = {
   paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
   transcript: ".workspace-transcript", // class
+  dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot
   dragLayer: ".workspace-drag-layer", // class: what is carried is drawn in it, below the titlebar row
   dragGhost: ".workspace-drag-ghost", // class: the translucent copy the pointer carries
   dragCarrier: ".workspace-drag-carrier", // class: holds the copy at the pointer

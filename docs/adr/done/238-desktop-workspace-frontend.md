@@ -310,7 +310,7 @@ drawing is `adapters/dom/drag.ts`):
 | while carrying | the copy | a pane the drop would move or resize |
 | --- | --- | --- |
 | no zone shown: before the first preview, off the grid, over a side column, its own place, a side the room refuses, under the overview | the carried pane's own size, its centre on the pointer | where and as big as it is |
-| a zone shown that offers something | the placeholder's size — the slot it would land in — its centre still on the pointer, never the slot's place | the rect the drop gives it (`dropOutcome`, the same the drop commits), what it holds at its own size, as a pane that shape would place it — its conversation held to the top and centred across, its header to the top left — and cut to the shape where smaller, its header past the window's controls where it would rest in the corner (`data-drag-corner`) and not until it has moved out from under them where it would leave |
+| a zone shown that offers something | the placeholder's size — the slot it would land in — its centre still on the pointer, never the slot's place | the rect the drop gives it (`dropOutcome`, the same the drop commits), what it holds at its own size, as a pane that shape would place it — its transcript held to the top, centred across as it grows and held left as it shrinks, its composer to the foot, its header to the top left — and cut to the shape where smaller, its header past the window's controls where it would rest in the corner (`data-drag-corner`) and not until it has moved out from under them where it would leave |
 | the zone changes, even mid-change | from the size it is drawn at now to the new one, `--desktop-base` on `--desktop-ease`, one way, never past it | from where it is drawn now, the same |
 | released onto the zone shown | flies from the pointer into the placeholder's rect | lands where it was previewed: `FlipScope` lets the preview go and finds nothing to fly |
 | cancelled home | flies home, back to its own size | back to its own place and size |
@@ -331,8 +331,15 @@ in what the content is laid out at, chosen by measurement:
 - **A pane keeps its layout and is cut to its would-be shape**: its box
   takes the rect by transform (`overflow: hidden` clips it) and its content,
   scaled back, stays at the size it has, placed as a pane that shape would
-  place it — its conversation centred across, as a wider pane centres its
-  column, and held to the top; its header held to the top left, so it steps
+  place it — its transcript held to the top, centred across where the pane
+  grows, as a wider pane centres its column, and held left where it
+  shrinks, so a line loses its end, never its start (centred both ways, a
+  narrower pane cut its title's first words); its composer held to the
+  foot, as a taller pane docks it (held to the top with the rest, it
+  floated mid-pane), and what is held to the top cut where the composer
+  begins, by as much as the pane is shorter, so it never runs under it; a
+  new session's home held to the middle; its header
+  held to the top left, so it steps
   past the window's controls where it rests in the corner and nothing of it
   passes under them. Centring down as well was tried: a pane shorter than
   before then drew its conversation's heading into the titlebar row, under
@@ -377,10 +384,13 @@ Where the pointer is decides the zone (`aimAt`, `model/drop.ts`):
 | over a pane | each side reaches a third of the way in, held to 90–300px and never past the middle (`edgeReach`); the middle is what the sides leave, and where two reaches meet the diagonal between them decides (`zoneAt`) |
 | over a pane, heading mostly toward a side (the last tenth of a second, `pointerVelocity`) | that side reaches 1.4 times further, so a drag down a tall pane is "below" by two-thirds of the way |
 | over a pane, heading plainly along one axis | the sides across it are reached only within 16px of their edge — unless the pointer is already in one — so a sideways drag near a tall narrow pane's top moves beside it, never above |
+| over a pane, the pointer 24px or more (`travelled`) from where the drag was pressed | the sides the way it has come reaches as a heading does, 1.4 times further: a pane moved up is moved up, one moved sideways beside — at rest too |
 | over a pane, still for 150ms | as at rest: the heading has aged out |
+| over the zone it is already in, resting or settling (under 0.25px/ms, `settlingSpeed`) | its side keeps the 1.4 times reach a heading gives, so coming to rest, or nudging into place, never swings the panes back; sweeping, only a heading toward a side reaches further |
 | over the zone it is already in | it holds until another wins by 12px, so it does not flicker at a boundary |
+| near a zone a drop would change nothing on — the side of a pane the carried one already sits on — or one the room refuses (`refusedZones`, read as the press begins) | never that zone: the zone beside it is decided as though it were not there, so moving a pane from above another to its right edge offers "right" at once, not "above" |
 | released | the zone shown then, as above: a release decides nothing again |
-| over the carried pane's own place | its zone, offering nothing: let go there, it goes home |
+| over the carried pane's own place | none, every zone refused: let go there, it goes home |
 
 The pointer is the aim because the copy's centre is under it: what the eye
 tracks and what aims are one point, so the middle of a tall pane — Swap — is

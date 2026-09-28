@@ -27,6 +27,7 @@ const targets: Targets = {
     [2, { left: 554, top: 0, width: 546, height: 800 }],
   ],
   covered: [],
+  refused: new Map(),
 }
 
 /** What the page made for the drag: here, a name. */
@@ -55,7 +56,7 @@ const move = (
   at: at(x, y, t),
   targets: over,
 })
-const middleOf2: Aim = { target: 2, zone: "center" }
+const middleOf2: Aim = { target: 2, zone: "center", within: "center" }
 /** A release of the carrying pointer at 827, 400 (pane 2's middle), with what the page shows as it lifts. */
 const release = (
   shown: Aim | null = middleOf2,
@@ -210,7 +211,7 @@ describe("carrying", () => {
     })
   })
 
-  it("still for restAfter: the zone is decided again as at rest", () => {
+  it("still for restAfter: the zone is decided again, and the one it is in holds", () => {
     // Heading right fast into pane 2, 220px from its right edge: the heading
     // reaches the right side (1.4 × 182px)…
     const fast = run([
@@ -222,12 +223,19 @@ describe("carrying", () => {
       move(880, 400, 30),
     ])
     expect(fast).toMatchObject({ aim: { target: 2, zone: "right" } })
-    // …at rest there it is the middle (182px reach, 12px held: 194px).
+    // …and coming to rest there does not take it away: the side it is in
+    // keeps the heading's reach, so the panes do not swing back as the hand stops.
     const settled = stepDrag(fast, { kind: "still", t: 30 + restAfter, targets })
-    expect(settled).toMatchObject({ aim: { target: 2, zone: "center" } })
+    expect(settled).toBe(fast)
     // Nudged a pixel after resting, it stays where it settled.
     expect(stepDrag(settled, move(881, 400, 30 + restAfter + 150))).toMatchObject({
-      aim: { target: 2, zone: "center" },
+      aim: { target: 2, zone: "right" },
+    })
+    // Arriving there at rest, the way the pane has come still counts: moved
+    // right from its place, the right side reaches as a heading does.
+    const slow = run([press(), ready, move(90, 40, 0), move(880, 400, 400)])
+    expect(stepDrag(slow, { kind: "still", t: 400 + restAfter, targets })).toMatchObject({
+      aim: { target: 2, zone: "right" },
     })
     // A move to where it already is restarts nothing.
     expect(stepDrag(fast, move(880, 400, 100))).toBe(fast)
@@ -250,7 +258,7 @@ describe("carrying", () => {
     expect(run([release()], carrying())).toEqual({
       kind: "dropping",
       carried: pane,
-      aim: { target: 2, zone: "center" },
+      aim: middleOf2,
     })
   })
 
@@ -264,7 +272,7 @@ describe("carrying", () => {
       move(840, 400, 20),
       move(880, 400, 30),
     ])
-    const right: Aim = { target: 2, zone: "right" }
+    const right: Aim = { target: 2, zone: "right", within: "right" }
     expect(fast).toMatchObject({ aim: right })
     // Let go just after the heading aged out, before the rest was shown:
     // what was on the page — "right of" — is what drops, not the middle

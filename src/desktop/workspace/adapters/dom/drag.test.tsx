@@ -714,7 +714,7 @@ it("takes the zone the pointer heads for: sideways near the top is the side, upw
   await act(async () => root.unmount())
 })
 
-it("settles the zone once the pointer rests: the heading ages out", async () => {
+it("holds the zone the pointer moved into as it comes to rest", async () => {
   const { root } = await mounted()
   await press(60, 16, header(1))
   // Heading right fast, 220px from pane c's right edge: its right…
@@ -724,10 +724,10 @@ it("settles the zone once the pointer rests: the heading ages out", async () => 
   }
   await frames()
   expect(said()).toBe("Move right of Session c")
-  // …and at rest there, its middle.
+  // …and at rest there, still its right: the panes do not swing back as the hand stops.
   await act(async () => new Promise((resolve) => setTimeout(resolve, restAfter + 30)))
   await frames()
-  expect(said()).toBe("Swap with Session c")
+  expect(said()).toBe("Move right of Session c")
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 880, 400)
   await act(async () => root.unmount())
@@ -827,11 +827,13 @@ it("draws the copy at the slot it would land in, and the panes at the rects the 
   expect(pane(1).getAttribute("data-drag-corner")).toBe("yes")
   expect(pane(2).getAttribute("data-drag-corner")).toBeNull()
   // Its content is scaled back as a pane that shape lays it out: the header
-  // held to the top left, the conversation to the top and centred across
-  // (273 is half the width it has) — cut to the shape where it is smaller.
-  const [paneHeader, paneBody] = Array.from(pane(2).children) as HTMLElement[]
-  expect(paneHeader.style.transformOrigin).toBe("0px 0px")
-  expect(paneBody.style.transformOrigin).toBe("273px 0px")
+  // held to the top left, the transcript to the top — centred across (273
+  // is half the width it has) as it grows, held left as it shrinks — cut
+  // to the shape where it is smaller.
+  const paneHeader = pane(2).querySelector<HTMLElement>(".workspace-pane-header")
+  const transcript = pane(2).querySelector<HTMLElement>(".workspace-transcript")
+  expect(paneHeader?.style.transformOrigin).toBe("0px 0px")
+  expect(transcript?.style.transformOrigin).toBe("273px 0px")
   // Each box and its content start at one time: never a frame apart.
   for (const [box, content] of [
     [pane(2), pane(2).firstElementChild],

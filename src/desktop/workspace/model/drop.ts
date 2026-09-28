@@ -26,7 +26,7 @@ import {
   type Side,
   type Zone,
 } from "./pane-layout"
-import { arrange, type Arranged, type WorkspaceRoom } from "./pane-sizing"
+import { arrange, placements, type Arranged, type WorkspaceRoom } from "./pane-sizing"
 
 /** What is carried: a pane by its header, or a session from a list. */
 export type Carried =
@@ -61,8 +61,14 @@ export type Carried =
  *
  * so a sideways drag near a tall narrow pane's top moves beside it, never
  * above, and a drag down a tall pane splits below well before its foot. The
- * zone the pointer is in holds: another takes over only once it wins by
- * `zoneHold` pixels, so the zone does not flicker at a boundary.
+ * zone the pointer is in holds: resting or settling (`settlingSpeed`), its
+ * side keeps the reach a heading gave it, and another takes over only once
+ * it wins by
+ * `zoneHold` pixels, so the zone flickers neither at a boundary nor as the
+ * hand stops. A zone a drop there would change nothing on — the side of a
+ * pane the carried one already sits on — or one the room refuses is never
+ * aimed at (`refusedZones`): its ground is the middle's, but near a corner
+ * the side beside it takes it (`cornerReach`).
  */
 export interface Pointer {
   /** From the pane's top left, in pixels. */
@@ -70,6 +76,8 @@ export interface Pointer {
   readonly y: number
   /** How it is moving, in pixels per millisecond (`pointerVelocity`). */
   readonly velocity: { readonly x: number; readonly y: number }
+  /** How far it has come since the drag was pressed, in pixels: which way the pane is being moved. */
+  readonly travel: { readonly x: number; readonly y: number }
 }
 
 /** A side's reach into the pane: its share of the pane across it, held to a floor and a cap. */
@@ -80,11 +88,24 @@ export const edgeCap = 300
 /** How much further a side reaches while the pointer heads mostly toward it. */
 export const headingReach = 1.4
 
+/**
+ * How far, in pixels, the pointer must have come since the press for the way
+ * it came to count: a pane moved up reaches the top sides further, one moved
+ * sideways the left or right, as a heading does.
+ */
+export const travelled = 24
+
 /** How much of the pointer's motion must be toward a side for it to be heading there (a cosine). */
 export const toward = 0.7
 
 /** Below this speed, in px/ms, the pointer is resting: its heading says nothing. */
 export const restingSpeed = 0.05
+
+/**
+ * Below this speed, in px/ms, the pointer is settling — a hand nudging into
+ * place — and the side it is in keeps its reach; faster, it sweeps.
+ */
+export const settlingSpeed = 0.25
 
 /** By how many pixels another zone must win before it takes over from the one the pointer is in. */
 export const zoneHold = 12
@@ -117,12 +138,19 @@ export function edgeReach(
   return Math.min(reach, extent / 2)
 }
 
-/** The zone of a pane of `size` the pointer is in; `now` is the zone it was in over this pane, if any. */
-export function zoneAt(
+/**
+ * The zone of a pane of `size` the pointer is in (`within`), and the one it
+ * offers (`zone`): the same, unless that zone is refused — then the middle,
+ * or near a corner the side beside it (`cornerReach`). `now` is the zone it
+ * was in over this pane, if any: what holds, refused or not, so the pointer
+ * moving about a refused side's ground stays on it.
+ */
+export function zonesAt(
   pointer: Pointer,
   size: { readonly width: number; readonly height: number },
   now: Zone | null = null,
-): Zone {
+  refused: ReadonlySet<Zone> = new Set(),
+): { readonly within: Zone; readonly zone: Zone } {
   const distance: Record<Side, number> = {
     left: pointer.x,
     right: size.width - pointer.x,
@@ -143,9 +171,27 @@ export function zoneAt(
       : Math.abs(vy) >= plainly * Math.abs(vx)
         ? "y"
         : null
+  // Which way the pane has been moved since the press: moved up, the top
+  // sides reach further; moved sideways, the left or right.
+  const { x: tx, y: ty } = pointer.travel
+  const distanceCome = Math.hypot(tx, ty)
+  const cameToward = (side: Side) =>
+    distanceCome >= travelled
+      ? (tx * outward[side].x + ty * outward[side].y) / distanceCome
+      : 0
+  // Resting or settling, the side the pointer is in keeps the reach a
+  // heading gives: coming to rest, or nudging into place, never throws it
+  // out of the zone it moved into. Sweeping, only a heading toward a side
+  // — or the way the pane has come — reaches further.
+  const settling = speed < settlingSpeed
   const reach = (side: Side) => {
     const extent = across[side] === "x" ? size.width : size.height
-    const heading = headingTo(side) >= toward ? headingReach : 1
+    const heading =
+      (side === now && settling) ||
+      headingTo(side) >= toward ||
+      cameToward(side) >= toward
+        ? headingReach
+        : 1
     return Math.min(edgeReach(size, side) * heading, extent / 2)
   }
   // The zone the pointer is in holds by `zoneHold` pixels: its side reaches
@@ -162,13 +208,47 @@ export function zoneAt(
         side === now ||
         distance[side] <= edgeHug),
   )
-  if (candidates.length === 0) return "center"
   // Where two reaches meet, the diagonal between them, as a share of each;
   // the side the pointer is in wins ties by `zoneHold` pixels.
   const depth = (side: Side) =>
     (distance[side] - (side === now ? zoneHold : 0)) / reach(side)
-  return candidates.reduce((best, side) => (depth(side) < depth(best) ? side : best))
+  const [nearest] = candidates.sort((a, b) => depth(a) - depth(b))
+  const within: Zone = nearest ?? "center"
+  if (!refused.has(within)) return { within, zone: within }
+  // A refused zone's ground is the middle's — but near a corner, the side
+  // beside it takes it: within `cornerReach` of its edge, however the
+  // pointer heads, so moving along that edge does not flicker — unless the
+  // pane has plainly come along the other axis: moved sideways, it is never
+  // put above or below.
+  const cameAlong =
+    distanceCome < travelled
+      ? null
+      : Math.abs(tx) >= plainly * Math.abs(ty)
+        ? "x"
+        : Math.abs(ty) >= plainly * Math.abs(tx)
+          ? "y"
+          : null
+  const [beside] = sides
+    .filter(
+      (side) =>
+        !refused.has(side) &&
+        distance[side] <= cornerReach &&
+        (cameAlong === null || across[side] === cameAlong),
+    )
+    .sort((a, b) => distance[a] - distance[b])
+  return { within, zone: beside ?? "center" }
 }
+
+/** The zone of a pane of `size` the pointer is offered (`zonesAt`). */
+export const zoneAt = (
+  pointer: Pointer,
+  size: { readonly width: number; readonly height: number },
+  now: Zone | null = null,
+  refused: ReadonlySet<Zone> = new Set(),
+): Zone => zonesAt(pointer, size, now, refused).zone
+
+/** How near its edge, in pixels, the side beside a refused one takes the refused one's ground. */
+export const cornerReach = 48
 
 /** A box on the page, in pixels. */
 export interface Rect {
@@ -246,6 +326,8 @@ export interface Targets {
    * under them.
    */
   readonly covered: readonly Rect[]
+  /** Each pane's zones a drop would change nothing on, or the room refuses (`refusedZones`). */
+  readonly refused: ReadonlyMap<PaneKey, ReadonlySet<Zone>>
 }
 
 const within = (point: { readonly x: number; readonly y: number }, box: Rect) =>
@@ -272,7 +354,10 @@ export function inReach(
 /** The pane and zone a drag aims at. */
 export interface Aim {
   readonly target: PaneKey
+  /** What a drop there does: never a zone the pane refuses. */
   readonly zone: Zone
+  /** The zone the pointer is in, refused or not: what holds as it moves (`zonesAt`). */
+  readonly within: Zone
 }
 
 /**
@@ -289,20 +374,30 @@ export function aimAt(
   now: number,
   was: Aim | null,
   targets: Targets | null,
+  /** Where the drag was pressed: which way the pane has come. */
+  from: PointerSample,
 ): Aim | null {
   const pointer = path.at(-1)
   if (!pointer || !inReach(pointer, targets)) return null
   const over = paneAt(pointer, targets.panes)
   if (!over) return null
-  return {
-    target: over.key,
-    zone: zoneAt(
-      { x: over.x, y: over.y, velocity: pointerVelocity(path, now) },
-      over.box,
-      was?.target === over.key ? was.zone : null,
-    ),
-  }
+  const refused = targets.refused.get(over.key) ?? noZones
+  const { within, zone } = zonesAt(
+    {
+      x: over.x,
+      y: over.y,
+      velocity: pointerVelocity(path, now),
+      travel: { x: pointer.x - from.x, y: pointer.y - from.y },
+    },
+    over.box,
+    was?.target === over.key ? was.within : null,
+    refused,
+  )
+  // A pane over itself, say, refuses every zone: nothing is aimed at.
+  return refused.has(zone) ? null : { target: over.key, zone, within }
 }
+
+const noZones: ReadonlySet<Zone> = new Set()
 
 /** What a drop leaves: the layout, whether the sidebar folds for it, and the pane it lands in. */
 export interface DropOutcome extends Arranged {
@@ -347,4 +442,62 @@ export function dropOutcome(
   const placed = arrange(layout, splitPane(layout, target, zone, carried.sessionId), room)
   // A new pane is minted the layout's next key.
   return placed ? { ...placed, lands: layout.nextKey, does: "split" } : null
+}
+
+const zones: readonly Zone[] = ["left", "right", "top", "bottom", "center"]
+
+/**
+ * Whether a drop's outcome leaves every pane where it was in `layout`: a pane
+ * moved to the side of the one it already sits beside, or dropped on
+ * itself. Focus aside, it would do nothing, so it is not offered.
+ */
+function movesNothing(layout: PaneLayout, outcome: DropOutcome): boolean {
+  if ((outcome.does !== "move" && outcome.does !== "swap") || outcome.foldSidebar)
+    return false
+  const before = placements(layout.columns).panes
+  const after = new Map(
+    placements(outcome.layout.columns).panes.map((placement) => [
+      placement.key,
+      placement,
+    ]),
+  )
+  return (
+    before.length === after.size &&
+    before.every((placement) => {
+      const moved = after.get(placement.key)
+      return (
+        moved !== undefined &&
+        Math.abs(moved.x - placement.x) < 1e-9 &&
+        Math.abs(moved.y - placement.y) < 1e-9 &&
+        Math.abs(moved.width - placement.width) < 1e-9 &&
+        Math.abs(moved.height - placement.height) < 1e-9 &&
+        moved.column === placement.column &&
+        moved.row === placement.row
+      )
+    })
+  )
+}
+
+/**
+ * Each pane's zones a drag carrying `carried` must not aim at, as `layout`
+ * and `room` stand when the press begins: where the drop would change
+ * nothing (`movesNothing`, and a pane over itself), or the room refuses it.
+ * Read once, as the targets are: any change to either ends the drag.
+ */
+export function refusedZones(
+  layout: PaneLayout,
+  carried: Carried,
+  room: WorkspaceRoom | undefined,
+): ReadonlyMap<PaneKey, ReadonlySet<Zone>> {
+  return new Map(
+    placements(layout.columns).panes.map(({ key }) => [
+      key,
+      new Set(
+        zones.filter((zone) => {
+          const outcome = dropOutcome(layout, carried, key, zone, room)
+          return outcome === null || movesNothing(layout, outcome)
+        }),
+      ),
+    ]),
+  )
 }

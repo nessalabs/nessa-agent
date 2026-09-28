@@ -44,7 +44,9 @@
  *                        its own place (no zone) it is its own size; each change of size is
  *                        drawn one way, never past where it goes; nothing under the controls
  *   preview-panes-take-shape  at rest with a zone shown, every pane is drawn at the rect the
- *                        drop then gives it, its conversation centred across it; its title and
+ *                        drop then gives it, its transcript held to its top — centred across
+ *                        where it grows, held left where it shrinks — and its composer to its
+ *                        foot; its title and
  *                        the copy's are never drawn stretched, any frame
  *
  * `--shots <dir>` saves, from copy-takes-slot-shape, the copy below a wide
@@ -217,7 +219,7 @@ const liftedNow = (page) => page.evaluate(() => performance.now())
 /**
  * Records, every frame until `stop()`: the copy's painted rect, the
  * placeholder's, the pointer, the zone said, each pane's painted rect and
- * its conversation's, and
+ * its transcript's and composer's, and
  * the scale each title — every pane's and the copy's — is drawn at, across
  * and down, by every transform above it.
  */
@@ -269,12 +271,14 @@ async function recordShapes(page) {
         panes: [...document.querySelectorAll(sel.pane)]
           .filter((e) => !e.closest(sel.dragGhost))
           .map((e) => {
-            // Its conversation, drawn.
-            const body = e.querySelector(sel.paneBody)
+            // Its transcript and composer, drawn.
+            const transcript = e.querySelector(sel.transcript)
+            const dock = e.querySelector(sel.dock)
             return {
               key: e.dataset.paneKey,
               ...rect(e),
-              body: body ? rect(body) : null,
+              transcript: transcript ? rect(transcript) : null,
+              dock: dock ? rect(dock) : null,
             }
           }),
         titles: [
@@ -1158,6 +1162,9 @@ Object.assign(checks, {
     const list = (await panes(page)).sort((a, b) => a.x - b.x)
     const target = list.at(-1)
     const shapes = await recordShapes(page)
+    // Each pane's parts as laid out, before anything is previewed.
+    await frames(page)
+    const laid = (await shapes.now()).panes
     await lift(page, 0)
     await headBelow(page, target)
     if (!(await zoneSays(page, /below/)))
@@ -1188,15 +1195,32 @@ Object.assign(checks, {
       )
         failures.push(`pane ${p.key} previewed ${px(previewed)}, landed ${px(p)}`)
     }
-    // Each pane's conversation is centred across the shape it would take,
-    // as a pane that wide centres it.
+    // Each pane's transcript keeps its top, centred across the shape it
+    // would take where that grows, as a pane that wide centres it, and held
+    // left where it shrinks, so its lines lose their ends, never their
+    // starts; its composer keeps to the foot.
     for (const p of shown.panes) {
-      if (!p.body) continue
-      const dx = p.body.x + p.body.w / 2 - (p.x + p.w / 2)
-      if (Math.abs(dx) > tolerance)
-        failures.push(
-          `pane ${p.key}'s conversation is centred ${Math.round(dx)}px across from its previewed rect's centre`,
-        )
+      const was = laid.find((q) => q.key === p.key)
+      if (!was) continue
+      if (p.transcript && was.transcript) {
+        const dy = p.transcript.y - p.y - (was.transcript.y - was.y)
+        const dx =
+          p.w >= was.w - tolerance
+            ? p.transcript.x + p.transcript.w / 2 - (p.x + p.w / 2)
+            : p.transcript.x - p.x - (was.transcript.x - was.x)
+        if (Math.abs(dy) > tolerance || Math.abs(dx) > tolerance)
+          failures.push(
+            `pane ${p.key}'s transcript is drawn ${Math.round(dx)}px across and ${Math.round(dy)}px down from where its previewed rect keeps it`,
+          )
+      }
+      if (p.dock && was.dock) {
+        const dy =
+          p.y + p.h - (p.dock.y + p.dock.h) - (was.y + was.h - (was.dock.y + was.dock.h))
+        if (Math.abs(dy) > tolerance)
+          failures.push(
+            `pane ${p.key}'s composer is drawn ${Math.round(dy)}px off its previewed rect's foot`,
+          )
+      }
     }
     failures.push(
       ...stretched(during, `"${said}"`).map(
