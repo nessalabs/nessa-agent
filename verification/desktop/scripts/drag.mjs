@@ -29,7 +29,8 @@
  *                        from the edge offers no zone and no placeholder, the reveal stays
  *                        for the whole drag, and the release changes nothing
  *   copy-under-controls  the corner pane carried: nothing of its copy is painted under the
- *                        window's controls, any frame
+ *                        window's controls, any frame, and its header is laid out as the
+ *                        pane's (the title starts within 2px of where the pane's does)
  *   docked-columns-no-zone  (1440 × 900) a pane carried over the docked sidebar, and over
  *                        the docked session list, offers no zone and no placeholder; the
  *                        release there changes nothing
@@ -1254,15 +1255,18 @@ Object.assign(checks, {
     // The pane measured, and lifted, must be the corner's, with both side
     // columns closed so its header steps past the controls — or the check
     // compares two plainly padded headers.
-    const cornered = await page.evaluate(
-      ([pane, corner, alone]) =>
-        !!document.querySelector(pane)?.matches(corner) &&
-        !!document.querySelector(alone),
+    const [corner, alone] = await page.evaluate(
+      ([pane, cornerPane, panesAlone]) => [
+        !!document.querySelector(pane)?.matches(cornerPane),
+        !!document.querySelector(panesAlone),
+      ],
       [css.pane, css.cornerPane, css.panesAlone],
     )
-    if (!cornered)
+    if (!corner)
+      throw new CannotRun(`the first pane is not ${css.cornerPane}: nothing to compare`)
+    if (!alone)
       throw new CannotRun(
-        "the first pane is not the corner's alone in the window's row: nothing to compare",
+        `no ${css.panesAlone}: a side column is open, nothing to compare`,
       )
     const inPane = await titleIn(css.pane, css.titleText)
     let inCopy = null
