@@ -23,6 +23,12 @@ ADR 0008 owns conversation behavior; ADR 0011 owns delivery to clients.
 
 ## Current state
 
+The canonical record and legacy cutover contract is being specified under
+[#274](https://github.com/nessalabs/nessa-agent/issues/274) in the
+[migration design](../../design/canonical-record-migration.md). It names the
+validated snapshot baseline and the limits of reconstructing historical order;
+the production write-path switch remains a separate slice.
+
 Checked 2026-09-07: the upstream [README](https://github.com/nessalabs/event-stream#readme)
 describes a memory runtime, optional SQLite adapter using bundled `rusqlite`,
 cursor tokens, and replay/live subscriptions. Its
