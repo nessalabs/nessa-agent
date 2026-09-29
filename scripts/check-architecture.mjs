@@ -21,6 +21,7 @@ import {
   rustBoundaryViolations,
   workspaceRustSourceRoots,
 } from "./architecture/rust-boundaries.mjs"
+import { withoutComments } from "./architecture/without-comments.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const src = join(root, "src")
@@ -94,8 +95,11 @@ for (const name of readdirSync(src)) {
   }
 }
 
+/** What a file imports, by its specifiers; a comment's example is not one (`withoutComments`). */
 function importedPaths(text) {
-  return [...text.matchAll(/from\s+["']([^"']+)["']/g)].map((match) => match[1])
+  return [...withoutComments(text).matchAll(/from\s+["']([^"']+)["']/g)].map(
+    (match) => match[1],
+  )
 }
 
 for (const file of walk(src)) {
@@ -357,7 +361,7 @@ for (const file of [
   // also what keeps a comment about imports from reading as one.
   const specifiers = [
     ...importedPaths(text),
-    ...[...text.matchAll(/^\s*import\s*\(?\s*["']([^"']+)["']/gm)].map(
+    ...[...withoutComments(text).matchAll(/^\s*import\s*\(?\s*["']([^"']+)["']/gm)].map(
       (match) => match[1],
     ),
   ]
