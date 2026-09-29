@@ -166,6 +166,11 @@ _ADR 238 › One fit rule for every change of layout_.
   _Check:_ unit tests in `pane-sizing`; by hand: ⇧⌘N repeatedly at 1100–1400
   px, with and without the overview open — the split is measured against the
   room the panes will have.
+- [ ] **The session list's content sits evenly in its column.** Its search
+  field and a row's highlight are as far from what is on their left — the
+  sidebar's card, or with the sidebar away the window's edge — as from the
+  panes on their right. _Check:_ `responsive.mjs --only list-gutter`
+  (Chromium and WebKit, sidebar open and closed).
 - [ ] **Side columns fold first for room, and come back when there is room.**
   _ADR 238 › Side columns_ table. _Check:_ `safe-area.mjs --only resize-breakpoints`
   exercises it; watch with `--headed`.
