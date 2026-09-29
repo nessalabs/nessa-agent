@@ -190,6 +190,21 @@ async function press(
   })
 }
 
+/** The source moves a session on, as after an answer given elsewhere. */
+const moveOn = (
+  source: Awaited<ReturnType<typeof mount>>["source"],
+  sessionId: string,
+  title: string,
+  status: "running" | "idle",
+) =>
+  act(async () => {
+    source.emit({
+      kind: "session",
+      session: summary(sessionId, "desktop", 600, status, { title, revision: 2 }),
+    })
+    await settle(10)
+  })
+
 describe("the agents overview", () => {
   it("leaves Needs you out while nothing waits, and says all is clear only when nothing is listed at all", async () => {
     const quiet = sampleIndex()
@@ -651,20 +666,6 @@ describe("the counts show one group alone", () => {
     expect(resting()).toEqual([])
   })
 
-  /** The source moves a session on, as after an answer given elsewhere. */
-  const moveOn = (
-    source: Awaited<ReturnType<typeof mount>>["source"],
-    sessionId: string,
-    title: string,
-    status: "running" | "idle",
-  ) =>
-    act(async () => {
-      source.emit({
-        kind: "session",
-        session: summary(sessionId, "desktop", 600, status, { title, revision: 2 }),
-      })
-      await settle(10)
-    })
   const headings = () =>
     [
       ...host.querySelectorAll(".agents-overview-column h2, .agents-overview-resting"),
@@ -875,6 +876,56 @@ describe("the peek's story is bounded, and scrolls from the keyboard beneath its
       await press(story as HTMLElement, key)
       expect(document.activeElement).toBe(story)
     }
+  })
+})
+
+describe("a row keeps the keyboard as its session changes group", () => {
+  const heading = (sessionId: string) =>
+    row(sessionId)?.closest(".agents-overview-group")?.querySelector("h2")?.textContent
+  it("follows its session to its new row, and the arrows walk the list from there", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const before = row("run") as HTMLElement
+    await act(async () => before.focus())
+    expect(heading("run")).toBe("Working")
+    // Its turn over, looked at: the session rests under Earlier, its row drawn anew.
+    await moveOn(source, "run", "Split panes", "idle")
+    const after = row("run")
+    expect(heading("run")).toBe("Earlier")
+    expect(after).not.toBe(before)
+    expect(document.activeElement).toBe(after)
+    await press(after as HTMLElement, "ArrowUp")
+    expect(document.activeElement).toBe(card("second"))
+  })
+
+  it("leaves the keyboard where it is when a row it is not on changes group", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const first = card("first") as HTMLElement
+    await act(async () => first.focus())
+    // Not looked at, it leaves Working (the filter may keep it out altogether).
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).not.toBe("Working")
+    expect(document.activeElement).toBe(first)
+  })
+
+  it("goes to the row the list chooses next when its session is removed, never to the page", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    await act(async () => {
+      source.emit({ kind: "session-removed", sessionId: "run", revision: 9 })
+      await settle(10)
+    })
+    expect(row("run")).toBeNull()
+    const column = host.querySelector(".agents-overview-column")
+    expect(column?.contains(document.activeElement)).toBe(true)
+    const from = document.activeElement as HTMLElement
+    await press(from, "Home")
+    expect(document.activeElement).toBe(card("first"))
   })
 })
 

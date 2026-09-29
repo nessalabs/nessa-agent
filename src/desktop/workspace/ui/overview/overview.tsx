@@ -432,6 +432,34 @@ export function AgentsOverview({
   // the list, on the current row, or at its top where it lists none.
   const leaveReply = useCallback(() => focusItem(currentNow.current), [focusItem])
 
+  // The session whose row the keyboard is on, followed by where focus
+  // arrives. A session that changes group is drawn anew under its new
+  // heading, and the row it leaves takes focus with it to the page's body,
+  // where no key is heard: the keyboard follows it to its new row — or, the
+  // session gone from the list, to the current row — before the frame is
+  // painted.
+  const holding = useRef<string | null>(null)
+  useEffect(() => {
+    const onFocusIn = (event: FocusEvent) => {
+      holding.current =
+        event.target instanceof HTMLElement && list.current?.contains(event.target)
+          ? (event.target.closest<HTMLElement>("[data-overview-item]")?.dataset
+              .overviewItem ?? null)
+          : null
+    }
+    document.addEventListener("focusin", onFocusIn)
+    return () => document.removeEventListener("focusin", onFocusIn)
+  }, [])
+  // After every change to the list, before it is painted.
+  useLayoutEffect(() => {
+    const was = holding.current
+    if (was === null) return
+    const focus = document.activeElement
+    if (focus !== null && focus !== document.body) return
+    holding.current = null
+    focusItem(order.includes(was) ? was : current)
+  })
+
   return (
     <ReplyCaret.Provider value={caret}>
       <section

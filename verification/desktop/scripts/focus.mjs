@@ -13,7 +13,9 @@
  * straight after ↓ puts the caret in the reply pill of the row ↓ went to,
  * and what is typed at once lands there; sending, which moves that row from
  * Needs you to Working and draws its pill anew, leaves the caret in the
- * session's pill (focus-reply, at 1440 × 900 and 1000 × 700). Focus on the
+ * session's pill (focus-reply, at 1440 × 900 and 1000 × 700). The keyboard
+ * on a row whose session changes group follows it to its new row, and the
+ * arrows walk the list from there (focus-regroup). Focus on the
  * scene's Customize control in a new session's home, as the window shortens
  * and the pane's home hides the scene, goes to that home's composer, not to
  * the page (focus-home-scene).
@@ -400,6 +402,101 @@ async function replyKeepsCaret(page) {
   return { trail, failures }
 }
 
+/** The heading of the group a session's row is listed under, or null where it is not listed. */
+const groupOf = (page, sessionId) =>
+  page.evaluate(
+    ([sel, id]) =>
+      document
+        .querySelector(
+          `${sel.overviewColumn} ${sel.overviewItem}[data-overview-item="${id}"]`,
+        )
+        ?.closest(sel.overviewGroup)
+        ?.querySelector("h2")
+        ?.textContent.trim() ?? null,
+    [css, sessionId],
+  )
+
+/**
+ * The keyboard on a row whose session changes group: a reply moves a request
+ * to Working, Escape puts the keyboard back on its row, and the scripted turn
+ * ending moves it on again, its row drawn anew under another heading. The
+ * keyboard follows it to that row, and the arrows walk the list from there
+ * (#308).
+ */
+async function regroupKeepsKeyboard(page) {
+  const failures = []
+  const trail = []
+  await page.keyboard.press(keys.overview)
+  await contentIs(page, content.overview)
+  await settled(page)
+  await frames(page, 4)
+  const on = (await state(page)).activeOverviewItem
+  if (!on) throw new CannotRun("the keyboard did not land on an overview row")
+  await page.keyboard.press(keys.reply)
+  await page.keyboard.type("status?")
+  await page.keyboard.press(keys.enter)
+  const working = await until(
+    page,
+    ([sel, id]) =>
+      document
+        .querySelector(
+          `${sel.overviewColumn} ${sel.overviewItem}[data-overview-item="${id}"]`,
+        )
+        ?.closest(sel.overviewGroup)
+        ?.querySelector("h2")
+        ?.textContent.trim() === "Working",
+    [css, on],
+    4000,
+  )
+  if (!working) throw new CannotRun(`${on} did not move to Working after the reply`)
+  await page.keyboard.press(keys.escape)
+  await settled(page)
+  await frames(page, 3)
+  const before = await state(page)
+  trail.push({ step: "replied, Escape", under: "Working", ...before })
+  if (before.content !== content.overview)
+    throw new CannotRun("Escape in the reply pill left the overview")
+  if (before.activeOverviewItem !== on)
+    throw new CannotRun(
+      `after Escape the keyboard is on ${before.active}, not ${on}'s row`,
+    )
+  const moved = await until(
+    page,
+    ([sel, id]) =>
+      document
+        .querySelector(
+          `${sel.overviewColumn} ${sel.overviewItem}[data-overview-item="${id}"]`,
+        )
+        ?.closest(sel.overviewGroup)
+        ?.querySelector("h2")
+        ?.textContent.trim() !== "Working",
+    [css, on],
+    8000,
+  )
+  if (!moved) throw new CannotRun(`${on} never left Working: its turn did not end`)
+  await frames(page, 3)
+  const after = await state(page)
+  const under = await groupOf(page, on)
+  trail.push({ step: "turn ended", under, ...after })
+  if (after.activeOverviewItem !== on)
+    failures.push(
+      `${on} moved from Working to ${under ?? "nowhere"}; the keyboard is on ${after.active}, not its row`,
+    )
+  // And the arrows still walk the list: down, or up from the last row.
+  await page.keyboard.press(keys.down)
+  await frames(page, 3)
+  let walked = await state(page)
+  if (walked.activeOverviewItem === after.activeOverviewItem) {
+    await page.keyboard.press(keys.up)
+    await frames(page, 3)
+    walked = await state(page)
+  }
+  trail.push({ step: "↓ (or ↑)", ...walked })
+  if (walked.activeOverviewItem === null || walked.activeOverviewItem === on)
+    failures.push(`the arrows do not walk the list: the keyboard is on ${walked.active}`)
+  return { trail, failures }
+}
+
 const meta = {
   name: "focus",
   summary:
@@ -427,6 +524,9 @@ Steps (each asserts where the caret is afterwards):
   focus-answers-overview, -card: a held ⌘↩, and ⌘↩ twice 80ms apart, each answer one request;
   a held ↩ on a pane card's Allow Once, and a double click on Deny and on
   Always Allow, each answer one, and the held ↩ sends nothing typed
+  focus-regroup: a reply moves a request to Working, Escape puts the keyboard
+  on its row, its turn ends and the row moves on → the keyboard is still on
+  that session's row, and ↓ walks the list from it
   focus-home-scene: Customize focused in a new session's home, the window
   shortened so the home hides its scene → the caret is in the home's composer`,
 }
@@ -543,6 +643,17 @@ await main(meta, async ({ options, rep, url }) => {
             await fresh.close()
           }
         })
+      await attempt(rep, { name: "focus-regroup", engine, layout }, async () => {
+        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
+        try {
+          await need(fresh.page, css.composer, "a composer")
+          await focusComposer(fresh.page)
+          const result = await regroupKeepsKeyboard(fresh.page)
+          return { ...result, failures: [...result.failures, ...fresh.errors] }
+        } finally {
+          await fresh.close()
+        }
+      })
       await attempt(rep, { name: "focus-home-scene", engine, layout }, async () => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {
