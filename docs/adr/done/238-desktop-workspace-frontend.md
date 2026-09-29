@@ -145,7 +145,10 @@ conversation a pane shows; those the open Agents overview shows, up to 24,
 the chosen one first, then the waiting ones most recently active first; and
 the eight most recently active of the rest; the newest 256 removals. Anything
 let go is read again when a pane or the overview shows it; a read older than
-256 removals is corrected by the next index read.
+256 removals is corrected by the next index read. A conversation's content
+let go keeps its newest revision while its session is listed
+(`conversationRevisions`), so a read answered after the content went, with
+an older conversation, is not taken for new.
 
 **Commands.** Everything a person or an agent does is dispatched from
 `adapters/store/commands.ts`: plain actions where the state alone decides

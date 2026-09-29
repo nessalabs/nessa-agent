@@ -711,6 +711,44 @@ describe("what is kept of sessions no pane shows", () => {
     expect(kept).toContain("s2")
   })
 
+  it("keeps a conversation's newest revision when its content is let go, so an older read cannot bring it back", () => {
+    // s0 is heard at revision 10 while a read of it is on its way; nine newer
+    // conversations push its content out; the read then answers revision 2.
+    const sessions = Array.from({ length: retention.unshownConversations + 1 }, (_, i) =>
+      summary(`s${i}`, "gateway", 1000 + i),
+    )
+    const state = indexLoaded(initialWorkspace, {
+      index: { ...testIndex(), sessions: [...testIndex().sessions, ...sessions] },
+      draftId: "x",
+      read: "r",
+    })
+    const heard = updateReceived(state, {
+      update: { kind: "transcript", transcript: transcript("s0", 10) },
+    })
+    const evicted = sessions.slice(1).reduce(
+      (current, session) =>
+        updateReceived(current, {
+          update: { kind: "transcript", transcript: transcript(session.id, 2) },
+        }),
+      heard,
+    )
+    expect(evicted.transcripts.s0).toBeUndefined()
+    expect(evicted.conversationRevisions.s0).toBe(10)
+    const late = transcriptLoaded(evicted, { transcript: transcript("s0", 2) })
+    expect(late.transcripts.s0).toBeUndefined()
+    expect(late.conversationRevisions.s0).toBe(10)
+    // A newer one than it had is still taken (and, the oldest, let go again).
+    const newer = transcriptLoaded(evicted, { transcript: transcript("s0", 11) })
+    expect(newer.conversationRevisions.s0).toBe(11)
+    // Let go with its session.
+    const gone = sessionRemoved(evicted, {
+      sessionId: "s0",
+      revision: 1001,
+      draftId: "y",
+    })
+    expect(gone.conversationRevisions.s0).toBeUndefined()
+  })
+
   it("remembers the newest removals, up to its limit", () => {
     const removed = Array.from({ length: retention.removals + 1 }, (_, i) => i).reduce(
       (state, i) =>

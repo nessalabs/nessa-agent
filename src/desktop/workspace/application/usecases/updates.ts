@@ -60,8 +60,19 @@ function holdsConversation(state: WorkspaceState, transcript: Transcript): boole
     session !== undefined &&
     knownToSource(session) &&
     fromSource(transcript) &&
-    supersedes(transcript, entry(state.transcripts, transcript.sessionId))
+    supersedes(transcript, heldConversation(state, transcript.sessionId))
   )
+}
+
+/**
+ * The conversation revision held for a session: the content's, or — its
+ * content let go to keep the window small — the newest revision it had.
+ */
+function heldConversation(state: WorkspaceState, sessionId: string) {
+  const held = entry(state.transcripts, sessionId)
+  if (held) return held
+  const revision = entry(state.conversationRevisions, sessionId)
+  return revision === undefined ? undefined : { revision }
 }
 
 /**

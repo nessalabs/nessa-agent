@@ -89,6 +89,13 @@ export interface WorkspaceState {
    */
   readonly transcripts: Readonly<Record<string, Transcript>>
   /**
+   * The newest conversation revision held, by listed session — kept when its
+   * content is let go (`model/retention.ts`), so a read answered after that
+   * with an older conversation cannot bring the old one back. Let go with the
+   * session.
+   */
+  readonly conversationRevisions: Readonly<Record<string, number>>
+  /**
    * Messages the person sent that the source's conversation does not hold yet,
    * by session: sending, sent, or refused. Shown after the conversation until
    * it includes them; kept apart so no replacement from the source can lose one.
@@ -154,6 +161,7 @@ export const initialWorkspace: WorkspaceState = {
   sessions: {},
   drafts: {},
   transcripts: {},
+  conversationRevisions: {},
   outbox: {},
   transcriptFailures: {},
   removed: [],
@@ -306,6 +314,7 @@ export function withTranscript(
   return {
     ...state,
     transcripts,
+    conversationRevisions: { ...state.conversationRevisions, [id]: transcript.revision },
     // Held now, so a read that failed before no longer matters.
     transcriptFailures: without(state.transcriptFailures, id),
     outbox:
@@ -391,6 +400,7 @@ export function forgetSession(state: WorkspaceState, sessionId: string): Workspa
     ...state,
     sessions: without(state.sessions, sessionId),
     transcripts: without(state.transcripts, sessionId),
+    conversationRevisions: without(state.conversationRevisions, sessionId),
     transcriptFailures: without(state.transcriptFailures, sessionId),
     outbox: without(state.outbox, sessionId),
     answers: without(state.answers, sessionId),
