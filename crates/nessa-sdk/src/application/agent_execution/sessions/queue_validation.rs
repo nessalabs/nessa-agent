@@ -2,46 +2,98 @@
 use super::{QueueHistoryRecord, SessionSnapshot, StorageError};
 use crate::application::agent_execution::executions::limits::validate_observation_id;
 use crate::domain::agent_execution::executions::{
-    InvocationQueue, InvocationStage, QueueMutation, QueueOrderChange, QueueRemovalCause,
-    SchedulingCause,
+    ExecutionId, InvocationQueue, InvocationStage, QueueMutation, QueueOrderChange,
+    QueueRemovalCause, SchedulingCause,
 };
 use std::collections::{HashMap, HashSet};
 fn corrupt(message: &str) -> StorageError {
     StorageError::Corrupt(message.into())
 }
 pub(super) fn replay(snapshot: &SessionSnapshot) -> Result<InvocationQueue, StorageError> {
-    let maximum = snapshot
-        .invocations
-        .len()
-        .saturating_mul(3)
-        .saturating_add(QueueHistoryRecord::MAX_REORDERS);
-    if snapshot.queue_history.len() > maximum
-        || snapshot.queue_history.capacity() > maximum.saturating_mul(2)
-    {
-        return Err(corrupt("queue history exceeds its structural bound"));
+    Ok(QueueReplay::from_snapshot(snapshot)?.queue)
+}
+
+/// The same queue authority used by restoration and ordered semantic folding.
+/// Its mutations remain local until the whole candidate is validated and saved.
+pub(super) struct QueueReplay {
+    queue: InvocationQueue,
+    selected: HashSet<ExecutionId>,
+    reorders: usize,
+}
+
+impl QueueReplay {
+    pub(super) fn empty() -> Self {
+        Self {
+            queue: InvocationQueue::new(QueueOrderChange::MAX_PENDING)
+                .expect("positive queue capacity"),
+            selected: HashSet::new(),
+            reorders: 0,
+        }
     }
-    let records: HashMap<_, _> = snapshot
-        .invocations
-        .iter()
-        .map(|record| (&record.request.execution_id, record))
-        .collect();
-    let mut queue =
-        InvocationQueue::new(QueueOrderChange::MAX_PENDING).expect("positive queue capacity");
-    let mut selected = HashSet::new();
-    let mut reorders = 0;
-    for entry in &snapshot.queue_history {
+
+    pub(super) fn from_snapshot(snapshot: &SessionSnapshot) -> Result<Self, StorageError> {
+        let maximum = snapshot
+            .invocations
+            .len()
+            .saturating_mul(3)
+            .saturating_add(QueueHistoryRecord::MAX_REORDERS);
+        if snapshot.queue_history.len() > maximum
+            || snapshot.queue_history.capacity() > maximum.saturating_mul(2)
+        {
+            return Err(corrupt("queue history exceeds its structural bound"));
+        }
+        let positions: HashMap<_, _> = snapshot
+            .invocations
+            .iter()
+            .enumerate()
+            .map(|(index, record)| (record.request.execution_id.clone(), index))
+            .collect();
+        let mut state = Self::empty();
+        for entry in &snapshot.queue_history {
+            state.apply(snapshot, &positions, entry, false)?;
+        }
+        state.validate_checkpoint(snapshot)?;
+        Ok(state)
+    }
+
+    /// Validate and apply one decision against the queue and scheduling prefix
+    /// that existed when this fact was recorded.
+    pub(super) fn apply_current(
+        &mut self,
+        snapshot: &SessionSnapshot,
+        positions: &HashMap<ExecutionId, usize>,
+        entry: &QueueHistoryRecord,
+    ) -> Result<(), StorageError> {
+        self.apply(snapshot, positions, entry, true)
+    }
+
+    fn apply(
+        &mut self,
+        snapshot: &SessionSnapshot,
+        positions: &HashMap<ExecutionId, usize>,
+        entry: &QueueHistoryRecord,
+        require_current_checkpoint: bool,
+    ) -> Result<(), StorageError> {
         let checkpoint = if let Some(id) = entry.mutation.id() {
             validate_observation_id(id.as_str())
                 .map_err(|_| corrupt("queue identity exceeds its bound"))?;
-            let record = records
+            let record = positions
                 .get(id)
+                .and_then(|index| snapshot.invocations.get(*index))
                 .ok_or_else(|| corrupt("queue event has no submitted invocation"))?;
+            if require_current_checkpoint
+                && entry.scheduling_length != Some(record.scheduling.len())
+            {
+                return Err(corrupt(
+                    "queue decision names an earlier or future scheduling checkpoint",
+                ));
+            }
             let index = entry
                 .scheduling_length
                 .and_then(|length| length.checked_sub(1))
                 .ok_or_else(|| corrupt("queue event has no scheduling checkpoint"))?;
             Some((
-                *record,
+                record,
                 record
                     .scheduling
                     .get(index)
@@ -63,12 +115,11 @@ pub(super) fn replay(snapshot: &SessionSnapshot) -> Result<InvocationQueue, Stor
                     return Err(corrupt("queue admission disagrees with submitted input"));
                 }
             }
-            QueueMutation::Selected { id } => {
+            QueueMutation::Selected { .. } => {
                 let (_, edge) = checkpoint.expect("single-input event");
                 if edge.stage != InvocationStage::Queued || entry.actor.is_some() {
                     return Err(corrupt("queue selection disagrees with pending checkpoint"));
                 }
-                selected.insert(id);
             }
             QueueMutation::Removed { cause, .. } => {
                 let (_, edge) = checkpoint.expect("single-input event");
@@ -101,8 +152,7 @@ pub(super) fn replay(snapshot: &SessionSnapshot) -> Result<InvocationQueue, Stor
                 }
             }
             QueueMutation::Reordered(change) => {
-                reorders += 1;
-                if reorders > QueueHistoryRecord::MAX_REORDERS
+                if self.reorders >= QueueHistoryRecord::MAX_REORDERS
                     || change.is_unchanged()
                     || entry.actor.is_none()
                 {
@@ -117,27 +167,52 @@ pub(super) fn replay(snapshot: &SessionSnapshot) -> Result<InvocationQueue, Stor
                 }
             }
         }
-        queue.apply_mutation(&entry.mutation).map_err(corrupt)?;
-    }
-    for (id, _) in queue.pending() {
-        let record = records
-            .get(&id)
-            .expect("replayed membership references a submitted invocation");
-        if record.scheduling.last().map(|edge| edge.stage) != Some(InvocationStage::Queued) {
-            return Err(corrupt(
-                "pending queue member has no matching pending scheduling state",
-            ));
+        self.queue
+            .apply_mutation(&entry.mutation)
+            .map_err(corrupt)?;
+        if let QueueMutation::Selected { id } = &entry.mutation {
+            self.selected.insert(id.clone());
         }
+        if matches!(&entry.mutation, QueueMutation::Reordered(_)) {
+            self.reorders += 1;
+        }
+        Ok(())
     }
-    for record in &snapshot.invocations {
-        if record
-            .scheduling
+
+    /// A running queued invocation must have been selected before its dispatch
+    /// fact, even when a later queue decision would make the final snapshot valid.
+    pub(super) fn selected(&self, id: &ExecutionId) -> bool {
+        self.selected.contains(id)
+    }
+
+    fn validate_checkpoint(&self, snapshot: &SessionSnapshot) -> Result<(), StorageError> {
+        let positions: HashMap<_, _> = snapshot
+            .invocations
             .iter()
-            .any(|edge| edge.stage == InvocationStage::Running)
-            && !selected.contains(&record.request.execution_id)
-        {
-            return Err(corrupt("queued dispatch has no prior queue selection"));
+            .enumerate()
+            .map(|(index, record)| (record.request.execution_id.clone(), index))
+            .collect();
+        for (id, _) in self.queue.pending() {
+            let record = positions
+                .get(&id)
+                .and_then(|index| snapshot.invocations.get(*index))
+                .expect("replayed membership references a submitted invocation");
+            if record.scheduling.last().map(|edge| edge.stage) != Some(InvocationStage::Queued) {
+                return Err(corrupt(
+                    "pending queue member has no matching pending scheduling state",
+                ));
+            }
         }
+        for record in &snapshot.invocations {
+            if record
+                .scheduling
+                .iter()
+                .any(|edge| edge.stage == InvocationStage::Running)
+                && !self.selected.contains(&record.request.execution_id)
+            {
+                return Err(corrupt("queued dispatch has no prior queue selection"));
+            }
+        }
+        Ok(())
     }
-    Ok(queue)
 }

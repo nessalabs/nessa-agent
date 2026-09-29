@@ -308,6 +308,10 @@ pub(crate) fn fold_changes(
     }
     let mut histories = HashMap::new();
     let mut provider_evidence = ProviderEvidence::from_snapshot(candidate.as_ref());
+    let mut queue = match prior {
+        Some(snapshot) => super::queue_validation::QueueReplay::from_snapshot(snapshot)?,
+        None => super::queue_validation::QueueReplay::empty(),
+    };
     for change in changes {
         match change {
             SessionChange::Opened {
@@ -371,6 +375,7 @@ pub(crate) fn fold_changes(
                 next_evidence.selected |=
                     matches!(decision.mutation, QueueMutation::Selected { .. });
                 next_evidence.validate(&snapshot.provider_context)?;
+                queue.apply_current(snapshot, &positions, decision)?;
                 provider_evidence = next_evidence;
                 snapshot.queue_history.push(decision.clone());
             }
@@ -388,6 +393,9 @@ pub(crate) fn fold_changes(
                 );
                 next_evidence.correlation |= event.target.is_some();
                 next_evidence.validate(&snapshot.provider_context)?;
+                if event.stage == InvocationStage::Running && !queue.selected(execution_id) {
+                    return Err(corrupt("queued dispatch has no prior queue selection"));
+                }
                 let record = invocation_at(snapshot, &positions, execution_id)?;
                 apply_history(&mut histories, record, |history| {
                     history

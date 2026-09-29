@@ -360,7 +360,7 @@ mod tests {
         domain::agent_execution::{
             executions::{
                 ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, MessageChunk,
-                QueueMutation, SchedulingCause,
+                QueueMutation, QueueRemovalCause, SchedulingCause,
             },
             prompts::{PromptText, UserMessage},
             sessions::{ExecutionSessionId, SessionId},
@@ -1042,6 +1042,103 @@ mod tests {
             after: Err(AgentError::Protocol("local failure".into())),
             local_outcome: None,
         };
+        let terminal = SessionChange::SchedulingTransition {
+            execution_id: execution_id.clone(),
+            event: InvocationSchedulingEvent {
+                kind: InvocationKind::Queued,
+                target: None,
+                before: Some(InvocationStage::Queued),
+                stage: InvocationStage::Settled,
+                cause: SchedulingCause::DispatchFailed,
+                actor: None,
+            },
+        };
+        let removed = SessionChange::QueueDecision(QueueHistoryRecord {
+            mutation: QueueMutation::Removed {
+                id: execution_id.clone(),
+                cause: QueueRemovalCause::DispatchFailed,
+            },
+            actor: None,
+            scheduling_length: Some(2),
+        });
+        let queue_cases = [
+            (
+                vec![admissions[1].clone(), admissions[0].clone()],
+                vec![admissions[0].clone(), admissions[1].clone()],
+            ),
+            (
+                vec![
+                    admissions[0].clone(),
+                    admissions[1].clone(),
+                    running.clone(),
+                    admissions[2].clone(),
+                ],
+                vec![
+                    admissions[0].clone(),
+                    admissions[1].clone(),
+                    admissions[2].clone(),
+                    running.clone(),
+                ],
+            ),
+            (
+                vec![
+                    admissions[0].clone(),
+                    admissions[1].clone(),
+                    failure.clone(),
+                    removed.clone(),
+                    terminal.clone(),
+                ],
+                vec![
+                    admissions[0].clone(),
+                    admissions[1].clone(),
+                    failure.clone(),
+                    terminal.clone(),
+                    removed.clone(),
+                ],
+            ),
+            (
+                vec![
+                    admissions[0].clone(),
+                    admissions[1].clone(),
+                    failure.clone(),
+                    terminal.clone(),
+                    admissions[2].clone(),
+                ],
+                vec![
+                    admissions[0].clone(),
+                    admissions[1].clone(),
+                    admissions[2].clone(),
+                    failure.clone(),
+                    terminal.clone(),
+                ],
+            ),
+            (
+                vec![
+                    admissions[0].clone(),
+                    failure.clone(),
+                    terminal.clone(),
+                    admissions[1].clone(),
+                    removed.clone(),
+                ],
+                vec![
+                    admissions[0].clone(),
+                    admissions[1].clone(),
+                    failure.clone(),
+                    terminal.clone(),
+                    removed.clone(),
+                ],
+            ),
+        ];
+        for (invalid, valid) in queue_cases {
+            let observed = records::fold_changes(Some(&snapshot), &valid).unwrap();
+            let retained = rows(&root);
+            assert!(matches!(
+                lease.save_changes(generation(2), observed, invalid).await,
+                Err(StorageError::Corrupt(_))
+            ));
+            assert_eq!(rows(&root), retained);
+            assert_eq!(lease.load().await.unwrap(), Some(snapshot.clone()));
+        }
         for later in [&output, &report, &failure] {
             let mut valid_changes = admissions.clone();
             valid_changes.extend([running.clone(), later.clone()]);
@@ -1204,6 +1301,85 @@ mod tests {
         ));
         assert_eq!(rows(&root), retained);
         assert_eq!(lease.load().await.unwrap(), Some(snapshot.clone()));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(snapshot));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn grouped_queue_failure_then_removal_preserves_causal_order_on_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("grouped-queue-removal").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, mut snapshot) = opening(&id);
+        lease
+            .save_changes(generation(0), snapshot.clone(), vec![opened])
+            .await
+            .unwrap();
+        let execution_id = ExecutionId::new("queued").unwrap();
+        let actor = ActionContext::new("user", "phone", "send").unwrap();
+        let admitted = InvocationSchedulingEvent {
+            kind: InvocationKind::Queued,
+            target: None,
+            before: None,
+            stage: InvocationStage::Queued,
+            cause: SchedulingCause::Submitted,
+            actor: Some(actor.clone()),
+        };
+        let input = accepted_input(execution_id.clone(), SubmissionMode::Queued, vec![admitted]);
+        let queue_admitted = SessionChange::QueueDecision(QueueHistoryRecord {
+            mutation: QueueMutation::Admitted {
+                id: execution_id.clone(),
+                kind: InvocationKind::Queued,
+            },
+            actor: Some(actor),
+            scheduling_length: Some(1),
+        });
+        let admission = vec![input, queue_admitted];
+        snapshot = records::fold_changes(Some(&snapshot), &admission).unwrap();
+        lease
+            .save_changes(generation(1), snapshot.clone(), admission)
+            .await
+            .unwrap();
+        let settlement = vec![
+            SessionChange::LocalSettlement {
+                execution_id: execution_id.clone(),
+                before: None,
+                after: Err(AgentError::Protocol("dispatch failed".into())),
+                local_outcome: None,
+            },
+            SessionChange::SchedulingTransition {
+                execution_id: execution_id.clone(),
+                event: InvocationSchedulingEvent {
+                    kind: InvocationKind::Queued,
+                    target: None,
+                    before: Some(InvocationStage::Queued),
+                    stage: InvocationStage::Settled,
+                    cause: SchedulingCause::DispatchFailed,
+                    actor: None,
+                },
+            },
+            SessionChange::QueueDecision(QueueHistoryRecord {
+                mutation: QueueMutation::Removed {
+                    id: execution_id,
+                    cause: QueueRemovalCause::DispatchFailed,
+                },
+                actor: None,
+                scheduling_length: Some(2),
+            }),
+        ];
+        snapshot = records::fold_changes(Some(&snapshot), &settlement).unwrap();
+        lease
+            .save_changes(generation(2), snapshot.clone(), settlement)
+            .await
+            .unwrap();
         drop(lease);
         storage.shutdown().await.unwrap();
         drop(storage);
