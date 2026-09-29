@@ -1247,11 +1247,9 @@ mod tests {
             ))
             .unwrap();
         let mut changes = Vec::new();
-        // Cross the 64 KiB physical-frame boundary with a small number of
-        // changes so this process fixture remains tractable under coverage.
-        for index in 0..160 {
+        for index in 0..800 {
             let context = ProviderContext::Recorded(
-                ExecutionSessionId::new(format!("remote-{index:04}-{}", "x".repeat(220))).unwrap(),
+                ExecutionSessionId::new(format!("remote-{index:04}-{}", "x".repeat(120))).unwrap(),
             );
             changes.push(SessionChange::ProviderContext {
                 before: ProviderContext::Absent,
@@ -1284,8 +1282,11 @@ mod tests {
             allowed_receivers: vec![scope.receiver().clone()],
         };
         let server = LoopbackRecordServer::bind(0, config, move || Ok(source.clone())).unwrap();
+        // The single-threaded test harness prints its test name on the same
+        // line as uncaptured child output. Put the protocol marker on its own
+        // line so the parent can parse it in coverage and ordinary test runs.
         println!(
-            "NESSA_DURABLE_READY {} {}",
+            "\nNESSA_DURABLE_READY {} {}",
             server.local_addr().unwrap().port(),
             scope.incarnation().as_str()
         );
