@@ -9,7 +9,7 @@ use crate::{
         },
     },
     domain::agent_execution::sessions::SessionId,
-    infrastructure::session_storage::{InMemoryStorage, LocalFileStorage},
+    infrastructure::session_storage::{InMemoryStorage, RecordStorage},
 };
 use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -22,7 +22,7 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
     let _process_slot = process_test_slot().await;
     let (root, provider) = test_acp_binding("echo", 16);
     let storage_root = tempfile::tempdir().unwrap();
-    let storage = Arc::new(LocalFileStorage::new(storage_root.path().join("sessions")).unwrap());
+    let storage = Arc::new(RecordStorage::new(storage_root.path().join("sessions")).unwrap());
     let local_id = SessionId::new("conversation").unwrap();
     let provider = Arc::new(provider);
     let agent = attached_agent(

@@ -20,7 +20,7 @@ use crate::conversation_test_support::{
 };
 use nessa_sdk::{
     application::agent_execution::sessions::StorageFuture,
-    infrastructure::session_storage::{InMemoryStorage, LocalFileStorage},
+    infrastructure::session_storage::{InMemoryStorage, RecordStorage},
 };
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -1453,6 +1453,127 @@ async fn busy_under_the_deletion_s_own_lease_is_left_not_carried_on() {
     }
 }
 
+/// Models a reset that committed before its physical cleanup was acknowledged.
+struct CleanupReplyFailsOnce {
+    storage: Arc<InMemoryStorage>,
+    fail_first: Arc<std::sync::atomic::AtomicBool>,
+}
+
+struct CleanupReplyLease {
+    lease: Box<dyn SessionStorageLease>,
+    fail_first: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl SessionStorage for CleanupReplyFailsOnce {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        self.storage.open(id)
+    }
+
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        Box::pin(async move {
+            Ok(self.storage.open_existing(id).await?.map(|lease| {
+                Box::new(CleanupReplyLease {
+                    lease,
+                    fail_first: self.fail_first.clone(),
+                }) as Box<dyn SessionStorageLease>
+            }))
+        })
+    }
+}
+
+impl SessionStorageLease for CleanupReplyLease {
+    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+        self.lease.load()
+    }
+
+    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+        self.lease.save(snapshot)
+    }
+
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        Box::pin(async move {
+            self.lease.erase().await?;
+            if self.fail_first.swap(false, Ordering::SeqCst) {
+                return Err(StorageError::Io(
+                    "injected cleanup acknowledgement loss".into(),
+                ));
+            }
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn cleanup_failure_keeps_deletion_unfinished_and_retry_keeps_original_evidence() {
+    let fixture = deleting();
+    let id = talked_in(&fixture).await;
+    fixture.service.shutdown().await.unwrap();
+    let deletion_storage = Arc::new(CleanupReplyFailsOnce {
+        storage: fixture.storage.clone(),
+        fail_first: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    });
+    let service = service_with(
+        &fixture,
+        fixture.repository.clone(),
+        deletion_storage.clone(),
+    );
+    let failures = incomplete(service.delete(id.clone(), caller("delete-1")).await);
+    assert!(matches!(
+        failures.history,
+        Some(ConversationError::Storage(StorageError::Io(_)))
+    ));
+    let unfinished = tombstone(&fixture, &id);
+    assert!(!unfinished.erased());
+    assert!(unfinished.provider_erasure().is_some());
+    let first_audit = fixture.audit.records.lock().unwrap()[0].clone();
+    assert_eq!(first_audit.initiator_principal_id.as_str(), "person");
+    assert_eq!(first_audit.correlation_id, "delete-1");
+    deleted(
+        service
+            .create(
+                id.clone(),
+                caller("new-create"),
+                crate::conversation::application::RequestedConversation::default(),
+            )
+            .await,
+    );
+    service.shutdown().await.unwrap();
+    let restarted = service_with(&fixture, fixture.repository.clone(), deletion_storage);
+    deleted(
+        restarted
+            .create(
+                id.clone(),
+                caller("after-restart"),
+                crate::conversation::application::RequestedConversation::default(),
+            )
+            .await,
+    );
+
+    restarted
+        .delete(id.clone(), caller("delete-2"))
+        .await
+        .unwrap();
+    let finished = tombstone(&fixture, &id);
+    assert!(finished.erased());
+    assert_eq!(finished.initiator(), unfinished.initiator());
+    assert_eq!(finished.surface(), unfinished.surface());
+    assert_eq!(finished.request(), unfinished.request());
+    assert_eq!(finished.provider_erasure(), unfinished.provider_erasure());
+    for audit in fixture.audit.records.lock().unwrap().iter() {
+        assert_eq!(
+            audit.initiator_principal_id,
+            first_audit.initiator_principal_id
+        );
+        assert_eq!(audit.correlation_id, first_audit.correlation_id);
+        assert_eq!(audit.provider_erasure, first_audit.provider_erasure);
+        assert_eq!(audit.provider_session_id, first_audit.provider_session_id);
+    }
+    restarted.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_close_that_fails_with_a_deadline_of_its_own_is_not_the_stop_budget() {
     let fixture = deleting();
@@ -1905,10 +2026,11 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
     nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
     let database = root.join("conversations").join("metadata.sqlite3");
     let metadata = Arc::new(LocalConversationStore::open(&database).unwrap());
+    let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
             agents,
-            storage: Arc::new(LocalFileStorage::new(root.join("sessions")).unwrap()),
+            storage: storage.clone(),
             metadata: metadata.clone(),
             mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
 
@@ -2008,24 +2130,19 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
             .join("deletion")
             .join(format!("conversation-deleted-{id}.json"))]
     );
-    // The summary and the history are gone — the summary's words from the
-    // database file too, not only from its rows — and the history's lock
-    // stays, empty.
+    // The summary and record history are gone while shared SQLite ownership remains.
     assert_eq!(
         ConversationSummaries::load(metadata.as_ref(), &id)
             .await
             .unwrap(),
         None
     );
-    let database = std::fs::read(&database).unwrap();
-    assert!(!database
-        .windows("read this".len())
-        .any(|window| window == b"read this"));
-    let sessions = files(&root.join("sessions"));
-    assert_eq!(sessions.len(), 1, "{:?}", sessions.keys());
-    let (lock, bytes) = sessions.iter().next().unwrap();
-    assert_eq!(lock.extension().unwrap(), "lock");
-    assert!(bytes.is_empty());
+    let lease = storage
+        .open_existing(SessionId::new(id.to_string()).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(lease.load().await.unwrap(), None);
     // Ownership stays, and so does the tombstone that refuses it.
     let kept = ConversationRepository::load(metadata.as_ref(), &id)
         .await
@@ -2041,7 +2158,20 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
             )
             .await,
     );
+    drop(lease);
     service.shutdown().await.unwrap();
+    drop(service);
+    drop(storage);
+    drop(metadata);
+
+    // SQLite's owner has closed before examining raw files. Windows can deny
+    // byte reads while its active connection holds a range lock.
+    let database = std::fs::read(&database).unwrap();
+    assert!(!database
+        .windows("read this".len())
+        .any(|window| window == b"read this"));
+    let sessions = files(&root.join("sessions"));
+    assert_eq!(sessions.len(), 2, "{:?}", sessions.keys());
 }
 
 /// The tombstone the repository holds for `id`.
@@ -2719,12 +2849,13 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
         LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
     );
     let clock: Arc<dyn Clock> = Arc::new(TestClock);
+    let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
             ))),
-            storage: Arc::new(LocalFileStorage::new(root.join("sessions")).unwrap()),
+            storage: storage.clone(),
             metadata: repository.clone(),
             mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
 
@@ -2767,8 +2898,12 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
         .delete(id.clone(), caller("delete-1"))
         .await
         .unwrap());
-    // Nothing to erase, and nothing made to erase it under.
-    assert!(files(&root.join("sessions")).is_empty());
+    // Nothing to erase, and no conversation stream was created by the lookup.
+    assert!(storage
+        .open_existing(SessionId::new(id.to_string()).unwrap())
+        .await
+        .unwrap()
+        .is_none());
     assert!(root
         .join("deletion")
         .join(format!("conversation-deleted-{id}.json"))

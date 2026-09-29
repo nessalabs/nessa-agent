@@ -12,7 +12,7 @@ sha2 = "0.10"
 base64 = "0.22"
 nessa-local-storage = { path = "../nessa-local-storage" }
 tracing = "0.1"
-event-stream = { git = "https://github.com/nessalabs/event-stream", rev = "66ba7525260040d6265276692088dca6dae0737e", default-features = false, features = ["codec"] }
+event-stream = { git = "https://github.com/nessalabs/event-stream", rev = "59624a2", default-features = false, features = ["codec", "sqlite", "retention"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
@@ -30,5 +30,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 [dev-dependencies]
 markdown = "1.0"
 percent-encoding = "2"
+rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
 tokio = { version = "1", features = ["test-util", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }

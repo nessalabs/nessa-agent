@@ -1,7 +1,7 @@
 # 0009. Integrate the standalone event-stream library
 
 > Current implementation: [gateway chat](../../guides/gateway-chat.md) uses the existing SDK Agent,
-> leased JSONL sessions, independent durable audit, and bounded replacement views.
+> leased SDK sessions, independent durable audit, and bounded replacement views.
 > NessaClient and the panel use authenticated conversation commands; retired spike
 > methods are absent. The exact durable cursor/event-store and broader collaboration design
 > below remains a proposal, not a prerequisite or description of the current chat API.
@@ -28,11 +28,15 @@ describes a memory runtime, optional SQLite adapter using bundled `rusqlite`,
 cursor tokens, and replay/live subscriptions. Its
 [manifest](https://github.com/nessalabs/event-stream/blob/main/Cargo.toml) identifies
 unpublished package `event-stream` 0.1.0. Release and performance checks are still
-incomplete. As of 2026-09-12, the SDK pins revision
-`66ba7525260040d6265276692088dca6dae0737e` with only `codec` enabled and reuses
-`NewlineFramer` for bounded ACP JSON-RPC input. This is framing reuse, not this
-ADR's storage integration: no event runtime or durable store is constructed.
-The commit, replay, and lifecycle requirements below still need to be tested in Nessa.
+incomplete. The SDK now pins revision
+`59624a2` with `codec`, `sqlite`, and `retention` enabled. It also uses
+`NewlineFramer` for bounded ACP JSON-RPC input. Server composition opens one
+SQLite record runtime before listening. SDK replay and lifecycle verification
+for issue #275 is in progress.
+
+The first integration replaces the session history path for every conversation.
+An old per-session JSONL file is refused without import or version routing. An
+old lock file alone is not history. The [semantic record writer design](../../design/semantic-record-writer.md) gives the current commit boundaries and ordering table.
 
 ## One instance, one record source
 

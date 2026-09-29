@@ -208,14 +208,13 @@ persisted explicitly; `AgentError` is a diagnostic projection, not a lifecycle
 state machine.
 
 This does not turn snapshots into a complete permission audit log or durable job
-queue. The storage port receives a complete snapshot; local file storage appends
-changed metadata and event tails as JSONL. Full snapshot copying and validation
-still depend on conversation length, while streaming text does not trigger a save
-or a full-history scan for every chunk. Per-invocation output limits and transport queue bounds
-protect different retained data; neither is a total conversation-size limit.
+queue. The storage port receives a complete observed snapshot and the semantic
+changes that produced it. Record storage validates that fold and appends one
+fact at the save boundary. Streaming text does not trigger a save for every
+chunk. Per-invocation output limits and transport queue bounds protect different
+retained data; neither is a total conversation-size limit.
 
-Journal decoding first walks each complete line without building owned records.
-It bounds field names, decoded strings, collection structure and nested diagnostics;
+Semantic decoding bounds fields, strings, collection structure and nested diagnostics;
 raw string tokens are limited to six times the selected decoded-byte allowance so
 JSON Unicode escapes remain valid. Each changed invocation has a 160 MiB decoding
 allowance for text and structural slots. Shared retention validation then enforces

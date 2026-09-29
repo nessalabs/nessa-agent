@@ -9,12 +9,324 @@ use crate::domain::agent_execution::{
     prompts::{PromptText, UserMessage},
     sessions::ExecutionSessionId,
 };
-use crate::infrastructure::session_storage::InMemoryStorage;
+use crate::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::{Barrier, Semaphore};
+
+struct PauseAfterSave {
+    inner: Arc<dyn SessionStorageLease>,
+    pause_before: AtomicBool,
+    pause_after: AtomicBool,
+    started: Barrier,
+    release: Semaphore,
+}
+
+impl SessionStorageLease for PauseAfterSave {
+    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+        self.inner.load()
+    }
+
+    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+        self.inner.save(snapshot)
+    }
+
+    fn save_changes(
+        &self,
+        generation: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        changes: Vec<SessionChange>,
+    ) -> StorageFuture<'_, ()> {
+        Box::pin(async move {
+            if self.pause_before.swap(false, Ordering::SeqCst) {
+                self.started.wait().await;
+                self.release
+                    .acquire()
+                    .await
+                    .expect("test releases save")
+                    .forget();
+            }
+            self.inner
+                .save_changes(generation, snapshot, changes)
+                .await?;
+            if self.pause_after.swap(false, Ordering::SeqCst) {
+                self.started.wait().await;
+                self.release
+                    .acquire()
+                    .await
+                    .expect("test releases save")
+                    .forget();
+            }
+            Ok(())
+        })
+    }
+
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.inner.erase()
+    }
+}
+
+#[tokio::test]
+async fn cancelled_save_wait_retries_the_same_generation_without_duplicate_records() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+    let id = SessionId::new("cancelled-save").unwrap();
+    let inner = storage.open(id.clone()).await.unwrap();
+    let opened = SessionChange::Opened {
+        id: id.clone(),
+        provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
+        context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+    };
+    let initial = super::super::records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
+    inner
+        .save_changes(
+            SessionSaveGeneration::initial(),
+            initial.clone(),
+            vec![opened],
+        )
+        .await
+        .unwrap();
+    let active = invocation("active", false);
+    let active_id = active.request.execution_id.clone();
+    let input = SessionChange::InputAccepted(Box::new(active));
+    let initial =
+        super::super::records::fold_changes(Some(&initial), std::slice::from_ref(&input)).unwrap();
+    inner
+        .save_changes(
+            SessionSaveGeneration::initial().checked_next().unwrap(),
+            initial.clone(),
+            vec![input],
+        )
+        .await
+        .unwrap();
+    let first = SessionChange::ProviderObservation(text(&active_id));
+    let observed =
+        super::super::records::fold_changes(Some(&initial), std::slice::from_ref(&first)).unwrap();
+    let lease = Arc::new(PauseAfterSave {
+        inner: Arc::from(inner),
+        pause_before: AtomicBool::new(false),
+        pause_after: AtomicBool::new(true),
+        started: Barrier::new(2),
+        release: Semaphore::new(0),
+    });
+    let manager = Arc::new(SessionManager {
+        id,
+        storage_lease: lease.clone(),
+        evidence: Arc::new(Mutex::new(Evidence {
+            save_generation: SessionSaveGeneration::initial()
+                .checked_next()
+                .unwrap()
+                .checked_next()
+                .unwrap(),
+            observed: Some(observed.clone()),
+            committed: Some(initial),
+            pending: vec![first],
+            ..Evidence::default()
+        })),
+        dispatched: RwLock::new(HashMap::new()),
+        attachment: Arc::new(AttachmentLease::empty()),
+    });
+    manager.begin_dispatch(&active_id);
+    let waiting = manager.clone();
+    let caller = tokio::spawn(async move { waiting.flush_observed().await });
+    lease.started.wait().await;
+    caller.abort();
+    assert!(caller.await.unwrap_err().is_cancelled());
+    let evidence = tokio::time::timeout(std::time::Duration::from_secs(3), manager.evidence.lock())
+        .await
+        .expect("cancellation releases manager evidence");
+    assert_eq!(evidence.pending.len(), 1);
+    assert_ne!(evidence.committed.as_ref(), Some(&observed));
+    drop(evidence);
+    manager.flush_observed().await.unwrap();
+    assert_eq!(lease.load().await.unwrap(), Some(observed));
+    manager.event(text(&active_id)).await.unwrap();
+    manager.flush_observed().await.unwrap();
+    let latest = lease.load().await.unwrap().unwrap();
+    assert_eq!(latest.invocations[0].events.len(), 2);
+    assert_eq!(
+        latest.invocations[0].events[0],
+        latest.invocations[0].events[1]
+    );
+    let rows: i64 = rusqlite::Connection::open(directory.path().join("sessions/records.sqlite3"))
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM event_records", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        rows, 4,
+        "the retry acknowledged one decision and the new generation stored equal content"
+    );
+    drop(manager);
+    drop(lease);
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+    let id = SessionId::new("large-output").unwrap();
+    let inner = storage.open(id.clone()).await.unwrap();
+    let opened = SessionChange::Opened {
+        id: id.clone(),
+        provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
+        context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+    };
+    let initial = super::super::records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
+    inner
+        .save_changes(
+            SessionSaveGeneration::initial(),
+            initial.clone(),
+            vec![opened],
+        )
+        .await
+        .unwrap();
+    let active = invocation("large-active", false);
+    let active_id = active.request.execution_id.clone();
+    let input = SessionChange::InputAccepted(Box::new(active));
+    let initial =
+        super::super::records::fold_changes(Some(&initial), std::slice::from_ref(&input)).unwrap();
+    inner
+        .save_changes(
+            SessionSaveGeneration::initial().checked_next().unwrap(),
+            initial.clone(),
+            vec![input],
+        )
+        .await
+        .unwrap();
+    let chunk = "\0".repeat(ExecutionEvent::MAX_MESSAGE_CHUNK_BYTES);
+    let oversized: Vec<_> = (0..7)
+        .map(|_| {
+            SessionChange::ProviderObservation(ExecutionEvent::new(
+                active_id.clone(),
+                ExecutionUpdate::Message(MessageChunk::text(chunk.clone())),
+            ))
+        })
+        .collect();
+    let candidate = super::super::records::fold_changes(Some(&initial), &oversized).unwrap();
+    assert_eq!(
+        inner
+            .save_changes(
+                SessionSaveGeneration::initial()
+                    .checked_next()
+                    .unwrap()
+                    .checked_next()
+                    .unwrap(),
+                candidate,
+                oversized,
+            )
+            .await,
+        Err(StorageError::TooLarge)
+    );
+    assert_eq!(inner.load().await.unwrap(), Some(initial.clone()));
+    let lease: Arc<dyn SessionStorageLease> = Arc::from(inner);
+    let manager = SessionManager {
+        id: id.clone(),
+        storage_lease: lease.clone(),
+        evidence: Arc::new(Mutex::new(Evidence {
+            save_generation: SessionSaveGeneration::initial()
+                .checked_next()
+                .unwrap()
+                .checked_next()
+                .unwrap(),
+            observed: Some(initial.clone()),
+            committed: Some(initial),
+            ..Evidence::default()
+        })),
+        dispatched: RwLock::new(HashMap::new()),
+        attachment: Arc::new(AttachmentLease::empty()),
+    };
+    manager.begin_dispatch(&active_id);
+    for _ in 0..7 {
+        manager
+            .event(ExecutionEvent::new(
+                active_id.clone(),
+                ExecutionUpdate::Message(MessageChunk::text(chunk.clone())),
+            ))
+            .await
+            .unwrap();
+    }
+    manager.flush_observed().await.unwrap();
+    let saved = lease.load().await.unwrap().unwrap();
+    assert_eq!(saved.invocations[0].events.len(), 7);
+    drop(manager);
+    drop(lease);
+    storage.shutdown().await.unwrap();
+    drop(storage);
+
+    let reopened = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+    let lease = reopened.open_existing(id).await.unwrap().unwrap();
+    let saved = lease.load().await.unwrap().unwrap();
+    assert_eq!(saved.invocations[0].events.len(), 7);
+    let ExecutionUpdate::Message(last) = saved.invocations[0].events[6].update() else {
+        panic!("last output is a message");
+    };
+    assert_eq!(last.as_str().len(), ExecutionEvent::MAX_MESSAGE_CHUNK_BYTES);
+    drop(lease);
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_wait_before_commit_extends_the_same_pending_generation() {
+    let (mut manager, lease, active) = manager(0).await;
+    let paused = Arc::new(PauseAfterSave {
+        inner: lease.clone(),
+        pause_before: AtomicBool::new(true),
+        pause_after: AtomicBool::new(false),
+        started: Barrier::new(2),
+        release: Semaphore::new(0),
+    });
+    manager.storage_lease = paused.clone();
+    let manager = Arc::new(manager);
+    manager.event(text(&active)).await.unwrap();
+    let waiting = manager.clone();
+    let first = tokio::spawn(async move { waiting.flush_observed().await });
+    paused.started.wait().await;
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    assert!(manager.evidence.try_lock().is_ok());
+    let next_manager = manager.clone();
+    let next_event = text(&active);
+    let next = tokio::spawn(async move { next_manager.event(next_event).await });
+    next.await.unwrap().unwrap();
+    manager.flush_observed().await.unwrap();
+    let snapshot = lease.load().await.unwrap().unwrap();
+    assert_eq!(snapshot.invocations[0].events.len(), 2);
+    let saves = lease.changes.lock().unwrap();
+    assert_eq!(saves.len(), 1);
+    assert_eq!(saves[0].len(), 2);
+}
+
+#[tokio::test]
+async fn settlement_failure_retains_the_storage_failure_wrapper() {
+    let (manager, lease, _) = manager(0).await;
+    lease.fail_save.store(true, Ordering::SeqCst);
+    let result = manager
+        .settle_submission(0, Err(AgentError::AuditFailure))
+        .await;
+    assert!(matches!(
+        result,
+        Err(AgentError::StorageAfterExecution { .. })
+    ));
+    let evidence = manager.evidence.lock().await;
+    assert!(matches!(
+        evidence.observed.as_ref().unwrap().invocations[0].result,
+        Some(Err(AgentError::StorageAfterExecution { .. }))
+    ));
+    assert_eq!(evidence.pending.len(), 2);
+    drop(evidence);
+    lease.fail_save.store(false, Ordering::SeqCst);
+    manager.flush_observed().await.unwrap();
+    let saved = lease.load().await.unwrap().unwrap();
+    assert!(matches!(
+        saved.invocations[0].result,
+        Some(Err(AgentError::StorageAfterExecution { .. }))
+    ));
+}
 
 struct FaultLease {
     inner: Box<dyn SessionStorageLease>,
     fail_save: AtomicBool,
+    changes: std::sync::Mutex<Vec<Vec<SessionChange>>>,
 }
 impl SessionStorageLease for FaultLease {
     fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
@@ -26,6 +338,24 @@ impl SessionStorageLease for FaultLease {
                 return Err(StorageError::Io("injected save failure".into()));
             }
             self.inner.save(snapshot).await
+        })
+    }
+    fn save_changes(
+        &self,
+        _generation: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        changes: Vec<SessionChange>,
+    ) -> StorageFuture<'_, ()> {
+        self.changes.lock().unwrap().push(changes.clone());
+        Box::pin(async move {
+            let previous = self.inner.load().await?;
+            super::super::records::confirm_candidate(
+                &snapshot.id,
+                previous.as_ref(),
+                &changes,
+                &snapshot,
+            )?;
+            self.save(snapshot).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
@@ -67,6 +397,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
     let lease = Arc::new(FaultLease {
         inner: storage.open(id.clone()).await.unwrap(),
         fail_save: AtomicBool::new(false),
+        changes: std::sync::Mutex::new(Vec::new()),
     });
     let active = invocation("active", false);
     let active_id = active.request.execution_id.clone();
@@ -97,6 +428,102 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
     };
     manager.begin_dispatch(&active_id);
     (manager, lease, active_id)
+}
+
+#[tokio::test]
+async fn failed_observation_save_retries_the_same_decisions_in_order() {
+    let (manager, lease, active) = manager(0).await;
+    manager.event(text(&active)).await.unwrap();
+    assert!(lease.changes.lock().unwrap().is_empty());
+
+    lease.fail_save.store(true, Ordering::SeqCst);
+    assert!(manager
+        .event(ExecutionEvent::new(
+            active,
+            ExecutionUpdate::Finished(ExecutionOutcome::Completed),
+        ))
+        .await
+        .is_err());
+    lease.fail_save.store(false, Ordering::SeqCst);
+    manager.flush_observed().await.unwrap();
+
+    let saves = lease.changes.lock().unwrap();
+    assert_eq!(saves.len(), 2);
+    for changes in saves.iter() {
+        assert_eq!(changes.len(), 2);
+        assert!(matches!(changes[0], SessionChange::ProviderObservation(_)));
+        assert!(matches!(changes[1], SessionChange::ProviderObservation(_)));
+    }
+    assert_eq!(
+        format!("{:?}", saves[0]),
+        format!("{:?}", saves[1]),
+        "a retry keeps the same typed changes"
+    );
+}
+
+#[tokio::test]
+async fn proactive_message_flush_failure_keeps_the_exact_pending_generation() {
+    let (manager, lease, active) = manager(0).await;
+    let chunk = "\0".repeat(ExecutionEvent::MAX_MESSAGE_CHUNK_BYTES);
+    let output = || {
+        ExecutionEvent::new(
+            active.clone(),
+            ExecutionUpdate::Message(MessageChunk::text(chunk.clone())),
+        )
+    };
+    manager.event(output()).await.unwrap();
+    lease.fail_save.store(true, Ordering::SeqCst);
+    assert!(manager.event(output()).await.is_err());
+    assert_eq!(manager.evidence.lock().await.pending.len(), 2);
+    lease.fail_save.store(false, Ordering::SeqCst);
+    manager.flush_observed().await.unwrap();
+    assert_eq!(manager.evidence.lock().await.pending.len(), 0);
+    let changes = lease.changes.lock().unwrap();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(format!("{:?}", changes[0]), format!("{:?}", changes[1]));
+}
+
+#[tokio::test]
+async fn many_tiny_messages_flush_on_metadata_count() {
+    let (manager, lease, active) = manager(0).await;
+    for _ in 0..1024 {
+        manager.event(text(&active)).await.unwrap();
+    }
+    {
+        let saves = lease.changes.lock().unwrap();
+        assert_eq!(saves.len(), 1);
+        assert_eq!(saves[0].len(), 1024);
+    }
+    assert_eq!(manager.evidence.lock().await.pending.len(), 0);
+}
+
+#[tokio::test]
+async fn definitely_rejected_admission_does_not_leak_into_the_next_record_batch() {
+    let (manager, lease, _) = manager(0).await;
+    let request = ExecutionRequest {
+        execution_id: ExecutionId::new("new-input").unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("new input").unwrap()),
+        estimated_input_tokens: 1,
+        reserved_output_tokens: 1,
+    };
+    let actor = ActionContext::new("user", "test", "invoke").unwrap();
+
+    lease.fail_save.store(true, Ordering::SeqCst);
+    assert!(manager.begin(request.clone(), actor.clone()).await.is_err());
+    assert_eq!(manager.snapshot().await.unwrap().invocations.len(), 1);
+    lease.fail_save.store(false, Ordering::SeqCst);
+    assert_eq!(manager.begin(request, actor).await.unwrap(), 1);
+
+    let saves = lease.changes.lock().unwrap();
+    assert_eq!(saves.len(), 2);
+    for changes in saves.iter() {
+        assert_eq!(changes.len(), 1);
+        assert!(matches!(
+            &changes[0],
+            SessionChange::InputAccepted(record)
+                if record.request.execution_id.as_str() == "new-input"
+        ));
+    }
 }
 fn text(id: &ExecutionId) -> ExecutionEvent {
     ExecutionEvent::new(
@@ -174,15 +601,17 @@ async fn local_failure_preserves_inferred_prior_success_before_save_and_after_re
     for retain_receipt in [false, true] {
         let (manager, lease, active) = manager(0).await;
         // The public snapshot contract also accepts success without duplicating its outcome.
-        manager
-            .evidence
-            .lock()
-            .await
-            .observed
-            .as_mut()
-            .unwrap()
-            .invocations[0]
-            .result = Some(Ok(ExecutionOutcome::Completed));
+        {
+            let mut evidence = manager.evidence.lock().await;
+            evidence.observed.as_mut().unwrap().invocations[0].result =
+                Some(Ok(ExecutionOutcome::Completed));
+            evidence.pending.push(SessionChange::LocalSettlement {
+                execution_id: active.clone(),
+                before: None,
+                after: Ok(ExecutionOutcome::Completed),
+                local_outcome: Some(ExecutionOutcome::Completed),
+            });
+        }
         if retain_receipt {
             assert_eq!(
                 manager

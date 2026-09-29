@@ -47,7 +47,7 @@ adds the marker. Nothing is added now, and nothing is deleted by hand.
 | Scope | Stores | What it cannot read |
 | --- | --- | --- |
 | **Gateway** — truth that decides who may do what for everyone | credential registry; browser-session journal; conversation metadata (ownership, tombstones, archived flag, summaries) | The gateway refuses to start |
-| **Record** — truth about one conversation or one upload | session journals; attachment holds (a blob is opaque bytes named by their digest, judged by that digest and never by a marker); managed-runtime reclamation and use markers | That record's operations fail, typed. Everything else carries on. |
+| **Record** — truth about one conversation or one upload | conversation record streams; attachment holds (a blob is opaque bytes named by their digest, judged by that digest and never by a marker); managed-runtime reclamation and use markers | That record's operations fail, typed. Everything else carries on. |
 | **Cache** — rebuilt from truth or from outside | warm-up records; `installed.json` and runtime binaries; host `shortcuts.json`; browser `localStorage` | Ignored, and overwritten when next written |
 
 Audit sinks are write-only evidence. They are never migrated and never read for
@@ -120,7 +120,7 @@ lock:
 J2 is safe because of how a record is written. It is appended with its newline
 and synced, and only then acknowledged. So a last line without its newline is
 an append that never answered anybody. Cutting it loses nothing that was
-confirmed. The SDK's session journals already do the same. Only the last line
+confirmed. SDK conversation records use a separate SQLite stream contract. Only the last line
 can lack a newline, because reading stops at each one.
 
 ## Decisions taken for the owner

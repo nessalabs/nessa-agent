@@ -1,6 +1,6 @@
 //! Prepared construction and attachment ownership use separate observable phases.
 use super::*;
-use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
+use nessa_sdk::infrastructure::session_storage::RecordStorage;
 use std::{
     future::Future,
     pin::Pin,
@@ -464,6 +464,48 @@ async fn prepare_is_durable_without_opening_provider() {
 }
 
 #[tokio::test]
+async fn cancelled_prepare_wait_reopens_without_provider_work() {
+    let storage = MemoryStorage::default();
+    let provider = TestProvider::new();
+    let (saving, release) = storage.pause_next_save();
+    let manager = storage.manager().await;
+    let preparing = tokio::spawn({
+        let provider = provider.clone();
+        async move { Agent::prepare(provider, manager, Arc::new(AcceptingAudit)).await }
+    });
+    saving.await.unwrap();
+    preparing.abort();
+    assert!(matches!(preparing.await, Err(error) if error.is_cancelled()));
+    assert!(provider.calls.opens.lock().unwrap().is_empty());
+    assert!(release.send(()).is_err());
+    let reopened = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            match SessionManager::open(
+                Some(SessionId::new("conversation").unwrap()),
+                Arc::new(storage.clone()),
+            )
+            .await
+            {
+                Ok(manager) => break manager,
+                Err(StorageError::Busy) => tokio::task::yield_now().await,
+                Err(error) => panic!("unexpected reopen error: {error:?}"),
+            }
+        }
+    })
+    .await
+    .expect("cancelled preparation releases its lease");
+    let agent = Agent::prepare(provider.clone(), reopened, Arc::new(AcceptingAudit))
+        .await
+        .unwrap();
+    assert!(provider.calls.opens.lock().unwrap().is_empty());
+    assert!(matches!(
+        storage.snapshot().provider_context,
+        ProviderContext::Absent
+    ));
+    drop(agent);
+}
+
+#[tokio::test]
 async fn queued_work_admitted_before_attachment_binds_to_the_published_provider() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
@@ -717,9 +759,9 @@ async fn provider_publication_preserves_queue_changes_made_while_open_waits() {
 }
 
 #[tokio::test]
-async fn journal_restores_queue_changes_published_during_gated_open() {
+async fn records_restore_queue_changes_published_during_gated_open() {
     let root = tempdir().unwrap();
-    let storage = Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap());
+    let storage = Arc::new(RecordStorage::new(root.path().join("private")).unwrap());
     let manager = SessionManager::open(
         Some(SessionId::new("gated-open-journal").unwrap()),
         storage.clone(),
@@ -778,8 +820,9 @@ async fn journal_restores_queue_changes_published_during_gated_open() {
     agent.close(close_action()).await.unwrap();
     drop(agent);
 
+    let executions_before_retry = provider.inner.calls.executions.load(Ordering::SeqCst);
     let restored = Agent::prepare(
-        provider,
+        provider.clone(),
         SessionManager::open(Some(SessionId::new("gated-open-journal").unwrap()), storage)
             .await
             .unwrap(),
@@ -798,6 +841,98 @@ async fn journal_restores_queue_changes_published_during_gated_open() {
         .queue_history
         .iter()
         .any(|record| matches!(&record.mutation, QueueMutation::Reordered(_))));
+    let retry = restored
+        .enqueue(request("journal-first"), actor())
+        .await
+        .unwrap();
+    assert_eq!(retry.wait().await, Ok(ExecutionOutcome::Completed));
+    assert_eq!(
+        provider.inner.calls.executions.load(Ordering::SeqCst),
+        executions_before_retry
+    );
+}
+
+#[tokio::test]
+async fn child_process_recovers_original_receipt_without_dispatching_again() {
+    let root = tempdir().unwrap();
+    let path = root.path().join("sessions");
+    let storage = Arc::new(RecordStorage::new(&path).unwrap());
+    storage.initialize().await.unwrap();
+    let id = SessionId::new("receipt-restart").unwrap();
+    let provider = TestProvider::new();
+    let agent = attached_agent(
+        provider.clone(),
+        SessionManager::open(Some(id), storage.clone())
+            .await
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let lost_reply = agent.enqueue(request("original"), actor()).await.unwrap();
+    drop(lost_reply);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let snapshot = agent.session_manager().snapshot().await.unwrap();
+            if snapshot.invocations[0].result == Some(Ok(ExecutionOutcome::Completed)) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 1);
+    agent.close(close_action()).await.unwrap();
+    drop(agent);
+    storage.shutdown().await.unwrap();
+    drop(storage);
+
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["child_record_receipt_probe", "--ignored"])
+        .env("NESSA_RECEIPT_CHILD_ROOT", &path)
+        .output()
+        .unwrap();
+    assert!(
+        child.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+}
+
+#[ignore = "child process probe"]
+#[tokio::test]
+async fn child_record_receipt_probe() {
+    let path = std::env::var_os("NESSA_RECEIPT_CHILD_ROOT").expect("parent supplies path");
+    let storage = Arc::new(RecordStorage::new(std::path::PathBuf::from(path)).unwrap());
+    storage.initialize().await.unwrap();
+    let id = SessionId::new("receipt-restart").unwrap();
+    let provider = TestProvider::new();
+    let agent = attached_agent(
+        provider.clone(),
+        SessionManager::open(Some(id), storage.clone())
+            .await
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        agent
+            .enqueue(request("original"), actor())
+            .await
+            .unwrap()
+            .wait()
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
+    assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
+    let mut changed = request("original");
+    changed.user_message = UserMessage::text_only(PromptText::new("changed bytes").unwrap());
+    assert!(agent.enqueue(changed, actor()).await.is_err());
+    assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
+    agent.close(close_action()).await.unwrap();
+    drop(agent);
+    storage.shutdown().await.unwrap();
 }
 
 #[tokio::test]

@@ -1,7 +1,7 @@
 # Session and stream contracts — proposed design
 
 > Current implementation: [gateway chat](../guides/gateway-chat.md) uses the existing SDK Agent,
-> leased JSONL sessions, independent durable audit, and bounded replacement views.
+> leased SQLite record sessions, independent durable audit, and bounded replacement views.
 > NessaClient and the panel use authenticated conversation commands; retired spike
 > methods are absent. The exact durable cursor/event-store and broader collaboration design
 > below remains a proposal, not a prerequisite or description of the current chat API.

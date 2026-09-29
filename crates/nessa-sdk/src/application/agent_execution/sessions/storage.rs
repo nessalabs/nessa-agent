@@ -21,6 +21,40 @@ use std::{error::Error, fmt, future::Future, pin::Pin};
 /// Asynchronous storage result borrowing its adapter for `'a` and returning `T`.
 pub type StorageFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StorageError>> + Send + 'a>>;
 
+/// Identity of one ordered SDK save decision sequence within a stream incarnation.
+///
+/// A retry keeps the same generation, including when its decision sequence has
+/// gained a valid suffix. Advance only after the caller has acknowledged the
+/// save and cleared its pending decisions. A newly opened writer starts at
+/// [`Self::initial`], including after Reset installs a replacement writer on
+/// the same exclusive lease. Generations are not persisted across writers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionSaveGeneration(u64);
+
+impl Default for SessionSaveGeneration {
+    fn default() -> Self {
+        Self::initial()
+    }
+}
+
+impl SessionSaveGeneration {
+    /// First generation for a newly opened writer or post-Reset incarnation.
+    pub const fn initial() -> Self {
+        Self(0)
+    }
+
+    /// Next generation after an acknowledged save.
+    ///
+    /// Returns [`StorageError::Corrupt`] if the lease exhausts its generation
+    /// space rather than wrapping and reusing an earlier identity.
+    pub fn checked_next(self) -> Result<Self, StorageError> {
+        self.0
+            .checked_add(1)
+            .map(Self)
+            .ok_or_else(|| StorageError::Corrupt("session save generation exhausted".into()))
+    }
+}
+
 /// Failure to acquire access, read, validate, or persist a session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StorageError {
@@ -32,6 +66,12 @@ pub enum StorageError {
     Corrupt(String),
     /// The session or provider identity differs from the requested context.
     IdentityMismatch,
+    /// This adapter requires the semantic SDK decisions with the candidate snapshot.
+    ChangesRequired,
+    /// A prior write may still commit and must be reconciled before reading old state.
+    Unresolved,
+    /// An atomic encoded decision group exceeds the record writer's 160 MiB body limit.
+    TooLarge,
 }
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -41,7 +81,7 @@ impl fmt::Display for StorageError {
 impl Error for StorageError {}
 
 /// Retained application evidence, not the authoritative live execution aggregate.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSnapshot {
     /// Local conversation key under which this snapshot is stored.
     pub id: SessionId,
@@ -54,6 +94,80 @@ pub struct SessionSnapshot {
     /// Append-only global queue membership/order facts. Local selection precedes
     /// provider dispatch; restoration clears pending membership without replay.
     pub queue_history: Vec<QueueHistoryRecord>,
+}
+
+/// One SDK decision retained for an atomic semantic-record save.
+///
+/// A record writer receives these in decision order. Existing snapshot adapters
+/// may use the accompanying snapshot alone. No variant authorizes replay to run
+/// a provider or tool effect.
+#[derive(Clone, Debug)]
+pub enum SessionChange {
+    /// The first empty state of a newly created conversation.
+    Opened {
+        /// Conversation identity.
+        id: SessionId,
+        /// Provider identity selected for this conversation.
+        provider: ProviderIdentity,
+        /// Initial recoverable provider context, usually absent.
+        context: ProviderContext,
+    },
+    /// Exact input and pending receipt accepted before provider work.
+    InputAccepted(Box<InvocationRecord>),
+    /// Actual queue membership, selection, restoration or order decision.
+    QueueDecision(QueueHistoryRecord),
+    /// Local lifecycle edge for the named invocation.
+    SchedulingTransition {
+        /// Invocation identity.
+        execution_id: ExecutionId,
+        /// The validated new edge.
+        event: InvocationSchedulingEvent,
+    },
+    /// Provider observation owned by a dispatched invocation.
+    ProviderObservation(ExecutionEvent),
+    /// Audit and storage acknowledgement of an earlier accepted input.
+    ReceiptUpdated {
+        /// Invocation identity.
+        execution_id: ExecutionId,
+        /// Previously retained acknowledgement.
+        before: SubmissionAcknowledgement,
+        /// New acknowledgement.
+        after: SubmissionAcknowledgement,
+    },
+    /// Undispatched local stop with its cause and caller.
+    StopDecision {
+        /// Invocation identity.
+        execution_id: ExecutionId,
+        /// Stop evidence.
+        event: InvocationCancellationEvent,
+    },
+    /// Provider settlement and the first dispatched local stop, if any.
+    ProviderReport {
+        /// Invocation identity.
+        execution_id: ExecutionId,
+        /// Provider-owned result evidence.
+        report: ExecutionReport,
+        /// Stop evidence required for a local-cancellation report.
+        local_stop: Option<InvocationCancellationEvent>,
+    },
+    /// A local result superseding the prior saved result, if any.
+    LocalSettlement {
+        /// Invocation identity.
+        execution_id: ExecutionId,
+        /// Previously saved result.
+        before: Option<Result<ExecutionOutcome, AgentError>>,
+        /// Newly saved result.
+        after: Result<ExecutionOutcome, AgentError>,
+        /// Earlier successful local outcome retained across a later failure.
+        local_outcome: Option<ExecutionOutcome>,
+    },
+    /// The provider context needed to resume an existing provider session.
+    ProviderContext {
+        /// Previously saved context.
+        before: ProviderContext,
+        /// Newly saved context.
+        after: ProviderContext,
+    },
 }
 impl SessionSnapshot {
     /// Maximum durable invocation records retained by one conversation.
@@ -80,7 +194,7 @@ impl QueueHistoryRecord {
 
 /// Saved input and observations. Never replay an input solely because its result
 /// is missing: pending, cancelled, or injected input may have no execution result.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InvocationRecord {
     /// Target observation count at steering admission; not a provider consumption acknowledgement.
     pub target_event_offset: Option<usize>,
@@ -223,6 +337,12 @@ impl InvocationSchedulingEvent {
 /// Implementations may serve many sessions. Each returned lease owns the resources
 /// needed to read and write one session independently of this backend's lifetime.
 pub trait SessionStorage: Send + Sync {
+    /// Drains this backend after all session owners have stopped. Snapshot
+    /// backends have no shared runtime to close.
+    fn shutdown(&self) -> StorageFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Acquires a writer lease for `id`, the local conversation key.
     ///
     /// Returns [`StorageError::Busy`] when already leased, or a backend error.
@@ -236,20 +356,20 @@ pub trait SessionStorage: Send + Sync {
     ///
     /// For a caller that means to read or erase what a session saved and has
     /// no reason to begin one: opening a session that never existed would
-    /// leave behind the exclusion resource an opening creates (the file
-    /// adapter's `.lock`), for an identity nothing will use again.
+    /// leave behind a stream or exclusion resource for an identity nothing
+    /// will use again.
     ///
     /// The default cannot tell whether a session exists without acquiring it,
     /// so it acquires it exactly as [`Self::open`] does and returns `Some`,
-    /// creating whatever that creates. [`LocalFileStorage`] and
-    /// [`InMemoryStorage`] override it and create nothing
+    /// creating whatever that creates. [`RecordStorage`] and
+    /// [`InMemoryStorage`] override it and create no session stream
     /// (`opening_an_existing_session_creates_nothing_for_one_that_never_was`).
     ///
     /// # Errors
     /// The same as [`Self::open`]: [`StorageError::Busy`] while another owner
     /// holds the session, or a backend error.
     ///
-    /// [`LocalFileStorage`]: crate::infrastructure::session_storage::LocalFileStorage
+    /// [`RecordStorage`]: crate::infrastructure::session_storage::RecordStorage
     /// [`InMemoryStorage`]: crate::infrastructure::session_storage::InMemoryStorage
     fn open_existing(
         &self,
@@ -269,8 +389,8 @@ pub trait SessionStorage: Send + Sync {
 /// Access lasts until drop. Outstanding I/O must retain the lock until it finishes,
 /// even if its caller stops waiting. Dropping a lease does not delete the session
 /// or close its provider context. Implementations must document their exclusion
-/// scope and durability; the supplied file adapter excludes other local processes,
-/// while memory storage excludes owners sharing the same storage instance.
+/// scope and durability; the supplied record adapter's SQLite runtime excludes
+/// other local processes, while memory storage excludes owners sharing one instance.
 pub trait SessionStorageLease: Send + Sync {
     /// Loads the saved snapshot, returning `None` for a session with no snapshot.
     ///
@@ -278,14 +398,38 @@ pub trait SessionStorageLease: Send + Sync {
     /// invalid data must never be treated as an empty conversation.
     fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>>;
 
-    /// Atomically saves this session's complete logical state from `snapshot`.
-    /// Adapters may persist only changes; the file adapter appends JSONL records.
+    /// Saves this session's complete logical state for snapshot adapters.
+    /// Record adapters return [`StorageError::ChangesRequired`]; callers using
+    /// them supply the exact decisions through [`Self::save_changes`].
     ///
     /// Returns [`StorageError::IdentityMismatch`] for a different session and a
     /// validation or backend error if the write cannot be acknowledged. An error
     /// does not imply that provider work was rolled back, or that no write reached
     /// storage. Successful return must satisfy the adapter's durability contract.
     fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()>;
+
+    /// Saves a snapshot together with the exact SDK decisions that produced it.
+    /// Record adapters persist `changes` as one atomic logical transition and
+    /// validate that applying them to the last committed state yields `snapshot`.
+    /// Existing snapshot adapters use the complete snapshot as their authority.
+    /// A failed, uncertain, or cancelled wait keeps the same `generation` and
+    /// caller decision sequence pending. A record adapter retains its first
+    /// encoded bytes and physically committed prefix for that generation. An
+    /// exact retry finishes or acknowledges it without duplicating the prefix;
+    /// a validated suffix may extend it. Only an acknowledged save advances
+    /// to the next generation. Distinct generations may contain equal bytes.
+    /// Snapshot adapters ignore this stream-incarnation identity. Record
+    /// adapters refuse an encoded atomic group above 160 MiB with
+    /// [`StorageError::TooLarge`] before appending any part of that group; a
+    /// caller may retry a smaller valid group with the same generation.
+    fn save_changes(
+        &self,
+        _generation: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        _changes: Vec<SessionChange>,
+    ) -> StorageFuture<'_, ()> {
+        self.save(snapshot)
+    }
 
     /// Erases this session's saved history, so that it has no snapshot.
     ///
@@ -299,8 +443,8 @@ pub trait SessionStorageLease: Send + Sync {
     /// opener acquire a fresh one beside this lease, which is two writers.
     ///
     /// Afterwards [`Self::load`] returns `None`. The identity is not retired:
-    /// a later [`Self::save`], through this lease or a later one, starts a new
-    /// history under it. A caller erasing a session permanently must therefore
+    /// a later save through this lease or a later one starts a new history
+    /// under it, using the adapter's supported save method. A caller erasing a session permanently must therefore
     /// stop using that identity itself. Erasing a session that has no saved
     /// history succeeds. Nothing outside this storage is touched: a provider's
     /// own record of the context named by [`SessionSnapshot::provider_context`]
@@ -310,11 +454,13 @@ pub trait SessionStorageLease: Send + Sync {
     /// it finishes, even if its caller stops waiting.
     ///
     /// # Errors
-    /// Returns a backend error when removal cannot be acknowledged. The history
-    /// may then still be present, in whole, and repeating the erase under a
-    /// lease completes it. The supplied adapters remove the history in one
-    /// step, so a failed erase leaves it whole rather than partly removed
-    /// (`a_failed_file_erase_is_typed_and_leaves_the_history_whole`).
+    /// Returns a backend error when removal cannot be acknowledged. A reset
+    /// may already have committed while retired physical rows still await
+    /// cleanup. The same live lease fences later loads and saves until a retry
+    /// reconciles the reset and completes physical cleanup. After process
+    /// restart, the deletion caller's durable tombstone remains the fence: it
+    /// must retry erase before treating an empty replacement snapshot as an
+    /// erasure acknowledgement.
     fn erase(&self) -> StorageFuture<'_, ()>;
 }
 
@@ -381,7 +527,11 @@ impl StorageError {
     pub(crate) fn validate_retained_size(&self) -> Result<(), StorageError> {
         let capacity = match self {
             Self::Io(value) | Self::Corrupt(value) => value.capacity(),
-            Self::Busy | Self::IdentityMismatch => 0,
+            Self::Busy
+            | Self::IdentityMismatch
+            | Self::ChangesRequired
+            | Self::Unresolved
+            | Self::TooLarge => 0,
         };
         (capacity <= 4096)
             .then_some(())

@@ -1,22 +1,22 @@
 //! Storage adapters retain session history behind exclusive writer leases.
-//! Memory storage keeps snapshots for its shared lifetime. Local storage appends
-//! private JSONL changes and reconstructs validated snapshots on load.
+//! Memory storage keeps snapshots for its shared lifetime. Record storage
+//! appends semantic facts to one SQLite runtime and folds them on load.
 //!
 //! ```text
 //! SessionStorage::open -> SessionStorageLease <- SessionManager
 //!                                      |-> memory snapshot
-//!                                      |-> JSONL changes -> private journal
+//!                                      |-> semantic facts -> SQLite runtime
 //! ```
-//! Arrows show calls and representation mapping. Each completed journal line is
-//! one logical snapshot replacement; unchanged earlier history is not rewritten.
-//! Pending file operations retain the lease until they finish. Erasing a session
-//! removes its history under that lease and keeps the lease's exclusion. JSON mapping and
-//! checkpoint validation live in `snapshot`; file ownership and sync live in `local`.
-//! `paths` encodes exact identities into case-fold-safe journal and lease filenames.
+//! Arrows show calls and representation mapping. A complete framed fact is
+//! folded into a validated snapshot. Pending operations retain the lease until
+//! they finish. Erasing a session resets its stream under that lease. `paths`
+//! identifies stale JSONL history so the record adapter refuses it unchanged.
 
-mod local;
 mod memory;
 mod paths;
+mod record;
+mod record_writer;
 mod snapshot;
-pub use local::LocalFileStorage;
+mod stream_fact;
 pub use memory::InMemoryStorage;
+pub use record::RecordStorage;

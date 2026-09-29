@@ -56,7 +56,7 @@ use nessa_auth::{
     domain::{AudienceId, OrganizationId, ResourceId},
 };
 #[cfg(unix)]
-use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStorage};
+use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
 #[cfg(unix)]
 use nessa_sdk::{
     application::agent_execution::providers::{ApprovalMode, ApprovalModeChoice},
@@ -126,7 +126,7 @@ impl StartupWarmUp {
 }
 
 /// Construct the guarded product route from a previously initialized local registry.
-pub(super) fn product_state(
+pub(super) async fn product_state(
     config: &Environment,
     uptime: Arc<dyn ServerClock>,
     bundle: Option<&Path>,
@@ -185,7 +185,8 @@ pub(super) fn product_state(
                 directory,
                 agent_credentials.clone(),
                 packaged_agents,
-            )?;
+            )
+            .await?;
             (
                 Some((built.service, built.attachments, built.agents_catalog)),
                 built.agent_probe,
@@ -311,7 +312,7 @@ struct BuiltConversations {
 }
 
 #[cfg(not(unix))]
-fn conversations(
+async fn conversations(
     _agents: &AgentsConfig,
     _directory: &Path,
     _credentials: Arc<dyn AgentCredentialSource>,
@@ -330,7 +331,7 @@ pub(crate) fn conversation_root(namespace: &Path) -> std::path::PathBuf {
 }
 
 #[cfg(unix)]
-fn conversations(
+async fn conversations(
     agents: &AgentsConfig,
     directory: &Path,
     credentials: Arc<dyn AgentCredentialSource>,
@@ -465,9 +466,13 @@ fn conversations(
         warm_ups.push(StartupWarmUp::Fixed(prepared));
     }
     let storage = Arc::new(
-        LocalFileStorage::new(root.join("sessions"))
+        RecordStorage::new(root.join("sessions"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
+    storage
+        .initialize()
+        .await
+        .map_err(|error| RunError::Agent(error.to_string()))?;
     let creation_audit = Arc::new(
         DurableConversationCreationAudit::new(root.join("audit").join("creation"))
             .map_err(|error| RunError::Agent(error.to_string()))?,

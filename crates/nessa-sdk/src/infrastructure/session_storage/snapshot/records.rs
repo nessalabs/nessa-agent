@@ -94,17 +94,7 @@ pub(super) struct Metadata {
     /// Empty for a message of images or files alone.
     pub(super) user_message: String,
     pub(super) user_images: Vec<Image>,
-    /// Absent in a journal written before a message could point at files, and
-    /// empty is what such a message meant: no message could name one.
-    ///
-    /// This is not a compatibility reader kept alongside a current one. There
-    /// is one contract, and under it an older record says truthfully that its
-    /// message named no files — the same reading the six `Option` fields
-    /// beside this one already take of their own absence. What the default
-    /// must never do is invent a value a record could have meant something
-    /// else by, which is why the path itself has none: a missing `path` is a
-    /// corrupt record, not an empty one.
-    #[serde(default)]
+    /// Empty when a message has no linked files.
     pub(super) user_files: Vec<FileLink>,
     pub(super) estimated_input_tokens: u64,
     pub(super) reserved_output_tokens: u32,

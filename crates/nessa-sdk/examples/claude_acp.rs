@@ -8,7 +8,7 @@ use nessa_sdk::application::agent_execution::permissions::{
     ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalModeSnapshot, PermissionAnswer,
 };
 use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
-use nessa_sdk::application::agent_execution::sessions::SessionManager;
+use nessa_sdk::application::agent_execution::sessions::{SessionManager, SessionStorage};
 use nessa_sdk::domain::agent_execution::executions::{ExecutionId, MessageKind};
 use nessa_sdk::domain::agent_execution::permissions::{
     PermissionCancellationReasonView, PermissionDecision, PermissionEffect, PermissionOfferPolicy,
@@ -22,7 +22,7 @@ use nessa_sdk::domain::common::value_objects::TokenLimits;
 use nessa_sdk::domain::model_metadata::entities::ModelMetadata;
 use nessa_sdk::infrastructure::claude_acp::sessions::ClaudeAcpProvider;
 use nessa_sdk::infrastructure::model_metadata_json::load_catalog;
-use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
+use nessa_sdk::infrastructure::session_storage::RecordStorage;
 use nessa_sdk::infrastructure::{acp::sessions::AcpConfig, clock::RuntimeClock};
 use nessa_sdk::Agent;
 use std::{
@@ -224,125 +224,166 @@ async fn run() -> Result<(), Box<dyn Error>> {
             )
             .build()?,
     );
-    let storage = Arc::new(LocalFileStorage::new(workspace.join(".nessa/sessions"))?);
+    let storage = Arc::new(RecordStorage::new(workspace.join(".nessa/sessions"))?);
+    let result = async {
+        storage.initialize().await?;
+        run_with_storage(
+            binding,
+            audit,
+            storage.clone(),
+            SmokeRun {
+                workspace: &workspace,
+                mode,
+                limits,
+                input_tokens: utf8(5)?,
+                prompt: utf8(6)?,
+            },
+        )
+        .await
+    }
+    .await;
+    let shutdown = storage.shutdown().await;
+    result?;
+    shutdown?;
+    Ok(())
+}
+
+struct SmokeRun<'a> {
+    workspace: &'a std::path::Path,
+    mode: &'a str,
+    limits: TokenLimits,
+    input_tokens: &'a str,
+    prompt: &'a str,
+}
+
+async fn run_with_storage(
+    binding: ClaudeAcpProvider,
+    audit: Arc<dyn ExecutionAudit>,
+    storage: Arc<RecordStorage>,
+    run: SmokeRun<'_>,
+) -> Result<(), Box<dyn Error>> {
     let session = Agent::prepare(
         Arc::new(binding),
         SessionManager::open(Some(SessionId::new("smoke")?), storage).await?,
         audit,
     )
     .await?;
-    let attachment = session.authorize_attachment(AttachmentRequest::CallerRequested(
-        ActionContext::new("nessa.smoke-host", "nessa.cli", "attach-smoke-session")?,
-    ))?;
-    session.start_attachment(attachment)?.wait().await?;
-    let mut events = session.subscribe();
-    tracing::info!(
-        model = session.capabilities().model().model_id(),
-        "Binding ready"
-    );
-    let execution_id = ExecutionId::new(format!(
-        "smoke-{}",
-        session
-            .session_manager()
-            .snapshot()
-            .await
-            .expect("opened session")
-            .invocations
-            .len()
-            + 1
-    ))?;
-    let input = ExecutionRequest {
-        execution_id: execution_id.clone(),
-        user_message: UserMessage::text_only(PromptText::new(utf8(6)?)?),
-        estimated_input_tokens: utf8(5)?.parse()?,
-        reserved_output_tokens: limits.max_output(),
-    };
-    let executing = session.clone();
-    let action = ActionContext::new("nessa.smoke-host", "nessa.cli", execution_id.as_str())?;
-    let pending = tokio::spawn(async move { executing.invoke(input, action).await });
-    tokio::pin!(pending);
-    let mut requested_close = false;
-    let mut allowed = 0;
-    let mut stream_failure = None;
-    let outcome = loop {
-        let event = tokio::select! {
-            result = &mut pending => { break result?; }
-            event = events.next() => event,
+    let result = async {
+        let attachment = session.authorize_attachment(AttachmentRequest::CallerRequested(
+            ActionContext::new("nessa.smoke-host", "nessa.cli", "attach-smoke-session")?,
+        ))?;
+        session.start_attachment(attachment)?.wait().await?;
+        let mut events = session.subscribe();
+        tracing::info!(
+            model = session.capabilities().model().model_id(),
+            "Binding ready"
+        );
+        let execution_id = ExecutionId::new(format!(
+            "smoke-{}",
+            session
+                .session_manager()
+                .snapshot()
+                .await
+                .expect("opened session")
+                .invocations
+                .len()
+                + 1
+        ))?;
+        let input = ExecutionRequest {
+            execution_id: execution_id.clone(),
+            user_message: UserMessage::text_only(PromptText::new(run.prompt)?),
+            estimated_input_tokens: run.input_tokens.parse()?,
+            reserved_output_tokens: run.limits.max_output(),
         };
-        match event {
-            Ok(Some(event)) => match event.into_update() {
-                ExecutionUpdate::Message(chunk) if chunk.kind() == MessageKind::Text => {
-                    let text = chunk.as_str();
-                    tracing::info!(%text, "Agent text");
-                    if mode == "close" && !requested_close && !text.is_empty() {
-                        requested_close = true;
-                        tracing::info!(cleanup = ?session.close(close_action()).await?, "Closed after text");
+        let executing = session.clone();
+        let action = ActionContext::new("nessa.smoke-host", "nessa.cli", execution_id.as_str())?;
+        let pending = tokio::spawn(async move { executing.invoke(input, action).await });
+        tokio::pin!(pending);
+        let mut requested_close = false;
+        let mut allowed = 0;
+        let mut stream_failure = None;
+        let outcome = loop {
+            let event = tokio::select! {
+                result = &mut pending => { break result?; }
+                event = events.next() => event,
+            };
+            match event {
+                Ok(Some(event)) => match event.into_update() {
+                    ExecutionUpdate::Message(chunk) if chunk.kind() == MessageKind::Text => {
+                        let text = chunk.as_str();
+                        tracing::info!(%text, "Agent text");
+                        if run.mode == "close" && !requested_close && !text.is_empty() {
+                            requested_close = true;
+                            tracing::info!(cleanup = ?session.close(close_action()).await?, "Closed after text");
+                        }
                     }
+                    ExecutionUpdate::PermissionRequested {
+                        id, input, options, ..
+                    } => {
+                        if run.mode == "close-write" {
+                            tracing::info!(cleanup = ?session.close(close_action()).await?, "Closed with pending permission");
+                            continue;
+                        }
+                        let allow_once = run.mode == "verify-write"
+                            && allowed == 0
+                            && input.name == "Write"
+                            && serde_json::from_str::<serde_json::Value>(&input.arguments_json)?
+                                == serde_json::json!({
+                                    "file_path": run.workspace.join("nessa-binding-smoke.txt"),
+                                    "content": "Nessa binding smoke test\n"
+                                });
+                        let resolution = session
+                            .answer_permission(PermissionAnswer {
+                                attribution: attribution(id.as_str()),
+                                execution_id: execution_id.clone(),
+                                id: id.clone(),
+                                option_id: options
+                                    .choices()
+                                    .iter()
+                                    .find(|option| {
+                                        option.decision().clone()
+                                            == if allow_once {
+                                                PermissionDecision::new(
+                                                    PermissionEffect::Allow,
+                                                    PermissionScope::request(),
+                                                )
+                                            } else {
+                                                PermissionDecision::new(
+                                                    PermissionEffect::Deny,
+                                                    PermissionScope::request(),
+                                                )
+                                            }
+                                    })
+                                    .ok_or("required once-only permission option missing")?
+                                    .id()
+                                    .clone(),
+                            })
+                            .await?;
+                        if allow_once {
+                            allowed += 1;
+                        }
+                        tracing::info!(
+                            principal = resolution.attribution().actor().principal_id(),
+                            request = resolution.attribution().actor().request_id(),
+                            basis = ?resolution.attribution().basis(),
+                            allow_once,
+                            "Permission answered"
+                        );
+                    }
+                    ExecutionUpdate::Finished(_) => break pending.as_mut().await?,
+                    _ => {}
+                },
+                Ok(None) => break pending.as_mut().await?,
+                Err(error) => {
+                    stream_failure = Some(error);
+                    break pending.as_mut().await?;
                 }
-                ExecutionUpdate::PermissionRequested {
-                    id, input, options, ..
-                } => {
-                    if mode == "close-write" {
-                        tracing::info!(cleanup = ?session.close(close_action()).await?, "Closed with pending permission");
-                        continue;
-                    }
-                    let allow_once = mode == "verify-write"
-                        && allowed == 0
-                        && input.name == "Write"
-                        && serde_json::from_str::<serde_json::Value>(&input.arguments_json)?
-                            == serde_json::json!({
-                                "file_path": workspace.join("nessa-binding-smoke.txt"),
-                                "content": "Nessa binding smoke test\n"
-                            });
-                    let resolution = session
-                        .answer_permission(PermissionAnswer {
-                            attribution: attribution(id.as_str()),
-                            execution_id: execution_id.clone(),
-                            id: id.clone(),
-                            option_id: options
-                                .choices()
-                                .iter()
-                                .find(|option| {
-                                    option.decision().clone()
-                                        == if allow_once {
-                                            PermissionDecision::new(
-                                                PermissionEffect::Allow,
-                                                PermissionScope::request(),
-                                            )
-                                        } else {
-                                            PermissionDecision::new(
-                                                PermissionEffect::Deny,
-                                                PermissionScope::request(),
-                                            )
-                                        }
-                                })
-                                .ok_or("required once-only permission option missing")?
-                                .id()
-                                .clone(),
-                        })
-                        .await?;
-                    if allow_once {
-                        allowed += 1;
-                    }
-                    tracing::info!(
-                        principal = resolution.attribution().actor().principal_id(),
-                        request = resolution.attribution().actor().request_id(),
-                        basis = ?resolution.attribution().basis(),
-                        allow_once,
-                        "Permission answered"
-                    );
-                }
-                ExecutionUpdate::Finished(_) => break pending.as_mut().await?,
-                _ => {}
-            },
-            Ok(None) => break pending.as_mut().await?,
-            Err(error) => {
-                stream_failure = Some(error);
-                break pending.as_mut().await?;
             }
-        }
-    };
+        };
+        Ok::<_, Box<dyn Error>>((outcome, allowed, stream_failure))
+    }.await;
     let cleanup = session.close(close_action()).await;
+    let (outcome, allowed, stream_failure) = result?;
     tracing::info!(
         ?outcome,
         ?cleanup,

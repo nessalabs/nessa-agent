@@ -1,12 +1,12 @@
 //! Validate snapshot relationships at every storage port, including custom adapters.
 use super::{
-    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, SessionSnapshot,
-    StorageError, SubmissionAcknowledgement,
+    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
+    SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::{
     limits::{validate_observation_id, ObservationUsage, MAX_RETAINED_OUTPUT_EVENTS},
-    ExecutionUpdate,
+    ExecutionEvent, ExecutionUpdate,
 };
 use crate::application::agent_execution::providers::{ExecutionReport, ExecutionReportSource};
 use crate::domain::agent_execution::{
@@ -147,6 +147,7 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
         let mut asked_ids = HashSet::new();
         let mut open_questions = HashSet::new();
         for event in &invocation.events {
+            validate_observation_context(&snapshot.provider_context, event)?;
             match event.update() {
                 ExecutionUpdate::Tool(tool) => {
                     validate_observation_id(tool.id().as_str()).map_err(corrupt)?
@@ -179,16 +180,6 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
                     );
                 }
                 ExecutionUpdate::PermissionCancelled(record) => {
-                    validate_observation_id(record.request().id().as_str()).map_err(corrupt)?;
-                    validate_observation_id(record.request().tool_id().as_str())
-                        .map_err(corrupt)?;
-                    if snapshot.provider_context.recorded() != Some(record.session_id())
-                        || record.request().execution_id() != event.execution_id()
-                    {
-                        return Err(corrupt(
-                            "cancellation belongs to a different session or invocation",
-                        ));
-                    }
                     let (mut pending, input) = reviews
                         .remove(record.request().id())
                         .ok_or_else(|| corrupt("cancellation has no preceding pending request"))?;
@@ -251,6 +242,27 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
     Ok(())
 }
 
+/// A context-bound observation must agree with the context at its own fact,
+/// before a later provider-context revision can change the final projection.
+pub(super) fn validate_observation_context(
+    context: &ProviderContext,
+    event: &ExecutionEvent,
+) -> Result<(), StorageError> {
+    let ExecutionUpdate::PermissionCancelled(record) = event.update() else {
+        return Ok(());
+    };
+    validate_observation_id(record.request().id().as_str()).map_err(corrupt)?;
+    validate_observation_id(record.request().tool_id().as_str()).map_err(corrupt)?;
+    if context.recorded() != Some(record.session_id())
+        || record.request().execution_id() != event.execution_id()
+    {
+        return Err(corrupt(
+            "cancellation belongs to a different session or invocation",
+        ));
+    }
+    Ok(())
+}
+
 /// Rebuild history authority from a boundary projection. Live mutations and
 /// restoration use this same entity; the DTO cannot authorize a transition.
 pub(super) fn invocation_history(
@@ -264,25 +276,7 @@ pub(super) fn invocation_history(
     if let Some(result) = &invocation.result {
         validate_local_result(invocation, result)?;
     }
-    if matches!(
-        &invocation.acknowledgement,
-        SubmissionAcknowledgement::Failed {
-            audit: None,
-            storage: None
-        }
-    ) {
-        return Err(corrupt(
-            "failed submission acknowledgement has no failed boundary",
-        ));
-    }
-    if let SubmissionAcknowledgement::Failed { audit, storage } = &invocation.acknowledgement {
-        if let Some(error) = audit {
-            error.validate_retained_size()?;
-        }
-        if let Some(error) = storage {
-            error.validate_retained_size()?;
-        }
-    }
+    validate_submission_acknowledgement(&invocation.acknowledgement)?;
     let mut history = InvocationHistory::new(
         invocation.request.execution_id.clone(),
         invocation.submission,
@@ -325,6 +319,32 @@ pub(super) fn invocation_history(
     )?;
     history.validate_checkpoint().map_err(corrupt)?;
     Ok(history)
+}
+
+/// Check one acknowledgement before it can be overwritten by another fact.
+pub(super) fn validate_submission_acknowledgement(
+    acknowledgement: &SubmissionAcknowledgement,
+) -> Result<(), StorageError> {
+    if matches!(
+        acknowledgement,
+        SubmissionAcknowledgement::Failed {
+            audit: None,
+            storage: None
+        }
+    ) {
+        return Err(corrupt(
+            "failed submission acknowledgement has no failed boundary",
+        ));
+    }
+    if let SubmissionAcknowledgement::Failed { audit, storage } = acknowledgement {
+        if let Some(error) = audit {
+            error.validate_retained_size()?;
+        }
+        if let Some(error) = storage {
+            error.validate_retained_size()?;
+        }
+    }
+    Ok(())
 }
 
 /// Map report origin and local stop together through the domain's history authority.
@@ -378,7 +398,22 @@ pub(super) fn validate_local_result(
     invocation: &InvocationRecord,
     result: &Result<ExecutionOutcome, AgentError>,
 ) -> Result<(), StorageError> {
-    if let (Some(settlement), Ok(_)) = (&invocation.provider_report, result) {
+    if let Err(error) = result {
+        error.validate_retained_size()?;
+    }
+    if let Some(settlement) = &invocation.provider_report {
+        validate_report_against_local_result(settlement, result)?;
+    }
+    Ok(())
+}
+
+/// A newly recorded report cannot retroactively invalidate an earlier public
+/// success, even if a later diagnostic in the same batch would hide that result.
+pub(super) fn validate_report_against_local_result(
+    settlement: &ExecutionReport,
+    result: &Result<ExecutionOutcome, AgentError>,
+) -> Result<(), StorageError> {
+    if result.is_ok() {
         // The domain checks outcome agreement, including causally recorded local
         // cancellation. Public success still cannot hide report delivery or cleanup
         // failures, which the pure history deliberately does not interpret.
@@ -389,4 +424,18 @@ pub(super) fn validate_local_result(
         }
     }
     Ok(())
+}
+
+/// Apply one proposed local result against the record's prior history authority.
+/// The caller mutates its projection only after this transition is accepted.
+pub(super) fn local_result_transition(
+    invocation: &InvocationRecord,
+    result: &Result<ExecutionOutcome, AgentError>,
+) -> Result<Option<ExecutionOutcome>, StorageError> {
+    validate_local_result(invocation, result)?;
+    let mut history = invocation_history(invocation)?;
+    history
+        .record_local_result(result.as_ref().copied().map_err(|_| ()))
+        .map_err(corrupt)?;
+    Ok(history.local_outcome())
 }

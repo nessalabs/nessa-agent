@@ -1,4 +1,22 @@
 use super::support::*;
+use nessa_sdk::domain::agent_execution::executions::MessageId;
+
+#[test]
+fn provider_message_ids_reject_empty_or_oversized_restored_strings() {
+    assert_eq!(
+        MessageId::new(String::new()),
+        Err(ExecutionError::EmptyValue("message ID"))
+    );
+    let valid = MessageId::new("x".repeat(MessageId::MAX_BYTES)).unwrap();
+    assert_eq!(valid.as_str().len(), MessageId::MAX_BYTES);
+    assert_eq!(
+        MessageId::new("x".repeat(MessageId::MAX_BYTES + 1)),
+        Err(ExecutionError::ValueTooLong {
+            field: "message ID",
+            max_bytes: MessageId::MAX_BYTES,
+        })
+    );
+}
 
 #[test]
 fn identities_and_prompt_text_preserve_meaning_and_reject_blank_values() {

@@ -1,4 +1,4 @@
-//! Compact queue membership facts in the same atomic JSONL transaction as lifecycle evidence.
+//! Compact queue membership facts in the same semantic batch as lifecycle evidence.
 use super::{permissions::Actor, scheduling::Kind, tools::corrupt};
 use crate::application::agent_execution::sessions::{QueueHistoryRecord, StorageError};
 use crate::domain::agent_execution::executions::{

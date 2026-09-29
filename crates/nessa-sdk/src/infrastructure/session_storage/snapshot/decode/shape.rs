@@ -1,8 +1,7 @@
 //! Select allocation budgets from storage field roles, without replacing schema validation.
 use crate::application::agent_execution::agents::ProviderDiagnostic;
 use crate::application::agent_execution::executions::{
-    limits::{MAX_MESSAGE_CHUNK_BYTES, MAX_RETAINED_OUTPUT_EVENTS},
-    ExecutionRequest,
+    limits::MAX_MESSAGE_CHUNK_BYTES, ExecutionRequest,
 };
 use crate::domain::agent_execution::{
     permissions::PermissionOption,
@@ -27,11 +26,17 @@ const MEDIA_TYPE_BYTES: usize = 16;
 
 #[derive(Clone, Copy)]
 pub(super) enum Shape {
-    Index,
-    Count,
-    Record,
-    Changes,
-    Change,
+    Semantic,
+    SemanticBatch,
+    SemanticChanges,
+    SemanticOpened,
+    SemanticInput,
+    SemanticScheduling,
+    SemanticReceipt,
+    SemanticStop,
+    SemanticReport,
+    SemanticSettlement,
+    SemanticContext,
     Metadata,
     Images,
     Image,
@@ -39,7 +44,6 @@ pub(super) enum Shape {
     FileLink,
     Provider,
     Actor,
-    Events,
     Event,
     Update,
     Scheduling,
@@ -48,7 +52,6 @@ pub(super) enum Shape {
     Acknowledgement,
     FailedAcknowledgement,
     StorageError,
-    Reorders,
     Reorder,
     QueueEntries,
     QueueEntry,
@@ -83,23 +86,38 @@ impl Shape {
     }
     pub(super) fn field(self, key: &str) -> Self {
         match (self, key) {
-            (Record, "queue_history") => Reorders,
+            (SemanticBatch, "changes") => SemanticChanges,
+            (Semantic, "Opened") => SemanticOpened,
+            (Semantic, "InputAccepted") => SemanticInput,
+            (Semantic, "QueueDecision") => Generic,
+            (Semantic, "SchedulingTransition") => SemanticScheduling,
+            (Semantic, "ProviderObservation") => Event,
+            (Semantic, "ReceiptUpdated") => SemanticReceipt,
+            (Semantic, "StopDecision") => SemanticStop,
+            (Semantic, "ProviderReport") => SemanticReport,
+            (Semantic, "LocalSettlement") => SemanticSettlement,
+            (Semantic, "ProviderContext") => SemanticContext,
+            (SemanticOpened, "id" | "context") => Text(256),
+            (SemanticOpened, "provider") => Provider,
+            (SemanticInput, "metadata") => Metadata,
+            (SemanticInput, "scheduling") => Scheduling,
+            (SemanticScheduling, "execution_id") => Text(256),
+            (SemanticScheduling, "event") => Generic,
+            (SemanticReceipt, "before" | "after") => Acknowledgement,
+            (SemanticSettlement, "before" | "after") => Result,
+            (SemanticContext, "before" | "after") => Text(256),
+            (
+                SemanticReceipt | SemanticStop | SemanticReport | SemanticSettlement,
+                "execution_id",
+            ) => Text(256),
             (_, "Reordered") => Reorder,
             (Reorder, "before") => QueueEntries,
             (Reorder, "after") => QueueIds,
             (_, "Admitted" | "Selected" | "Removed") => QueueEntry,
             (QueueEntry, "id") => Text(256),
-            (Record, "provider") => Provider,
-            (Record, "invocation_count") => Count,
-            (Change, "index") => Index,
-            (Record, "invocations") => Changes,
-            (Record, "id" | "provider_context") => Text(256),
             (Provider, "name" | "model_id") => Text(256),
             (Provider, "context") => Text(4096),
             (Actor, _) => Text(256),
-            (Change, "metadata") => Metadata,
-            (Change, "events") => Events,
-            (Change, "scheduling") => Scheduling,
             (_, "projection") => FinalizedComponents,
             (FinalizedComponent, "Operation") => Error,
             (FinalizedComponent, "PermissionDeliveryAndAudit") => Generic,
@@ -177,7 +195,7 @@ impl Shape {
             FileLink => key == "path",
             ProviderError => matches!(key, "code" | "diagnostic"),
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
-            StorageError => matches!(key, "Io" | "Corrupt"),
+            StorageError => matches!(key, "Io" | "Corrupt" | "ChangesRequired" | "Unresolved"),
             _ => true,
         }
     }
@@ -185,11 +203,9 @@ impl Shape {
         match self {
             Self::Images => Self::Image,
             Self::Files => Self::FileLink,
-            Self::Changes => Self::Change,
-            Self::Events => Self::Event,
+            Self::SemanticChanges => Self::Semantic,
             Self::FinalizedComponents => Self::FinalizedComponent,
             Self::Hooks => Self::Hook,
-            Self::Reorders => Self::Reorder,
             Self::QueueEntries => Self::QueueEntry,
             Self::QueueIds => Self::Text(256),
             Self::AskedQuestions => Self::Asked,
@@ -199,10 +215,8 @@ impl Shape {
     }
     pub(super) fn array_limit(self) -> usize {
         match self {
-            Self::Changes => usize::MAX,
-            Self::Events => MAX_RETAINED_OUTPUT_EVENTS,
+            Self::SemanticChanges => 262_144 + 16 * 1024,
             Self::Hooks => 128,
-            Self::Reorders => usize::MAX,
             Self::QueueEntries | Self::QueueIds => 64,
             // The message's own constructor refuses more; refuse them here
             // before the excess references are built.

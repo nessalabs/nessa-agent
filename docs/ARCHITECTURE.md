@@ -778,10 +778,10 @@ replacement view and durable SDK receipt. Closing a tab detaches a view;
 Stop explicitly closes active and queued work.
 
 See [gateway chat](guides/gateway-chat.md) for configuration, ownership, commands,
-limits, and durability. The server stores SDK JSONL snapshots at consequential
+limits, and durability. The server stores SDK semantic records in one SQLite runtime at consequential
 boundaries and mandatory audit records independently. Unfinished streaming text
 can be lost on crash. Reads are bounded current views, not a durable cursor stream.
-No second event database is required for this initial integration.
+The shared record database is opened before the gateway listens.
 
 A message refers to an image by digest, media type and size; its bytes never
 ride the product socket. `attachment.begin` on the authenticated socket answers
