@@ -51,7 +51,7 @@ pub struct BaselinePiece {
     pub section: BaselineSection,
     /// Zero-based part number within the section.
     pub part: u32,
-    /// Exact serialized bytes, at most [`MAX_BASELINE_PIECE_BYTES`].
+    /// Exact serialized bytes, at most 64 KiB.
     pub bytes: Vec<u8>,
 }
 
