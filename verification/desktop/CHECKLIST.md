@@ -228,6 +228,14 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   (`focus-reply`, 1440 × 900 and 1000 × 700); unit test `overview.test.tsx`.
 - [ ] **The sidebar marks what is shown**: Agents while the overview is, a
   channel or session only while the panes are. _Check:_ manual.
+- [ ] **The header holds its place; only the list scrolls.** The title, its
+  counts and the filter stay where they are while the list scrolls to its
+  end; the list begins below the header and its top edge fades (a mask)
+  rather than cutting a row. "Needs you" is shown only while something
+  waits. _Check:_ `responsive.mjs --only overview-header` (Chromium and
+  WebKit, at 1440 × 560 so the list must scroll); unit tests in
+  `overview.test.tsx` for the empty section.
+
 
 ## Composer and approval card
 

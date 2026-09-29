@@ -423,43 +423,46 @@ export function AgentsOverview({
         data-split={split || undefined}
       >
         <div className="agents-overview-surface">
-          <div className="agents-overview-scroll">
-            <div
-              ref={list}
-              className="agents-overview-column"
-              tabIndex={-1}
-              onKeyDown={onKeyDown}
-            >
-              <header className="agents-overview-header">
-                <div className="agents-overview-title">
-                  <h1>Agents</h1>
-                  <FilterMenu filter={filter} onChange={setFilter} />
-                </div>
-                <p>{ready ? glanceLine(glance) : "\u00a0"}</p>
-              </header>
-              {ready ? (
-                <Groups
-                  glance={glance}
-                  current={current}
-                  selected={split ? current : null}
-                  expanded={split ? null : expanded}
-                  settlingOf={settlingOf}
-                  onFocusItem={choose}
-                  onChoose={pick}
-                  onOpen={open}
-                  onAnswer={answer}
-                  onLeaveReply={leaveReply}
-                  takesKey={takesKey}
-                  onShowAll={
-                    filter.scope === "all"
-                      ? undefined
-                      : () => setFilter({ ...filter, scope: "all" })
-                  }
-                />
-              ) : null}
-              <p className="agents-overview-said" aria-live="polite">
-                {said}
-              </p>
+          {/* The header stays where it is; only the list under it scrolls. */}
+          <div className="agents-overview-side">
+            <header className="agents-overview-header">
+              <div className="agents-overview-title">
+                <h1>Agents</h1>
+                <FilterMenu filter={filter} onChange={setFilter} />
+              </div>
+              <p>{ready ? glanceLine(glance) : "\u00a0"}</p>
+            </header>
+            <div className="agents-overview-scroll">
+              <div
+                ref={list}
+                className="agents-overview-column"
+                tabIndex={-1}
+                onKeyDown={onKeyDown}
+              >
+                {ready ? (
+                  <Groups
+                    glance={glance}
+                    current={current}
+                    selected={split ? current : null}
+                    expanded={split ? null : expanded}
+                    settlingOf={settlingOf}
+                    onFocusItem={choose}
+                    onChoose={pick}
+                    onOpen={open}
+                    onAnswer={answer}
+                    onLeaveReply={leaveReply}
+                    takesKey={takesKey}
+                    onShowAll={
+                      filter.scope === "all"
+                        ? undefined
+                        : () => setFilter({ ...filter, scope: "all" })
+                    }
+                  />
+                ) : null}
+                <p className="agents-overview-said" aria-live="polite">
+                  {said}
+                </p>
+              </div>
             </div>
           </div>
           {split && peeked !== null ? (
@@ -524,13 +527,21 @@ function Groups({
     onAnswer,
     onLeaveReply,
   })
+  // Nothing listed at all: one quiet line, never an empty page.
+  const empty =
+    glance.needsYou.length +
+      glance.working.length +
+      glance.finished.length +
+      glance.earlier.length ===
+    0
   return (
     <>
-      <section className="agents-overview-group" aria-labelledby="agents-needs-you">
-        <h2 id="agents-needs-you" data-reflow="title:needs-you">
-          Needs you
-        </h2>
-        {glance.needsYou.length > 0 ? (
+      {/* Shown only while something waits: an empty section is nothing to review. */}
+      {glance.needsYou.length > 0 ? (
+        <section className="agents-overview-group" aria-labelledby="agents-needs-you">
+          <h2 id="agents-needs-you" data-reflow="title:needs-you">
+            Needs you
+          </h2>
           <ul role="list" className="agents-overview-list">
             {glance.needsYou.map((sessionId) => (
               <RequestRow
@@ -541,10 +552,10 @@ function Groups({
               />
             ))}
           </ul>
-        ) : (
-          <AllClear />
-        )}
-      </section>
+        </section>
+      ) : empty ? (
+        <AllClear />
+      ) : null}
       {glance.working.length > 0 ? (
         <section className="agents-overview-group" aria-labelledby="agents-working">
           <h2 id="agents-working" data-reflow="title:working">

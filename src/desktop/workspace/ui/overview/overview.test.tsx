@@ -70,8 +70,13 @@ function sampleIndex(): WorkspaceIndex {
 async function mount({
   strict = false,
   wrap = (tree: ReactNode) => tree,
-}: { strict?: boolean; wrap?: (tree: ReactNode) => ReactNode } = {}) {
-  const source = fakeSource(sampleIndex())
+  index = sampleIndex(),
+}: {
+  strict?: boolean
+  wrap?: (tree: ReactNode) => ReactNode
+  index?: WorkspaceIndex
+} = {}) {
+  const source = fakeSource(index)
   for (const [sessionId, command] of [
     ["first", "security import build.p12"],
     ["second", "xcrun notarytool submit build.dmg"],
@@ -175,6 +180,29 @@ async function press(
 }
 
 describe("the agents overview", () => {
+  it("leaves Needs you out while nothing waits, and says all is clear only when nothing is listed at all", async () => {
+    const quiet = sampleIndex()
+    await mount({
+      index: {
+        ...quiet,
+        sessions: quiet.sessions.filter((session) => session.status !== "needs-you"),
+      },
+    })
+    await open()
+    expect(host.querySelector("#agents-needs-you")).toBeNull()
+    expect(host.querySelector(".agents-clear-title")).toBeNull()
+    expect(host.querySelector("#agents-working")).not.toBeNull()
+  })
+
+  it("says all is clear when nothing at all is listed", async () => {
+    await mount({ index: { ...sampleIndex(), sessions: [] } })
+    await open()
+    expect(host.querySelector("#agents-needs-you")).toBeNull()
+    expect(host.querySelector(".agents-clear-title")?.textContent).toBe(
+      "Nothing needs you",
+    )
+  })
+
   it("shows what each waiting agent asks, and what is working, over panes left in place", async () => {
     await mount()
     await open()
