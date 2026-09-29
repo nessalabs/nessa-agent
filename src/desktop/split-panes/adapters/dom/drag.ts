@@ -437,9 +437,11 @@ export interface SplitPanesDragOptions {
 }
 
 /**
- * What a copy leaves out of what it pictures: identity, focus, and every mark
- * of the module's — a copy is a picture, never a pane, a part, or something
- * to carry.
+ * What a copy leaves out of what it pictures: identity and focus, and what
+ * would make it something to carry, aim at or treat as mid-drag. What says
+ * how the pane is laid out — in the corner (`marks.corner`,
+ * `marks.dragCorner`) — stays, so the copy's header starts where the pane's
+ * does.
  */
 const alwaysStripped = [
   "id",
@@ -450,7 +452,11 @@ const alwaysStripped = [
   "data-pane-key",
   "data-flip",
   "data-flip-id",
-  ...Object.values(marks),
+  marks.dragPane,
+  marks.dragItem,
+  marks.carrying,
+  marks.lifted,
+  marks.waiting,
 ]
 
 /**

@@ -116,6 +116,8 @@ function Host({ fake, options }: { fake: Fake; options: SplitPanesDragOptions })
             key={pane.key}
             data-pane-key={pane.key}
             aria-label={`Pane ${pane.item}`}
+            // The top-left pane, as the grid's frame marks it.
+            {...{ [marks.corner]: pane.key === 1 || undefined }}
           >
             <header data-split-keeps="top-left" data-drag-pane={pane.key} data-host-mark>
               {pane.item}
@@ -435,8 +437,10 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   await frames()
   await liftOntoTwo()
   const copy = element(`.${classes.ghost} header`)
-  // A picture, never a pane or its parts: none of the module's marks is copied.
-  for (const name of Object.values(marks))
+  // A picture of the pane as it looks — in the corner, its header starts
+  // where the pane's does — but nothing to carry, aim at, or mid-drag.
+  expect(element(`.${classes.ghost} article`).hasAttribute(marks.corner)).toBe(true)
+  for (const name of [marks.dragPane, marks.dragItem, marks.carrying, marks.lifted])
     expect(element(`.${classes.ghost}`).querySelector(`[${name}]`), name).toBeNull()
   expect(copy.hasAttribute("data-host-mark")).toBe(false)
   expect(copy.hasAttribute("data-drag-pane")).toBe(false)

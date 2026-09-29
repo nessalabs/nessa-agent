@@ -1238,12 +1238,28 @@ Object.assign(checks, {
     await hideColumns(page, layout)
     await openPanes(page, 2)
     const sampler = safeArea(page)
+    // Where the corner pane's title starts in its pane: past the window's
+    // controls, as a pane in the corner lays out its header.
+    const titleIn = (box, title) =>
+      page.evaluate(
+        ([boxSelector, titleSelector]) => {
+          const outer = document.querySelector(boxSelector)
+          const inner = outer?.querySelector(titleSelector)
+          return outer && inner
+            ? inner.getBoundingClientRect().left - outer.getBoundingClientRect().left
+            : null
+        },
+        [box, title],
+      )
+    const inPane = await titleIn(css.pane, css.titleText)
+    let inCopy = null
     await sampler.watch(
       "carry the corner pane",
       async () => {
         await lift(page, 0)
         // Held near where it was grabbed while the copy glides to its centre.
         await page.waitForTimeout(300)
+        inCopy = await titleIn(css.dragGhost, css.titleText)
         await page.keyboard.press(keys.escape)
         await page.mouse.up()
       },
@@ -1255,6 +1271,13 @@ Object.assign(checks, {
       failures: [
         ...summarize(await sampler.take()),
         ...residueFailures(await dragResidue(page)),
+        // The copy is the pane as it looks: its header keeps the corner's
+        // start, never the plain padding of a pane beside another.
+        ...(inPane === null || inCopy === null
+          ? [`no title to measure (pane ${inPane}, copy ${inCopy})`]
+          : Math.abs(inCopy - inPane) > 2
+            ? [`the copy's title starts ${inCopy}px into it, the pane's ${inPane}px`]
+            : []),
       ],
     }
   },

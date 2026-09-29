@@ -177,8 +177,13 @@ Where the code refined the contract above, and why:
   flight rule is now `:is([data-split-flipping], [data-drag-reflow])
   .split-panes-pane-edge`, specificity (0,2,0) rather than (0,3,0), and the
   pane's placement `.split-panes-grid > [data-pane-key]` — computed styles
-  are unchanged in every state sampled; a copy now leaves out every mark of
-  the module's, so a picture is never a part or something to carry.
+  are unchanged in every state sampled. A copy leaves out what would make it
+  something to carry, aim at or treat as mid-drag (`marks.dragPane`,
+  `dragItem`, `carrying`, `lifted`, `waiting`) and keeps what says how the
+  pane is laid out: a corner pane's copy keeps `marks.corner`, so its header
+  starts past the window's controls as the pane's does (round 2 found the
+  first version stripping every mark, which moved it; `drag.mjs`
+  `copy-under-controls` now measures it).
 
 ## Consequences
 

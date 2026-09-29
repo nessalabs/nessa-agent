@@ -130,7 +130,9 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   mid-drag ends the drag; nothing is carried after it and its release drops
   nothing. _Check:_ `drag.mjs` (`chord-right-button`).
 - [ ] **Nothing carried is painted under the window's controls**, the corner
-  pane's copy included, every frame. _Check:_ `drag.mjs` (`copy-under-controls`).
+  pane's copy included, every frame, and the corner pane's copy lays its
+  header out as the pane does, its title as far in (± 2 px). _Check:_
+  `drag.mjs` (`copy-under-controls`).
 - [ ] **No text selection is left behind**, during or after a drag. _Check:_
   `drag.mjs` (`sweep-across-zones`, `outside-cancels`).
 - [ ] **Preview equals commit** — the placeholder marks exactly the rect the
