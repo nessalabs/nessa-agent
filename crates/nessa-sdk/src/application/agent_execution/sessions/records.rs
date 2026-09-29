@@ -490,6 +490,7 @@ pub(crate) fn fold_changes(
                 let mut next_evidence = provider_evidence;
                 next_evidence.observations = true;
                 next_evidence.validate(&snapshot.provider_context)?;
+                super::validation::validate_observation_context(&snapshot.provider_context, event)?;
                 let record = invocation_at(snapshot, &positions, event.execution_id())?;
                 event
                     .validate_payload_size()

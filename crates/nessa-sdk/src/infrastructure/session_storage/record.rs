@@ -350,20 +350,27 @@ mod tests {
         application::agent_execution::{
             agents::AgentError,
             executions::{ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode},
-            permissions::ActionContext,
+            permissions::{ActionContext, CancellationOrigin, PermissionCancellation},
             providers::{ExecutionReport, ProviderIdentity, ProviderSessionState},
             sessions::{
                 records, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
                 QueueHistoryRecord, SubmissionAcknowledgement,
             },
+            tools::ToolReviewInput,
         },
         domain::agent_execution::{
             executions::{
                 ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, MessageChunk,
                 QueueMutation, QueueRemovalCause, SchedulingCause,
             },
+            permissions::{
+                PermissionCancellationReason, PermissionDecision, PermissionEffect, PermissionId,
+                PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
+                PermissionRequest, PermissionScope,
+            },
             prompts::{PromptText, UserMessage},
-            sessions::{ExecutionSessionId, SessionId},
+            sessions::{ExecutionSession, ExecutionSessionId, SessionId},
+            tools::{ToolCallId, ToolCallUpdate, ToolObservation},
         },
     };
     use event_stream::{infrastructure::SqliteFailureInjection, EventSink, StreamId};
@@ -1550,6 +1557,140 @@ mod tests {
             assert_eq!(reopened.load().await.unwrap(), Some(observed));
             drop(reopened);
         }
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn permission_cancellation_uses_the_context_at_its_fact_boundary() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("context-cancellation").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let a = ExecutionSessionId::new("context-A").unwrap();
+        let b = ExecutionSessionId::new("context-B").unwrap();
+        let context = ProviderContext::Recorded(a.clone());
+        let opened = SessionChange::Opened {
+            id: id.clone(),
+            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            context: context.clone(),
+        };
+        let mut snapshot = records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
+        lease
+            .save_changes(generation(0), snapshot.clone(), vec![opened])
+            .await
+            .unwrap();
+        let execution_id = ExecutionId::new("execution").unwrap();
+        let accepted = accepted_input(execution_id.clone(), SubmissionMode::Immediate, vec![]);
+        snapshot = records::fold_changes(Some(&snapshot), std::slice::from_ref(&accepted)).unwrap();
+        lease
+            .save_changes(generation(1), snapshot.clone(), vec![accepted])
+            .await
+            .unwrap();
+        let permission_id = PermissionId::new("permission").unwrap();
+        let tool_id = ToolCallId::new("tool").unwrap();
+        let options = PermissionOptions::new(
+            vec![PermissionOption::new(
+                PermissionOptionId::new("allow").unwrap(),
+                "Allow",
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+            )
+            .unwrap()],
+            &PermissionOfferPolicy::once_only(),
+        )
+        .unwrap();
+        let input = ToolReviewInput {
+            name: "tool".into(),
+            arguments_json: "{}".into(),
+        };
+        let requested = SessionChange::ProviderObservation(ExecutionEvent::new(
+            execution_id.clone(),
+            ExecutionUpdate::PermissionRequested {
+                id: permission_id.clone(),
+                tool_id: tool_id.clone(),
+                observation: ToolObservation::default(),
+                input: input.clone(),
+                options: options.clone(),
+            },
+        ));
+        snapshot =
+            records::fold_changes(Some(&snapshot), std::slice::from_ref(&requested)).unwrap();
+        lease
+            .save_changes(generation(2), snapshot.clone(), vec![requested])
+            .await
+            .unwrap();
+        let mut session = ExecutionSession::new(a.clone());
+        session.begin_execution(execution_id.clone()).unwrap();
+        session
+            .observe_tool(
+                &execution_id,
+                ToolCallUpdate::new(tool_id.clone(), None, None, None, None, None),
+            )
+            .unwrap();
+        session
+            .request_permission(PermissionRequest::new(
+                permission_id.clone(),
+                execution_id.clone(),
+                tool_id,
+                options,
+            ))
+            .unwrap();
+        let cancellation = session
+            .cancel_permission(
+                &execution_id,
+                &permission_id,
+                PermissionCancellationReason::provider_withdrawal(),
+            )
+            .unwrap()
+            .unwrap();
+        let cancelled = SessionChange::ProviderObservation(ExecutionEvent::new(
+            execution_id,
+            ExecutionUpdate::PermissionCancelled(
+                PermissionCancellation::from_record(
+                    a,
+                    cancellation,
+                    input,
+                    CancellationOrigin::Provider,
+                )
+                .unwrap(),
+            ),
+        ));
+        let mut observed = snapshot.clone();
+        let SessionChange::ProviderObservation(event) = &cancelled else {
+            unreachable!("cancellation is an observation")
+        };
+        observed.invocations[0].events.push(event.clone());
+        let bad = vec![
+            SessionChange::ProviderContext {
+                before: context.clone(),
+                after: ProviderContext::Recorded(b.clone()),
+            },
+            cancelled.clone(),
+            SessionChange::ProviderContext {
+                before: ProviderContext::Recorded(b),
+                after: context,
+            },
+        ];
+        let retained = rows(&root);
+        assert!(matches!(
+            lease
+                .save_changes(generation(3), observed.clone(), bad)
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(rows(&root), retained);
+        assert_eq!(lease.load().await.unwrap(), Some(snapshot));
+        lease
+            .save_changes(generation(3), observed.clone(), vec![cancelled])
+            .await
+            .unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(observed));
+        drop(lease);
         storage.shutdown().await.unwrap();
     }
 

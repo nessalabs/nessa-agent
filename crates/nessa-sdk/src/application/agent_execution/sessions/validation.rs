@@ -1,12 +1,12 @@
 //! Validate snapshot relationships at every storage port, including custom adapters.
 use super::{
-    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, SessionSnapshot,
-    StorageError, SubmissionAcknowledgement,
+    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
+    SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::{
     limits::{validate_observation_id, ObservationUsage, MAX_RETAINED_OUTPUT_EVENTS},
-    ExecutionUpdate,
+    ExecutionEvent, ExecutionUpdate,
 };
 use crate::application::agent_execution::providers::{ExecutionReport, ExecutionReportSource};
 use crate::domain::agent_execution::{
@@ -147,6 +147,7 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
         let mut asked_ids = HashSet::new();
         let mut open_questions = HashSet::new();
         for event in &invocation.events {
+            validate_observation_context(&snapshot.provider_context, event)?;
             match event.update() {
                 ExecutionUpdate::Tool(tool) => {
                     validate_observation_id(tool.id().as_str()).map_err(corrupt)?
@@ -179,16 +180,6 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
                     );
                 }
                 ExecutionUpdate::PermissionCancelled(record) => {
-                    validate_observation_id(record.request().id().as_str()).map_err(corrupt)?;
-                    validate_observation_id(record.request().tool_id().as_str())
-                        .map_err(corrupt)?;
-                    if snapshot.provider_context.recorded() != Some(record.session_id())
-                        || record.request().execution_id() != event.execution_id()
-                    {
-                        return Err(corrupt(
-                            "cancellation belongs to a different session or invocation",
-                        ));
-                    }
                     let (mut pending, input) = reviews
                         .remove(record.request().id())
                         .ok_or_else(|| corrupt("cancellation has no preceding pending request"))?;
@@ -247,6 +238,27 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
                 _ => {}
             }
         }
+    }
+    Ok(())
+}
+
+/// A context-bound observation must agree with the context at its own fact,
+/// before a later provider-context revision can change the final projection.
+pub(super) fn validate_observation_context(
+    context: &ProviderContext,
+    event: &ExecutionEvent,
+) -> Result<(), StorageError> {
+    let ExecutionUpdate::PermissionCancelled(record) = event.update() else {
+        return Ok(());
+    };
+    validate_observation_id(record.request().id().as_str()).map_err(corrupt)?;
+    validate_observation_id(record.request().tool_id().as_str()).map_err(corrupt)?;
+    if context.recorded() != Some(record.session_id())
+        || record.request().execution_id() != event.execution_id()
+    {
+        return Err(corrupt(
+            "cancellation belongs to a different session or invocation",
+        ));
     }
     Ok(())
 }
