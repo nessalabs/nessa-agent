@@ -69,6 +69,16 @@ export const css = {
   overviewHeader: ".agents-overview-header", // class: the title, its counts and the filter
   overviewScroll: ".agents-overview-scroll", // class: the list's scroller, under the header
 
+  // The composer's thinking control (src/desktop/ui/thinking-control.tsx): a chip
+  // opening a popover whose stops are a radio group; the levels are read from
+  // the page, never named here (their owner is src/desktop/model/composer-options.ts)
+  composerForm: ".desktop-composer", // class: a composer, whose place must not move
+  thinkingChip: 'button[aria-haspopup="dialog"][aria-label^="Thinking level"]',
+  thinkingPopover: '[role="dialog"][aria-label="Thinking"]',
+  thinkingStop: '[role="dialog"][aria-label="Thinking"] [role="radio"]',
+  thinkingFast: '[role="dialog"][aria-label="Thinking"] button[aria-label="Fast mode"]',
+  thinkingLeaving: ".desktop-thinking-words[data-leaving]", // class: the words that were shown
+
   // Column heads (src/desktop/ui/column-header.tsx): data-title / data-placement are "inline" | "below"
   columnBar: ".desktop-column-bar", // class
   columnTitle: ".desktop-column-title[data-placement]:not(.desktop-column-sizer)", // class
@@ -152,7 +162,10 @@ export const keys = {
   enter: "Enter",
   down: "ArrowDown",
   up: "ArrowUp",
+  left: "ArrowLeft",
+  right: "ArrowRight",
   home: "Home",
+  end: "End",
   toggleSidebar: "Meta+KeyB",
   toggleSessionList: "Meta+Alt+KeyS",
   newSession: "Meta+KeyN",

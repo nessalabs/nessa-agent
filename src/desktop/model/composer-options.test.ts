@@ -127,7 +127,7 @@ describe("a model's short name", () => {
     expect(shortModelName(catalogue[4], catalogue)).toBe("Solo One")
   })
 
-  it("marks only the utmost thinking level, which the composer gives its Ultra treatment", () => {
+  it("marks only the utmost thinking level, which the thinking control sets apart", () => {
     expect(
       thinkingLevels.filter((level) => level.utmost).map((level) => level.value),
     ).toEqual(["max"])

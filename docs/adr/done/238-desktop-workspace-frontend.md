@@ -611,6 +611,49 @@ motion — chosen in Settings, or the system's — sets the durations to zero
 there under the root's `data-motion`, and script motion follows with no
 check of its own.
 
+### The thinking control
+
+The composer's thinking effort ([#287](https://github.com/nessalabs/nessa-agent/issues/287))
+is the window's own control, `ui/thinking-control.tsx`, not nessa_ui's
+`ModelThinkingControl`. That component's popover is fixed — a label with a
+chevron over a continuous, gradient-filled slider — and exposes no place for a
+level's description, swaps its label rather than cross-fading it, and draws
+its level as a position rather than stops; no class, slot or data attribute
+reaches those, and nessa_ui is out of scope here. What it offered that still
+fits is kept: its `ModelFastMode` is the Fast toggle.
+
+- **One owner of the levels.** `thinkingLevels` in `model/composer-options.ts`
+  (its `utmost` marks Max); every rule of the control — which level a key or
+  the pointer picks, the order the stops light in, where the popover sits — is
+  `model/thinking-effort.ts`'s, by position, naming no level.
+- **Effort reads as rising.** A track of stops, one per level, fills from the
+  left up to the level in the theme's own light (`--desktop-light-*`, which a
+  header picture tints), each lit stop brighter than the one before and the
+  chosen one glowing by its rank. Above it, the level's name and one line
+  about it cross-fade, rising as the level rises and falling as it falls. Max
+  gets one moment: a bloom of the theme's lights in the popover's corner and a
+  light run once along the lit track. Fast is a pill of its own beside the
+  heading, a fill while on, never a stop.
+- **Nothing moves the composer.** The chip is the same size whatever the level;
+  wherever Fast is offered its bolt is laid out, on or off, so turning Fast on
+  moves nothing either. The words hold one line in one cell and the track its
+  stops, so the popover does not change size.
+- **Keyboard and assistive technology.** The chip opens a non-modal dialog
+  onto the level chosen; the stops are a radio group (arrows step, Home and
+  End go to the ends, each stop described by its line); the track can be
+  dragged along like a slider. Escape, Tab past either end, or a press
+  elsewhere closes it, the first two onto its chip.
+- **Motion** is transform and opacity on the window's tokens — the popover
+  rises with `desktop-pop`, the stops fill as a wave (`--desktop-stagger`) — and
+  with less motion nothing in it animates. The popover is drawn inside the
+  surface its chip sits in, as the window's tooltip is, so it takes that
+  surface's tokens, theme and reduced motion.
+
+`responsive.mjs --only thinking-control` holds it in Chromium and WebKit: every
+frame of every change, the composer, its controls and the popover in place;
+only transform and opacity animated; and with the system's reduced motion,
+nothing (`verification/desktop/CHECKLIST.md` › _Composer and approval card_).
+
 ### Interaction and visual rules
 
 The person's standing design choices for the window, held in review and
@@ -761,6 +804,11 @@ the source holds, at a glance — and is used nowhere else; the port method is
 - **The browser's own drag and drop.** Its drag image cannot be full size or
   move, so the carried pane could not become the window it will be; a pointer
   drag can.
+- **Restyle nessa_ui's `ModelThinkingControl` from the stylesheet**, as the
+  model picker and access mode are. Its slider could be quietened, but its
+  popover has no room for a level's description and no way to cross-fade its
+  label, so the control that reads as effort rising could not be reached
+  without changing nessa_ui (_The thinking control_).
 - **Build the icon provider in nessa_ui now.** It is the right home, but
   nessa_ui is out of scope for this work. Mirroring the contract keeps the swap
   mechanical.

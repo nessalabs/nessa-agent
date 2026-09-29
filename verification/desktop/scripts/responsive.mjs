@@ -18,6 +18,15 @@
  *   overview-header the Agents overview's header holds its place while its list
  *                   scrolls to the end, the list begins below it, and the list's
  *                   top edge fades (its mask) rather than cutting a row
+ *   thinking-control the composer's thinking control (ADR 238 › The thinking
+ *                   control), from the keyboard alone: it opens onto the level
+ *                   chosen, the arrows, Home and End change the level and the
+ *                   keyboard follows, and in every frame of every change — Fast
+ *                   too — the composer, its controls and the popover hold their
+ *                   place; a level's change animates transform and opacity only;
+ *                   Escape, and Tab past its end, close it onto its chip; with
+ *                   the system's reduced motion, nothing animates and the words
+ *                   that were shown are not drawn
  *
  * With --shots <dir>, screenshots of each width go there for a person to look at.
  */
@@ -28,7 +37,7 @@ import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, names } from "./lib/selectors.mjs"
-import { frames, hideColumns, openPanes, settled } from "./lib/workspace.mjs"
+import { frames, hideColumns, openPanes, settled, until } from "./lib/workspace.mjs"
 
 const longTail =
   " --config=/Users/nessa/Library/Application-Support/nessa/releases/very/deep/path/release-signing-configuration.json"
@@ -349,9 +358,265 @@ checks["list-gutter"] = async ({ page, engine, layout, options }) => {
   return { gutters: seen, failures }
 }
 
+/**
+ * Samples, every frame until `stop`, where a composer, its controls and the
+ * thinking popover are, and what animates in them: how many animations were
+ * running and which properties they moved.
+ */
+const sampleThinking = (page, chip) =>
+  page.evaluate(
+    ([sel, chipSelector]) => {
+      const chipElement = document.querySelector(chipSelector)
+      const composer = chipElement?.closest(sel.composerForm)
+      const popover = document.querySelector(sel.thinkingPopover)
+      if (!composer || !popover) return false
+      const controls = [...composer.querySelectorAll(sel.button)]
+      const rect = (e) => {
+        const r = e.getBoundingClientRect()
+        return [r.left, r.top, r.width, r.height]
+      }
+      const sample = { frames: [], running: 0, properties: [], stop: false }
+      window.__thinkingSample = sample
+      const properties = new Set()
+      const ignored = new Set(["offset", "computedOffset", "easing", "composite"])
+      const tick = () => {
+        sample.frames.push({
+          composer: rect(composer),
+          controls: controls.map(rect),
+          popover: popover.isConnected ? rect(popover) : null,
+        })
+        for (const a of document.getAnimations()) {
+          const target = a.effect?.target
+          if (!(target instanceof Element)) continue
+          if (!popover.contains(target) && !composer.contains(target)) continue
+          if (a.playState !== "running" && a.playState !== "pending") continue
+          sample.running += 1
+          if (a.transitionProperty) properties.add(a.transitionProperty)
+          else
+            for (const frame of a.effect.getKeyframes())
+              for (const name of Object.keys(frame))
+                if (!ignored.has(name)) properties.add(name)
+        }
+        sample.properties = [...properties]
+        if (!sample.stop) requestAnimationFrame(tick)
+      }
+      tick()
+      return true
+    },
+    [css, chip],
+  )
+
+/** Stops `sampleThinking` and reads what it saw. */
+const sampled = (page) =>
+  page.evaluate(() => {
+    const sample = window.__thinkingSample
+    sample.stop = true
+    return sample
+  })
+
+/** The largest distance anything sampled moved from where it was in the first frame. */
+function drift(frames, part) {
+  const first = frames[0][part]
+  let most = 0
+  for (const frame of frames) {
+    const now = frame[part]
+    if (!first || !now) continue
+    const pairs = Array.isArray(first[0])
+      ? first.map((r, i) => [r, now[i]])
+      : [[first, now]]
+    for (const [a, b] of pairs)
+      for (let i = 0; i < a.length; i++) most = Math.max(most, Math.abs(a[i] - b[i]))
+  }
+  return Math.round(most * 100) / 100
+}
+
+/** Which stop is checked and which has the keyboard, by position (the levels are the page's). */
+const thinkingState = (page, chip) =>
+  page.evaluate(
+    ([sel, chipSelector]) => {
+      const stops = [...document.querySelectorAll(sel.thinkingStop)]
+      return {
+        open: document.querySelector(sel.thinkingPopover) !== null,
+        count: stops.length,
+        checked: stops.findIndex((s) => s.getAttribute("aria-checked") === "true"),
+        focused: stops.indexOf(document.activeElement),
+        chipFocused: document.activeElement === document.querySelector(chipSelector),
+        chipLabel: document.querySelector(chipSelector)?.getAttribute("aria-label"),
+        checkedLabel: stops.find((s) => s.getAttribute("aria-checked") === "true")
+          ?.ariaLabel,
+      }
+    },
+    [css, chip],
+  )
+
+/** Opens a new session's home, whose composer offers every level and Fast, and its chip from the keyboard. */
+async function openThinking(page) {
+  await page.keyboard.press(keys.newSession)
+  await settled(page)
+  const chip = `${css.focusedPane} ${css.thinkingChip}`
+  await need(page, chip, "the focused pane's thinking chip")
+  if (await page.locator(chip).isDisabled())
+    throw new CannotRun("the new session's model offers no thinking levels")
+  await page.locator(chip).focus()
+  return chip
+}
+
+checks["thinking-control"] = async ({ page, engine, options }) => {
+  const failures = []
+  const chip = await openThinking(page)
+  const moves = []
+  const sampling = async (name, act, { motionOnly = true } = {}) => {
+    if (!(await sampleThinking(page, chip)))
+      throw new CannotRun("no composer or thinking popover to sample")
+    await act()
+    await settled(page)
+    await frames(page, 2)
+    const sample = await sampled(page)
+    const move = {
+      name,
+      frames: sample.frames.length,
+      running: sample.running,
+      properties: sample.properties,
+      composer: drift(sample.frames, "composer"),
+      controls: drift(sample.frames, "controls"),
+      popover: drift(sample.frames, "popover"),
+    }
+    moves.push(move)
+    for (const part of ["composer", "controls", "popover"])
+      if (move[part] > 0.5) failures.push(`${name}: the ${part} moved ${move[part]}px`)
+    const other = sample.properties.filter((p) => p !== "transform" && p !== "opacity")
+    if (motionOnly && other.length)
+      failures.push(`${name}: animated ${other.join(", ")} (transform and opacity only)`)
+    return move
+  }
+
+  await page.keyboard.press(keys.enter)
+  if (!(await until(page, (sel) => document.querySelector(sel), css.thinkingPopover)))
+    return { failures: ["Return on the chip did not open the thinking popover"] }
+  await settled(page)
+  const opened = await thinkingState(page, chip)
+  if (opened.count < 3)
+    throw new CannotRun(`the popover offers ${opened.count} levels; the walk needs 3`)
+  if (opened.focused !== opened.checked)
+    failures.push(
+      `opened with the keyboard on stop ${opened.focused}, not the chosen ${opened.checked}`,
+    )
+  await shot(options, page, `thinking-${engine}-opened`)
+
+  // Home first, so every step after it has somewhere to go.
+  const walk = [
+    [keys.home, () => 0],
+    [keys.right, (s) => s.checked + 1],
+    [keys.right, (s) => s.checked + 1],
+    [keys.end, (s) => s.count - 1],
+    [keys.left, (s) => s.checked - 1],
+    [keys.home, () => 0],
+  ]
+  let now = opened
+  for (const [key, expected] of walk) {
+    const want = expected(now)
+    await sampling(`${key} to stop ${want}`, () => page.keyboard.press(key))
+    now = await thinkingState(page, chip)
+    if (now.checked !== want)
+      failures.push(`${key}: the level is stop ${now.checked}, not ${want}`)
+    if (now.focused !== now.checked)
+      failures.push(`${key}: the keyboard is on stop ${now.focused}, not the level's`)
+    if (now.chipLabel !== `Thinking level: ${now.checkedLabel}`)
+      failures.push(`${key}: the chip says "${now.chipLabel}"`)
+    if (key === keys.end) await shot(options, page, `thinking-${engine}-utmost`)
+  }
+  const changes = moves.filter((m) => m.name !== "fast")
+  if (!changes.some((m) => m.running > 0))
+    failures.push("no level change animated at all: the sampler saw nothing")
+
+  // Fast, where offered: a setting of its own, and turning it on moves nothing.
+  const fast = await page.locator(css.thinkingFast).count()
+  if (fast) {
+    await sampling(
+      "fast",
+      async () => {
+        await page.locator(css.thinkingFast).focus()
+        await page.keyboard.press("Space")
+      },
+      // Its pill changes colour as well as its bolt moving; only its place is held here.
+      { motionOnly: false },
+    )
+    const pressed = await page.locator(css.thinkingFast).getAttribute("aria-pressed")
+    if (pressed !== "true")
+      failures.push(`Fast mode's toggle is aria-pressed="${pressed}"`)
+    const after = await thinkingState(page, chip)
+    if (after.checked !== now.checked)
+      failures.push(`Fast changed the level from stop ${now.checked} to ${after.checked}`)
+  }
+
+  await page.keyboard.press(keys.escape)
+  const closed = await thinkingState(page, chip)
+  if (closed.open) failures.push("Escape left the thinking popover open")
+  if (!closed.chipFocused)
+    failures.push("Escape did not give the keyboard back to the chip")
+
+  // Tab from the level, the popover's last part, leaves it for its chip too.
+  await page.keyboard.press(keys.enter)
+  await until(page, (sel) => document.querySelector(sel), css.thinkingPopover)
+  await page.keyboard.press("Tab")
+  const tabbed = await thinkingState(page, chip)
+  if (tabbed.open) failures.push("Tab past the popover's end left it open")
+  if (!tabbed.chipFocused)
+    failures.push("Tab past the popover's end did not land on the chip")
+
+  // With the system's reduced motion, the same walk animates nothing.
+  const reduced = await openPage(page.context().browser(), {
+    url: page.url(),
+    layout: "columns",
+    reducedMotion: "reduce",
+  })
+  const still = []
+  try {
+    const reducedChip = await openThinking(reduced.page)
+    await reduced.page.keyboard.press(keys.enter)
+    if (
+      !(await until(
+        reduced.page,
+        (sel) => document.querySelector(sel),
+        css.thinkingPopover,
+      ))
+    )
+      throw new CannotRun(
+        "Return on the chip did not open the popover with reduced motion",
+      )
+    // The chip's own wash as it opens is a colour, not the control's motion: let it end.
+    await settled(reduced.page)
+    for (const key of [keys.end, keys.home, keys.right]) {
+      if (!(await sampleThinking(reduced.page, reducedChip)))
+        throw new CannotRun("no thinking popover to sample with reduced motion")
+      await reduced.page.keyboard.press(key)
+      await frames(reduced.page, 6)
+      const sample = await sampled(reduced.page)
+      still.push({ key, running: sample.running, properties: sample.properties })
+      if (sample.running > 0)
+        failures.push(
+          `reduced motion: ${key} ran ${sample.running} animation frames (${sample.properties.join(", ")})`,
+        )
+      const leaving = await reduced.page.evaluate(
+        (sel) =>
+          [...document.querySelectorAll(sel)].map((e) => getComputedStyle(e).opacity),
+        css.thinkingLeaving,
+      )
+      if (leaving.some((opacity) => opacity !== "0"))
+        failures.push(`reduced motion: ${key} left the old words drawn (${leaving})`)
+    }
+    failures.push(...reduced.errors)
+  } finally {
+    await reduced.close()
+  }
+
+  return { opened, moves, reduced: still, failures }
+}
+
 const meta = {
   name: "responsive",
-  summary: "approval card, composer controls, column titles and Settings at many widths",
+  summary:
+    "approval card, composer controls and thinking control, column titles and Settings at many widths",
   defaults: { engine: "chromium,webkit", layout: "columns" },
   options: { only: { type: "string" } },
   help: `
