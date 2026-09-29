@@ -13,8 +13,9 @@ flowchart LR
     Provider[Provider adapter] --> SDK[SDK conversation coordinator]
     SDK -->|commit semantic fact| Stream[event-stream runtime]
     Stream <--> SQLite[Owned SQLite record store]
-    Stream -->|committed bounded read| Gateway[Gateway authorization adapter]
-    Gateway -->|authorized range| Device[Device cache and fold]
+    Stream -->|committed bounded read| Gateway[Trusted gateway read]
+    Gateway -->|validated facts| Fold[Device-safe fold]
+    Fold -->|authorized projection| Device[Device cache]
     SDK -->|after commit| Effect[Provider or tool effect]
 ```
 
@@ -25,6 +26,8 @@ flowchart LR
 The snapshot does **not** retain a total historical order between observations and scheduling changes in different invocations. Import can preserve the current facts, each invocation's own order and the saved queue order. It cannot invent a past global event timeline. The first migrated record is therefore a clearly identified **baseline**, followed by actual new semantic changes. A device can show the recovered transcript and its current state, but must not present that baseline as a minute-by-minute historical event feed. Provider context is recovery metadata for the SDK, never a remote execution capability.
 
 The gateway's conversation catalogue and deletion state remain owned by its conversation store. Audit is independently owned today. Their facts must be captured or linked through explicit identity and cut evidence; copying an SDK snapshot cannot prove that a conversation still exists or that a file is authorized. Before exposing a loaded baseline, composition compares its saved session ID with the requested conversation and checks the gateway ownership/deletion cut. The import cannot silently resurrect a deleted conversation.
+
+The SDK stream is trusted host storage, not the phone wire format. It contains provider recovery context and may retain audit or diagnostic details that a device view does not need. The bounded `RecordSource` adapter in [#276](https://github.com/nessalabs/nessa-agent/issues/276) is an internal trusted read boundary. [#277](https://github.com/nessalabs/nessa-agent/issues/277) produces the versioned device-safe projection, which the authorized endpoint in [#260](https://github.com/nessalabs/nessa-agent/issues/260) serves. A projection can be cached and replayed, but it cannot become another decision or execution authority. Cursor and gap handling must still correspond to the committed source records, including records the projection suppresses.
 
 ## Record and import contract
 
