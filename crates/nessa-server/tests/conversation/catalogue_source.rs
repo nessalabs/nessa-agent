@@ -1,0 +1,253 @@
+use super::*;
+use crate::{
+    agents::domain::AgentId,
+    conversation::{
+        application::ConversationRepository,
+        domain::{
+            Conversation, ConversationApprovalMode, ConversationDeletion, ConversationModelId,
+        },
+    },
+};
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use uuid::Uuid;
+
+fn id(value: &str) -> Id {
+    Id::new(value).unwrap()
+}
+fn caller() -> ConversationCaller {
+    ConversationCaller {
+        organization_id: OrganizationId::new("org").unwrap(),
+        principal_id: PrincipalId::new("alice").unwrap(),
+        surface_id: "panel".into(),
+        action_id: "read".into(),
+    }
+}
+fn scope(incarnation: &str) -> Scope {
+    Scope::new(
+        id("receiver"),
+        id("origin"),
+        conversation_catalogue_stream(&caller()),
+        id(incarnation),
+        conversation_catalogue_schema(),
+        id("epoch"),
+    )
+}
+fn owned(id: &ConversationId, owner: &str) -> Conversation {
+    Conversation::new(
+        id.clone(),
+        OrganizationId::new("org").unwrap(),
+        PrincipalId::new(owner).unwrap(),
+        "panel".into(),
+        "create".into(),
+        1,
+        AgentId::Claude,
+        ConversationModelId::new("model").unwrap(),
+        ConversationApprovalMode::Ask,
+    )
+    .unwrap()
+}
+fn pass(scope: Scope, boundary: u64) -> CataloguePass {
+    CataloguePass {
+        scope,
+        completed: 0,
+        boundary,
+        cursor: None,
+        generation: 1,
+    }
+}
+
+#[tokio::test]
+async fn source_reads_owner_scoped_current_values_and_rejects_wrong_scope() {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let store = Arc::new(
+        super::super::store::LocalConversationStore::open(&private.join("metadata.sqlite3"))
+            .unwrap(),
+    );
+    let alice_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let bob_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    store.create(owned(&alice_id, "alice")).await.unwrap();
+    store.create(owned(&bob_id, "bob")).await.unwrap();
+    let head = store
+        .head(&caller().organization_id, &caller().principal_id)
+        .await
+        .unwrap();
+    let exact = scope(&head.incarnation);
+    let mut bob_caller = caller();
+    bob_caller.principal_id = PrincipalId::new("bob").unwrap();
+    assert!(matches!(
+        NessaCatalogueSource::new(store.clone(), bob_caller, exact.clone(), Handle::current()),
+        Err(CatalogueSourceError::IdentityChanged)
+    ));
+    let mut source =
+        NessaCatalogueSource::new(store.clone(), caller(), exact.clone(), Handle::current())
+            .unwrap();
+    let mut blocking = source.clone();
+    assert_eq!(
+        tokio::task::spawn_blocking(move || blocking.head(&exact))
+            .await
+            .unwrap()
+            .unwrap(),
+        1
+    );
+
+    let request = ManifestRequest {
+        pass: pass(source.scope().clone(), 1),
+        max_entries: 10,
+    };
+    let mut blocking = source.clone();
+    let page = tokio::task::spawn_blocking({
+        let request = request.clone();
+        move || blocking.manifest(&request)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].key.id.as_str(), alice_id.to_string());
+    assert!(!page.has_more);
+    let mut blocking = source.clone();
+    let resolved = tokio::task::spawn_blocking({
+        let request = request.clone();
+        let id = page.entries[0].key.id.clone();
+        move || blocking.resolve(&request.pass, &id, 1024)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&resolved.payload).unwrap();
+    assert_eq!(json["summary"], serde_json::Value::Null);
+    assert_eq!(json["id"], alice_id.to_string());
+    let mut blocking = source.clone();
+    let error = tokio::task::spawn_blocking({
+        let request = request.clone();
+        let id = page.entries[0].key.id.clone();
+        move || blocking.resolve(&request.pass, &id, 1)
+    })
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(error, CatalogueSourceError::OversizedEntry);
+    let mut blocking = source.clone();
+    let invalid_page = tokio::task::spawn_blocking({
+        let mut request = request.clone();
+        request.max_entries = MAX_CATALOGUE_PAGE + 1;
+        move || blocking.manifest(&request)
+    })
+    .await
+    .unwrap();
+    assert_eq!(invalid_page, Err(CatalogueSourceError::InvalidRequest));
+    let wrong = Scope::new(
+        id("other-receiver"),
+        id("origin"),
+        conversation_catalogue_stream(&caller()),
+        id(&head.incarnation),
+        conversation_catalogue_schema(),
+        id("epoch"),
+    );
+    assert_eq!(
+        source.head(&wrong),
+        Err(CatalogueSourceError::IdentityChanged)
+    );
+    let wrong_epoch = Scope::new(
+        id("receiver"),
+        id("origin"),
+        conversation_catalogue_stream(&caller()),
+        id(&head.incarnation),
+        conversation_catalogue_schema(),
+        id("new-epoch"),
+    );
+    assert_eq!(
+        source.head(&wrong_epoch),
+        Err(CatalogueSourceError::IdentityChanged)
+    );
+    let wrong_incarnation = Scope::new(
+        id("receiver"),
+        id("origin"),
+        conversation_catalogue_stream(&caller()),
+        id("new-incarnation"),
+        conversation_catalogue_schema(),
+        id("epoch"),
+    );
+    assert_eq!(
+        source.head(&wrong_incarnation),
+        Err(CatalogueSourceError::IdentityChanged)
+    );
+    let absent = id(&bob_id.to_string());
+    let mut blocking = source.clone();
+    assert_eq!(
+        tokio::task::spawn_blocking({
+            let pass = request.pass.clone();
+            move || blocking.resolve(&pass, &absent, 1024)
+        })
+        .await
+        .unwrap(),
+        Err(CatalogueSourceError::Unavailable)
+    );
+}
+
+#[tokio::test]
+async fn source_resolves_deletion_after_manifest_and_keeps_newer_revision() {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let store = Arc::new(
+        super::super::store::LocalConversationStore::open(&private.join("metadata.sqlite3"))
+            .unwrap(),
+    );
+    let conversation_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    store
+        .create(owned(&conversation_id, "alice"))
+        .await
+        .unwrap();
+    let head = store
+        .head(&caller().organization_id, &caller().principal_id)
+        .await
+        .unwrap();
+    let source = NessaCatalogueSource::new(
+        store.clone(),
+        caller(),
+        scope(&head.incarnation),
+        Handle::current(),
+    )
+    .unwrap();
+    let request = ManifestRequest {
+        pass: pass(source.scope().clone(), head.revision),
+        max_entries: 1,
+    };
+    let mut blocking = source.clone();
+    let page = tokio::task::spawn_blocking({
+        let request = request.clone();
+        move || blocking.manifest(&request)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    store
+        .record_deletion(
+            &conversation_id,
+            ConversationDeletion::new(
+                caller().organization_id,
+                caller().principal_id,
+                "panel".into(),
+                "delete".into(),
+                2,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut blocking = source.clone();
+    let resolved = tokio::task::spawn_blocking({
+        let pass = request.pass.clone();
+        let id = page.entries[0].key.id.clone();
+        move || blocking.resolve(&pass, &id, 1024)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(resolved.manifest.deleted);
+    assert!(resolved.manifest.revision > page.entries[0].revision);
+    assert!(resolved.payload.is_empty());
+}

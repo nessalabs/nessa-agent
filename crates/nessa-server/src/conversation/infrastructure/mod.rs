@@ -25,6 +25,11 @@
 mod store;
 pub use store::LocalConversationStore;
 
+mod catalogue_source;
+pub use catalogue_source::{
+    conversation_catalogue_schema, conversation_catalogue_stream, NessaCatalogueSource,
+};
+
 mod provider_sessions;
 pub use provider_sessions::BindingSessionEraser;
 

@@ -494,8 +494,13 @@ The same store implements `ConversationCatalogue` for owner-scoped current
 metadata reads. Its per-owner head and per-conversation creation/change revisions
 are committed with the visible write; a retained tombstone is a catalogue deletion
 marker. The finite pass order is in [conversation catalogue](design/conversation-catalogue.md).
-A summary holds each
-conversation's title, last line said and time, derived by `domain/value_objects/conversation_summary.rs` — the one
+`infrastructure/catalogue_source.rs` adapts that port to sync-engine's
+`CatalogueSource` through a bounded blocking worker bound to one authenticated
+caller and exact scope. Its stream ID derives from that caller's organization
+and principal; linked transport belongs to #260.
+
+A summary holds each conversation's title, last line said and time, derived by
+`domain/value_objects/conversation_summary.rs` — the one
 owner of those rules — when a message is accepted and when a reply completes. A
 summary is a projection, so a failed write is logged and the command stands; the
 `archived` flag it also carries is a person's decision, so `archive`/`unarchive`

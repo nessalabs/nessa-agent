@@ -34,6 +34,9 @@ unknown, and only a retained deletion marker says deleted.
 | Owner, incarnation, or access epoch changes | Refuse with a typed mismatch | Receiver explicitly resets under current authorization; old live values are cleared and absence stays unknown. |
 | An owner's head is missing or disagrees with the largest retained change revision | Refuse head, page, resolve and new creation as unavailable; retain all existing rows unchanged | A damaged counter cannot publish an empty catalogue or reuse an existing revision. Another owner remains readable. |
 | Own row is unreadable | Refuse the read as unavailable | Progress does not advance. Another owner's damaged row is outside the query. |
+| Sync request presents a different receiver, source, schema, incarnation, or access epoch | Reject before metadata access with `IdentityChanged` | The bound authenticated owner and epoch cannot be selected by the requester. |
+| A host constructs a source for another owner under a previously used stream key | Derive the stream identity from the authenticated organization and principal and refuse mismatched construction | Separate owners cannot be cached under one scope even if a caller reuses the other scope fields. |
+| Resolved live value exceeds the remaining page payload budget | Reject with `OversizedEntry` before returning payload | Cursor does not advance; a larger allowed budget or explicit handling is required. |
 
 The manifest reads one short transaction per page and releases it before any
 payload read. It does not use offsets or hold a snapshot across pages. Page
@@ -44,5 +47,7 @@ The metadata tests in `crates/nessa-server/tests/conversation/store.rs` cover
 creation, summary, archive, deletion and mode revisions; failure rollback;
 version refusal; owner isolation; damaged rows; a manifest/deletion race; and a
 620-entry pass with changes from a second open store between pages. The sync
-adapter tests add receiver progress, lost replies, reset epochs and payload
-bounds when the shared dependency is integrated.
+adapter tests in `catalogue_source.rs` and `catalogue_receiver.rs` cover exact
+scope, payload bounds, manifest/deletion races, two independently reopened
+process-local receiver files, a lost page reply, stale delayed response, and
+explicit epoch reset retaining deletion evidence while live absence is unknown.

@@ -3026,6 +3026,7 @@ dependencies = [
  "nessa-local-database",
  "nessa-local-storage",
  "nessa-sdk",
+ "nessa-sync",
  "reqwest",
  "rustls",
  "security-framework",
