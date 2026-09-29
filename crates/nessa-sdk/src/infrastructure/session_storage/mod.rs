@@ -14,15 +14,21 @@
 //! checkpoint validation live in `snapshot`; file ownership and sync live in `local`.
 //! `paths` encodes exact identities into case-fold-safe journal and lease filenames.
 //! `snapshot::baseline` projects a validated legacy snapshot into deterministic
-//! bounded pieces plus an integrity seal. It performs no file read, stream append,
-//! authority selection, or provider effect; composition must own the cutover.
+//! bounded pieces plus an integrity seal. `stream_baseline` maps those pieces to
+//! Nessa records on one event-stream runtime and reconstructs a sealed baseline.
+//! Composition still owns the legacy lease, gateway deletion cut and authority
+//! switch; reading saved input performs no provider effect.
 
 mod local;
 mod memory;
 mod paths;
 mod snapshot;
+mod stream_baseline;
 pub use local::LocalFileStorage;
 pub use memory::InMemoryStorage;
 pub use snapshot::{
     decode_baseline, encode_baseline, BaselineExport, BaselinePiece, BaselineSeal, BaselineSection,
+};
+pub use stream_baseline::{
+    commit_baseline_candidate, load_baseline, BaselineImportError, BaselineLoad,
 };

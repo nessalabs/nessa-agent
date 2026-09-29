@@ -163,9 +163,13 @@ fn assert_same(actual: &SessionSnapshot, expected: &SessionSnapshot) {
         );
         assert_eq!(actual.target_event_offset, expected.target_event_offset);
         assert_eq!(actual.actor, expected.actor);
+        assert_eq!(actual.acknowledgement, expected.acknowledgement);
         assert_eq!(actual.events, expected.events);
         assert_eq!(actual.scheduling, expected.scheduling);
         assert_eq!(actual.cancellation, expected.cancellation);
+        assert_eq!(actual.local_cancellation, expected.local_cancellation);
+        assert_eq!(actual.local_outcome, expected.local_outcome);
+        assert_eq!(actual.provider_report, expected.provider_report);
         assert_eq!(actual.result, expected.result);
     }
 }

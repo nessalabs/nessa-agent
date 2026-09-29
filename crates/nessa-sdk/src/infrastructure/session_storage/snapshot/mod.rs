@@ -29,6 +29,7 @@ mod scheduling;
 mod settlement;
 mod tools;
 pub(super) use crate::application::agent_execution::sessions::validation::validate;
+pub(crate) use baseline::MAX_BASELINE_PIECE_BYTES;
 pub use baseline::{
     decode_baseline, encode_baseline, BaselineExport, BaselinePiece, BaselineSeal, BaselineSection,
 };

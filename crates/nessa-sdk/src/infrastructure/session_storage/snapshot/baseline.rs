@@ -35,11 +35,19 @@ pub enum BaselineSection {
 }
 
 impl BaselineSection {
-    fn index(self) -> u64 {
+    pub(crate) fn index(self) -> u64 {
         match self {
             Self::Header => 0,
             Self::Queue => 1,
             Self::Invocation(index) => u64::from(index) + 2,
+        }
+    }
+
+    pub(crate) fn from_index(value: u64) -> Option<Self> {
+        match value {
+            0 => Some(Self::Header),
+            1 => Some(Self::Queue),
+            other => u32::try_from(other - 2).ok().map(Self::Invocation),
         }
     }
 }

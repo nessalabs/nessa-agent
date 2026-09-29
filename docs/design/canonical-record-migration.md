@@ -1,12 +1,12 @@
 # Canonical conversation records and legacy import
 
-**Status:** proposed cutover contract for [#274](https://github.com/nessalabs/nessa-agent/issues/274), under [#258](https://github.com/nessalabs/nessa-agent/issues/258). A pure baseline codec now reuses the SDK's typed snapshot field mappings and verifies bounded pieces plus a seal. The current SDK still writes leased JSONL session journals; no production record runtime or importer is composed yet.
+**Status:** proposed cutover contract for [#274](https://github.com/nessalabs/nessa-agent/issues/274), under [#258](https://github.com/nessalabs/nessa-agent/issues/258). The baseline codec reuses the SDK's typed snapshot field mappings. An adapter writes an opening record, bounded pieces and a seal through the `event-stream` runtime, and can read the sealed baseline after restart. The current SDK still writes leased JSONL session journals; no production record runtime or authority switch is composed yet.
 
 ## What becomes authoritative
 
 One SDK coordinator owns decisions about a conversation. Once the transition is complete, it commits Nessa semantic records to one `event-stream` runtime before applying the committed fact or starting a new effect. The gateway may authorize and read those records; a phone may cache and fold them. Neither a gateway reader nor a phone replays a record by executing a prompt, tool or agent.
 
-The library owns the generic `StreamKey`, incarnation, cursor, event ID, append identity, bounded reads, replay/live subscriptions and SQLite store lifetime. Nessa owns what the payload means, verified caller attribution, command receipt lookup, provider correlation, deletion and recovery decisions. The current pinned library revision is `66ba7525260040d6265276692088dca6dae0737e`; Nessa enables only its `codec` feature today for ACP JSON-RPC framing. Its `EventSink`, `EventReader` and `EventRuntime` ports, `Runtime<S>` and SQLite adapter are available in source, but their durability and lifecycle guarantees must pass Nessa integration tests before composition relies on them. The library's optional replication feature is a separate protocol; the device path uses `nessa-sync`'s current record contract.
+The library owns the generic `StreamKey`, incarnation, cursor, event ID, append identity, bounded reads, replay/live subscriptions and SQLite store lifetime. Nessa owns what the payload means, verified caller attribution, command receipt lookup, provider correlation, deletion and recovery decisions. The current pinned library revision is `b39790230c21ae797b05f54e29a7b8dc51d89766`, merged in [event-stream PR #2](https://github.com/nessalabs/event-stream/pull/2). Production SDK code enables its `codec` feature for ACP JSON-RPC framing; the SDK test graph also enables `sqlite` to prove restart recovery. Its durability and lifecycle guarantees must pass Nessa integration tests before composition relies on them. The library's optional replication feature is a separate protocol; the device path uses `nessa-sync`'s current record contract.
 
 ```mermaid
 flowchart LR
@@ -32,13 +32,23 @@ The Nessa payload schema is versioned independently of `event-stream`'s generic 
 
 | Family | Meaning and owner | Required identity |
 | --- | --- | --- |
-| Imported baseline | Coherent validated legacy session at a frozen cut; SDK import owns it | Session ID, source journal identity and committed cut digest |
+| Imported baseline | Coherent validated legacy session at a frozen cut; SDK import owns it | Session ID, which names the journal under its lease, and the validated cut digest |
 | Command accepted | Canonical input, verified actor, request ID, allocated execution/turn IDs and acceptance response; SDK admission owns it | Conversation, request ID, operation and target |
 | Provider observation | Normalized display or interaction fact after the SDK accepts its source identity | Conversation, owning execution and observation ID |
 | Scheduling/stop decision | Local stage, cause, actor and target, separate from provider acknowledgement | Conversation, owning execution and transition ID |
 | Settlement/recovery | Provider result, local result, cleanup and uncertainty as separate facts | Conversation, owning execution and attempt ID |
 
-The baseline may need several bounded payload records because a validated legacy snapshot can exceed one event limit. Its first record identifies the import and source cut; numbered pieces carry exact bytes and hashes; a final seal states their count and digest. The fold does not expose a partial baseline. Deterministic event IDs and exact retry bytes let an interrupted import resume without duplicating pieces. The final payload format must use Nessa-owned typed fields and bounds, not a second copy of the JSONL journal contract. An importer must prove that decoding those pieces reconstructs a `SessionSnapshot` passing the same application validation as the source. The piece encoding and size are fixed before code changes to the write path.
+The baseline may need several bounded payload records because a validated legacy snapshot can exceed one event limit. Its opening record names the source session and digest of the validated semantic cut; numbered pieces carry exact bytes; a final seal states their count, total bytes and digest. The fold exposes a baseline only after checking that seal and the opening identity. Deterministic event IDs and exact retry bytes let an interrupted import resume without duplicating pieces. The payload uses Nessa-owned typed snapshot field mappings and bounds, not a second copy of the JSONL journal contract. The importer checks that decoding the pieces reconstructs a `SessionSnapshot` passing the same application validation as the source.
+
+The current version 1 record payloads are byte encoded:
+
+| Schema | Payload fields in order | Meaning |
+| --- | --- | --- |
+| `nessa.baseline-open` | version `u8`, session ID length `u16`, session ID UTF-8, cut digest `[u8; 32]` | Names the legacy session and exact validated semantic cut. |
+| `nessa.baseline-piece` | version `u8`, section `u64`, part `u32`, byte length `u32`, exact bytes | Carries one bounded section fragment. |
+| `nessa.baseline-seal` | version `u8`, piece count `u64`, content bytes `u64`, digest `[u8; 32]` | Commits the opening record's cut after all pieces match. |
+
+Integers use big-endian bytes. The digest is SHA-256 over each piece's section, part, length and content in order. Event IDs derive from that digest and the record index. The stream importer reads an existing prefix before appending, refuses a different prefix, and reads back the full prefix after the seal. A missing seal leaves the legacy journal authoritative. A sealed read returns both the reconstructed snapshot and the seal cursor, so the later fold starts after the baseline. The SDK's SQLite restart test reads the sealed baseline back through a newly opened `event-stream` runtime; the production gateway cut and writer switch remain [#275](https://github.com/nessalabs/nessa-agent/issues/275).
 
 Every later record is immutable. A correction or superseding outcome is a new fact with explicit cause and target; the old fact remains. Command receipt lookup uses the committed acceptance record and never dispatches work. A record from another stream incarnation, an unknown required schema or an impossible combination of actor, target and result stops the fold with a typed error before checkpoint advance. Optional display content may be reported unsupported without changing lifecycle meaning.
 
@@ -67,6 +77,7 @@ sequenceDiagram
     participant SDK as SDK coordinator
     Host->>Old: Acquire writer lease and validate saved session
     Host->>Host: Freeze admission and confirm ownership/deletion cut
+    Host->>New: Append opening identity and source-cut digest
     loop Bounded deterministic pieces
         Host->>New: Append piece with stable event ID
         New-->>Host: Inserted or identical retry
