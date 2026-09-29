@@ -2,7 +2,8 @@
  * What the person (or an agent) does with panes: open a session in one, open
  * one beside another, drop a session on a pane, move, nudge, resize, close.
  * Each is a pure function of the workspace; the layout rules themselves are
- * the model's (`model/pane-layout.ts`, `model/pane-sizing.ts`).
+ * the split panes' model (`split-panes/model/pane-layout.ts`,
+ * `split-panes/model/pane-sizing.ts`, `split-panes/model/drop.ts`).
  */
 import { fitted as fittedColumn } from "../../../model/side-column"
 import { defaultModel, type ModelRef } from "../../model/workspace-index"

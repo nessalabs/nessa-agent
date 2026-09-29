@@ -11,10 +11,12 @@
  *     │                    layout · subscribe · watched · holds · targetable
  *     │                    measure · commitDrop · resize · equalize · fit
  *     │
+ *     ├──▶ <SplitPanes source renderPane empty>        ui/split-panes.tsx
+ *     │      ├──▶ renderPane({ placement, frame, multi }) ──▶ the host's pane root
+ *     │      └──▶ ResizeEdge ──▶ usePointerResize       ui/, adapters/dom/
  *     ├──▶ useSplitPanesDrag(root, source, options)   adapters/dom/drag.ts
  *     │      └──▶ model/drag.ts (stepDrag) ──▶ model/drop.ts (aimAt, dropOutcome)
- *     ├──▶ FlipScope                                   adapters/dom/flip.tsx
- *     └──▶ ResizeEdge ──▶ usePointerResize             ui/, adapters/dom/
+ *     └──▶ FlipScope                                   adapters/dom/flip.tsx
  *
  *   model/pane-layout.ts ◀── model/pane-sizing.ts ◀── model/drop.ts ◀── model/drag.ts
  * ```
@@ -23,7 +25,10 @@
  * host's own model and use cases import it by its files, which is the one
  * way past this map; everything else a host takes from here. The module
  * never stores a layout: a drop, a resize, an equalize or a fit is the
- * host's to apply, through the source, so its rules keep one owner.
+ * host's to apply, through the source, so its rules keep one owner. The grid
+ * adds no element around a pane: the host spreads the grid's `frame` on its
+ * own root, which FLIP and the drag's preview move. `ui/split-panes.css`
+ * places, resizes and carries panes; what a pane looks like is the host's.
  *
  * A host marks its page for the drag: `data-drag-pane` (a pane's key, on
  * what carries it) and `data-drag-item` (an item's id, outside the grid);
@@ -33,7 +38,6 @@
  */
 export { useSplitPanesDrag, type SplitPanesDragOptions } from "./adapters/dom/drag"
 export { FlipScope } from "./adapters/dom/flip"
-export { paneTabOrder } from "./adapters/dom/tab-order"
 export { ResizeEdge } from "./ui/resize-edge"
 export { paneFrame, SplitPanes, type PaneFrame, type ShownPane } from "./ui/split-panes"
 export type { Drop, EdgeMove, SplitPanesSource } from "./application/ports"

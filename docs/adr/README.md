@@ -74,6 +74,7 @@ this table. None of it changes implementation or approval status.
 | 10 | [202 — Versioned local datasets](todo/202-versioned-local-datasets.md) | Accepted. Implemented, in review: conversation metadata and the browser-session journal refuse the gateway as `datasetRefused` — not retried, recorded, said by the host — when they hold something this build cannot read. Remaining: migrations once Nessa leaves alpha |
 | 11 | [221 — Startup refusals are handled or said plainly](todo/221-startup-refusals.md) | Accepted. Implemented, in review: setup opens a window instead of aborting, the one shared-read repair, named startup steps and the panel's startup notice, named retirement refusals, and the host's stop of a gateway whose data is gone, on launchd and systemd |
 | 12 | [231 — Model and tool approval per conversation](todo/231-model-and-approval-per-conversation.md) | Implemented, in review: catalog-backed model selection, Claude/Codex native approval presets, durable idle-only mode changes and recovery. OpenCode remains fixed Ask; its additional modes are deferred. |
+| 13 | [253 — Split panes are one module the workspace wraps](todo/253-split-panes-component.md) | Implemented, in review: `src/desktop/split-panes/` owns the pane model, the drag, FLIP, resizing and the grid behind one `SplitPanesSource`, and the workspace wraps it with nothing a person sees changed. Remaining: a second host, when one asks |
 
 Auth API readiness and operating-bound work is complete. The
 [current Rust SDK](../../crates/nessa-sdk/docs/agent_execution/README.md) provides

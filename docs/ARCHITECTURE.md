@@ -258,14 +258,7 @@ pane's card (`onScreen`, one rule), and the conversations it shows are read
 and kept like a pane's, bounded (`retention.overviewConversations`); a peek is
 not reading the session, which stays unread.
 
-- `model/` is pure: the index's types (`workspace-index.ts`); the pane layout
-  (`pane-layout.ts`), columns of stacked panes with one focused, whose
-  operations split, move, swap, nudge, close and even out, capped at four
-  panes and three columns, a session never shown twice; its pixel rules
-  (`pane-sizing.ts`): placements as fractions, the one fit rule every change
-  of layout and every resize is held to (each pane at least 300 by 220
-  pixels), and edge drags held to it; where a drag aims and what a drop
-  does (`drop.ts`); what a press becomes, event by event (`drag.ts`); how a
+- `model/` is pure: the index's types (`workspace-index.ts`); how a
   window fits the side columns (`window-fit.ts`); why the source refused
   (`failure.ts`); what is kept of what no pane shows (`retention.ts`); a session's conversation, its messages and steps
   (`transcript.ts`); the revision rule every replacement follows
@@ -301,19 +294,42 @@ not reading the session, which stays unread.
   conversation on screen again, setting aside a read asked before it; `hooks.ts`,
   the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/in-memory/` is the
   only home of the sample index and the scripted, streamed replies,
-  on timers it owns and cancels. `adapters/dom/` holds what belongs to the
-  page: FLIP motion (`flip.tsx`, which measures in React's commit phase, so
-  any dispatch animates), drag and drop carried by the pointer with a live
-  preview (`drag.ts`), pointer resizing, keys and Tab order, focus following
-  the focused pane (`focus.ts`), the page's measure of the panes' room
-  (`measure.ts`, injected into the commands), the arrival of a first message,
-  and the clock's ticks. `adapters/storage/` keeps the Agents overview's
+  on timers it owns and cancels. `adapters/store/split-panes-source.ts` is
+  the workspace as the split panes' source (below). `adapters/dom/` holds what
+  belongs to the page: what the workspace adds to a drag — a session's card,
+  the side columns that are never targets (`split-panes-drag.ts`) — keys,
+  focus following the focused pane (`focus.ts`), the page's measure of the
+  panes' room (`measure.ts`, injected into the commands), the arrival of a
+  first message, and the clock's ticks. `adapters/storage/` keeps the Agents overview's
   filter between launches (`remembered-filter.ts`).
 - `ui/` holds each component once — source list (two variants of one
   component), session list, pane grid, pane, pane header, transcript, message,
   tool steps, approval card, quick switcher, empty states, the Agents
   overview, the words for each failure (`failure-copy.ts`) — and
   `layouts/` that only arrange them.
+
+The panes themselves are **split panes** (`src/desktop/split-panes/`,
+[ADR 253](adr/todo/253-split-panes-component.md)), a module any desktop
+surface can wrap; the workspace does. Its `model/` is pure: the pane layout
+(`pane-layout.ts`), columns of stacked panes with one focused, each showing an
+item the host gives meaning to (the workspace's, a session), whose operations
+split, move, swap, nudge, close and even out, capped at four panes and three
+columns, an item never shown twice; its pixel rules (`pane-sizing.ts`):
+placements as fractions, the one fit rule every change of layout and every
+resize is held to (each pane at least 300 by 220 pixels, taking the host's
+spare room where that is what fits it), and edge drags held to it; where a
+drag aims and what a drop does (`drop.ts`); what a press becomes, event by
+event (`drag.ts`). A host supplies one `SplitPanesSource`
+(`application/ports.ts`) that reads its layout, says when it changes — at
+once, so a drag ends the moment anything under it moves — and carries out a
+drop, a resize, an equalize or a fit through its own commands, so its rules
+(the workspace folds its sidebar for room) keep one owner. `adapters/dom/`
+holds FLIP motion (`flip.tsx`, which measures in React's commit phase, so any
+dispatch animates), drag and drop carried by the pointer with a live preview
+(`drag.ts`, `useSplitPanesDrag`, with what only the host knows given as
+options), pointer resizing and Tab order; `ui/` the grid (`SplitPanes`,
+which hands each pane a `frame` to spread on the host's own root), its edges
+(`ResizeEdge`, also the side columns') and its stylesheet.
 
 A pane subscribes to its own session and a row to its own summary, so a
 streamed word renders one transcript (`ui/panes/pane-isolation.test.tsx`).

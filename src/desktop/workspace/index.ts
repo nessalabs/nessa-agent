@@ -13,11 +13,18 @@
  *        │
  *        ▼
  *   ui/ components, each once ──▶ ui/layouts/ that only arrange them
+ *
+ *   slice ──▶ adapters/store/split-panes-source.ts ──▶ split-panes (../split-panes)
+ *                                                       the grid, the drag, FLIP
  * ```
  *
- * An arrow points the way data flows. `adapters/dom/` holds what belongs to
- * the page rather than the product — motion, drag and drop, resizing, keys,
- * the clock's ticks — as hooks and adapters beside the tree, never as state;
+ * An arrow points the way data flows. The panes are split panes, a module of
+ * the window's the workspace wraps (`../split-panes`, ADR 253): it reads the
+ * layout through the workspace's source and changes it only through the
+ * commands here. `adapters/dom/` holds what belongs to the page rather than
+ * the product — what the workspace adds to a drag (`split-panes-drag.ts`),
+ * focus, the panes' room, keys, the clock's ticks — as hooks and adapters
+ * beside the tree, never as state;
  * `adapters/storage/` keeps the overview's filter between launches. The Agents overview
  * is part of the workspace: its rules in `model/overview/`, its state in the
  * slice, its views in `ui/overview/`, answering and reading through the same
