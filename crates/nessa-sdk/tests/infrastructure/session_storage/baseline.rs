@@ -12,6 +12,75 @@ use nessa_sdk::infrastructure::session_storage::{
 };
 use std::io::Write;
 
+fn legacy_v1_source() -> SessionSnapshot {
+    let mut source = snapshot("legacy-v1");
+    let invocation = &mut source.invocations[0];
+    invocation.acknowledgement = SubmissionAcknowledgement::Acknowledged;
+    invocation.events.push(ExecutionEvent::new(
+        invocation.request.execution_id.clone(),
+        ExecutionUpdate::Finished(ExecutionOutcome::Completed),
+    ));
+    invocation.provider_report = Some(ExecutionReport::new(
+        Some(Ok(ExecutionOutcome::Completed)),
+        None,
+        ProviderSessionState::Usable,
+    ));
+    invocation.local_outcome = Some(ExecutionOutcome::Completed);
+    invocation.result = Some(Ok(ExecutionOutcome::Completed));
+    source
+}
+
+#[tokio::test]
+async fn versioned_legacy_jsonl_fixture_imports_after_sqlite_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let legacy_root = root.path().join("private");
+    private::create_directory(&legacy_root).unwrap();
+    let path = journal_path(&legacy_root, "legacy-v1");
+    let mut file = private::open(&path, private::OpenMode::CreateNew).unwrap();
+    file.write_all(include_bytes!("fixtures/legacy-v1.jsonl"))
+        .unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let storage = LocalFileStorage::new(&legacy_root).unwrap();
+    let lease = storage.open(id("legacy-v1")).await.unwrap();
+    let saved = SessionSnapshot::load_saved(&*lease, &id("legacy-v1"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_same(&saved, &legacy_v1_source());
+    let sqlite_path = root.path().join("records.sqlite3");
+    let runtime =
+        Runtime::<SqliteStore>::open(SqliteOptions::new(&sqlite_path), RuntimeConfig::default())
+            .await
+            .unwrap();
+    let stream_id = StreamId::new("legacy-v1").unwrap();
+    let stream = runtime.create_stream(&stream_id).await.unwrap();
+    commit_baseline_candidate(&runtime, &stream, &encode_baseline(&saved).unwrap())
+        .await
+        .unwrap();
+    runtime
+        .shutdown(std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
+    drop(runtime);
+    drop(lease);
+    let reopened =
+        Runtime::<SqliteStore>::open(SqliteOptions::new(&sqlite_path), RuntimeConfig::default())
+            .await
+            .unwrap();
+    let same_stream = reopened.create_stream(&stream_id).await.unwrap();
+    let BaselineLoad::Sealed { snapshot, .. } =
+        load_baseline(&reopened, &same_stream).await.unwrap()
+    else {
+        panic!("versioned legacy fixture did not import");
+    };
+    assert_same(&snapshot, &legacy_v1_source());
+    reopened
+        .shutdown(std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn legacy_tail_recovery_or_corruption_decides_whether_a_baseline_can_be_imported() {
     let directory = tempfile::tempdir().unwrap();
@@ -510,6 +579,12 @@ async fn sealed_baseline_reconstructs_the_saved_session_after_sqlite_restart() {
         panic!("later facts hid the sealed baseline");
     };
     assert_eq!(again, cursor);
+    assert_eq!(
+        commit_baseline_candidate(&reopened, &same_stream, &export)
+            .await
+            .unwrap(),
+        cursor
+    );
     assert!(
         reopened
             .shutdown(std::time::Duration::from_secs(5))

@@ -82,26 +82,29 @@ its protocol; do not parse its decoded records again.
 
 ## Commit and read contract
 
-ADR 0008 defines one record for each accepted command. It contains the input in
-its standard form, verified information about who sent it, the allocated IDs, and
-the acceptance response. A **commit** means storage confirms that the whole
-record was saved. Commit before starting work or replying that it was accepted.
+ADR 0008 defines one logical fact for each accepted command. It contains the
+exact input, verified caller and `requestId`, the SDK's
+`ExecutionRequest.execution_id` submission key, and initial acknowledgement.
+A large fact may require bounded pieces and a seal.
+A **commit** means storage confirms the complete fact, including its seal when
+needed. Commit before starting work or replying that it was accepted.
 
-That record is also the **receipt**: proof of what Nessa accepted. State and receipt
-indexes are views rebuilt from the records. Saving acceptance and its receipt in
-one record avoids coordinating separate writes to separate databases.
+That committed fact is also the **receipt**: proof of what Nessa accepted. State
+and receipt indexes are views rebuilt from the records. Saving acceptance and its
+receipt in one logical fact avoids coordinating separate database writes.
 
 For example, Nessa may save a prompt and start the agent just before the socket
-disconnects. Retrying with the same `requestId` retrieves the saved acceptance;
-it does not start a second turn.
+disconnects. Retrying with the same `requestId` and `execution_id` retrieves the
+saved acceptance; it does not start a second turn.
 
 The integration must demonstrate:
 
 - Retrying an append with the same event ID and bytes returns the original record
   and cursor. Different bytes with that ID fail. Keep both unchanged on retries.
-  An event ID identifies one record; `requestId` identifies one product command
-  that changes state. Preventing duplicate records does not enforce the SDK's
-  rules for accepting commands.
+  An event ID identifies one physical record; `requestId` identifies the
+  caller-qualified command and `execution_id` identifies its SDK submission.
+  Preventing duplicate records does not enforce the SDK's rules for accepting
+  commands.
 - Reads and subscriptions use saved records. A live notification tells readers
   to check the store; it does not carry a separate authoritative copy. Never send
   a provider update to the transcript before saving it.

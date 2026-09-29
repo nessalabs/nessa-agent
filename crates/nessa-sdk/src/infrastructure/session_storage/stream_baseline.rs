@@ -226,6 +226,9 @@ async fn matching_prefix(
             }
             cursor = record.cursor.clone();
             matched += 1;
+            if matched == expected.len() {
+                return Ok(matched);
+            }
         }
     }
     Ok(matched)
