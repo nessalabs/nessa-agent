@@ -15,6 +15,7 @@
 //! Agent lifecycle -> AttachmentLease -> provider cleanup + protective writer lease
 //! SessionManager -> SessionSnapshot + ordered SessionChange decisions
 //!                + lease-scoped SessionSaveGeneration
+//!                + injected MessageCommitClock -> deadline wake
 //!                -> SessionStorageLease
 //!                       |-> validation -> domain InvocationHistory / permission rules
 //!                                      |-> retention -> live controller limits
@@ -37,12 +38,14 @@
 //! cleanup is confirmed; supervised retry requires the runtime to remain alive.
 //! Initialization transfers the attachment to Agent's lifecycle coordinator.
 //! Provider settlement facts are retained separately from local receipt failures.
-//! Streaming text is live output until a tool/review/terminal or settlement save.
+//! Streaming text is live output until the fixed deadline, size/count cadence,
+//! or a tool/review/terminal or settlement save.
 //! A process failure may lose unfinished text. Consequential changes require saved
 //! evidence; snapshots expose only committed state. Adapters choose its encoding.
 
 pub(crate) mod attachment;
 mod manager;
+mod message_commit_clock;
 pub(crate) mod records;
 mod retention;
 // Queue membership is replayed separately from provider/lifecycle scheduling.
@@ -51,6 +54,7 @@ pub mod storage;
 pub(crate) mod validation;
 pub use manager::SessionManager;
 pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource};
+pub use message_commit_clock::{MessageCommitClock, MessageCommitSleep};
 pub use storage::{
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
     QueueHistoryRecord, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,

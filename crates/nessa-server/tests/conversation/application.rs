@@ -1155,6 +1155,9 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1220,6 +1223,9 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1332,6 +1338,9 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1451,6 +1460,9 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1485,6 +1497,9 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1564,6 +1579,9 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1861,6 +1879,9 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits {
@@ -2079,6 +2100,9 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2206,6 +2230,9 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2289,6 +2316,9 @@ async fn resource_free_provider_failure_waits_for_explicit_close_before_retry() 
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2454,6 +2484,9 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2523,6 +2556,9 @@ async fn close_releases_only_its_waiting_attachment_owner_and_stale_authorizatio
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2625,6 +2661,9 @@ async fn bounded_queue_controls_complete_while_attachment_waits_for_runtime() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2723,6 +2762,9 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2806,6 +2848,9 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2887,6 +2932,9 @@ async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2988,6 +3036,9 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -3042,6 +3093,9 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -3154,6 +3208,9 @@ async fn restart_restores_saved_messages_without_replaying_input() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -3198,6 +3255,9 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -3247,6 +3307,9 @@ async fn delete_after_a_held_opening(
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -3475,6 +3538,9 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -3646,6 +3712,9 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -3692,6 +3761,9 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -3754,6 +3826,9 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -3797,6 +3872,9 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -3874,6 +3952,9 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
                 deletion_audit: Arc::new(AcceptingDeletionAudit),
                 provider_sessions: ProviderSessionErasers::default(),
                 deletion_budgets: DELETION_BUDGETS,
+                message_commit_clock: Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
                 clock: Arc::new(TestClock),
             },
             limits,
@@ -3915,6 +3996,9 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         limits,
@@ -3995,6 +4079,9 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
                 deletion_audit: Arc::new(AcceptingDeletionAudit),
                 provider_sessions: ProviderSessionErasers::default(),
                 deletion_budgets: DELETION_BUDGETS,
+                message_commit_clock: Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
                 clock: Arc::new(TestClock),
             },
             ConversationLimits::default(),
@@ -4042,6 +4129,9 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -4206,6 +4296,9 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -4434,6 +4527,9 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),

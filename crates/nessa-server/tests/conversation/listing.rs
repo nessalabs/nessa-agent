@@ -90,6 +90,9 @@ fn listing(limits: ConversationLimits) -> Listing {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         limits,
@@ -137,6 +140,9 @@ fn stored(limits: ConversationLimits) -> Stored {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         limits,
@@ -1204,6 +1210,9 @@ async fn a_list_asks_for_one_row_past_its_bound_and_no_more() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1298,6 +1307,9 @@ async fn a_list_shows_only_what_the_domain_lets_the_caller_see() {
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),

@@ -66,9 +66,15 @@ async fn confirmed_control_then_last_agent_drop_releases_lease_without_closing_a
             dropped: StateMutex::new(Some(dropped)),
         });
         let id = SessionId::new("confirmed-drop").unwrap();
-        let manager = SessionManager::open(Some(id.clone()), storage.clone())
-            .await
-            .unwrap();
+        let manager = SessionManager::open(
+            Some(id.clone()),
+            storage.clone(),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap();
         let backend = Arc::new(Backend::default());
         let agent = attached_agent(Arc::new(Provider(backend.clone())), manager)
             .await
@@ -108,9 +114,16 @@ async fn late_confirmation_updates_only_the_current_physical_attempt() {
             for explicit in [false, true] {
                 let backend = Arc::new(Backend::default());
                 let audit = Arc::new(CountingAudit::default());
-                let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-                    .await
-                    .unwrap();
+                let manager = SessionManager::open(
+                    None,
+                    Arc::new(InMemoryStorage::new()),
+                    std::sync::Arc::new(
+                        nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(
+                        ),
+                    ),
+                )
+                .await
+                .unwrap();
                 let agent = attached_agent_with_audit(
                     Arc::new(Provider(backend.clone())),
                     manager,
@@ -229,9 +242,15 @@ async fn delayed_old_finalizer_cannot_publish_over_a_physical_retry() {
     let backend = Arc::new(Backend::default());
     backend.fail_cleanup_once.store(true, Ordering::SeqCst);
     let audit = Arc::new(CountingAudit::default());
-    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent =
         attached_agent_with_audit(Arc::new(Provider(backend.clone())), manager, audit.clone())
             .await

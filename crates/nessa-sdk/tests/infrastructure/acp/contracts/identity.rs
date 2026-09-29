@@ -39,7 +39,15 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
     let storage_path = storage_root.path().join("sessions");
     let storage = Arc::new(RecordStorage::new(&storage_path).unwrap());
     let session_id = SessionId::new("fingerprint").unwrap();
-    let manager = || SessionManager::open(Some(session_id.clone()), storage.clone());
+    let manager = || {
+        SessionManager::open(
+            Some(session_id.clone()),
+            storage.clone(),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+    };
     let agent = attached_agent(Arc::new(original), manager().await.unwrap())
         .await
         .unwrap();

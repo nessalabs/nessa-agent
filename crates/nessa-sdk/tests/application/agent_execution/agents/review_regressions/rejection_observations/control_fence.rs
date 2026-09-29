@@ -79,6 +79,10 @@ async fn rejected_observation_fences_permission_controls_before_its_save_resumes
                         backing: storage.clone(),
                         gate: Arc::new(Mutex::new(Some((saving, release)))),
                     }),
+                    std::sync::Arc::new(
+                        nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(
+                        ),
+                    ),
                 )
                 .await
                 .unwrap();

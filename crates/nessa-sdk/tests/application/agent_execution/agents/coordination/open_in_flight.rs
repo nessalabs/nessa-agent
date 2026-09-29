@@ -65,9 +65,15 @@ async fn recovery_at_the_gate(keeps_failed: bool) -> (Agent, QueueAdmission, one
         entered: StateMutex::new(Some(entered)),
         release: StateMutex::new(Some(gate)),
     });
-    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(provider.clone(), manager).await.unwrap();
     assert!(
         agent.may_hold_provider_resources(),

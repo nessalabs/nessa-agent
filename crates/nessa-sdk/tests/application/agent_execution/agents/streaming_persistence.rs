@@ -1,9 +1,39 @@
-//! Live text is ephemeral; lifecycle boundaries persist the observed sequence.
+//! Live text is provisional until the cadence or a lifecycle boundary saves it.
 use super::*;
+use nessa_sdk::application::agent_execution::sessions::{MessageCommitClock, MessageCommitSleep};
 use std::{
     future::{poll_fn, Future},
+    sync::Arc,
     task::Poll,
+    time::Duration,
 };
+
+struct ManualMessageClock(watch::Sender<Duration>);
+impl ManualMessageClock {
+    fn new() -> Self {
+        Self(watch::channel(Duration::ZERO).0)
+    }
+    fn advance(&self, duration: Duration) {
+        let next = *self.0.borrow() + duration;
+        self.0.send_replace(next);
+    }
+}
+impl MessageCommitClock for ManualMessageClock {
+    fn now(&self) -> Duration {
+        *self.0.borrow()
+    }
+    fn sleep_until(&self, deadline: Duration) -> MessageCommitSleep {
+        let mut changes = self.0.subscribe();
+        Box::pin(async move {
+            loop {
+                if *changes.borrow() >= deadline {
+                    return;
+                }
+                changes.changed().await.expect("manual clock remains owned");
+            }
+        })
+    }
+}
 
 type Chunk = (ExecutionEvent, oneshot::Sender<()>);
 struct TextStream {
@@ -59,6 +89,12 @@ struct StreamingTest {
 }
 impl StreamingTest {
     async fn new() -> Self {
+        Self::with_clock(Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ))
+        .await
+    }
+    async fn with_clock(clock: Arc<dyn MessageCommitClock>) -> Self {
         let storage = MemoryStorage::default();
         let (chunks, receiver) = mpsc::unbounded_channel();
         // The existing backend remains active until close. Its ordinary output
@@ -86,7 +122,13 @@ impl StreamingTest {
                 backend: backend.clone(),
                 chunks: Mutex::new(Some(receiver)),
             }),
-            storage.manager().await,
+            SessionManager::open(
+                Some(SessionId::new("conversation").unwrap()),
+                Arc::new(storage.clone()),
+                clock,
+            )
+            .await
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -141,7 +183,7 @@ async fn assert_pending<T>(future: impl Future<Output = T>) {
 }
 
 #[tokio::test]
-async fn text_is_live_without_a_save_and_terminal_persists_the_sequence() {
+async fn text_is_live_until_the_cadence_and_terminal_persists_the_sequence() {
     let test = StreamingTest::new().await;
     let mut events = test.agent.subscribe();
     let running = test.start().await;
@@ -155,8 +197,8 @@ async fn text_is_live_without_a_save_and_terminal_persists_the_sequence() {
     }
     test.text(&"x".repeat(64 * 1024)).await;
     received.push(events.next().await.unwrap().unwrap());
-    assert_eq!(test.storage.0.lock().unwrap().writes, writes);
-    assert!(test.storage.snapshot().invocations[0].events.is_empty());
+    assert!(test.storage.0.lock().unwrap().writes > writes);
+    assert!(!test.storage.snapshot().invocations[0].events.is_empty());
     let (saving, release) = test.storage.pause_next_save();
     let terminal = test.send(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled));
     saving.await.unwrap();
@@ -327,4 +369,186 @@ async fn direct_invocation_retains_storage_failure_separately_from_provider_outc
             .provider_result(),
         Some(&Ok(ExecutionOutcome::Cancelled))
     );
+}
+
+async fn wait_for_saved_text(storage: &MemoryStorage, count: usize) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if storage.snapshot().invocations[0].events.len() >= count {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("deadline save did not finish");
+}
+
+#[tokio::test]
+async fn lone_message_saves_at_fixed_manual_deadline_without_another_event() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test = StreamingTest::with_clock(clock.clone()).await;
+    let running = test.start().await;
+    test.text("only chunk").await;
+    assert!(test.storage.snapshot().invocations[0].events.is_empty());
+    clock.advance(Duration::from_millis(99));
+    tokio::task::yield_now().await;
+    assert!(test.storage.snapshot().invocations[0].events.is_empty());
+    clock.advance(Duration::from_millis(1));
+    wait_for_saved_text(&test.storage, 1).await;
+    assert_eq!(
+        test.storage.snapshot().invocations[0].events[0].update(),
+        &ExecutionUpdate::Message(MessageChunk::text("only chunk"))
+    );
+    test.finish().await;
+    running.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn sustained_messages_do_not_slide_first_deadline() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test = StreamingTest::with_clock(clock.clone()).await;
+    let running = test.start().await;
+    test.text("first").await;
+    clock.advance(Duration::from_millis(50));
+    for _ in 0..8 {
+        test.text("next").await;
+    }
+    clock.advance(Duration::from_millis(49));
+    tokio::task::yield_now().await;
+    assert!(test.storage.snapshot().invocations[0].events.is_empty());
+    clock.advance(Duration::from_millis(1));
+    wait_for_saved_text(&test.storage, 9).await;
+    test.finish().await;
+    running.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn consequential_save_makes_old_timer_wake_a_noop() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test = StreamingTest::with_clock(clock.clone()).await;
+    let running = test.start().await;
+    test.text("before terminal").await;
+    test.finish().await;
+    running.await.unwrap().unwrap();
+    let writes = test.storage.0.lock().unwrap().writes;
+    clock.advance(Duration::from_millis(100));
+    tokio::task::yield_now().await;
+    assert_eq!(test.storage.0.lock().unwrap().writes, writes);
+}
+
+#[tokio::test]
+async fn failed_deadline_save_stops_provider_with_typed_storage_failure() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test = StreamingTest::with_clock(clock.clone()).await;
+    let running = test.start().await;
+    test.text("pending").await;
+    test.storage.fail_next();
+    clock.advance(Duration::from_millis(100));
+    let result = tokio::time::timeout(Duration::from_secs(2), running)
+        .await
+        .expect("failure supervised")
+        .unwrap();
+    assert!(matches!(
+        result,
+        Err(AgentError::StorageAfterExecution { .. })
+    ));
+    assert_eq!(
+        test.backend.calls.closes.lock().unwrap().as_slice(),
+        &[SessionCloseRequest::ExecutionFailed]
+    );
+}
+
+#[tokio::test]
+async fn message_count_or_bytes_flushes_before_deadline_once() {
+    for large in [false, true] {
+        let clock = Arc::new(ManualMessageClock::new());
+        let test = StreamingTest::with_clock(clock.clone()).await;
+        let running = test.start().await;
+        let baseline = test.storage.0.lock().unwrap().writes;
+        if large {
+            test.text(&"x".repeat(16 * 1024)).await;
+            wait_for_saved_text(&test.storage, 1).await;
+        } else {
+            for _ in 0..64 {
+                test.text("x").await;
+            }
+            wait_for_saved_text(&test.storage, 64).await;
+        }
+        let writes = test.storage.0.lock().unwrap().writes;
+        assert_eq!(writes, baseline + 1);
+        clock.advance(Duration::from_millis(100));
+        tokio::task::yield_now().await;
+        assert_eq!(test.storage.0.lock().unwrap().writes, writes);
+        test.finish().await;
+        running.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn stalled_threshold_save_stops_provider_ingress_until_acknowledged() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test = StreamingTest::with_clock(clock).await;
+    let running = test.start().await;
+    for _ in 0..63 {
+        test.text("x").await;
+    }
+    let (saving, release) = test.storage.pause_next_save();
+    let mut threshold = test.send(ExecutionUpdate::Message(MessageChunk::text("x")));
+    saving.await.unwrap();
+    let mut following = test.send(ExecutionUpdate::Message(MessageChunk::text("next")));
+    assert_pending(&mut threshold).await;
+    assert_pending(&mut following).await;
+    release.send(()).unwrap();
+    threshold.await.unwrap();
+    following.await.unwrap();
+    assert_eq!(test.storage.snapshot().invocations[0].events.len(), 64);
+    test.finish().await;
+    running.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn simultaneous_deadline_and_count_threshold_save_one_generation_once() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test = StreamingTest::with_clock(clock.clone()).await;
+    let running = test.start().await;
+    for _ in 0..63 {
+        test.text("x").await;
+    }
+    let baseline = test.storage.0.lock().unwrap().writes;
+    let threshold = test.send(ExecutionUpdate::Message(MessageChunk::text("x")));
+    clock.advance(Duration::from_millis(100));
+    threshold.await.unwrap();
+    wait_for_saved_text(&test.storage, 63).await;
+    assert_eq!(test.storage.0.lock().unwrap().writes, baseline + 1);
+    test.finish().await;
+    running.await.unwrap().unwrap();
+    assert_eq!(test.storage.snapshot().invocations[0].events.len(), 65);
+}
+
+#[tokio::test]
+async fn stopped_provider_cleanup_is_not_held_by_stalled_deadline_save() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test = StreamingTest::with_clock(clock.clone()).await;
+    let running = test.start().await;
+    test.text("pending").await;
+    let (saving, release) = test.storage.pause_next_save();
+    clock.advance(Duration::from_millis(100));
+    saving.await.unwrap();
+    let mut closing = test.backend.closing.subscribe();
+    let agent = test.agent.clone();
+    let close = tokio::spawn(async move { agent.close(actor()).await });
+    let cleanup_started = tokio::time::timeout(Duration::from_secs(2), closing.changed()).await;
+    release.send(()).unwrap();
+    test.finish().await;
+    assert!(
+        cleanup_started.is_ok(),
+        "provider cleanup did not start while save was stalled"
+    );
+    assert_eq!(
+        test.backend.calls.closes.lock().unwrap().as_slice(),
+        &[SessionCloseRequest::Explicit(actor())]
+    );
+    close.await.unwrap().unwrap();
+    let _ = running.await.unwrap();
 }

@@ -42,7 +42,8 @@ use nessa_sdk::application::agent_execution::{
     },
     providers::{AgentProvider, ApprovalMode as ProviderApprovalMode, OperationCapabilities},
     sessions::{
-        SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+        MessageCommitClock, SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease,
+        StorageError,
     },
 };
 use nessa_sdk::domain::agent_execution::{
@@ -425,6 +426,7 @@ struct Inner {
     /// names none is made on.
     agents: ConversationAgents,
     storage: Arc<dyn SessionStorage>,
+    message_commit_clock: Arc<dyn MessageCommitClock>,
     metadata: Arc<dyn ConversationRepository>,
     creation_audit: Arc<dyn ConversationCreationAudit>,
     mode_audit: Arc<dyn ConversationModeAudit>,
@@ -586,6 +588,7 @@ pub struct ConversationDependencies {
     /// Every configured agent, and the one a caller that names none gets.
     pub agents: ConversationAgents,
     pub storage: Arc<dyn SessionStorage>,
+    pub message_commit_clock: Arc<dyn MessageCommitClock>,
     pub metadata: Arc<dyn ConversationRepository>,
     pub creation_audit: Arc<dyn ConversationCreationAudit>,
     pub mode_audit: Arc<dyn ConversationModeAudit>,
@@ -634,6 +637,7 @@ impl ConversationService {
         let ConversationDependencies {
             agents,
             storage,
+            message_commit_clock,
             metadata,
             creation_audit,
             mode_audit,
@@ -658,6 +662,7 @@ impl ConversationService {
                 workspace,
                 agents,
                 storage,
+                message_commit_clock,
                 metadata,
                 creation_audit,
                 mode_audit,
@@ -1026,6 +1031,7 @@ impl ConversationService {
                             let manager = SessionManager::open(
                                 Some(session_id),
                                 service.inner.storage.clone(),
+                                service.inner.message_commit_clock.clone(),
                             )
                             .await
                             .map_err(|error| {

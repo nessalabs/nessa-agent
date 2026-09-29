@@ -11,7 +11,7 @@ mod terminal;
 pub use ports::{
     ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpFuture, WarmUpRecords,
 };
-pub use service::AgentWarmUp;
+pub use service::{AgentWarmUp, WarmUpSessionPorts};
 #[cfg(any(unix, test))]
 pub(crate) use terminal::WarmUpLaunchOwnership;
 #[cfg(test)]

@@ -328,6 +328,9 @@ async fn queued_storage_panics_retain_current_and_pending_receipts() {
                     stage,
                     commit_first,
                 }),
+                std::sync::Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
             )
             .await
             .unwrap();
@@ -456,6 +459,9 @@ async fn dispatch_save_panic_does_not_inherit_previous_close_actor() {
             stage: InvocationStage::Running,
             commit_first: true,
         }),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
     )
     .await
     .unwrap();
@@ -499,6 +505,9 @@ async fn withdrawal_save_panics_keep_receipts_and_attribution_owned() {
                     stage: InvocationStage::Cancelled,
                     commit_first,
                 }),
+                std::sync::Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
             )
             .await
             .unwrap();

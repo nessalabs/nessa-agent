@@ -9,6 +9,7 @@
 //!                                      |-> memory snapshot
 //!                                      |-> semantic facts -> SQLite runtime
 //!                                      |-> bounded read source -> sync engine
+//! MessageCommitClock <--------------------- Tokio monotonic clock adapter
 //! ```
 //! Arrows show calls and representation mapping. A complete framed fact is
 //! folded into a validated snapshot. Pending operations retain the lease until
@@ -16,6 +17,7 @@
 //! identifies stale JSONL history so the record adapter refuses it unchanged.
 
 mod memory;
+mod message_commit_clock;
 mod paths;
 mod record;
 mod record_source;
@@ -23,5 +25,6 @@ mod record_writer;
 mod snapshot;
 mod stream_fact;
 pub use memory::InMemoryStorage;
+pub use message_commit_clock::RuntimeMessageCommitClock;
 pub use record::RecordStorage;
 pub use record_source::{physical_record_schema, NessaRecordSource};

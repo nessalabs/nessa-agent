@@ -78,9 +78,15 @@ async fn selected_claude_preset_survives_a_real_agent_close_and_restore() {
     let local_id = SessionId::new("live-approval-restore").unwrap();
     let agent = attached_agent(
         provider.clone(),
-        SessionManager::open(Some(local_id.clone()), storage.clone())
-            .await
-            .unwrap(),
+        SessionManager::open(
+            Some(local_id.clone()),
+            storage.clone(),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
     )
     .await
     .unwrap();
@@ -100,7 +106,15 @@ async fn selected_claude_preset_survives_a_real_agent_close_and_restore() {
     drop(agent);
     let restored = attached_agent(
         provider,
-        SessionManager::open(Some(local_id), storage).await.unwrap(),
+        SessionManager::open(
+            Some(local_id),
+            storage,
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
     )
     .await
     .unwrap();
@@ -164,9 +178,15 @@ async fn selected_codex_preset_survives_a_real_agent_close_and_restore() {
     let local_id = SessionId::new("live-codex-restore").unwrap();
     let agent = attached_agent(
         provider.clone(),
-        SessionManager::open(Some(local_id.clone()), storage.clone())
-            .await
-            .unwrap(),
+        SessionManager::open(
+            Some(local_id.clone()),
+            storage.clone(),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
     )
     .await
     .unwrap();
@@ -190,7 +210,15 @@ async fn selected_codex_preset_survives_a_real_agent_close_and_restore() {
     drop(agent);
     let restored = attached_agent(
         provider,
-        SessionManager::open(Some(local_id), storage).await.unwrap(),
+        SessionManager::open(
+            Some(local_id),
+            storage,
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
     )
     .await
     .unwrap();

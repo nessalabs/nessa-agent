@@ -99,6 +99,9 @@ async fn explicit_close_storage_panics_settle_every_pending_receipt_and_finalize
                     drop_panics,
                     panics,
                 }),
+                std::sync::Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
             )
             .await
             .unwrap();

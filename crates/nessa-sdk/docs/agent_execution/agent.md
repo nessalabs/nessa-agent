@@ -8,7 +8,8 @@ the TypeScript gateway client does not yet expose agent chat RPCs.
 let provider = Arc::new(ClaudeAcpProvider::new(config, &model, limits, audit)?);
 let storage = Arc::new(RecordStorage::new("./sessions")?);
 storage.initialize().await?;
-let manager = SessionManager::open(None, storage).await?; // Fresh local UUID v4.
+let clock = Arc::new(RuntimeMessageCommitClock::new());
+let manager = SessionManager::open(None, storage, clock).await?; // Fresh local UUID v4.
 let session_id = manager.id().clone(); // Retain this key to reopen the conversation.
 let agent = Agent::prepare(provider, manager, audit.clone()).await?;
 let authorization = agent.authorize_attachment(AttachmentRequest::CallerRequested(verified_actor.clone()))?;
@@ -30,7 +31,7 @@ or treat a caller-supplied principal string as authenticated identity. See the
 [complete queued interaction](../../src/application/agent_execution/agents/agent.rs)
 and the [executable provider composition example](../../examples/claude_acp.rs) for composition.
 
-Omit the local key with `SessionManager::open(None, storage)` to create a fresh
+Omit the local key with `SessionManager::open(None, storage, clock)` to create a fresh
 UUID v4 session. For a named or existing session, pass `Some(SessionId::new("test-session")?)`.
 Save `manager.id().clone()` to reopen a generated session; `None` always creates a new key.
 This session UUID identifies the conversation. Each new logical submission also
@@ -41,7 +42,7 @@ not generate execution IDs automatically.
 
 ```text
 host / future chat RPC
-    -> SessionManager::open(optional local SessionId, storage)
+    -> SessionManager::open(optional local SessionId, storage, monotonic clock)
         -> SessionStorage::open -> SessionStorageLease [exclusive writer lease]
     -> Agent::prepare(provider, session_manager, audit)
         -> load saved snapshot and verify provider identity without provider I/O
@@ -57,7 +58,7 @@ host / future chat RPC
         -> before hooks
         -> provider prepares/restores its live context
         -> provider executes while Agent drains observations
-        -> stream text; save at tool/review/terminal boundaries
+        -> stream text; save at cadence or tool/review/terminal boundaries
         -> save settlement -> after hooks -> result
 ```
 
@@ -222,10 +223,12 @@ task, the SDK keeps the storage lease fenced for the process lifetime. Await exp
 host exit. Audit-only failure remains reported separately from confirmed resource
 cleanup.
 
-Streaming text and thoughts reach subscribers immediately and stay in memory
-until the next save. Tool/review events, terminal observations, and invocation
-settlement save the accumulated observations. There is no timer or per-chunk
-write. If the process fails mid-stream, text since the last save may be lost;
+Streaming text and thoughts reach subscribers immediately. The first unsaved
+message sets a fixed 100 ms deadline; 16 KiB of message payload or 64 message
+observations cause an earlier save. Tool/review events, terminal observations,
+and invocation settlement save accumulated observations immediately. The injected
+monotonic clock wakes the active invocation supervisor even when the provider is
+silent. If the process fails mid-stream, text since the last save may be lost;
 recovery never reruns the provider to recover it. Exact chunks and their order are
 preserved when saved. Admissions and consequential lifecycle changes still save
 before successful acknowledgement. Mandatory permission audit remains separate.

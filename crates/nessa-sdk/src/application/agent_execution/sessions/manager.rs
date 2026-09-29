@@ -1,8 +1,8 @@
 use super::{
     attachment::AttachmentLease, InvocationCancellationEvent, InvocationRecord,
-    InvocationSchedulingEvent, ProviderContext, QueueHistoryRecord, SessionChange,
-    SessionSaveGeneration, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-    StorageFuture, SubmissionAcknowledgement,
+    InvocationSchedulingEvent, MessageCommitClock, ProviderContext, QueueHistoryRecord,
+    SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage, SessionStorageLease,
+    StorageError, StorageFuture, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -32,6 +32,7 @@ use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     sync::{Arc, RwLock},
     task::Poll,
+    time::Duration,
 };
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -81,11 +82,15 @@ impl AttachmentOpenError {
 /// use nessa_sdk::{
 ///     application::agent_execution::sessions::SessionManager,
 ///     domain::agent_execution::sessions::SessionId,
-///     infrastructure::session_storage::InMemoryStorage,
+///     infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock},
 /// };
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let storage = Arc::new(InMemoryStorage::new());
-/// let manager = SessionManager::open(Some(SessionId::new("conversation")?), storage).await?;
+/// let manager = SessionManager::open(
+///     Some(SessionId::new("conversation")?),
+///     storage,
+///     Arc::new(RuntimeMessageCommitClock::new()),
+/// ).await?;
 /// assert!(manager.snapshot().await.is_none()); // No Agent attached yet.
 /// drop(manager); // Releases the writer lease without deleting saved data.
 /// # Ok(())
@@ -93,6 +98,7 @@ impl AttachmentOpenError {
 /// ```
 pub struct SessionManager {
     id: SessionId,
+    message_commit_clock: Arc<dyn MessageCommitClock>,
     // One exclusive lease; supervised admission writes retain this same handle
     // until they publish their result, even when the caller drops its future.
     storage_lease: Arc<dyn SessionStorageLease>,
@@ -139,7 +145,19 @@ struct Evidence {
     // Decisions retained after observation but before a confirmed save. A
     // retry submits the same ordered facts, including earlier failed writes.
     pending: Vec<SessionChange>,
+    message_commit: Option<PendingMessageCommit>,
 }
+#[derive(Clone, Copy)]
+struct PendingMessageCommit {
+    generation: SessionSaveGeneration,
+    deadline: Duration,
+    bytes: usize,
+    retained_bytes: usize,
+    count: usize,
+}
+const MESSAGE_COMMIT_DELAY: Duration = Duration::from_millis(100);
+const MESSAGE_COMMIT_BYTES: usize = 16 * 1024;
+const MESSAGE_COMMIT_COUNT: usize = 64;
 impl SessionManager {
     /// Acquires exclusive storage access for one local session.
     ///
@@ -149,6 +167,8 @@ impl SessionManager {
     ///   key. Retain [`Self::id`] to reopen a generated session later.
     /// - `storage`: Shared backend used to acquire the lease. The manager retains
     ///   only the returned lease, which must keep its backend resources alive.
+    /// - `message_commit_clock`: Monotonic application timer for streaming
+    ///   output deadlines. Its wake only asks this manager to recheck pending facts.
     ///
     /// # Errors
     /// Returns [`StorageError::Busy`] if another owner holds this session, or a
@@ -157,6 +177,7 @@ impl SessionManager {
     pub async fn open(
         id: Option<SessionId>,
         storage: Arc<dyn SessionStorage>,
+        message_commit_clock: Arc<dyn MessageCommitClock>,
     ) -> Result<Self, StorageError> {
         let id = id.unwrap_or_else(|| {
             SessionId::new(Uuid::new_v4().to_string())
@@ -168,6 +189,7 @@ impl SessionManager {
             .map_err(StorageError::bounded)?;
         Ok(Self {
             id,
+            message_commit_clock,
             storage_lease: Arc::from(storage_lease),
             evidence: Arc::new(Mutex::new(Evidence::default())),
             dispatched: RwLock::new(HashMap::new()),
@@ -182,6 +204,40 @@ impl SessionManager {
     /// Failed writes never appear here as committed evidence.
     pub async fn snapshot(&self) -> Option<SessionSnapshot> {
         self.evidence.lock().await.committed.clone()
+    }
+    #[cfg(test)]
+    pub(crate) async fn pending_message_deadline(
+        &self,
+    ) -> Option<(SessionSaveGeneration, Duration)> {
+        self.evidence
+            .lock()
+            .await
+            .message_commit
+            .map(|pending| (pending.generation, pending.deadline))
+    }
+    pub(crate) fn try_pending_message_deadline(
+        &self,
+    ) -> Option<Option<(SessionSaveGeneration, Duration)>> {
+        self.evidence.try_lock().ok().map(|evidence| {
+            evidence
+                .message_commit
+                .map(|pending| (pending.generation, pending.deadline))
+        })
+    }
+    pub(crate) async fn wait_for_message_deadline(&self, deadline: Duration) {
+        self.message_commit_clock.sleep_until(deadline).await;
+    }
+    pub(crate) async fn flush_due_messages(
+        &self,
+        generation: SessionSaveGeneration,
+    ) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        if evidence.message_commit.is_some_and(|pending| {
+            pending.generation == generation && self.message_commit_clock.now() >= pending.deadline
+        }) {
+            self.save_observed(&mut evidence).await?;
+        }
+        Ok(())
     }
     /// Joins admission writes after the Agent has excluded new invocations.
     pub(crate) async fn await_admission_writes(&self) {
@@ -263,6 +319,7 @@ impl SessionManager {
             observed: Some(snapshot.clone()),
             committed: Some(snapshot),
             pending: Vec::new(),
+            message_commit: None,
         };
         Ok(context)
     }
@@ -1081,6 +1138,11 @@ impl SessionManager {
     }
     pub(crate) async fn event(&self, event: ExecutionEvent) -> Result<(), StorageError> {
         let save = !matches!(event.update(), ExecutionUpdate::Message(_));
+        let message_bytes = match event.update() {
+            ExecutionUpdate::Message(chunk) => chunk.payload_bytes(),
+            _ => 0,
+        };
+        let message_retained_bytes = if save { 0 } else { event.retained_bytes() };
         event
             .validate_payload_size()
             .map_err(|error| StorageError::Corrupt(error.to_string()))?;
@@ -1129,20 +1191,31 @@ impl SessionManager {
                 .pending
                 .push(SessionChange::ProviderObservation(event));
             evidence.event_usage.insert(id, usage);
-            // JSON may expand each retained byte to six bytes. Bound both
-            // payload and per-event metadata before the next provider boundary
-            // so a valid output cannot grow into an unframeable atomic fact.
-            let mut message_bytes = 0usize;
-            let mut message_count = 0usize;
-            for change in &evidence.pending {
-                if let SessionChange::ProviderObservation(observation) = change {
-                    if matches!(observation.update(), ExecutionUpdate::Message(_)) {
-                        message_bytes = message_bytes.saturating_add(observation.retained_bytes());
-                        message_count += 1;
-                    }
-                }
-            }
-            if message_bytes >= 8 * 1024 * 1024 || message_count >= 1024 {
+            let generation = evidence.save_generation;
+            let pending = evidence
+                .message_commit
+                .get_or_insert_with(|| PendingMessageCommit {
+                    generation,
+                    deadline: self
+                        .message_commit_clock
+                        .now()
+                        .saturating_add(MESSAGE_COMMIT_DELAY),
+                    bytes: 0,
+                    retained_bytes: 0,
+                    count: 0,
+                });
+            pending.bytes = pending.bytes.saturating_add(message_bytes);
+            pending.retained_bytes = pending
+                .retained_bytes
+                .saturating_add(message_retained_bytes);
+            pending.count = pending.count.saturating_add(1);
+            // The smaller cadence is the normal flush. The larger retained
+            // safety bound remains a backstop for future policy adjustments.
+            if pending.bytes >= MESSAGE_COMMIT_BYTES
+                || pending.count >= MESSAGE_COMMIT_COUNT
+                || pending.retained_bytes >= 8 * 1024 * 1024
+                || pending.count >= 1024
+            {
                 self.save_observed(&mut evidence).await?;
             }
             return Ok(());
@@ -1493,6 +1566,7 @@ impl SessionManager {
             .map_err(StorageError::bounded)?;
         evidence.committed = Some(snapshot);
         evidence.pending.clear();
+        evidence.message_commit = None;
         evidence.save_generation = next_generation;
         Ok(())
     }

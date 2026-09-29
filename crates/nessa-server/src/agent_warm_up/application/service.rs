@@ -12,7 +12,7 @@ use nessa_sdk::application::agent_execution::{
     executions::ExecutionAudit,
     permissions::ActionContext,
     providers::AgentProvider,
-    sessions::{SessionManager, SessionStorage},
+    sessions::{MessageCommitClock, SessionManager, SessionStorage},
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -25,6 +25,12 @@ use uuid::Uuid;
 /// principal here; no human asked for this and none is claimed.
 const WARM_UP_SURFACE: &str = "runtime_warm_up";
 const GATEWAY_PRINCIPAL: &str = "gateway";
+
+/// Session ports used by the warm-up's disposable SDK conversation.
+pub struct WarmUpSessionPorts {
+    pub storage: Arc<dyn SessionStorage>,
+    pub message_commit_clock: Arc<dyn MessageCommitClock>,
+}
 
 /// Runs the configured runtime through a full open and close, once, so the
 /// operating system's first-execution scan is paid before anyone is waiting.
@@ -48,6 +54,7 @@ struct Inner {
     records: Arc<dyn WarmUpRecords>,
     audit: Arc<dyn WarmUpAudit>,
     clock: Arc<dyn Clock>,
+    message_commit_clock: Arc<dyn MessageCommitClock>,
     runtime: RuntimeFingerprint,
     started: AtomicBool,
     settled: watch::Sender<Option<Arc<PublishedTerminal>>>,
@@ -77,12 +84,16 @@ impl AgentWarmUp {
     pub fn new(
         provider: Arc<dyn AgentProvider>,
         execution_audit: Arc<dyn ExecutionAudit>,
-        storage: Arc<dyn SessionStorage>,
+        session: WarmUpSessionPorts,
         records: Arc<dyn WarmUpRecords>,
         audit: Arc<dyn WarmUpAudit>,
         clock: Arc<dyn Clock>,
         runtime: RuntimeFingerprint,
     ) -> Self {
+        let WarmUpSessionPorts {
+            storage,
+            message_commit_clock,
+        } = session;
         Self {
             inner: Arc::new(Inner {
                 provider,
@@ -91,6 +102,7 @@ impl AgentWarmUp {
                 records,
                 audit,
                 clock,
+                message_commit_clock,
                 runtime,
                 started: AtomicBool::new(false),
                 settled: watch::channel(None).0,
@@ -365,7 +377,13 @@ impl AgentWarmUp {
     /// session, and closed again. Resource-owning failures remain owned here
     /// until the terminal projection has captured their release meaning.
     async fn open_and_close(&self, actor: &ActionContext) -> PreparationAttempt {
-        let manager = match SessionManager::open(None, self.inner.storage.clone()).await {
+        let manager = match SessionManager::open(
+            None,
+            self.inner.storage.clone(),
+            self.inner.message_commit_clock.clone(),
+        )
+        .await
+        {
             Ok(manager) => manager,
             Err(error) => {
                 return PreparationAttempt {

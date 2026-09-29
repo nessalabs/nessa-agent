@@ -4,7 +4,9 @@
 //! only place that knows both.
 use crate::{
     agent_warm_up::{
-        application::{AgentWarmUp, WarmUpAudit, WarmUpLaunchOwnership, WarmUpRecords},
+        application::{
+            AgentWarmUp, WarmUpAudit, WarmUpLaunchOwnership, WarmUpRecords, WarmUpSessionPorts,
+        },
         domain::RuntimeFingerprint,
     },
     conversation::application::{ConversationAgent, ConversationError, RuntimeReadiness},
@@ -131,7 +133,10 @@ impl CurrentOpenCodeWarmUp {
                 let warm_up = AgentWarmUp::new(
                     agent.provider.clone(),
                     agent.execution_audit.clone(),
-                    Arc::new(InMemoryStorage::new()),
+                    WarmUpSessionPorts {
+                        storage: Arc::new(InMemoryStorage::new()),
+                        message_commit_clock: Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
+                    },
                     self.inner.records.clone(),
                     self.inner.audit.clone(),
                     self.inner.clock.clone(),

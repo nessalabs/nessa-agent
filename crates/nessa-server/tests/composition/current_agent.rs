@@ -985,6 +985,9 @@ fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationServ
             listing: Arc::new(Unlisted),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),

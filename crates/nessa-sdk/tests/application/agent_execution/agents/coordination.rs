@@ -333,9 +333,15 @@ async fn agent() -> Agent {
 }
 async fn agent_with_backend() -> (Agent, Arc<Backend>) {
     let backend = Arc::new(Backend::default());
-    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(Arc::new(Provider(backend.clone())), manager)
         .await
         .unwrap();
@@ -425,9 +431,15 @@ async fn automatic_recovery_open_failure_settles_and_restores_the_queue_receipt(
         inner: Provider(backend),
         opens: AtomicUsize::new(0),
     });
-    let manager = SessionManager::open(Some(id.clone()), storage.clone())
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        Some(id.clone()),
+        storage.clone(),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(provider.clone(), manager).await.unwrap();
 
     let control = agent.accept_control().unwrap();
@@ -466,7 +478,15 @@ async fn automatic_recovery_open_failure_settles_and_restores_the_queue_receipt(
     drop(agent);
     let restored = Agent::prepare(
         provider.clone(),
-        SessionManager::open(Some(id), storage).await.unwrap(),
+        SessionManager::open(
+            Some(id),
+            storage,
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
         Arc::new(AcceptingAudit),
     )
     .await
@@ -776,9 +796,15 @@ async fn close_joins_a_held_started_audit_panic_before_replacement() {
         AttachmentAuditPanic::Drop,
     ] {
         let backend = Arc::new(Backend::default());
-        let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-            .await
-            .unwrap();
+        let manager = SessionManager::open(
+            None,
+            Arc::new(InMemoryStorage::new()),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap();
         let agent = Agent::prepare(
             Arc::new(Provider(backend.clone())),
             manager,

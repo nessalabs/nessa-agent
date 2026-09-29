@@ -631,6 +631,9 @@ async fn assert_terminal_failure_round_trip(
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),

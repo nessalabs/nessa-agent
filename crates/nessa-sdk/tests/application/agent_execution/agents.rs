@@ -177,6 +177,9 @@ impl MemoryStorage {
         SessionManager::open(
             Some(SessionId::new("conversation").unwrap()),
             Arc::new(self.clone()),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
         )
         .await
         .unwrap()
@@ -456,7 +459,10 @@ async fn lease_and_provider_mismatch_fail_before_opening_another_context() {
     assert!(matches!(
         SessionManager::open(
             Some(SessionId::new("conversation").unwrap()),
-            Arc::new(storage.clone())
+            Arc::new(storage.clone()),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()
+            )
         )
         .await,
         Err(StorageError::Busy)
@@ -724,7 +730,10 @@ async fn unattached_manager_holds_lease_until_drop_without_writing() {
     assert!(matches!(
         SessionManager::open(
             Some(SessionId::new("conversation").unwrap()),
-            Arc::new(storage.clone())
+            Arc::new(storage.clone()),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()
+            )
         )
         .await,
         Err(StorageError::Busy)

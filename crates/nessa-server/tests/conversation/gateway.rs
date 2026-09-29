@@ -438,6 +438,7 @@ mod gateway {
                 provider_sessions:
                     crate::conversation::application::ProviderSessionErasers::default(),
                 deletion_budgets: conversation_support::DELETION_BUDGETS,
+                message_commit_clock: Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
                 clock: Arc::new(conversation_support::TestClock),
             },
             ConversationLimits::default(),

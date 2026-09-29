@@ -6,7 +6,7 @@
 //! claim the pair exists to make: one cold launch, joined rather than repeated.
 use super::PreparedRuntime;
 use crate::agent_warm_up::application::{
-    AgentWarmUp, WarmUpAudit, WarmUpAuditRecord, WarmUpFuture, WarmUpRecords,
+    AgentWarmUp, WarmUpAudit, WarmUpAuditRecord, WarmUpFuture, WarmUpRecords, WarmUpSessionPorts,
 };
 use crate::agent_warm_up::domain::RuntimeFingerprint;
 use crate::agents::domain::AgentId;
@@ -88,7 +88,12 @@ async fn a_failed_warm_up_releases_readiness_without_becoming_conversation_failu
     let warm_up = AgentWarmUp::new(
         Arc::new(Provider::new(provider.clone())),
         Arc::new(crate::conversation_test_support::AcceptingAudit),
-        Arc::new(InMemoryStorage::new()),
+        WarmUpSessionPorts {
+            storage: Arc::new(InMemoryStorage::new()),
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        },
         records.clone(),
         audit.clone(),
         Arc::new(TestClock),
@@ -121,6 +126,9 @@ async fn a_failed_warm_up_releases_readiness_without_becoming_conversation_failu
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),

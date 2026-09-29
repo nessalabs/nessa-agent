@@ -144,7 +144,7 @@ impl Agent {
     ///     estimated_input_tokens: 8, // Host estimate, including retained context.
     ///     reserved_output_tokens: 128,
     /// };
-    /// let manager = SessionManager::open(None, storage).await?;
+    /// let manager = SessionManager::open(None, storage, Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new())).await?;
     /// let agent = Agent::prepare(provider, manager, audit).await?;
     /// let authorization = agent.authorize_attachment(AttachmentRequest::CallerRequested(actor.clone()))?;
     /// agent.start_attachment(authorization)?.wait().await?;
@@ -856,6 +856,10 @@ impl Agent {
             if result.is_some() && ended {
                 break;
             }
+            // A storage save may hold evidence while the provider settles or
+            // Stop arrives. Reacquire that lock as one select branch instead of
+            // blocking the entire invocation supervisor before the select.
+            let message_deadline = self.inner.manager.try_pending_message_deadline();
             tokio::select! {
                 biased;
                 _ = stop_notice.changed(), if !stop_observed => {
@@ -909,6 +913,26 @@ impl Agent {
                 // Capture an already-ready execution reply above, then stop before
                 // another ready chunk can delay settlement or an explicit close.
                 _ = async {}, if stop_after_ready_settlement => break,
+                _ = self.inner.manager.await_admission_writes(), if message_deadline.is_none() => {},
+                () = async {
+                    if let Some(Some((_, deadline))) = message_deadline {
+                        self.inner.manager.wait_for_message_deadline(deadline).await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                }, if !ended && storage_failure.is_none() => {
+                    if let Some(Some((generation, _))) = message_deadline {
+                        if let Err(error) = self.inner.manager.flush_due_messages(generation).await {
+                            storage_failure.get_or_insert(error.clone());
+                            let cleanup = self.shutdown_after_failure(SessionCloseRequest::ExecutionFailed).await;
+                            if let Err(cleanup_error) = cleanup.into_result() {
+                                observation_failure = Some(cleanup_error);
+                            }
+                            result = Some(Err(AgentError::Storage(error)));
+                            ended = true;
+                        }
+                    }
+                }
                 next = events.next(), if !ended => {
                     match next {
                         Ok(Some(event)) => {

@@ -739,6 +739,9 @@ pub(crate) fn image_fixture_with_model(
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -858,6 +861,9 @@ pub(crate) fn mode_fixture() -> (
             listing: Arc::new(Unlisted),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -896,6 +902,9 @@ pub(crate) fn fixture(
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         limits,
