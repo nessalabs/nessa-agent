@@ -1247,9 +1247,11 @@ mod tests {
             ))
             .unwrap();
         let mut changes = Vec::new();
-        for index in 0..800 {
+        // Cross the 64 KiB physical-frame boundary with a small number of
+        // changes so this process fixture remains tractable under coverage.
+        for index in 0..160 {
             let context = ProviderContext::Recorded(
-                ExecutionSessionId::new(format!("remote-{index:04}-{}", "x".repeat(120))).unwrap(),
+                ExecutionSessionId::new(format!("remote-{index:04}-{}", "x".repeat(220))).unwrap(),
             );
             changes.push(SessionChange::ProviderContext {
                 before: ProviderContext::Absent,
