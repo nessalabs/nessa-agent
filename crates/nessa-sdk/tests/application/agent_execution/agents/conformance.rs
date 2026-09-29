@@ -77,6 +77,9 @@ struct WorkflowBackend {
     cleanup: Mutex<CleanupReport>,
     execution_fault: Mutex<Option<ProviderOperationFailure>>,
     execution_report: Mutex<Option<ExecutionReport>>,
+    report_polled: watch::Sender<bool>,
+    question_calls: AtomicUsize,
+    yield_after_close: AtomicBool,
     exhaust_prepare_budget: AtomicUsize,
     shutdowns: Mutex<Vec<SessionCloseRequest>>,
 }
@@ -158,9 +161,13 @@ impl ProviderSessionBackend for WorkflowBackend {
             if let Some(gate) = gate {
                 tokio::select! { _ = gate => {}, _ = closed.changed() => {} }
             }
+            if self.yield_after_close.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
             self.target.lock().unwrap().take();
             if let Some(report) = self.execution_report.lock().unwrap().clone() {
                 output.send(None).unwrap();
+                self.report_polled.send_replace(true);
                 return ProviderExecutionReply::Finished(report);
             }
             let fault = self.execution_fault.lock().unwrap().clone();
@@ -217,6 +224,7 @@ impl ProviderSessionBackend for WorkflowBackend {
     }
     fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async {
+            self.question_calls.fetch_add(1, Ordering::SeqCst);
             Err(ProviderOperationFailure::new(
                 AgentError::Unsupported("this fixture asks nothing".into()),
                 ProviderSessionState::Usable,
@@ -324,6 +332,9 @@ fn workflow_backend() -> Arc<WorkflowBackend> {
         cleanup: Mutex::new(CleanupReport::confirmed(CloseOutcome { forced: false })),
         execution_fault: Mutex::new(None),
         execution_report: Mutex::new(None),
+        report_polled: watch::channel(false).0,
+        question_calls: AtomicUsize::new(0),
+        yield_after_close: AtomicBool::new(false),
         exhaust_prepare_budget: AtomicUsize::new(0),
         shutdowns: Mutex::new(Vec::new()),
     })
@@ -551,6 +562,8 @@ async fn invocation_modes_retain_provider_settlement_when_its_save_panics() {
 
 #[path = "conformance/automatic_cleanup.rs"]
 mod automatic_cleanup;
+
+mod control_state_at_reply;
 
 mod unconfirmed_drain;
 

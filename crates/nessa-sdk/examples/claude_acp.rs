@@ -264,7 +264,14 @@ async fn run_with_storage(
 ) -> Result<(), Box<dyn Error>> {
     let session = Agent::prepare(
         Arc::new(binding),
-        SessionManager::open(Some(SessionId::new("smoke")?), storage).await?,
+        SessionManager::open(
+            Some(SessionId::new("smoke")?),
+            storage,
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await?,
         audit,
     )
     .await?;

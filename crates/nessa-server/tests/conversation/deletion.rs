@@ -155,6 +155,9 @@ fn service_over(
             }),
             provider_sessions,
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -757,6 +760,9 @@ fn service_with(
             }),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1343,6 +1349,9 @@ async fn a_history_that_cannot_be_opened_at_all_is_left_not_carried_on() {
             }),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -1912,6 +1921,9 @@ async fn a_create_racing_a_delete_cannot_republish_it() {
             }),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2053,6 +2065,9 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
             listing: metadata.clone(),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock,
         },
         ConversationLimits::default(),
@@ -2727,6 +2742,9 @@ async fn a_history_that_names_another_session_is_refused_and_nothing_is_erased()
             }),
             provider_sessions,
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -2870,6 +2888,9 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
             listing: repository.clone(),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock,
         },
         ConversationLimits::default(),
@@ -3267,6 +3288,9 @@ async fn a_reopen_racing_a_delete_is_not_recorded_after_the_deletion() {
             listing: Arc::new(Unlisted),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -3414,6 +3438,9 @@ async fn a_delete_spends_the_stop_and_lease_budgets_it_is_given() {
             }),
             provider_sessions: claude_erasers(),
             deletion_budgets: short,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -3487,6 +3514,9 @@ fn over_with(
             }),
             provider_sessions,
             deletion_budgets: budgets,
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),

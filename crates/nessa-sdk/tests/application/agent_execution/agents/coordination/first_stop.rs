@@ -58,7 +58,15 @@ async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
         let lease = storage.open(id.clone()).await.unwrap();
         lease.save(saved.clone()).await.unwrap();
         drop(lease);
-        let restored = SessionManager::open(Some(id), storage).await.unwrap();
+        let restored = SessionManager::open(
+            Some(id),
+            storage,
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap();
         let restored_agent =
             attached_agent(Arc::new(Provider(Arc::new(Backend::default()))), restored)
                 .await

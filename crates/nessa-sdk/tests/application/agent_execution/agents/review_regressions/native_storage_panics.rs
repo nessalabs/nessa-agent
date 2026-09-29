@@ -58,6 +58,9 @@ async fn native_steering_storage_panic_keeps_receipt_evidence_and_cleanup_barrie
                 stage,
                 fired: Arc::new(AtomicBool::new(false)),
             }),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
         )
         .await
         .unwrap();

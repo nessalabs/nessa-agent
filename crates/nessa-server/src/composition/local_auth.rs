@@ -16,7 +16,7 @@ use crate::product::generated::{
 };
 #[cfg(unix)]
 use crate::{
-    agent_warm_up::application::AgentWarmUp,
+    agent_warm_up::application::{AgentWarmUp, WarmUpSessionPorts},
     agent_warm_up::{
         domain::RuntimeFingerprint,
         infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
@@ -456,7 +456,12 @@ async fn conversations(
             // A throwaway context: the warm-up must not leave a snapshot on
             // disk and must not take an exclusive lease on a conversation a
             // user owns.
-            Arc::new(InMemoryStorage::new()),
+            WarmUpSessionPorts {
+                storage: Arc::new(InMemoryStorage::new()),
+                message_commit_clock: Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
+            },
             records.clone(),
             warm_up_audit.clone(),
             clock.clone(),
@@ -544,6 +549,9 @@ async fn conversations(
             listing: metadata,
             provider_sessions: erasers,
             deletion_budgets: super::agent_budgets::deletion(),
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
             clock,
         },
         ConversationLimits::default(),

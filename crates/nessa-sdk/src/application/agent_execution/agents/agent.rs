@@ -34,7 +34,8 @@ use crate::application::agent_execution::providers::{
     ProviderOperationResult, ProviderSessionState, SessionCloseRequest,
 };
 use crate::application::agent_execution::sessions::{
-    AttachmentOpenFailureSource, ProviderContext, SessionManager, StorageError,
+    AttachmentOpenFailureSource, InvocationCancellationEvent, ProviderContext, SessionManager,
+    StorageError,
 };
 use crate::domain::{
     agent_execution::executions::ExecutionOutcome,
@@ -43,10 +44,41 @@ use crate::domain::{
 use std::{
     future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
+    pin::Pin,
     sync::{Arc, RwLock},
     task::Poll,
 };
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, watch, Mutex};
+
+// All observation and timer saves use this same supervisor-owned wait. Evidence
+// remains locked by the manager's one save future while ingress is paused.
+async fn await_supervised_save<Save, Execution, Failure>(
+    save: Save,
+    mut execution: Pin<&mut Execution>,
+    stop_notice: &mut watch::Receiver<Option<InvocationCancellationEvent>>,
+    stop_observed: &mut bool,
+    pending_provider_outcome: &mut Option<(
+        ProviderExecutionReply,
+        Option<InvocationCancellationEvent>,
+    )>,
+    result_known: bool,
+) -> Result<(), Failure>
+where
+    Save: Future<Output = Result<(), Failure>>,
+    Execution: Future<Output = (ProviderExecutionReply, Option<InvocationCancellationEvent>)>,
+{
+    tokio::pin!(save);
+    loop {
+        tokio::select! {
+            biased;
+            _ = stop_notice.changed(), if !*stop_observed => *stop_observed = true,
+            outcome = &mut execution, if !result_known && pending_provider_outcome.is_none() => {
+                *pending_provider_outcome = Some(outcome);
+            }
+            saved = &mut save => return saved,
+        }
+    }
+}
 
 /// One agent conversation. Clones share its provider context, hooks, and storage.
 /// Configure the provider and manager once; all runtime controls go through Agent.
@@ -144,7 +176,7 @@ impl Agent {
     ///     estimated_input_tokens: 8, // Host estimate, including retained context.
     ///     reserved_output_tokens: 128,
     /// };
-    /// let manager = SessionManager::open(None, storage).await?;
+    /// let manager = SessionManager::open(None, storage, Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new())).await?;
     /// let agent = Agent::prepare(provider, manager, audit).await?;
     /// let authorization = agent.authorize_attachment(AttachmentRequest::CallerRequested(actor.clone()))?;
     /// agent.start_attachment(authorization)?.wait().await?;
@@ -837,10 +869,23 @@ impl Agent {
             let _active =
                 match ActiveInvocation::new(&self.inner.lifecycle, input.execution_id.clone()) {
                     Ok(active) => active,
-                    Err(error) => return ProviderExecutionReply::Rejected(error),
+                    Err(error) => {
+                        return (ProviderExecutionReply::Rejected(error), work.cancellation());
+                    }
                 };
             work.mark_execution_started();
-            attached.session.execute(input.clone()).await
+            let outcome = attached.session.execute(input.clone()).await;
+            // Capture the existing stop authority with the reply. A later Stop
+            // cannot retroactively authorize an earlier cancellation report.
+            let cancellation_at_reply = work.cancellation();
+            // Session usability is a live lifecycle fact. Apply it before this
+            // future exposes the reply, even when an observation save is stalled.
+            if let ProviderExecutionReply::Finished(report) = &outcome {
+                self.inner
+                    .lifecycle
+                    .record_provider_state(work, report.session_state());
+            }
+            (outcome, cancellation_at_reply)
         });
         let mut stop_observed = false;
         let mut result = None;
@@ -852,10 +897,119 @@ impl Agent {
         let mut storage_failure = None;
         let mut observation_failure = None;
         let mut stop_after_ready_settlement = false;
+        let mut pending_provider_outcome = None;
+        let mut pending_save_failure: Option<StorageError> = None;
         loop {
+            if let Some(error) = pending_save_failure.take() {
+                storage_failure.get_or_insert(error.clone());
+                // Fence admission and start cleanup before a captured report can
+                // require another save. The reply remains pending below.
+                let cleanup = self
+                    .shutdown_after_failure(SessionCloseRequest::ExecutionFailed)
+                    .await;
+                if let Err(cleanup_error) = cleanup.clone().into_result() {
+                    stop_after_ready_settlement = !cleanup.is_confirmed();
+                    observation_failure = Some(cleanup_error);
+                }
+                if !cleanup.is_confirmed() && result.is_none() && pending_provider_outcome.is_none()
+                {
+                    // An unconfirmed cleanup cannot promise eventual settlement.
+                    // Preserve a reply only if it is already ready.
+                    tokio::select! {
+                        biased;
+                        outcome = &mut execution => pending_provider_outcome = Some(outcome),
+                        _ = async {} => result = Some(Err(AgentError::Storage(error))),
+                    }
+                }
+                if !cleanup.is_confirmed() {
+                    ended = true;
+                }
+                continue;
+            }
+            if let Some((outcome, cancellation_at_reply)) = pending_provider_outcome.take() {
+                let mut cleanup_failure = None;
+                admission_rejected = matches!(&outcome, ProviderExecutionReply::Rejected(_));
+                if let ProviderExecutionReply::Finished(settlement) = &outcome {
+                    let cancellation = (settlement.source()
+                        == ExecutionReportSource::LocalCancellation)
+                        .then_some(cancellation_at_reply)
+                        .flatten();
+                    if settlement.source() == ExecutionReportSource::LocalCancellation
+                        && cancellation.is_none()
+                    {
+                        let error = AgentError::Protocol(
+                            "local cancellation report has no invocation stop".into(),
+                        );
+                        let (failure, _) = self
+                            .stop_after_observation_failure(
+                                error.clone(),
+                                ObservationFailureCause::ExecutionFailed,
+                            )
+                            .await;
+                        observation_failure = Some(failure);
+                        result = Some(Err(error));
+                        ended = true;
+                        continue;
+                    }
+                    provider_result = settlement.provider_result().cloned();
+                    if let ProviderSessionState::CleanupReported(cleanup) =
+                        settlement.session_state()
+                    {
+                        stop_after_ready_settlement |= !cleanup.is_confirmed();
+                    }
+                    if let Err(error) = self
+                        .inner
+                        .manager
+                        .record_provider_report(index, settlement.clone(), cancellation)
+                        .await
+                    {
+                        storage_failure.get_or_insert(error);
+                    }
+                    if matches!(
+                        settlement.session_state(),
+                        ProviderSessionState::CleanupRequired
+                    ) {
+                        let cleanup = self
+                            .shutdown_after_failure(SessionCloseRequest::ExecutionFailed)
+                            .await;
+                        stop_after_ready_settlement = !cleanup.is_confirmed();
+                        cleanup_failure = cleanup.into_result().err();
+                    }
+                }
+                let settled = outcome.into_result();
+                result = Some(match cleanup_failure {
+                    Some(error) => Err(AgentError::ExecutionObservation {
+                        error: Box::new(error),
+                        execution_result: Some(Box::new(settled)),
+                    }),
+                    None => settled,
+                });
+            }
+            if admission_rejected && observed_current_execution && observation_failure.is_none() {
+                // A rejected attempt cannot own observations. Keep its accepted
+                // prefix, then stop immediately rather than draining an unbounded
+                // ready stream from a provider that already violated the contract.
+                self.inner.manager.reject_dispatch(&input.execution_id);
+                let error = AgentError::Protocol(
+                    "provider rejected admission after emitting execution observations".into(),
+                );
+                let (failure, _) = self
+                    .stop_after_observation_failure(error, ObservationFailureCause::ExecutionFailed)
+                    .await;
+                observation_failure = Some(failure);
+            }
+            if admission_rejected && (storage_failure.is_some() || observation_failure.is_some()) {
+                // Invalid foreign observations already ran cleanup in the shared
+                // event path too. Do not poll another ready item after that failure.
+                ended = true;
+            }
             if result.is_some() && ended {
                 break;
             }
+            // A storage save may hold evidence while the provider settles or
+            // Stop arrives. Reacquire that lock as one select branch instead of
+            // blocking the entire invocation supervisor before the select.
+            let message_deadline = self.inner.manager.try_pending_message_deadline();
             tokio::select! {
                 biased;
                 _ = stop_notice.changed(), if !stop_observed => {
@@ -868,47 +1022,33 @@ impl Agent {
                     // settlement and cancellation evidence while close cleans up.
                 }
                 outcome = &mut execution, if result.is_none() => {
-                    let mut cleanup_failure = None;
-                    admission_rejected = matches!(&outcome, ProviderExecutionReply::Rejected(_));
-                    if let ProviderExecutionReply::Finished(settlement) = &outcome {
-                        // Read the admitted owner's first stop before adapter cleanup can
-                        // stop work itself. A report cannot authorize its own cancellation.
-                        let cancellation = (settlement.source() == ExecutionReportSource::LocalCancellation)
-                            .then(|| work.cancellation()).flatten();
-                        if settlement.source() == ExecutionReportSource::LocalCancellation && cancellation.is_none() {
-                            self.inner.lifecycle.record_provider_state(work, settlement.session_state());
-                            let error = AgentError::Protocol("local cancellation report has no invocation stop".into());
-                            let (failure, _) = self.stop_after_observation_failure(error.clone(), ObservationFailureCause::ExecutionFailed).await;
-                            observation_failure = Some(failure);
-                            result = Some(Err(error));
-                            ended = true;
-                            continue;
-                        }
-                        self.inner.lifecycle.record_provider_state(work, settlement.session_state());
-                        provider_result = settlement.provider_result().cloned();
-                        if let ProviderSessionState::CleanupReported(cleanup) = settlement.session_state() {
-                            stop_after_ready_settlement |= !cleanup.is_confirmed();
-                        }
-                        if let Err(error) = self.inner.manager.record_provider_report(index, settlement.clone(), cancellation).await { storage_failure.get_or_insert(error); }
-                        if matches!(settlement.session_state(), ProviderSessionState::CleanupRequired) {
-                            let cleanup = self.shutdown_after_failure(SessionCloseRequest::ExecutionFailed).await;
-                            stop_after_ready_settlement = !cleanup.is_confirmed();
-                            cleanup_failure = cleanup.into_result().err();
-                        }
-                    }
-                    let settled = outcome.into_result();
-                    result = Some(match cleanup_failure {
-                        Some(error) => Err(AgentError::ExecutionObservation {
-                            error: Box::new(error),
-                            execution_result: Some(Box::new(settled)),
-                        }),
-                        None => settled,
-                    });
+                    pending_provider_outcome = Some(outcome);
                 }
                 // Unconfirmed cleanup cannot promise a finite observation stream.
                 // Capture an already-ready execution reply above, then stop before
                 // another ready chunk can delay settlement or an explicit close.
                 _ = async {}, if stop_after_ready_settlement => break,
+                _ = self.inner.manager.await_admission_writes(), if message_deadline.is_none() => {},
+                () = async {
+                    if let Some(Some((_, deadline))) = message_deadline {
+                        self.inner.manager.wait_for_message_deadline(deadline).await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                }, if storage_failure.is_none() => {
+                    if let Some(Some((generation, _))) = message_deadline {
+                        if let Err(error) = await_supervised_save(
+                            self.inner.manager.flush_due_messages(generation),
+                            execution.as_mut(),
+                            &mut stop_notice,
+                            &mut stop_observed,
+                            &mut pending_provider_outcome,
+                            result.is_some(),
+                        ).await {
+                            pending_save_failure = Some(error);
+                        }
+                    }
+                }
                 next = events.next(), if !ended => {
                     match next {
                         Ok(Some(event)) => {
@@ -943,24 +1083,31 @@ impl Agent {
                                     terminal = Some(*outcome);
                                 }
                             }
-                            if let Err(error) = self.inner.manager.validate_event_retention(&event).await {
+                            if let Err(error) = await_supervised_save(
+                                self.inner.manager.validate_event_retention(&event),
+                                execution.as_mut(),
+                                &mut stop_notice,
+                                &mut stop_observed,
+                                &mut pending_provider_outcome,
+                                result.is_some(),
+                            ).await {
                                 let (failure, confirmed) = self.stop_after_observation_failure(error, ObservationFailureCause::ExecutionFailed).await;
                                 observation_failure = Some(failure);
                                 ended = true;
                                 stop_after_ready_settlement = !confirmed;
                                 continue;
                             }
-                            match self.inner.manager.event(event.clone()).await {
+                            match await_supervised_save(
+                                self.inner.manager.event(event.clone()),
+                                execution.as_mut(),
+                                &mut stop_notice,
+                                &mut stop_observed,
+                                &mut pending_provider_outcome,
+                                result.is_some(),
+                            ).await {
                                 Ok(()) => { let _ = self.inner.updates.send(event); }
                                 Err(error) => {
-                                    storage_failure.get_or_insert(error);
-                                    // Cleanup must still run even when saving observations fails.
-                                    let cleanup = self.shutdown_after_failure(SessionCloseRequest::ExecutionFailed).await;
-                                    if let Err(error) = cleanup.clone().into_result() {
-                                        stop_after_ready_settlement = !cleanup.is_confirmed();
-                                        observation_failure = Some(error);
-                                        ended = true;
-                                    }
+                                    pending_save_failure = Some(error);
                                 }
                             }
                         }
@@ -980,25 +1127,7 @@ impl Agent {
                 // Drain observations already available at settlement, including a
                 // second terminal event. A conforming stream may remain open for
                 // the next invocation, so do not await future observations here.
-                _ = async {}, if admission_rejected || (result.is_some() && terminal.is_some()) => break,
-            }
-            if admission_rejected && observed_current_execution && observation_failure.is_none() {
-                // A rejected attempt cannot own observations. Keep its accepted
-                // prefix, then stop immediately rather than draining an unbounded
-                // ready stream from a provider that already violated the contract.
-                self.inner.manager.reject_dispatch(&input.execution_id);
-                let error = AgentError::Protocol(
-                    "provider rejected admission after emitting execution observations".into(),
-                );
-                let (failure, _) = self
-                    .stop_after_observation_failure(error, ObservationFailureCause::ExecutionFailed)
-                    .await;
-                observation_failure = Some(failure);
-            }
-            if admission_rejected && (storage_failure.is_some() || observation_failure.is_some()) {
-                // Invalid foreign observations already ran cleanup in the shared
-                // event path too. Do not poll another ready item after that failure.
-                ended = true;
+                _ = async {}, if admission_rejected || (result.is_some() && (terminal.is_some() || storage_failure.is_some())) => break,
             }
         }
         self.inner.manager.retire_observations(&input.execution_id);

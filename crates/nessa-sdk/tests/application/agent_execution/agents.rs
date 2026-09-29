@@ -177,6 +177,9 @@ impl MemoryStorage {
         SessionManager::open(
             Some(SessionId::new("conversation").unwrap()),
             Arc::new(self.clone()),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
         )
         .await
         .unwrap()
@@ -220,8 +223,11 @@ struct TestBackend {
     calls: Arc<ProviderCalls>,
     sender: Mutex<Option<mpsc::UnboundedSender<ExecutionEvent>>>,
     closing: watch::Sender<bool>,
+    settled: Option<watch::Sender<bool>>,
     wait_for_close: bool,
     outcome: Result<ExecutionOutcome, AgentError>,
+    outcome_after_close: Option<Result<ExecutionOutcome, AgentError>>,
+    yield_after_close: Mutex<bool>,
 }
 struct TestEvents(mpsc::UnboundedReceiver<ExecutionEvent>);
 impl ExecutionEventStream for TestEvents {
@@ -251,8 +257,11 @@ impl AgentProvider for TestProvider {
                         calls: self.calls.clone(),
                         sender: Mutex::new(Some(sender)),
                         closing,
+                        settled: None,
                         wait_for_close: self.wait_for_close,
                         outcome: self.outcome.clone(),
+                        outcome_after_close: None,
+                        yield_after_close: Mutex::new(false),
                     }),
                     capabilities(),
                 ),
@@ -290,7 +299,12 @@ impl ProviderSessionBackend for TestBackend {
                         while !*closing.borrow() {
                             closing.changed().await.map_err(|_| AgentError::Closed)?;
                         }
-                        Ok(ExecutionOutcome::Cancelled)
+                        if *self.yield_after_close.lock().unwrap() {
+                            tokio::task::yield_now().await;
+                        }
+                        self.outcome_after_close
+                            .clone()
+                            .unwrap_or(Ok(ExecutionOutcome::Cancelled))
                     } else {
                         self.outcome.clone()
                     };
@@ -308,6 +322,9 @@ impl ProviderSessionBackend for TestBackend {
                 }
             }
             .await;
+            if let Some(settled) = &self.settled {
+                settled.send_replace(true);
+            }
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(result),
                 None,
@@ -456,7 +473,10 @@ async fn lease_and_provider_mismatch_fail_before_opening_another_context() {
     assert!(matches!(
         SessionManager::open(
             Some(SessionId::new("conversation").unwrap()),
-            Arc::new(storage.clone())
+            Arc::new(storage.clone()),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()
+            )
         )
         .await,
         Err(StorageError::Busy)
@@ -724,7 +744,10 @@ async fn unattached_manager_holds_lease_until_drop_without_writing() {
     assert!(matches!(
         SessionManager::open(
             Some(SessionId::new("conversation").unwrap()),
-            Arc::new(storage.clone())
+            Arc::new(storage.clone()),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()
+            )
         )
         .await,
         Err(StorageError::Busy)

@@ -203,9 +203,15 @@ impl SessionStorageLease for PanicOnSettlementLease {
 #[tokio::test]
 async fn settlement_storage_panic_preserves_already_observed_provider_success() {
     let storage = MemoryStorage::default();
-    let manager = SessionManager::open(None, Arc::new(PanicOnSettlementStorage(storage.clone())))
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        None,
+        Arc::new(PanicOnSettlementStorage(storage.clone())),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(TestProvider::new(), manager).await.unwrap();
     let result = agent.invoke(input("settlement-panic"), actor()).await;
     assert!(

@@ -52,6 +52,64 @@ async fn local_cancellation_requires_owned_stop_and_preserves_explicit_closer() 
 }
 
 #[tokio::test]
+async fn stop_after_unowned_report_during_timer_save_cannot_authorize_it() {
+    let (agent, backend, storage) = workflow().await;
+    *backend.execution_report.lock().unwrap() = Some(ExecutionReport::cancelled_locally(
+        CleanupReport::confirmed(CloseOutcome { forced: false }),
+    ));
+    let (release_report, report_gate) = oneshot::channel();
+    *backend.execution_gate.lock().unwrap() = Some(report_gate);
+    let execution_id = ExecutionId::new("report-before-stop").unwrap();
+    let mut updates = agent.subscribe();
+    let running = Mode::Direct.start(agent.clone(), request(execution_id.as_str()));
+    bounded(backend.dispatched.notified()).await;
+    backend
+        .output
+        .lock()
+        .unwrap()
+        .send(Some(ExecutionEvent::new(
+            execution_id,
+            ExecutionUpdate::Message(MessageChunk::text("one pending chunk")),
+        )))
+        .unwrap();
+    bounded(updates.next()).await.unwrap().unwrap();
+    let (saving, release_save) = storage.pause_next_save();
+    bounded(saving).await.unwrap();
+    release_report.send(()).unwrap();
+    let mut report_polled = backend.report_polled.subscribe();
+    bounded(report_polled.wait_for(|polled| *polled))
+        .await
+        .unwrap();
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
+    let close = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close(actor()).await }
+    });
+    release_save.send(()).unwrap();
+    let result = bounded(running).await.unwrap();
+    let Err(AgentError::ExecutionObservation {
+        execution_result: Some(projected),
+        ..
+    }) = &result
+    else {
+        panic!("{result:?}");
+    };
+    assert!(matches!(projected.as_ref(), Err(AgentError::Protocol(_))));
+    let saved = storage.snapshot();
+    let record = &saved.invocations[0];
+    assert_eq!(record.result, Some(result));
+    assert!(record.provider_report.is_none());
+    assert!(record.local_outcome.is_none());
+    assert!(record.local_cancellation.is_none());
+    assert!(!backend
+        .shutdowns
+        .lock()
+        .unwrap()
+        .contains(&SessionCloseRequest::Explicit(actor())));
+    let _ = bounded(close).await;
+}
+
+#[tokio::test]
 async fn unowned_local_cancellation_never_hides_cleanup_or_audit_failure() {
     for mode in Mode::ALL {
         for confirmed in [false, true] {

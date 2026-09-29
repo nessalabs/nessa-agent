@@ -136,9 +136,15 @@ impl AgentProvider for TestProvider {
     }
 }
 pub(super) async fn provider_agent(backend: Arc<dyn ProviderSessionBackend>) -> Agent {
-    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     attached_agent(Arc::new(TestProvider(backend)), manager)
         .await
         .unwrap()
@@ -186,6 +192,14 @@ pub(super) async fn provider_agent_with_review(
         .await
         .unwrap();
     drop(lease);
-    let manager = SessionManager::open(Some(id), storage).await.unwrap();
+    let manager = SessionManager::open(
+        Some(id),
+        storage,
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     attached_agent(provider, manager).await.unwrap()
 }

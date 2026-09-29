@@ -848,9 +848,15 @@ async fn agent_startup_preserves_configuration_and_audit_failures_after_cleanup(
                 .unwrap();
         let storage = Arc::new(InMemoryStorage::new());
         let id = SessionId::new("startup-audit").unwrap();
-        let manager = SessionManager::open(Some(id.clone()), storage.clone())
-            .await
-            .unwrap();
+        let manager = SessionManager::open(
+            Some(id.clone()),
+            storage.clone(),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap();
         let error = timeout(
             Duration::from_secs(3),
             clock.passing(grace, attached_agent(Arc::new(binding), manager)),
@@ -868,7 +874,17 @@ async fn agent_startup_preserves_configuration_and_audit_failures_after_cleanup(
                 cleanup_error: Box::new(AgentError::AuditFailure),
             }
         );
-        drop(SessionManager::open(Some(id), storage).await.unwrap());
+        drop(
+            SessionManager::open(
+                Some(id),
+                storage,
+                std::sync::Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
+            )
+            .await
+            .unwrap(),
+        );
         assert_gone(&root, "pid");
     }
 }
@@ -929,9 +945,15 @@ async fn close_during_fresh_configuration_retains_the_explicit_actor() {
     let (root, binding) = test_acp_binding_with_audit("configuration-stall", 16, audit.clone());
     let storage = Arc::new(InMemoryStorage::new());
     let id = SessionId::new("fresh-configuration").unwrap();
-    let manager = SessionManager::open(Some(id.clone()), storage.clone())
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        Some(id.clone()),
+        storage.clone(),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = Agent::prepare(Arc::new(binding), manager, audit.clone())
         .await
         .unwrap();
@@ -965,7 +987,17 @@ async fn close_during_fresh_configuration_retains_the_explicit_actor() {
     }
     assert_gone(&root, "pid");
     drop(agent);
-    drop(SessionManager::open(Some(id), storage).await.unwrap());
+    drop(
+        SessionManager::open(
+            Some(id),
+            storage,
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
+    );
 }
 
 #[tokio::test]
@@ -976,9 +1008,15 @@ async fn close_during_restored_configuration_retains_the_explicit_actor() {
         test_acp_binding_with_audit("configuration-stall-on-resume", 16, audit.clone());
     let storage = Arc::new(InMemoryStorage::new());
     let id = SessionId::new("restore-configuration").unwrap();
-    let manager = SessionManager::open(Some(id.clone()), storage.clone())
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        Some(id.clone()),
+        storage.clone(),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(Arc::new(binding), manager).await.unwrap();
     let provider_id = agent
         .session_manager()
@@ -1016,7 +1054,17 @@ async fn close_during_restored_configuration_retains_the_explicit_actor() {
     }
     assert!(audit.finishes.lock().unwrap().is_empty());
     drop(agent);
-    drop(SessionManager::open(Some(id), storage).await.unwrap());
+    drop(
+        SessionManager::open(
+            Some(id),
+            storage,
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
+    );
     assert_gone(&root, "pid");
 }
 
@@ -1045,7 +1093,15 @@ async fn close_during_configuration_retains_provider_closure_audit_failure() {
             )
             .unwrap();
             let storage = Arc::new(InMemoryStorage::new());
-            let manager = SessionManager::open(None, storage).await.unwrap();
+            let manager = SessionManager::open(
+                None,
+                storage,
+                std::sync::Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
+            )
+            .await
+            .unwrap();
             let agent = Agent::prepare(Arc::new(binding), manager, audit.clone())
                 .await
                 .unwrap();
@@ -1102,9 +1158,15 @@ async fn sdk_close_retries_unconfirmed_configuration_cleanup_without_losing_audi
     )
     .unwrap()
     .with_process_factory(process);
-    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = Agent::prepare(Arc::new(binding), manager, audit.clone())
         .await
         .unwrap();

@@ -483,6 +483,9 @@ async fn cancelled_prepare_wait_reopens_without_provider_work() {
             match SessionManager::open(
                 Some(SessionId::new("conversation").unwrap()),
                 Arc::new(storage.clone()),
+                std::sync::Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
             )
             .await
             {
@@ -765,6 +768,9 @@ async fn records_restore_queue_changes_published_during_gated_open() {
     let manager = SessionManager::open(
         Some(SessionId::new("gated-open-journal").unwrap()),
         storage.clone(),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
     )
     .await
     .unwrap();
@@ -823,9 +829,15 @@ async fn records_restore_queue_changes_published_during_gated_open() {
     let executions_before_retry = provider.inner.calls.executions.load(Ordering::SeqCst);
     let restored = Agent::prepare(
         provider.clone(),
-        SessionManager::open(Some(SessionId::new("gated-open-journal").unwrap()), storage)
-            .await
-            .unwrap(),
+        SessionManager::open(
+            Some(SessionId::new("gated-open-journal").unwrap()),
+            storage,
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
         Arc::new(AcceptingAudit),
     )
     .await
@@ -862,9 +874,15 @@ async fn child_process_recovers_original_receipt_without_dispatching_again() {
     let provider = TestProvider::new();
     let agent = attached_agent(
         provider.clone(),
-        SessionManager::open(Some(id), storage.clone())
-            .await
-            .unwrap(),
+        SessionManager::open(
+            Some(id),
+            storage.clone(),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
     )
     .await
     .unwrap();
@@ -910,9 +928,15 @@ async fn child_record_receipt_probe() {
     let provider = TestProvider::new();
     let agent = attached_agent(
         provider.clone(),
-        SessionManager::open(Some(id), storage.clone())
-            .await
-            .unwrap(),
+        SessionManager::open(
+            Some(id),
+            storage.clone(),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
     )
     .await
     .unwrap();
@@ -1599,6 +1623,9 @@ async fn provider_context_save_panics_fail_durably_and_cleanup_provider() {
         let manager = SessionManager::open(
             Some(SessionId::new("panic-save-conversation").unwrap()),
             storage,
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
         )
         .await
         .unwrap();

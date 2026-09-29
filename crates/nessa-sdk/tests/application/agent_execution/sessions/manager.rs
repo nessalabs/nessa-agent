@@ -2,16 +2,27 @@
 use super::*;
 use crate::application::agent_execution::{
     providers::{ProviderIdentity, ProviderSessionState},
-    sessions::{validation::VALIDATION_CALLS, StorageFuture},
+    sessions::{validation::VALIDATION_CALLS, MessageCommitSleep, StorageFuture},
 };
 use crate::domain::agent_execution::{
-    executions::MessageChunk,
+    executions::{InvocationKind, InvocationStage, MessageChunk},
     prompts::{PromptText, UserMessage},
     sessions::ExecutionSessionId,
 };
 use crate::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Barrier, Semaphore};
+
+struct FixedMessageClock(std::sync::Mutex<std::time::Duration>);
+impl MessageCommitClock for FixedMessageClock {
+    fn now(&self) -> std::time::Duration {
+        *self.0.lock().unwrap()
+    }
+
+    fn sleep_until(&self, _: std::time::Duration) -> MessageCommitSleep {
+        Box::pin(std::future::pending())
+    }
+}
 
 struct PauseAfterSave {
     inner: Arc<dyn SessionStorageLease>,
@@ -66,7 +77,7 @@ impl SessionStorageLease for PauseAfterSave {
 }
 
 #[tokio::test]
-async fn cancelled_save_wait_retries_the_same_generation_without_duplicate_records() {
+async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
     let id = SessionId::new("cancelled-save").unwrap();
@@ -108,18 +119,29 @@ async fn cancelled_save_wait_retries_the_same_generation_without_duplicate_recor
         started: Barrier::new(2),
         release: Semaphore::new(0),
     });
+    let pending_generation = SessionSaveGeneration::initial()
+        .checked_next()
+        .unwrap()
+        .checked_next()
+        .unwrap();
     let manager = Arc::new(SessionManager {
         id,
+        message_commit_clock: Arc::new(
+            crate::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
         storage_lease: lease.clone(),
         evidence: Arc::new(Mutex::new(Evidence {
-            save_generation: SessionSaveGeneration::initial()
-                .checked_next()
-                .unwrap()
-                .checked_next()
-                .unwrap(),
+            save_generation: pending_generation,
             observed: Some(observed.clone()),
             committed: Some(initial),
             pending: vec![first],
+            message_commit: Some(PendingMessageCommit {
+                generation: pending_generation,
+                deadline: std::time::Duration::ZERO,
+                bytes: 1,
+                retained_bytes: 1,
+                count: 1,
+            }),
             ..Evidence::default()
         })),
         dispatched: RwLock::new(HashMap::new()),
@@ -127,8 +149,17 @@ async fn cancelled_save_wait_retries_the_same_generation_without_duplicate_recor
     });
     manager.begin_dispatch(&active_id);
     let waiting = manager.clone();
-    let caller = tokio::spawn(async move { waiting.flush_observed().await });
+    let caller = tokio::spawn(async move { waiting.flush_due_messages(pending_generation).await });
     lease.started.wait().await;
+    let committed_rows: i64 =
+        rusqlite::Connection::open(directory.path().join("sessions/records.sqlite3"))
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM event_records", [], |row| row.get(0))
+            .unwrap();
+    assert_eq!(
+        committed_rows, 3,
+        "record is visible before save acknowledgement"
+    );
     caller.abort();
     assert!(caller.await.unwrap_err().is_cancelled());
     let evidence = tokio::time::timeout(std::time::Duration::from_secs(3), manager.evidence.lock())
@@ -136,8 +167,15 @@ async fn cancelled_save_wait_retries_the_same_generation_without_duplicate_recor
         .expect("cancellation releases manager evidence");
     assert_eq!(evidence.pending.len(), 1);
     assert_ne!(evidence.committed.as_ref(), Some(&observed));
+    assert_eq!(
+        evidence.message_commit.map(|pending| pending.generation),
+        Some(pending_generation)
+    );
     drop(evidence);
-    manager.flush_observed().await.unwrap();
+    manager
+        .flush_due_messages(pending_generation)
+        .await
+        .unwrap();
     assert_eq!(lease.load().await.unwrap(), Some(observed));
     manager.event(text(&active_id)).await.unwrap();
     manager.flush_observed().await.unwrap();
@@ -157,6 +195,101 @@ async fn cancelled_save_wait_retries_the_same_generation_without_duplicate_recor
     );
     drop(manager);
     drop(lease);
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "run explicitly to measure the local SQLite streaming commit cadence"]
+async fn measure_growing_history_message_commit_latency() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+    let id = SessionId::new("cadence-measurement").unwrap();
+    let inner = storage.open(id.clone()).await.unwrap();
+    let opened = SessionChange::Opened {
+        id: id.clone(),
+        provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
+        context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+    };
+    let initial = super::super::records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
+    inner
+        .save_changes(
+            SessionSaveGeneration::initial(),
+            initial.clone(),
+            vec![opened],
+        )
+        .await
+        .unwrap();
+    let active = invocation("active", false);
+    let active_id = active.request.execution_id.clone();
+    let input = SessionChange::InputAccepted(Box::new(active));
+    let initial =
+        super::super::records::fold_changes(Some(&initial), std::slice::from_ref(&input)).unwrap();
+    inner
+        .save_changes(
+            SessionSaveGeneration::initial().checked_next().unwrap(),
+            initial.clone(),
+            vec![input],
+        )
+        .await
+        .unwrap();
+    let clock = Arc::new(crate::infrastructure::session_storage::RuntimeMessageCommitClock::new());
+    let manager = SessionManager {
+        id,
+        message_commit_clock: clock,
+        storage_lease: Arc::from(inner),
+        evidence: Arc::new(Mutex::new(Evidence {
+            save_generation: SessionSaveGeneration::initial()
+                .checked_next()
+                .unwrap()
+                .checked_next()
+                .unwrap(),
+            observed: Some(initial.clone()),
+            committed: Some(initial),
+            ..Evidence::default()
+        })),
+        dispatched: RwLock::new(HashMap::new()),
+        attachment: Arc::new(AttachmentLease::empty()),
+    };
+    manager.begin_dispatch(&active_id);
+    let mut latencies = Vec::new();
+    let mut write_durations = Vec::new();
+    let measurement_start = std::time::Instant::now();
+    for index in 0..64 {
+        let observed_at = std::time::Instant::now();
+        manager.event(text(&active_id)).await.unwrap();
+        let (generation, deadline) = manager.pending_message_deadline().await.unwrap();
+        manager.wait_for_message_deadline(deadline).await;
+        let writing_at = std::time::Instant::now();
+        manager.flush_due_messages(generation).await.unwrap();
+        write_durations.push(writing_at.elapsed());
+        latencies.push(observed_at.elapsed());
+        assert_eq!(
+            manager.snapshot().await.unwrap().invocations[0]
+                .events
+                .len(),
+            index + 1
+        );
+    }
+    let elapsed = measurement_start.elapsed().as_secs_f64();
+    latencies.sort_unstable();
+    let percentile = |value: f64| {
+        latencies[((latencies.len() - 1) as f64 * value).ceil() as usize].as_secs_f64() * 1000.0
+    };
+    let writing_seconds: f64 = write_durations
+        .iter()
+        .map(std::time::Duration::as_secs_f64)
+        .sum();
+    eprintln!(
+        "sqlite_streaming_commit samples={} p50_ms={:.2} p95_ms={:.2} p99_ms={:.2} cadence_records_per_second={:.2} write_records_per_second={:.2} elapsed_seconds={:.2}",
+        latencies.len(),
+        percentile(0.50),
+        percentile(0.95),
+        percentile(0.99),
+        latencies.len() as f64 / elapsed,
+        write_durations.len() as f64 / writing_seconds,
+        elapsed
+    );
+    drop(manager);
     storage.shutdown().await.unwrap();
 }
 
@@ -220,6 +353,9 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
     assert_eq!(inner.load().await.unwrap(), Some(initial.clone()));
     let lease: Arc<dyn SessionStorageLease> = Arc::from(inner);
     let manager = SessionManager {
+        message_commit_clock: Arc::new(
+            crate::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
         id: id.clone(),
         storage_lease: lease.clone(),
         evidence: Arc::new(Mutex::new(Evidence {
@@ -417,6 +553,9 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
     lease.save(snapshot.clone()).await.unwrap();
     let manager = SessionManager {
         id,
+        message_commit_clock: Arc::new(
+            crate::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
         storage_lease: lease.clone(),
         evidence: Arc::new(Mutex::new(Evidence {
             observed: Some(snapshot.clone()),
@@ -464,7 +603,7 @@ async fn failed_observation_save_retries_the_same_decisions_in_order() {
 #[tokio::test]
 async fn proactive_message_flush_failure_keeps_the_exact_pending_generation() {
     let (manager, lease, active) = manager(0).await;
-    let chunk = "\0".repeat(ExecutionEvent::MAX_MESSAGE_CHUNK_BYTES);
+    let chunk = "\0".repeat(8 * 1024);
     let output = || {
         ExecutionEvent::new(
             active.clone(),
@@ -491,10 +630,79 @@ async fn many_tiny_messages_flush_on_metadata_count() {
     }
     {
         let saves = lease.changes.lock().unwrap();
-        assert_eq!(saves.len(), 1);
-        assert_eq!(saves[0].len(), 1024);
+        assert_eq!(saves.len(), 16);
+        assert!(saves.iter().all(|changes| changes.len() == 64));
     }
     assert_eq!(manager.evidence.lock().await.pending.len(), 0);
+}
+
+#[tokio::test]
+async fn queued_admission_resets_consumed_message_cadence() {
+    let (mut manager, lease, active) = manager(0).await;
+    let clock = Arc::new(FixedMessageClock(std::sync::Mutex::new(
+        std::time::Duration::ZERO,
+    )));
+    manager.message_commit_clock = clock.clone();
+    manager.event(text(&active)).await.unwrap();
+    let (old_generation, old_deadline) = manager.pending_message_deadline().await.unwrap();
+    assert_eq!(old_deadline, MESSAGE_COMMIT_DELAY);
+
+    *clock.0.lock().unwrap() = std::time::Duration::from_millis(40);
+    let request = invocation("queued", false).request;
+    let actor = ActionContext::new("user", "test", "queue").unwrap();
+    manager
+        .begin_with_scheduling(
+            request,
+            actor.clone(),
+            InvocationSchedulingEvent {
+                kind: InvocationKind::Queued,
+                target: None,
+                before: None,
+                stage: InvocationStage::Queued,
+                cause: SchedulingCause::Submitted,
+                actor: Some(actor),
+            },
+            SubmissionMode::Queued,
+        )
+        .await
+        .unwrap();
+    assert!(manager.pending_message_deadline().await.is_none());
+    assert_eq!(lease.changes.lock().unwrap().len(), 1);
+
+    manager.event(text(&active)).await.unwrap();
+    let (new_generation, new_deadline) = manager.pending_message_deadline().await.unwrap();
+    assert_ne!(new_generation, old_generation);
+    assert_eq!(new_deadline, std::time::Duration::from_millis(140));
+    {
+        let evidence = manager.evidence.lock().await;
+        assert_eq!(evidence.message_commit.unwrap().count, 1);
+        assert_eq!(evidence.pending.len(), 1);
+    }
+    *clock.0.lock().unwrap() = old_deadline;
+    manager.flush_due_messages(old_generation).await.unwrap();
+    manager.flush_due_messages(new_generation).await.unwrap();
+    assert_eq!(lease.changes.lock().unwrap().len(), 1);
+    *clock.0.lock().unwrap() = new_deadline;
+    manager.flush_due_messages(new_generation).await.unwrap();
+    assert_eq!(lease.changes.lock().unwrap().len(), 2);
+    assert_eq!(lease.changes.lock().unwrap()[1].len(), 1);
+}
+
+#[tokio::test]
+async fn failed_admission_retains_pending_message_cadence() {
+    let (manager, lease, active) = manager(0).await;
+    manager.event(text(&active)).await.unwrap();
+    let before = manager.pending_message_deadline().await.unwrap();
+    lease.fail_save.store(true, Ordering::SeqCst);
+    let new_input = invocation("queued", false);
+    assert!(manager
+        .begin(new_input.request, new_input.actor)
+        .await
+        .is_err());
+    assert_eq!(manager.pending_message_deadline().await, Some(before));
+    let evidence = manager.evidence.lock().await;
+    assert_eq!(evidence.pending.len(), 1);
+    assert_eq!(evidence.message_commit.unwrap().count, 1);
 }
 
 #[tokio::test]
@@ -548,14 +756,18 @@ async fn streamed_chunks_do_not_rescan_prior_turns_and_terminal_invalidates_cach
             manager.validate_event_retention(&event).await.unwrap();
             manager.event(event).await.unwrap();
         }
-        assert_eq!(
-            counts(),
-            (0, 1),
-            "one active history rebuild, no full scans per chunk"
+        let (full_scans, history_checks) = counts();
+        assert!(full_scans <= 4, "only cadence saves may scan full evidence");
+        assert!(
+            history_checks <= 4 * 1004,
+            "history checks follow cadence saves, not each chunk"
         );
-        assert!(manager.snapshot().await.unwrap().invocations[1001]
-            .events
-            .is_empty());
+        assert_eq!(
+            manager.snapshot().await.unwrap().invocations[1001]
+                .events
+                .len(),
+            128
+        );
         lease.fail_save.store(fail_save, Ordering::SeqCst);
         let result = manager
             .event(ExecutionEvent::new(

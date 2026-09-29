@@ -58,6 +58,85 @@ impl ExecutionEventStream for ReadyOutput {
 }
 
 #[tokio::test]
+async fn failed_timer_save_with_unconfirmed_cleanup_does_not_invent_settlement() {
+    let (agent, backend, storage) = workflow().await;
+    *backend.cleanup.lock().unwrap() = CleanupReport::unconfirmed(AgentError::CleanupUncertain);
+    let (_release, gate) = oneshot::channel();
+    *backend.execution_gate.lock().unwrap() = Some(gate);
+    let mut updates = agent.subscribe();
+    let running = Mode::Direct.start(agent.clone(), request("unconfirmed-timer"));
+    bounded(backend.dispatched.notified()).await;
+    backend
+        .output
+        .lock()
+        .unwrap()
+        .send(Some(ExecutionEvent::new(
+            ExecutionId::new("unconfirmed-timer").unwrap(),
+            ExecutionUpdate::Message(MessageChunk::text("pending")),
+        )))
+        .unwrap();
+    bounded(updates.next()).await.unwrap().unwrap();
+    storage.fail_next();
+    let result = bounded(running).await.unwrap();
+    let Err(AgentError::StorageAfterExecution {
+        execution_result, ..
+    }) = &result
+    else {
+        panic!("{result:?}");
+    };
+    assert!(execution_result.is_err());
+    assert!(storage.snapshot().invocations[0].provider_report.is_none());
+}
+
+#[tokio::test]
+async fn failed_timer_save_with_confirmed_audit_failure_still_waits_for_provider() {
+    let (agent, backend, storage) = workflow().await;
+    *backend.cleanup.lock().unwrap() = CleanupReport::new(
+        ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
+        Err(AgentError::AuditFailure),
+    );
+    *backend.execution_report.lock().unwrap() = Some(ExecutionReport::new(
+        Some(Ok(ExecutionOutcome::Completed)),
+        None,
+        ProviderSessionState::Usable,
+    ));
+    backend.yield_after_close.store(true, Ordering::SeqCst);
+    let (_release, gate) = oneshot::channel();
+    *backend.execution_gate.lock().unwrap() = Some(gate);
+    let mut updates = agent.subscribe();
+    let running = Mode::Direct.start(agent.clone(), request("audit-failed-timer"));
+    bounded(backend.dispatched.notified()).await;
+    backend
+        .output
+        .lock()
+        .unwrap()
+        .send(Some(ExecutionEvent::new(
+            ExecutionId::new("audit-failed-timer").unwrap(),
+            ExecutionUpdate::Message(MessageChunk::text("pending")),
+        )))
+        .unwrap();
+    bounded(updates.next()).await.unwrap().unwrap();
+    storage.fail_next();
+    let result = bounded(running).await.unwrap();
+    let Err(AgentError::StorageAfterExecution {
+        execution_result, ..
+    }) = &result
+    else {
+        panic!("{result:?}");
+    };
+    let Err(AgentError::ExecutionObservation {
+        execution_result: Some(provider),
+        ..
+    }) = execution_result.as_ref()
+    else {
+        panic!("{execution_result:?}");
+    };
+    assert_eq!(provider.as_ref(), &Ok(ExecutionOutcome::Completed));
+    assert_eq!(storage.snapshot().invocations[0].result, Some(result));
+    assert!(storage.snapshot().invocations[0].provider_report.is_some());
+}
+
+#[tokio::test]
 async fn unconfirmed_cleanup_stops_ready_output_and_preserves_settlement() {
     for mode in Mode::ALL {
         for reported in [false, true] {

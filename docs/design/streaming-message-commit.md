@@ -1,0 +1,77 @@
+# Streaming message commit cadence
+
+Issue [#294](https://github.com/nessalabs/nessa-agent/issues/294) owns the
+initial cadence. `SessionManager::Evidence` remains the only owner of observed,
+committed, and pending message facts. Its existing `save_observed` is the only
+writer. A timer is a wake-up, not a second record queue or a transcript source.
+
+A pending generation begins with the first unsaved `ExecutionUpdate::Message`.
+The deadline is that observation's monotonic time plus 100 ms and never moves
+while the generation grows. A generation saves sooner at 16 KiB of message
+payload or 64 message observations. A consequential event saves immediately.
+The existing 8 MiB/1,024-message safety limits and frame bounds still apply.
+On acknowledged save, the pending generation clears with its facts. On definite
+or uncertain failure, both remain available for the existing typed storage
+failure path and exact retry.
+
+The application owns a monotonic timer port. SDK infrastructure adapts Tokio's
+clock; tests inject a manual implementation. The active Agent invocation
+supervisor waits for the next deadline alongside provider events and settlement.
+A wake reacquires the evidence lock and checks the generation and deadline before
+calling the same save owner. The manager never reads a clock or sleeps through a
+concrete runtime directly.
+
+The supervisor has one save state for every trigger. In `Polling` it may admit
+one provider event or a due timer. In `Saving` it owns that single manager future,
+pauses event ingress, and keeps polling Stop and the provider execution future.
+An acknowledged save returns to `Polling`; a failed save retains its typed error,
+asks the existing lifecycle owner to clean up, and awaits settlement after
+confirmed cleanup. Unconfirmed cleanup permits only an already-ready reply.
+The manager's evidence lock remains the sole writer and serialization point;
+there is no second save queue.
+When the provider replies, the one execution future first captures existing
+invocation stop authority, then applies its reported provider session state to
+the lifecycle before exposing the reply to the supervisor. Durable report and
+result saves may wait behind an in-flight observation save; control admission
+and already-admitted control polling read the lifecycle state immediately.
+
+| Ordering | Required result | Enforcer |
+| --- | --- | --- |
+| One small message, then silence | Save begins at the fixed 100 ms deadline without another provider event. | Supervisor timer branch and manager generation check. |
+| Event stream reaches EOF after a small message while execution remains pending | EOF ends event ingress, but the message deadline still saves the pending generation before the provider replies. | Separate event-stream completion from pending-message cadence. |
+| Continuous tiny messages | The first deadline stays fixed; size/count may save sooner. | Pending generation state in `Evidence`. |
+| Consequential event before deadline | Its save includes pending messages; the old timer wake changes nothing. | Evidence lock and generation comparison. |
+| A queued or steering admission directly saves a pending small message before its deadline, then another message arrives | The acknowledged direct save consumes that generation and its cadence state. The later message starts a new generation with a fresh deadline and count; an old wake cannot append an empty batch or flush the new message early. A failed or uncertain direct save retains pending facts and cadence for reconciliation. | Every successful direct path that clears `Evidence.pending` also clears `message_commit`; failed saves leave both intact. |
+| Timer and threshold become ready together | One generation receives one in-flight append, with no empty save. | `save_observed` under the evidence lock. |
+| Append is slow | One save remains in flight; bounded provider ingress and cancellation work retain capacity. | Supervisor polling and existing output limits. |
+| Another save holds evidence while the provider settles or Stop arrives | The supervisor still polls settlement and Stop; it waits for evidence as a select branch. | Nonblocking deadline inspection and supervised lock reacquisition. |
+| Timer, threshold, or consequential save stalls while Stop and provider settlement become ready | The same in-flight save retains evidence ownership; the supervisor records Stop and the provider outcome without polling another observation or waiting for the save to finish. Once the save settles, normal evidence ordering resumes. | One supervisor-owned save future and deferred provider outcome for every trigger. |
+| A provider reports `CleanupRequired` during a stalled save, then a new or already-admitted control is polled | The lifecycle fences the provider generation at reply receipt; no control reaches that backend while durable report persistence waits. | Capture cancellation first, then apply the existing provider-state transition inside the one execution future. |
+| A provider reports confirmed or unconfirmed `CleanupReported` during a stalled save | Confirmed cleanup retires the provider generation; unconfirmed cleanup blocks it. Neither status admits a control during the save, and its audit meaning is retained for later report processing. | Existing lifecycle reconciliation at reply receipt, with durable report persistence deferred. |
+| A provider reports `Usable` during a stalled save | Controls remain admissible and delegate to the same live backend while the independent report save waits. | Existing lifecycle transition leaves usable provider admission open. |
+| An unowned local-cancellation report confirms cleanup during a stalled timer save, then explicit Stop arrives before the save returns | The later Stop cannot authorize the earlier report. The reply is refused as a protocol error, no local-cancellation report is saved, and the already-retired provider receives no invented explicit close. | Capture existing work cancellation authority before applying the provider's confirmed cleanup at reply receipt; validate that captured fact when evidence becomes available. |
+| Append definitely fails | Exact facts and generation remain pending; normal dispatch is fenced by typed storage supervision. | `save_observed` acknowledgement boundary and Agent failure path. |
+| Any supervised save fails as a provider outcome becomes ready | A ready provider outcome remains recorded before the typed storage failure and cleanup are finalized; a failed save cannot erase the independent provider result. | Separate result and storage-failure slots in the supervisor. |
+| A failed save has already captured a provider reply and its report save stalls | The known storage failure starts the admission fence and cleanup before waiting for a second report save. The captured reply and receipt-time cancellation authority survive for later persistence. | Process the shared save-failure transition before deferred provider-report persistence. |
+| Any supervised save fails and confirmed cleanup precedes a delayed provider outcome | Confirmed cleanup requires the backend to settle admitted work. The supervisor continues polling through a pending yield and records the actual report and result within `StorageAfterExecution`. | The existing observation-save failure transition, with no timer-only settlement shortcut. |
+| Any supervised save fails and cleanup is unconfirmed | The supervisor captures an already-ready reply but does not await a reply the backend cannot promise or invent a successful result. | Existing uncertain-cleanup settlement boundary. |
+| A save fails after a provider outcome was already recorded but trailing text remained pending | The prior success or failure remains the `StorageAfterExecution.execution_result`; cleanup retires the attachment without substituting a storage error for the known provider outcome. | Separate result and storage-failure slots in the supervisor. |
+| Append may have committed but acknowledgement is lost | Retry presents the same record bytes and identity; storage reconciles it once. | Semantic record writer and pending generation retention. |
+| Stop during stalled append | The write keeps lease ownership; stop cause and provider cleanup are independently bounded. | Session lifecycle and storage lease supervision. |
+| Shutdown/crash at a save boundary | A write may be source-visible before its acknowledgement; the manager advances its committed snapshot only after acknowledgement or exact reconciliation. Replay exposes the physical commit once and never executes tools. | Semantic record writer reconciliation, `committed` update after save, and storage replay. |
+
+The panel's provisional live output can still appear before storage
+acknowledgement. This slice does not replace gateway views or claim remote
+subsecond delivery; those are separate issues.
+
+## Local measurement
+
+Run `cargo test -p nessa-sdk --all-features measure_growing_history_message_commit_latency -- --ignored --nocapture`
+to repeat the real SQLite measurement. It appends 64 one-message generations to
+one growing history, starts each observation timer before admission, waits the
+actual 100 ms deadline, and measures through confirmed `save_changes` and the
+manager snapshot. The 2026-09-29 local run measured p50 105.03 ms, p95 106.28 ms,
+and p99 106.52 ms observation to commit. It completed 9.53 cadence writes per
+second including the policy wait, and 419.47 writes per second when summing
+only the actual SQLite save durations. The test is a low-load local sample, not
+a remote delivery measurement; link and phone lag require #260/#261/#262.

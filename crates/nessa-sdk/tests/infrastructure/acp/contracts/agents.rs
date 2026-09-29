@@ -27,9 +27,15 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
     let provider = Arc::new(provider);
     let agent = attached_agent(
         provider.clone(),
-        SessionManager::open(Some(local_id.clone()), storage.clone())
-            .await
-            .unwrap(),
+        SessionManager::open(
+            Some(local_id.clone()),
+            storage.clone(),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
     )
     .await
     .unwrap();
@@ -67,7 +73,15 @@ async fn agent_persists_and_resumes_acp_without_a_ui_reader_or_prompt_replay() {
     drop(agent);
     let restored = attached_agent(
         provider,
-        SessionManager::open(Some(local_id), storage).await.unwrap(),
+        SessionManager::open(
+            Some(local_id),
+            storage,
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
     )
     .await
     .unwrap();
@@ -129,6 +143,9 @@ async fn agent_queue_and_native_steering_share_one_acp_execution_at_a_time() {
     let manager = SessionManager::open(
         Some(SessionId::new("scheduled").unwrap()),
         Arc::new(InMemoryStorage::new()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
     )
     .await
     .unwrap();
@@ -190,9 +207,15 @@ async fn agent_queue_and_native_steering_share_one_acp_execution_at_a_time() {
 async fn idle_generation_failure_is_reported_before_restoration_can_send_a_prompt() {
     let _slot = process_test_slot().await;
     let (root, provider) = test_acp_binding("idle-config-change-once", 16);
-    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     wait_until_gone(&root, "pid").await;
     let result = agent.invoke(prompt("must-not-send"), close_action()).await;
@@ -324,9 +347,15 @@ async fn cancelled_generation_is_sealed_while_terminal_audit_is_pending() {
 async fn queued_followup_resumes_after_provider_cancellation_without_losing_admission() {
     let _slot = process_test_slot().await;
     let (root, provider, waiting, release) = pause_cancelled_provider();
-    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     let first = agent
         .enqueue(prompt("cancelled-first"), close_action())
@@ -408,7 +437,15 @@ async fn observation_storage_failure_audits_execution_failure_without_fabricated
         inner: InMemoryStorage::new(),
         failed: Arc::new(AtomicBool::new(false)),
     });
-    let manager = SessionManager::open(None, storage).await.unwrap();
+    let manager = SessionManager::open(
+        None,
+        storage,
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     assert!(matches!(
         agent
@@ -538,6 +575,9 @@ async fn declined_review_survives_selected_save_failure_and_caller_loss() {
             inner: storage.clone(),
             gate: Arc::new(Mutex::new(Some((save_entered, release)))),
         }),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
     )
     .await
     .unwrap();
@@ -663,9 +703,15 @@ async fn dropping_agent_retains_reader_and_lease_until_handles_dropped_cleanup()
         let (root, provider) = test_acp_binding_with_audit("echo", 16, audit.clone());
         let storage = Arc::new(InMemoryStorage::new());
         let id = SessionId::new("drop-protection").unwrap();
-        let manager = SessionManager::open(Some(id.clone()), storage.clone())
-            .await
-            .unwrap();
+        let manager = SessionManager::open(
+            Some(id.clone()),
+            storage.clone(),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap();
         let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
         if resume_first {
             agent.close(close_action()).await.unwrap();
@@ -684,7 +730,16 @@ async fn dropping_agent_retains_reader_and_lease_until_handles_dropped_cleanup()
         // retain it until the real process has terminated and its audit is delivered.
         let _released = timeout(Duration::from_secs(5), async {
             loop {
-                match SessionManager::open(Some(id.clone()), storage.clone()).await {
+                match SessionManager::open(
+                    Some(id.clone()),
+                    storage.clone(),
+                    std::sync::Arc::new(
+                        nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(
+                        ),
+                    ),
+                )
+                .await
+                {
                     Ok(manager) => break manager,
                     Err(StorageError::Busy) => tokio::task::yield_now().await,
                     Err(error) => panic!("unexpected lease result: {error:?}"),
@@ -709,9 +764,15 @@ async fn dropping_agent_retains_reader_and_lease_until_handles_dropped_cleanup()
 async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input() {
     let _slot = process_test_slot().await;
     let (root, provider) = test_acp_binding("echo", 16);
-    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     // More local rejections than the former 16-generation reader queue capacity.
     // Escapes make the encoded frame oversized even though raw input is smaller.
@@ -782,9 +843,15 @@ async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input
 async fn repeated_failed_restoration_recovers_on_the_same_agent() {
     let _slot = process_test_slot().await;
     let (root, provider) = test_acp_binding("resume-retry", 16);
-    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
     agent.close(close_action()).await.unwrap();
     // Preparation returns before Agent polls its reader. Failed startups must

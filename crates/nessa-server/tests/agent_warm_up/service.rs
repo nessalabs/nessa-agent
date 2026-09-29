@@ -3,7 +3,7 @@ use super::{AgentWarmUp, RuntimeFingerprint, WarmUpCause, WarmUpState};
 use crate::agent_warm_up::application::{
     ProviderFailure, WarmUpAudit, WarmUpAuditDelivery, WarmUpAuditRecord,
     WarmUpCompletionRecordDelivery, WarmUpEffect, WarmUpError, WarmUpFuture, WarmUpLaunchOwnership,
-    WarmUpRecords,
+    WarmUpRecords, WarmUpSessionPorts,
 };
 use crate::conversation_test_support::{AcceptingAudit, Provider, ProviderFactory, TestClock};
 use nessa_sdk::application::agent_execution::agents::{
@@ -104,7 +104,12 @@ fn fixture_with(
         warm_up: AgentWarmUp::new(
             Arc::new(Provider::new(provider.clone())),
             execution_audit,
-            storage,
+            WarmUpSessionPorts {
+                storage,
+                message_commit_clock: Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
+            },
             records.clone(),
             audit.clone(),
             Arc::new(TestClock),
@@ -394,7 +399,12 @@ async fn provider_open_failure_reports_retained_cleanup_handle_ownership() {
             cleanup: cleanup.clone(),
         }),
         Arc::new(AcceptingAudit),
-        Arc::new(InMemoryStorage::new()),
+        WarmUpSessionPorts {
+            storage: Arc::new(InMemoryStorage::new()),
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        },
         records.clone(),
         audit.clone(),
         Arc::new(TestClock),
@@ -435,7 +445,12 @@ async fn provider_open_failure_without_resources_reports_confirmed_absence() {
     let warm_up = AgentWarmUp::new(
         Arc::new(OpenNoResourcesProvider(Provider::new(provider))),
         Arc::new(AcceptingAudit),
-        Arc::new(InMemoryStorage::new()),
+        WarmUpSessionPorts {
+            storage: Arc::new(InMemoryStorage::new()),
+            message_commit_clock: Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        },
         records.clone(),
         audit.clone(),
         Arc::new(TestClock),

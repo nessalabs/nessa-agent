@@ -307,10 +307,10 @@ own current lifecycle and API contracts.
 | `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, and prompts; DDD roles beneath each feature. |
 | `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. |
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
-| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, retained attachment resources, and snapshot evidence mapped through domain history rules. |
+| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, retained attachment resources, snapshot evidence mapped through domain history rules, and the injected streaming commit clock port. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, attributed decisions, and observation/review projections. |
 | `infrastructure/acp/`, `claude_acp/`, `codex_acp/`, `opencode_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. Verification shared by more than one provider moves up into `acp/`, as ordered session configuration did once Codex and Opencode both needed it. |
-| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, explicit evidence serialization, and a bounded committed physical record source for sync-engine. |
+| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, explicit evidence serialization, a bounded committed physical record source for sync-engine, and the Tokio streaming commit clock adapter. |
 | `infrastructure/json_rpc/`, `process.rs`, `model_metadata_json.rs` | Framing, process supervision, and model catalog parsing. |
 | `infrastructure/clock.rs` | The clock every ACP protocol deadline is measured on: `RuntimeClock` from composition, and `tests/infrastructure/manual_clock.rs` in tests, which moves only when the test moves it. |
 | `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
@@ -526,6 +526,8 @@ with it when the barrel's components cannot be resolved.
 configured agent runtime: which runtime is being prepared (domain), running it
 through one open and close and committing that evidence (application), and the
 completion record and audit files in the data directory (infrastructure). It is
+given disposable session storage and the message commit clock together through
+`WarmUpSessionPorts`; the application owns neither concrete adapter.
 started by composition once the gateway is listening, so the operating system's
 first-execution scan is paid in the background rather than inside a user's first
 message. The application terminal keeps preparation, physical launch ownership,

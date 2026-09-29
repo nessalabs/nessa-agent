@@ -11,6 +11,7 @@ unrelated future systems.
 | [SDK runtime shape](sdk-shape.md) | Nessa server ownership and proposed conversation delivery contract |
 | [Session and stream contracts](../session-and-stream-contracts.md) | Proposed gateway/history delivery contract, broader than the implemented execution binding |
 | [Dependency injection](../dependency-injection.md) | Current composition rules shared across repository contexts |
+| [Streaming message commit](../streaming-message-commit.md) | Implemented local message cadence, timer seam, and write orderings for #294 |
 | [Nessa-owned policy hooks](../../adr/todo/0014-nessa-owned-policy-hooks.md) | Proposed decision for hook boundaries, disclosure, failure and attribution; implementation remains tracked by #130 |
 | [Hook capability survey](hook-capabilities.md) | Pinned Claude/Codex/Opencode source evidence, unpinned Kiro observations, and explicit limits on Nessa enforcement |
 | [Telemetry](telemetry.md) | Proposed research behind [ADR 195](../../adr/todo/195-tracing-is-the-telemetry-port.md): what exists, the `tracing`-as-port design, its growth costs, and the slices tracked under #195 |

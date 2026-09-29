@@ -73,10 +73,16 @@ async fn explicit_close_retains_undispatched_input_cause_actor_and_write_failure
                 } else {
                     Arc::new(storage.clone())
                 };
-                let manager =
-                    SessionManager::open(Some(SessionId::new("conversation").unwrap()), adapter)
-                        .await
-                        .unwrap();
+                let manager = SessionManager::open(
+                    Some(SessionId::new("conversation").unwrap()),
+                    adapter,
+                    std::sync::Arc::new(
+                        nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(
+                        ),
+                    ),
+                )
+                .await
+                .unwrap();
                 let (agent, backend) = probe_with_manager(false, manager).await;
                 let (entered, waiting) = oneshot::channel();
                 let (release, released) = std::sync::mpsc::channel();
@@ -286,10 +292,15 @@ async fn automatic_cancellation_evidence_survives_save_failure_and_caller_loss()
                     Arc::new(CancellationPanicStorage(storage.clone()))
                 }
             };
-            let manager =
-                SessionManager::open(Some(SessionId::new("conversation").unwrap()), adapter)
-                    .await
-                    .unwrap();
+            let manager = SessionManager::open(
+                Some(SessionId::new("conversation").unwrap()),
+                adapter,
+                std::sync::Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
+            )
+            .await
+            .unwrap();
             let (agent, backend) = probe_with_manager(false, manager).await;
             let (release, wait) = oneshot::channel();
             *backend.prepare_gate.lock().unwrap() = Some(wait);

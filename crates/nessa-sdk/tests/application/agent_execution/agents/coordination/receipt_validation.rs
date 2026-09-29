@@ -69,6 +69,9 @@ async fn received_permission_receipt_finishes_validation_after_close() {
                     backing: InMemoryStorage::new(),
                     gate: gate.clone(),
                 }),
+                std::sync::Arc::new(
+                    nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+                ),
             )
             .await
             .unwrap();

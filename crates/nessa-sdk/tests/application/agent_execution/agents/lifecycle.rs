@@ -113,6 +113,9 @@ async fn cancelled_caller_during_admission_still_executes_committed_input() {
     let manager = SessionManager::open(
         Some(SessionId::new("conversation").unwrap()),
         Arc::new(storage.clone()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
     )
     .await
     .unwrap();
@@ -170,6 +173,9 @@ async fn verify_uncertain_admission(fail_load: bool) {
     let manager = SessionManager::open(
         Some(SessionId::new("conversation").unwrap()),
         Arc::new(storage.clone()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
     )
     .await
     .unwrap();
@@ -225,6 +231,9 @@ async fn close_joins_admission_save_after_the_invoke_caller_disappears() {
     let manager = SessionManager::open(
         Some(SessionId::new("conversation").unwrap()),
         Arc::new(storage.clone()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
     )
     .await
     .unwrap();
@@ -272,9 +281,15 @@ async fn abandoned_admission_retains_exclusive_lease_until_save_settles() {
         loaded_snapshot: Arc::new(Mutex::new(None)),
     };
     let id = SessionId::new("conversation").unwrap();
-    let manager = SessionManager::open(Some(id.clone()), Arc::new(storage.clone()))
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        Some(id.clone()),
+        Arc::new(storage.clone()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(TestProvider::new(), manager).await.unwrap();
     let (committed, observing) = oneshot::channel();
     let (release, waiting) = oneshot::channel();
@@ -321,6 +336,9 @@ async fn corrupt_reconciliation_cannot_prove_absence_and_deep_errors_are_safely_
         let manager = SessionManager::open(
             Some(SessionId::new("conversation").unwrap()),
             Arc::new(storage.clone()),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
         )
         .await
         .unwrap();

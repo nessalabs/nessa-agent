@@ -333,13 +333,50 @@ async fn agent() -> Agent {
 }
 async fn agent_with_backend() -> (Agent, Arc<Backend>) {
     let backend = Arc::new(Backend::default());
-    let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(Arc::new(Provider(backend.clone())), manager)
         .await
         .unwrap();
     (agent, backend)
+}
+
+#[tokio::test]
+async fn control_admitted_before_provider_reply_cannot_first_poll_after_unusable_state() {
+    for session_state in [
+        ProviderSessionState::CleanupRequired,
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+        ProviderSessionState::CleanupReported(CleanupReport::unconfirmed(
+            AgentError::CleanupUncertain,
+        )),
+    ] {
+        let (agent, _) = agent_with_backend().await;
+        let control = agent.accept_control().unwrap();
+        let invocation = agent.inner.lifecycle.accept_work().unwrap();
+        agent
+            .inner
+            .lifecycle
+            .record_provider_state(&invocation, &session_state);
+        let delegated = Arc::new(AtomicUsize::new(0));
+        let attempted = delegated.clone();
+        let result = agent
+            .run_control(control, async move {
+                attempted.fetch_add(1, Ordering::SeqCst);
+                Ok::<(), ProviderOperationFailure>(())
+            })
+            .await;
+        assert_eq!(result, Err(AgentError::Closed), "{session_state:?}");
+        assert_eq!(delegated.load(Ordering::SeqCst), 0);
+    }
 }
 async fn reattach(agent: &Agent) {
     agent.close(actor()).await.unwrap();
@@ -425,9 +462,15 @@ async fn automatic_recovery_open_failure_settles_and_restores_the_queue_receipt(
         inner: Provider(backend),
         opens: AtomicUsize::new(0),
     });
-    let manager = SessionManager::open(Some(id.clone()), storage.clone())
-        .await
-        .unwrap();
+    let manager = SessionManager::open(
+        Some(id.clone()),
+        storage.clone(),
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     let agent = attached_agent(provider.clone(), manager).await.unwrap();
 
     let control = agent.accept_control().unwrap();
@@ -466,7 +509,15 @@ async fn automatic_recovery_open_failure_settles_and_restores_the_queue_receipt(
     drop(agent);
     let restored = Agent::prepare(
         provider.clone(),
-        SessionManager::open(Some(id), storage).await.unwrap(),
+        SessionManager::open(
+            Some(id),
+            storage,
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap(),
         Arc::new(AcceptingAudit),
     )
     .await
@@ -776,9 +827,15 @@ async fn close_joins_a_held_started_audit_panic_before_replacement() {
         AttachmentAuditPanic::Drop,
     ] {
         let backend = Arc::new(Backend::default());
-        let manager = SessionManager::open(None, Arc::new(InMemoryStorage::new()))
-            .await
-            .unwrap();
+        let manager = SessionManager::open(
+            None,
+            Arc::new(InMemoryStorage::new()),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap();
         let agent = Agent::prepare(
             Arc::new(Provider(backend.clone())),
             manager,

@@ -163,7 +163,8 @@ automatic session storage, hooks, invocation, and UI integration.
   observations; permissions own once-only decisions/cancellations; prompts own
   attributed system instructions. Public imports name the feature explicitly.
 - `application/agent_execution/`: `agents` exposes `Agent` and its errors,
-  `providers` injected execution ports, `sessions` automatic snapshot management,
+  `providers` injected execution ports, `sessions` automatic snapshot management
+  and the streaming commit clock port,
   `hooks` typed callbacks registered on Agent,
   `executions` the request/controller/event projections and mandatory execution audit port,
   `permissions` attribution and answer/cancellation evidence, and `tools` the original review input. The controller
@@ -186,7 +187,8 @@ automatic session storage, hooks, invocation, and UI integration.
   configuration moved up from `codex_acp/` to `acp/sessions/configuration.rs` when
   Opencode turned out to need the same two options.
 - `infrastructure/session_storage/`: in-memory test snapshots and private SQLite semantic records,
-  exclusive leases, bounded physical framing, and explicit JSON evidence mapping.
+  exclusive leases, bounded physical framing, explicit JSON evidence mapping,
+  and the Tokio streaming commit clock adapter.
 - `infrastructure/`: JSON parsing into application input DTOs, including required
   fields, unknown fields, and read errors. The host owns filesystem selection and
   injects the loaded catalog at composition.

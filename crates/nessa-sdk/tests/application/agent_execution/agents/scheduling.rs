@@ -170,7 +170,15 @@ impl SessionStorageLease for PanickingQueueLease {
 }
 
 async fn prepared(storage: Arc<dyn SessionStorage>, audit: Arc<dyn ExecutionAudit>) -> Agent {
-    let manager = SessionManager::open(None, storage).await.unwrap();
+    let manager = SessionManager::open(
+        None,
+        storage,
+        std::sync::Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+    )
+    .await
+    .unwrap();
     Agent::prepare(Arc::new(TestProvider), manager, audit)
         .await
         .unwrap()
