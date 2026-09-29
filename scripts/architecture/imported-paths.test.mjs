@@ -41,3 +41,30 @@ test("a string that only names a path is not an import", () => {
   ])
     assert.deepEqual(importedPaths(text), [], text)
 })
+
+test("an import written in a comment is documentation, not an import", () => {
+  const text = [
+    '// import "../../../workspace"',
+    '/* import x from "../../../workspace/model"',
+    ' * import "../../no"',
+    " */",
+    '/** vi.mock("../../mocked") */',
+    'import a from "./a" // import "../trailing"',
+  ].join("\n")
+  assert.deepEqual(importedPaths(text), ["./a"])
+})
+
+test("a `//` or `/*` inside a string, template or regular expression is not a comment", () => {
+  const text = [
+    'const url = "https://example.com/x"; import "./after-string.css"',
+    'const quote = /["\'/]/g; import "./after-regex.css"',
+    'const t = `a ${"b" /* c */} // d ${x}`; import "./after-template.css"',
+    'const n = a / b; import("./after-division")',
+  ].join("\n")
+  assert.deepEqual(importedPaths(text), [
+    "./after-string.css",
+    "./after-regex.css",
+    "./after-template.css",
+    "./after-division",
+  ])
+})
