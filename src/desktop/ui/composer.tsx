@@ -141,7 +141,10 @@ export function Composer({
   const [thinking, setThinking] = useState(defaultThinkingLevel)
   const [access, setAccess] = useState<ComposerAccessModeValue>("ask-approval")
 
-  const levels = thinkingLevelsFor(model)
+  // The model's levels, in the control's terms: the utmost gets its Ultra treatment.
+  const levels = thinkingLevelsFor(model).map(({ utmost, ...level }) =>
+    utmost ? { ...level, accent: "ultra" as const } : level,
+  )
   const [fast, setFast] = useState(false)
   // Fast is remembered while switching models, but only in effect on one that offers it.
   const fastOn = fast && fastModeFor(model)

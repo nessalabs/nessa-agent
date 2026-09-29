@@ -1,7 +1,7 @@
-import type { PillComposerExpansionReason } from "@nessa-ui/react/pill-composer"
-
 /**
- * Whether the panel takes an expansion change the composer proposes.
+ * Whether the panel takes an expansion change the composer proposes: `next`
+ * the state proposed, `submitted` whether a submit proposed it (the UI reads
+ * that from the composer's reason).
  *
  * The composer offers to close its full-pane editor on every submit, because
  * sending is normally the end of writing. Submitting is not sending: the
@@ -16,9 +16,6 @@ import type { PillComposerExpansionReason } from "@nessa-ui/react/pill-composer"
  * take it away, and is always taken. Declining those would strand somebody
  * inside an editor whose exits had stopped working.
  */
-export function takesExpansion(
-  next: boolean,
-  reason: PillComposerExpansionReason,
-): boolean {
-  return next || reason !== "submit"
+export function takesExpansion(next: boolean, submitted: boolean): boolean {
+  return next || !submitted
 }

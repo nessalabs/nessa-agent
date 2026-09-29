@@ -1,4 +1,3 @@
-import type { ModelThinkingLevel } from "@nessa-ui/react/model-capabilities"
 import catalog from "../../../crates/nessa-sdk/data/models.json"
 import type { AgentId } from "../../onboarding/model/onboarding"
 
@@ -79,7 +78,16 @@ export function contextLabel(tokens: number): string {
   return `${Math.round(tokens / 1_000)}K context`
 }
 
-export const thinkingLevels: ModelThinkingLevel[] = [
+/** A thinking level a reasoning model accepts, as the composer offers it. */
+export interface ThinkingLevel {
+  readonly value: string
+  readonly label: string
+  readonly description: string
+  /** The most a model will think: the composer marks it apart from the others. */
+  readonly utmost?: true
+}
+
+export const thinkingLevels: readonly ThinkingLevel[] = [
   { value: "low", label: "Low", description: "Quick answers" },
   { value: "medium", label: "Medium", description: "Balanced" },
   { value: "high", label: "High", description: "Works it through" },
@@ -87,7 +95,7 @@ export const thinkingLevels: ModelThinkingLevel[] = [
     value: "max",
     label: "Max",
     description: "Thinks as long as it needs",
-    accent: "ultra",
+    utmost: true,
   },
 ]
 
@@ -96,7 +104,7 @@ export const defaultThinkingLevel = "medium"
 /** A model that does not reason offers no levels, and the control says so. */
 export function thinkingLevelsFor(
   model: ComposerModel | undefined,
-): ModelThinkingLevel[] {
+): readonly ThinkingLevel[] {
   return model?.reasoning ? thinkingLevels : []
 }
 

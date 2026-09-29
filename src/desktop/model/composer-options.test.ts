@@ -7,6 +7,7 @@ import {
   fastModeFor,
   groupByProvider,
   providerLabel,
+  thinkingLevels,
   thinkingLevelsFor,
   type ComposerModel,
   shortModelName,
@@ -124,5 +125,11 @@ describe("a model's short name", () => {
   it("keeps a name whole where nothing is shared, or it is the only one", () => {
     expect(shortModelName(catalogue[2], catalogue)).toBe("GPT-6 Astra")
     expect(shortModelName(catalogue[4], catalogue)).toBe("Solo One")
+  })
+
+  it("marks only the utmost thinking level, which the composer gives its Ultra treatment", () => {
+    expect(
+      thinkingLevels.filter((level) => level.utmost).map((level) => level.value),
+    ).toEqual(["max"])
   })
 })

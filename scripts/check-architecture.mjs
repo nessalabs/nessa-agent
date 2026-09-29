@@ -186,6 +186,14 @@ for (const file of walk(src)) {
     if (/from\s+["']react["']/.test(text) || /from\s+["']react\//.test(text)) {
       fail(file, `${feature} model/use cases must not import React`)
     }
+    // Nor a React component library, even for a type: the model's values are
+    // its own, and the UI maps them to a component's props.
+    if (/from\s+["']@nessa-ui\/react(?:["'/])/.test(text)) {
+      fail(
+        file,
+        `${feature} model/use cases must not import the UI library (@nessa-ui/react)`,
+      )
+    }
     if (/@tauri-apps/.test(text)) {
       fail(file, `${feature} model/use cases must not import the host`)
     }
