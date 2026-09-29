@@ -14,6 +14,7 @@ use crate::domain::agent_execution::executions::{
 use crate::domain::agent_execution::sessions::{
     AttachmentCause, ExecutionFinish, SessionClosure, SessionId,
 };
+use crate::domain::model_metadata::value_objects::EffortLevel;
 
 /// Audited lifecycle stage of one provider attachment attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -331,6 +332,7 @@ pub struct QueueAdmissionRecord {
     after: AdmissionAuditStage,
     cause: AdmissionAuditCause,
     approval_mode: Option<ApprovalMode>,
+    effort_level: Option<EffortLevel>,
     admission_generation: Option<String>,
 }
 impl QueueAdmissionRecord {
@@ -350,6 +352,7 @@ impl QueueAdmissionRecord {
             after: AdmissionAuditStage::Owned,
             cause: AdmissionAuditCause::Submitted,
             approval_mode: None,
+            effort_level: None,
             admission_generation: None,
         }
     }
@@ -364,9 +367,20 @@ impl QueueAdmissionRecord {
         self.admission_generation = Some(admission_generation);
         self
     }
+    /// Attach the reasoning effort level in force at admission: the one the
+    /// provider selected on open or last verified through a live change.
+    pub(crate) fn with_effort_level(mut self, effort_level: Option<EffortLevel>) -> Self {
+        self.effort_level = effort_level;
+        self
+    }
     /// Provider approval preset at admission, when the binding publishes one.
     pub fn approval_mode(&self) -> Option<ApprovalMode> {
         self.approval_mode
+    }
+    /// Reasoning effort level in force at admission. `None` means no level
+    /// was sent and the agent ran at its own default.
+    pub fn effort_level(&self) -> Option<&EffortLevel> {
+        self.effort_level.as_ref()
     }
     /// Agent-instance and provider-generation correlation at admission.
     pub fn admission_generation(&self) -> Option<&str> {

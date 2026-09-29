@@ -339,3 +339,106 @@ async fn the_same_session_reopened_selects_the_live_level_again() {
         .unwrap();
     assert_gone(&root, "pid");
 }
+
+/// Keeps the effort level each admission record names, in order.
+#[derive(Default)]
+struct AdmissionAudit(Mutex<Vec<Option<String>>>);
+impl crate::application::agent_execution::executions::ExecutionAudit for AdmissionAudit {
+    fn record(
+        &self,
+        record: crate::application::agent_execution::executions::ExecutionAuditRecord,
+    ) -> crate::application::agent_execution::agents::AgentFuture<'_, ()> {
+        if let crate::application::agent_execution::executions::ExecutionAuditRecord::QueueAdmitted(
+            admitted,
+        ) = &record
+        {
+            self.0
+                .lock()
+                .unwrap()
+                .push(admitted.effort_level().map(|level| level.as_str().to_owned()));
+        }
+        Box::pin(async { Ok(()) })
+    }
+}
+
+async fn audited_agent(provider: Arc<dyn AgentProvider>, audit: Arc<AdmissionAudit>) -> Agent {
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(crate::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(provider, manager, audit)
+        .await
+        .map_err(|error| error.cause().clone())
+        .unwrap();
+    attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
+        .await
+        .unwrap();
+    agent
+}
+
+#[tokio::test]
+async fn each_admission_records_the_level_in_force() {
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(AdmissionAudit::default());
+    let (_root, binding) = claude("echo", CLAUDE_LEVELS);
+    let agent = audited_agent(Arc::new(binding), audit.clone()).await;
+    // Queued admissions are the audited ones. None selected: the agent's own
+    // default, and the record says so.
+    assert_eq!(
+        agent
+            .enqueue(prompt("first"), close_action())
+            .await
+            .unwrap()
+            .wait()
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
+    agent.set_effort_level(level("xhigh")).await.unwrap();
+    assert_eq!(
+        agent
+            .enqueue(prompt("second"), close_action())
+            .await
+            .unwrap()
+            .wait()
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
+    assert_eq!(*audit.0.lock().unwrap(), [None, Some("xhigh".to_owned())]);
+    agent.close(close_action()).await.unwrap();
+
+    // Selected on open: the first admission already names it.
+    let audit = Arc::new(AdmissionAudit::default());
+    let (_root, binding) = codex("echo", GPT_LEVELS);
+    let binding = binding.with_effort_level(level("low")).unwrap();
+    let agent = audited_agent(Arc::new(binding), audit.clone()).await;
+    assert_eq!(
+        agent
+            .enqueue(prompt("hello"), close_action())
+            .await
+            .unwrap()
+            .wait()
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
+    assert_eq!(*audit.0.lock().unwrap(), [Some("low".to_owned())]);
+    agent.close(close_action()).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_change_keeps_the_previous_level_on_record() {
+    let _slot = process_test_slot().await;
+    // The agent answers the change without applying it.
+    let (_root, binding) = claude("effort-misreported", CLAUDE_LEVELS);
+    let agent = agent(Arc::new(binding)).await;
+    let failure = agent.set_effort_level(level("high")).await.unwrap_err();
+    assert!(matches!(failure.error(), AgentError::Protocol(_)));
+    assert_eq!(
+        failure.session_state(),
+        &ProviderSessionState::CleanupRequired
+    );
+    assert_eq!(agent.effort_level(), None);
+    let _ = agent.close(close_action()).await;
+}

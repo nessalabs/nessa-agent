@@ -119,9 +119,9 @@ the domain catalog; a selected application metadata DTO can also be mapped throu
 The factory intersects model and binding input/output modalities, tool use,
 reasoning, and fast mode. A binding can remove support but cannot enable a
 model-false feature. The model's effort levels stay in the snapshot
-(`effort_levels()`) only while reasoning does. No binding sends an effort level
-or fast mode to its agent yet, so today's bindings declare both unsupported
-([#310](https://github.com/nessalabs/nessa-agent/issues/310)). No shared input or output modality is a setup error. Explicit configured
+(`effort_levels()`) only while reasoning does. The Claude and Codex bindings
+run reasoning and send an effort level; the OpenCode binding does not. No
+binding sends fast mode, so every binding declares it unsupported. No shared input or output modality is a setup error. Explicit configured
 context/output limits above either ceiling fail with `ConfiguredLimitExceeded`;
 valid smaller limits are retained exactly. The snapshot owns its model identity,
 features, and limits independently of other selections.
@@ -263,7 +263,7 @@ domain/
     value_objects/
       identity.rs       ModelProvider, ModelKey
       capabilities.rs   Modalities, ModelFeatures
-      reasoning.rs      EffortLevel, EffortLevels
+      reasoning.rs      EffortLevel, EffortLevels, OfferedEffortLevels
       description.rs    ModelDescription
     entities/
       model.rs          ModelMetadata

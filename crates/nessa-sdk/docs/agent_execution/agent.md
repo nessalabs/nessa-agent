@@ -133,6 +133,28 @@ unavailable. Read the snapshot again after reconnection. SDK-owned queueing,
 next-invocation steering, and invocation hooks remain available independently of
 native provider support. No provider model/tool-step hooks are implied.
 
+### Reasoning effort
+
+The model's catalog effort levels (`agent.capabilities().effort_levels()`) are a
+ceiling. Once a connection is negotiated, `operation_capabilities().effort_levels()`
+says which of them the connected agent also offers: the levels its ACP
+`thought_level` config option lists, matched by exact name, in catalog order. It
+never names a level the catalog lacks, such as Claude's own `default` or a level
+Codex offers past `max`. `agent.effort_levels()` reads the two together as
+levels, and is `None` before negotiation, while restoring, and wherever the
+model, binding, or agent offers none (Claude on Haiku 4.5 lists no effort option).
+
+The Claude and Codex bindings select a level for every session they open with
+`with_effort_level`; without one nothing is sent and the agent keeps its own
+default. `agent.set_effort_level(level)` changes it on an idle attachment, under
+the same scheduler lock as `set_approval_mode`. A level not offered is refused
+with `InvalidInput` and a queued or running turn with `Busy`, both before
+anything is sent. The agent's reported level must match the one selected, at
+open and after a change; a mismatch is a protocol failure. A connection the same
+session restores selects the last verified level again; a new attachment starts
+at the binding's level. `agent.effort_level()` is the level in force, and every
+queued admission records it (`QueueAdmissionRecord::effort_level`).
+
 ## Session manager and storage
 
 `SessionId` is the local conversation key. `ExecutionSessionId` is the provider's

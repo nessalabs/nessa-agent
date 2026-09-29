@@ -213,3 +213,45 @@ fn refuses_an_ambiguous_or_malformed_option() {
         MAX_CHOICES
     );
 }
+
+/// Session configuration as the pinned agents sent it on 2026-09-29, with no
+/// prompt sent: claude-agent-acp 0.76.0 launched on Opus 5 and on Haiku 4.5,
+/// and codex-acp 1.12.0 after selecting gpt-5.6-sol.
+const RECORDED_CLAUDE_OPUS: &str =
+    include_str!("../contracts/fixtures/claude_acp_0.76.0_opus_5_config_options.json");
+const RECORDED_CLAUDE_HAIKU: &str =
+    include_str!("../contracts/fixtures/claude_acp_0.76.0_haiku_4_5_config_options.json");
+const RECORDED_CODEX_SOL: &str =
+    include_str!("../contracts/fixtures/codex_acp_1.12.0_gpt_5.6_sol_config_options.json");
+
+#[test]
+fn reads_what_the_pinned_agents_actually_sent() {
+    let parse = |recorded: &str| serde_json::from_str::<Value>(recorded).unwrap();
+    // The shipped catalogue's levels for these models.
+    let opus = capabilities(Some(&["low", "medium", "high", "xhigh", "max"]), true);
+    let sol = capabilities(
+        Some(&["none", "low", "medium", "high", "xhigh", "max"]),
+        true,
+    );
+
+    let claude = parse(RECORDED_CLAUDE_OPUS);
+    assert_eq!(thought_level(&claude).unwrap().unwrap().id, "effort");
+    assert_eq!(
+        narrowed(&claude, &opus).unwrap(),
+        ["low", "medium", "high", "xhigh", "max"]
+    );
+
+    let haiku = parse(RECORDED_CLAUDE_HAIKU);
+    assert_eq!(thought_level(&haiku).unwrap(), None);
+    assert_eq!(narrowed(&haiku, &opus), None);
+
+    let codex = parse(RECORDED_CODEX_SOL);
+    assert_eq!(
+        thought_level(&codex).unwrap().unwrap().id,
+        "reasoning_effort"
+    );
+    assert_eq!(
+        narrowed(&codex, &sol).unwrap(),
+        ["low", "medium", "high", "xhigh", "max"]
+    );
+}
