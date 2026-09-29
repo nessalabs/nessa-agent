@@ -1,11 +1,7 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
 import { Composer } from "../../../ui/composer"
 import { chooseModel, sendMessage, setComposerText } from "../../adapters/store/commands"
-import {
-  useWorkspaceDispatch,
-  useWorkspaceSelector,
-  useWorkspaceStore,
-} from "../../adapters/store/hooks"
+import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectComposerText, selectNextModel } from "../../adapters/store/selectors"
 import { useArrival, type Arrival } from "../../adapters/dom/arrival"
 import type { ModelRef } from "../../model/workspace-index"
@@ -16,11 +12,14 @@ import "./conversation.css"
 /** The docked composer is always a card; only a home opens into a page. */
 const stayCard = () => {}
 
-/** The model a session's composer starts on, read once: the composer keeps its own after. */
-function useInitialModel(sessionId: string): ModelRef | undefined {
-  const store = useWorkspaceStore()
-  const [model] = useState(() => selectNextModel(store.getState(), sessionId))
-  return model
+/**
+ * The model a session's composer shows: the one its next message is sent
+ * with (`modelForNextTurn`), selected, so a choice made anywhere — the
+ * picker, an agent's `chooseModel`, a newer summary from the source — is
+ * what the picker shows while it stays mounted (`conversation.test.tsx`).
+ */
+function useNextModel(sessionId: string): ModelRef | undefined {
+  return useWorkspaceSelector((state) => selectNextModel(state, sessionId))
 }
 
 /** A session's unsent text, held in the workspace so it outlives a change of layout. */
@@ -61,12 +60,12 @@ export const PaneHome = memo(function PaneHome({
   sessionId: string
   onSend: (text: string) => void
 }) {
-  const initialModel = useInitialModel(sessionId)
+  const model = useNextModel(sessionId)
   const { changeModel } = useComposerActions(sessionId)
   const { text, onTextChange } = useComposerText(sessionId)
   return (
     <Home
-      initialModel={initialModel}
+      model={model}
       onSend={onSend}
       onModelChange={changeModel}
       text={text}
@@ -121,9 +120,9 @@ export const Conversation = memo(function Conversation({
   )
 })
 
-/** The docked composer, starting on the session's own model. */
+/** The docked composer, showing the model the session's next message is sent with. */
 const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: string }) {
-  const initialModel = useInitialModel(sessionId)
+  const model = useNextModel(sessionId)
   const { send, changeModel } = useComposerActions(sessionId)
   const { text, onTextChange } = useComposerText(sessionId)
   return (
@@ -132,7 +131,7 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
       onTextChange={onTextChange}
       page={false}
       onPageChange={stayCard}
-      initialModel={initialModel}
+      model={model}
       onModelChange={changeModel}
       onSend={send}
       // In a conversation the field is a reply, and says so in fewer words than the home's question.

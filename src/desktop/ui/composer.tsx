@@ -11,7 +11,6 @@ import {
   composerModels,
   composerProviders,
   contextLabel,
-  defaultComposerModel,
   defaultThinkingLevel,
   fastModeFor,
   shortModelName,
@@ -87,7 +86,7 @@ function draftLines(textarea: HTMLTextAreaElement): number {
 export function Composer({
   page,
   onPageChange,
-  initialModel,
+  model: shown,
   onModelChange,
   onSend,
   text,
@@ -97,10 +96,15 @@ export function Composer({
   /** Whether the composer shows as a full writing page rather than a card. */
   page: boolean
   onPageChange: (page: boolean) => void
-  /** The catalog model to start on, as `provider` and `modelId`; the default otherwise. */
-  initialModel?: { provider: string; modelId: string }
-  /** Told when the person picks another model. */
-  onModelChange?: (model: { provider: string; modelId: string }) => void
+  /**
+   * The model the next turn is sent with, as `provider` and `modelId`, held
+   * by whoever sends it — the workspace's `modelForNextTurn` for a session —
+   * so what the picker shows is what is sent, whoever changed it. A model
+   * not in the catalogue shows as none chosen rather than as another one.
+   */
+  model: { provider: string; modelId: string } | undefined
+  /** Told when the person picks another model; the owner decides what is shown. */
+  onModelChange: (model: { provider: string; modelId: string }) => void
   /** Sends a turn; without it nothing can be sent and the send button says so. */
   onSend?: (text: string) => void
   /**
@@ -130,14 +134,7 @@ export function Composer({
     if (!onSend || message === "") return
     onSend(message)
   }
-  const [model, setModel] = useState(
-    () =>
-      composerModels.find(
-        (candidate) =>
-          candidate.provider === initialModel?.provider &&
-          candidate.modelId === initialModel.modelId,
-      ) ?? defaultComposerModel(composerModels),
-  )
+  const model = shown && findComposerModel(shown.provider, shown.modelId)
   const [thinking, setThinking] = useState(defaultThinkingLevel)
   const [access, setAccess] = useState<ComposerAccessModeValue>("ask-approval")
 
@@ -201,12 +198,11 @@ export function Composer({
           >
             <ModelPicker
               groups={pickerGroups}
-              value={model && { providerId: model.provider, modelId: model.modelId }}
+              value={shown && { providerId: shown.provider, modelId: shown.modelId }}
               onValueChange={({ providerId, modelId }) => {
                 const next = findComposerModel(providerId, modelId)
                 if (!next) return
-                setModel(next)
-                onModelChange?.({ provider: next.provider, modelId: next.modelId })
+                onModelChange({ provider: next.provider, modelId: next.modelId })
               }}
               side="top"
               align="start"

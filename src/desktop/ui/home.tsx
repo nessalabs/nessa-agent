@@ -15,17 +15,17 @@ import { HeaderArt } from "./header-art"
  */
 export function Home({
   onSend,
+  model,
   onModelChange,
-  initialModel,
   text,
   onTextChange,
 }: {
   /** Sends the first message; without it the composer says chat is not connected. */
   onSend?: (text: string) => void
+  /** The model the first message is sent with, held by the caller, as the text is. */
+  model: { provider: string; modelId: string } | undefined
   /** Told when the person picks another model. */
-  onModelChange?: (model: { provider: string; modelId: string }) => void
-  /** The catalogue model the composer starts on. */
-  initialModel?: { provider: string; modelId: string }
+  onModelChange: (model: { provider: string; modelId: string }) => void
   /** What is typed in the composer and not sent, held by the caller. */
   text: string
   onTextChange: (text: string) => void
@@ -43,8 +43,8 @@ export function Home({
             page={page}
             onPageChange={setPage}
             onSend={onSend}
+            model={model}
             onModelChange={onModelChange}
-            initialModel={initialModel}
             text={text}
             onTextChange={onTextChange}
           />

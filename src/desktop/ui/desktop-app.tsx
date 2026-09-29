@@ -19,6 +19,7 @@ import { useEdgePeek } from "../adapters/use-edge-peek"
 import { EdgePeekStrip } from "./edge-peek-strip"
 import { useThemePreference } from "../adapters/theme-preference"
 import type { DesktopThemeId } from "../model/theme"
+import { composerModels, defaultComposerModel } from "../model/composer-options"
 import {
   LEFT_DEFAULT_WIDTH,
   LEFT_MAX_WIDTH,
@@ -54,8 +55,11 @@ export function DesktopApp({
   hostKind: HostKind
   browserSurface: boolean
 }) {
-  // The classic home's unsent text: this shell's own, as it has no sessions.
+  // The classic home's unsent text and model: this shell's own, as it has no sessions.
   const [homeText, setHomeText] = useState("")
+  const [homeModel, setHomeModel] = useState<
+    { provider: string; modelId: string } | undefined
+  >(() => defaultComposerModel(composerModels))
   const {
     groupRef,
     layout,
@@ -264,7 +268,12 @@ export function DesktopApp({
               aria-hidden={rightMaximized || workspaceCollapsed}
             >
               <AppShellMain id="home" aria-label="Home" className="desktop-main">
-                <Home text={homeText} onTextChange={setHomeText} />
+                <Home
+                  text={homeText}
+                  onTextChange={setHomeText}
+                  model={homeModel}
+                  onModelChange={setHomeModel}
+                />
               </AppShellMain>
             </SplitViewPanel>
             <SplitViewSeparator

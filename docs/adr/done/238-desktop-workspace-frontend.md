@@ -456,6 +456,16 @@ pane showing another session, and goes with its session. Sent by the person
 (`messageSent`); a message an agent sends is its own, and what the person is
 typing stays; nothing sent (`not-asked`), it stays.
 
+**The model a composer shows** is the one its next message is sent with:
+`modelForNextTurn`, selected by the pane (`selectNextModel`). The composer
+holds no model of its own — it is given one and told of a pick, as it is given
+its text — so a model an agent chooses (`chooseModel`), or a newer summary
+from the source that moves the session, is what the picker shows while it
+stays mounted, and what `sendMessage` sends
+(`ui/panes/conversation.test.tsx`). The classic shell's home, which has no
+session, holds its own. A model the catalogue does not have shows as none
+chosen, never as another (`ui/composer.test.tsx`).
+
 The desktop gets its own store and composition root: `src/desktop/store.ts`,
 with `src/desktop/dependencies.ts` building its dependencies and
 `src/desktop/main.tsx` wiring dependencies → store → provider → icons → window.
