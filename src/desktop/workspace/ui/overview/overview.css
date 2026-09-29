@@ -74,13 +74,13 @@ html:not(.dark) .agents-overview-surface {
   position: relative;
   max-width: 640px;
   margin: 0 auto;
-  padding: 64px 28px 72px;
+  padding: 20px 28px 72px;
   outline: none;
 }
 
 .agents-overview[data-split] .agents-overview-column {
   max-width: 560px;
-  padding: 64px 20px 72px 28px;
+  padding: 20px 20px 72px 28px;
 }
 
 .agents-truncate {
@@ -91,6 +91,39 @@ html:not(.dark) .agents-overview-surface {
 }
 
 /* ——— Header ——— */
+
+/*
+ * The title, its counts and the filter hold their place at the top of the
+ * list side; only the list scrolls, fading out at its top edge, so a row
+ * slides away under the header rather than being cut.
+ */
+.agents-overview-side {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.agents-overview-side > .agents-overview-scroll {
+  flex: 1;
+  /* A row scrolling up under the header fades out over its last 20px. */
+  mask-image: linear-gradient(transparent, black 20px);
+}
+
+.agents-overview-header {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 640px;
+  flex: none;
+  margin: 0 auto;
+  padding: 64px 28px 12px;
+}
+
+.agents-overview[data-split] .agents-overview-header {
+  max-width: 560px;
+  padding: 64px 20px 12px 28px;
+}
 
 .agents-overview-header h1 {
   margin: 0;

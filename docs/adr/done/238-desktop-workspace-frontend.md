@@ -242,7 +242,10 @@ turn on (`layouts.test.tsx`). It began as a preview behind a setting; that
 setting is gone, and with it the sidebar's separate "Needs you" and "Running"
 views, which the overview holds — the session list shows one channel's
 sessions (`SessionView`). Previews to come are offered under Settings ›
-Advanced › Experimental, which says so while it has none. The entry and ⌘0 are a place like a channel:
+Advanced › Experimental, which says so while it has none. Its groups are
+shown only while they hold something, "Needs you" too — nothing waiting
+leaves no empty section — and its one quiet line ("Nothing needs you") shows
+only when it lists nothing at all (`overview.test.tsx`). Its header — the title, its counts and the filter — holds its place; only the list under it scrolls, fading out at its top edge. The entry and ⌘0 are a place like a channel:
 choosing it again keeps it, and Escape leaves it whenever it is open —
 wherever the keyboard is, even before the keyboard has landed on its row —
 but for Escape in a menu or dialog over it, which is theirs; every action that goes
