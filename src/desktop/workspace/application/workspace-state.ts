@@ -59,6 +59,12 @@ export type LoadStatus = "loading" | "ready" | "failed"
 export interface IndexRead {
   readonly read: string
   readonly heard: readonly string[]
+  /**
+   * A read asked after this one has answered and been applied: this one's
+   * answer, whenever it comes, is older than what the window holds, and is
+   * let go unread.
+   */
+  readonly outrun: boolean
 }
 
 export interface WorkspaceState {

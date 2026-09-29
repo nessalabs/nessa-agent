@@ -133,15 +133,21 @@ function removeSession(
  * stream brought before this read was asked, even while another read was
  * on its way, this read is the newer word on. A session the source has not
  * spoken of yet (revision 0) is the window's own, and stays.
+ *
+ * Answers may come in any order. One whose read was outrun — a read asked
+ * after it answered first — is older than what the window holds, and is let
+ * go unread: applied, it would take out a session the newer answer listed.
  */
 export function indexLoaded(
   state: WorkspaceState,
   { index, draftId, read }: { index: WorkspaceIndex; draftId: string; read: string },
 ): WorkspaceState {
+  const asked = state.reading.find((pending) => pending.read === read)
+  if (asked?.outrun) return { ...state, reading: readAnswered(state.reading, read) }
   const channels = new Set(index.channels.map((channel) => channel.id))
   const inChannel = index.sessions.filter((session) => channels.has(session.channelId))
   const listed = new Set(inChannel.map((session) => session.id))
-  const kept = new Set(state.reading.find((asked) => asked.read === read)?.heard ?? [])
+  const kept = new Set(asked?.heard ?? [])
   const heard = inChannel.reduce(summaryHeard, {
     ...state,
     sections: index.sections,
@@ -171,7 +177,7 @@ export function indexLoaded(
     ...reconciled,
     status: "ready",
     failure: null,
-    reading: readAnswered(state.reading, read),
+    reading: outrunBy(readAnswered(state.reading, read), state.reading, read),
   }
   if (state.panes) {
     // A channel the index no longer lists is not looked at.
@@ -211,6 +217,20 @@ export function indexLoaded(
   )
 }
 
+/** Every read still on its way that was asked before `read`: outrun by its answer. */
+function outrunBy(
+  pending: WorkspaceState["reading"],
+  asked: WorkspaceState["reading"],
+  read: string,
+): WorkspaceState["reading"] {
+  const at = asked.findIndex((entry) => entry.read === read)
+  if (at <= 0) return pending
+  const earlier = new Set(asked.slice(0, at).map((entry) => entry.read))
+  return pending.map((entry) =>
+    earlier.has(entry.read) && !entry.outrun ? { ...entry, outrun: true } : entry,
+  )
+}
+
 /** The read `read` answered, or failed: what the stream brought since it was asked goes with it. */
 function readAnswered(
   reading: WorkspaceState["reading"],
@@ -230,7 +250,7 @@ export function indexRequested(
   state: WorkspaceState,
   { read }: { read: string },
 ): WorkspaceState {
-  const reading = [...state.reading, { read, heard: [] }]
+  const reading = [...state.reading, { read, heard: [], outrun: false }]
   return state.status === "failed"
     ? { ...state, status: "loading", failure: null, reading }
     : { ...state, reading }

@@ -130,8 +130,12 @@ session the stream brought after that read was asked, which the read may
 predate: it stays, until a later read says otherwise. Each read notes what
 the stream brings from when it is asked (`reading`, by the name it was asked
 under), so with two reads on their way, a session brought before the second
-was asked is kept by the first and taken out by the second, whichever
-answers first. A session the source
+was asked is kept by the first and taken out by the second. **Answers are
+applied oldest to newest**: a read whose later-asked read has already been
+applied is outrun (`outrun`), and its answer is let go unread whenever it
+comes — applied, an older index would take out a session the newer one
+listed, leaving a tombstone at the revision held that a later index listing
+it at that same revision could not undo. A session the source
 has not spoken of (revision 0) is the window's own and stays. A pane is never
 left showing a session that is not there: a removal closes the pane showing
 it, and the last pane starts over as a new session's home in the same channel.
@@ -642,7 +646,9 @@ as it found it when it carried the call out, and what became of it — refused,
 or taken with the revision it produced (`WorkspaceSource.approve`, `deny`,
 `setPinned`, `archive`). A message carries who sent it too; the source records
 it when, taken, it lets a waiting approval go — naming the message, the
-approval and the sender. The in-memory source keeps that record (`audit()`).
+approval and the sender. The in-memory source keeps that record (`audit()`),
+and writes it before any subscriber hears of the change: one shown the
+approval gone finds its `let-go` on record already.
 Each of these commands, and sending a message, answers its caller with what
 became of it — `sent`, `refused` when the source said no, `unknown` when no
 answer came and it may have been done (`unavailable`), or `not-asked` when
@@ -673,10 +679,10 @@ leave a read or a send hanging. The one mark the window clears itself is
 | a session is shown | marked read, and the source told | nothing more | the mark stays cleared | marked unread again while shown: read again |
 | a shown session's transcript is read | the heading | the conversation, unless a newer one arrived meanwhile | the pane says why, and is not read again until "Try Again" (`retryTranscript`); a failure no pane shows any more is not kept, so the session is read afresh when shown again | the newer of it and the read's answer is kept, in either order |
 | the index is read | nothing yet | the workspace opens on its first session; summaries the stream already brought, if newer, are kept | the workspace says why, with "Try Again" | a removal that arrived first keeps the session out |
-| the index is read again (the resync) | nothing | a session it does not list, or lists in a channel it does not list, is taken out at the revision held — its pane closes, or the last starts over; every conversation on screen is read again, a read asked before that read of the index set aside and its answer let go — each answer paired with the read that asked it (`read`, on `indexRequested`, `indexLoaded`, `indexFailed`), in whatever order they arrive | an open workspace stays open, as it was | a summary the stream brought after that read was asked stays — noted per read, so a read asked after it is the newer word |
+| the index is read again (the resync) | nothing | a session it does not list, or lists in a channel it does not list, is taken out at the revision held — its pane closes, or the last starts over; every conversation on screen is read again, a read asked before that read of the index set aside and its answer let go — each answer paired with the read that asked it (`read`, on `indexRequested`, `indexLoaded`, `indexFailed`), in whatever order they arrive | an open workspace stays open, as it was | a summary the stream brought after that read was asked stays — noted per read, so a read asked after it is the newer word; the answer of a read outrun by a later-asked read already applied is let go unread |
 | the source sends `resync` (it reconnected, or found a gap) | nothing | the index is read again, as above | as above | as above |
 | a shown session's transcript read is answered with one the window cannot use (another session's, revision 0) | — | a fault, logged; the pane says why, with "Try Again" | — | — |
-| an update at a revision the source could not have sent | — | let go, logged where received | — | — |
+| an update at a revision the source could not have sent | — | let go, logged where received — by its kind, its session and the revision, never its content (a transcript holds the person's words and commands) | — | — |
 
 ### Naming the index
 

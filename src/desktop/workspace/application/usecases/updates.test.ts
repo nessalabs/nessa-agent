@@ -575,7 +575,7 @@ describe("the index read again: the resync", () => {
     })
     const first = indexLoaded(brought, { index: testIndex(), draftId: "x", read: "r1" })
     expect(first.sessions.z).toBeDefined()
-    expect(first.reading).toEqual([{ read: "r2", heard: ["z"] }])
+    expect(first.reading).toEqual([{ read: "r2", heard: ["z"], outrun: false }])
     const second = indexLoaded(first, { index: testIndex(), draftId: "y", read: "r2" })
     expect(second.sessions.z).toBeDefined()
     expect(second.reading).toEqual([])
@@ -592,7 +592,8 @@ describe("the index read again: the resync", () => {
     // r2 answers first: z came before it, so it goes.
     const newer = indexLoaded(two, { index: testIndex(), draftId: "x", read: "r2" })
     expect(newer.sessions.z).toBeUndefined()
-    expect(newer.reading).toEqual([{ read: "r1", heard: ["z"] }])
+    // r1, asked before r2, is outrun: its answer, whenever it comes, is let go.
+    expect(newer.reading).toEqual([{ read: "r1", heard: ["z"], outrun: true }])
     // In the other order, r1 keeps it — it may predate z — and r2 then takes it out.
     const older = indexLoaded(two, { index: testIndex(), draftId: "x", read: "r1" })
     expect(older.sessions.z).toBeDefined()
@@ -601,10 +602,33 @@ describe("the index read again: the resync", () => {
     expect(both.reading).toEqual([])
   })
 
+  it("lets an older read's answer go unread once a newer read's has been applied", () => {
+    // r1 and r2 on their way; r2 — the newer word — answers first and lists
+    // a session r1's older answer does not: applying r1 would take it out
+    // and leave a tombstone a later index listing it could not undo.
+    const two = indexRequested(indexRequested(loaded(), { read: "r1" }), { read: "r2" })
+    const withB = {
+      ...testIndex(),
+      sessions: [...testIndex().sessions, summary("b2", "gateway", 1)],
+    }
+    const newer = indexLoaded(two, { index: withB, draftId: "x", read: "r2" })
+    expect(newer.sessions.b2).toBeDefined()
+    const older = indexLoaded(newer, { index: testIndex(), draftId: "y", read: "r1" })
+    expect(older.sessions.b2).toBeDefined()
+    expect(older.removed).toEqual(newer.removed)
+    expect(older.reading).toEqual([])
+    // In the order asked, the newer answer is applied last, and says what stands.
+    const inOrder = indexLoaded(
+      indexLoaded(two, { index: testIndex(), draftId: "x", read: "r1" }),
+      { index: withB, draftId: "y", read: "r2" },
+    )
+    expect(inOrder.sessions.b2).toBeDefined()
+  })
+
   it("lets a failed read's notes go with it, and no other read's", () => {
     const two = indexRequested(indexRequested(loaded(), { read: "r1" }), { read: "r2" })
     const failed = indexFailed(two, { reason: "unavailable", read: "r1" })
-    expect(failed.reading).toEqual([{ read: "r2", heard: [] }])
+    expect(failed.reading).toEqual([{ read: "r2", heard: [], outrun: false }])
   })
 
   it("keeps a session the source has not spoken of yet: it is the window's own", () => {
