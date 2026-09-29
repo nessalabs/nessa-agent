@@ -496,8 +496,9 @@ are committed with the visible write; a retained tombstone is a catalogue deleti
 marker. The finite pass order is in [conversation catalogue](design/conversation-catalogue.md).
 `infrastructure/catalogue_source.rs` adapts that port to sync-engine's
 `CatalogueSource` through a bounded blocking worker bound to one authenticated
-caller and exact scope. Its stream ID derives from that caller's organization
-and principal; linked transport belongs to #260.
+caller and exact scope. The worker owns a Tokio runtime so metadata reads can
+use a blocking slot independently of the caller. Its stream ID derives from
+that caller's organization and principal; linked transport belongs to #260.
 
 A summary holds each conversation's title, last line said and time, derived by
 `domain/value_objects/conversation_summary.rs` — the one

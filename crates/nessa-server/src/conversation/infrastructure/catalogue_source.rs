@@ -79,8 +79,9 @@ impl Drop for Worker {
 }
 
 /// Cloneable source bound to one authenticated caller and one exact sync scope.
-/// Construct it inside Tokio, then call the synchronous trait on a blocking
-/// thread. A bounded worker queue is the explicit async/blocking boundary.
+/// Call the synchronous trait on a blocking thread. A bounded worker queue and
+/// source-owned Tokio runtime form the execution boundary: metadata reads can
+/// use `spawn_blocking` even when the caller occupies its only blocking slot.
 #[derive(Clone)]
 pub struct NessaCatalogueSource {
     scope: Scope,
@@ -92,13 +93,17 @@ impl NessaCatalogueSource {
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
         scope: Scope,
-        handle: Handle,
     ) -> Result<Self, CatalogueSourceError> {
         if scope.schema() != &conversation_catalogue_schema()
             || scope.stream() != &conversation_catalogue_stream(&caller)
         {
             return Err(CatalogueSourceError::IdentityChanged);
         }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .map_err(|_| CatalogueSourceError::Unavailable)?;
         let (sender, receiver) = mpsc::sync_channel(QUEUE_CAPACITY);
         let expected = scope.clone();
         let worker = thread::Builder::new()
@@ -107,12 +112,16 @@ impl NessaCatalogueSource {
                 while let Ok(command) = receiver.recv() {
                     match command {
                         Command::Head(scope, reply) => {
-                            let result =
-                                handle.block_on(read_head(&*catalogue, &caller, &expected, &scope));
+                            let result = runtime.block_on(read_head(
+                                &*catalogue,
+                                &caller,
+                                &expected,
+                                &scope,
+                            ));
                             let _ = reply.send(result);
                         }
                         Command::Manifest(request, reply) => {
-                            let result = handle.block_on(read_manifest(
+                            let result = runtime.block_on(read_manifest(
                                 &*catalogue,
                                 &caller,
                                 &expected,
@@ -121,7 +130,7 @@ impl NessaCatalogueSource {
                             let _ = reply.send(result);
                         }
                         Command::Resolve(pass, id, bound, reply) => {
-                            let result = handle.block_on(read_resolved(
+                            let result = runtime.block_on(read_resolved(
                                 &*catalogue,
                                 &caller,
                                 &expected,

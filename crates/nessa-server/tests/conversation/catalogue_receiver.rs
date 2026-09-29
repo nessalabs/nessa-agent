@@ -314,8 +314,7 @@ async fn receiver_child() {
         .await
         .unwrap();
     let scope = scope(&receiver, &head.incarnation);
-    let source =
-        NessaCatalogueSource::new(store, owner(), scope.clone(), Handle::current()).unwrap();
+    let source = NessaCatalogueSource::new(store, owner(), scope.clone()).unwrap();
     let stop_after_page = std::env::var_os("NESSA_259_CHILD_STOP_AFTER_PAGE").is_some();
     tokio::task::spawn_blocking(move || {
         let mut cache = SqliteReceiver::open(&cache_path);

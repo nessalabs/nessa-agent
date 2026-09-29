@@ -11,6 +11,39 @@ use crate::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use uuid::Uuid;
 
+#[test]
+fn source_head_finishes_when_caller_owns_the_only_blocking_slot() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("conversations");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let store = Arc::new(
+            super::super::store::LocalConversationStore::open(&private.join("metadata.sqlite3"))
+                .unwrap(),
+        );
+        let head = store
+            .head(&caller().organization_id, &caller().principal_id)
+            .await
+            .unwrap();
+        let scope = scope(&head.incarnation);
+        let mut source = NessaCatalogueSource::new(store, caller(), scope.clone()).unwrap();
+        let read = tokio::task::spawn_blocking(move || source.head(&scope));
+        let answer = tokio::time::timeout(std::time::Duration::from_secs(2), read)
+            .await
+            .expect("source read must finish with one caller blocking slot")
+            .unwrap()
+            .unwrap();
+        assert_eq!(answer, 0);
+    });
+    runtime.shutdown_timeout(std::time::Duration::from_millis(20));
+}
+
 fn id(value: &str) -> Id {
     Id::new(value).unwrap()
 }
@@ -77,12 +110,10 @@ async fn source_reads_owner_scoped_current_values_and_rejects_wrong_scope() {
     let mut bob_caller = caller();
     bob_caller.principal_id = PrincipalId::new("bob").unwrap();
     assert!(matches!(
-        NessaCatalogueSource::new(store.clone(), bob_caller, exact.clone(), Handle::current()),
+        NessaCatalogueSource::new(store.clone(), bob_caller, exact.clone()),
         Err(CatalogueSourceError::IdentityChanged)
     ));
-    let mut source =
-        NessaCatalogueSource::new(store.clone(), caller(), exact.clone(), Handle::current())
-            .unwrap();
+    let mut source = NessaCatalogueSource::new(store.clone(), caller(), exact.clone()).unwrap();
     let mut blocking = source.clone();
     assert_eq!(
         tokio::task::spawn_blocking(move || blocking.head(&exact))
@@ -205,13 +236,8 @@ async fn source_resolves_deletion_after_manifest_and_keeps_newer_revision() {
         .head(&caller().organization_id, &caller().principal_id)
         .await
         .unwrap();
-    let source = NessaCatalogueSource::new(
-        store.clone(),
-        caller(),
-        scope(&head.incarnation),
-        Handle::current(),
-    )
-    .unwrap();
+    let source =
+        NessaCatalogueSource::new(store.clone(), caller(), scope(&head.incarnation)).unwrap();
     let request = ManifestRequest {
         pass: pass(source.scope().clone(), head.revision),
         max_entries: 1,
