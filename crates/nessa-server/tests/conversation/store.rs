@@ -113,7 +113,10 @@ async fn mode_intent_and_commit_survive_restart_without_reapplying() {
         .finish_mode_change(&id, "mode-1", ConversationModeRequestState::Applied)
         .await
         .unwrap();
-    assert_eq!(opened.store.head(&org(), &alice()).await.unwrap().revision, 2);
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        2
+    );
     drop(opened.store);
     let reopened = LocalConversationStore::open(&opened.path).unwrap();
     assert_eq!(reopened.pending_mode_change(&id).await.unwrap(), None);
@@ -1249,8 +1252,9 @@ async fn catalogue_pages_use_creation_keys_and_do_not_cut_off_newer_changes() {
         20
     );
     let boundary = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    let writer = LocalConversationStore::open(&opened.path).unwrap();
     let created_midpass = new_id();
-    opened.store.create(owned(&created_midpass)).await.unwrap();
+    writer.create(owned(&created_midpass)).await.unwrap();
     let mut after = None;
     let mut seen = Vec::new();
     let mut first_page = true;
@@ -1272,8 +1276,7 @@ async fn catalogue_pages_use_creation_keys_and_do_not_cut_off_newer_changes() {
         }
         seen.extend(page.entries);
         if first_page {
-            opened
-                .store
+            writer
                 .record(&ids[0], said("changed behind cursor", 3))
                 .await
                 .unwrap();
@@ -1289,7 +1292,7 @@ async fn catalogue_pages_use_creation_keys_and_do_not_cut_off_newer_changes() {
         .all(|pair| (pair[0].key.creation, pair[0].key.id.to_string())
             < (pair[1].key.creation, pair[1].key.id.to_string())));
     let late = ids.last().unwrap();
-    opened.store.record(late, said("late", 4)).await.unwrap();
+    writer.record(late, said("late", 4)).await.unwrap();
     let page = opened
         .store
         .page(catalogue_request(
@@ -1416,4 +1419,110 @@ async fn catalogue_resolves_a_deletion_that_raced_its_manifest_descriptor() {
         .await
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn a_failed_visible_write_rolls_back_its_owner_revision() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    let incarnation = opened
+        .store
+        .head(&org(), &alice())
+        .await
+        .unwrap()
+        .incarnation;
+    let raw = raw(&opened.path);
+    raw.execute_batch("CREATE TRIGGER refuse_summary BEFORE INSERT ON summaries BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
+    assert!(matches!(
+        opened.store.record(&id, said("refused", 2)).await,
+        Err(ConversationError::Metadata)
+    ));
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        1
+    );
+    assert!(opened
+        .store
+        .resolve(&org(), &alice(), &incarnation, &id)
+        .await
+        .unwrap()
+        .unwrap()
+        .summary
+        .is_none());
+    raw.execute_batch("DROP TRIGGER refuse_summary;").unwrap();
+    opened.store.record(&id, said("accepted", 3)).await.unwrap();
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        2
+    );
+    raw.execute_batch("CREATE TRIGGER refuse_deletion BEFORE INSERT ON deletions BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
+    assert!(matches!(
+        opened.store.record_deletion(&id, deletion("refused")).await,
+        Err(ConversationError::Metadata)
+    ));
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        2
+    );
+    assert!(
+        !opened
+            .store
+            .resolve(&org(), &alice(), &incarnation, &id)
+            .await
+            .unwrap()
+            .unwrap()
+            .descriptor
+            .deleted
+    );
+    raw.execute_batch("DROP TRIGGER refuse_deletion;").unwrap();
+    opened
+        .store
+        .record_deletion(&id, deletion("accepted"))
+        .await
+        .unwrap();
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        3
+    );
+}
+
+#[tokio::test]
+async fn a_failed_creation_does_not_publish_an_owner_or_spend_a_revision() {
+    let opened = opened();
+    let id = new_id();
+    let incarnation = opened
+        .store
+        .head(&org(), &alice())
+        .await
+        .unwrap()
+        .incarnation;
+    let raw = raw(&opened.path);
+    raw.execute_batch("CREATE TRIGGER refuse_creation BEFORE INSERT ON conversations BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
+    assert!(matches!(
+        opened.store.create(owned(&id)).await,
+        Err(ConversationError::Metadata)
+    ));
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        0
+    );
+    assert!(opened
+        .store
+        .resolve(&org(), &alice(), &incarnation, &id)
+        .await
+        .unwrap()
+        .is_none());
+    raw.execute_batch("DROP TRIGGER refuse_creation;").unwrap();
+    opened.store.create(owned(&id)).await.unwrap();
+    let current = opened
+        .store
+        .resolve(&org(), &alice(), &incarnation, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (current.descriptor.key.creation, current.descriptor.revision),
+        (1, 1)
+    );
 }

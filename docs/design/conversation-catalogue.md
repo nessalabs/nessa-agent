@@ -38,3 +38,10 @@ The manifest reads one short transaction per page and releases it before any
 payload read. It does not use offsets or hold a snapshot across pages. Page
 size and payload size are bounded by the sync contract. The source stores no
 per-receiver state or history.
+
+The metadata tests in `crates/nessa-server/tests/conversation/store.rs` cover
+creation, summary, archive, deletion and mode revisions; failure rollback;
+version refusal; owner isolation; damaged rows; a manifest/deletion race; and a
+620-entry pass with changes from a second open store between pages. The sync
+adapter tests add receiver progress, lost replies, reset epochs and payload
+bounds when the shared dependency is integrated.
