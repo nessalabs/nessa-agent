@@ -1238,6 +1238,14 @@ html:not(.dark) [data-surface] {
   flex-direction: column;
 }
 
+/* The composer's box passes the page's height on to it. */
+.desktop-home[data-page] .desktop-home-composer {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
 /* The greeting stays, heading the page, on the same left edge as the text. */
 .desktop-home[data-page] .desktop-greeting {
   margin: 20px 0 0;

@@ -13,7 +13,10 @@
  * straight after ↓ puts the caret in the reply pill of the row ↓ went to,
  * and what is typed at once lands there; sending, which moves that row from
  * Needs you to Working and draws its pill anew, leaves the caret in the
- * session's pill (focus-reply, at 1440 × 900 and 1000 × 700).
+ * session's pill (focus-reply, at 1440 × 900 and 1000 × 700). Focus on the
+ * scene's Customize control in a new session's home, as the window shortens
+ * and the pane's home hides the scene, goes to that home's composer, not to
+ * the page (focus-home-scene).
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
@@ -423,7 +426,46 @@ Steps (each asserts where the caret is afterwards):
   which moves that row to Working → the caret stays in that session's pill
   focus-answers-overview, -card: a held ⌘↩, and ⌘↩ twice 80ms apart, each answer one request;
   a held ↩ on a pane card's Allow Once, and a double click on Deny and on
-  Always Allow, each answer one, and the held ↩ sends nothing typed`,
+  Always Allow, each answer one, and the held ↩ sends nothing typed
+  focus-home-scene: Customize focused in a new session's home, the window
+  shortened so the home hides its scene → the caret is in the home's composer`,
+}
+
+/**
+ * A new session's home alone in the pane shows its scene; the scene's
+ * Customize control takes focus; the window shortens, so the pane is under
+ * 640px and its home hides the scene (`conversation.css`). The caret goes to
+ * the home's composer rather than falling to the page.
+ */
+async function sceneHiddenKeepsCaret(page) {
+  const failures = []
+  await page.keyboard.press(keys.newSession)
+  await need(page, css.homeCustomize, "the scene's Customize control")
+  await settled(page)
+  await page.locator(css.homeCustomize).focus()
+  const held = await page.evaluate(
+    (sel) => document.activeElement?.matches(sel) === true,
+    css.homeCustomize,
+  )
+  if (!held) throw new CannotRun("Customize did not take focus")
+  await page.setViewportSize({ width: 1440, height: 600 })
+  await settled(page)
+  await frames(page, 3)
+  const after = await state(page)
+  const scene = await page.evaluate(
+    (sel) => document.querySelector(sel)?.checkVisibility() ?? false,
+    css.homeCustomize,
+  )
+  if (scene) throw new CannotRun("the scene still shows in a 600px window")
+  const inHome = await page.evaluate(
+    ([home, field]) => document.activeElement?.matches(`${home} ${field}`) === true,
+    [css.paneHome, css.field],
+  )
+  if (!inHome)
+    failures.push(
+      `the scene hid: the caret is on ${after.active}, not the home's composer`,
+    )
+  return { after, failures }
 }
 
 await main(meta, async ({ options, rep, url }) => {
@@ -501,6 +543,16 @@ await main(meta, async ({ options, rep, url }) => {
             await fresh.close()
           }
         })
+      await attempt(rep, { name: "focus-home-scene", engine, layout }, async () => {
+        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
+        try {
+          await need(fresh.page, css.composer, "a composer")
+          const result = await sceneHiddenKeepsCaret(fresh.page)
+          return { ...result, failures: [...result.failures, ...fresh.errors] }
+        } finally {
+          await fresh.close()
+        }
+      })
       for (const [width, height] of [
         [1440, 900],
         [1000, 700],

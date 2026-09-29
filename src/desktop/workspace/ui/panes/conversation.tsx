@@ -51,7 +51,9 @@ function useComposerActions(sessionId: string) {
  * A new session's home in a pane: the window's scene, greeting and composer,
  * the composer wired to this session, so the model chosen here is the one it
  * keeps and its first message starts it. `onSend` lets the pane measure the
- * home before the conversation replaces it.
+ * home before the conversation replaces it. Its composer sits in the dock's
+ * box, so a small pane docks it at the foot as a conversation's
+ * (`conversation.css`).
  */
 export const PaneHome = memo(function PaneHome({
   sessionId,
@@ -70,6 +72,8 @@ export const PaneHome = memo(function PaneHome({
       onModelChange={changeModel}
       text={text}
       onTextChange={onTextChange}
+      // Docked as a conversation's composer is, where the pane is small (`conversation.css`).
+      composerClassName="workspace-dock"
     />
   )
 })

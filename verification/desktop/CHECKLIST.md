@@ -274,6 +274,23 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   dark, with and without Ultra and Fast (Claude Sonnet 5 has neither),
   against the menus and chips beside it.
 - [ ] **Send from a new session arrives in its transcript.** _Check:_ `smoke.mjs` (`send`).
+- [ ] **A new session's home takes its pane's shape.** In a pane under 640px
+  either way its composer docks at the foot as the conversation's beside it
+  (same distance from the foot, inset and height, ± 1.5 px), with the
+  greeting on and turned off; the scene is gone and "Working late?" sits in
+  the middle above the composer at the conversation title's size, weight and
+  tracking; a larger pane keeps the scene and the card. A home appearing,
+  large or small, plays no settling; each crossing plays one, by opacity and
+  transform alone, and with less motion the composer is there on the next
+  frame. Across each crossing the same field keeps its draft, the model
+  chosen and an open page, and across a resize the caret keeps its focus and
+  position. _ADR 238 › A new session's home takes its pane's shape_.
+  _Check:_ `responsive.mjs --only home-shape --shots <dir>`, then look at the
+  shots beside the conversation pane.
+- [ ] **Focus on a hidden scene goes to the composer.** Customize focused in a
+  new session's home, the window shortened until the home hides its scene:
+  the caret is in that home's composer, not on the page. _Check:_ `focus.mjs`
+  (`focus-home-scene`).
 
 ## Settings
 

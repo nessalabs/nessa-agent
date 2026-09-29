@@ -32,7 +32,15 @@ export const css = {
   paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
   transcript: ".workspace-transcript", // class
-  dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot
+  dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
+  conversationDock: ".workspace-conversation .workspace-dock", // class: a conversation's composer, never a home's
+  paneHome: ".workspace-pane-home", // class: a new session's home in a pane
+  homeScene: ".workspace-pane-home .desktop-header", // class: the home's night scene or picture
+  greeting: ".workspace-pane-home .desktop-greeting", // class: "Working late?"
+  conversationTitle: ".workspace-heading h2", // class: a conversation's title, atop its transcript
+  composerCard: ".desktop-composer", // class: the composer's card
+  homePage: ".desktop-home[data-page]", // class: a home whose long draft opened the page
+  homeCustomize: ".workspace-pane-home .desktop-header-customize", // class: the scene's Customize control
   dragLayer: ".split-panes-layer", // class: what is carried is drawn in it, below the titlebar row
   dragGhost: ".split-panes-ghost", // class: the translucent copy the pointer carries
   dragCarrier: ".split-panes-carrier", // class: holds the copy at the pointer
@@ -76,6 +84,7 @@ export const css = {
   thinkingChip: 'button[aria-haspopup="dialog"][aria-label^="Thinking level"]',
   thinkingPopover: '[role="dialog"][aria-label="Thinking"]',
   modelChip: '[data-slot="model-picker-trigger"]', // the composer's model picker
+  modelPicker: '[data-slot="model-picker-content"]', // its list, a model each role="option"
   modelOption: '.desktop-model-picker [role="option"]', // class: a model in the picker
   thinkingSlider: '[role="dialog"][aria-label="Thinking"] [role="slider"]',
   thinkingTrack: ".desktop-thinking-slider", // class: the slider's pointer room; data-ultra when the model has Ultra
@@ -146,11 +155,13 @@ export const storage = {
   motion: "nessa.desktop.motion",
   theme: "nessa.desktop.theme",
   pictureInConversations: "nessa.desktop.picture-in-conversations",
+  greeting: "nessa.desktop.greeting",
 }
 
 /** The same-window event a stored preference announces a change on. */
 export const preferenceEvents = {
   layout: "nessa:workspace-layout",
+  greeting: "nessa:desktop-greeting",
 }
 
 /** The workspace layouts the scripts cover (`src/desktop/model/workspace-layout.ts`). */

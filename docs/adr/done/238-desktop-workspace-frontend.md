@@ -202,6 +202,49 @@ first (`model/window-fit.ts`, asking the same `columnsFit`); where even that
 cannot fit them, each pane's composer takes a compact, one-line form rather
 than be clipped.
 
+**A new session's home takes its pane's shape** (`ui/panes/conversation.css`,
+issue #285). In a pane at least 640px each way the home is the window's own:
+the scene, "Working late?" and the composer's card. In a smaller pane — split
+beside or below another, or in a short window — it takes a conversation's
+shape: the scene steps aside, the greeting sits in the middle of the room
+above the composer at a conversation title's size, and the composer docks at
+the pane's foot as a conversation's does, with the greeting turned off in
+Settings too. The pane's own size decides, by the container query the pane
+already is (`workspace-pane`), never the window's. It is one composer in both
+shapes: the home holds it in the dock's box (`Home`'s `composerClassName`),
+and the dock's rules, and a title's type, ask for a `workspace-docked`
+container around them, which a conversation always is and a home only while
+small, so the dock and the title are each written once. Nothing is
+remounted, so the draft, the caret, the model chosen and a long draft's page
+stay as they were across the threshold; the page still opens in either
+shape. In a small pane the arrival has nowhere to glide — the composer is
+already where the conversation docks it — so only the first message rises
+and the greeting lifts away. Crossing the threshold, as a pane is resized or
+split, the greeting and composer settle into their new places
+(`--desktop-slow`, opacity and transform only) under the panes' own flight;
+with less motion they are simply there. Only a crossing plays it: the
+stylesheet names each shape's settling in `--workspace-home-settle`, and the
+pane marks its home `data-reshaped` when that name changes under it
+(`adapters/dom/home-shape.ts`), so a home that appears, in either shape,
+plays only its own entrance, as it did before. Focus on the scene's controls
+(Customize, the picture's framing) when the scene steps aside goes to the
+focused pane's composer, as focus that falls away from anything in a pane
+does (`adapters/dom/focus.ts`); a framing being adjusted waits, as it was,
+for the scene to come back.
+
+`responsive.mjs --only home-shape` measures, in Chromium and WebKit: the
+docked composer's distance from the foot, inset and height against the
+conversation's beside it, with the greeting on and off; the scene hidden and
+the greeting's place and type in a small pane; the scene and the card in a
+large one; that a home appearing, large or small, plays no settling, and
+that each crossing plays one, by opacity and transform alone, and none with
+less motion; and, across each crossing, the same field, its draft, the model
+chosen and an open page — and, where the crossing is a resize that moves
+nothing else, the caret's focus and position. `focus.mjs`
+(`focus-home-scene`) measures that focus on Customize goes to the home's
+composer as the scene steps aside. A first message sent from a small home
+arriving in place is not measured in a browser.
+
 **Side columns: chosen, or folded for room** (`src/desktop/model/side-column.ts`,
 shared by the workspace's sidebar and session list and by Settings' sidebar):
 
@@ -364,7 +407,8 @@ in what the content is laid out at, chosen by measurement:
   foot, as a taller pane docks it (held to the top with the rest, it
   floated mid-pane), and what is held to the top cut where the composer
   begins, by as much as the pane is shorter, so it never runs under it; a
-  new session's home held to the middle; its header
+  new session's home held to the middle — a small one's docked composer
+  with it, not to the foot; its header
   held to the top left, so it steps
   past the window's controls where it rests in the corner and nothing of it
   passes under them. Centring down as well was tried: a pane shorter than
