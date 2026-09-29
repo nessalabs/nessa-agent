@@ -165,6 +165,27 @@ impl RecordWriter {
                 "committed semantic decision prefix changed before reconciliation",
             ));
         }
+        // A definite local size refusal must leave a fresh batch untouched. A
+        // later save can then choose a smaller, still atomic decision group.
+        let preflight_body = if self.pending.is_none() {
+            let start = if next_batch {
+                0
+            } else {
+                self.committed_prefix.len()
+            };
+            let remaining = &changes[start..];
+            if remaining.is_empty() {
+                None
+            } else {
+                let body = snapshot::encode_semantic_batch(remaining)?;
+                if body.len() > stream_fact::MAX_BODY_BYTES {
+                    return Err(StorageError::TooLarge);
+                }
+                Some(body)
+            }
+        } else {
+            None
+        };
         if next_batch {
             self.batch_generation = Some(generation);
             self.batch_complete = false;
@@ -210,10 +231,14 @@ impl RecordWriter {
             return Err(corrupt("semantic decisions disagree with observed session"));
         }
         let key = records::key_for_changes(self.committed.as_ref(), remaining, self.cursor.offset)?;
-        let fact = stream_fact::FramedFact {
-            key,
-            body: snapshot::encode_semantic_batch(remaining)?,
+        let body = match preflight_body {
+            Some(body) => body,
+            None => snapshot::encode_semantic_batch(remaining)?,
         };
+        if body.len() > stream_fact::MAX_BODY_BYTES {
+            return Err(StorageError::TooLarge);
+        }
+        let fact = stream_fact::FramedFact { key, body };
         let encoded = encoded[self.committed_prefix.len()..].to_vec();
         self.batch_complete = false;
         self.pending = Some(Pending {

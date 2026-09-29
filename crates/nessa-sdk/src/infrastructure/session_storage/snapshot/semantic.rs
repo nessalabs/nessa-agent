@@ -346,9 +346,14 @@ mod tests {
             sessions::{InvocationRecord, SubmissionAcknowledgement},
         },
         domain::agent_execution::{
-            executions::MessageChunk,
-            prompts::{PromptText, UserMessage},
+            executions::{MessageChunk, MessageId},
+            permissions::{
+                ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
+                ReviewDeclineStage,
+            },
+            prompts::{ImageReference, PromptText, UserMessage},
         },
+        domain::common::value_objects::{ImageMediaType, Sha256Digest},
     };
 
     #[test]
@@ -393,6 +398,117 @@ mod tests {
             decode_change(&bytes, &context).unwrap(),
             SessionChange::ProviderObservation(next) if next == event
         ));
+    }
+
+    #[test]
+    fn semantic_observation_refuses_an_empty_message_identity() {
+        let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let event = ExecutionEvent::new(
+            ExecutionId::new("one").unwrap(),
+            ExecutionUpdate::Message(
+                MessageChunk::text("chunk").with_message_id(MessageId::new("valid").unwrap()),
+            ),
+        );
+        let bytes = encode_change(&SessionChange::ProviderObservation(event)).unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value["ProviderObservation"]["message_id"] = "".into();
+        assert!(matches!(
+            decode_change(&serde_json::to_vec(&value).unwrap(), &context),
+            Err(StorageError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn semantic_admission_restores_image_references_through_domain_rules() {
+        let id = ExecutionId::new("one").unwrap();
+        let image =
+            ImageReference::new(Sha256Digest::from_bytes([1; 32]), ImageMediaType::Png, 1).unwrap();
+        let record = InvocationRecord {
+            target_event_offset: None,
+            submission: SubmissionMode::Immediate,
+            request: ExecutionRequest {
+                execution_id: id,
+                user_message: UserMessage::new(None, vec![image], Vec::new()).unwrap(),
+                estimated_input_tokens: 7,
+                reserved_output_tokens: 8,
+            },
+            actor: ActionContext::new("user", "phone", "send").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Pending,
+            events: Vec::new(),
+            scheduling: Vec::new(),
+            cancellation: None,
+            provider_report: None,
+            local_cancellation: None,
+            local_outcome: None,
+            result: None,
+        };
+        let bytes = encode_change(&SessionChange::InputAccepted(Box::new(record.clone()))).unwrap();
+        assert!(matches!(
+            decode_change(&bytes, &ProviderContext::Absent).unwrap(),
+            SessionChange::InputAccepted(next) if *next == record
+        ));
+        let valid: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        for (field, replacement) in [
+            ("digest", serde_json::Value::from("sha256:00")),
+            (
+                "digest",
+                serde_json::Value::from(format!("sha256:{}", "AB".repeat(32))),
+            ),
+            ("media_type", serde_json::Value::from("image/svg+xml")),
+            ("size", serde_json::Value::from(0)),
+        ] {
+            let mut invalid = valid.clone();
+            invalid["InputAccepted"]["metadata"]["user_images"][0][field] = replacement;
+            assert!(
+                matches!(
+                    decode_change(
+                        &serde_json::to_vec(&invalid).unwrap(),
+                        &ProviderContext::Absent
+                    ),
+                    Err(StorageError::Corrupt(_))
+                ),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_decline_stages_preserve_identity_and_order() {
+        let id = ExecutionId::new("one").unwrap();
+        let mut events = Vec::new();
+        for (decline_id, terminal) in [
+            ("1", ReviewDeclineStage::WriteConfirmed),
+            ("2", ReviewDeclineStage::WriteUnconfirmed),
+        ] {
+            let selected = ReviewDeclineObservation::selected(
+                ReviewDeclineId::new(decline_id).unwrap(),
+                ReviewDecline::new(Some("Read"), ReviewDeclineReason::ToolNotReviewable),
+            );
+            events.push(ExecutionEvent::new(
+                id.clone(),
+                ExecutionUpdate::ReviewDeclined(selected.clone()),
+            ));
+            events.push(ExecutionEvent::new(
+                id.clone(),
+                ExecutionUpdate::ReviewDeclined(selected.advance(terminal).unwrap()),
+            ));
+        }
+        let changes: Vec<_> = events
+            .iter()
+            .cloned()
+            .map(SessionChange::ProviderObservation)
+            .collect();
+        let bytes = encode_batch(&changes).unwrap();
+        let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let restored = decode_batch(&bytes, true, &context).unwrap();
+        let restored: Vec<_> = restored
+            .into_iter()
+            .map(|change| match change {
+                SessionChange::ProviderObservation(event) => event,
+                _ => panic!("decoded fact remains an observation"),
+            })
+            .collect();
+        assert_eq!(restored, events);
     }
 
     #[test]

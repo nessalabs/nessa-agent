@@ -92,6 +92,7 @@ pub(super) enum StorageFailure {
     IdentityMismatch,
     ChangesRequired,
     Unresolved,
+    TooLarge,
 }
 impl From<StorageFailure> for StorageError {
     fn from(value: StorageFailure) -> Self {
@@ -102,6 +103,7 @@ impl From<StorageFailure> for StorageError {
             StorageFailure::Corrupt(value) => Self::Corrupt(value),
             StorageFailure::ChangesRequired => Self::ChangesRequired,
             StorageFailure::Unresolved => Self::Unresolved,
+            StorageFailure::TooLarge => Self::TooLarge,
         }
     }
 }
@@ -114,6 +116,7 @@ impl From<StorageError> for StorageFailure {
             StorageError::Corrupt(value) => Self::Corrupt(value),
             StorageError::ChangesRequired => Self::ChangesRequired,
             StorageError::Unresolved => Self::Unresolved,
+            StorageError::TooLarge => Self::TooLarge,
         }
     }
 }

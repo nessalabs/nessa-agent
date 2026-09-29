@@ -1129,6 +1129,22 @@ impl SessionManager {
                 .pending
                 .push(SessionChange::ProviderObservation(event));
             evidence.event_usage.insert(id, usage);
+            // JSON may expand each retained byte to six bytes. Bound both
+            // payload and per-event metadata before the next provider boundary
+            // so a valid output cannot grow into an unframeable atomic fact.
+            let mut message_bytes = 0usize;
+            let mut message_count = 0usize;
+            for change in &evidence.pending {
+                if let SessionChange::ProviderObservation(observation) = change {
+                    if matches!(observation.update(), ExecutionUpdate::Message(_)) {
+                        message_bytes = message_bytes.saturating_add(observation.retained_bytes());
+                        message_count += 1;
+                    }
+                }
+            }
+            if message_bytes >= 8 * 1024 * 1024 || message_count >= 1024 {
+                self.save_observed(&mut evidence).await?;
+            }
             return Ok(());
         }
         evidence.message_histories.clear();
@@ -1161,9 +1177,10 @@ impl SessionManager {
             .pending
             .push(SessionChange::ProviderObservation(event));
         evidence.event_usage.insert(execution_id, usage);
-        // Text/thought fragments are live output until the next boundary save.
-        // Tools, reviews, terminal events and settlement persist the accumulated
-        // observations. A process failure may lose unfinished streaming text.
+        // Text/thought fragments are live output until a bounded output flush
+        // or the next boundary save. Tools, reviews, terminal events and
+        // settlement persist the accumulated observations. A process failure
+        // may lose only the unfinished streaming suffix.
         if save {
             self.save_observed(&mut evidence).await?;
         }

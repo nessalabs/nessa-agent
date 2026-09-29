@@ -161,6 +161,111 @@ async fn cancelled_save_wait_retries_the_same_generation_without_duplicate_recor
 }
 
 #[tokio::test]
+async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+    let id = SessionId::new("large-output").unwrap();
+    let inner = storage.open(id.clone()).await.unwrap();
+    let opened = SessionChange::Opened {
+        id: id.clone(),
+        provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
+        context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+    };
+    let initial = super::super::records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
+    inner
+        .save_changes(
+            SessionSaveGeneration::initial(),
+            initial.clone(),
+            vec![opened],
+        )
+        .await
+        .unwrap();
+    let active = invocation("large-active", false);
+    let active_id = active.request.execution_id.clone();
+    let input = SessionChange::InputAccepted(Box::new(active));
+    let initial =
+        super::super::records::fold_changes(Some(&initial), std::slice::from_ref(&input)).unwrap();
+    inner
+        .save_changes(
+            SessionSaveGeneration::initial().checked_next().unwrap(),
+            initial.clone(),
+            vec![input],
+        )
+        .await
+        .unwrap();
+    let chunk = "\0".repeat(ExecutionEvent::MAX_MESSAGE_CHUNK_BYTES);
+    let oversized: Vec<_> = (0..7)
+        .map(|_| {
+            SessionChange::ProviderObservation(ExecutionEvent::new(
+                active_id.clone(),
+                ExecutionUpdate::Message(MessageChunk::text(chunk.clone())),
+            ))
+        })
+        .collect();
+    let candidate = super::super::records::fold_changes(Some(&initial), &oversized).unwrap();
+    assert_eq!(
+        inner
+            .save_changes(
+                SessionSaveGeneration::initial()
+                    .checked_next()
+                    .unwrap()
+                    .checked_next()
+                    .unwrap(),
+                candidate,
+                oversized,
+            )
+            .await,
+        Err(StorageError::TooLarge)
+    );
+    assert_eq!(inner.load().await.unwrap(), Some(initial.clone()));
+    let lease: Arc<dyn SessionStorageLease> = Arc::from(inner);
+    let manager = SessionManager {
+        id: id.clone(),
+        storage_lease: lease.clone(),
+        evidence: Arc::new(Mutex::new(Evidence {
+            save_generation: SessionSaveGeneration::initial()
+                .checked_next()
+                .unwrap()
+                .checked_next()
+                .unwrap(),
+            observed: Some(initial.clone()),
+            committed: Some(initial),
+            ..Evidence::default()
+        })),
+        dispatched: RwLock::new(HashMap::new()),
+        attachment: Arc::new(AttachmentLease::empty()),
+    };
+    manager.begin_dispatch(&active_id);
+    for _ in 0..7 {
+        manager
+            .event(ExecutionEvent::new(
+                active_id.clone(),
+                ExecutionUpdate::Message(MessageChunk::text(chunk.clone())),
+            ))
+            .await
+            .unwrap();
+    }
+    manager.flush_observed().await.unwrap();
+    let saved = lease.load().await.unwrap().unwrap();
+    assert_eq!(saved.invocations[0].events.len(), 7);
+    drop(manager);
+    drop(lease);
+    storage.shutdown().await.unwrap();
+    drop(storage);
+
+    let reopened = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+    let lease = reopened.open_existing(id).await.unwrap().unwrap();
+    let saved = lease.load().await.unwrap().unwrap();
+    assert_eq!(saved.invocations[0].events.len(), 7);
+    let ExecutionUpdate::Message(last) = saved.invocations[0].events[6].update() else {
+        panic!("last output is a message");
+    };
+    assert_eq!(last.as_str().len(), ExecutionEvent::MAX_MESSAGE_CHUNK_BYTES);
+    drop(lease);
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn cancelled_wait_before_commit_extends_the_same_pending_generation() {
     let (mut manager, lease, active) = manager(0).await;
     let paused = Arc::new(PauseAfterSave {
@@ -354,6 +459,42 @@ async fn failed_observation_save_retries_the_same_decisions_in_order() {
         format!("{:?}", saves[1]),
         "a retry keeps the same typed changes"
     );
+}
+
+#[tokio::test]
+async fn proactive_message_flush_failure_keeps_the_exact_pending_generation() {
+    let (manager, lease, active) = manager(0).await;
+    let chunk = "\0".repeat(ExecutionEvent::MAX_MESSAGE_CHUNK_BYTES);
+    let output = || {
+        ExecutionEvent::new(
+            active.clone(),
+            ExecutionUpdate::Message(MessageChunk::text(chunk.clone())),
+        )
+    };
+    manager.event(output()).await.unwrap();
+    lease.fail_save.store(true, Ordering::SeqCst);
+    assert!(manager.event(output()).await.is_err());
+    assert_eq!(manager.evidence.lock().await.pending.len(), 2);
+    lease.fail_save.store(false, Ordering::SeqCst);
+    manager.flush_observed().await.unwrap();
+    assert_eq!(manager.evidence.lock().await.pending.len(), 0);
+    let changes = lease.changes.lock().unwrap();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(format!("{:?}", changes[0]), format!("{:?}", changes[1]));
+}
+
+#[tokio::test]
+async fn many_tiny_messages_flush_on_metadata_count() {
+    let (manager, lease, active) = manager(0).await;
+    for _ in 0..1024 {
+        manager.event(text(&active)).await.unwrap();
+    }
+    {
+        let saves = lease.changes.lock().unwrap();
+        assert_eq!(saves.len(), 1);
+        assert_eq!(saves[0].len(), 1024);
+    }
+    assert_eq!(manager.evidence.lock().await.pending.len(), 0);
 }
 
 #[tokio::test]

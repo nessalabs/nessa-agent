@@ -70,6 +70,8 @@ pub enum StorageError {
     ChangesRequired,
     /// A prior write may still commit and must be reconciled before reading old state.
     Unresolved,
+    /// An atomic encoded decision group exceeds the record writer's 160 MiB body limit.
+    TooLarge,
 }
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -416,7 +418,10 @@ pub trait SessionStorageLease: Send + Sync {
     /// exact retry finishes or acknowledges it without duplicating the prefix;
     /// a validated suffix may extend it. Only an acknowledged save advances
     /// to the next generation. Distinct generations may contain equal bytes.
-    /// Snapshot adapters ignore this stream-incarnation identity.
+    /// Snapshot adapters ignore this stream-incarnation identity. Record
+    /// adapters refuse an encoded atomic group above 160 MiB with
+    /// [`StorageError::TooLarge`] before appending any part of that group; a
+    /// caller may retry a smaller valid group with the same generation.
     fn save_changes(
         &self,
         _generation: SessionSaveGeneration,
@@ -522,7 +527,11 @@ impl StorageError {
     pub(crate) fn validate_retained_size(&self) -> Result<(), StorageError> {
         let capacity = match self {
             Self::Io(value) | Self::Corrupt(value) => value.capacity(),
-            Self::Busy | Self::IdentityMismatch | Self::ChangesRequired | Self::Unresolved => 0,
+            Self::Busy
+            | Self::IdentityMismatch
+            | Self::ChangesRequired
+            | Self::Unresolved
+            | Self::TooLarge => 0,
         };
         (capacity <= 4096)
             .then_some(())

@@ -2236,7 +2236,7 @@ mod tests {
 
         let mut recovered = RecordStorage::new(&root).unwrap();
         recovered.options.failure_injection = Some(SqliteFailureInjection::PauseBeforeCommit(
-            Duration::from_millis(300),
+            Duration::from_millis(700),
         ));
         let recovered = Arc::new(recovered);
         let opening = tokio::spawn({
@@ -2250,8 +2250,23 @@ mod tests {
             recovered.open_existing(id.clone()).await,
             Err(StorageError::Busy)
         ));
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        let lease = recovered.open_existing(id).await.unwrap().unwrap();
+        // The detached abort owns the reservation through SQLite's commit.
+        // Its completion time depends on the host, so wait for that handoff
+        // rather than assuming the injected pause has finished after 400 ms.
+        let lease = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                match recovered.open_existing(id.clone()).await {
+                    Err(StorageError::Busy) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    result => break result,
+                }
+            }
+        })
+        .await
+        .expect("detached abort recovery released its reservation before the deadline")
+        .unwrap()
+        .unwrap();
         assert_eq!(lease.load().await.unwrap(), Some(snapshot));
         drop(lease);
         recovered.shutdown().await.unwrap();
