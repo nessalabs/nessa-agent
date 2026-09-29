@@ -86,6 +86,7 @@ struct StreamingTest {
     backend: Arc<TestBackend>,
     chunks: mpsc::UnboundedSender<Chunk>,
     started: watch::Receiver<bool>,
+    settled: watch::Receiver<bool>,
 }
 impl StreamingTest {
     async fn new() -> Self {
@@ -95,18 +96,27 @@ impl StreamingTest {
         .await
     }
     async fn with_clock(clock: Arc<dyn MessageCommitClock>) -> Self {
+        Self::with_clock_and_outcome(clock, None).await
+    }
+    async fn with_clock_and_outcome(
+        clock: Arc<dyn MessageCommitClock>,
+        outcome_after_close: Option<Result<ExecutionOutcome, AgentError>>,
+    ) -> Self {
         let storage = MemoryStorage::default();
         let (chunks, receiver) = mpsc::unbounded_channel();
         // The existing backend remains active until close. Its ordinary output
         // goes to an unrelated channel so these tests control stream boundaries.
         let (sender, _ignored) = mpsc::unbounded_channel();
         let (closing, _) = watch::channel(false);
+        let (settled_sender, settled) = watch::channel(false);
         let backend = Arc::new(TestBackend {
             calls: Arc::new(ProviderCalls::default()),
             sender: Mutex::new(Some(sender)),
             closing,
+            settled: Some(settled_sender),
             wait_for_close: true,
             outcome: Ok(ExecutionOutcome::Completed),
+            outcome_after_close,
         });
         let (started_sender, started) = watch::channel(false);
         // The first backend message proves execute has started. Keep its output
@@ -138,6 +148,7 @@ impl StreamingTest {
             backend,
             chunks,
             started,
+            settled,
         }
     }
     async fn wait_for_dispatch(&self) {
@@ -539,6 +550,8 @@ async fn stopped_provider_cleanup_is_not_held_by_stalled_deadline_save() {
     let agent = test.agent.clone();
     let close = tokio::spawn(async move { agent.close(actor()).await });
     let cleanup_started = tokio::time::timeout(Duration::from_secs(2), closing.changed()).await;
+    let mut settled = test.settled.clone();
+    let provider_settled = tokio::time::timeout(Duration::from_secs(2), settled.changed()).await;
     release.send(()).unwrap();
     test.finish().await;
     assert!(
@@ -549,6 +562,119 @@ async fn stopped_provider_cleanup_is_not_held_by_stalled_deadline_save() {
         test.backend.calls.closes.lock().unwrap().as_slice(),
         &[SessionCloseRequest::Explicit(actor())]
     );
+    assert!(
+        provider_settled.is_ok(),
+        "supervisor did not poll provider settlement while timer save stalled"
+    );
     close.await.unwrap().unwrap();
     let _ = running.await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_timer_save_preserves_provider_reply_ready_during_the_write() {
+    for provider_failed in [false, true] {
+        let clock = Arc::new(ManualMessageClock::new());
+        let provider_outcome =
+            provider_failed.then(|| Err(AgentError::InvalidInput("provider failed".into())));
+        let test = StreamingTest::with_clock_and_outcome(clock.clone(), provider_outcome).await;
+        let running = test.start().await;
+        test.text("pending").await;
+        let (saving, release) = test.storage.pause_next_save();
+        test.storage.fail_next();
+        clock.advance(Duration::from_millis(100));
+        saving.await.unwrap();
+        test.backend.closing.send_replace(true);
+        let mut settled = test.settled.clone();
+        let provider_settled =
+            tokio::time::timeout(Duration::from_secs(2), settled.changed()).await;
+        release.send(()).unwrap();
+        assert!(
+            provider_settled.is_ok(),
+            "provider reply was not polled during save"
+        );
+        drop(test.chunks);
+        let result = tokio::time::timeout(Duration::from_secs(2), running)
+            .await
+            .unwrap()
+            .unwrap();
+        let Err(AgentError::StorageAfterExecution {
+            execution_result, ..
+        }) = result
+        else {
+            panic!("timer failure did not retain the provider outcome");
+        };
+        assert_eq!(execution_result.is_err(), provider_failed);
+        assert_eq!(
+            test.storage.snapshot().invocations[0]
+                .provider_report
+                .as_ref()
+                .unwrap()
+                .provider_result()
+                .unwrap()
+                .is_err(),
+            provider_failed
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_trailing_timer_save_keeps_an_already_recorded_provider_outcome() {
+    for provider_failed in [false, true] {
+        let clock = Arc::new(ManualMessageClock::new());
+        let provider_outcome =
+            provider_failed.then(|| Err(AgentError::InvalidInput("provider failed".into())));
+        let test = StreamingTest::with_clock_and_outcome(clock.clone(), provider_outcome).await;
+        let running = test.start().await;
+        test.backend.closing.send_replace(true);
+        let mut settled = test.settled.clone();
+        settled.wait_for(|done| *done).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if test.storage.snapshot().invocations[0]
+                    .provider_report
+                    .is_some()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        test.text("trailing").await;
+        let (saving, release) = test.storage.pause_next_save();
+        test.storage.fail_next();
+        clock.advance(Duration::from_millis(100));
+        saving.await.unwrap();
+        release.send(()).unwrap();
+        drop(test.chunks);
+        let result = tokio::time::timeout(Duration::from_secs(2), running)
+            .await
+            .unwrap()
+            .unwrap();
+        let Err(AgentError::StorageAfterExecution {
+            execution_result, ..
+        }) = result
+        else {
+            panic!("timer failure did not retain the independent execution result");
+        };
+        assert_eq!(execution_result.is_err(), provider_failed);
+        if !provider_failed {
+            assert_eq!(*execution_result, Ok(ExecutionOutcome::Cancelled));
+        }
+        assert_eq!(
+            test.backend.calls.closes.lock().unwrap().as_slice(),
+            &[SessionCloseRequest::ExecutionFailed]
+        );
+        assert_eq!(
+            test.storage.snapshot().invocations[0]
+                .provider_report
+                .as_ref()
+                .unwrap()
+                .provider_result()
+                .unwrap()
+                .is_err(),
+            provider_failed
+        );
+    }
 }

@@ -852,7 +852,116 @@ impl Agent {
         let mut storage_failure = None;
         let mut observation_failure = None;
         let mut stop_after_ready_settlement = false;
+        let mut pending_provider_outcome = None;
+        let mut pending_timer_failure: Option<StorageError> = None;
         loop {
+            if let Some(outcome) = pending_provider_outcome.take() {
+                let mut cleanup_failure = None;
+                admission_rejected = matches!(&outcome, ProviderExecutionReply::Rejected(_));
+                if let ProviderExecutionReply::Finished(settlement) = &outcome {
+                    // Read the admitted owner's first stop before adapter cleanup can
+                    // stop work itself. A report cannot authorize its own cancellation.
+                    let cancellation = (settlement.source()
+                        == ExecutionReportSource::LocalCancellation)
+                        .then(|| work.cancellation())
+                        .flatten();
+                    if settlement.source() == ExecutionReportSource::LocalCancellation
+                        && cancellation.is_none()
+                    {
+                        self.inner
+                            .lifecycle
+                            .record_provider_state(work, settlement.session_state());
+                        let error = AgentError::Protocol(
+                            "local cancellation report has no invocation stop".into(),
+                        );
+                        let (failure, _) = self
+                            .stop_after_observation_failure(
+                                error.clone(),
+                                ObservationFailureCause::ExecutionFailed,
+                            )
+                            .await;
+                        observation_failure = Some(failure);
+                        result = Some(Err(error));
+                        ended = true;
+                        continue;
+                    }
+                    self.inner
+                        .lifecycle
+                        .record_provider_state(work, settlement.session_state());
+                    provider_result = settlement.provider_result().cloned();
+                    if let ProviderSessionState::CleanupReported(cleanup) =
+                        settlement.session_state()
+                    {
+                        stop_after_ready_settlement |= !cleanup.is_confirmed();
+                    }
+                    if let Err(error) = self
+                        .inner
+                        .manager
+                        .record_provider_report(index, settlement.clone(), cancellation)
+                        .await
+                    {
+                        storage_failure.get_or_insert(error);
+                    }
+                    if matches!(
+                        settlement.session_state(),
+                        ProviderSessionState::CleanupRequired
+                    ) {
+                        let cleanup = self
+                            .shutdown_after_failure(SessionCloseRequest::ExecutionFailed)
+                            .await;
+                        stop_after_ready_settlement = !cleanup.is_confirmed();
+                        cleanup_failure = cleanup.into_result().err();
+                    }
+                }
+                let settled = outcome.into_result();
+                result = Some(match cleanup_failure {
+                    Some(error) => Err(AgentError::ExecutionObservation {
+                        error: Box::new(error),
+                        execution_result: Some(Box::new(settled)),
+                    }),
+                    None => settled,
+                });
+            }
+            if admission_rejected && observed_current_execution && observation_failure.is_none() {
+                // A rejected attempt cannot own observations. Keep its accepted
+                // prefix, then stop immediately rather than draining an unbounded
+                // ready stream from a provider that already violated the contract.
+                self.inner.manager.reject_dispatch(&input.execution_id);
+                let error = AgentError::Protocol(
+                    "provider rejected admission after emitting execution observations".into(),
+                );
+                let (failure, _) = self
+                    .stop_after_observation_failure(error, ObservationFailureCause::ExecutionFailed)
+                    .await;
+                observation_failure = Some(failure);
+            }
+            if admission_rejected && (storage_failure.is_some() || observation_failure.is_some()) {
+                // Invalid foreign observations already ran cleanup in the shared
+                // event path too. Do not poll another ready item after that failure.
+                ended = true;
+            }
+            if let Some(error) = pending_timer_failure.take() {
+                storage_failure.get_or_insert(error.clone());
+                let cleanup = self
+                    .shutdown_after_failure(SessionCloseRequest::ExecutionFailed)
+                    .await;
+                if let Err(cleanup_error) = cleanup.clone().into_result() {
+                    stop_after_ready_settlement = !cleanup.is_confirmed();
+                    observation_failure = Some(cleanup_error);
+                }
+                if result.is_none() {
+                    // Cleanup can make an execution reply ready. Give that
+                    // independent reply one poll before settling storage
+                    // failure as the only known execution outcome.
+                    tokio::select! {
+                        biased;
+                        outcome = &mut execution => pending_provider_outcome = Some(outcome),
+                        _ = async {} => result = Some(Err(AgentError::Storage(error))),
+                    }
+                }
+                ended = true;
+                continue;
+            }
             if result.is_some() && ended {
                 break;
             }
@@ -872,42 +981,7 @@ impl Agent {
                     // settlement and cancellation evidence while close cleans up.
                 }
                 outcome = &mut execution, if result.is_none() => {
-                    let mut cleanup_failure = None;
-                    admission_rejected = matches!(&outcome, ProviderExecutionReply::Rejected(_));
-                    if let ProviderExecutionReply::Finished(settlement) = &outcome {
-                        // Read the admitted owner's first stop before adapter cleanup can
-                        // stop work itself. A report cannot authorize its own cancellation.
-                        let cancellation = (settlement.source() == ExecutionReportSource::LocalCancellation)
-                            .then(|| work.cancellation()).flatten();
-                        if settlement.source() == ExecutionReportSource::LocalCancellation && cancellation.is_none() {
-                            self.inner.lifecycle.record_provider_state(work, settlement.session_state());
-                            let error = AgentError::Protocol("local cancellation report has no invocation stop".into());
-                            let (failure, _) = self.stop_after_observation_failure(error.clone(), ObservationFailureCause::ExecutionFailed).await;
-                            observation_failure = Some(failure);
-                            result = Some(Err(error));
-                            ended = true;
-                            continue;
-                        }
-                        self.inner.lifecycle.record_provider_state(work, settlement.session_state());
-                        provider_result = settlement.provider_result().cloned();
-                        if let ProviderSessionState::CleanupReported(cleanup) = settlement.session_state() {
-                            stop_after_ready_settlement |= !cleanup.is_confirmed();
-                        }
-                        if let Err(error) = self.inner.manager.record_provider_report(index, settlement.clone(), cancellation).await { storage_failure.get_or_insert(error); }
-                        if matches!(settlement.session_state(), ProviderSessionState::CleanupRequired) {
-                            let cleanup = self.shutdown_after_failure(SessionCloseRequest::ExecutionFailed).await;
-                            stop_after_ready_settlement = !cleanup.is_confirmed();
-                            cleanup_failure = cleanup.into_result().err();
-                        }
-                    }
-                    let settled = outcome.into_result();
-                    result = Some(match cleanup_failure {
-                        Some(error) => Err(AgentError::ExecutionObservation {
-                            error: Box::new(error),
-                            execution_result: Some(Box::new(settled)),
-                        }),
-                        None => settled,
-                    });
+                    pending_provider_outcome = Some(outcome);
                 }
                 // Unconfirmed cleanup cannot promise a finite observation stream.
                 // Capture an already-ready execution reply above, then stop before
@@ -922,14 +996,25 @@ impl Agent {
                     }
                 }, if !ended && storage_failure.is_none() => {
                     if let Some(Some((generation, _))) = message_deadline {
-                        if let Err(error) = self.inner.manager.flush_due_messages(generation).await {
-                            storage_failure.get_or_insert(error.clone());
-                            let cleanup = self.shutdown_after_failure(SessionCloseRequest::ExecutionFailed).await;
-                            if let Err(cleanup_error) = cleanup.into_result() {
-                                observation_failure = Some(cleanup_error);
+                        let flush = self.inner.manager.flush_due_messages(generation);
+                        tokio::pin!(flush);
+                        loop {
+                            tokio::select! {
+                                biased;
+                                _ = stop_notice.changed(), if !stop_observed => {
+                                    stop_observed = true;
+                                }
+                                outcome = &mut execution, if result.is_none() && pending_provider_outcome.is_none() => {
+                                    pending_provider_outcome = Some(outcome);
+                                }
+                                flush_result = &mut flush => {
+                                    if let Err(error) = flush_result {
+                                        storage_failure.get_or_insert(error.clone());
+                                        pending_timer_failure = Some(error);
+                                    }
+                                    break;
+                                }
                             }
-                            result = Some(Err(AgentError::Storage(error)));
-                            ended = true;
                         }
                     }
                 }
@@ -1005,24 +1090,6 @@ impl Agent {
                 // second terminal event. A conforming stream may remain open for
                 // the next invocation, so do not await future observations here.
                 _ = async {}, if admission_rejected || (result.is_some() && terminal.is_some()) => break,
-            }
-            if admission_rejected && observed_current_execution && observation_failure.is_none() {
-                // A rejected attempt cannot own observations. Keep its accepted
-                // prefix, then stop immediately rather than draining an unbounded
-                // ready stream from a provider that already violated the contract.
-                self.inner.manager.reject_dispatch(&input.execution_id);
-                let error = AgentError::Protocol(
-                    "provider rejected admission after emitting execution observations".into(),
-                );
-                let (failure, _) = self
-                    .stop_after_observation_failure(error, ObservationFailureCause::ExecutionFailed)
-                    .await;
-                observation_failure = Some(failure);
-            }
-            if admission_rejected && (storage_failure.is_some() || observation_failure.is_some()) {
-                // Invalid foreign observations already ran cleanup in the shared
-                // event path too. Do not poll another ready item after that failure.
-                ended = true;
             }
         }
         self.inner.manager.retire_observations(&input.execution_id);
