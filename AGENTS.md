@@ -39,6 +39,9 @@ examples.
   before it gets a branch.
 - [Rust imports and type names](CODING_STANDARDS.md#rust-imports-and-type-names)
   — applies to generated code through its generator, not by hand.
+- [Tracking work on the project board](CODING_STANDARDS.md#tracking-work-on-the-project-board)
+  — move the issue you are working on as the work moves: In progress when it
+  starts, In review when its PR opens. Applies to work you delegate.
 
 ## While you work
 
