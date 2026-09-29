@@ -24,6 +24,16 @@
   min-height: 0;
 }
 
+/*
+ * With the sidebar away, the list is the window's first column and meets its
+ * edge, where the sidebar's card would stand a gutter in. Its content takes
+ * that gutter too, so the search field and a row's highlight sit as far from
+ * the window's edge as from the panes beside them.
+ */
+.workspace[data-sidebar="closed"] .workspace-list-inner {
+  padding-left: var(--desktop-gutter);
+}
+
 .workspace[data-list="closed"] .workspace-list {
   position: absolute;
   top: 0;
