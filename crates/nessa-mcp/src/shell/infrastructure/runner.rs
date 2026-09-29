@@ -3,8 +3,8 @@ use crate::shell::{
     domain::{RunCause, StopCause},
 };
 use shepherd::{
-    EnvPolicy, GracePeriod, OutputMode, OutputStream, ProcessId, ProcessSpec, ProcessSupervisor,
-    TerminateOptions,
+    EnvPolicy, GracePeriod, OutputMode, OutputSnapshot, OutputStream, ProcessId, ProcessSpec,
+    ProcessSupervisor, TerminateOptions,
 };
 use std::{ffi::OsString, time::Duration};
 use tokio::sync::watch;
@@ -107,22 +107,70 @@ impl Runner for ShepherdRunner {
                 }
             }
             if let Some(output) = output {
-                let snapshot = output.read();
-                result.dropped_bytes = snapshot.dropped_bytes;
-                result.output_errors = snapshot.errors;
-                let mut stdout = Vec::new();
-                let mut stderr = Vec::new();
-                for chunk in snapshot.chunks {
-                    match chunk.stream {
-                        OutputStream::Stdout => stdout.extend(chunk.bytes),
-                        OutputStream::Stderr => stderr.extend(chunk.bytes),
-                    }
-                }
-                result.stdout = String::from_utf8_lossy(&stdout).into_owned();
-                result.stderr = String::from_utf8_lossy(&stderr).into_owned();
+                let collected = collect(|| output.read(), OUTPUT_CLOSE_WAIT).await;
+                result.dropped_bytes = collected.dropped_bytes;
+                result.output_errors = collected.errors;
+                result.stdout = String::from_utf8_lossy(&collected.stdout).into_owned();
+                result.stderr = String::from_utf8_lossy(&collected.stderr).into_owned();
             }
             result
         })
+    }
+}
+
+/// How long a result waits for both pipes to close after the scope ends.
+/// Each pipe is read on its own task, so the last bytes can arrive after exit.
+const OUTPUT_CLOSE_WAIT: Duration = Duration::from_secs(1);
+const OUTPUT_POLL: Duration = Duration::from_millis(5);
+
+struct Collected {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    dropped_bytes: u64,
+    errors: Vec<String>,
+}
+
+/// Drains the output until both streams have closed, or `wait` has passed.
+/// Each read consumes its chunks; dropped bytes and errors are cumulative, so
+/// the last snapshot's are the totals. A stream still open at the deadline is
+/// reported as an output error rather than passed off as complete.
+async fn collect(mut read: impl FnMut() -> OutputSnapshot, wait: Duration) -> Collected {
+    let deadline = tokio::time::Instant::now() + wait;
+    let mut collected = Collected {
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        dropped_bytes: 0,
+        errors: Vec::new(),
+    };
+    loop {
+        let snapshot = read();
+        for chunk in snapshot.chunks {
+            match chunk.stream {
+                OutputStream::Stdout => collected.stdout.extend(chunk.bytes),
+                OutputStream::Stderr => collected.stderr.extend(chunk.bytes),
+            }
+        }
+        collected.dropped_bytes = snapshot.dropped_bytes;
+        collected.errors = snapshot.errors;
+        let open: Vec<&str> = [
+            (!snapshot.stdout_closed).then_some("stdout"),
+            (!snapshot.stderr_closed).then_some("stderr"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if open.is_empty() {
+            return collected;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            collected.errors.push(format!(
+                "{} still open {}ms after the command ended",
+                open.join(" and "),
+                wait.as_millis()
+            ));
+            return collected;
+        }
+        tokio::time::sleep(OUTPUT_POLL).await;
     }
 }
 
