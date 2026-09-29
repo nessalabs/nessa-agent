@@ -458,14 +458,28 @@ pub(crate) async fn read_next_fact(
     {
         return Err(FactCommitError::InvalidStream);
     }
-    if after.offset == bounds.tail.offset {
+    read_next_fact_through(reader, stream, after, &bounds.tail).await
+}
+
+/// Read a fact without following records appended after `through` was captured.
+/// The caller must obtain a current bound and reject pruned or replaced streams.
+pub(crate) async fn read_next_fact_through(
+    reader: &dyn EventReader,
+    stream: &StreamKey,
+    after: &Cursor,
+    through: &Cursor,
+) -> Result<FactRead, FactCommitError> {
+    if after.stream != *stream || through.stream != *stream || after.offset > through.offset {
+        return Err(FactCommitError::InvalidStream);
+    }
+    if after.offset == through.offset {
         return Ok(FactRead::Absent);
     }
     let mut cursor = after.clone();
     let mut expected_count = None;
     let mut events = Vec::new();
-    while cursor.offset < bounds.tail.offset {
-        let page = reader.read_after(&cursor, PAGE, Some(&bounds.tail)).await?;
+    while cursor.offset < through.offset {
+        let page = reader.read_after(&cursor, PAGE, Some(through)).await?;
         if page.records.is_empty() {
             return Err(FactCommitError::InvalidStream);
         }

@@ -171,7 +171,7 @@ impl ReaderState {
         Ok(())
     }
 
-    async fn check_stream(&self) -> Result<(), SourceError> {
+    async fn check_stream(&self) -> Result<Cursor, SourceError> {
         let current = self
             .runtime
             .find_stream(&self.stream.id)
@@ -191,29 +191,28 @@ impl ReaderState {
         if bounds.tail.offset < self.head {
             return Err(SourceError::IdentityChanged);
         }
-        Ok(())
+        Ok(bounds.tail)
     }
 
     async fn head(&mut self, scope: &Scope) -> Result<u64, SourceError> {
         self.check_scope(scope)?;
-        self.check_stream().await?;
-        loop {
-            match stream_fact::read_next_fact(
+        let through = self.check_stream().await?;
+        self.advance_through(&through).await
+    }
+
+    async fn advance_through(&mut self, through: &Cursor) -> Result<u64, SourceError> {
+        while self.head < through.offset {
+            match stream_fact::read_next_fact_through(
                 &self.runtime,
                 &self.stream,
                 &Cursor::new(self.stream.clone(), self.head),
+                through,
             )
             .await
             .map_err(fact_error)?
             {
                 stream_fact::FactRead::Absent | stream_fact::FactRead::Partial => {
-                    if self.observed_heads.back() != Some(&self.head) {
-                        if self.observed_heads.len() == REMEMBERED_HEADS {
-                            self.observed_heads.pop_front();
-                        }
-                        self.observed_heads.push_back(self.head);
-                    }
-                    return Ok(self.head);
+                    break;
                 }
                 stream_fact::FactRead::Aborted { cursor }
                 | stream_fact::FactRead::Complete { cursor, .. } => {
@@ -221,10 +220,18 @@ impl ReaderState {
                 }
             }
         }
+        if self.observed_heads.back() != Some(&self.head) {
+            if self.observed_heads.len() == REMEMBERED_HEADS {
+                self.observed_heads.pop_front();
+            }
+            self.observed_heads.push_back(self.head);
+        }
+        Ok(self.head)
     }
 
     async fn page(&mut self, request: &PageRequest) -> Result<Page, SourceError> {
-        let head = self.head(&request.scope).await?;
+        self.check_scope(&request.scope)?;
+        let tail = self.check_stream().await?;
         if request.max_records == 0
             || request.max_records > MAX_PAGE_RECORDS
             || request.max_payload_bytes == 0
@@ -232,9 +239,15 @@ impl ReaderState {
             || request.max_record_bytes == 0
             || request.max_record_bytes > MAX_PAGE_PAYLOAD
             || request.after >= request.target
-            || request.target > head
-            || !self.is_terminal(request.target).await?
+            || request.target > tail.offset
         {
+            return Err(SourceError::InvalidRequest);
+        }
+        if request.target > self.head {
+            self.advance_through(&Cursor::new(self.stream.clone(), request.target))
+                .await?;
+        }
+        if request.target > self.head || !self.is_terminal(request.target).await? {
             return Err(SourceError::InvalidRequest);
         }
         let after = Cursor::new(self.stream.clone(), request.after);
@@ -300,10 +313,11 @@ impl ReaderState {
         }
         let mut position = 0;
         while position < target {
-            match stream_fact::read_next_fact(
+            match stream_fact::read_next_fact_through(
                 &self.runtime,
                 &self.stream,
                 &Cursor::new(self.stream.clone(), position),
+                &Cursor::new(self.stream.clone(), target),
             )
             .await
             .map_err(fact_error)?
@@ -516,6 +530,103 @@ mod tests {
         assert_eq!(page.records[1].position, 2);
         assert_eq!(page.records[1].payload[0], 1);
         drop(source);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn captured_head_and_historical_page_do_not_follow_a_later_suffix() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+        let runtime = storage.runtime().await.unwrap().clone();
+        let session = SessionId::new("conversation").unwrap();
+        let stream = runtime
+            .create_stream(&StreamId::new(session.as_str()).unwrap())
+            .await
+            .unwrap();
+        let fact = stream_fact::FramedFact {
+            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
+            body: b"first".to_vec(),
+        };
+        let first = stream_fact::frame_fact(&fact, 1).unwrap().remove(0);
+        runtime.append(&stream, first).await.unwrap();
+        let mut reader = ReaderState {
+            runtime: runtime.clone(),
+            stream: stream.clone(),
+            origin: id("origin"),
+            head: 0,
+            observed_heads: VecDeque::from([0]),
+        };
+        let captured = reader.check_stream().await.unwrap();
+
+        // A later record is deliberately invalid. Neither the earlier captured
+        // head nor a fixed historical page should inspect it. A fresh head must.
+        let mut later = stream_fact::frame_fact(&fact, 2).unwrap().remove(0);
+        later.schema = SchemaRef {
+            id: SchemaId::new("foreign.schema").unwrap(),
+            version: 1,
+        };
+        runtime.append(&stream, later).await.unwrap();
+        assert_eq!(reader.advance_through(&captured).await, Ok(1));
+
+        let source = storage
+            .record_source(&session, id("origin"))
+            .await
+            .unwrap()
+            .unwrap();
+        let scope = source.scope(id("receiver"), id("epoch"));
+        let (page, current_head) = tokio::task::spawn_blocking(move || {
+            let mut source = source;
+            let page = source.page(&request(scope.clone(), 0, 1, 1));
+            let current_head = source.head(&scope);
+            (page, current_head)
+        })
+        .await
+        .unwrap();
+        assert_eq!(page.unwrap().records.len(), 1);
+        assert_eq!(current_head, Err(SourceError::Unavailable));
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn captured_head_does_not_follow_a_later_seal() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+        let runtime = storage.runtime().await.unwrap().clone();
+        let stream = runtime
+            .create_stream(&StreamId::new("conversation").unwrap())
+            .await
+            .unwrap();
+        let fact = |body| stream_fact::FramedFact {
+            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
+            body,
+        };
+        runtime
+            .append(
+                &stream,
+                stream_fact::frame_fact(&fact(b"first".to_vec()), 1).unwrap()[0].clone(),
+            )
+            .await
+            .unwrap();
+        let frames = stream_fact::frame_fact(&fact(vec![b'x'; 100_000]), 2).unwrap();
+        runtime.append(&stream, frames[0].clone()).await.unwrap();
+        runtime.append(&stream, frames[1].clone()).await.unwrap();
+        let mut reader = ReaderState {
+            runtime: runtime.clone(),
+            stream: stream.clone(),
+            origin: id("origin"),
+            head: 0,
+            observed_heads: VecDeque::from([0]),
+        };
+        let captured = reader.check_stream().await.unwrap();
+        for frame in frames.iter().skip(2) {
+            runtime.append(&stream, frame.clone()).await.unwrap();
+        }
+        assert_eq!(reader.advance_through(&captured).await, Ok(1));
+        let current = reader.check_stream().await.unwrap();
+        assert_eq!(
+            reader.advance_through(&current).await,
+            Ok(frames.len() as u64 + 1)
+        );
         storage.shutdown().await.unwrap();
     }
 
