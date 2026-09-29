@@ -237,14 +237,20 @@ writing the full defaults on first launch is buying.
   `src/desktop/split-panes/` (its map is `index.ts`) owns the pane layout, its
   sizing, drops and the drag's phases (`model/`, pure), the port a host
   implements (`application/ports.ts`, `SplitPanesSource`), the drag, FLIP,
-  pointer resizing and Tab order (`adapters/dom/`), and the grid, its edges
-  and its stylesheet (`ui/`). A host supplies one source that reads its layout
-  and carries out every change through its own commands, and spreads the
-  grid's `frame` on its own pane root; the workspace is that host
-  (`adapters/store/split-panes-source.ts`, `ui/panes/pane-grid.tsx`). Other
-  modules import the barrel, or — from a model or use case, which may not
-  import React — the pure model by its files, and nothing else; the
-  architecture check refuses the rest. See
+  Tab order and the names a host may see of the page (`adapters/dom/`,
+  `marks.ts`), and the grid and its stylesheet (`ui/`). A host supplies one
+  source that reads its layout and carries out every change through its own
+  commands, and spreads the grid's `frame` on its own pane root; the
+  workspace is that host (`adapters/store/split-panes-source.ts`,
+  `ui/panes/pane-grid.tsx`). Other modules import the barrel, any of the pure
+  model's files (a model or use case, which may not import React, must), and
+  — from a test — `split-panes/testing`; split panes import no host, only the
+  desktop window's shared parts (`src/desktop/adapters/`, `ui/`, `model/`).
+  `scripts/architecture/split-panes-boundary.mjs` refuses the rest, however
+  the import is written; a test may still read a stylesheet's text by URL.
+  The page's names a host uses are held to the published ones by
+  `src/desktop/styles.test.ts`. The resize edge that the grid and the side
+  columns share is the desktop's (`src/desktop/ui/resize-edge.tsx`). See
   [adr/todo/253-split-panes-component.md](adr/todo/253-split-panes-component.md).
 - A preview offered under Settings › Advanced › Experimental is a window
   preference that decides only whether the window offers a way in; the

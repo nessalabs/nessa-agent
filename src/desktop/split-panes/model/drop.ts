@@ -3,8 +3,7 @@
  * a drag aims (`aimAt`, the pointer itself), the zone it is in, and the
  * layout the drop would leave — the one the
  * drag previews and the one the command commits, from this one function, so
- * the preview is never a guess at the drop (the workspace's `usecases/panes.ts`
- * calls it for both `movePane` and `dropSession`).
+ * the preview is never a guess at the drop (a host's commit asks it too).
  *
  * | carried            | zone   | outcome                                          |
  * | ------------------ | ------ | ------------------------------------------------ |
@@ -28,7 +27,7 @@ import {
 } from "./pane-layout"
 import { arrange, placements, type Arranged, type PaneRoom } from "./pane-sizing"
 
-/** What is carried: a pane by its header, or an item from outside the grid (a session from a list). */
+/** What is carried: a pane by its header, or an item from outside the grid (a row in a list). */
 export type Carried =
   | { readonly kind: "pane"; readonly pane: PaneKey }
   | { readonly kind: "item"; readonly item: string }
@@ -314,16 +313,16 @@ export function pointerVelocity(
 
 /**
  * What a drag may aim at: the grid and every pane in it, as laid out when the
- * press began — or `null` while no pane can be seen (the Agents overview or
- * Settings over them).
+ * press began — or `null` while no pane can be seen (the host covers them all,
+ * `targetable`).
  */
 export interface Targets {
   readonly grid: Rect
   readonly panes: readonly (readonly [PaneKey, Rect])[]
   /**
-   * What the host draws over or beside the grid as the press began — the
-   * workspace's side columns, docked or revealed from the window's edge
-   * over it: never a target, whatever is under them.
+   * What the host draws over or beside the grid as the press began — side
+   * columns, docked or revealed from the window's edge over it: never a
+   * target, whatever is under them.
    */
   readonly covered: readonly Rect[]
   /** Each pane's zones a drop would change nothing on, or the room refuses (`refusedZones`). */

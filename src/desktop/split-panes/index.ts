@@ -13,28 +13,47 @@
  *     │
  *     ├──▶ <SplitPanes source renderPane empty>        ui/split-panes.tsx
  *     │      ├──▶ renderPane({ placement, frame, multi }) ──▶ the host's pane root
- *     │      └──▶ ResizeEdge ──▶ usePointerResize       ui/, adapters/dom/
+ *     │      └──▶ the desktop's ResizeEdge              src/desktop/ui/resize-edge.tsx
  *     ├──▶ useSplitPanesDrag(root, source, options)   adapters/dom/drag.ts
  *     │      └──▶ model/drag.ts (stepDrag) ──▶ model/drop.ts (aimAt, dropOutcome)
- *     └──▶ FlipScope                                   adapters/dom/flip.tsx
+ *     ├──▶ FlipScope                                   adapters/dom/flip.tsx
+ *     └──▶ marks, classes, gridOf                      adapters/dom/marks.ts
  *
  *   model/pane-layout.ts ◀── model/pane-sizing.ts ◀── model/drop.ts ◀── model/drag.ts
  * ```
  *
- * An arrow points from what uses to what it uses. The model is pure — a
- * host's own model and use cases import it by its files, which is the one
- * way past this map; everything else a host takes from here. The module
- * never stores a layout: a drop, a resize, an equalize or a fit is the
- * host's to apply, through the source, so its rules keep one owner. The grid
- * adds no element around a pane: the host spreads the grid's `frame` on its
- * own root, which FLIP and the drag's preview move. `ui/split-panes.css`
- * places, resizes and carries panes; what a pane looks like is the host's.
+ * An arrow points from what uses to what it uses. A host takes what it uses
+ * from here; any module may import the pure model's files, and a host's own
+ * model and use cases, which may not import React, must; a test may take
+ * `testing.ts`. The module imports no host — only the desktop window's shared
+ * parts. `scripts/architecture/split-panes-boundary.mjs` holds both.
  *
- * A host marks its page for the drag: `data-drag-pane` (a pane's key, on
- * what carries it) and `data-drag-item` (an item's id, outside the grid);
- * `data-split-keeps` (`top-left`, `foot`, `middle`) on the parts of a pane a
- * preview holds to a point, `data-split-through` on a wrapper to look
- * inside, `data-split-scroll` on the scroller a copy shows one screen of.
+ * The module keeps no layout: a drop, a resize, an equalize or a fit is
+ * asked of the source (`split-panes.test.tsx`, "resizes, evens and fits
+ * through the source"; the drag's tests read every drop from it), so a
+ * host's rules keep one owner. The grid adds no element around a pane: the
+ * host spreads the grid's `frame` on its own root, which FLIP and the drag's
+ * preview move. `ui/split-panes.css` places and carries panes; what a pane
+ * looks like is the host's.
+ *
+ * What a host may see of the page is published (`marks`, `classes`) and
+ * nothing else is its to spell; `src/desktop/styles.test.ts` holds every
+ * host file to it:
+ *
+ * - it writes `data-drag-pane` (a pane's key, on what carries it),
+ *   `data-drag-item` (an item's id, outside the grid), and on a pane's
+ *   parts `data-split-keeps` (`top-left`, `foot`, `middle`),
+ *   `data-split-through` (a wrapper to look inside) and `data-split-scroll`
+ *   (what a copy shows one screen of);
+ * - it may style or read the grid (`.split-panes-grid`, `data-split-grid`,
+ *   found with `gridOf`, and `data-split-multi`), a pane's corner
+ *   (`data-split-corner`, and `data-drag-corner` while a preview moves it),
+ *   motion in progress (`data-split-flipping`, `data-drag-reflow`), a drag
+ *   (`data-drag-carrying`, `data-drag-lifted`, `data-drag-waiting`,
+ *   `data-drag-takes-spare`), and the carried copy and its layer
+ *   (`.split-panes-ghost`, `-layer`, `-carrier`, `-placeholder`, `-shield`);
+ * - the frame spreads `data-pane-key`, `data-flip` and `data-flip-id`, and a
+ *   host marks a column that slides with FLIP's `data-flip="slide"`.
  */
 export { useSplitPanesDrag, type SplitPanesDragOptions } from "./adapters/dom/drag"
 export { classes, gridOf, marks } from "./adapters/dom/marks"

@@ -108,9 +108,9 @@ export type DragEvent<Made = unknown> =
   | { readonly kind: "lost" }
   /**
    * Something the drag read changed, or is about to: a key that is a command,
-   * a resize, the panes or anything else the host watches (the workspace's
-   * content view and side columns), the carried item gone, the window going inert under Settings — or,
-   * pressed, nothing to carry on the page.
+   * a resize, the panes or anything else the host watches, the carried item
+   * gone, the page going inert under something modal — or, pressed, nothing
+   * to carry on the page.
    */
   | { readonly kind: "changed" }
   /** The copy's last flight — onto its place, or home — ended. */

@@ -1,9 +1,11 @@
 /**
  * What a host gives split panes: one source it builds once, which reads the
  * layout the host keeps and carries out every change through the host's own
- * commands. The module never stores a layout of its own — a drop, a resize,
- * an equalize or a fit is the host's to apply, so the rules the host adds to
- * a change (the workspace folds its sidebar for room, leaves drafts behind)
+ * commands. The module keeps no layout of its own — a drop, a resize, an
+ * equalize or a fit is asked of the source, and nothing else changes one
+ * (held by `split-panes.test.tsx`, "resizes, evens and fits through the
+ * source", and the drag's tests, which read every drop from the source) —
+ * so the rules a host adds to a change (folding a sidebar for room, say)
  * keep one owner. A host with no such rules applies a drop as the drag
  * previews it: the layout `dropOutcome` gives.
  */
@@ -38,8 +40,8 @@ export interface SplitPanesSource {
   /**
    * Values of the host's, compared by identity, whose change ends a press or
    * a drag (beside the panes' arrangement, which the drag watches itself):
-   * anything a drag reads once that the host can change — the workspace's
-   * content view and side columns.
+   * anything a drag reads once that the host can change, such as what fills
+   * its content region or which side columns are open.
    */
   watched(): readonly unknown[]
   /** Whether the host still has `item`: a carried item gone ends the drag. */

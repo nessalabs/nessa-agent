@@ -14,19 +14,28 @@
  *        ▼
  *   ui/ components, each once ──▶ ui/layouts/ that only arrange them
  *
- *   slice ──▶ adapters/store/split-panes-source.ts ──▶ split-panes (../split-panes)
- *                                                       the grid, the drag, FLIP
+ *   store (state.workspace.panes) ──▶ adapters/store/split-panes-source.ts
+ *                                            │ SplitPanesSource
+ *   adapters/dom/split-panes-drag.ts         ▼
+ *   (a session's card, the side columns) ──▶ ../split-panes: <SplitPanes> in
+ *                                            ui/panes/pane-grid.tsx, and
+ *                                            useSplitPanesDrag and FlipScope
+ *                                            in ui/layouts/workspace-shell.tsx
+ *                                            │ a drop, a resize, an equalize, a fit
+ *                                            ▼
+ *   commands (commitDrop, resizePanes, equalizePanes, fitPanes) ──▶ slice
  * ```
  *
  * An arrow points the way data flows. The panes are split panes, a module of
- * the window's the workspace wraps (`../split-panes`, ADR 253): it reads the
- * layout through the workspace's source and changes it only through the
- * commands here. `adapters/dom/` holds what belongs to the page rather than
- * the product — what the workspace adds to a drag (`split-panes-drag.ts`),
- * focus, the panes' room, keys, the clock's ticks — as hooks and adapters
- * beside the tree, never as state;
- * `adapters/storage/` keeps the overview's filter between launches. The Agents overview
- * is part of the workspace: its rules in `model/overview/`, its state in the
+ * the window's the workspace wraps (`../split-panes`, ADR 253): the window
+ * builds one source over the store, which the grid and the drag share, and
+ * the drag's options from `split-panes-drag.ts`; the module reads the layout
+ * through the source and changes it only through the commands here.
+ * `adapters/dom/` holds what belongs to the page rather than the product —
+ * what the workspace adds to a drag (`split-panes-drag.ts`), focus, the
+ * panes' room, keys, the clock's ticks — as hooks and adapters beside the
+ * tree, never as state; `adapters/storage/` keeps the overview's filter
+ * between launches. The Agents overview is part of the workspace: its rules in `model/overview/`, its state in the
  * slice, its views in `ui/overview/`, answering and reading through the same
  * commands and effects as a pane.
  *

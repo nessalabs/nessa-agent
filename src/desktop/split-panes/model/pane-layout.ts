@@ -8,8 +8,8 @@
  *   columns ─▶ [ column { share, panes ─▶ [ pane { key, item, share } ] } ]
  * ```
  *
- * Each pane shows an item: an opaque id the host gives meaning to (the
- * workspace's panes show sessions). A share is a pane's (or column's) part of
+ * Each pane shows an item: an opaque id the host gives meaning to (a
+ * conversation, a document). A share is a pane's (or column's) part of
  * its parent's room, relative to its siblings, so resizing the window keeps
  * proportions. Pane keys are minted by the layout itself and never reused
  * within it; a key names a pane for as long as it lives, whichever item it

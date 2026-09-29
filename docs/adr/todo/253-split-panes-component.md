@@ -50,8 +50,8 @@ What binds:
 
 `src/desktop/split-panes/` owns the pane model (`pane-layout`, `pane-sizing`,
 `drop`, `drag`), the port a host implements (`application/ports.ts`), the DOM
-adapters (drag and its preview, FLIP, pointer resize, tab order) and the UI
-(`<SplitPanes>`, `ResizeEdge`, its stylesheet). The model speaks of panes
+adapters (drag and its preview, FLIP, tab order, the names a host may see)
+and the UI (`<SplitPanes>`, its stylesheet). The model speaks of panes
 that each show an `item` — an opaque id the host gives meaning to — so
 `Carried` is a pane or an item, and the room a drop may take from the host is
 `spare` (`takesSpare`, not `foldSidebar`). A host supplies one
@@ -132,9 +132,53 @@ Where the code refined the contract above, and why:
   pane in the carried layer by `.split-panes-ghost-pane`; the pane's look
   stays the host's. The announcer's hidden style was only the drag's, so it
   moved too (`.split-panes-announcer`).
-- **The boundary is checked**: `pnpm architecture` refuses any import into
-  `split-panes/` but its barrel and — for a host's model and use cases, which
-  may not import React — its pure model files.
+- **The boundary is checked both ways**
+  (`scripts/architecture/split-panes-boundary.mjs`, with its tests): outside
+  the module, an import into it must be the barrel, one of the pure model's
+  files — any module may import them, and a host's model and use cases,
+  which may not import React, must — or, from a test, `split-panes/testing`;
+  inside it, an import out of it must be one of the desktop window's shared
+  parts (`src/desktop/adapters/`, `ui/`, `model/`), never a host. Every form
+  of import is read: named, side-effect (a stylesheet), dynamic, and
+  `vi.mock`. A test reading a stylesheet's text by URL is not an import and
+  is allowed: the sheet is published text.
+- **What a host sees of the page is published, not retyped**
+  (`adapters/dom/marks.ts`): `marks` (attributes), `classes`, and `gridOf`.
+  Every name begins `data-split-`, `data-drag-` or `split-panes-`, so a
+  host's stylesheets, which cannot import them, are held to them by what they
+  spell (`src/desktop/styles.test.ts`: any name of those families in a host
+  file or a verification script must be published). To make the families
+  total, `data-multi`, `data-corner`, `data-flipping`, `data-dragging`,
+  `data-lifted` and `data-waiting` were renamed into them. The frame's
+  `data-pane-key`, `data-flip` and `data-flip-id`, and FLIP's
+  `data-flip="slide"` a host writes on a column, keep their names: the host
+  spreads them from `frame` rather than spelling them, the verification
+  scripts use `data-pane-key` throughout, and renaming FLIP's markup is not
+  this move's.
+- **The resize edge is the desktop's**, not the module's: the side columns
+  use it as much as the grid does, so `ResizeEdge` and `usePointerResize`
+  live in `src/desktop/ui/` and `src/desktop/adapters/`, with their look in
+  `src/desktop/ui/resize-edge.css`; the grid places it between panes.
+- **`paneFrame` is test-only** (`split-panes/testing.ts`): a host spreads the
+  frame the grid hands it and has no use for building one.
+- **`copyOf` and `covered` stay required**: the one host sets both, and a
+  default ("nothing outside the grid is carried or covers it") would be an
+  option only a second host could tell right from wrong.
+- **The module assumes the desktop window**, beside its motion tokens and
+  reduced motion: the carried layer begins below the window's titlebar
+  (`--desktop-titlebar-height`) and a pane in the corner clears the window's
+  controls (`PanePlacement.corner`). A surface in another window would need
+  both.
+- **The announcer's hidden style is written out** (`.split-panes-announcer`),
+  not `sr-only`: the desktop's stylesheets carry no such utility, so there is
+  nothing to reuse; it was the drag's own before the move too.
+- **Settled as they are**: the root's `data-dragging` value `session` became
+  `item` with the model's words (nothing reads the value); the edges'
+  flight rule is now `:is([data-split-flipping], [data-drag-reflow])
+  .split-panes-pane-edge`, specificity (0,2,0) rather than (0,3,0), and the
+  pane's placement `.split-panes-grid > [data-pane-key]` — computed styles
+  are unchanged in every state sampled; a copy now leaves out every mark of
+  the module's, so a picture is never a part or something to carry.
 
 ## Consequences
 
@@ -146,10 +190,21 @@ Where the code refined the contract above, and why:
 - Harder: the contract is a real API now. Adding a behaviour means deciding
   whether it belongs to every host (the module) or to one (an option), and a
   change to an option's meaning touches every host.
-- The rename (`sessionId` → `item`, `session` → `item`, `foldSidebar` →
-  `takesSpare`, `.workspace-drag-*` → `.split-panes-*`) touches the workspace's
-  use cases, tests, selectors and the browser checks' selectors in the same
-  change, with no aliases left behind.
+- The rename touches the workspace's use cases, stylesheets, tests,
+  selectors and the browser checks' selectors in the same change, with no
+  aliases left behind: `sessionId` → `item`, `session` → `item` (a `Carried`
+  and the root's carrying value), `foldSidebar` → `takesSpare`,
+  `WorkspaceRoom` → `PaneRoom`; `.workspace-drag-*` → `.split-panes-*`,
+  `.workspace-panes` → `.split-panes-grid` with `data-split-grid`,
+  `.workspace-pane-edge` → `.split-panes-pane-edge`,
+  `.workspace-visually-hidden` → `.split-panes-announcer`; `.workspace-edge`
+  → the desktop's `.desktop-resize-edge`, `--workspace-glow` →
+  `--desktop-edge-glow`, `data-workspace-resizing` → `data-desktop-resizing`;
+  `data-drag-session` → `data-drag-item`, `data-drag-folds` →
+  `data-drag-takes-spare` (`marks.takesSpare`), `data-multi` →
+  `data-split-multi`, `data-corner` → `data-split-corner`, `data-flipping` →
+  `data-split-flipping`, `data-dragging` → `data-drag-carrying`,
+  `data-lifted` → `data-drag-lifted`, `data-waiting` → `data-drag-waiting`.
 - Watch for: an option that only the workspace ever sets growing into a
   second contract, or the workspace reaching past the source into the
   module's internals — either says the boundary is in the wrong place.

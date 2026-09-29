@@ -50,10 +50,11 @@ The desktop window gets a `workspace` vertical in `src/desktop/workspace/`,
 laid out feature-first with roles below, like `src/conversation/`.
 
 Since [253](../todo/253-split-panes-component.md), the split panes — the pane
-layout, its sizing, drops and the drag's phases (`model/`), the drag, FLIP,
-pointer resizing and Tab order (`adapters/dom/`), and the grid and its edges
-(`ui/`) — live in `src/desktop/split-panes/`, which the workspace wraps through
-one `SplitPanesSource`; the paths below that name them are that module's. The
+layout, its sizing, drops and the drag's phases (`model/`), the drag, FLIP
+and Tab order (`adapters/dom/`), and the grid (`ui/`) — live in
+`src/desktop/split-panes/`, which the workspace wraps through one
+`SplitPanesSource`; the paths below that name them are that module's, and
+the resize edge is the desktop's (`src/desktop/ui/resize-edge.tsx`). The
 behaviour set down here is unchanged by the move.
 
 - **`model/`** holds pure values and rules:

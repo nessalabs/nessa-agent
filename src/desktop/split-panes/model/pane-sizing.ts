@@ -123,7 +123,7 @@ export function placements(columns: PaneLayout["columns"]): {
 /**
  * The room the panes have: the grid's size as laid out — never as a flight
  * of motion draws it mid-way — and `spare`, the width the host could give
- * the grid beside it if a change needs it (the workspace's sidebar, folding:
+ * the grid beside it if a change needs it (a sidebar that would fold away:
  * its width and gutter; zero when there is none to give). Measured by the
  * host's page and handed to every change of layout, whoever asks for it.
  */

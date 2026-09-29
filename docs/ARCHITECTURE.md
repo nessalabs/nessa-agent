@@ -327,9 +327,11 @@ drop, a resize, an equalize or a fit through its own commands, so its rules
 holds FLIP motion (`flip.tsx`, which measures in React's commit phase, so any
 dispatch animates), drag and drop carried by the pointer with a live preview
 (`drag.ts`, `useSplitPanesDrag`, with what only the host knows given as
-options), pointer resizing and Tab order; `ui/` the grid (`SplitPanes`,
-which hands each pane a `frame` to spread on the host's own root), its edges
-(`ResizeEdge`, also the side columns') and its stylesheet.
+options), Tab order, and the names a host may see of the page (`marks.ts`:
+`marks`, `classes`, `gridOf`); `ui/` the grid (`SplitPanes`, which hands
+each pane a `frame` to spread on the host's own root, and places the
+desktop's `ResizeEdge` between panes, the same edge the side columns use)
+and its stylesheet. It imports no host.
 
 A pane subscribes to its own session and a row to its own summary, so a
 streamed word renders one transcript (`ui/panes/pane-isolation.test.tsx`).

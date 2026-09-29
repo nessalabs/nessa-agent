@@ -1,5 +1,5 @@
 /**
- * FLIP for the workspace: a layout change lands at once, and what moved plays
+ * FLIP for a host's panes and columns: a layout change lands at once, and what moved plays
  * back from where it was by transform alone, so no frame of the motion lays
  * out text again.
  *

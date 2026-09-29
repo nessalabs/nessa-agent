@@ -44,7 +44,7 @@
  * pane's key, on its header) or `data-drag-item` (an item's id, on a row
  * outside the grid), and by marking what each part of a pane keeps to as a
  * preview reshapes it (`data-split-keeps`, `PanePart`). The keyboard's own
- * ways — the workspace's Move items, ⌃⌥ and an arrow — are untouched.
+ * ways — whatever moves a host gives a pane — are untouched.
  */
 import { useEffect, type RefObject } from "react"
 import { reducedMotion } from "../../../adapters/motion-preference"
@@ -196,8 +196,8 @@ const boxOf = (rect: DOMRect | Box): Box => ({
 
 /**
  * Where something the host covers the grid with is once it has settled. It
- * rests at no transform, so one still sliding in — the workspace's peek,
- * revealed just before the press — is taken at the rect it is sliding to,
+ * rests at no transform, so one still sliding in — a column revealed from
+ * the window's edge just before the press — is taken at the rect it is sliding to,
  * its box less the translation it is drawn at now, never the part of the way
  * it has come.
  */
@@ -346,11 +346,11 @@ interface Made {
 /**
  * A part of a pane a preview draws at its own size, and what of the pane's
  * would-be box it keeps to, as a pane that shape would lay it out — as the
- * host marks it with `data-split-keeps`: `top-left` (the workspace's header,
- * where it steps past the window's controls), `foot` (its composer),
- * `middle` (a new session's home); unmarked, the top. Across, the top keeps
- * to the middle where the pane grows — a pane centres its conversation —
- * and to the left where it shrinks, so what is cut is the end of its lines,
+ * host marks it with `data-split-keeps`: `top-left` (a header, which steps
+ * past the window's controls in the corner), `foot` (what docks at the
+ * foot, a composer), `middle` (what a pane centres, an empty pane's
+ * content); unmarked, the top. Across, the top keeps to the middle where
+ * the pane grows — a pane centres its column of content — and to the left where it shrinks, so what is cut is the end of its lines,
  * never their start.
  */
 interface PanePart {
@@ -375,9 +375,8 @@ function keepsOf(element: HTMLElement): PanePart["keeps"] {
 
 /**
  * A pane's parts, read as the press begins: its children, and the children
- * of any the host marks `data-split-through` (a wrapper to look inside, as
- * the workspace's body and conversation are), so a conversation's
- * transcript and composer are parts apart.
+ * of any the host marks `data-split-through` (a wrapper to look inside), so
+ * what scrolls and what docks at the foot are parts apart.
  */
 function partsOf(pane: HTMLElement): PanePart[] {
   // Laid out, not drawn: offsets, summed up to the pane, ignore any transform.
@@ -429,8 +428,8 @@ export interface SplitPanesDragOptions {
   ) => HTMLElement
   /**
    * What the host draws over or beside the grid under `root` as the press
-   * begins, never a target whatever is under it (the workspace's side
-   * columns, docked or revealed from the edge).
+   * begins, never a target whatever is under it (side columns, docked or
+   * revealed from the window's edge).
    */
   readonly covered: (root: HTMLElement) => readonly Element[]
   /** Attributes of the host's a copy leaves out, beside the module's own. */
@@ -1147,7 +1146,7 @@ export function useSplitPanesDrag(
       waiting = null
     }
 
-    // The window going inert under Settings is seen as it happens, not at the next move.
+    // The page going inert under something modal is seen as it happens, not at the next move.
     const inert = new MutationObserver(() => {
       if (scope.closest("[inert]")) send({ kind: "changed" })
     })
@@ -1316,7 +1315,7 @@ export function useSplitPanesDrag(
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (phase.kind !== "pressed" && phase.kind !== "carrying") return
-      // Under Settings the keys are Settings' own, its Escape included.
+      // Under something modal the keys are its own, its Escape included.
       if (scope.closest("[inert]")) return
       const said = keyToDrag(event.key)
       if (!said) return
