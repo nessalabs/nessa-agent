@@ -892,6 +892,32 @@ impl Agent {
         let mut pending_provider_outcome = None;
         let mut pending_save_failure: Option<StorageError> = None;
         loop {
+            if let Some(error) = pending_save_failure.take() {
+                storage_failure.get_or_insert(error.clone());
+                // Fence admission and start cleanup before a captured report can
+                // require another save. The reply remains pending below.
+                let cleanup = self
+                    .shutdown_after_failure(SessionCloseRequest::ExecutionFailed)
+                    .await;
+                if let Err(cleanup_error) = cleanup.clone().into_result() {
+                    stop_after_ready_settlement = !cleanup.is_confirmed();
+                    observation_failure = Some(cleanup_error);
+                }
+                if !cleanup.is_confirmed() && result.is_none() && pending_provider_outcome.is_none()
+                {
+                    // An unconfirmed cleanup cannot promise eventual settlement.
+                    // Preserve a reply only if it is already ready.
+                    tokio::select! {
+                        biased;
+                        outcome = &mut execution => pending_provider_outcome = Some(outcome),
+                        _ = async {} => result = Some(Err(AgentError::Storage(error))),
+                    }
+                }
+                if !cleanup.is_confirmed() {
+                    ended = true;
+                }
+                continue;
+            }
             if let Some((outcome, cancellation_at_reply)) = pending_provider_outcome.take() {
                 let mut cleanup_failure = None;
                 admission_rejected = matches!(&outcome, ProviderExecutionReply::Rejected(_));
@@ -975,30 +1001,6 @@ impl Agent {
                 // event path too. Do not poll another ready item after that failure.
                 ended = true;
             }
-            if let Some(error) = pending_save_failure.take() {
-                storage_failure.get_or_insert(error.clone());
-                let cleanup = self
-                    .shutdown_after_failure(SessionCloseRequest::ExecutionFailed)
-                    .await;
-                if let Err(cleanup_error) = cleanup.clone().into_result() {
-                    stop_after_ready_settlement = !cleanup.is_confirmed();
-                    observation_failure = Some(cleanup_error);
-                }
-                if !cleanup.is_confirmed() && result.is_none() && pending_provider_outcome.is_none()
-                {
-                    // An unconfirmed cleanup cannot promise eventual settlement.
-                    // Preserve a reply only if it is already ready.
-                    tokio::select! {
-                        biased;
-                        outcome = &mut execution => pending_provider_outcome = Some(outcome),
-                        _ = async {} => result = Some(Err(AgentError::Storage(error))),
-                    }
-                }
-                if !cleanup.is_confirmed() {
-                    ended = true;
-                }
-                continue;
-            }
             if result.is_some() && ended {
                 break;
             }
@@ -1031,7 +1033,7 @@ impl Agent {
                     } else {
                         std::future::pending::<()>().await;
                     }
-                }, if !ended && storage_failure.is_none() => {
+                }, if storage_failure.is_none() => {
                     if let Some(Some((generation, _))) = message_deadline {
                         if let Err(error) = await_supervised_save(
                             self.inner.manager.flush_due_messages(generation),

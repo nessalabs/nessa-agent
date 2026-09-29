@@ -39,6 +39,7 @@ type Chunk = (ExecutionEvent, oneshot::Sender<()>);
 struct TextStream {
     chunks: mpsc::UnboundedReceiver<Chunk>,
     consumed: Option<oneshot::Sender<()>>,
+    ended: watch::Sender<bool>,
 }
 impl ExecutionEventStream for TextStream {
     fn next(&mut self) -> ProviderObservationFuture<'_> {
@@ -46,16 +47,23 @@ impl ExecutionEventStream for TextStream {
             if let Some(consumed) = self.consumed.take() {
                 let _ = consumed.send(());
             }
-            Ok(self.chunks.recv().await.map(|(event, consumed)| {
-                self.consumed = Some(consumed);
-                event
-            }))
+            match self.chunks.recv().await {
+                Some((event, consumed)) => {
+                    self.consumed = Some(consumed);
+                    Ok(Some(event))
+                }
+                None => {
+                    self.ended.send_replace(true);
+                    Ok(None)
+                }
+            }
         })
     }
 }
 struct TextProvider {
     backend: Arc<TestBackend>,
     chunks: Mutex<Option<mpsc::UnboundedReceiver<Chunk>>>,
+    ended: watch::Sender<bool>,
 }
 impl AgentProvider for TextProvider {
     fn identity(&self) -> ProviderIdentity {
@@ -75,6 +83,7 @@ impl AgentProvider for TextProvider {
                 events: Box::new(TextStream {
                     chunks: self.chunks.lock().unwrap().take().unwrap(),
                     consumed: None,
+                    ended: self.ended.clone(),
                 }),
             })
         })
@@ -87,6 +96,7 @@ struct StreamingTest {
     chunks: mpsc::UnboundedSender<Chunk>,
     started: watch::Receiver<bool>,
     settled: watch::Receiver<bool>,
+    stream_ended: watch::Receiver<bool>,
 }
 impl StreamingTest {
     async fn new() -> Self {
@@ -104,6 +114,7 @@ impl StreamingTest {
     ) -> Self {
         let storage = MemoryStorage::default();
         let (chunks, receiver) = mpsc::unbounded_channel();
+        let (ended_sender, stream_ended) = watch::channel(false);
         // The existing backend remains active until close. Its ordinary output
         // goes to an unrelated channel so these tests control stream boundaries.
         let (sender, _ignored) = mpsc::unbounded_channel();
@@ -132,6 +143,7 @@ impl StreamingTest {
             Arc::new(TextProvider {
                 backend: backend.clone(),
                 chunks: Mutex::new(Some(receiver)),
+                ended: ended_sender,
             }),
             SessionManager::open(
                 Some(SessionId::new("conversation").unwrap()),
@@ -150,6 +162,7 @@ impl StreamingTest {
             chunks,
             started,
             settled,
+            stream_ended,
         }
     }
     async fn wait_for_dispatch(&self) {
@@ -283,6 +296,24 @@ async fn eof_settlement_saves_text_without_a_terminal_event() {
         saved.invocations[0].result,
         Some(Ok(ExecutionOutcome::Cancelled))
     );
+}
+
+#[tokio::test]
+async fn eof_before_provider_reply_does_not_disable_pending_message_deadline() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test = StreamingTest::with_clock(clock.clone()).await;
+    let running = test.start().await;
+    test.text("text before eof").await;
+    let mut stream_ended = test.stream_ended.clone();
+    drop(test.chunks);
+    stream_ended.wait_for(|ended| *ended).await.unwrap();
+    assert!(!*test.settled.borrow());
+    assert!(test.storage.snapshot().invocations[0].events.is_empty());
+    clock.advance(Duration::from_millis(100));
+    wait_for_saved_text(&test.storage, 1).await;
+    assert!(!*test.settled.borrow());
+    test.backend.closing.send_replace(true);
+    assert_eq!(running.await.unwrap(), Ok(ExecutionOutcome::Cancelled));
 }
 
 #[tokio::test]
@@ -708,6 +739,57 @@ async fn failed_timer_save_preserves_provider_reply_ready_during_the_write() {
             provider_failed
         );
     }
+}
+
+#[tokio::test]
+async fn failed_save_starts_cleanup_before_captured_report_save_can_stall() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test = StreamingTest::with_clock(clock.clone()).await;
+    let running = test.start().await;
+    test.text("pending").await;
+    let (first_saving, release_first) = test.storage.pause_next_save();
+    test.storage.fail_next();
+    clock.advance(Duration::from_millis(100));
+    first_saving.await.unwrap();
+    test.backend.closing.send_replace(true);
+    let mut settled = test.settled.clone();
+    settled.wait_for(|done| *done).await.unwrap();
+    let (report_saving, release_report) = test.storage.pause_next_save();
+    release_first.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), report_saving)
+        .await
+        .expect("captured report save starts")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if test
+                .backend
+                .calls
+                .closes
+                .lock()
+                .unwrap()
+                .contains(&SessionCloseRequest::ExecutionFailed)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("first save failure must start cleanup before report save finishes");
+    release_report.send(()).unwrap();
+    drop(test.chunks);
+    let result = tokio::time::timeout(Duration::from_secs(2), running)
+        .await
+        .expect("execution settles")
+        .unwrap();
+    assert!(matches!(
+        result,
+        Err(AgentError::StorageAfterExecution { .. })
+    ));
+    assert!(test.storage.snapshot().invocations[0]
+        .provider_report
+        .is_some());
 }
 
 #[tokio::test]
