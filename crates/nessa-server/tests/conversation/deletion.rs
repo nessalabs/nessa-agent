@@ -2137,12 +2137,6 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
             .unwrap(),
         None
     );
-    let database = std::fs::read(&database).unwrap();
-    assert!(!database
-        .windows("read this".len())
-        .any(|window| window == b"read this"));
-    let sessions = files(&root.join("sessions"));
-    assert_eq!(sessions.len(), 2, "{:?}", sessions.keys());
     let lease = storage
         .open_existing(SessionId::new(id.to_string()).unwrap())
         .await
@@ -2164,7 +2158,20 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
             )
             .await,
     );
+    drop(lease);
     service.shutdown().await.unwrap();
+    drop(service);
+    drop(storage);
+    drop(metadata);
+
+    // SQLite's owner has closed before examining raw files. Windows can deny
+    // byte reads while its active connection holds a range lock.
+    let database = std::fs::read(&database).unwrap();
+    assert!(!database
+        .windows("read this".len())
+        .any(|window| window == b"read this"));
+    let sessions = files(&root.join("sessions"));
+    assert_eq!(sessions.len(), 2, "{:?}", sessions.keys());
 }
 
 /// The tombstone the repository holds for `id`.
