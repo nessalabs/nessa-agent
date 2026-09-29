@@ -1,4 +1,9 @@
-import { memo, type RefObject } from "react"
+import {
+  memo,
+  useMemo,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
+} from "react"
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
 import { useNow } from "../../adapters/dom/clock"
@@ -11,10 +16,12 @@ import {
   selectTranscript,
   selectTranscriptFailure,
 } from "../../adapters/store/selectors"
+import { isMac } from "../../../adapters/platform"
+import { matchesChord } from "../../../model/keyboard"
 import { answering } from "../../application/workspace-state"
 import { peekOf } from "../../model/overview/peek"
 import { sessionTime } from "../../model/time-labels"
-import { agentName, agentOf, modelName } from "../../model/workspace-index"
+import { agentName, agentOf, modelName, nowLine } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { failureCopy } from "../failure-copy"
@@ -34,11 +41,17 @@ import { answeredLabels, type OnAnswer, type Settling } from "./settling"
  * did and said since, in order, what it is doing now — and, when it waits on
  * the person, the request in full with its answers. The story is drawn with
  * the conversation's own pieces (its messages, the live row), so a session
- * reads the same here as in its pane, and a long turn scrolls within the
- * peek. A reply pill at its foot lets the person answer the agent from here.
+ * reads the same here as in its pane; it draws the turn's latest parts
+ * (`peekOf`), saying where there is more above, which the session shows in
+ * full. A long story scrolls within the peek — beside the list, the peek
+ * scrolls; beneath a row, the story scrolls in its own bounded height and
+ * takes the keyboard to do it, so it is reached and scrolled without a
+ * pointer in WebKit too. A reply pill at its foot lets the person answer the
+ * agent from here.
  */
 export const SessionPeek = memo(function SessionPeek({
   sessionId,
+  placement,
   settling,
   onOpen,
   onAnswer,
@@ -46,6 +59,8 @@ export const SessionPeek = memo(function SessionPeek({
   replyRef,
 }: {
   sessionId: string
+  /** Beside the list, or opened beneath its row, where its story scrolls on its own. */
+  placement: "beside" | "beneath"
   settling: Settling | undefined
   onOpen: (sessionId: string) => void
   onAnswer: OnAnswer
@@ -69,8 +84,10 @@ export const SessionPeek = memo(function SessionPeek({
   const answer = useWorkspaceSelector((state) =>
     approval ? selectAnswer(state, sessionId, approval.id) : undefined,
   )
+  // Drawn again only when the conversation changes, not on every tick or answer.
+  const peek = useMemo(() => (transcript ? peekOf(transcript) : null), [transcript])
   if (!summary) return null
-  const peek = transcript ? peekOf(transcript) : null
+  const line = nowLine(summary)
   // What the agent is doing now, while it works: the story's last line, where its reply will appear.
   const running = summary.status === "running" ? (peek?.activity ?? null) : null
   const answerable = approval !== null && !settling && !answering(answer, approval.id)
@@ -121,17 +138,36 @@ export const SessionPeek = memo(function SessionPeek({
             {sessionTime(summary.updatedAt, now)}
           </time>
         </p>
-        {summary.now ? (
-          <p className="agents-peek-summary agents-truncate" title={summary.now}>
-            {summary.now}
+        {line !== null ? (
+          <p className="agents-peek-summary agents-truncate" title={line}>
+            {line}
           </p>
         ) : null}
       </div>
 
       {peek && (peek.asked || peek.since.length > 0 || running) ? (
-        <section className="agents-peek-story" aria-label="This turn">
+        <section
+          className="agents-peek-story"
+          aria-label="This turn"
+          tabIndex={placement === "beneath" ? 0 : undefined}
+          onKeyDown={placement === "beneath" ? keepScrollKeys : undefined}
+        >
           {peek.asked ? (
             <Message sessionId={sessionId} message={peek.asked} isNew={false} />
+          ) : null}
+          {peek.earlier ? (
+            <p className="agents-peek-earlier">
+              Earlier in this turn
+              {" · "}
+              <button
+                type="button"
+                className="workspace-link-button"
+                {...tooltip("Open Session", { shortcut: labelOf(overviewKeys, "open") })}
+                onClick={() => onOpen(sessionId)}
+              >
+                Open
+              </button>
+            </p>
           ) : null}
           {peek.since.map((message) => (
             <Message
@@ -191,3 +227,21 @@ export const SessionPeek = memo(function SessionPeek({
     </article>
   )
 })
+
+/**
+ * The keys that walk the list scroll the story instead while it has the
+ * keyboard, as any scroller's do: they stop here, and the page scrolls it.
+ */
+function keepScrollKeys(event: ReactKeyboardEvent<HTMLElement>) {
+  if (event.target !== event.currentTarget) return
+  const binding = overviewKeys.find((candidate) =>
+    matchesChord(event.nativeEvent, candidate.chord, isMac),
+  )
+  if (
+    binding?.command === "next" ||
+    binding?.command === "previous" ||
+    binding?.command === "first" ||
+    binding?.command === "last"
+  )
+    event.stopPropagation()
+}

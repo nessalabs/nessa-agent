@@ -734,6 +734,13 @@ html:not(.dark) .agents-request {
   font-size: var(--desktop-text-body);
 }
 
+/* Where the story begins after the person's message, when the turn holds more above. */
+.agents-peek-earlier {
+  margin: 0;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+}
+
 /* The request in full: the one warm thing in the peek, as in a pane. */
 .agents-peek-ask {
   display: grid;
@@ -805,16 +812,28 @@ html:not(.dark) .agents-request {
   display: none;
 }
 
-/* Beneath its row, a long turn scrolls within the peek rather than pushing the list away. */
+/*
+ * Beneath its row, a long turn scrolls within the peek rather than pushing
+ * the list away. It takes the keyboard (it is focusable, so WebKit reaches
+ * it too) and keeps its scrollbar; its foot fades out over its last 16px
+ * while there is more below, and the padding under its last line lets that
+ * line scroll clear of the fade.
+ */
 .agents-inline-peek .agents-peek-story {
   max-height: 360px;
+  /* Room inside for its focus ring, taken back outside so its words stay aligned. */
+  margin-inline: -8px;
+  padding: 0 8px 16px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: none;
+  mask-image: linear-gradient(black calc(100% - 16px), transparent);
+  border-radius: var(--desktop-radius-sm);
+  outline: none;
 }
 
-.agents-inline-peek .agents-peek-story::-webkit-scrollbar {
-  display: none;
+/* Inset, so the story's own mask does not clip it away. */
+.agents-inline-peek .agents-peek-story:focus-visible {
+  box-shadow: inset 0 0 0 1.5px var(--desktop-focus-ring);
 }
 
 /* ——— Replying from the peek: a pill, the composer pared down ——— */

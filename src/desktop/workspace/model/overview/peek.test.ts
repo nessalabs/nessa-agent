@@ -23,14 +23,53 @@ describe("peekOf", () => {
     const peek = peekOf(conversation(first, earlier, asked, steps, words))
     expect(peek.asked).toBe(asked)
     expect(peek.since).toEqual([steps, words])
+    expect(peek.earlier).toBe(false)
   })
 
-  it("keeps every step of a long turn, none counted away", () => {
+  it("draws the latest parts of a long turn and says there is more above, the oldest drawn cut to its latest parts", () => {
+    const parts = (from: number, count: number) =>
+      Array.from({ length: count }, (_, index) => step(`s${from + index}`))
+    const asked = message("user", 1, text("Go."))
+    const early = message("agent", 2, ...parts(0, 10))
+    const middle = message("agent", 3, ...parts(10, 20))
+    const latest = message("agent", 4, ...parts(30, 10))
+    const peek = peekOf(conversation(asked, early, middle, latest), 24)
+    expect(peek.asked).toBe(asked)
+    expect(peek.earlier).toBe(true)
+    expect(peek.since).toHaveLength(2)
+    // The latest message as it is; the one before it cut to its last 14 parts, under its own id.
+    expect(peek.since[1]).toBe(latest)
+    expect(peek.since[0].id).toBe(middle.id)
+    expect(peek.since[0].parts).toEqual(middle.parts.slice(-14))
+    expect(peek.since.flatMap((each) => each.parts)).toHaveLength(24)
+  })
+
+  it("draws a single message longer than the bound from its latest parts", () => {
     const many = Array.from({ length: 40 }, (_, index) => step(`s${index}`))
     const peek = peekOf(
       conversation(message("user", 1, text("Go.")), message("agent", 2, ...many)),
+      24,
     )
-    expect(peek.since[0].parts).toHaveLength(40)
+    expect(peek.since[0].parts).toEqual(many.slice(-24))
+    expect(peek.earlier).toBe(true)
+  })
+
+  it("draws a turn that fits whole, and says nothing is above", () => {
+    const whole = message("agent", 2, ...Array.from({ length: 24 }, () => step("s")))
+    const peek = peekOf(conversation(message("user", 1, text("Go.")), whole), 24)
+    expect(peek.since).toEqual([whole])
+    expect(peek.since[0]).toBe(whole)
+    expect(peek.earlier).toBe(false)
+  })
+
+  it("bounds the conversation before the person has written, as a turn", () => {
+    const opening = Array.from({ length: 30 }, (_, index) =>
+      message("agent", index, text(`${index}`)),
+    )
+    const peek = peekOf(conversation(...opening), 24)
+    expect(peek.asked).toBeNull()
+    expect(peek.since).toEqual(opening.slice(-24))
+    expect(peek.earlier).toBe(true)
   })
 
   it("tells the whole conversation before the person has written", () => {
@@ -38,6 +77,7 @@ describe("peekOf", () => {
     const peek = peekOf(conversation(opening))
     expect(peek.asked).toBeNull()
     expect(peek.since).toEqual([opening])
+    expect(peek.earlier).toBe(false)
   })
 
   it("ends on the person's message while the agent has not answered it", () => {

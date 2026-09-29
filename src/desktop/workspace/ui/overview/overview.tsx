@@ -2,6 +2,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -33,6 +34,7 @@ import {
 import {
   glanceCounts,
   quietLine,
+  quietOf,
   readingOrder,
   sameGlance,
   type AgentsGlance,
@@ -426,7 +428,8 @@ export function AgentsOverview({
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [dispatch])
-  // Escape in a pill: back to the row it replies to.
+  // Escape in a pill, or a count the keyboard was on gone from the line: to
+  // the list, on the current row, or at its top where it lists none.
   const leaveReply = useCallback(() => focusItem(currentNow.current), [focusItem])
 
   return (
@@ -446,7 +449,12 @@ export function AgentsOverview({
                 <h1>Agents</h1>
                 <FilterMenu filter={filter} onChange={setFilter} />
               </div>
-              <Counts ready={ready} glance={glance} onToggle={toggleGroup} />
+              <Counts
+                ready={ready}
+                glance={glance}
+                onToggle={toggleGroup}
+                onFocusGone={leaveReply}
+              />
             </header>
             <div className="agents-overview-scroll">
               <div
@@ -483,6 +491,7 @@ export function AgentsOverview({
                 <SessionPeek
                   key={peeked}
                   sessionId={peeked}
+                  placement="beside"
                   settling={settlingOf.get(peeked)}
                   onOpen={open}
                   onAnswer={answer}
@@ -507,17 +516,46 @@ const everySession: AgentsFilter = { scope: "all", range: "any", tags: [] }
  * The header's counts, each a toggle that shows its group alone — pressed
  * while it does — and, chosen again, every group. Nothing to count, one
  * quiet line; not ready, a line's room held so the header does not move.
+ *
+ * A count goes from the line when its group has none the filter lets
+ * through and is not shown alone — let go at nought, or emptied by the
+ * source. When the keyboard was on it, it goes to the list (`onFocusGone`)
+ * in the same frame, never left on the page's body, where no key is heard.
  */
 function Counts({
   ready,
   glance,
   onToggle,
+  onFocusGone,
 }: {
   ready: boolean
   glance: AgentsGlance
   onToggle: (group: AgentsGroup) => void
+  onFocusGone: () => void
 }) {
   const counts = glanceCounts(glance)
+  // The count the keyboard is on, followed by where focus arrives: a count
+  // taken from the page moves focus nowhere, so it is still named here.
+  const holding = useRef<string | null>(null)
+  useEffect(() => {
+    const onFocusIn = (event: FocusEvent) => {
+      holding.current =
+        event.target instanceof HTMLElement
+          ? (event.target.closest<HTMLElement>(".agents-overview-counts [data-group]")
+              ?.dataset.group ?? null)
+          : null
+    }
+    document.addEventListener("focusin", onFocusIn)
+    return () => document.removeEventListener("focusin", onFocusIn)
+  }, [])
+  // After every change to the line, before it is painted.
+  useLayoutEffect(() => {
+    const was = holding.current
+    if (was === null || (ready && counts.some((count) => count.group === was))) return
+    holding.current = null
+    const focus = document.activeElement
+    if (focus === null || focus === document.body) onFocusGone()
+  })
   if (!ready) return <p className="agents-overview-counts">{"\u00a0"}</p>
   if (counts.length === 0) return <p className="agents-overview-counts">{quietLine}</p>
   return (
@@ -586,15 +624,18 @@ function Groups({
     onAnswer,
     onLeaveReply,
   })
-  // Nothing listed at all: one quiet line, never an empty page.
-  const empty =
-    glance.needsYou.length +
-      glance.working.length +
-      glance.finished.length +
-      glance.earlier.length ===
-    0
+  // Nothing listed at all, or nothing of the group shown alone: one quiet
+  // line, never an empty page (`quietOf`).
+  const quiet = quietOf(glance)
   return (
     <>
+      {quiet === "all" ? (
+        <AllClear />
+      ) : quiet !== null ? (
+        <p className="agents-overview-resting" data-reflow="empty">
+          {emptyGroup[quiet]}
+        </p>
+      ) : null}
       {/* Shown only while something waits: an empty section is nothing to review. */}
       {glance.needsYou.length > 0 ? (
         <section className="agents-overview-group" aria-labelledby="agents-needs-you">
@@ -612,12 +653,6 @@ function Groups({
             ))}
           </ul>
         </section>
-      ) : empty && glance.group === null ? (
-        <AllClear />
-      ) : empty && glance.group !== null ? (
-        <p className="agents-overview-resting" data-reflow="empty">
-          {emptyGroup[glance.group]}
-        </p>
       ) : null}
       {glance.working.length > 0 ? (
         <section className="agents-overview-group" aria-labelledby="agents-working">

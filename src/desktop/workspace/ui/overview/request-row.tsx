@@ -248,6 +248,7 @@ export const RequestRow = memo(function RequestRow({
         <div className="agents-inline-peek">
           <SessionPeek
             sessionId={sessionId}
+            placement="beneath"
             settling={settling}
             onOpen={onOpen}
             onAnswer={onAnswer}

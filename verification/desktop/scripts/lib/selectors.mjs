@@ -81,6 +81,11 @@ export const css = {
   overviewPeek: ".agents-overview-peek", // class: the peek beside the list, which scrolls
   peekSummary: ".agents-peek-summary", // class: what is going on, in the source's line
   peekStory: ".agents-peek-story", // class: the turn's story, top to bottom
+  peekEarlier: ".agents-peek-earlier", // class: says the turn holds more above what the peek draws
+  transcriptStep: ".workspace-steps li", // class: one step the agent took, in a message
+  overviewColumn: ".agents-overview-column", // class: the list the arrow keys walk
+  overviewResting: ".agents-overview-resting", // class: a quiet line in the list ("Nothing needs you")
+  inlinePeek: ".agents-inline-peek", // class: the peek opened beneath its row
   peekAsk: ".agents-peek-ask", // class: the request in full, after the story
 
   // The composer's thinking control (src/desktop/ui/thinking-control.tsx): a chip

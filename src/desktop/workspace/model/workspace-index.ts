@@ -53,8 +53,10 @@ export interface SessionSummary {
    * What is going on in it now, in one line of the source's own words —
    * "Running the reconnect tests after adding a token bucket" — as the
    * source summarises its turn; absent when the source has nothing to say,
-   * and then nothing is shown. The window never writes one: it is the
-   * source's, replaced with the summary it arrives in, at its revision.
+   * and then nothing is shown — nor for a line of only whitespace, which
+   * says nothing either (`nowLine`, the one rule). The window never writes
+   * one: it is the source's, replaced with the summary it arrives in, at its
+   * revision, and kept as it was sent.
    */
   readonly now?: string
   readonly pinned: boolean
@@ -144,6 +146,15 @@ export function modelName(model: ModelRef): string {
       (entry) => entry.provider === model.provider && entry.modelId === model.modelId,
     )?.displayName ?? model.modelId
   )
+}
+
+/**
+ * The source's line of what is going on in a session, as it sent it, when
+ * it says something; `null` when it is absent or only whitespace. The one
+ * rule for whether there is a line to show.
+ */
+export function nowLine(session: SessionSummary): string | null {
+  return session.now !== undefined && session.now.trim() !== "" ? session.now : null
 }
 
 /** Newest first. */

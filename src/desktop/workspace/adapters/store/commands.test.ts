@@ -18,6 +18,8 @@ import {
   testStore,
 } from "../../testing"
 import { retention } from "../../model/retention"
+import { quietOf } from "../../model/overview/agents-glance"
+import { selectGlance } from "./selectors"
 import {
   approve,
   archiveSession,
@@ -1610,6 +1612,37 @@ describe("the overview shows one group alone (ADR 238, the group's table)", () =
     // Ongoing lists no idle session: nothing finished is listed.
     store.dispatch(showOverviewGroup({ group: "finished" }))
     expect(overview(store).selected).toBeNull()
+  })
+
+  it("says the group lists nothing once its last session leaves it, and keeps the one looked at chosen under its new heading", async () => {
+    const { store, source } = await ready()
+    store.dispatch(followWorkspace())
+    store.dispatch(showContent({ content: "agents" }))
+    store.dispatch(showOverviewGroup({ group: "needsYou" }))
+    expect(overview(store).selected).toBe("b")
+    // Answered elsewhere: the source moves it on to working.
+    source.emit({
+      kind: "session",
+      session: summary("b", "desktop", 500, "running", { unread: true, revision: 2 }),
+    })
+    await settle()
+    expect(overview(store)).toMatchObject({ group: "needsYou", selected: "b" })
+    const glance = selectGlance(store.getState(), [], 1000)
+    expect(glance.needsYou).toEqual([])
+    expect(glance.working).toEqual(["b"])
+    expect(glance.counts.needsYou).toBe(0)
+    expect(quietOf(glance)).toBe("needsYou")
+  })
+
+  it("chooses nothing once the group's last session is removed", async () => {
+    const { store, source } = await ready()
+    store.dispatch(followWorkspace())
+    store.dispatch(showContent({ content: "agents" }))
+    store.dispatch(showOverviewGroup({ group: "needsYou" }))
+    source.emit({ kind: "session-removed", sessionId: "b", revision: 2 })
+    await settle()
+    expect(overview(store)).toMatchObject({ group: "needsYou", selected: null })
+    expect(quietOf(selectGlance(store.getState(), [], 1000))).toBe("needsYou")
   })
 
   it("keeps the group through a change of filter, and while the overview is closed and opened again", async () => {

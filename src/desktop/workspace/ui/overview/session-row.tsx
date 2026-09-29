@@ -88,6 +88,7 @@ export const SessionRow = memo(function SessionRow({
         <div className="agents-inline-peek">
           <SessionPeek
             sessionId={sessionId}
+            placement="beneath"
             settling={undefined}
             onOpen={onOpen}
             onAnswer={onAnswer}

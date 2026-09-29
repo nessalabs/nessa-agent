@@ -45,12 +45,20 @@
  *   overview-counts the header's counts are toggles reached by Tab: one chosen
  *                   lists its group alone and reads as pressed, the header not
  *                   moving; chosen again every group is back; with one chosen,
- *                   the first Escape shows every group and the next leaves
+ *                   the first Escape shows every group and the next leaves.
+ *                   Needs you chosen and every request answered: "Nothing
+ *                   needs you" heads the list, the one looked at still listed
+ *                   and chosen beneath; its count, let go at nought from the
+ *                   keyboard, gives the keyboard to the list, whose arrows walk
  *   overview-story  the peek tells the turn top to bottom — the source's line
- *                   of what is going on, the person's latest message, the
- *                   agent's work in order, the request — and a long turn
- *                   scrolls within the peek while the list's header holds
+ *                   of what is going on, the person's latest message, where
+ *                   there is more above, the agent's latest work in order, the
+ *                   request — and a long turn scrolls within the peek while the
+ *                   list's header holds; beneath a row (760px), the story is
+ *                   reached by the keyboard and scrolled by it
  *
+ * The two overview checks run in both workspace layouts unless --layout says
+ * otherwise; the rest in the columns layout.
  * With --shots <dir>, screenshots of each width go there for a person to look at.
  */
 import { mkdirSync } from "node:fs"
@@ -59,7 +67,15 @@ import { join } from "node:path"
 import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { content, css, keys, names, preferenceEvents, storage } from "./lib/selectors.mjs"
+import {
+  content,
+  css,
+  keys,
+  layouts,
+  names,
+  preferenceEvents,
+  storage,
+} from "./lib/selectors.mjs"
 import {
   frames,
   hideColumns,
@@ -1228,11 +1244,151 @@ checks["overview-counts"] = async ({ page, engine, options }) => {
     css,
   )
   if (left !== content.panes) failures.push(`second Escape left the content as ${left}`)
+
+  // Needs you alone, every request answered from the keyboard (ADR 238, the
+  // group's table: its last session moves to another group).
+  await page.keyboard.press(keys.overview)
+  await need(page, css.overview, "the Agents overview")
+  await frames(page, 2)
+  await settled(page)
+  const needsYou = page.locator(`${css.overviewCount}[data-group="needsYou"]`)
+  if (!(await needsYou.count()))
+    throw new CannotRun("no Needs you count in the header to choose")
+  await needsYou.click()
+  await frames(page, 2)
+  await page.locator(css.overviewRequest).first().focus()
+  let answered = 0
+  for (; answered < 12 && (await page.locator(`${css.overviewRequest}:focus`).count());) {
+    await page.keyboard.press(keys.allow)
+    answered += 1
+    // Past the pause after the keyboard moves on (`takesAnswerKey`): pacing, not a wait for state.
+    await page.waitForTimeout(400)
+  }
+  if (
+    !(await until(page, (sel) => !document.querySelector(sel), css.overviewRequest, 6000))
+  )
+    failures.push("requests still listed after answering them all")
+  await frames(page, 2)
+  await settled(page)
+  const emptied = await page.evaluate((sel) => {
+    const column = document.querySelector(sel.overviewColumn)
+    const lines = [...column.querySelectorAll(`h2, ${sel.overviewResting}`)].map((e) =>
+      e.textContent.trim(),
+    )
+    const chosen = column.querySelector(`${sel.overviewItem}[tabindex="0"]`)
+    return {
+      lines,
+      chosen: chosen?.dataset.overviewItem ?? null,
+      chosenUnder:
+        chosen?.closest(sel.overviewGroup)?.querySelector("h2")?.textContent.trim() ??
+        null,
+      counts: [...document.querySelectorAll(sel.overviewCount)].map(
+        (b) =>
+          `${b.textContent.trim()}${b.getAttribute("aria-pressed") === "true" ? "*" : ""}`,
+      ),
+    }
+  }, css)
+  if (emptied.lines[0] !== "Nothing needs you")
+    failures.push(
+      `every request answered, the list reads ${JSON.stringify(emptied.lines)}`,
+    )
+  if (!emptied.counts.includes("0 need you*"))
+    failures.push(
+      `every request answered, the counts read ${JSON.stringify(emptied.counts)}`,
+    )
+  if (emptied.chosen === null || emptied.chosenUnder === null)
+    failures.push(
+      `the session looked at is not listed beneath under its heading: ${JSON.stringify(emptied)}`,
+    )
+  await shot(options, page, `overview-count-emptied-${engine}`)
+  // Its script over, the session looked at rests; the filter (Ongoing) keeps
+  // out what rests and has been seen: it stays listed, looked at, and no
+  // count counts it. Waited for, so no row changes group under the keyboard below.
+  const rested = await until(
+    page,
+    ([sel, id]) =>
+      document
+        .querySelector(
+          `${sel.overviewColumn} ${sel.overviewItem}[data-overview-item="${id}"]`,
+        )
+        ?.closest(sel.overviewGroup)
+        ?.querySelector("h2")
+        ?.textContent.trim() !== "Working",
+    [css, emptied.chosen],
+    6000,
+  )
+  const resting = await page.evaluate(
+    ([sel, id]) => ({
+      under:
+        document
+          .querySelector(
+            `${sel.overviewColumn} ${sel.overviewItem}[data-overview-item="${id}"]`,
+          )
+          ?.closest(sel.overviewGroup)
+          ?.querySelector("h2")
+          ?.textContent.trim() ?? null,
+      counts: [...document.querySelectorAll(sel.overviewCount)].map(
+        (b) => b.dataset.group,
+      ),
+    }),
+    [css, emptied.chosen],
+  )
+  if (!rested) failures.push(`${emptied.chosen} never rested from its script`)
+  else if (resting.under === null)
+    failures.push(`${emptied.chosen}, looked at, went from the list as it rested`)
+  else if (resting.under === "Earlier" && resting.counts.includes("earlier"))
+    failures.push(
+      `the filter keeps out ${emptied.chosen}, yet it is counted: ${JSON.stringify(resting.counts)}`,
+    )
+  // Let go at nought from the keyboard: its count goes, and the keyboard goes to the list.
+  await needsYou.focus()
+  await page.keyboard.press("Space")
+  await frames(page, 2)
+  const released = await page.evaluate(
+    (sel) => ({
+      inList: document
+        .querySelector(sel.overviewColumn)
+        ?.contains(document.activeElement),
+      on:
+        document.activeElement?.dataset?.overviewItem ??
+        document.activeElement?.className,
+      counts: document.querySelectorAll(`${sel.overviewCount}[data-group="needsYou"]`)
+        .length,
+    }),
+    css,
+  )
+  if (released.counts !== 0)
+    failures.push("the count let go at nought is still in the line")
+  if (!released.inList)
+    failures.push(
+      `letting go at nought left the keyboard on ${released.on}, not the list`,
+    )
+  const walked = []
+  for (const key of [keys.down, keys.up]) {
+    await page.keyboard.press(key)
+    await frames(page, 2)
+    walked.push(
+      await page.evaluate(() => ({
+        item: document.activeElement?.dataset?.overviewItem ?? null,
+        on: `${document.activeElement?.tagName}.${document.activeElement?.className}`,
+      })),
+    )
+  }
+  if (!walked.some(({ item }) => item !== null && item !== released.on))
+    failures.push(
+      `the arrows did not walk the list from there: ${JSON.stringify(walked)}`,
+    )
+
   return {
     before: before.counts.map((c) => c.text),
     groups: before.groups,
     chosen: chosen.groups,
     pressed,
+    answered,
+    emptied,
+    resting,
+    released: released.on,
+    walked,
     failures,
   }
 }
@@ -1273,6 +1429,8 @@ checks["overview-story"] = async ({ page, engine, options }) => {
         ],
         room: peek.scrollHeight - peek.clientHeight,
         scrollTop: peek.scrollTop,
+        earlier: story.querySelector(sel.peekEarlier)?.textContent.trim() ?? null,
+        steps: story.querySelectorAll(sel.transcriptStep).length,
         header: document.querySelector(sel.overviewHeader).getBoundingClientRect().top,
       }
     }, css)
@@ -1302,13 +1460,94 @@ checks["overview-story"] = async ({ page, engine, options }) => {
     failures.push(`the peek scrolled to ${after.scrollTop} of ${before.room}px`)
   if (Math.abs(after.header - before.header) > 0.5)
     failures.push("the list's header moved as the peek scrolled")
+  if (before.earlier !== "Earlier in this turn · Open")
+    failures.push(
+      `a turn longer than the peek draws says ${JSON.stringify(before.earlier)}`,
+    )
+  if (before.steps > 24)
+    failures.push(`the peek draws ${before.steps} steps, over its bound`)
   await page.evaluate((sel) => {
     document.querySelector(sel.overviewPeek).scrollTop = 0
   }, css)
   await frames(page, 2)
   await shot(options, page, `overview-story-${engine}`)
-  return { order: kinds, summary: before.summary, room: before.room, failures }
+
+  // Beneath its row, where there is no room beside the list: the story
+  // scrolls in its own height, and the keyboard reaches and scrolls it.
+  await page.keyboard.press(keys.escape)
+  await page.setViewportSize({ width: 760, height: 640 })
+  await frames(page, 2)
+  await page.keyboard.press(keys.overview)
+  await need(page, css.overview, "the Agents overview")
+  await frames(page, 2)
+  await settled(page)
+  await item.click()
+  await need(page, `${css.inlinePeek} ${css.peekStory}`, "the story beneath its row")
+  await frames(page, 2)
+  await settled(page)
+  const story = `${css.inlinePeek} ${css.peekStory}`
+  const scroller = () =>
+    page.evaluate((sel) => {
+      const story = document.querySelector(sel)
+      return {
+        overflow: story.scrollHeight - story.clientHeight,
+        scrollTop: Math.round(story.scrollTop),
+        focused: document.activeElement === story,
+        scrollbar: getComputedStyle(story).scrollbarWidth,
+      }
+    }, story)
+  const beneath = await scroller()
+  if (beneath.overflow < 40)
+    failures.push(`beneath its row, the story overflows only ${beneath.overflow}px`)
+  if (beneath.scrollbar === "none")
+    failures.push("beneath its row, the scrollbar is hidden")
+  // From its row, the control keys (⌥Tab in WebKit) reach the story.
+  await item.focus()
+  let presses = 0
+  for (; presses < 10 && !(await scroller()).focused; presses++)
+    await page.keyboard.press(keys.nextControl[engine])
+  const reached = await scroller()
+  if (!reached.focused)
+    failures.push(
+      `${keys.nextControl[engine]} ×${presses} from the row never reached the story`,
+    )
+  const scrolled = {}
+  if (reached.focused) {
+    await page.keyboard.press("PageDown")
+    await until(page, (sel) => document.querySelector(sel).scrollTop > 0, story, 2000)
+    scrolled.pageDown = (await scroller()).scrollTop
+    await page.keyboard.press("End")
+    // Scrolled smoothly: waits until it rests at the end, or says where it stopped.
+    await until(
+      page,
+      (sel) => {
+        const story = document.querySelector(sel)
+        return Math.abs(story.scrollTop - (story.scrollHeight - story.clientHeight)) <= 2
+      },
+      story,
+      2000,
+    )
+    const end = await scroller()
+    scrolled.end = end.scrollTop
+    if (!(scrolled.pageDown > 0))
+      failures.push("PageDown on the story beneath its row did not scroll it")
+    if (!end.focused) failures.push("End on the story walked the list away from it")
+    if (Math.abs(end.scrollTop - end.overflow) > 2)
+      failures.push(`End scrolled the story to ${end.scrollTop} of ${end.overflow}px`)
+  }
+  await shot(options, page, `overview-story-beneath-${engine}`)
+  return {
+    order: kinds,
+    summary: before.summary,
+    room: before.room,
+    steps: before.steps,
+    beneath: { overflow: beneath.overflow, presses, ...scrolled },
+    failures,
+  }
 }
+
+/** Checks run in both workspace layouts by default (the rest, in columns). */
+const everyLayout = new Set(["overview-counts", "overview-story"])
 
 const meta = {
   name: "responsive",
@@ -1320,17 +1559,28 @@ const meta = {
 Usage: node verification/desktop/scripts/responsive.mjs [options] [--shots <dir>]
 
   --only <list>   Checks, comma-separated. Available:
-                  ${Object.keys(checks).join(", ")}`,
+                  ${Object.keys(checks).join(", ")}
+
+  ${[...everyLayout].join(" and ")} run in both layouts unless --layout
+  is given; the rest in the columns layout.`,
 }
 
 await main(meta, async ({ options, rep, url }) => {
   const only = options.only
     ? chosen(options.only, Object.keys(checks), options.list)
     : null
+  // The layouts a check runs in: as asked, or its own default.
+  const layoutsOf = (name) =>
+    options.given("layout") || options.quick
+      ? options.layouts
+      : everyLayout.has(name)
+        ? layouts
+        : options.layouts
   await withEngines(options, rep, async (engine, browser) => {
-    for (const layout of options.layouts)
+    for (const layout of layouts)
       for (const [name, check] of Object.entries(checks)) {
         if (only && !only.includes(name)) continue
+        if (!layoutsOf(name).includes(layout)) continue
         await attempt(rep, { name, engine, layout }, async () => {
           const opened = await openPage(browser, {
             url,

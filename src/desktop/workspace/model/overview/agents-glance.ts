@@ -73,8 +73,9 @@ export interface AgentsGlance {
   readonly hidden: number
   /**
    * The header's figures: how many of each group the filter lets through,
-   * whichever group is shown. Needs you counts what waits now, held
-   * requests not counted.
+   * whichever group is shown — the session looked at only when the filter
+   * lets it through too, though it is listed either way. Needs you counts
+   * what waits now, held requests not counted.
    */
   readonly counts: Readonly<Record<AgentsGroup, number>>
   /** The group shown alone; `null` shows every group. */
@@ -111,56 +112,70 @@ export function agentsGlance(
       .filter((hold) => listed.has(hold.sessionId))
       .map((hold) => [hold.sessionId, hold]),
   )
-  const free = sessions.filter((session) => !holding.has(session.id))
-  const passing = free.filter(
-    (session) => session.id === looking || passes(session, filter, now, tagsOf),
-  )
-  // What the filter lets through, counted whatever the group; then what the group lists.
-  const counted = (status: SessionSummary["status"], unread?: boolean) =>
-    passing
-      .filter(
-        (session) =>
-          session.status === status &&
-          (unread === undefined || session.unread === unread),
-      )
-      .sort(byRecency)
-  const waitingNow = counted("needs-you")
-  const running = counted("running")
-  const done = counted("idle", true)
-  const seen = counted("idle", false)
-  const shows = (id: string, of: AgentsGroup) =>
-    group === null || group === of || id === looking
-  const ids = (of: AgentsGroup, from: readonly SessionSummary[]) =>
-    from.filter((session) => shows(session.id, of)).map((session) => session.id)
+  // Each session sorted once into its group (`groupOf`), whatever it is: what
+  // the group lists, what the header counts, and what the footer says is
+  // kept out all come from this one pass.
+  const lists: Record<AgentsGroup, SessionSummary[]> = {
+    needsYou: [],
+    working: [],
+    finished: [],
+    earlier: [],
+  }
+  const counts: Record<AgentsGroup, number> = {
+    needsYou: 0,
+    working: 0,
+    finished: 0,
+    earlier: 0,
+  }
+  let hidden = 0
+  for (const session of sessions) {
+    if (holding.has(session.id)) continue
+    const of = groupOf(session)
+    const through = passes(session, filter, now, tagsOf)
+    // Counted only as the filter lets it through — the session looked at too.
+    if (through) counts[of] += 1
+    // Listed as the filter lets it through, in the group shown; the session
+    // looked at whatever the filter and the group say.
+    if (session.id === looking || (through && inGroup(session, group)))
+      lists[of].push(session)
+    else if (!through && inGroup(session, group)) hidden += 1
+  }
+  const ids = (of: AgentsGroup) => lists[of].sort(byRecency).map((session) => session.id)
   const needsYou = [
-    ...waitingNow.map((session) => ({ id: session.id, updatedAt: session.updatedAt })),
-    ...[...holding.values()].map((hold) => ({
-      id: hold.sessionId,
-      updatedAt: hold.updatedAt,
+    ...lists.needsYou.map((session) => ({
+      id: session.id,
+      updatedAt: session.updatedAt,
     })),
+    ...[...holding.values()]
+      .filter(
+        (hold) => hold.sessionId === looking || group === null || group === "needsYou",
+      )
+      .map((hold) => ({ id: hold.sessionId, updatedAt: hold.updatedAt })),
   ]
-    .filter((entry) => shows(entry.id, "needsYou"))
     .sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? -1 : 1))
     .map((entry) => entry.id)
   return {
     needsYou,
-    working: ids("working", running),
-    finished: ids("finished", done),
-    earlier: ids("earlier", seen),
-    hidden: free.filter(
-      (session) =>
-        session.id !== looking &&
-        !passes(session, filter, now, tagsOf) &&
-        inGroup(session, group),
-    ).length,
-    counts: {
-      needsYou: waitingNow.length,
-      working: running.length,
-      finished: done.length,
-      earlier: seen.length,
-    },
+    working: ids("working"),
+    finished: ids("finished"),
+    earlier: ids("earlier"),
+    hidden,
+    counts,
     group,
   }
+}
+
+/**
+ * What the list says in its one quiet line, when it says one: `"all"` when
+ * every group is shown and none lists anything ("All clear"); the group shown
+ * alone when it lists nothing of its own ("Nothing needs you") — the session
+ * looked at may still be listed under another heading beneath the line, having
+ * left the group while the person looked at it (`looking`); `null` otherwise.
+ */
+export function quietOf(glance: AgentsGlance): AgentsGroup | "all" | null {
+  if (glance.group !== null)
+    return glance[glance.group].length === 0 ? glance.group : null
+  return readingOrder(glance).length === 0 ? "all" : null
 }
 
 /** Whether two glances list the same ids in the same places and count the same. */
