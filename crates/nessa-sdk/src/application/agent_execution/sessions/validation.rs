@@ -390,3 +390,17 @@ pub(super) fn validate_local_result(
     }
     Ok(())
 }
+
+/// Apply one proposed local result against the record's prior history authority.
+/// The caller mutates its projection only after this transition is accepted.
+pub(super) fn local_result_transition(
+    invocation: &InvocationRecord,
+    result: &Result<ExecutionOutcome, AgentError>,
+) -> Result<Option<ExecutionOutcome>, StorageError> {
+    validate_local_result(invocation, result)?;
+    let mut history = invocation_history(invocation)?;
+    history
+        .record_local_result(result.as_ref().copied().map_err(|_| ()))
+        .map_err(corrupt)?;
+    Ok(history.local_outcome())
+}

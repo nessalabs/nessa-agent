@@ -1485,12 +1485,7 @@ impl SessionManager {
             .as_ref()
             .expect("initialized agent session")
             .invocations[index];
-        super::validation::validate_local_result(record, result)?;
-        let mut history = super::validation::invocation_history(record)?;
-        history
-            .record_local_result(result.as_ref().copied().map_err(|_| ()))
-            .map_err(|error| StorageError::Corrupt(error.to_string()))?;
-        Ok(history.local_outcome())
+        super::validation::local_result_transition(record, result)
     }
 }
 

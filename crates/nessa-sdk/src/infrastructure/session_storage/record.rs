@@ -348,6 +348,7 @@ mod tests {
     use super::*;
     use crate::{
         application::agent_execution::{
+            agents::AgentError,
             executions::{ExecutionRequest, SubmissionMode},
             permissions::ActionContext,
             providers::{ExecutionReport, ProviderIdentity, ProviderSessionState},
@@ -807,7 +808,7 @@ mod tests {
             execution_id,
             before: None,
             after: Ok(ExecutionOutcome::Completed),
-            local_outcome: None,
+            local_outcome: Some(ExecutionOutcome::Completed),
         };
         observed =
             records::fold_changes(Some(&observed), std::slice::from_ref(&settlement)).unwrap();
@@ -824,6 +825,219 @@ mod tests {
         assert_eq!(lease.load().await.unwrap(), Some(observed));
         drop(lease);
         reopened.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_settlement_revisions_preserve_history_rules_before_append() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let rows = || -> i64 {
+            Connection::open(root.join("records.sqlite3"))
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM event_records", [], |row| row.get(0))
+                .unwrap()
+        };
+        let input = |execution_id: ExecutionId| {
+            SessionChange::InputAccepted(Box::new(InvocationRecord {
+                target_event_offset: None,
+                submission: SubmissionMode::Immediate,
+                request: ExecutionRequest {
+                    execution_id,
+                    user_message: UserMessage::text_only(PromptText::new("hello").unwrap()),
+                    estimated_input_tokens: 1,
+                    reserved_output_tokens: 1,
+                },
+                actor: ActionContext::new("user", "phone", "send").unwrap(),
+                acknowledgement: SubmissionAcknowledgement::Pending,
+                events: Vec::new(),
+                scheduling: Vec::new(),
+                cancellation: None,
+                provider_report: None,
+                local_cancellation: None,
+                local_outcome: None,
+                result: None,
+            }))
+        };
+
+        let id = SessionId::new("failed-result").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, mut failed) = opening(&id);
+        lease
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                failed.clone(),
+                vec![opened],
+            )
+            .await
+            .unwrap();
+        let execution_id = ExecutionId::new("failed-execution").unwrap();
+        let accepted = input(execution_id.clone());
+        failed = records::fold_changes(Some(&failed), std::slice::from_ref(&accepted)).unwrap();
+        lease
+            .save_changes(generation(1), failed.clone(), vec![accepted])
+            .await
+            .unwrap();
+        let original_failure = Err(AgentError::Protocol("original failure".into()));
+        let first = SessionChange::LocalSettlement {
+            execution_id: execution_id.clone(),
+            before: None,
+            after: original_failure.clone(),
+            local_outcome: None,
+        };
+        failed = records::fold_changes(Some(&failed), std::slice::from_ref(&first)).unwrap();
+        lease
+            .save_changes(generation(2), failed.clone(), vec![first])
+            .await
+            .unwrap();
+        let mut forged_success = failed.clone();
+        forged_success.invocations[0].result = Some(Ok(ExecutionOutcome::Completed));
+        forged_success.invocations[0].local_outcome = Some(ExecutionOutcome::Completed);
+        let failure_to_success = SessionChange::LocalSettlement {
+            execution_id: execution_id.clone(),
+            before: Some(original_failure.clone()),
+            after: Ok(ExecutionOutcome::Completed),
+            local_outcome: Some(ExecutionOutcome::Completed),
+        };
+        let before_rejection = rows();
+        assert!(matches!(
+            lease
+                .save_changes(generation(3), forged_success, vec![failure_to_success])
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(lease.load().await.unwrap(), Some(failed.clone()));
+        assert_eq!(rows(), before_rejection);
+        let another_failure = Err(AgentError::Protocol("revised failure".into()));
+        let valid_failure = SessionChange::LocalSettlement {
+            execution_id,
+            before: Some(original_failure),
+            after: another_failure.clone(),
+            local_outcome: None,
+        };
+        failed =
+            records::fold_changes(Some(&failed), std::slice::from_ref(&valid_failure)).unwrap();
+        lease
+            .save_changes(generation(3), failed.clone(), vec![valid_failure])
+            .await
+            .unwrap();
+        drop(lease);
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(failed));
+        drop(lease);
+
+        let id = SessionId::new("successful-result").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, mut successful) = opening(&id);
+        lease
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                successful.clone(),
+                vec![opened],
+            )
+            .await
+            .unwrap();
+        let context = SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        };
+        successful =
+            records::fold_changes(Some(&successful), std::slice::from_ref(&context)).unwrap();
+        lease
+            .save_changes(generation(1), successful.clone(), vec![context])
+            .await
+            .unwrap();
+        let execution_id = ExecutionId::new("successful-execution").unwrap();
+        let accepted = input(execution_id.clone());
+        successful =
+            records::fold_changes(Some(&successful), std::slice::from_ref(&accepted)).unwrap();
+        lease
+            .save_changes(generation(2), successful.clone(), vec![accepted])
+            .await
+            .unwrap();
+        let report = SessionChange::ProviderReport {
+            execution_id: execution_id.clone(),
+            report: ExecutionReport::new(
+                Some(Ok(ExecutionOutcome::Completed)),
+                None,
+                ProviderSessionState::Usable,
+            ),
+            local_stop: None,
+        };
+        successful =
+            records::fold_changes(Some(&successful), std::slice::from_ref(&report)).unwrap();
+        lease
+            .save_changes(generation(3), successful.clone(), vec![report])
+            .await
+            .unwrap();
+        let settled = SessionChange::LocalSettlement {
+            execution_id: execution_id.clone(),
+            before: None,
+            after: Ok(ExecutionOutcome::Completed),
+            local_outcome: Some(ExecutionOutcome::Completed),
+        };
+        successful =
+            records::fold_changes(Some(&successful), std::slice::from_ref(&settled)).unwrap();
+        lease
+            .save_changes(generation(4), successful.clone(), vec![settled])
+            .await
+            .unwrap();
+        let changed_success = SessionChange::LocalSettlement {
+            execution_id: execution_id.clone(),
+            before: Some(Ok(ExecutionOutcome::Completed)),
+            after: Ok(ExecutionOutcome::OutputLimit),
+            local_outcome: Some(ExecutionOutcome::OutputLimit),
+        };
+        let masked_by_final_success = SessionChange::LocalSettlement {
+            execution_id: execution_id.clone(),
+            before: Some(Ok(ExecutionOutcome::OutputLimit)),
+            after: Ok(ExecutionOutcome::Completed),
+            local_outcome: Some(ExecutionOutcome::Completed),
+        };
+        let before_rejection = rows();
+        assert!(matches!(
+            lease
+                .save_changes(
+                    generation(5),
+                    successful.clone(),
+                    vec![changed_success, masked_by_final_success]
+                )
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(lease.load().await.unwrap(), Some(successful.clone()));
+        assert_eq!(rows(), before_rejection);
+        let failure = Err(AgentError::Protocol("later storage failure".into()));
+        let success_to_failure = SessionChange::LocalSettlement {
+            execution_id: execution_id.clone(),
+            before: Some(Ok(ExecutionOutcome::Completed)),
+            after: failure.clone(),
+            local_outcome: Some(ExecutionOutcome::Completed),
+        };
+        successful =
+            records::fold_changes(Some(&successful), std::slice::from_ref(&success_to_failure))
+                .unwrap();
+        lease
+            .save_changes(generation(5), successful.clone(), vec![success_to_failure])
+            .await
+            .unwrap();
+        let failure_to_success = SessionChange::LocalSettlement {
+            execution_id,
+            before: Some(failure),
+            after: Ok(ExecutionOutcome::Completed),
+            local_outcome: Some(ExecutionOutcome::Completed),
+        };
+        let mut forged_success = successful.clone();
+        forged_success.invocations[0].result = Some(Ok(ExecutionOutcome::Completed));
+        assert!(matches!(
+            lease
+                .save_changes(generation(6), forged_success, vec![failure_to_success])
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(lease.load().await.unwrap(), Some(successful));
+        drop(lease);
+        storage.shutdown().await.unwrap();
     }
 
     #[tokio::test]

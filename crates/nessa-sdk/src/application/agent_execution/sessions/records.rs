@@ -340,6 +340,10 @@ pub(crate) fn fold_changes(
                 if &record.result != before || record.result.as_ref() == Some(after) {
                     return Err(corrupt("local result revision does not match prior value"));
                 }
+                let retained = super::validation::local_result_transition(record, after)?;
+                if retained != *local_outcome {
+                    return Err(corrupt("local result changes its retained outcome"));
+                }
                 record.local_outcome = *local_outcome;
                 record.result = Some(after.clone());
             }
