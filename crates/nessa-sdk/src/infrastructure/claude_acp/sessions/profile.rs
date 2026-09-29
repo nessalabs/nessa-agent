@@ -81,14 +81,6 @@ impl ClaudeProfile {
     }
 }
 impl ClaudeProfile {
-    /// Once configured, the selected level is the agent's current one. Before
-    /// that the request that sets it may still be in flight.
-    fn verify_effort(&self, result: &Value, configured: bool) -> Result<(), AgentError> {
-        if !configured {
-            return Ok(());
-        }
-        thought_level::verify_selected(result, EFFORT, self.effort_level.as_ref())
-    }
     pub(super) fn with_mcp_servers(mut self, config: &AcpConfig) -> Self {
         self.mcp_prefixes = config
             .mcp_servers
@@ -189,7 +181,7 @@ impl AcpProfile for ClaudeProfile {
             capabilities.model().model_id(),
             configured.then_some(native_mode(self.approval_mode)),
         )?;
-        self.verify_effort(result, configured)
+        thought_level::verify_selected(result, EFFORT, self.effort_level.as_ref(), configured)
     }
     fn verify_update(
         &self,
@@ -209,7 +201,12 @@ impl AcpProfile for ClaudeProfile {
                     capabilities.model().model_id(),
                     configured.then_some(native_mode(self.approval_mode)),
                 )?;
-                self.verify_effort(update, configured)
+                thought_level::verify_selected(
+                    update,
+                    EFFORT,
+                    self.effort_level.as_ref(),
+                    configured,
+                )
             }
             "current_mode_update" => {
                 let reported = string(update, "currentModeId")?;

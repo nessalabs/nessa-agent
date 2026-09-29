@@ -67,11 +67,11 @@ pub(super) fn native_mode(mode: ApprovalMode) -> &'static str {
     }
 }
 
-/// Codex's session contract: what this binding selects, checks, and retains.
 /// The id Codex's adapter gives its `thought_level` option. It lists the
 /// option only once a model is selected.
 const EFFORT: &str = "reasoning_effort";
 
+/// Codex's session contract: what this binding selects, checks, and retains.
 #[derive(Clone)]
 pub(super) struct CodexProfile {
     model: String,
@@ -92,14 +92,6 @@ impl CodexProfile {
             effort_level,
             tools: ObservedTools::default(),
         }
-    }
-    /// Once configured, the selected level is the agent's current one. Before
-    /// that the request that sets it may still be in flight.
-    fn verify_effort(&self, result: &Value, configured: bool) -> Result<(), AgentError> {
-        if !configured {
-            return Ok(());
-        }
-        thought_level::verify_selected(result, EFFORT, self.effort_level.as_ref())
     }
 }
 impl AcpProfile for CodexProfile {
@@ -206,7 +198,7 @@ impl AcpProfile for CodexProfile {
             &self.model,
             configured.then_some(native_mode(self.approval_mode)),
         )?;
-        self.verify_effort(result, configured)
+        thought_level::verify_selected(result, EFFORT, self.effort_level.as_ref(), configured)
     }
 
     fn verify_update(
@@ -227,7 +219,12 @@ impl AcpProfile for CodexProfile {
                     &self.model,
                     configured.then_some(native_mode(self.approval_mode)),
                 )?;
-                self.verify_effort(update, configured)
+                thought_level::verify_selected(
+                    update,
+                    EFFORT,
+                    self.effort_level.as_ref(),
+                    configured,
+                )
             }
             // A mode this binding has already put the session into, changing
             // afterwards, is a different matter: that is the session leaving

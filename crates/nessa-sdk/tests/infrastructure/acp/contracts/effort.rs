@@ -475,3 +475,46 @@ async fn detached_the_level_is_the_bindings_and_work_admitted_then_says_so() {
     assert_eq!(agent.effort_level(), Some(level("low")));
     agent.close(close_action()).await.unwrap();
 }
+
+#[tokio::test]
+async fn the_connection_refuses_a_change_during_a_turn_and_stays_usable() {
+    let _slot = process_test_slot().await;
+    // Below the Agent's own check: the connection itself, with a turn open on
+    // a permission nobody answers.
+    let (root, binding) = claude("permission", CLAUDE_LEVELS);
+    let opened = binding
+        .open(ProviderOpenRequest::without_startup_control(None))
+        .await
+        .unwrap();
+    let session = opened.session.clone();
+    let turn = tokio::spawn(async move { session.execute(prompt("held")).await });
+    let sent = || {
+        lines(&root, "effort-steps")
+            .iter()
+            .filter(|step| step[0] == "effort")
+            .count()
+    };
+    let mut refused = None;
+    for _ in 0..200 {
+        let before = sent();
+        match opened.session.set_effort_level(level("high")).await {
+            Err(failure) if failure.error() == &AgentError::Busy => {
+                // Refused without a request reaching the agent.
+                assert_eq!(sent(), before);
+                refused = Some(failure);
+                break;
+            }
+            // The turn has not reached the connection yet: that change was applied.
+            _ => tokio::time::sleep(Duration::from_millis(5)).await,
+        }
+    }
+    let refused = refused.expect("a change while the turn is open is refused as Busy");
+    assert_eq!(refused.session_state(), &ProviderSessionState::Usable);
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    let _ = turn.await;
+}

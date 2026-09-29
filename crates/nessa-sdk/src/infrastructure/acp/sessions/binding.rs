@@ -690,7 +690,14 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                 .await
                 .unwrap_or(Err(AgentError::Closed))
                 .map_err(|error| {
-                    ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+                    // Refused while a turn or a permission is open: nothing
+                    // was sent, and the session is as it was.
+                    let state = if matches!(error, AgentError::Busy) {
+                        ProviderSessionState::Usable
+                    } else {
+                        ProviderSessionState::CleanupRequired
+                    };
+                    ProviderOperationFailure::new(error, state)
                 });
             // Verified: a restored connection selects the same level again.
             if outcome.is_ok() {

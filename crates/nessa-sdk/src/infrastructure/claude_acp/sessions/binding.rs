@@ -17,7 +17,7 @@ use crate::domain::model_metadata::value_objects::{
     EffortLevel, Modalities, ModelFeatures, ModelProvider,
 };
 use crate::infrastructure::acp::sessions::{
-    binding as acp_binding, deletion::DeletionCleanups, identity, AcpConfig,
+    binding as acp_binding, deletion::DeletionCleanups, identity, thought_level, AcpConfig,
 };
 use crate::infrastructure::process::ProcessScope;
 use std::sync::Arc;
@@ -156,15 +156,7 @@ impl ClaudeAcpProvider {
     /// ([`EffectiveCapabilities::effort_levels`]). The factory is unchanged on
     /// failure.
     pub fn with_effort_level(mut self, level: EffortLevel) -> Result<Self, AgentError> {
-        if !self
-            .capabilities
-            .effort_levels()
-            .is_some_and(|levels| levels.contains(&level))
-        {
-            return Err(AgentError::Unsupported(
-                "Claude effort level is unavailable for this model".into(),
-            ));
-        }
+        thought_level::selectable(&self.capabilities, &level)?;
         self.effort_level = Some(level);
         Ok(self)
     }

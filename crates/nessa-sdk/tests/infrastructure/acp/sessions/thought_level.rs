@@ -74,11 +74,8 @@ fn capabilities(levels: Option<&[&str]>, binding_reasons: bool) -> EffectiveCapa
     EffectiveCapabilities::new(&model, binding, limits).unwrap()
 }
 
-fn narrowed(result: &Value, capabilities: &EffectiveCapabilities) -> Option<Vec<String>> {
-    let id = thought_level(result)
-        .unwrap()
-        .map(|option| option.id.to_owned());
-    let offered = offered(result, capabilities, id.as_deref()).unwrap();
+fn narrowed(result: &Value, capabilities: &EffectiveCapabilities, id: &str) -> Option<Vec<String>> {
+    let offered = offered(result, capabilities, Some(id)).unwrap();
     capabilities
         .effort_levels()
         .and_then(|levels| levels.restricted_to(offered))
@@ -92,23 +89,21 @@ fn narrowed(result: &Value, capabilities: &EffectiveCapabilities) -> Option<Vec<
 }
 
 #[test]
-fn finds_the_option_by_category_whatever_the_agent_calls_it() {
+fn finds_the_option_by_category_under_the_id_a_level_is_sent_to() {
     let claude = claude();
-    let found = thought_level(&claude).unwrap().unwrap();
     assert_eq!(
-        found,
+        thought_level(&claude, "effort").unwrap().unwrap(),
         ThoughtLevel {
-            id: "effort",
             current: Some("default"),
             choices: vec!["default", "low", "medium", "high", "xhigh", "max"],
         }
     );
+    // Not under another agent's id, nor a non-`thought_level` option under ours.
+    assert_eq!(thought_level(&claude, "reasoning_effort").unwrap(), None);
+    assert_eq!(thought_level(&claude, "model").unwrap(), None);
     let codex = codex();
-    let found = thought_level(&codex).unwrap().unwrap();
-    assert_eq!(
-        (found.id, found.current),
-        ("reasoning_effort", Some("medium"))
-    );
+    let found = thought_level(&codex, "reasoning_effort").unwrap().unwrap();
+    assert_eq!(found.current, Some("medium"));
 }
 
 #[test]
@@ -119,13 +114,13 @@ fn narrows_to_the_catalogue_levels_the_agent_also_offers() {
     );
     // No `none` from the agent, and its `ultra` is not a catalogue level.
     assert_eq!(
-        narrowed(&codex(), &gpt).unwrap(),
+        narrowed(&codex(), &gpt, "reasoning_effort").unwrap(),
         ["low", "medium", "high", "xhigh", "max"]
     );
     let opus = capabilities(Some(&["low", "medium", "high", "xhigh", "max"]), true);
     // Claude's own `default` is not a level either.
     assert_eq!(
-        narrowed(&claude(), &opus).unwrap(),
+        narrowed(&claude(), &opus, "effort").unwrap(),
         ["low", "medium", "high", "xhigh", "max"]
     );
 }
@@ -134,9 +129,12 @@ fn narrows_to_the_catalogue_levels_the_agent_also_offers() {
 fn offers_nothing_without_an_option_catalogue_levels_or_binding_reasoning() {
     // claude-agent-acp on Haiku 4.5 advertises no effort option.
     let haiku = json!({"configOptions": [select("model", "model", "haiku", &["haiku"])]});
-    assert_eq!(thought_level(&haiku).unwrap(), None);
+    assert_eq!(thought_level(&haiku, "effort").unwrap(), None);
     let levels: &[&str] = &["low", "high"];
-    assert_eq!(narrowed(&haiku, &capabilities(Some(levels), true)), None);
+    assert_eq!(
+        narrowed(&haiku, &capabilities(Some(levels), true), "effort"),
+        None
+    );
     // The catalogue records no levels for the model.
     assert!(
         offered(&claude(), &capabilities(None, true), Some("effort"))
@@ -170,18 +168,17 @@ fn reads_choices_grouped_as_acp_allows() {
         ],
     }]});
     assert_eq!(
-        thought_level(&grouped).unwrap().unwrap().choices,
+        thought_level(&grouped, "effort").unwrap().unwrap().choices,
         ["low", "high", "max"]
     );
 }
 
 #[test]
-fn refuses_an_ambiguous_or_malformed_option() {
+fn refuses_an_ambiguous_or_malformed_option_under_its_own_id() {
     let twice = json!({"configOptions": [
         select("effort", "thought_level", "low", &["low"]),
-        select("reasoning_effort", "thought_level", "low", &["low"]),
+        select("effort", "thought_level", "high", &["high"]),
     ]});
-    let without_id = json!({"configOptions": [{"category": "thought_level", "options": []}]});
     let without_choices = json!({"configOptions": [{"id": "effort", "category": "thought_level"}]});
     let numeric = json!({"configOptions": [{"id": "effort", "category": "thought_level", "options": [{"value": 1}]}]});
     let too_many: Vec<String> = (0..=MAX_CHOICES)
@@ -196,14 +193,13 @@ fn refuses_an_ambiguous_or_malformed_option() {
     for (label, result) in [
         ("missing options", json!({})),
         ("twice", twice),
-        ("without id", without_id),
         ("without choices", without_choices),
         ("numeric", numeric),
         ("too many", too_many),
     ] {
         assert!(
             matches!(
-                thought_level(&result),
+                thought_level(&result, "effort"),
                 Err(crate::application::agent_execution::agents::AgentError::Protocol(_))
             ),
             "{label}"
@@ -220,8 +216,30 @@ fn refuses_an_ambiguous_or_malformed_option() {
         &most.iter().map(String::as_str).collect::<Vec<_>>(),
     )]});
     assert_eq!(
-        thought_level(&most).unwrap().unwrap().choices.len(),
+        thought_level(&most, "effort")
+            .unwrap()
+            .unwrap()
+            .choices
+            .len(),
         MAX_CHOICES
+    );
+}
+
+#[test]
+fn options_under_other_ids_are_not_read() {
+    // Twice, malformed, or without an id: not the option a level is sent to.
+    let others = json!({"configOptions": [
+        {"category": "thought_level", "options": []},
+        {"id": "speed", "category": "thought_level"},
+        {"id": "speed", "category": "thought_level", "options": [{"value": 1}]},
+        select("effort", "thought_level", "low", &["low", "high"]),
+    ]});
+    let found = thought_level(&others, "effort").unwrap().unwrap();
+    assert_eq!(found.choices, ["low", "high"]);
+    let levels: &[&str] = &["low", "high"];
+    assert_eq!(
+        narrowed(&others, &capabilities(Some(levels), true), "effort").unwrap(),
+        ["low", "high"]
     );
 }
 
@@ -246,23 +264,20 @@ fn reads_what_the_pinned_agents_actually_sent() {
     );
 
     let claude = parse(RECORDED_CLAUDE_OPUS);
-    assert_eq!(thought_level(&claude).unwrap().unwrap().id, "effort");
+    assert!(thought_level(&claude, "effort").unwrap().is_some());
     assert_eq!(
-        narrowed(&claude, &opus).unwrap(),
+        narrowed(&claude, &opus, "effort").unwrap(),
         ["low", "medium", "high", "xhigh", "max"]
     );
 
     let haiku = parse(RECORDED_CLAUDE_HAIKU);
-    assert_eq!(thought_level(&haiku).unwrap(), None);
-    assert_eq!(narrowed(&haiku, &opus), None);
+    assert_eq!(thought_level(&haiku, "effort").unwrap(), None);
+    assert_eq!(narrowed(&haiku, &opus, "effort"), None);
 
     let codex = parse(RECORDED_CODEX_SOL);
+    assert!(thought_level(&codex, "reasoning_effort").unwrap().is_some());
     assert_eq!(
-        thought_level(&codex).unwrap().unwrap().id,
-        "reasoning_effort"
-    );
-    assert_eq!(
-        narrowed(&codex, &sol).unwrap(),
+        narrowed(&codex, &sol, "reasoning_effort").unwrap(),
         ["low", "medium", "high", "xhigh", "max"]
     );
 }
