@@ -221,6 +221,13 @@ principal must equal the binding owner before either selector is admitted.
 | Active binding | Binding revocation or embedded policy profile change | Advance persisted epoch and deny old scope before source |
 | Revoked binding | Explicit regrant | Keep receiver identity, advance epoch again; old scope stays stale |
 | Any binding | Wrong receiver, owner, target, stale epoch, or unavailable authority | Deny before source |
+| No binding | Pairing initiated by a principal whose ID is `system` | Record an actor-kind initiator with that exact ID; reopen accepts the paired binding |
+| Active or revoked binding | Revocation/regrant initiated by principal `system`, then reopen or policy change | Retain actor-kind attribution through the transition; a policy change records system-kind attribution with no principal ID |
+
+Receiver transition attribution is a tagged fact: `principal` with a validated
+principal ID, or `system` with no principal ID. The string value `system` is a
+valid principal ID and does not select the system tag. History validation checks
+the tag, ID presence, cause, and the before/after receiver state together.
 
 The pairing ceremony and bounded record and catalogue transport belong to their
 separate issues. This admission contract applies to both future source routes.

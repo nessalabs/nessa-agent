@@ -77,7 +77,7 @@ impl LocalReceiverAuthority {
             );
             if result.is_err() { return Err(ReceiverChangeError::Conflict); }
             transaction.execute(
-                "INSERT INTO receiver_transitions (receiver_id, organization_id, owner_id, before_epoch, after_epoch, before_active, after_active, before_credential, after_credential, cause, initiator_id, request_id, observed_at_ms) VALUES (?1, ?2, ?3, NULL, 1, NULL, 1, NULL, ?4, 'paired', ?5, ?6, ?7)",
+                "INSERT INTO receiver_transitions (receiver_id, organization_id, owner_id, before_epoch, after_epoch, before_active, after_active, before_credential, after_credential, cause, initiator_kind, initiator_id, request_id, observed_at_ms) VALUES (?1, ?2, ?3, NULL, 1, NULL, 1, NULL, ?4, 'paired', 'principal', ?5, ?6, ?7)",
                 params![receiver_id, organization_id.as_str(), owner_id.as_str(), credential_id.as_str(), initiator_id.as_str(), request_id, observed_at_ms],
             ).map_err(|_| ReceiverChangeError::Conflict)?;
             transaction.commit().map_err(|_| ReceiverChangeError::Unavailable)?;
@@ -119,7 +119,7 @@ impl LocalReceiverAuthority {
                 return Err(ReceiverChangeError::Conflict);
             }
             let prior_request: Option<String> = transaction.query_row(
-                "SELECT receiver_id FROM receiver_transitions WHERE initiator_id = ?1 AND request_id = ?2",
+                "SELECT receiver_id FROM receiver_transitions WHERE initiator_kind = 'principal' AND initiator_id = ?1 AND request_id = ?2",
                 params![initiator_id.as_str(), request_id], |row| row.get(0),
             ).optional().map_err(|_| ReceiverChangeError::Unavailable)?;
             if prior_request.is_some() { return Err(ReceiverChangeError::Conflict); }
@@ -131,7 +131,7 @@ impl LocalReceiverAuthority {
                 params![receiver_id, credential_id.as_str(), stored_epoch, active],
             ).map_err(|_| ReceiverChangeError::Conflict)?;
             transaction.execute(
-                "INSERT INTO receiver_transitions (receiver_id, organization_id, owner_id, before_epoch, after_epoch, before_active, after_active, before_credential, after_credential, cause, initiator_id, request_id, observed_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                "INSERT INTO receiver_transitions (receiver_id, organization_id, owner_id, before_epoch, after_epoch, before_active, after_active, before_credential, after_credential, cause, initiator_kind, initiator_id, request_id, observed_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'principal', ?11, ?12, ?13)",
                 params![receiver_id, previous.organization_id.as_str(), previous.owner_id.as_str(), i64::try_from(previous.access_epoch).map_err(|_| ReceiverChangeError::Exhausted)?, stored_epoch, previous.active, active,
                     previous.credential_id.as_str(), credential_id.as_str(), if active { "regranted" } else { "revoked" }, initiator_id.as_str(), request_id, observed_at_ms],
             ).map_err(|_| ReceiverChangeError::Unavailable)?;
@@ -148,7 +148,7 @@ fn validate_history(connection: &Connection) -> nessa_local_database::rusqlite::
     let invalid = || nessa_local_database::rusqlite::Error::InvalidQuery;
     let mut states: HashMap<String, State> = HashMap::new();
     let mut query = connection.prepare(
-        "SELECT sequence, receiver_id, organization_id, owner_id, before_epoch, after_epoch, before_active, after_active, before_credential, after_credential, cause, initiator_id, request_id, observed_at_ms FROM receiver_transitions ORDER BY sequence",
+        "SELECT sequence, receiver_id, organization_id, owner_id, before_epoch, after_epoch, before_active, after_active, before_credential, after_credential, cause, initiator_kind, initiator_id, request_id, observed_at_ms FROM receiver_transitions ORDER BY sequence",
     )?;
     let mut rows = query.query([])?;
     let mut sequence = 0_i64;
@@ -165,20 +165,25 @@ fn validate_history(connection: &Connection) -> nessa_local_database::rusqlite::
         let before_credential: Option<String> = row.get(8)?;
         let after_credential: String = row.get(9)?;
         let cause: String = row.get(10)?;
-        let initiator: String = row.get(11)?;
-        let request_id: String = row.get(12)?;
-        let observed_at_ms: i64 = row.get(13)?;
+        let initiator_kind: String = row.get(11)?;
+        let initiator_id: Option<String> = row.get(12)?;
+        let request_id: String = row.get(13)?;
+        let observed_at_ms: i64 = row.get(14)?;
+        let valid_initiator = match (initiator_kind.as_str(), initiator_id.as_deref()) {
+            ("principal", Some(id)) => PrincipalId::new(id.to_owned()).is_ok(),
+            ("system", None) => true,
+            _ => false,
+        };
         if stored_sequence != sequence
             || receiver_id.is_empty()
             || receiver_id.len() > 128
-            || initiator.is_empty()
+            || !valid_initiator
             || request_id.is_empty()
             || request_id.len() > 200
             || observed_at_ms < 0
             || CredentialId::new(after_credential.clone()).is_err()
             || OrganizationId::new(organization_id.clone()).is_err()
             || PrincipalId::new(owner_id.clone()).is_err()
-            || (initiator != "system" && PrincipalId::new(initiator.clone()).is_err())
         {
             return Err(invalid());
         }
@@ -189,7 +194,7 @@ fn validate_history(connection: &Connection) -> nessa_local_database::rusqlite::
                 && before_credential.is_none()
                 && after_epoch == 1
                 && after_active == 1
-                && initiator != "system" => {}
+                && initiator_kind == "principal" => {}
             Some((epoch, active, credential, organization, owner))
                 if cause != "paired"
                     && *organization == organization_id
@@ -203,18 +208,18 @@ fn validate_history(connection: &Connection) -> nessa_local_database::rusqlite::
                             *active == 1
                                 && after_active == 0
                                 && after_credential == *credential
-                                && initiator != "system"
+                                && initiator_kind == "principal"
                         }
                         "regranted" => {
                             *active == 0
                                 && after_active == 1
                                 && after_credential != *credential
-                                && initiator != "system"
+                                && initiator_kind == "principal"
                         }
                         "policy_changed" => {
                             after_active == *active
                                 && after_credential == *credential
-                                && initiator == "system"
+                                && initiator_kind == "system"
                         }
                         _ => false,
                     } => {}
@@ -311,7 +316,7 @@ fn advance_policy(
                     params![receiver_id, next],
                 )?;
                 transaction.execute(
-                    "INSERT INTO receiver_transitions (receiver_id, organization_id, owner_id, before_epoch, after_epoch, before_active, after_active, before_credential, after_credential, cause, initiator_id, request_id, observed_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?7, 'policy_changed', 'system', ?8, ?9)",
+                    "INSERT INTO receiver_transitions (receiver_id, organization_id, owner_id, before_epoch, after_epoch, before_active, after_active, before_credential, after_credential, cause, initiator_kind, initiator_id, request_id, observed_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?7, 'policy_changed', 'system', NULL, ?8, ?9)",
                     params![receiver_id, organization_id, owner_id, epoch, next, active, credential_id, format!("policy-{}", uuid::Uuid::new_v4()), observed_at_ms],
                 )?;
             }
@@ -395,6 +400,93 @@ mod tests {
 
     fn open(path: &Path, revision: &str) -> Result<LocalReceiverAuthority, OpenError> {
         LocalReceiverAuthority::open(path, revision, Arc::new(FixedClock))
+    }
+
+    #[tokio::test]
+    async fn a_principal_named_system_survives_pair_revoke_regrant_and_policy_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("conversations");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("receiver-access.sqlite3");
+        let actor = PrincipalId::new("system").unwrap();
+        let first_credential = CredentialId::new("first").unwrap();
+        let second_credential = CredentialId::new("second").unwrap();
+        let receiver_id = {
+            let store = open(&path, "policy-one").unwrap();
+            store
+                .pair(
+                    first_credential.clone(),
+                    OrganizationId::new("org").unwrap(),
+                    actor.clone(),
+                    actor.clone(),
+                    "pair".into(),
+                )
+                .await
+                .unwrap()
+                .receiver_id
+        };
+        let store = open(&path, "policy-one").unwrap();
+        assert_eq!(
+            store
+                .resolve(&first_credential)
+                .await
+                .unwrap()
+                .unwrap()
+                .access_epoch,
+            1
+        );
+        store
+            .change(
+                receiver_id.clone(),
+                None,
+                false,
+                actor.clone(),
+                "revoke".into(),
+            )
+            .await
+            .unwrap();
+        store
+            .change(
+                receiver_id.clone(),
+                Some(second_credential.clone()),
+                true,
+                actor,
+                "regrant".into(),
+            )
+            .await
+            .unwrap();
+        drop(store);
+        let changed_policy = open(&path, "policy-two").unwrap();
+        assert_eq!(
+            changed_policy
+                .resolve(&second_credential)
+                .await
+                .unwrap()
+                .unwrap()
+                .access_epoch,
+            4
+        );
+        let raw = Connection::open(&path).unwrap();
+        let initiators = raw
+            .prepare(
+                "SELECT initiator_kind, initiator_id FROM receiver_transitions ORDER BY sequence",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .unwrap()
+            .collect::<nessa_local_database::rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            initiators,
+            [
+                ("principal".into(), Some("system".into())),
+                ("principal".into(), Some("system".into())),
+                ("principal".into(), Some("system".into())),
+                ("system".into(), None),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -529,7 +621,7 @@ mod tests {
         );
         let raw = Connection::open(&path).unwrap();
         let transitions = raw
-            .prepare("SELECT receiver_id, before_epoch, after_epoch, cause, initiator_id, before_credential, after_credential, observed_at_ms FROM receiver_transitions ORDER BY sequence")
+            .prepare("SELECT receiver_id, before_epoch, after_epoch, cause, initiator_kind, initiator_id, before_credential, after_credential, observed_at_ms FROM receiver_transitions ORDER BY sequence")
             .unwrap()
             .query_map([], |row| Ok((
                 row.get::<_, String>(0)?,
@@ -538,8 +630,9 @@ mod tests {
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, i64>(8)?,
             )))
             .unwrap()
             .collect::<nessa_local_database::rusqlite::Result<Vec<_>>>()
@@ -561,15 +654,17 @@ mod tests {
         assert!(transitions.iter().all(|entry| entry.0 == receiver_id));
         assert_eq!(transitions[0].1, None);
         assert_eq!(transitions[0].2, 1);
-        assert_eq!(transitions[0].4, "owner");
-        assert_eq!(transitions[0].5, None);
-        assert_eq!(transitions[0].6, "credential-one");
+        assert_eq!(transitions[0].4, "principal");
+        assert_eq!(transitions[0].5.as_deref(), Some("owner"));
+        assert_eq!(transitions[0].6, None);
+        assert_eq!(transitions[0].7, "credential-one");
         assert_eq!(transitions[2].1, Some(2));
         assert_eq!(transitions[2].2, 3);
-        assert_eq!(transitions[2].5.as_deref(), Some("credential-one"));
-        assert_eq!(transitions[2].6, "credential-two");
+        assert_eq!(transitions[2].6.as_deref(), Some("credential-one"));
+        assert_eq!(transitions[2].7, "credential-two");
         assert_eq!(transitions[3].4, "system");
-        assert!(transitions.iter().all(|entry| entry.7 == 123_000));
+        assert_eq!(transitions[3].5, None);
+        assert!(transitions.iter().all(|entry| entry.8 == 123_000));
         drop(restored_policy);
         raw.execute(
             "UPDATE receivers SET access_epoch = 3 WHERE receiver_id = ?1",

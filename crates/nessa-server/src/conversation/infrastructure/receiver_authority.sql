@@ -20,10 +20,12 @@ CREATE TABLE receiver_transitions (
     before_credential TEXT,
     after_credential TEXT NOT NULL,
     cause TEXT NOT NULL CHECK (cause IN ('paired', 'revoked', 'regranted', 'policy_changed')),
-    initiator_id TEXT NOT NULL,
+    initiator_kind TEXT NOT NULL CHECK (initiator_kind IN ('principal', 'system')),
+    initiator_id TEXT,
     request_id TEXT NOT NULL,
     observed_at_ms INTEGER NOT NULL CHECK (observed_at_ms >= 0),
-    UNIQUE (initiator_id, request_id),
+    UNIQUE (initiator_kind, initiator_id, request_id),
+    CHECK ((initiator_kind = 'principal' AND initiator_id IS NOT NULL) OR (initiator_kind = 'system' AND initiator_id IS NULL)),
     CHECK (after_epoch > 0),
     CHECK (after_active IN (0, 1))
 ) STRICT;
