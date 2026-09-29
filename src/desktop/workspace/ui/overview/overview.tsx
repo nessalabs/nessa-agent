@@ -432,32 +432,53 @@ export function AgentsOverview({
   // the list, on the current row, or at its top where it lists none.
   const leaveReply = useCallback(() => focusItem(currentNow.current), [focusItem])
 
-  // The session whose row the keyboard is on, followed by where focus
-  // arrives. A session that changes group is drawn anew under its new
-  // heading, and the row it leaves takes focus with it to the page's body,
-  // where no key is heard: the keyboard follows it to its new row — or, the
-  // session gone from the list, to the current row — before the frame is
-  // painted.
-  const holding = useRef<string | null>(null)
+  // Where the keyboard is in the list, followed by where focus arrives: the
+  // element, and the session whose row holds it — on the row, or in the peek
+  // opened beneath it. A session that changes group is drawn anew under its
+  // new heading, and the element leaves the page with focus still on it, to
+  // the page's body, where no key is heard: the keyboard follows the session
+  // to its new row — or, the session gone from the list, to the current row —
+  // before the frame is painted. Focus the person takes to the body (a click
+  // on text) leaves with the element still on the page, and is let go.
+  const holding = useRef<{ element: HTMLElement; sessionId: string } | null>(null)
   useEffect(() => {
     const onFocusIn = (event: FocusEvent) => {
+      const element = event.target
+      const sessionId =
+        element instanceof HTMLElement && list.current?.contains(element)
+          ? element
+              .closest<HTMLElement>(".agents-row-item")
+              ?.querySelector<HTMLElement>("[data-overview-item]")?.dataset.overviewItem
+          : undefined
       holding.current =
-        event.target instanceof HTMLElement && list.current?.contains(event.target)
-          ? (event.target.closest<HTMLElement>("[data-overview-item]")?.dataset
-              .overviewItem ?? null)
+        element instanceof HTMLElement && sessionId !== undefined
+          ? { element, sessionId }
           : null
     }
+    const onFocusOut = (event: FocusEvent) => {
+      const element = event.target
+      // Settled once the change that moved focus has: an element taken off
+      // the page is still held, one the person left is not.
+      queueMicrotask(() => {
+        if (holding.current?.element === element && holding.current.element.isConnected)
+          holding.current = null
+      })
+    }
     document.addEventListener("focusin", onFocusIn)
-    return () => document.removeEventListener("focusin", onFocusIn)
+    document.addEventListener("focusout", onFocusOut)
+    return () => {
+      document.removeEventListener("focusin", onFocusIn)
+      document.removeEventListener("focusout", onFocusOut)
+    }
   }, [])
   // After every change to the list, before it is painted.
   useLayoutEffect(() => {
     const was = holding.current
-    if (was === null) return
+    if (was === null || was.element.isConnected) return
     const focus = document.activeElement
     if (focus !== null && focus !== document.body) return
     holding.current = null
-    focusItem(order.includes(was) ? was : current)
+    focusItem(order.includes(was.sessionId) ? was.sessionId : current)
   })
 
   return (

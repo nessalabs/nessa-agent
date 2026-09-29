@@ -15,7 +15,8 @@
  * Needs you to Working and draws its pill anew, leaves the caret in the
  * session's pill (focus-reply, at 1440 × 900 and 1000 × 700). The keyboard
  * on a row whose session changes group follows it to its new row, and the
- * arrows walk the list from there (focus-regroup). Focus on the
+ * arrows walk the list from there — from the peek beneath the row too — while
+ * focus the person took to the page stays there (focus-regroup-*). Focus on the
  * scene's Customize control in a new session's home, as the window shortens
  * and the pane's home hides the scene, goes to that home's composer, not to
  * the page (focus-home-scene).
@@ -419,11 +420,15 @@ const groupOf = (page, sessionId) =>
 /**
  * The keyboard on a row whose session changes group: a reply moves a request
  * to Working, Escape puts the keyboard back on its row, and the scripted turn
- * ending moves it on again, its row drawn anew under another heading. The
- * keyboard follows it to that row, and the arrows walk the list from there
- * (#308).
+ * ending moves it on again, its row drawn anew under another heading (#308).
+ * `from` is where the keyboard waits for that: on the row (`row`), where it
+ * must follow the session to its new row and the arrows walk the list from
+ * there; in the peek opened beneath the row (`peek`, where there is no room
+ * beside the list), where it must follow the session to its new row too; or
+ * nowhere, the person having clicked the page's title (`away`), where it must
+ * stay.
  */
-async function regroupKeepsKeyboard(page) {
+async function regroupKeepsKeyboard(page, from) {
   const failures = []
   const trail = []
   await page.keyboard.press(keys.overview)
@@ -460,6 +465,29 @@ async function regroupKeepsKeyboard(page) {
     throw new CannotRun(
       `after Escape the keyboard is on ${before.active}, not ${on}'s row`,
     )
+  if (from === "peek") {
+    // The reply opened this session's peek beneath its row; its story takes the keyboard.
+    const story = page.locator(
+      `${css.overviewItem}[data-overview-item="${on}"] ~ ${css.inlinePeek} ${css.peekStory}`,
+    )
+    if ((await story.count()) !== 1)
+      throw new CannotRun(`no peek is open beneath ${on}'s row`)
+    await story.focus()
+  } else if (from === "away") {
+    // A click on text: the keyboard goes to the page's body.
+    await page.locator(`${css.overviewTitle} h1`).click()
+  }
+  await frames(page, 2)
+  const waiting = await page.evaluate(
+    ([story]) => {
+      const a = document.activeElement
+      return a === document.body ? "body" : a?.matches(story) ? "story" : "row"
+    },
+    [css.peekStory],
+  )
+  trail.push({ step: `waiting (${from})`, on: waiting })
+  if (waiting !== { row: "row", peek: "story", away: "body" }[from])
+    throw new CannotRun(`the keyboard waits on ${waiting}, not where ${from} puts it`)
   const moved = await until(
     page,
     ([sel, id]) =>
@@ -478,6 +506,14 @@ async function regroupKeepsKeyboard(page) {
   const after = await state(page)
   const under = await groupOf(page, on)
   trail.push({ step: "turn ended", under, ...after })
+  if (from === "away") {
+    const still = await page.evaluate(() => document.activeElement === document.body)
+    if (!still)
+      failures.push(
+        `${on} moved to ${under ?? "nowhere"} and took the keyboard back to ${after.active}; the person had left it`,
+      )
+    return { trail, failures }
+  }
   if (after.activeOverviewItem !== on)
     failures.push(
       `${on} moved from Working to ${under ?? "nowhere"}; the keyboard is on ${after.active}, not its row`,
@@ -524,9 +560,11 @@ Steps (each asserts where the caret is afterwards):
   focus-answers-overview, -card: a held ⌘↩, and ⌘↩ twice 80ms apart, each answer one request;
   a held ↩ on a pane card's Allow Once, and a double click on Deny and on
   Always Allow, each answer one, and the held ↩ sends nothing typed
-  focus-regroup: a reply moves a request to Working, Escape puts the keyboard
-  on its row, its turn ends and the row moves on → the keyboard is still on
-  that session's row, and ↓ walks the list from it
+  focus-regroup-row, -peek, -away: a reply moves a request to Working, Escape
+  puts the keyboard on its row, its turn ends and the row moves on → from the
+  row (1440 × 900) or from the peek beneath it (1000 × 700), the keyboard is
+  on that session's row, and ↓ walks the list from the row; after a click on
+  the title (away), it stays on the page's body
   focus-home-scene: Customize focused in a new session's home, the window
   shortened so the home hides its scene → the caret is in the home's composer`,
 }
@@ -643,17 +681,26 @@ await main(meta, async ({ options, rep, url }) => {
             await fresh.close()
           }
         })
-      await attempt(rep, { name: "focus-regroup", engine, layout }, async () => {
-        const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
-        try {
-          await need(fresh.page, css.composer, "a composer")
-          await focusComposer(fresh.page)
-          const result = await regroupKeepsKeyboard(fresh.page)
-          return { ...result, failures: [...result.failures, ...fresh.errors] }
-        } finally {
-          await fresh.close()
-        }
-      })
+      for (const [from, width, height] of [
+        ["row", 1440, 900],
+        ["peek", 1000, 700],
+        ["away", 1440, 900],
+      ])
+        await attempt(
+          rep,
+          { name: `focus-regroup-${from}`, engine, layout, size: `${width}x${height}` },
+          async () => {
+            const fresh = await openPage(browser, { url, layout, width, height })
+            try {
+              await need(fresh.page, css.composer, "a composer")
+              await focusComposer(fresh.page)
+              const result = await regroupKeepsKeyboard(fresh.page, from)
+              return { ...result, failures: [...result.failures, ...fresh.errors] }
+            } finally {
+              await fresh.close()
+            }
+          },
+        )
       await attempt(rep, { name: "focus-home-scene", engine, layout }, async () => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {
