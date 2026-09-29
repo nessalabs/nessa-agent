@@ -140,6 +140,56 @@ describe("the in-memory source", () => {
     })
   })
 
+  it("says what is going on at each beat in the session's summary, at its revision, and nothing once at rest", async () => {
+    const { source, updates, advance } = started()
+    await source.send({
+      initiator: "person",
+      sessionId: "new",
+      messageId: "m1",
+      text: "Sketch a calmer header",
+      model: { provider: "anthropic", modelId: "claude-opus-5" },
+      start: { channelId: "desktop-app", title: "Sketch a calmer header" },
+    })
+    const summaries = () =>
+      updates.flatMap((update) => (update.kind === "session" ? [update.session] : []))
+    expect(summaries().at(-1)?.now).toBe("Thinking about “sketch a calmer header”")
+    advance(scriptTiming.readingMs)
+    expect(summaries().at(-1)?.now).toBe(
+      "Reading what #desktop-app already has around “sketch a calmer header”",
+    )
+    advance(scriptTiming.answerMs - scriptTiming.readingMs)
+    expect(summaries().at(-1)?.now).toBe(
+      "Writing a short plan for “sketch a calmer header”",
+    )
+    advance(10_000)
+    expect(summaries().at(-1)).toMatchObject({ status: "idle", now: undefined })
+    // Each change of it is the summary's next revision.
+    const revisions = summaries().map((summary) => summary.revision)
+    expect(revisions).toEqual(revisions.map((_, index) => index + 1))
+  })
+
+  it("says a waiting session waits, runs what was allowed, and says nothing once denied", async () => {
+    const { source, advance } = started()
+    const index = await source.index()
+    const now = (id: string) => index.sessions.find((session) => session.id === id)?.now
+    expect(now("retry-budget")).toMatch(/^Waiting to run the reconnect tests/)
+    // An idle session has nothing going on.
+    expect(index.sessions.filter((s) => s.status === "idle").map((s) => s.now)).toEqual(
+      index.sessions.filter((s) => s.status === "idle").map(() => undefined),
+    )
+    const asked = await source.transcript("retry-budget")
+    await source.approve("retry-budget", asked.approval!.id, "once", "person")
+    const running = (await source.index()).sessions.find((s) => s.id === "retry-budget")
+    expect(running?.now).toBe("Running cargo test, as you allowed")
+    advance(scriptTiming.commandMs)
+    const rested = (await source.index()).sessions.find((s) => s.id === "retry-budget")
+    expect(rested?.now).toBeUndefined()
+    const waiting = await source.transcript("notarize")
+    await source.deny("notarize", waiting.approval!.id, "person")
+    const denied = (await source.index()).sessions.find((s) => s.id === "notarize")
+    expect(denied?.now).toBeUndefined()
+  })
+
   it("keeps earlier messages as the same values while a reply streams", async () => {
     const { source, updates, advance } = started()
     await source.send({

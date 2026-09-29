@@ -141,6 +141,66 @@ html:not(.dark) .agents-overview-surface {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * The counts, each a quiet toggle: it reads as the line it always was, and
+ * a count shown alone is a soft chip, the filter's own fill. Every count has
+ * the same box pressed or not, so choosing one moves nothing.
+ */
+.agents-overview-header .agents-overview-counts {
+  display: flex;
+  min-height: 22px;
+  flex-wrap: wrap;
+  align-items: center;
+  /* The first count's words line up with the title, its fill reaching past them. */
+  margin: 4px 0 0 -7px;
+  line-height: 22px;
+}
+
+.agents-overview-counts:not([role="group"]) {
+  margin-left: 0;
+}
+
+.agents-overview-count {
+  display: inline-flex;
+  align-items: center;
+}
+
+.agents-overview-count > span {
+  padding: 0 1px;
+  color: var(--desktop-fainter);
+}
+
+.agents-overview-count button {
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--desktop-muted) !important;
+  font: inherit;
+  font-size: var(--desktop-text-body) !important;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+  outline: none;
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease;
+}
+
+.agents-overview-count button:is(:hover, :focus-visible) {
+  background: var(--desktop-hover);
+  color: var(--foreground) !important;
+}
+
+.agents-overview-count button[aria-pressed="true"] {
+  background: var(--desktop-selected);
+  color: var(--foreground) !important;
+}
+
+.agents-overview-count button[aria-pressed="true"]:focus-visible {
+  background: var(--desktop-press);
+}
+
 .agents-overview-title {
   display: flex;
   align-items: center;
@@ -618,8 +678,12 @@ html:not(.dark) .agents-request {
   stroke-width: 2;
 }
 
-.agents-peek-now .workspace-live {
-  margin: 0;
+/* Where it stands, and what is going on in a line, as the source says it. */
+.agents-peek-now {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 20px;
+  box-shadow: inset 0 -1px 0 color-mix(in oklab, var(--foreground) 6%, transparent);
 }
 
 .agents-peek-state {
@@ -636,6 +700,45 @@ html:not(.dark) .agents-request {
   color: var(--desktop-faint);
   font-size: var(--desktop-text-footnote);
   font-variant-numeric: tabular-nums;
+}
+
+/* Under the words beside the glyph, not under the glyph. */
+.agents-peek-summary {
+  margin: 0 0 0 var(--agents-peek-glyph, 20px);
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.45;
+}
+
+/*
+ * The turn's story, as its pane tells it but a step smaller: the person's
+ * bubble, then the agent's steps and words in order, then what it is doing.
+ */
+.agents-peek-story {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.agents-peek-story :is(.workspace-message-body, .workspace-bubble) {
+  font-size: var(--desktop-text-body);
+}
+
+.agents-peek-story .workspace-message-body {
+  gap: 10px;
+  line-height: 1.6;
+}
+
+.agents-peek-story .workspace-live {
+  margin: 0;
+  font-size: var(--desktop-text-body);
+}
+
+/* Where the story begins after the person's message, when the turn holds more above. */
+.agents-peek-earlier {
+  margin: 0;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
 }
 
 /* The request in full: the one warm thing in the peek, as in a pane. */
@@ -688,32 +791,6 @@ html:not(.dark) .agents-request {
   color: var(--desktop-muted);
 }
 
-.agents-peek-section h3 {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin: 0 0 10px;
-  color: var(--desktop-muted);
-  font-size: var(--desktop-text-footnote);
-  font-weight: 600;
-}
-
-.agents-peek-section h3 > span {
-  color: var(--desktop-faint);
-  font-weight: 400;
-}
-
-.agents-peek-said {
-  display: -webkit-box;
-  margin: 0;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 6;
-  color: var(--desktop-ink-2);
-  font-size: var(--desktop-text-body);
-  line-height: 1.55;
-}
-
 /* Where there is no room beside the list, a chosen row opens its peek beneath it. */
 .agents-inline-peek {
   padding: 18px 18px 20px 52px;
@@ -733,6 +810,30 @@ html:not(.dark) .agents-request {
 
 .agents-inline-peek .agents-peek-head {
   display: none;
+}
+
+/*
+ * Beneath its row, a long turn scrolls within the peek rather than pushing
+ * the list away. It takes the keyboard (it is focusable, so WebKit reaches
+ * it too) and keeps its scrollbar; its foot fades out over its last 16px
+ * while there is more below, and the padding under its last line lets that
+ * line scroll clear of the fade.
+ */
+.agents-inline-peek .agents-peek-story {
+  max-height: 360px;
+  /* Room inside for its focus ring, taken back outside so its words stay aligned. */
+  margin-inline: -8px;
+  padding: 0 8px 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  mask-image: linear-gradient(black calc(100% - 16px), transparent);
+  border-radius: var(--desktop-radius-sm);
+  outline: none;
+}
+
+/* Inset, so the story's own mask does not clip it away. */
+.agents-inline-peek .agents-peek-story:focus-visible {
+  box-shadow: inset 0 0 0 1.5px var(--desktop-focus-ring);
 }
 
 /* ——— Replying from the peek: a pill, the composer pared down ——— */

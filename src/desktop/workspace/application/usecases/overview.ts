@@ -1,10 +1,15 @@
 /**
- * The Agents overview's own state: which session its peek shows, and what
- * it lists. Opening and leaving it is the content region's
+ * The Agents overview's own state: which session its peek shows, what it
+ * lists, and the one group it shows alone. Opening and leaving it is the content region's
  * (`navigation.ts`, `showContent`). Each is a named action an agent can
  * dispatch, as the person's clicks and keys do.
  */
-import { agentsGlance, readingOrder } from "../../model/overview/agents-glance"
+import {
+  agentsGlance,
+  inGroup,
+  readingOrder,
+  type AgentsGroup,
+} from "../../model/overview/agents-glance"
 import type { AgentsFilter } from "../../model/overview/filter"
 import {
   keepShownFailures,
@@ -34,6 +39,30 @@ export function filterOverview(
 }
 
 /**
+ * Shows one group alone, or — `null` — every group. The chosen session
+ * stays chosen when the group holds it; otherwise nothing is, and the open
+ * overview chooses the first the group lists (`keepOverviewChoice`), so its
+ * peek never shows a session the group leaves out. Choosing the group
+ * already shown changes nothing: letting it go is choosing `null`.
+ */
+export function showOverviewGroup(
+  state: WorkspaceState,
+  { group }: { group: AgentsGroup | null },
+): WorkspaceState {
+  if (state.overview.group === group) return state
+  const { selected } = state.overview
+  const chosen = selected === null ? undefined : sessionOf(state, selected)
+  return keepShownFailures({
+    ...state,
+    overview: {
+      ...state.overview,
+      group,
+      selected: chosen && inGroup(chosen, group) ? selected : null,
+    },
+  })
+}
+
+/**
  * With nothing chosen that it lists — on opening, or once the chosen session
  * is gone — the open overview chooses the first it lists at `now`. The one
  * owner of which session its peek shows: the window reads that session's
@@ -45,9 +74,9 @@ export function keepOverviewChoice(
   { now }: { now: number },
 ): WorkspaceState {
   if (state.content !== "agents") return state
-  const { selected, filter } = state.overview
+  const { selected, filter, group } = state.overview
   const order = readingOrder(
-    agentsGlance(listedSessions(state), [], { filter, now, looking: selected }),
+    agentsGlance(listedSessions(state), [], { filter, group, now, looking: selected }),
   )
   if (selected !== null && order.includes(selected)) return state
   const first = order[0] ?? null

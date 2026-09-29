@@ -11,7 +11,8 @@ vi.mock("../../model/composer-options", async (load) => {
   }
 })
 
-const { consistentIndex, contradicts, defaultModel } = await import("./workspace-index")
+const { consistentIndex, contradicts, defaultModel, nowLine } =
+  await import("./workspace-index")
 const { defaultComposerModel, composerModels } =
   await import("../../model/composer-options")
 
@@ -96,5 +97,31 @@ describe("the index the workspace takes", () => {
       channels: ["c"],
       sessions: ["a"],
     })
+  })
+})
+
+describe("the source's line of what is going on", () => {
+  const summaryWith = (now: string | undefined) => ({
+    id: "s",
+    channelId: "c",
+    title: "S",
+    model: { provider: "anthropic", modelId: "claude-opus-5" },
+    status: "running" as const,
+    startedAt: 1,
+    updatedAt: 2,
+    preview: "",
+    now,
+    pinned: false,
+    unread: false,
+    revision: 1,
+  })
+
+  it("is the line as the source sent it, when it says something", () => {
+    expect(nowLine(summaryWith("  Running the tests\n"))).toBe("  Running the tests\n")
+  })
+
+  it("is nothing when absent, empty, or only whitespace", () => {
+    for (const blank of [undefined, "", " ", "\n", "\t \u00a0"])
+      expect(nowLine(summaryWith(blank))).toBeNull()
   })
 })

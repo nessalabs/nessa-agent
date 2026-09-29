@@ -35,6 +35,7 @@ import type { WorkspaceFailureReason } from "../../model/failure"
 import {
   agentsGlance,
   type AgentsGlance,
+  type AgentsGroup,
   type Held,
 } from "../../model/overview/agents-glance"
 import type { AgentsFilter } from "../../model/overview/filter"
@@ -77,6 +78,9 @@ export const selectOverviewSelected = (state: Root) => state.workspace.overview.
 /** What the overview lists. */
 export const selectOverviewFilter = (state: Root): AgentsFilter =>
   state.workspace.overview.filter
+/** The group the overview shows alone, or `null` for every group. */
+export const selectOverviewGroup = (state: Root): AgentsGroup | null =>
+  state.workspace.overview.group
 /** Whether the workspace has read its index and can list sessions. */
 export const selectReady = (state: Root) => state.workspace.status === "ready"
 export const selectPanes = (state: Root) => state.workspace.panes
@@ -294,7 +298,8 @@ export function sameListGroups(
 export const selectListedSessions = listed
 
 /**
- * The overview's groups under its filter at `now`, with answered requests
+ * The overview's groups under its filter at `now`, the group chosen shown
+ * alone, with answered requests
  * `held` in their places and the chosen session listed whatever the filter
  * says; compare with `sameGlance`.
  */
@@ -305,6 +310,7 @@ export const selectGlance = (
 ): AgentsGlance =>
   agentsGlance(listed(state), held, {
     filter: state.workspace.overview.filter,
+    group: state.workspace.overview.group,
     now,
     looking: state.workspace.overview.selected,
   })

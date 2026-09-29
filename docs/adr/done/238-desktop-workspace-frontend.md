@@ -77,8 +77,8 @@ behaviour set down here is unchanged by the move.
     pane shows it;
   - the Agents overview's rules (`model/overview/`): what it lists and in
     what order (`agents-glance.ts`), its filter (`filter.ts`), where the
-    keyboard goes (`walk.ts`), a peek and a request read from a conversation
-    (`peek.ts`, `request.ts`).
+    keyboard goes (`walk.ts`), a peek's story of the turn and a request read
+    from a conversation (`peek.ts`, `request.ts`).
 - **`application/`** owns the **`WorkspaceSource`** port and the workspace's
   state, with each use case a pure function over it (`usecases/`).
 - **`adapters/`** holds:
@@ -117,7 +117,17 @@ a read answered late, or an index read while updates already flow cannot
 undo anything. A session has two counters — its summary's and its
 conversation's — never compared with each other; **a removal is counted with
 the summary** (it is the summary's next revision), and is remembered with that
-revision, so an older read cannot bring the session back. An update at a
+revision, so an older read cannot bring the session back. **A summary may
+say what is going on in its session now** (`SessionSummary.now`, optional): one
+line in the source's own words — "Running the reconnect tests after adding a
+token bucket" — which the overview's peek shows as it is. It belongs to the
+summary and follows its revisions: a newer summary without one says there is
+nothing to say, and it may lag or lead the conversation, which has its own
+counter. The window never writes one and shows nothing where the source says
+nothing — a line of only whitespace says nothing either, the one rule for
+which is the model's (`nowLine`), the line otherwise shown as it was sent;
+the in-memory source writes one at each beat of its scripts and in
+its sample data, and the gateway will generate it (#248). An update at a
 revision the source could not have sent is let go, and logged where it is
 received (`followWorkspace`, `loadWorkspace`); the reducers stay pure.
 
@@ -288,10 +298,29 @@ sessions (`SessionView`). Previews to come are offered under Settings ›
 Advanced › Experimental, which says so while it has none. Its groups are
 shown only while they hold something, "Needs you" too — nothing waiting
 leaves no empty section — and its one quiet line ("Nothing needs you") shows
-only when it lists nothing at all (`overview.test.tsx`). Its header — the title, its counts and the filter — holds its place; only the list under it scrolls, fading out at its top edge. The entry and ⌘0 are a place like a channel:
+only when it lists nothing at all (`overview.test.tsx`). **Each count in its
+header shows its group alone** (see _Showing one group alone_ below): a toggle
+button, pressed while its group is shown alone, in a group labelled "Show
+only"; chosen again it shows every group. The counts are always what the
+filter lets through, whichever group is shown and whichever session is looked
+at — one the filter keeps out stays listed while looked at, and is never
+counted — so another group is one click away on the same line, and the chosen
+one stays in the line at nought ("0 finished") so it can be let go where it
+was chosen. A group shown alone that lists nothing of its own says so in one
+quiet line at the top of the list ("Nothing has finished"), even while the
+session looked at, having left it, is still listed beneath under its new
+heading (`quietOf`). A count the keyboard is on that goes from the line — let
+go at nought, or emptied by the source — gives the keyboard to the list, on
+its current row or at its top, never to the page. The line under
+the list — "N more sessions outside this view · Show All" — counts only what
+the filter keeps out *of the group shown*, and Show All chooses every session
+at any time under any tag, so it always lists what it counted. Its header — the title, its counts and the filter — holds its place; only the list under it scrolls, fading out at its top edge. The entry and ⌘0 are a place like a channel:
 choosing it again keeps it, and Escape leaves it whenever it is open —
 wherever the keyboard is, even before the keyboard has landed on its row —
-but for Escape in a menu or dialog over it, which is theirs; every action that goes
+but for Escape in a menu or dialog over it, which is theirs, Escape in a
+reply pill, which takes the keyboard back to the list, and, while one group
+is shown alone, the first Escape, which shows every group again (the next
+leaves); every action that goes
 somewhere — a session, a channel, a new session, another pane,
 or the focused pane asked for by name — goes back to the panes, even when it
 finds the window already there; and one that changes the panes a person asked
@@ -327,7 +356,70 @@ the same `approve` and `deny` as a pane's card, so there is one answer per
 approval whichever surface gave it — a second, from either, is `answering` —
 and refused stays apart from unknown. Its conversations are read and kept as
 a pane's are (bounded, above), and a failed read is kept while it is shown. A
-peek is not reading the session: only a pane marks it read.
+peek is not reading the session: only a pane marks it read. With a group
+shown alone, what waits on the person is on screen only when that group is
+Needs you (`inGroup`, in the same rule): a request the group leaves out is
+neither read for the overview nor answered from it (`not-asked`).
+
+**The peek tells the turn's story** (`model/overview/peek.ts`,
+`ui/overview/session-peek.tsx`). Under its title: where the session stands
+(waiting for you, working, finished) and, when the source says one, its line
+of what is going on (`SessionSummary.now`). Then, top to bottom: the person's
+latest message — the last message of theirs in the source's conversation —
+then what the agent did and said since, in order, drawn by the
+conversation's own `Message` (its steps, edits, code and words, as a pane
+draws them), then what it is doing now (the live row), then the request in
+full where one waits. Nothing is summarised by the window, but a peek is a
+glance drawn afresh for each session the keyboard lands on, so it is
+bounded: it draws the turn's latest parts (`peekParts`, 24 — steps,
+paragraphs, code, lists; the oldest message drawn cut to its latest), and
+where the turn holds more, one line under the person's message says so
+("Earlier in this turn · Open"), opening the session, which shows it all.
+Beside the list, a long turn scrolls within the peek with the reply pill
+held at its foot; beneath a row it scrolls within its own bounded height,
+taking the keyboard to do it (a stop of its own, so WebKit reaches it; its
+arrows, Home and End scroll it rather than walk the list), its scrollbar
+shown and its foot fading while there is more below.
+
+### Showing one group alone
+
+The overview's state holds the group shown alone (`OverviewState.group`:
+`needsYou`, `working`, `finished`, `earlier`, or `null` for every group),
+beside its filter and chosen session, and `showOverviewGroup` is the one
+command that changes it; a count's toggle is the view dispatching it (its
+group, or `null` when it is already shown). A session's group is where it
+stands (`groupOf`: waiting; running; idle and unread; idle and seen), the one
+rule the list, the counts, the footer's figure and `overviewShows` read: the
+glance files each session once, by `groupOf`, and draws its lists and counts
+from that one pass. The group is kept while
+the window lives — closing and opening the overview keeps it, as it keeps the
+chosen session — and **never between launches**: only the filter is a
+standing choice worth remembering (`RememberedFilter`); a group is a
+momentary narrowing, and a window opening on yesterday's "Finished" would
+hide a request waiting on the person. One row, at least one test
+(`adapters/store/commands.test.ts` › _the overview shows one group alone_,
+`model/overview/agents-glance.test.ts` › _one group shown alone_,
+`ui/overview/overview.test.tsx` › _the counts show one group alone_).
+
+| State | Event | Next | What the person sees |
+| --- | --- | --- | --- |
+| every group | a count chosen (click, Space or Return on it) | that group | only that group listed; its count pressed; every count still in the line; if the chosen session is outside the group, the group's first is chosen (`keepOverviewChoice`), and nothing when it lists none |
+| a group | its count chosen again, or `showOverviewGroup(null)` | every group | every group listed; the chosen session kept |
+| a group | another count chosen | that group | as for the first choice |
+| a group | the same group asked for again | unchanged | nothing changes (the same state) |
+| a group | Escape, outside a menu, dialog or reply pill | every group | the overview stays open |
+| every group | Escape | — | the overview is left (as before) |
+| a group | the filter changes | the same group | its counts and list under the new filter |
+| a group | the chosen session moves to another group while looked at | the same group | it stays listed, under its new heading, until the person moves on (`looking`), as under the filter |
+| a group | its last session moves to another group | the same group | its count at nought, pressed; "Nothing …" at the top of the list (`quietOf`); that session — the one looked at, as a group's first is chosen — stays chosen and listed beneath the line under its new heading, until the person moves on (`looking`) |
+| a group | its last session is removed | the same group | its count at nought, pressed; "Nothing …"; nothing chosen |
+| any | the session looked at is one the filter keeps out | unchanged | it stays listed while looked at; no count counts it |
+| a group at nought | its count let go (click, Space, Return, or Escape) while the keyboard is on it | every group | the count leaves the line; the keyboard goes to the list — its current row, or its top |
+| any | a count the keyboard is on drops to nought, its group not shown alone | unchanged | the count leaves the line; the keyboard goes to the list — its current row, or its top |
+| a group | the overview closes and opens again | the same group | as it was |
+| any | a launch | every group | the filter as kept; no group |
+| Needs you not shown | an answer asked for a waiting session not chosen | unchanged | `not-asked`; it is not read for the overview |
+| Needs you | a request answered from its row | unchanged | it settles in place; held rows are listed only while the waiting are shown |
 
 **Focus follows the focused pane** (`adapters/dom/focus.ts`, one mechanism):
 whenever another pane takes focus — a split, ⌘N, ⌘W, ⌘1–4, ⇧⌘[ ⇧⌘], a pick in

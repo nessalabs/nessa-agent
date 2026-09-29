@@ -32,6 +32,7 @@ import {
 import * as navigation from "../../application/usecases/navigation"
 import * as overview from "../../application/usecases/overview"
 import type { AgentsFilter } from "../../model/overview/filter"
+import type { AgentsGroup } from "../../model/overview/agents-glance"
 import * as panes from "../../application/usecases/panes"
 import * as sessions from "../../application/usecases/sessions"
 import * as updates from "../../application/usecases/updates"
@@ -123,6 +124,8 @@ const workspaceSlice = createSlice({
       overview.keepOverviewChoice(state, payload),
     filterOverview: (state, { payload }: Payload<{ filter: AgentsFilter }>) =>
       overview.filterOverview(state, payload),
+    showOverviewGroup: (state, { payload }: Payload<{ group: AgentsGroup | null }>) =>
+      overview.showOverviewGroup(state, payload),
     selectChannel: (state, { payload }: Payload<{ channelId: string }>) =>
       navigation.selectChannel(state, payload),
     channelOpened: (

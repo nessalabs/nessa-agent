@@ -2,6 +2,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,20 +20,25 @@ import {
   filterOverview,
   openSession,
   selectInOverview,
+  showOverviewGroup,
   type AnswerOutcome,
 } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectGlance,
   selectOverviewFilter,
+  selectOverviewGroup,
   selectOverviewSelected,
   selectReady,
 } from "../../adapters/store/selectors"
 import {
-  glanceLine,
+  glanceCounts,
+  quietLine,
+  quietOf,
   readingOrder,
   sameGlance,
   type AgentsGlance,
+  type AgentsGroup,
   type Held,
 } from "../../model/overview/agents-glance"
 import type { AgentsFilter } from "../../model/overview/filter"
@@ -87,6 +93,7 @@ export function AgentsOverview({
   const dispatch = useWorkspaceDispatch()
   const ready = useWorkspaceSelector(selectReady)
   const filter = useWorkspaceSelector(selectOverviewFilter)
+  const group = useWorkspaceSelector(selectOverviewGroup)
   const selected = useWorkspaceSelector(selectOverviewSelected)
   const [settling, setSettling] = useState<readonly Settling[]>([])
   const [said, setSaid] = useState("")
@@ -113,6 +120,12 @@ export function AgentsOverview({
   const setFilter = useCallback(
     (next: AgentsFilter) => dispatch(filterOverview({ filter: next })),
     [dispatch],
+  )
+  // A count shows its group alone; chosen again, every group.
+  const toggleGroup = useCallback(
+    (chosen: AgentsGroup) =>
+      dispatch(showOverviewGroup({ group: chosen === group ? null : chosen })),
+    [dispatch, group],
   )
   const [expanded, setExpanded] = useState<string | null>(null)
   const list = useRef<HTMLDivElement>(null)
@@ -387,9 +400,13 @@ export function AgentsOverview({
 
   // Escape leaves whenever the overview is open — wherever the keyboard is,
   // even before it has landed on a row — but for Escape in a menu or a
-  // dialog over it, which is theirs, and under Settings, whose keys are its own.
+  // dialog over it, which is theirs, and under Settings, whose keys are its
+  // own; and, with one group shown alone, the first Escape shows every group
+  // again and the next leaves.
   const leaveNow = useRef(onLeave)
   leaveNow.current = onLeave
+  const groupNow = useRef(group)
+  groupNow.current = group
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return
@@ -405,12 +422,14 @@ export function AgentsOverview({
       )
         return
       event.preventDefault()
-      leaveNow.current()
+      if (groupNow.current !== null) dispatch(showOverviewGroup({ group: null }))
+      else leaveNow.current()
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [])
-  // Escape in a pill: back to the row it replies to.
+  }, [dispatch])
+  // Escape in a pill, or a count the keyboard was on gone from the line: to
+  // the list, on the current row, or at its top where it lists none.
   const leaveReply = useCallback(() => focusItem(currentNow.current), [focusItem])
 
   return (
@@ -430,7 +449,12 @@ export function AgentsOverview({
                 <h1>Agents</h1>
                 <FilterMenu filter={filter} onChange={setFilter} />
               </div>
-              <p>{ready ? glanceLine(glance) : "\u00a0"}</p>
+              <Counts
+                ready={ready}
+                glance={glance}
+                onToggle={toggleGroup}
+                onFocusGone={leaveReply}
+              />
             </header>
             <div className="agents-overview-scroll">
               <div
@@ -452,11 +476,7 @@ export function AgentsOverview({
                     onAnswer={answer}
                     onLeaveReply={leaveReply}
                     takesKey={takesKey}
-                    onShowAll={
-                      filter.scope === "all"
-                        ? undefined
-                        : () => setFilter({ ...filter, scope: "all" })
-                    }
+                    onShowAll={() => setFilter(everySession)}
                   />
                 ) : null}
                 <p className="agents-overview-said" aria-live="polite">
@@ -471,6 +491,7 @@ export function AgentsOverview({
                 <SessionPeek
                   key={peeked}
                   sessionId={peeked}
+                  placement="beside"
                   settling={settlingOf.get(peeked)}
                   onOpen={open}
                   onAnswer={answer}
@@ -487,6 +508,82 @@ export function AgentsOverview({
 
 /** How wide the overview's layer must be to hold its peek beside the list. */
 export const splitWidth = 820
+
+/** What Show All chooses: every session, at any time, under any tag. */
+const everySession: AgentsFilter = { scope: "all", range: "any", tags: [] }
+
+/**
+ * The header's counts, each a toggle that shows its group alone — pressed
+ * while it does — and, chosen again, every group. Nothing to count, one
+ * quiet line; not ready, a line's room held so the header does not move.
+ *
+ * A count goes from the line when its group has none the filter lets
+ * through and is not shown alone — let go at nought, or emptied by the
+ * source. When the keyboard was on it, it goes to the list (`onFocusGone`)
+ * in the same frame, never left on the page's body, where no key is heard.
+ */
+function Counts({
+  ready,
+  glance,
+  onToggle,
+  onFocusGone,
+}: {
+  ready: boolean
+  glance: AgentsGlance
+  onToggle: (group: AgentsGroup) => void
+  onFocusGone: () => void
+}) {
+  const counts = glanceCounts(glance)
+  // The count the keyboard is on, followed by where focus arrives: a count
+  // taken from the page moves focus nowhere, so it is still named here.
+  const holding = useRef<string | null>(null)
+  useEffect(() => {
+    const onFocusIn = (event: FocusEvent) => {
+      holding.current =
+        event.target instanceof HTMLElement
+          ? (event.target.closest<HTMLElement>(".agents-overview-counts [data-group]")
+              ?.dataset.group ?? null)
+          : null
+    }
+    document.addEventListener("focusin", onFocusIn)
+    return () => document.removeEventListener("focusin", onFocusIn)
+  }, [])
+  // After every change to the line, before it is painted.
+  useLayoutEffect(() => {
+    const was = holding.current
+    if (was === null || (ready && counts.some((count) => count.group === was))) return
+    holding.current = null
+    const focus = document.activeElement
+    if (focus === null || focus === document.body) onFocusGone()
+  })
+  if (!ready) return <p className="agents-overview-counts">{"\u00a0"}</p>
+  if (counts.length === 0) return <p className="agents-overview-counts">{quietLine}</p>
+  return (
+    <p className="agents-overview-counts" role="group" aria-label="Show only">
+      {counts.map(({ group, label }, index) => (
+        <span key={group} className="agents-overview-count">
+          {index > 0 ? <span aria-hidden="true">{" · "}</span> : null}
+          <button
+            type="button"
+            aria-pressed={glance.group === group}
+            data-group={group}
+            onClick={() => onToggle(group)}
+          >
+            {label}
+          </button>
+        </span>
+      ))}
+    </p>
+  )
+}
+
+/** What a group shown alone says when it lists nothing. */
+const emptyGroup: Readonly<Record<AgentsGroup, string>> = {
+  needsYou: "Nothing needs you",
+  working: "Nothing is working",
+  finished: "Nothing has finished",
+  earlier: "Nothing from earlier",
+}
 
 function Groups({
   glance,
@@ -513,8 +610,8 @@ function Groups({
   onAnswer: OnAnswer
   onLeaveReply: () => void
   takesKey: (event: KeyboardEvent) => boolean
-  /** Widens the filter to every session; absent when it already lists them all. */
-  onShowAll: (() => void) | undefined
+  /** Widens the filter to every session, which lists all it kept out. */
+  onShowAll: () => void
 }) {
   const row = (sessionId: string) => ({
     sessionId,
@@ -527,15 +624,18 @@ function Groups({
     onAnswer,
     onLeaveReply,
   })
-  // Nothing listed at all: one quiet line, never an empty page.
-  const empty =
-    glance.needsYou.length +
-      glance.working.length +
-      glance.finished.length +
-      glance.earlier.length ===
-    0
+  // Nothing listed at all, or nothing of the group shown alone: one quiet
+  // line, never an empty page (`quietOf`).
+  const quiet = quietOf(glance)
   return (
     <>
+      {quiet === "all" ? (
+        <AllClear />
+      ) : quiet !== null ? (
+        <p className="agents-overview-resting" data-reflow="empty">
+          {emptyGroup[quiet]}
+        </p>
+      ) : null}
       {/* Shown only while something waits: an empty section is nothing to review. */}
       {glance.needsYou.length > 0 ? (
         <section className="agents-overview-group" aria-labelledby="agents-needs-you">
@@ -553,8 +653,6 @@ function Groups({
             ))}
           </ul>
         </section>
-      ) : empty ? (
-        <AllClear />
       ) : null}
       {glance.working.length > 0 ? (
         <section className="agents-overview-group" aria-labelledby="agents-working">
@@ -596,14 +694,10 @@ function Groups({
         <p className="agents-overview-resting" data-reflow="hidden">
           {glance.hidden} more {glance.hidden === 1 ? "session" : "sessions"} outside this
           view
-          {onShowAll ? (
-            <>
-              {" · "}
-              <button type="button" onClick={onShowAll}>
-                Show All
-              </button>
-            </>
-          ) : null}
+          {" · "}
+          <button type="button" onClick={onShowAll}>
+            Show All
+          </button>
         </p>
       ) : null}
     </>

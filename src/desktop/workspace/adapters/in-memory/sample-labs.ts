@@ -3,6 +3,7 @@ import {
   edited,
   exchange,
   models,
+  ran,
   read,
   searched,
   text,
@@ -19,6 +20,7 @@ export const labsSamples: readonly SampleSession[] = [
     updated: 3,
     started: 22,
     preview: "Wants to run the reconnect tests, including the new budget case.",
+    now: "Waiting to run the reconnect tests after adding a token bucket",
     unread: true,
     approval: {
       id: "retry-tests",
@@ -35,14 +37,59 @@ export const labsSamples: readonly SampleSession[] = [
           ),
         ],
       ],
+      // A long turn — dozens of steps over several messages — so the peek's
+      // bound and its cost are seen and measured on something real.
+      [
+        "agent",
+        18,
+        [
+          searched("reconnect · 11 results"),
+          read("acp/reconnect.rs"),
+          read("acp/client.rs"),
+          read("acp/session.rs"),
+          read("gateway/listener.rs"),
+          read("gateway/accept.rs"),
+          read("gateway/limits.rs"),
+          searched("retry_interval · 6 results"),
+          read("acp/config.rs"),
+          read("acp/backoff.rs"),
+          text(
+            "Every client retries on a fixed 250 ms interval with no ceiling. After a gateway restart they all come back in the same few milliseconds, and the accept loop falls behind.",
+          ),
+        ],
+      ],
+      [
+        "agent",
+        12,
+        [
+          ran("cargo test -p nessa-gateway accept"),
+          ran("cargo run -p nessa-gateway -- --simulate-clients 50"),
+          read("target/storm.log"),
+          searched("BudgetExhausted · 0 results"),
+          read("acp/errors.rs"),
+          edited("acp/errors.rs", 6),
+          read("acp/tests/reconnect.rs"),
+          edited("acp/tests/reconnect.rs", 38, 4),
+          read("acp/tests/support.rs"),
+          edited("acp/tests/support.rs", 12, 2),
+          text(
+            "Fifty simulated clients are enough to reproduce it: the accept queue peaks at 4,100 pending handshakes. I've added a failing test for a budget that runs out.",
+          ),
+          {
+            kind: "code",
+            code: "#[tokio::test]\nasync fn gives_up_once_the_budget_is_spent() {\n    let client = storm_client(Budget::new(5, secs(2)));\n    assert!(matches!(client.reconnect().await, Err(ReconnectError::BudgetExhausted)));\n}",
+          },
+        ],
+      ],
       [
         "agent",
         4,
         [
-          searched("reconnect · 11 results"),
           read("acp/reconnect.rs"),
+          read("acp/backoff.rs"),
+          edited("acp/backoff.rs", 22, 9),
           text(
-            "Every client retries on a fixed 250 ms interval with no ceiling, so a restart turns into a thundering herd. I've given each client a token bucket — five attempts, one refilled every two seconds — and jittered the backoff:",
+            "The test fails as it should. I've given each client a token bucket — five attempts, one refilled every two seconds — and jittered the backoff:",
           ),
           {
             kind: "code",
@@ -56,6 +103,14 @@ export const labsSamples: readonly SampleSession[] = [
             detail: "acp/budget.rs",
             added: 41,
           },
+          edited("acp/mod.rs", 1),
+          edited("acp/config.rs", 8, 3),
+          read("docs/gateway.md"),
+          edited("docs/gateway.md", 14, 2),
+          ran("cargo check -p nessa-gateway"),
+          ran("cargo clippy -p nessa-gateway -- -D warnings"),
+          edited("acp/budget.rs", 3, 3),
+          ran("cargo clippy -p nessa-gateway -- -D warnings"),
           text("I'd like to run the reconnect tests before calling it done."),
         ],
       ],
@@ -70,6 +125,7 @@ export const labsSamples: readonly SampleSession[] = [
     updated: 12,
     started: 40,
     preview: "Asks to restart the local gateway to test jittered backoff.",
+    now: "Waiting to restart the gateway with 200 clients to prove the jitter",
     approval: {
       id: "storm-restart",
       command: "cargo run -p nessa-gateway -- --simulate-clients 200",
@@ -90,6 +146,7 @@ export const labsSamples: readonly SampleSession[] = [
     updated: 6,
     started: 120,
     preview: "Threading the span context through session/prompt.",
+    now: "Threading the span context through session/prompt as a _meta field",
     pinned: true,
     activity: ["Threading the span context", 212],
     messages: exchange(
@@ -107,6 +164,7 @@ export const labsSamples: readonly SampleSession[] = [
     updated: 8,
     started: 30,
     preview: "Bounding the per-client queue and dropping to snapshots when it fills.",
+    now: "Running clippy on the bounded per-client queue before the stream tests",
     activity: ["Running cargo clippy", 95],
     messages: exchange(
       "A slow panel makes the event stream buffer without bound.",
@@ -150,6 +208,7 @@ export const labsSamples: readonly SampleSession[] = [
     updated: 12,
     started: 20,
     preview: "Adding GPT-6 Astra with its context window and reasoning levels.",
+    now: "Reading the catalog to add GPT-6 Astra with its reasoning levels",
     activity: ["Reading models.json", 212],
     messages: exchange(
       "Add GPT-6 to the model catalog.",

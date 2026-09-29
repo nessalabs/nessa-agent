@@ -11,6 +11,14 @@
  * anything: the newer revision wins whichever arrived first. A conversation
  * includes each message sent to it under the id it was sent with.
  *
+ * A summary may say what is going on in its session now
+ * (`SessionSummary.now`): the source's one-line account of its turn, which
+ * the overview's peek shows as it is. It is part of the summary and follows
+ * its revisions — a newer summary without one says there is nothing to say
+ * — and it may lag or lead the conversation, which arrives on its own
+ * revisions. The window shows nothing where the source says nothing; it
+ * never writes one of its own.
+ *
  * The stream of updates may lose some: a connection that drops, a listener
  * that joins late. Nothing here asks the source to replay them. A read of the
  * index is the resync instead: its sessions are every session the source

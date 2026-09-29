@@ -241,6 +241,34 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   waits. _Check:_ `responsive.mjs --only overview-header` (Chromium and
   WebKit, at 1440 × 560 so the list must scroll); unit tests in
   `overview.test.tsx` for the empty section.
+- [ ] **A count shows its group alone** (_ADR 238 › Showing one group
+  alone_): the header's counts are toggle buttons reached from the filter by
+  Tab (⌥Tab in WebKit); one chosen lists only its group and reads as pressed
+  (`aria-pressed`), no count and not the header moving; chosen again, every
+  group is back; with one chosen, the first Escape shows every group and the
+  overview stays, the next leaves. With Needs you chosen and every request
+  answered, "Nothing needs you" heads the list with the session looked at
+  still listed and chosen beneath, under its new heading; once it rests, the
+  filter keeping it out, no count counts it; its count, let go at nought from
+  the keyboard, gives the keyboard to the list, whose arrows walk it — never
+  `<body>`. _Check:_ `responsive.mjs --only overview-counts` (Chromium and
+  WebKit, both layouts, its default); unit tests
+  `overview.test.tsx` (the counts show one group alone, the footer's count and
+  Show All under a group), `commands.test.ts` (the group's table),
+  `agents-glance.test.ts`.
+- [ ] **The peek tells the turn's story** (_ADR 238 › The peek tells the
+  turn's story_): the source's line of what is going on (one line), then the
+  person's latest message, "Earlier in this turn · Open" where the turn holds
+  more than the peek draws (at most 24 parts), the agent's latest work in
+  order, and the request last, each below the one before; a long turn scrolls
+  within the peek while the list's header holds; beneath a row (760px wide),
+  the story is reached from its row by Tab (⌥Tab in WebKit), keeps its
+  scrollbar, and scrolls on PageDown and End without the list moving the
+  keyboard away. _Check:_ `responsive.mjs --only overview-story` (Chromium
+  and WebKit, both layouts, its default; 1440 × 640, then 760 × 640); unit
+  tests `overview.test.tsx` (the peek tells the turn's story; the peek's
+  story is bounded), `peek.test.ts`,
+  `in-memory-source.test.ts` (the source's line at each beat).
 
 
 ## Composer and approval card

@@ -17,6 +17,7 @@ import { focusedPaneAttribute } from "../../adapters/dom/focus"
 import {
   approve,
   filterOverview,
+  showOverviewGroup,
   followWorkspace,
   loadWorkspace,
   setComposerText,
@@ -28,6 +29,7 @@ import { selectOverviewOpen } from "../../adapters/store/selectors"
 import type { WorkspaceIndex } from "../../model/workspace-index"
 import { OverviewRow } from "../source-list/overview-row"
 import { answerPause } from "../../model/overview/walk"
+import { peekParts } from "../../model/overview/peek"
 import { OverviewLayer } from "./overview-layer"
 
 let root: Root
@@ -61,7 +63,10 @@ function sampleIndex(): WorkspaceIndex {
     sessions: [
       summary("first", "desktop", 300, "needs-you", { title: "Sign the build" }),
       summary("second", "desktop", 200, "needs-you", { title: "Notarize" }),
-      summary("run", "desktop", 250, "running", { title: "Split panes" }),
+      summary("run", "desktop", 250, "running", {
+        title: "Split panes",
+        now: "Running the pane tests after laying them out as fractions",
+      }),
       summary("rest", "desktop", 100),
     ],
   }
@@ -93,6 +98,12 @@ async function mount({
     source.transcripts.set("run", {
       ...running,
       messages: [
+        {
+          id: "run-0",
+          role: "user",
+          at: 800,
+          parts: [{ kind: "text", text: "Lay the panes out as fractions." }],
+        },
         {
           id: "run-1",
           role: "agent",
@@ -551,6 +562,319 @@ describe("the agents overview", () => {
     await press(field as HTMLElement, "Escape")
     expect(document.activeElement).toBe(card("second"))
     expect(host.querySelector(".agents-overview")).not.toBeNull()
+  })
+})
+
+describe("the counts show one group alone", () => {
+  const counts = () => [
+    ...host.querySelectorAll<HTMLButtonElement>(".agents-overview-counts button"),
+  ]
+  const count = (words: string) =>
+    counts().find((each) => each.textContent?.trim() === words)
+  const pressed = () =>
+    counts()
+      .filter((each) => each.getAttribute("aria-pressed") === "true")
+      .map((each) => each.textContent)
+
+  it("are toggle buttons in a group the keyboard reaches, none pressed at first", async () => {
+    await mount()
+    await open()
+    const line = host.querySelector(".agents-overview-counts")
+    expect(line?.getAttribute("role")).toBe("group")
+    expect(line?.getAttribute("aria-label")).toBe("Show only")
+    expect(counts().map((each) => [each.textContent, each.type, each.tabIndex])).toEqual([
+      ["2 need you", "button", 0],
+      ["1 working", "button", 0],
+    ])
+    expect(counts().every((each) => each.getAttribute("aria-pressed") === "false")).toBe(
+      true,
+    )
+  })
+
+  it("shows only a count's group, pressed, and every group once it is chosen again", async () => {
+    const { store } = await mount()
+    await open()
+    await act(async () => count("1 working")?.click())
+    expect(cards()).toEqual([])
+    expect(row("run")).not.toBeNull()
+    expect(host.querySelector("#agents-needs-you")).toBeNull()
+    expect(pressed()).toEqual(["1 working"])
+    // Every count stays, so another group can be chosen from the same line.
+    expect(counts().map((each) => each.textContent)).toEqual(["2 need you", "1 working"])
+    expect(store.getState().workspace.overview.group).toBe("working")
+    await act(async () => count("1 working")?.click())
+    expect(cards()).toHaveLength(2)
+    expect(pressed()).toEqual([])
+  })
+
+  it("moves from one group to another in a click", async () => {
+    await mount()
+    await open()
+    await act(async () => count("1 working")?.click())
+    await act(async () => count("2 need you")?.click())
+    expect(cards()).toHaveLength(2)
+    expect(row("run")).toBeNull()
+    expect(pressed()).toEqual(["2 need you"])
+  })
+
+  it("lets Escape show every group first, and leave on the next", async () => {
+    const { store } = await mount()
+    await open()
+    await act(async () => count("1 working")?.click())
+    const focused = count("1 working") as HTMLElement
+    focused.focus()
+    await press(focused, "Escape")
+    expect(selectOverviewOpen(store.getState())).toBe(true)
+    expect(store.getState().workspace.overview.group).toBeNull()
+    expect(cards()).toHaveLength(2)
+    await press(document.activeElement as HTMLElement, "Escape")
+    expect(selectOverviewOpen(store.getState())).toBe(false)
+  })
+
+  it("keeps a group that lists nothing in the line at nought, says so, and Show All lists what the filter kept out of it", async () => {
+    const { store, filter } = await mount()
+    await open()
+    await act(async () => store.dispatch(showOverviewGroup({ group: "earlier" })))
+    expect(pressed()).toEqual(["0 earlier"])
+    const resting = () =>
+      [...host.querySelectorAll(".agents-overview-resting")].map((line) =>
+        line.textContent?.trim(),
+      )
+    expect(resting()).toEqual([
+      "Nothing from earlier",
+      "1 more session outside this view · Show All",
+    ])
+    await act(async () => button(host, "Show All")?.click())
+    expect(filter.writes.at(-1)).toEqual({ scope: "all", range: "any", tags: [] })
+    expect(row("rest")).not.toBeNull()
+    expect(pressed()).toEqual(["1 earlier"])
+    expect(resting()).toEqual([])
+  })
+
+  /** The source moves a session on, as after an answer given elsewhere. */
+  const moveOn = (
+    source: Awaited<ReturnType<typeof mount>>["source"],
+    sessionId: string,
+    title: string,
+    status: "running" | "idle",
+  ) =>
+    act(async () => {
+      source.emit({
+        kind: "session",
+        session: summary(sessionId, "desktop", 600, status, { title, revision: 2 }),
+      })
+      await settle(10)
+    })
+  const headings = () =>
+    [
+      ...host.querySelectorAll(".agents-overview-column h2, .agents-overview-resting"),
+    ].map((each) => each.textContent?.trim())
+  const inList = () =>
+    host.querySelector(".agents-overview-column")?.contains(document.activeElement) ??
+    false
+
+  it("says nothing needs you once its last request moves on, the one looked at still chosen beneath, under Working", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => count("2 need you")?.click())
+    expect(store.getState().workspace.overview.selected).toBe("first")
+    await moveOn(source, "second", "Notarize", "running")
+    await moveOn(source, "first", "Sign the build", "running")
+    expect(pressed()).toEqual(["0 need you"])
+    expect(headings()).toEqual(["Nothing needs you", "Working"])
+    expect(cards()).toEqual([])
+    expect(row("first")).not.toBeNull()
+    expect(row("second")).toBeNull()
+    expect(store.getState().workspace.overview).toMatchObject({
+      group: "needsYou",
+      selected: "first",
+    })
+  })
+
+  it("counts only what the filter lets through: the session looked at, kept out by it, is listed and not counted", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.click())
+    // Ongoing keeps out what is idle and seen: "run" finishes, looked at.
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(row("run")).not.toBeNull()
+    expect(headings()).toContain("Earlier")
+    expect(counts().map((each) => each.textContent)).toEqual(["2 need you"])
+  })
+
+  it("puts the keyboard on the list when the count it is on goes: let go at nought", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => count("1 working")?.click())
+    await moveOn(source, "run", "Split panes", "idle")
+    const nought = count("0 working") as HTMLButtonElement
+    nought.focus()
+    await act(async () => nought.click())
+    expect(count("0 working")).toBeUndefined()
+    expect(inList()).toBe(true)
+    // And the arrows walk the list from there.
+    const from = document.activeElement as HTMLElement
+    await press(from, "ArrowUp")
+    expect(inList()).toBe(true)
+    expect(document.activeElement).not.toBe(from)
+  })
+
+  it("puts the keyboard on the list when the count it is on goes: emptied by the source", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const working = count("1 working") as HTMLButtonElement
+    working.focus()
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(count("1 working")).toBeUndefined()
+    expect(inList()).toBe(true)
+  })
+
+  it("leaves the keyboard where it is when a count it is not on goes", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const needs = count("2 need you") as HTMLButtonElement
+    needs.focus()
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(document.activeElement).toBe(needs)
+  })
+
+  it("says nothing is kept out of a group the filter keeps nothing out of", async () => {
+    await mount()
+    await open()
+    // Ongoing keeps out the idle session, which is not working.
+    expect(host.querySelector(".agents-overview-resting")).not.toBeNull()
+    await act(async () => count("1 working")?.click())
+    expect(host.querySelector(".agents-overview-resting")).toBeNull()
+  })
+})
+
+describe("the peek tells the turn's story", () => {
+  it("from the person's latest message, through the agent's work in order, to what it does now", async () => {
+    await mount()
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    const story = host.querySelector(".agents-inline-peek .agents-peek-story")
+    const told = [...(story?.children ?? [])].map((part) =>
+      part.classList.contains("workspace-live")
+        ? "live"
+        : `${part.getAttribute("data-role")}: ${part.textContent?.trim().slice(0, 12)}`,
+    )
+    expect(told).toEqual(["user: Lay the pane", "agent: Readpanes.ts", "live"])
+    const work = story?.querySelector('[data-role="agent"]')
+    expect(
+      [...(work?.querySelectorAll(".workspace-steps li, p") ?? [])].map((part) =>
+        part.textContent?.trim(),
+      ),
+    ).toEqual(["Readpanes.tsx", "Editedgrid.tsx+4", "Laying the panes out as fractions."])
+  })
+
+  it("says what is going on in the source's own line, and nothing where the source says nothing", async () => {
+    await mount()
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    expect(host.querySelector(".agents-peek-summary")?.textContent).toBe(
+      "Running the pane tests after laying them out as fractions",
+    )
+    await act(async () => row("run")?.click())
+    await act(async () => card("first")?.click())
+    await act(async () => settle(10))
+    expect(host.querySelector(".agents-inline-peek")).not.toBeNull()
+    expect(host.querySelector(".agents-peek-summary")).toBeNull()
+  })
+
+  it("draws no line where the source's line is only whitespace", async () => {
+    const index = sampleIndex()
+    await mount({
+      index: {
+        ...index,
+        sessions: index.sessions.map((each) =>
+          each.id === "run" ? { ...each, now: " \n\t" } : each,
+        ),
+      },
+    })
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    expect(host.querySelector(".agents-inline-peek")).not.toBeNull()
+    expect(host.querySelector(".agents-peek-summary")).toBeNull()
+  })
+})
+
+describe("the peek's story is bounded, and scrolls from the keyboard beneath its row", () => {
+  const longTurn = (source: Awaited<ReturnType<typeof mount>>["source"]) => {
+    const held = source.transcripts.get("run")
+    if (!held) return
+    source.transcripts.set("run", {
+      ...held,
+      messages: [
+        {
+          id: "run-0",
+          role: "user",
+          at: 800,
+          parts: [{ kind: "text", text: "Lay the panes out as fractions." }],
+        },
+        ...Array.from({ length: 4 }, (_, message) => ({
+          id: `run-${message + 1}`,
+          role: "agent" as const,
+          at: 900 + message,
+          parts: Array.from({ length: 10 }, (_, index) => ({
+            kind: "step" as const,
+            step: "read" as const,
+            label: "Read",
+            detail: `file-${message}-${index}.ts`,
+          })),
+        })),
+      ],
+    })
+  }
+
+  it("draws the turn's latest parts after the person's message, says there is more above, and opens the session from there", async () => {
+    const { source, store } = await mount()
+    longTurn(source)
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    const story = host.querySelector(".agents-inline-peek .agents-peek-story")
+    const steps = [...(story?.querySelectorAll(".workspace-steps li") ?? [])]
+    expect(steps).toHaveLength(peekParts)
+    expect(steps.at(-1)?.textContent).toBe("Readfile-3-9.ts")
+    expect(story?.children[0].getAttribute("data-role")).toBe("user")
+    const earlier = story?.children[1]
+    expect(earlier?.textContent).toBe("Earlier in this turn · Open")
+    await act(async () => button(earlier ?? null, "Open")?.click())
+    expect(selectFocusedSessionId(store.getState())).toBe("run")
+    expect(selectOverviewOpen(store.getState())).toBe(false)
+  })
+
+  it("says nothing of more above a turn that fits", async () => {
+    await mount()
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    expect(host.querySelector(".agents-peek-earlier")).toBeNull()
+  })
+
+  it("takes the keyboard beneath a row, and keeps the keys that scroll it rather than walking the list", async () => {
+    await mount()
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    const story = host.querySelector<HTMLElement>(
+      ".agents-inline-peek .agents-peek-story",
+    )
+    expect(story?.tabIndex).toBe(0)
+    story?.focus()
+    for (const key of ["ArrowDown", "ArrowUp", "End", "Home"]) {
+      await press(story as HTMLElement, key)
+      expect(document.activeElement).toBe(story)
+    }
   })
 })
 

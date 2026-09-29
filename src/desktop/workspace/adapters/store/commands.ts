@@ -51,6 +51,7 @@ export const {
   showContent,
   selectInOverview,
   filterOverview,
+  showOverviewGroup,
   revealSession,
   toggleSection,
   toggleChannel,
