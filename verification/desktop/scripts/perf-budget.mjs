@@ -2,9 +2,9 @@
 /**
  * The performance budget (ADR 238, Context — "Calm means no dropped
  * frames"): no frame over 50 ms on split, move, close, sidebar and list
- * toggles, send, typing, streaming, a pane dragged across zones, or opening
- * and answering in the Agents overview, in a production build at 4× CPU
- * throttling.
+ * toggles, send, typing, streaming, a pane dragged across zones, opening
+ * and answering in the Agents overview, or walking and dragging the
+ * composer's thinking control, in a production build at 4× CPU throttling.
  *
  * Every interaction runs in a fresh page, N times per layout. Each run also
  * checks that the interaction did what it is named for (a split adds a pane,
@@ -35,6 +35,10 @@ import {
 } from "./lib/workspace.mjs"
 
 const snapshot = async (page) => ({
+  thinking: await page.evaluate(
+    (sel) => document.querySelector(sel)?.getAttribute("aria-valuenow") ?? null,
+    css.thinkingSlider,
+  ),
   panes: await paneCount(page),
   order: (await order(page)).join(","),
   ...(await state(page)),
@@ -70,6 +74,30 @@ async function dragAcross(page, { cancel }) {
     await page.waitForTimeout(250)
   }
   if (cancel) await page.keyboard.press(keys.escape)
+  await page.mouse.up()
+}
+
+/** A new session's thinking popover, open at its least level. */
+async function openThinking(page) {
+  await page.keyboard.press(keys.newSession)
+  await settled(page)
+  const chip = page.locator(`${css.focusedPane} ${css.thinkingChip}`)
+  if ((await chip.count()) === 0 || (await chip.isDisabled()))
+    throw new CannotRun("no thinking chip with levels in the new session's composer")
+  await chip.click()
+  await need(page, css.thinkingSlider, "the thinking slider")
+  await page.keyboard.press(keys.home)
+  await settled(page)
+}
+
+/** Drags the thinking knob from the track's start to its end, as a person would. */
+async function dragThinking(page) {
+  const track = await page.locator(css.thinkingTrack).boundingBox()
+  if (!track) throw new CannotRun(`no thinking track (${css.thinkingTrack})`)
+  const y = track.y + track.height / 2
+  await page.mouse.move(track.x + 2, y)
+  await page.mouse.down()
+  await page.mouse.move(track.x + track.width - 2, y, { steps: 40 })
   await page.mouse.up()
 }
 
@@ -154,6 +182,30 @@ const scenarios = {
       a.order === b.order && a.ghost === 0
         ? null
         : `cancel changed the layout (${b.order} → ${a.order}) or left the copy`,
+  },
+  // The thinking control: every level from the least to the most, with Ultra's
+  // moment at the end, and the knob dragged along the whole track.
+  "thinking-walk": {
+    setup: openThinking,
+    act: async (p) => {
+      for (let i = 0; i < 4; i++) {
+        await p.keyboard.press(keys.right)
+        // A person's pace between steps: pacing the measured act, not a wait for state.
+        await p.waitForTimeout(200)
+      }
+    },
+    expect: (b, a) =>
+      Number(a.thinking) > Number(b.thinking)
+        ? null
+        : `the level went ${b.thinking} → ${a.thinking}, expected higher`,
+  },
+  "thinking-drag": {
+    setup: openThinking,
+    act: dragThinking,
+    expect: (b, a) =>
+      Number(a.thinking) > Number(b.thinking)
+        ? null
+        : `the drag left the level ${b.thinking} → ${a.thinking}, expected higher`,
   },
   "overview-open": {
     setup: (p) => focusComposer(p),

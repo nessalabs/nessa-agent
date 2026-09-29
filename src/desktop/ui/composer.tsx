@@ -4,7 +4,6 @@ import {
   ComposerAccessMode,
   type ComposerAccessModeValue,
 } from "@nessa-ui/react/composer-access-mode"
-import { ModelThinkingControl } from "@nessa-ui/react/model-capability-controls"
 import { AgentMark } from "../../onboarding/ui/agent-mark"
 import {
   agentForProvider,
@@ -26,6 +25,7 @@ import {
   MenuItem,
   MenuLabel,
 } from "./menu"
+import { ThinkingControl } from "./thinking-control"
 import { tooltip } from "./tooltip"
 
 /**
@@ -138,13 +138,7 @@ export function Composer({
   const [thinking, setThinking] = useState(defaultThinkingLevel)
   const [access, setAccess] = useState<ComposerAccessModeValue>("ask-approval")
 
-  // The model's levels, in the control's terms: the utmost gets its Ultra treatment.
-  const levels = thinkingLevelsFor(model).map(({ utmost, ...level }) =>
-    utmost ? { ...level, accent: "ultra" as const } : level,
-  )
   const [fast, setFast] = useState(false)
-  // Fast is remembered while switching models, but only in effect on one that offers it.
-  const fastOn = fast && fastModeFor(model)
 
   return (
     <form
@@ -227,26 +221,15 @@ export function Composer({
             className="desktop-tip-anchor"
             {...tooltip("Thinking", { side: "above" })}
           >
-            <ModelThinkingControl
-              levels={levels}
+            <ThinkingControl
+              levels={thinkingLevelsFor(model)}
               value={thinking}
               onValueChange={setThinking}
-              className="desktop-chip"
-              contentClassName="desktop-popover"
-              sliderLabel="Thinking"
-              align="end"
+              // Fast is remembered while switching models, but only offered on one that has it.
               fastMode={
                 fastModeFor(model)
                   ? { pressed: fast, onPressedChange: setFast }
                   : undefined
-              }
-              icon={
-                <>
-                  <DesktopIcon name="thinking" />
-                  {fastOn ? (
-                    <DesktopIcon name="fast" className="desktop-fast-mark" />
-                  ) : null}
-                </>
               }
             />
           </span>

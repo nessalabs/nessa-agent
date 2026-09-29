@@ -23,8 +23,9 @@ production build at 4× CPU throttling.
 - [ ] **Every budgeted interaction stays under 50 ms per frame**, in both
   layouts: split right, split down, move, close, sidebar toggle, session-list
   toggle, send from a new session, typing, streaming into one of four panes, a
-  pane dragged across zones (dropped, and cancelled), and the Agents overview
-  opened, walked, answered and left.
+  pane dragged across zones (dropped, and cancelled), the Agents overview
+  opened, walked, answered and left, and the composer's thinking control
+  walked from its least level to Ultra and its knob dragged along the track.
   _Check:_ `perf-budget.mjs` (defaults: `--mode prod --throttle 4 --runs 3`).
   Read max and median per row; every over-budget frame carries its Long
   Animation Frame attribution (scripts, forced layout, style-and-layout time).
@@ -253,6 +254,25 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.
   _Check:_ `responsive.mjs --only composer-chips`.
+- [ ] **The thinking control changes level without moving anything**
+  (_ADR 238 › The thinking control_): from the keyboard it opens with the keys
+  on the slider; the arrows, Home and End change the level, the chip's name
+  follows, and only Ultra — past Max, where the model has it — is marked
+  apart; dragged, the knob stays on the pointer (± 2 px), the level is the
+  nearest, and let go the knob settles on its level (± 1 px); as ⌘B and ⌥⌘S
+  move its chip, the popover stays on it (its edge on the chip's ± 1 px, 10 px
+  above it ± 1 px); on a model that ends at Max (Claude Sonnet 5) the walk
+  ends there, Ultra carried to it shows as Max, and Max chosen there is still
+  Max back on a model with Ultra; in every frame of
+  every change, of the drag, and of turning Fast on, the composer, its
+  controls and the popover hold their place (± 0.5 px); a level's change
+  animates transform and opacity only; Escape, and Tab past its end, close it
+  onto its chip; with the system's reduced motion nothing animates and the
+  words that were shown are not drawn.
+  _Check:_ `responsive.mjs --only thinking-control` (`--shots <dir>` saves it
+  opened and at the utmost level); its look by eye in each theme, light and
+  dark, with and without Ultra and Fast (Claude Sonnet 5 has neither),
+  against the menus and chips beside it.
 - [ ] **Send from a new session arrives in its transcript.** _Check:_ `smoke.mjs` (`send`).
 
 ## Settings

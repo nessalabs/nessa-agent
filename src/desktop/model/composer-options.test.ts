@@ -9,6 +9,11 @@ import {
   providerLabel,
   thinkingLevels,
   thinkingLevelsFor,
+  offeredLevelIndex,
+  ultraThinkingFor,
+  ultraThinkingModels,
+  fastModeModels,
+  levelRank,
   type ComposerModel,
   shortModelName,
 } from "./composer-options"
@@ -82,13 +87,77 @@ describe("thinkingLevelsFor", () => {
     expect(thinkingLevelsFor(undefined)).toEqual([])
   })
 
-  it("offers levels to a reasoning model", () => {
+  it("offers a reasoning model the levels up to Max", () => {
     expect(thinkingLevelsFor(model("x", "y")).map((level) => level.value)).toEqual([
       "low",
       "medium",
       "high",
       "max",
     ])
+  })
+
+  it("offers Ultra, past Max, only to a model that has it", () => {
+    const opus = model("anthropic", "claude-opus-5")
+    expect(ultraThinkingFor(opus)).toBe(true)
+    expect(thinkingLevelsFor(opus).map((level) => level.value)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "max",
+      "ultra",
+    ])
+    expect(ultraThinkingFor(model("openai", "gpt-6-astra"))).toBe(true)
+    expect(ultraThinkingFor(model("anthropic", "claude-sonnet-5"))).toBe(false)
+    expect(ultraThinkingFor(model("openai", "claude-opus-5"))).toBe(false)
+    expect(ultraThinkingFor(undefined)).toBe(false)
+    // A model with Ultra listed but no reasoning still offers nothing.
+    expect(thinkingLevelsFor(model("anthropic", "claude-opus-5", false))).toEqual([])
+  })
+})
+
+describe("the models listed for Ultra and Fast", () => {
+  // Until the SDK catalogue records them (#302), a model renamed there must not
+  // silently lose Ultra or Fast here.
+  it.each([
+    ["Ultra", ultraThinkingModels],
+    ["Fast", fastModeModels],
+  ])("names only models in the SDK catalogue, for %s", (_, listed) => {
+    for (const entry of listed)
+      expect(
+        composerModels.some(
+          (known) => known.provider === entry.provider && known.modelId === entry.modelId,
+        ),
+        `${entry.provider}/${entry.modelId}`,
+      ).toBe(true)
+  })
+})
+
+describe("levelRank", () => {
+  it("stands each level where it is among them all, whichever model offers it", () => {
+    expect(levelRank("low")).toBe(0)
+    expect(levelRank("max")).toBe(3)
+    expect(levelRank("ultra")).toBe(4)
+    expect(levelRank("turbo")).toBe(-1)
+    expect(levelRank(undefined)).toBe(-1)
+  })
+})
+
+describe("offeredLevelIndex", () => {
+  const upToMax = thinkingLevelsFor(model("x", "y"))
+  const withUltra = thinkingLevelsFor(model("anthropic", "claude-opus-5"))
+
+  it("is the level itself where the model offers it", () => {
+    expect(offeredLevelIndex(upToMax, "high")).toBe(2)
+    expect(offeredLevelIndex(withUltra, "ultra")).toBe(4)
+  })
+
+  it("shows Ultra on a model that stops at Max as Max, never lower", () => {
+    expect(offeredLevelIndex(upToMax, "ultra")).toBe(3)
+  })
+
+  it("shows a value it does not know as the first level", () => {
+    expect(offeredLevelIndex(upToMax, "turbo")).toBe(0)
+    expect(offeredLevelIndex([], "high")).toBe(0)
   })
 })
 
@@ -127,9 +196,10 @@ describe("a model's short name", () => {
     expect(shortModelName(catalogue[4], catalogue)).toBe("Solo One")
   })
 
-  it("marks only the utmost thinking level, which the composer gives its Ultra treatment", () => {
+  it("marks only Ultra as the utmost thinking level, the one past Max", () => {
     expect(
       thinkingLevels.filter((level) => level.utmost).map((level) => level.value),
-    ).toEqual(["max"])
+    ).toEqual(["ultra"])
+    expect(thinkingLevels.at(-1)?.utmost).toBe(true)
   })
 })

@@ -69,6 +69,19 @@ export const css = {
   overviewHeader: ".agents-overview-header", // class: the title, its counts and the filter
   overviewScroll: ".agents-overview-scroll", // class: the list's scroller, under the header
 
+  // The composer's thinking control (src/desktop/ui/thinking-control.tsx): a chip
+  // opening a popover holding a slider; the levels are read from
+  // the page, never named here (their owner is src/desktop/model/composer-options.ts)
+  composerForm: ".desktop-composer", // class: a composer, whose place must not move
+  thinkingChip: 'button[aria-haspopup="dialog"][aria-label^="Thinking level"]',
+  thinkingPopover: '[role="dialog"][aria-label="Thinking"]',
+  modelChip: '[data-slot="model-picker-trigger"]', // the composer's model picker
+  modelOption: '.desktop-model-picker [role="option"]', // class: a model in the picker
+  thinkingSlider: '[role="dialog"][aria-label="Thinking"] [role="slider"]',
+  thinkingTrack: ".desktop-thinking-slider", // class: the slider's pointer room; data-ultra when the model has Ultra
+  thinkingFast: '[role="dialog"][aria-label="Thinking"] button[aria-label="Fast mode"]',
+  thinkingLeaving: ".desktop-thinking-words[data-leaving]", // class: the words that were shown
+
   // Column heads (src/desktop/ui/column-header.tsx): data-title / data-placement are "inline" | "below"
   columnBar: ".desktop-column-bar", // class
   columnTitle: ".desktop-column-title[data-placement]:not(.desktop-column-sizer)", // class
@@ -152,7 +165,10 @@ export const keys = {
   enter: "Enter",
   down: "ArrowDown",
   up: "ArrowUp",
+  left: "ArrowLeft",
+  right: "ArrowRight",
   home: "Home",
+  end: "End",
   toggleSidebar: "Meta+KeyB",
   toggleSessionList: "Meta+Alt+KeyS",
   newSession: "Meta+KeyN",
@@ -197,6 +213,12 @@ export const names = {
   /** Sample sessions (in-memory source) that each wait on one approval. */
   approvalSessions: ["Release build signing", "Notarize the macOS", "Reconnect storm"],
   denyOnce: "Deny",
+  /**
+   * Models the thinking check switches between (their Ultra is listed in
+   * src/desktop/model/composer-options.ts; the check confirms each on the page).
+   */
+  modelWithUltra: "Claude Opus 5",
+  modelWithoutUltra: "Claude Sonnet 5",
   alwaysAllow: "Always Allow",
 }
 
