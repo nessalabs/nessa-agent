@@ -54,6 +54,13 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     ) -> Result<Value, AgentError> {
         Err(AgentError::Unsupported("live approval mode change".into()))
     }
+    /// The id of the agent's `thought_level` option this profile sends an
+    /// effort level to, or `None` for a profile that sends none. Only an
+    /// option under this id counts as offering levels: one under any other
+    /// id is an option this profile would never set.
+    fn effort_option(&self) -> Option<&'static str> {
+        None
+    }
     /// Admit a live reasoning effort change into this profile before its RPC
     /// is sent, as [`Self::change_approval_mode`] does for a preset: the
     /// response, and any notification before it, are then checked against the

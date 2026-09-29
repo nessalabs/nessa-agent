@@ -75,7 +75,10 @@ fn capabilities(levels: Option<&[&str]>, binding_reasons: bool) -> EffectiveCapa
 }
 
 fn narrowed(result: &Value, capabilities: &EffectiveCapabilities) -> Option<Vec<String>> {
-    let offered = offered(result, capabilities).unwrap();
+    let id = thought_level(result)
+        .unwrap()
+        .map(|option| option.id.to_owned());
+    let offered = offered(result, capabilities, id.as_deref()).unwrap();
     capabilities
         .effort_levels()
         .and_then(|levels| levels.restricted_to(offered))
@@ -135,18 +138,26 @@ fn offers_nothing_without_an_option_catalogue_levels_or_binding_reasoning() {
     let levels: &[&str] = &["low", "high"];
     assert_eq!(narrowed(&haiku, &capabilities(Some(levels), true)), None);
     // The catalogue records no levels for the model.
-    assert!(offered(&claude(), &capabilities(None, true))
-        .unwrap()
-        .is_empty());
+    assert!(
+        offered(&claude(), &capabilities(None, true), Some("effort"))
+            .unwrap()
+            .is_empty()
+    );
     // The binding cannot run the model's reasoning: no catalogue levels survive.
-    assert!(offered(&claude(), &capabilities(Some(levels), false))
-        .unwrap()
-        .is_empty());
+    assert!(offered(
+        &claude(),
+        &capabilities(Some(levels), false),
+        Some("effort")
+    )
+    .unwrap()
+    .is_empty());
     // Nothing the agent advertises is a catalogue level.
     let other = json!({"configOptions": [select("effort", "thought_level", "a", &["a", "b"])]});
-    assert!(offered(&other, &capabilities(Some(levels), true))
-        .unwrap()
-        .is_empty());
+    assert!(
+        offered(&other, &capabilities(Some(levels), true), Some("effort"))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -254,4 +265,18 @@ fn reads_what_the_pinned_agents_actually_sent() {
         narrowed(&codex, &sol).unwrap(),
         ["low", "medium", "high", "xhigh", "max"]
     );
+}
+
+#[test]
+fn offers_nothing_under_an_id_no_level_is_sent_to() {
+    let opus = capabilities(Some(&["low", "medium", "high", "xhigh", "max"]), true);
+    // Codex's option id, as a Claude profile would never set it.
+    assert!(offered(&claude(), &opus, Some("reasoning_effort"))
+        .unwrap()
+        .is_empty());
+    // A profile that sends no level offers none, and does not read the response.
+    assert!(offered(&json!({}), &opus, None).unwrap().is_empty());
+    assert!(!offered(&claude(), &opus, Some("effort"))
+        .unwrap()
+        .is_empty());
 }

@@ -2,8 +2,8 @@
 
 use super::{
     attachment::{
-        AttachmentAuthorization, AttachmentFailureCode, AttachmentRequest, AttachmentStatus,
-        AttachmentWait,
+        AttachmentAuthorization, AttachmentFailureCode, AttachmentPhase, AttachmentRequest,
+        AttachmentStatus, AttachmentWait,
     },
     attachment_evidence::{
         AttachmentAttemptFailure, AttachmentEvidenceTransition, AttachmentFailureSource,
@@ -90,7 +90,10 @@ pub struct Agent {
 pub(super) struct Inner {
     pub(super) instance_id: String,
     pub(super) approval_mode: RwLock<Option<ApprovalMode>>,
-    pub(super) effort_level: RwLock<Option<EffortLevel>>,
+    /// A level verified by a live change, and the provider generation of the
+    /// attachment it was applied to. It is in force only while that
+    /// attachment is: any other opens at the provider's own level.
+    pub(super) live_effort_level: RwLock<Option<(u64, EffortLevel)>>,
     pub(super) provider: Arc<dyn AgentProvider>,
     capabilities: EffectiveCapabilities,
     pub(super) audit: Arc<dyn ExecutionAudit>,
@@ -150,15 +153,27 @@ impl Agent {
         drop(scheduler);
         result
     }
-    /// The reasoning effort level this agent generation was configured with
-    /// or last verified through a live change. `None` means no level was sent
-    /// and the agent keeps its own default.
+    /// The reasoning effort level in force: the one last verified by a live
+    /// change on the current attachment, or else the provider's own
+    /// ([`AgentProvider::effort_level`]), which every new attachment opens
+    /// at — including while none is attached, so work admitted then names
+    /// the level the next attachment will run at. `None` means no level is
+    /// sent and the agent keeps its own default.
     pub fn effort_level(&self) -> Option<EffortLevel> {
-        self.inner
-            .effort_level
+        let live = self
+            .inner
+            .live_effort_level
             .read()
             .expect("effort level lock")
-            .clone()
+            .clone();
+        match live {
+            Some((generation, level))
+                if self.inner.lifecycle.attached_generation() == Some(generation) =>
+            {
+                Some(level)
+            }
+            _ => self.inner.provider.effort_level(),
+        }
     }
     /// The reasoning effort levels a person can choose now, least effort
     /// first: the model's catalogue levels
@@ -181,14 +196,49 @@ impl Agent {
     ///
     /// # Errors
     ///
-    /// - [`AgentError::InvalidInput`] with [`ProviderSessionState::Usable`]
-    ///   when `level` is not one of [`Self::effort_levels`]; nothing is sent.
+    /// Nothing is sent on any of these:
     /// - [`AgentError::Busy`] with [`ProviderSessionState::Usable`] while an
-    ///   invocation is queued or running; nothing is sent.
+    ///   invocation is queued or running.
+    /// - [`AgentError::AttachmentUnavailable`] while no attachment is usable,
+    ///   or one is being restored and its offered levels are not known yet
+    ///   ([`AttachmentPhase::Starting`], [`ProviderSessionState::Usable`]).
+    /// - [`AgentError::InvalidInput`] with [`ProviderSessionState::Usable`]
+    ///   when `level` is not one of [`Self::effort_levels`].
     /// - Any other failure carries explicit session status, and the previous
     ///   level stays recorded; callers must retire an uncertain generation
     ///   before admitting another turn.
     pub async fn set_effort_level(&self, level: EffortLevel) -> ProviderOperationResult<()> {
+        let scheduler = self.inner.scheduler.lock().await;
+        if !scheduler.is_idle() || self.inner.lifecycle.active().is_some() {
+            return Err(ProviderOperationFailure::new(
+                AgentError::Busy,
+                ProviderSessionState::Usable,
+            ));
+        }
+        // Nothing attached is nothing to clean up: this attempt revoked no
+        // admission. Any other refusal here is the agent closing.
+        let unavailable = |error: AgentError| {
+            let state = if matches!(error, AgentError::AttachmentUnavailable(_)) {
+                ProviderSessionState::Usable
+            } else {
+                ProviderSessionState::CleanupRequired
+            };
+            ProviderOperationFailure::new(error, state)
+        };
+        let permit = self.inner.lifecycle.accept_control().map_err(unavailable)?;
+        let attached = self
+            .inner
+            .lifecycle
+            .attached_provider(&permit)
+            .map_err(unavailable)?;
+        // Attached, but what the agent offers is not known until the
+        // connection is negotiated again (a restore in progress): not yet.
+        if !self.operation_capabilities().negotiated() {
+            return Err(ProviderOperationFailure::new(
+                AgentError::AttachmentUnavailable(AttachmentPhase::Starting),
+                ProviderSessionState::Usable,
+            ));
+        }
         if !self
             .effort_levels()
             .is_some_and(|offered| offered.contains(&level))
@@ -201,26 +251,13 @@ impl Agent {
                 ProviderSessionState::Usable,
             ));
         }
-        let scheduler = self.inner.scheduler.lock().await;
-        if !scheduler.is_idle() || self.inner.lifecycle.active().is_some() {
-            return Err(ProviderOperationFailure::new(
-                AgentError::Busy,
-                ProviderSessionState::Usable,
-            ));
-        }
-        let permit = self.inner.lifecycle.accept_control().map_err(|error| {
-            ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
-        })?;
-        let attached = self
-            .inner
-            .lifecycle
-            .attached_provider(&permit)
-            .map_err(|error| {
-                ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
-            })?;
         let result = attached.session.set_effort_level(level.clone()).await;
         if result.is_ok() {
-            *self.inner.effort_level.write().expect("effort level lock") = Some(level);
+            *self
+                .inner
+                .live_effort_level
+                .write()
+                .expect("effort level lock") = Some((permit.provider_generation(), level));
         }
         drop(permit);
         drop(scheduler);
@@ -300,7 +337,7 @@ impl Agent {
             inner: Arc::new(Inner {
                 instance_id: uuid::Uuid::new_v4().to_string(),
                 approval_mode: RwLock::new(provider.approval_mode()),
-                effort_level: RwLock::new(provider.effort_level()),
+                live_effort_level: RwLock::new(None),
                 provider,
                 capabilities,
                 audit,
@@ -415,11 +452,6 @@ impl Agent {
                                     };
                                     AttachmentAttemptFailure::new(failure.cause, source)
                                 })?;
-                            // A newly opened context runs at the level its
-                            // provider selects on open, not one a live change
-                            // made on an earlier context.
-                            *agent.inner.effort_level.write().expect("effort level lock") =
-                                provider.effort_level();
                             let published_evidence = lifecycle
                                 .publish_attachment(start.generation, attached)
                                 .map_err(|_| AttachmentAttemptFailure::from(AgentError::Closed))?;

@@ -87,8 +87,10 @@ pub(crate) fn thought_level(result: &Value) -> Result<Option<ThoughtLevel<'_>>, 
 }
 
 /// Which of the model's catalogue levels the agent's `thought_level` option in
-/// `result` also offers: none where the catalogue records no levels for the
-/// model (or the binding offers no reasoning), or the agent advertises none.
+/// `result` also offers, where that option has the `id` a level is sent to:
+/// none where the profile sends no level (`id` is `None`), the catalogue
+/// records no levels for the model (or the binding offers no reasoning), the
+/// agent advertises no option, or advertises it under another id.
 ///
 /// # Errors
 ///
@@ -97,12 +99,14 @@ pub(crate) fn thought_level(result: &Value) -> Result<Option<ThoughtLevel<'_>>, 
 pub(crate) fn offered(
     result: &Value,
     capabilities: &EffectiveCapabilities,
+    id: Option<&str>,
 ) -> Result<OfferedEffortLevels, AgentError> {
-    // Nothing to narrow: the response is not read at all.
-    let Some(levels) = capabilities.effort_levels() else {
+    // Nothing to narrow, or nothing that could be sent: the response is not read.
+    let (Some(levels), Some(id)) = (capabilities.effort_levels(), id) else {
         return Ok(OfferedEffortLevels::default());
     };
     Ok(thought_level(result)?
+        .filter(|option| option.id == id)
         .map(|option| levels.offered_by(option.choices))
         .unwrap_or_default())
 }

@@ -1004,7 +1004,8 @@ impl<P: AcpProfile> Worker<P> {
         }
         // An agent may only list its effort option once its model is selected
         // (Codex does), so the levels are read from the settled response.
-        let effort_levels = thought_level::offered(&settled, &self.capabilities)?;
+        let effort_levels =
+            thought_level::offered(&settled, &self.capabilities, self.profile.effort_option())?;
         self.configured = true;
         let profile_capabilities = self.profile.operation_capabilities(&init);
         self.operation_capabilities

@@ -166,6 +166,9 @@ impl AcpProfile for ClaudeProfile {
         self.approval_mode = mode;
         Ok(json!({"sessionId":session_id,"configId":"mode","value":native_mode(mode)}))
     }
+    fn effort_option(&self) -> Option<&'static str> {
+        Some(EFFORT)
+    }
     fn change_effort_level(
         &mut self,
         session_id: &str,

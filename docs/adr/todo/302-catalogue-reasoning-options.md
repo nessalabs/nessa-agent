@@ -101,9 +101,28 @@ The Claude and Codex bindings run reasoning and send a level: selected on open
 (`Agent::set_effort_level`, an offered level), with `session/set_config_option`
 after the model and before the mode, and verified against the level the agent
 reports back. With none selected nothing is sent and the agent keeps its own
-default. The level in force is recorded on every queued admission. The OpenCode
-binding does not send one, and no binding sends fast mode: no agent advertises
-it through ACP.
+default. Only an option under the id the binding sends to counts as offering
+levels. The OpenCode binding does not send one, and no binding sends fast mode:
+no agent advertises it through ACP.
+
+Which level is in force (`Agent::effort_level`) has one owner and three states:
+
+| Attachment | A live change verified on it | Level in force |
+| --- | --- | --- |
+| none, or one starting | — | the binding's (every new attachment opens at it) |
+| usable | none | the binding's |
+| usable | yes | the last one verified |
+
+A connection the same attachment restores selects its last verified level
+again (the session factory keeps it), so it stays the same attachment here. A
+change is refused, with nothing sent, while a turn is queued or running
+(`Busy`), while nothing is attached or what the agent offers is not negotiated
+yet (`AttachmentUnavailable`), and for a level not offered (`InvalidInput`).
+Each queued admission records the level in force when it was admitted. A turn
+still queued when its attachment is replaced starts on the new one, at that
+attachment's level, which its admission record does not name; approval mode
+has the same gap, and one answer for both is
+[#313](https://github.com/nessalabs/nessa-agent/issues/313).
 
 ## Alternatives considered
 

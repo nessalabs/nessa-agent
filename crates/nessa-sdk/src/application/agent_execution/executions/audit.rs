@@ -367,8 +367,7 @@ impl QueueAdmissionRecord {
         self.admission_generation = Some(admission_generation);
         self
     }
-    /// Attach the reasoning effort level in force at admission: the one the
-    /// provider selected on open or last verified through a live change.
+    /// Attach the reasoning effort level in force at admission.
     pub(crate) fn with_effort_level(mut self, effort_level: Option<EffortLevel>) -> Self {
         self.effort_level = effort_level;
         self
@@ -377,8 +376,11 @@ impl QueueAdmissionRecord {
     pub fn approval_mode(&self) -> Option<ApprovalMode> {
         self.approval_mode
     }
-    /// Reasoning effort level in force at admission. `None` means no level
-    /// was sent and the agent ran at its own default.
+    /// Reasoning effort level in force when this input was admitted
+    /// ([`Agent::effort_level`](crate::application::agent_execution::agents::Agent::effort_level)).
+    /// `None` means no level is sent and the agent keeps its own default. A
+    /// turn still queued when its attachment is replaced starts at the new
+    /// attachment's level, which this record does not name.
     pub fn effort_level(&self) -> Option<&EffortLevel> {
         self.effort_level.as_ref()
     }

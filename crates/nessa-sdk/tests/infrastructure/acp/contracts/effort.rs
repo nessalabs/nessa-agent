@@ -442,3 +442,36 @@ async fn a_failed_change_keeps_the_previous_level_on_record() {
     assert_eq!(agent.effort_level(), None);
     let _ = agent.close(close_action()).await;
 }
+
+#[tokio::test]
+async fn detached_the_level_is_the_bindings_and_work_admitted_then_says_so() {
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(AdmissionAudit::default());
+    let (_root, binding) = claude("echo", CLAUDE_LEVELS);
+    let binding = binding.with_effort_level(level("low")).unwrap();
+    let agent = audited_agent(Arc::new(binding), audit.clone()).await;
+    agent.set_effort_level(level("max")).await.unwrap();
+    assert_eq!(agent.effort_level(), Some(level("max")));
+    agent.close(close_action()).await.unwrap();
+    // No attachment: the next one opens at the binding's level, and says so now.
+    assert_eq!(agent.effort_level(), Some(level("low")));
+    // A change needs an attachment, whatever the level: not a refusal of the level.
+    let failure = agent.set_effort_level(level("high")).await.unwrap_err();
+    assert!(matches!(
+        failure.error(),
+        AgentError::AttachmentUnavailable(_)
+    ));
+    assert_eq!(failure.session_state(), &ProviderSessionState::Usable);
+    // Queued while detached: recorded at the level it will run at.
+    let receipt = agent
+        .enqueue(prompt("later"), close_action())
+        .await
+        .unwrap();
+    assert_eq!(*audit.0.lock().unwrap(), [Some("low".to_owned())]);
+    attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
+        .await
+        .unwrap();
+    assert_eq!(receipt.wait().await, Ok(ExecutionOutcome::Completed));
+    assert_eq!(agent.effort_level(), Some(level("low")));
+    agent.close(close_action()).await.unwrap();
+}
