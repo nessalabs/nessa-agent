@@ -176,21 +176,98 @@ pub(crate) fn key_for_changes(
 }
 
 use super::{SessionChange, SessionSnapshot, StorageError};
-use crate::domain::agent_execution::sessions::SessionId;
+use crate::application::agent_execution::executions::ExecutionUpdate;
+use crate::domain::agent_execution::{
+    executions::{InvocationHistory, InvocationObservation, InvocationStage, QueueMutation},
+    sessions::{ProviderContext, SessionId},
+};
+use std::collections::HashMap;
 
-fn corrupt(message: &'static str) -> StorageError {
-    StorageError::Corrupt(message.into())
+fn corrupt(message: impl std::fmt::Display) -> StorageError {
+    StorageError::Corrupt(message.to_string())
 }
 
-fn invocation_mut<'a>(
+fn invocation_at<'a>(
     snapshot: &'a mut SessionSnapshot,
+    positions: &HashMap<ExecutionId, usize>,
     id: &ExecutionId,
 ) -> Result<&'a mut super::InvocationRecord, StorageError> {
-    snapshot
-        .invocations
-        .iter_mut()
-        .find(|record| &record.request.execution_id == id)
+    positions
+        .get(id)
+        .and_then(|index| snapshot.invocations.get_mut(*index))
         .ok_or_else(|| corrupt("semantic fact has no accepted input"))
+}
+
+/// Advance a cached domain authority without changing either cache or projection
+/// when the proposed transition fails. Each affected history is rebuilt once.
+fn apply_history<T>(
+    histories: &mut HashMap<ExecutionId, InvocationHistory>,
+    record: &super::InvocationRecord,
+    transition: impl FnOnce(&mut InvocationHistory) -> Result<T, StorageError>,
+) -> Result<T, StorageError> {
+    let id = &record.request.execution_id;
+    let mut next = match histories.get(id) {
+        Some(history) => history.clone(),
+        None => super::validation::invocation_history(record)?,
+    };
+    let result = transition(&mut next)?;
+    histories.insert(id.clone(), next);
+    Ok(result)
+}
+
+#[derive(Clone, Copy, Default)]
+struct ProviderEvidence {
+    observations: bool,
+    reports: bool,
+    dispatched: bool,
+    correlation: bool,
+    selected: bool,
+}
+
+impl ProviderEvidence {
+    fn from_snapshot(snapshot: Option<&SessionSnapshot>) -> Self {
+        let Some(snapshot) = snapshot else {
+            return Self::default();
+        };
+        Self {
+            observations: snapshot
+                .invocations
+                .iter()
+                .any(|record| !record.events.is_empty()),
+            reports: snapshot
+                .invocations
+                .iter()
+                .any(|record| record.provider_report.is_some()),
+            dispatched: snapshot.invocations.iter().any(|record| {
+                record.scheduling.iter().any(|event| {
+                    matches!(
+                        event.stage,
+                        InvocationStage::Running | InvocationStage::Injected
+                    )
+                })
+            }),
+            correlation: snapshot.invocations.iter().any(|record| {
+                record.target_event_offset.is_some()
+                    || record.scheduling.iter().any(|event| event.target.is_some())
+            }),
+            selected: snapshot
+                .queue_history
+                .iter()
+                .any(|record| matches!(record.mutation, QueueMutation::Selected { .. })),
+        }
+    }
+
+    fn validate(self, context: &ProviderContext) -> Result<(), StorageError> {
+        context
+            .validate_evidence(
+                self.observations,
+                self.reports,
+                self.dispatched,
+                self.correlation,
+                self.selected,
+            )
+            .map_err(|error| StorageError::Corrupt(error.to_string()))
+    }
 }
 
 fn invocation<'a>(
@@ -218,6 +295,19 @@ pub(crate) fn fold_changes(
             .ok_or_else(|| corrupt("empty semantic batch cannot open a session"));
     }
     let mut candidate = prior.cloned();
+    let mut positions = HashMap::new();
+    if let Some(snapshot) = &candidate {
+        for (index, record) in snapshot.invocations.iter().enumerate() {
+            if positions
+                .insert(record.request.execution_id.clone(), index)
+                .is_some()
+            {
+                return Err(corrupt("execution identity occurs in multiple invocations"));
+            }
+        }
+    }
+    let mut histories = HashMap::new();
+    let mut provider_evidence = ProviderEvidence::from_snapshot(candidate.as_ref());
     for change in changes {
         match change {
             SessionChange::Opened {
@@ -237,14 +327,12 @@ pub(crate) fn fold_changes(
                 });
             }
             SessionChange::InputAccepted(record) => {
+                super::validation::validate_submission_acknowledgement(&record.acknowledgement)?;
+                let history = super::validation::invocation_history(record)?;
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("input precedes session open"))?;
-                if snapshot
-                    .invocations
-                    .iter()
-                    .any(|prior| prior.request.execution_id == record.request.execution_id)
-                {
+                if positions.contains_key(&record.request.execution_id) {
                     return Err(corrupt("execution identity was accepted twice"));
                 }
                 if !record.events.is_empty()
@@ -257,14 +345,34 @@ pub(crate) fn fold_changes(
                 {
                     return Err(corrupt("new input carries later evidence"));
                 }
+                let mut next_evidence = provider_evidence;
+                next_evidence.correlation |= record.target_event_offset.is_some()
+                    || record.scheduling.iter().any(|event| event.target.is_some());
+                next_evidence.dispatched |= record.scheduling.iter().any(|event| {
+                    matches!(
+                        event.stage,
+                        InvocationStage::Running | InvocationStage::Injected
+                    )
+                });
+                next_evidence.validate(&snapshot.provider_context)?;
+                provider_evidence = next_evidence;
+                positions.insert(
+                    record.request.execution_id.clone(),
+                    snapshot.invocations.len(),
+                );
+                histories.insert(record.request.execution_id.clone(), history);
                 snapshot.invocations.push((**record).clone());
             }
             SessionChange::QueueDecision(decision) => {
-                candidate
+                let snapshot = candidate
                     .as_mut()
-                    .ok_or_else(|| corrupt("queue decision precedes session open"))?
-                    .queue_history
-                    .push(decision.clone());
+                    .ok_or_else(|| corrupt("queue decision precedes session open"))?;
+                let mut next_evidence = provider_evidence;
+                next_evidence.selected |=
+                    matches!(decision.mutation, QueueMutation::Selected { .. });
+                next_evidence.validate(&snapshot.provider_context)?;
+                provider_evidence = next_evidence;
+                snapshot.queue_history.push(decision.clone());
             }
             SessionChange::SchedulingTransition {
                 execution_id,
@@ -273,17 +381,55 @@ pub(crate) fn fold_changes(
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("scheduling precedes session open"))?;
-                invocation_mut(snapshot, execution_id)?
-                    .scheduling
-                    .push(event.clone());
+                let mut next_evidence = provider_evidence;
+                next_evidence.dispatched |= matches!(
+                    event.stage,
+                    InvocationStage::Running | InvocationStage::Injected
+                );
+                next_evidence.correlation |= event.target.is_some();
+                next_evidence.validate(&snapshot.provider_context)?;
+                let record = invocation_at(snapshot, &positions, execution_id)?;
+                apply_history(&mut histories, record, |history| {
+                    history
+                        .schedule(
+                            event
+                                .transition()
+                                .map_err(|error| corrupt(error.to_string()))?,
+                        )
+                        .map_err(|error| corrupt(error.to_string()))?;
+                    super::validation::validate_stop_actor(
+                        record.local_cancellation.as_ref(),
+                        Some(event),
+                    )
+                })?;
+                provider_evidence = next_evidence;
+                record.scheduling.push(event.clone());
             }
             SessionChange::ProviderObservation(event) => {
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("observation precedes session open"))?;
-                invocation_mut(snapshot, event.execution_id())?
-                    .events
-                    .push(event.clone());
+                let mut next_evidence = provider_evidence;
+                next_evidence.observations = true;
+                next_evidence.validate(&snapshot.provider_context)?;
+                let record = invocation_at(snapshot, &positions, event.execution_id())?;
+                event
+                    .validate_payload_size()
+                    .map_err(|error| corrupt(error.to_string()))?;
+                let observation = match event.update() {
+                    ExecutionUpdate::Finished(outcome) => InvocationObservation::Finished(*outcome),
+                    ExecutionUpdate::PermissionCancelled(_) => {
+                        InvocationObservation::PermissionCancellation
+                    }
+                    _ => InvocationObservation::Output,
+                };
+                apply_history(&mut histories, record, |history| {
+                    history
+                        .observe(event.execution_id(), observation)
+                        .map_err(|error| corrupt(error.to_string()))
+                })?;
+                provider_evidence = next_evidence;
+                record.events.push(event.clone());
             }
             SessionChange::ReceiptUpdated {
                 execution_id,
@@ -293,10 +439,11 @@ pub(crate) fn fold_changes(
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("receipt precedes session open"))?;
-                let record = invocation_mut(snapshot, execution_id)?;
+                let record = invocation_at(snapshot, &positions, execution_id)?;
                 if &record.acknowledgement != before || before == after {
                     return Err(corrupt("receipt revision does not match prior value"));
                 }
+                super::validation::validate_submission_acknowledgement(after)?;
                 record.acknowledgement = after.clone();
             }
             SessionChange::StopDecision {
@@ -306,10 +453,15 @@ pub(crate) fn fold_changes(
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("stop precedes session open"))?;
-                let record = invocation_mut(snapshot, execution_id)?;
+                let record = invocation_at(snapshot, &positions, execution_id)?;
                 if record.cancellation.is_some() {
                     return Err(corrupt("undispatched stop was already recorded"));
                 }
+                apply_history(&mut histories, record, |history| {
+                    history
+                        .record_cancellation(event.cancellation()?)
+                        .map_err(|error| corrupt(error.to_string()))
+                })?;
                 record.cancellation = Some(event.clone());
             }
             SessionChange::ProviderReport {
@@ -320,10 +472,25 @@ pub(crate) fn fold_changes(
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("provider report precedes session open"))?;
-                let record = invocation_mut(snapshot, execution_id)?;
+                let mut next_evidence = provider_evidence;
+                next_evidence.reports = true;
+                next_evidence.validate(&snapshot.provider_context)?;
+                let record = invocation_at(snapshot, &positions, execution_id)?;
                 if record.provider_report.is_some() || record.local_cancellation.is_some() {
                     return Err(corrupt("provider report was already recorded"));
                 }
+                if let Some(result) = &record.result {
+                    super::validation::validate_report_against_local_result(report, result)?;
+                }
+                apply_history(&mut histories, record, |history| {
+                    super::validation::record_report(
+                        history,
+                        Some(report),
+                        local_stop.as_ref(),
+                        record.scheduling.last(),
+                    )
+                })?;
+                provider_evidence = next_evidence;
                 record.provider_report = Some(report.clone());
                 record.local_cancellation = local_stop.clone();
             }
@@ -336,11 +503,17 @@ pub(crate) fn fold_changes(
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("local result precedes session open"))?;
-                let record = invocation_mut(snapshot, execution_id)?;
+                let record = invocation_at(snapshot, &positions, execution_id)?;
                 if &record.result != before || record.result.as_ref() == Some(after) {
                     return Err(corrupt("local result revision does not match prior value"));
                 }
-                let retained = super::validation::local_result_transition(record, after)?;
+                super::validation::validate_local_result(record, after)?;
+                let retained = apply_history(&mut histories, record, |history| {
+                    history
+                        .record_local_result(after.as_ref().copied().map_err(|_| ()))
+                        .map_err(|error| corrupt(error.to_string()))?;
+                    Ok(history.local_outcome())
+                })?;
                 if retained != *local_outcome {
                     return Err(corrupt("local result changes its retained outcome"));
                 }
@@ -356,6 +529,7 @@ pub(crate) fn fold_changes(
                         "provider context revision does not match prior value",
                     ));
                 }
+                provider_evidence.validate(after)?;
                 snapshot.provider_context = after.clone();
             }
         }

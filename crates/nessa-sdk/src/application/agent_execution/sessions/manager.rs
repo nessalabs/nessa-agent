@@ -853,6 +853,7 @@ impl SessionManager {
             *audit = audit.take().map(AgentError::bounded);
             *storage = storage.take().map(StorageError::bounded);
         }
+        super::validation::validate_submission_acknowledgement(&acknowledgement)?;
         let mut evidence = self.evidence.lock().await;
         let record = evidence
             .observed
@@ -1182,6 +1183,9 @@ impl SessionManager {
             .as_mut()
             .expect("initialized agent session")
             .invocations[index];
+        if let Some(result) = &record.result {
+            super::validation::validate_report_against_local_result(&settlement, result)?;
+        }
         let mut history = super::validation::invocation_history(record)?;
         super::validation::record_report(
             &mut history,

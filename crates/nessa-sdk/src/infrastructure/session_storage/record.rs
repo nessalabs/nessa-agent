@@ -349,13 +349,19 @@ mod tests {
     use crate::{
         application::agent_execution::{
             agents::AgentError,
-            executions::{ExecutionRequest, SubmissionMode},
+            executions::{ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode},
             permissions::ActionContext,
             providers::{ExecutionReport, ProviderIdentity, ProviderSessionState},
-            sessions::{records, InvocationRecord, ProviderContext, SubmissionAcknowledgement},
+            sessions::{
+                records, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
+                QueueHistoryRecord, SubmissionAcknowledgement,
+            },
         },
         domain::agent_execution::{
-            executions::{ExecutionId, ExecutionOutcome},
+            executions::{
+                ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, MessageChunk,
+                QueueMutation, SchedulingCause,
+            },
             prompts::{PromptText, UserMessage},
             sessions::{ExecutionSessionId, SessionId},
         },
@@ -406,6 +412,39 @@ mod tests {
         (0..acknowledged_saves).fold(SessionSaveGeneration::initial(), |value, _| {
             value.checked_next().unwrap()
         })
+    }
+
+    fn accepted_input(
+        execution_id: ExecutionId,
+        submission: SubmissionMode,
+        scheduling: Vec<InvocationSchedulingEvent>,
+    ) -> SessionChange {
+        SessionChange::InputAccepted(Box::new(InvocationRecord {
+            target_event_offset: None,
+            submission,
+            request: ExecutionRequest {
+                execution_id,
+                user_message: UserMessage::text_only(PromptText::new("hello").unwrap()),
+                estimated_input_tokens: 1,
+                reserved_output_tokens: 1,
+            },
+            actor: ActionContext::new("user", "phone", "send").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Pending,
+            events: Vec::new(),
+            scheduling,
+            cancellation: None,
+            provider_report: None,
+            local_cancellation: None,
+            local_outcome: None,
+            result: None,
+        }))
+    }
+
+    fn rows(root: &std::path::Path) -> i64 {
+        Connection::open(root.join("records.sqlite3"))
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM event_records", [], |row| row.get(0))
+            .unwrap()
     }
 
     #[tokio::test]
@@ -828,6 +867,354 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn masked_admission_and_receipt_failures_never_append() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("receipt-steps").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, mut snapshot) = opening(&id);
+        lease
+            .save_changes(generation(0), snapshot.clone(), vec![opened])
+            .await
+            .unwrap();
+        let execution_id = ExecutionId::new("receipt-input").unwrap();
+        let valid_input = accepted_input(execution_id.clone(), SubmissionMode::Immediate, vec![]);
+        let pending =
+            records::fold_changes(Some(&snapshot), std::slice::from_ref(&valid_input)).unwrap();
+        let mut invalid_input = valid_input.clone();
+        if let SessionChange::InputAccepted(record) = &mut invalid_input {
+            record.acknowledgement = SubmissionAcknowledgement::Failed {
+                audit: None,
+                storage: None,
+            };
+        }
+        let repair = SessionChange::ReceiptUpdated {
+            execution_id: execution_id.clone(),
+            before: SubmissionAcknowledgement::Failed {
+                audit: None,
+                storage: None,
+            },
+            after: SubmissionAcknowledgement::Pending,
+        };
+        let retained = rows(&root);
+        assert!(matches!(
+            lease
+                .save_changes(generation(1), pending.clone(), vec![invalid_input, repair])
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(rows(&root), retained);
+        assert_eq!(lease.load().await.unwrap(), Some(snapshot.clone()));
+        lease
+            .save_changes(generation(1), pending.clone(), vec![valid_input])
+            .await
+            .unwrap();
+        snapshot = pending;
+
+        let acknowledged = SessionChange::ReceiptUpdated {
+            execution_id: execution_id.clone(),
+            before: SubmissionAcknowledgement::Pending,
+            after: SubmissionAcknowledgement::Acknowledged,
+        };
+        let final_snapshot =
+            records::fold_changes(Some(&snapshot), std::slice::from_ref(&acknowledged)).unwrap();
+        for failed in [
+            SubmissionAcknowledgement::Failed {
+                audit: None,
+                storage: None,
+            },
+            SubmissionAcknowledgement::Failed {
+                audit: None,
+                storage: Some(StorageError::Io("x".repeat(4097))),
+            },
+        ] {
+            let bad = SessionChange::ReceiptUpdated {
+                execution_id: execution_id.clone(),
+                before: SubmissionAcknowledgement::Pending,
+                after: failed.clone(),
+            };
+            let repair = SessionChange::ReceiptUpdated {
+                execution_id: execution_id.clone(),
+                before: failed,
+                after: SubmissionAcknowledgement::Acknowledged,
+            };
+            let retained = rows(&root);
+            assert!(matches!(
+                lease
+                    .save_changes(generation(2), final_snapshot.clone(), vec![bad, repair])
+                    .await,
+                Err(StorageError::Corrupt(_))
+            ));
+            assert_eq!(rows(&root), retained);
+            assert_eq!(lease.load().await.unwrap(), Some(snapshot.clone()));
+        }
+        lease
+            .save_changes(generation(2), final_snapshot.clone(), vec![acknowledged])
+            .await
+            .unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(final_snapshot));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ordered_invocation_and_context_facts_refuse_masked_invalid_steps() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("ordered-facts").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, mut snapshot) = opening(&id);
+        lease
+            .save_changes(generation(0), snapshot.clone(), vec![opened])
+            .await
+            .unwrap();
+        let recorded = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        let context = SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: recorded.clone(),
+        };
+        snapshot = records::fold_changes(Some(&snapshot), std::slice::from_ref(&context)).unwrap();
+        lease
+            .save_changes(generation(1), snapshot.clone(), vec![context])
+            .await
+            .unwrap();
+        let execution_id = ExecutionId::new("queued-output").unwrap();
+        let actor = ActionContext::new("user", "phone", "send").unwrap();
+        let admitted = InvocationSchedulingEvent {
+            kind: InvocationKind::Queued,
+            target: None,
+            before: None,
+            stage: InvocationStage::Queued,
+            cause: SchedulingCause::Submitted,
+            actor: Some(actor.clone()),
+        };
+        let input = accepted_input(execution_id.clone(), SubmissionMode::Queued, vec![admitted]);
+        let queue_admitted = SessionChange::QueueDecision(QueueHistoryRecord {
+            mutation: QueueMutation::Admitted {
+                id: execution_id.clone(),
+                kind: InvocationKind::Queued,
+            },
+            actor: Some(actor),
+            scheduling_length: Some(1),
+        });
+        let selected = SessionChange::QueueDecision(QueueHistoryRecord {
+            mutation: QueueMutation::Selected {
+                id: execution_id.clone(),
+            },
+            actor: None,
+            scheduling_length: Some(1),
+        });
+        let admissions = vec![input, queue_admitted, selected];
+        let running = SessionChange::SchedulingTransition {
+            execution_id: execution_id.clone(),
+            event: InvocationSchedulingEvent {
+                kind: InvocationKind::Queued,
+                target: None,
+                before: Some(InvocationStage::Queued),
+                stage: InvocationStage::Running,
+                cause: SchedulingCause::Dispatched,
+                actor: None,
+            },
+        };
+        let output = SessionChange::ProviderObservation(ExecutionEvent::new(
+            execution_id.clone(),
+            ExecutionUpdate::Message(MessageChunk::text("provider output")),
+        ));
+        let report = SessionChange::ProviderReport {
+            execution_id: execution_id.clone(),
+            report: ExecutionReport::new(
+                Some(Ok(ExecutionOutcome::Completed)),
+                None,
+                ProviderSessionState::Usable,
+            ),
+            local_stop: None,
+        };
+        let failure = SessionChange::LocalSettlement {
+            execution_id: execution_id.clone(),
+            before: None,
+            after: Err(AgentError::Protocol("local failure".into())),
+            local_outcome: None,
+        };
+        for later in [&output, &report, &failure] {
+            let mut valid_changes = admissions.clone();
+            valid_changes.extend([running.clone(), later.clone()]);
+            let valid = records::fold_changes(Some(&snapshot), &valid_changes).unwrap();
+            let mut invalid_changes = admissions.clone();
+            invalid_changes.extend([later.clone(), running.clone()]);
+            let retained = rows(&root);
+            assert!(matches!(
+                lease
+                    .save_changes(generation(2), valid, invalid_changes)
+                    .await,
+                Err(StorageError::Corrupt(_))
+            ));
+            assert_eq!(rows(&root), retained);
+            assert_eq!(lease.load().await.unwrap(), Some(snapshot.clone()));
+        }
+        snapshot = records::fold_changes(Some(&snapshot), &admissions).unwrap();
+        lease
+            .save_changes(generation(2), snapshot.clone(), admissions)
+            .await
+            .unwrap();
+        for later in [&output, &report, &failure] {
+            let valid =
+                records::fold_changes(Some(&snapshot), &[running.clone(), later.clone()]).unwrap();
+            let retained = rows(&root);
+            assert!(matches!(
+                lease
+                    .save_changes(generation(3), valid, vec![later.clone(), running.clone()])
+                    .await,
+                Err(StorageError::Corrupt(_))
+            ));
+            assert_eq!(rows(&root), retained);
+            assert_eq!(lease.load().await.unwrap(), Some(snapshot.clone()));
+        }
+        let with_running =
+            records::fold_changes(Some(&snapshot), std::slice::from_ref(&running)).unwrap();
+        lease
+            .save_changes(generation(3), with_running.clone(), vec![running])
+            .await
+            .unwrap();
+        snapshot = with_running;
+        let with_output =
+            records::fold_changes(Some(&snapshot), std::slice::from_ref(&output)).unwrap();
+        lease
+            .save_changes(generation(4), with_output.clone(), vec![output])
+            .await
+            .unwrap();
+        snapshot = with_output;
+        let absent = SessionChange::ProviderContext {
+            before: recorded.clone(),
+            after: ProviderContext::Absent,
+        };
+        let restored = SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: recorded,
+        };
+        let retained = rows(&root);
+        assert!(matches!(
+            lease
+                .save_changes(generation(5), snapshot.clone(), vec![absent, restored])
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(rows(&root), retained);
+        assert_eq!(lease.load().await.unwrap(), Some(snapshot.clone()));
+        let settlement = SessionChange::LocalSettlement {
+            execution_id: execution_id.clone(),
+            before: None,
+            after: Ok(ExecutionOutcome::Completed),
+            local_outcome: Some(ExecutionOutcome::Completed),
+        };
+        let ended = SessionChange::SchedulingTransition {
+            execution_id,
+            event: InvocationSchedulingEvent {
+                kind: InvocationKind::Queued,
+                target: None,
+                before: Some(InvocationStage::Running),
+                stage: InvocationStage::Settled,
+                cause: SchedulingCause::ExecutionSettled,
+                actor: None,
+            },
+        };
+        let grouped = vec![report, settlement, ended];
+        snapshot = records::fold_changes(Some(&snapshot), &grouped).unwrap();
+        lease
+            .save_changes(generation(5), snapshot.clone(), grouped)
+            .await
+            .unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(snapshot));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn later_local_failure_cannot_mask_report_that_contradicted_prior_success() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("report-after-result").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, mut snapshot) = opening(&id);
+        lease
+            .save_changes(generation(0), snapshot.clone(), vec![opened])
+            .await
+            .unwrap();
+        let context = SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        };
+        let execution_id = ExecutionId::new("execution").unwrap();
+        let input = accepted_input(execution_id.clone(), SubmissionMode::Immediate, vec![]);
+        let setup = vec![context, input];
+        snapshot = records::fold_changes(Some(&snapshot), &setup).unwrap();
+        lease
+            .save_changes(generation(1), snapshot.clone(), setup)
+            .await
+            .unwrap();
+        let success = SessionChange::LocalSettlement {
+            execution_id: execution_id.clone(),
+            before: None,
+            after: Ok(ExecutionOutcome::Completed),
+            local_outcome: Some(ExecutionOutcome::Completed),
+        };
+        snapshot = records::fold_changes(Some(&snapshot), std::slice::from_ref(&success)).unwrap();
+        lease
+            .save_changes(generation(2), snapshot.clone(), vec![success])
+            .await
+            .unwrap();
+        let report = ExecutionReport::new(
+            Some(Ok(ExecutionOutcome::Completed)),
+            Some(AgentError::Protocol("provider delivery failed".into())),
+            ProviderSessionState::Usable,
+        );
+        let failure = Err(AgentError::Protocol("later local failure".into()));
+        let mut forged = snapshot.clone();
+        forged.invocations[0].provider_report = Some(report.clone());
+        forged.invocations[0].result = Some(failure.clone());
+        let bad = vec![
+            SessionChange::ProviderReport {
+                execution_id: execution_id.clone(),
+                report,
+                local_stop: None,
+            },
+            SessionChange::LocalSettlement {
+                execution_id,
+                before: Some(Ok(ExecutionOutcome::Completed)),
+                after: failure,
+                local_outcome: Some(ExecutionOutcome::Completed),
+            },
+        ];
+        let retained = rows(&root);
+        assert!(matches!(
+            lease.save_changes(generation(3), forged, bad).await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(rows(&root), retained);
+        assert_eq!(lease.load().await.unwrap(), Some(snapshot.clone()));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(snapshot));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn local_settlement_revisions_preserve_history_rules_before_append() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("sessions");
@@ -909,6 +1296,34 @@ mod tests {
         assert_eq!(lease.load().await.unwrap(), Some(failed.clone()));
         assert_eq!(rows(), before_rejection);
         let another_failure = Err(AgentError::Protocol("revised failure".into()));
+        let oversized_failure = Err(AgentError::Protocol("x".repeat(1_100_000)));
+        let oversized_intermediate = SessionChange::LocalSettlement {
+            execution_id: execution_id.clone(),
+            before: Some(original_failure.clone()),
+            after: oversized_failure.clone(),
+            local_outcome: None,
+        };
+        let masked_oversized = SessionChange::LocalSettlement {
+            execution_id: execution_id.clone(),
+            before: Some(oversized_failure),
+            after: another_failure.clone(),
+            local_outcome: None,
+        };
+        let mut forged_failure = failed.clone();
+        forged_failure.invocations[0].result = Some(another_failure.clone());
+        let before_rejection = rows();
+        assert!(matches!(
+            lease
+                .save_changes(
+                    generation(3),
+                    forged_failure,
+                    vec![oversized_intermediate, masked_oversized],
+                )
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(rows(), before_rejection);
+        assert_eq!(lease.load().await.unwrap(), Some(failed.clone()));
         let valid_failure = SessionChange::LocalSettlement {
             execution_id,
             before: Some(original_failure),

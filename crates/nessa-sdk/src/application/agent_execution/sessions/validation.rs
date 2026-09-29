@@ -264,25 +264,7 @@ pub(super) fn invocation_history(
     if let Some(result) = &invocation.result {
         validate_local_result(invocation, result)?;
     }
-    if matches!(
-        &invocation.acknowledgement,
-        SubmissionAcknowledgement::Failed {
-            audit: None,
-            storage: None
-        }
-    ) {
-        return Err(corrupt(
-            "failed submission acknowledgement has no failed boundary",
-        ));
-    }
-    if let SubmissionAcknowledgement::Failed { audit, storage } = &invocation.acknowledgement {
-        if let Some(error) = audit {
-            error.validate_retained_size()?;
-        }
-        if let Some(error) = storage {
-            error.validate_retained_size()?;
-        }
-    }
+    validate_submission_acknowledgement(&invocation.acknowledgement)?;
     let mut history = InvocationHistory::new(
         invocation.request.execution_id.clone(),
         invocation.submission,
@@ -325,6 +307,32 @@ pub(super) fn invocation_history(
     )?;
     history.validate_checkpoint().map_err(corrupt)?;
     Ok(history)
+}
+
+/// Check one acknowledgement before it can be overwritten by another fact.
+pub(super) fn validate_submission_acknowledgement(
+    acknowledgement: &SubmissionAcknowledgement,
+) -> Result<(), StorageError> {
+    if matches!(
+        acknowledgement,
+        SubmissionAcknowledgement::Failed {
+            audit: None,
+            storage: None
+        }
+    ) {
+        return Err(corrupt(
+            "failed submission acknowledgement has no failed boundary",
+        ));
+    }
+    if let SubmissionAcknowledgement::Failed { audit, storage } = acknowledgement {
+        if let Some(error) = audit {
+            error.validate_retained_size()?;
+        }
+        if let Some(error) = storage {
+            error.validate_retained_size()?;
+        }
+    }
+    Ok(())
 }
 
 /// Map report origin and local stop together through the domain's history authority.
@@ -378,7 +386,22 @@ pub(super) fn validate_local_result(
     invocation: &InvocationRecord,
     result: &Result<ExecutionOutcome, AgentError>,
 ) -> Result<(), StorageError> {
-    if let (Some(settlement), Ok(_)) = (&invocation.provider_report, result) {
+    if let Err(error) = result {
+        error.validate_retained_size()?;
+    }
+    if let Some(settlement) = &invocation.provider_report {
+        validate_report_against_local_result(settlement, result)?;
+    }
+    Ok(())
+}
+
+/// A newly recorded report cannot retroactively invalidate an earlier public
+/// success, even if a later diagnostic in the same batch would hide that result.
+pub(super) fn validate_report_against_local_result(
+    settlement: &ExecutionReport,
+    result: &Result<ExecutionOutcome, AgentError>,
+) -> Result<(), StorageError> {
+    if result.is_ok() {
         // The domain checks outcome agreement, including causally recorded local
         // cancellation. Public success still cannot hide report delivery or cleanup
         // failures, which the pure history deliberately does not interpret.
