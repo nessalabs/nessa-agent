@@ -10,10 +10,12 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { focusPane, loadWorkspace, openBeside } from "../../adapters/store/commands"
+import { paneFrame } from "../../../split-panes/testing"
+import { placements as placementsOf } from "../../../split-panes/model/pane-sizing"
 import {
   selectFocusedSessionId,
+  selectPanes,
   selectPaneSession,
-  selectPlacements,
 } from "../../adapters/store/selectors"
 import { workspaceActions } from "../../adapters/store/slice"
 import { ClockProvider } from "../../adapters/dom/clock"
@@ -89,7 +91,8 @@ async function fourPanes() {
   await store.dispatch(loadWorkspace())
   for (const sessionId of ["b", "c", "d"]) store.dispatch(openBeside({ sessionId }))
   await settle()
-  const placements = selectPlacements(store.getState()).panes
+  const panes = selectPanes(store.getState())
+  const placements = panes ? placementsOf(panes.columns).panes : []
   expect(placements).toHaveLength(4)
   const sessionOf = (key: number) => selectPaneSession(store.getState(), key) ?? ""
   await act(async () => {
@@ -104,7 +107,7 @@ async function fourPanes() {
                   id={sessionOf(placement.key)}
                   onRender={(id) => renders.set(id, (renders.get(id) ?? 0) + 1)}
                 >
-                  <Pane placement={placement} multi />
+                  <Pane placement={placement} frame={paneFrame(placement)} multi />
                 </Profiler>
               ))}
             </Frame>
@@ -172,14 +175,14 @@ describe("a pane renders for its own session only", () => {
     await act(async () => {
       if (target) store.dispatch(focusPane({ pane: target.key }))
     })
-    expect(rendered()).toEqual([target?.sessionId, was].sort())
+    expect(rendered()).toEqual([target?.item, was].sort())
     // The two panes render their headers; what they show is handed nothing new.
     expect([...contentRenders.keys()]).toEqual([])
   })
 
-  it("keeps the placements, which the grid renders from, when content changes", async () => {
+  it("keeps the columns, which the grid renders from, when content changes", async () => {
     const { store } = await fourPanes()
-    const before = selectPlacements(store.getState())
+    const before = selectPanes(store.getState())?.columns
     await act(async () => {
       store.dispatch(
         workspaceActions.updateReceived({
@@ -187,7 +190,7 @@ describe("a pane renders for its own session only", () => {
         }),
       )
     })
-    expect(selectPlacements(store.getState())).toBe(before)
+    expect(selectPanes(store.getState())?.columns).toBe(before)
   })
 
   it("renders one pane while its composer is typed in", async () => {

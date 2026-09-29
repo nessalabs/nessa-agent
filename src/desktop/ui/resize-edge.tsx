@@ -1,6 +1,7 @@
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react"
-import { usePointerResize } from "../../adapters/dom/pointer-resize"
-import { tooltip } from "../../../ui/tooltip"
+import { usePointerResize } from "../adapters/pointer-resize"
+import { tooltip } from "./tooltip"
+import "./resize-edge.css"
 
 /** How far an arrow key moves an edge. */
 const keyStep = 16
@@ -42,7 +43,7 @@ export function ResizeEdge({
   const glow = (event: ReactPointerEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect()
     const along = axis === "x" ? event.clientY - box.top : event.clientX - box.left
-    event.currentTarget.style.setProperty("--workspace-glow", `${along}px`)
+    event.currentTarget.style.setProperty("--desktop-edge-glow", `${along}px`)
   }
   const [back, forward] =
     axis === "x" ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"]
@@ -55,7 +56,7 @@ export function ResizeEdge({
       aria-valuemin={Math.round(value.min)}
       aria-valuemax={Math.round(value.max)}
       tabIndex={0}
-      className={className ? `workspace-edge ${className}` : "workspace-edge"}
+      className={className ? `desktop-resize-edge ${className}` : "desktop-resize-edge"}
       data-axis={axis}
       style={style}
       {...drag}

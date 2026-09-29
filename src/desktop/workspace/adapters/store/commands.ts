@@ -16,7 +16,7 @@ import {
   type PaneKey,
   type Side,
   type Zone,
-} from "../../model/pane-layout"
+} from "../../../split-panes/model/pane-layout"
 import { messageText, type Message } from "../../model/transcript"
 import {
   failureReason,
@@ -38,12 +38,8 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import * as panesUseCases from "../../application/usecases/panes"
-import { dropOutcome, type Carried, type DropOutcome } from "../../model/drop"
-import {
-  edgeSides as edgeSidesIn,
-  type PaneEdge,
-  type WorkspaceRoom,
-} from "../../model/pane-sizing"
+import type { Drop } from "../../../split-panes"
+import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import { workspaceActions } from "./slice"
 
 export const {
@@ -260,71 +256,26 @@ export function fitPanes(): WorkspaceCommand {
 }
 
 /**
- * The two sides of an edge between panes, in pixels, as the room the page
- * measures lays them out — where a drag of it starts from, whatever a flight
- * of motion draws meanwhile.
+ * The panes' room as the page measures it now: what the split panes' drag
+ * reads once, as its press begins (`split-panes-source.ts`).
  */
-export function edgeSides(
-  edge: PaneEdge,
-): WorkspaceCommand<{ before: number; after: number } | null> {
-  return (_dispatch, getState, { measure }) => {
-    const panes = getState().workspace.panes
-    const room = measure()
-    return panes && room ? edgeSidesIn(panes, edge, room) : null
-  }
-}
-
-/** The panes' room as the page measures it now: what a drag reads once, as its press begins. */
-export function measureRoom(): WorkspaceCommand<WorkspaceRoom | undefined> {
+export function measureRoom(): WorkspaceCommand<PaneRoom | undefined> {
   return (_dispatch, _getState, { measure }) => measure()
 }
 
 /**
- * What dropping what is carried on `zone` of `target` would leave, in `room`
- * (`measureRoom`, read as the drag's press began): the outcome a drag
- * previews, which `commitDrop` then commits in the same room (`dropOutcome`,
- * one function for both). The drag's own, as `commitDrop` is.
+ * The drag's drop: commits what the drag previewed for the same zone
+ * (`dropOutcome` of the same panes), in the same room — the one read as the
+ * press began, so the drop reads nothing of the page. The drag's own,
+ * through the split panes' source; an agent moves a pane with `movePane` or
+ * opens a session with `dropSession`, which measure the room as they run.
  */
-export function previewDrop({
-  carried,
-  target,
-  zone,
-  room,
-}: {
-  carried: Carried
-  target: PaneKey
-  zone: Zone
-  room: WorkspaceRoom | undefined
-}): WorkspaceCommand<DropOutcome | null> {
-  return (_dispatch, getState) => {
-    const panes = getState().workspace.panes
-    return panes ? dropOutcome(panes, carried, target, zone, room) : null
-  }
-}
-
-/**
- * The drag's drop: commits what `previewDrop` showed for the same zone, in
- * the same room — the one read as the press began, so the drop reads nothing
- * of the page (`dropOutcome`, one function for both). The drag's own; an
- * agent moves a pane with `movePane` or opens a session with `dropSession`,
- * which measure the room as they run.
- */
-export function commitDrop({
-  carried,
-  target,
-  zone,
-  room,
-}: {
-  carried: Carried
-  target: PaneKey
-  zone: Zone
-  room: WorkspaceRoom | undefined
-}): WorkspaceCommand {
+export function commitDrop({ carried, target, zone, room }: Drop): WorkspaceCommand {
   return (dispatch) => {
     dispatch(
       carried.kind === "pane"
         ? paneMoved({ pane: carried.pane, target, zone, room })
-        : sessionDropped({ sessionId: carried.sessionId, target, zone, room }),
+        : sessionDropped({ sessionId: carried.item, target, zone, room }),
     )
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { panesOf, paneShowing } from "../../model/pane-layout"
+import { panesOf, paneShowing } from "../../../split-panes/model/pane-layout"
 import { retention } from "../../model/retention"
 import { emptyTranscript, type Transcript } from "../../model/transcript"
 import { astra, roomyGrid as roomy, summary, testIndex } from "../../testing"
@@ -30,8 +30,7 @@ const loaded = () =>
     read: "r",
   })
 
-const shown = (state: WorkspaceState) =>
-  panesOf(state.panes!).map((pane) => pane.sessionId)
+const shown = (state: WorkspaceState) => panesOf(state.panes!).map((pane) => pane.item)
 
 const transcript = (
   sessionId: string,
@@ -296,13 +295,13 @@ describe("what goes with a session", () => {
   it("closes the pane showing a removed session, and starts the last over under the id given", () => {
     const two = openBeside(loaded(), { sessionId: "c", room: roomy })
     const closed = sessionRemoved(two, { sessionId: "c", revision: 3, draftId: "x" })
-    expect(panesOf(closed.panes!).map((pane) => pane.sessionId)).toEqual(["a"])
+    expect(panesOf(closed.panes!).map((pane) => pane.item)).toEqual(["a"])
     const last = sessionRemoved(loaded(), {
       sessionId: "a",
       revision: 3,
       draftId: "fresh",
     })
-    expect(panesOf(last.panes!).map((pane) => pane.sessionId)).toEqual(["fresh"])
+    expect(panesOf(last.panes!).map((pane) => pane.item)).toEqual(["fresh"])
     expect(last.drafts.fresh.channelId).toBe("desktop")
     const chosen = sessionRemoved(
       { ...loaded(), chosenModels: { a: astra } },

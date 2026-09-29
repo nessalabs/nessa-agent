@@ -12,7 +12,7 @@ import { isMac } from "../../../adapters/platform"
 import { chordEvent } from "../../../model/keyboard"
 import { ClockProvider } from "../../adapters/dom/clock"
 import { focusPane, loadWorkspace, openBeside } from "../../adapters/store/commands"
-import { layoutShape, panesOf } from "../../model/pane-layout"
+import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
 import { settle, testStore } from "../../testing"
 import { SessionsInSidebar } from "./sessions-in-sidebar"
 import { workspaceShortcuts } from "./shortcuts"
@@ -106,9 +106,7 @@ function outcome(store: ReturnType<typeof testStore>) {
     panes: state.panes ? layoutShape(state.panes) : "",
     focused: state.panes?.focused,
     shown: state.panes?.columns.flatMap((column) =>
-      column.panes.map((pane) =>
-        pane.sessionId.startsWith("id-") ? "new" : pane.sessionId,
-      ),
+      column.panes.map((pane) => (pane.item.startsWith("id-") ? "new" : pane.item)),
     ),
     sidebar: state.chrome.sidebar,
     content: state.content,

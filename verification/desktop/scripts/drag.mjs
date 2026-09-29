@@ -29,7 +29,8 @@
  *                        from the edge offers no zone and no placeholder, the reveal stays
  *                        for the whole drag, and the release changes nothing
  *   copy-under-controls  the corner pane carried: nothing of its copy is painted under the
- *                        window's controls, any frame
+ *                        window's controls, any frame, and its header is laid out as the
+ *                        pane's (the title starts within 2px of where the pane's does)
  *   docked-columns-no-zone  (1440 × 900) a pane carried over the docked sidebar, and over
  *                        the docked session list, offers no zone and no placeholder; the
  *                        release there changes nothing
@@ -1238,12 +1239,44 @@ Object.assign(checks, {
     await hideColumns(page, layout)
     await openPanes(page, 2)
     const sampler = safeArea(page)
+    // Where the corner pane's title starts in its pane: past the window's
+    // controls, as a pane in the corner lays out its header.
+    const titleIn = (box, title) =>
+      page.evaluate(
+        ([boxSelector, titleSelector]) => {
+          const outer = document.querySelector(boxSelector)
+          const inner = outer?.querySelector(titleSelector)
+          return outer && inner
+            ? inner.getBoundingClientRect().left - outer.getBoundingClientRect().left
+            : null
+        },
+        [box, title],
+      )
+    // The pane measured, and lifted, must be the corner's, with both side
+    // columns closed so its header steps past the controls — or the check
+    // compares two plainly padded headers.
+    const [corner, alone] = await page.evaluate(
+      ([pane, cornerPane, panesAlone]) => [
+        !!document.querySelector(pane)?.matches(cornerPane),
+        !!document.querySelector(panesAlone),
+      ],
+      [css.pane, css.cornerPane, css.panesAlone],
+    )
+    if (!corner)
+      throw new CannotRun(`the first pane is not ${css.cornerPane}: nothing to compare`)
+    if (!alone)
+      throw new CannotRun(
+        `no ${css.panesAlone}: a side column is open, nothing to compare`,
+      )
+    const inPane = await titleIn(css.pane, css.titleText)
+    let inCopy = null
     await sampler.watch(
       "carry the corner pane",
       async () => {
         await lift(page, 0)
         // Held near where it was grabbed while the copy glides to its centre.
         await page.waitForTimeout(300)
+        inCopy = await titleIn(css.dragGhost, css.titleText)
         await page.keyboard.press(keys.escape)
         await page.mouse.up()
       },
@@ -1255,6 +1288,13 @@ Object.assign(checks, {
       failures: [
         ...summarize(await sampler.take()),
         ...residueFailures(await dragResidue(page)),
+        // The copy is the pane as it looks: its header keeps the corner's
+        // start, never the plain padding of a pane beside another.
+        ...(inPane === null || inCopy === null
+          ? [`no title to measure (pane ${inPane}, copy ${inCopy})`]
+          : Math.abs(inCopy - inPane) > 2
+            ? [`the copy's title starts ${inCopy}px into it, the pane's ${inPane}px`]
+            : []),
       ],
     }
   },

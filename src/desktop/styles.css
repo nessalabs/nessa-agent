@@ -1093,7 +1093,7 @@ html:not(.dark) [data-surface] {
   animation: none;
 }
 
-.workspace-panes[data-multi]
+.split-panes-grid[data-split-multi]
   .workspace-pane:not([data-focused])
   .desktop-header[data-sliver] {
   opacity: 0.24;
@@ -1108,7 +1108,10 @@ html:not(.dark) [data-surface] {
  * carry the band under the controls on its way.
  */
 .workspace[data-panes-alone]
-  .workspace-pane:is([data-corner]:not([data-drag-corner="no"]), [data-drag-corner="yes"])
+  .workspace-pane:is(
+    [data-split-corner]:not([data-drag-corner="no"]),
+    [data-drag-corner="yes"]
+  )
   .desktop-header[data-sliver] {
   left: calc(var(--desktop-titlebar-safe-start) - var(--desktop-gutter));
   width: auto;

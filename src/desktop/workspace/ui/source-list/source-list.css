@@ -7,9 +7,9 @@
 /*
  * Folding the sidebar is transform only. A closed sidebar leaves the flow at
  * once, so what is beside it takes its new place in one layout and travels
- * there by transform (FLIP, `adapters/dom/flip.tsx`); the sidebar itself
- * slides out on its own, fully opaque so its glass keeps its blur, and hides
- * once it is off-screen.
+ * there by transform (FLIP, `split-panes/adapters/dom/flip.tsx`); the sidebar
+ * itself slides out on its own, fully opaque so its glass keeps its blur, and
+ * hides once it is off-screen.
  */
 .workspace-sidebar {
   position: relative;
@@ -369,7 +369,7 @@ html:not(.dark) .workspace-sidebar {
 }
 
 /* The row stays in place, quieter, while its pill is carried. */
-.workspace-sidebar [data-dragging] {
+.workspace-sidebar [data-drag-carrying] {
   opacity: 0.45;
 }
 

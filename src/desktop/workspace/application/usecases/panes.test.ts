@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { dropOutcome } from "../../model/drop"
-import { focusedPane, paneCount, panesOf, paneLimits } from "../../model/pane-layout"
+import { dropOutcome } from "../../../split-panes/model/drop"
+import {
+  focusedPane,
+  paneCount,
+  panesOf,
+  paneLimits,
+} from "../../../split-panes/model/pane-layout"
 import { astra, roomyGrid, summary, testIndex } from "../../testing"
 import { initialWorkspace, type WorkspaceState } from "../workspace-state"
 import {
@@ -27,10 +32,10 @@ const loaded = () =>
 
 /** Session ids per column, as drawn. */
 const drawn = (state: WorkspaceState) =>
-  state.panes?.columns.map((column) => column.panes.map((pane) => pane.sessionId))
+  state.panes?.columns.map((column) => column.panes.map((pane) => pane.item))
 
 const keyOf = (state: WorkspaceState, sessionId: string) =>
-  panesOf(state.panes!).find((pane) => pane.sessionId === sessionId)!.key
+  panesOf(state.panes!).find((pane) => pane.item === sessionId)!.key
 
 const roomy = roomyGrid
 
@@ -46,7 +51,7 @@ describe("opening a session", () => {
     const back = focusPane(two, keyOf(two, "a"))
     const again = openSession(back, { sessionId: "b" })
     expect(drawn(again)).toEqual([["a"], ["b"]])
-    expect(focusedPane(again.panes!).sessionId).toBe("b")
+    expect(focusedPane(again.panes!).item).toBe("b")
   })
 
   it("discloses the session's channel in the sidebar", () => {
@@ -73,7 +78,7 @@ describe("opening beside", () => {
   it("opens a column to the right of the focused pane and focuses it", () => {
     const state = openBeside(loaded(), { sessionId: "c", room: roomy })
     expect(drawn(state)).toEqual([["a"], ["c"]])
-    expect(focusedPane(state.panes!).sessionId).toBe("c")
+    expect(focusedPane(state.panes!).item).toBe("c")
   })
 
   it("stacks instead when a column would not be readable", () => {
@@ -126,8 +131,8 @@ describe("opening beside", () => {
     )
     const replaced = openBeside(state, { sessionId: "e", room: roomy })
     expect(paneCount(replaced.panes!)).toBe(paneLimits.maxPanes)
-    expect(focusedPane(replaced.panes!).sessionId).toBe("e")
-    expect(panesOf(replaced.panes!).map((pane) => pane.sessionId)).not.toContain("d")
+    expect(focusedPane(replaced.panes!).item).toBe("e")
+    expect(panesOf(replaced.panes!).map((pane) => pane.item)).not.toContain("d")
   })
 })
 
@@ -155,7 +160,7 @@ describe("dropping a session on a pane", () => {
       room: roomy,
     })
     expect(drawn(dropped)).toEqual([["a"], ["c"]])
-    expect(focusedPane(dropped.panes!).sessionId).toBe("c")
+    expect(focusedPane(dropped.panes!).item).toBe("c")
   })
 })
 
@@ -329,7 +334,7 @@ describe("a drop commits what its drag previewed", () => {
       expect(moved.panes).toEqual(preview ? preview.layout : two.panes)
       const shown = dropOutcome(
         two.panes!,
-        { kind: "session", sessionId: "d" },
+        { kind: "item", item: "d" },
         first,
         zone,
         roomy,

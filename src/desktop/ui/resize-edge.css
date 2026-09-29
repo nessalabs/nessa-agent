@@ -1,0 +1,50 @@
+/*
+ * A boundary that resizes what is on either side of it (`resize-edge.tsx`):
+ * the gutter itself, lit near the pointer. Shared by the window's side
+ * columns and the split panes' edges, which place it (`split-panes.css`).
+ */
+
+.desktop-resize-edge {
+  position: relative;
+  width: var(--desktop-gutter);
+  flex: none;
+  cursor: col-resize;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* A glow runs along the edge near the pointer, in the theme's edge light. */
+.desktop-resize-edge::before {
+  content: "";
+  position: absolute;
+  inset: calc(var(--desktop-gutter) + var(--desktop-radius)) 2.5px;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 3px 90px at 50%
+      calc(var(--desktop-edge-glow, 50%) - var(--desktop-gutter) - var(--desktop-radius)),
+    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
+    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
+    transparent 100%
+  );
+  opacity: 0;
+  transition: opacity var(--desktop-fast) ease;
+}
+
+.desktop-resize-edge:hover::before,
+.desktop-resize-edge:focus-visible::before,
+.desktop-resize-edge:active::before {
+  opacity: 1;
+}
+
+/* While an edge is dragged the cursor holds everywhere, and nothing selects (`pointer-resize.ts`). */
+html[data-desktop-resizing],
+html[data-desktop-resizing] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+html[data-desktop-resizing="y"],
+html[data-desktop-resizing="y"] * {
+  cursor: row-resize !important;
+}

@@ -9,8 +9,14 @@
  */
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
 import type { ModelRef, WorkspaceIndex } from "../../model/workspace-index"
-import type { Direction, PaneKey, Side, Zone } from "../../model/pane-layout"
-import type { PaneEdge, WorkspaceRoom } from "../../model/pane-sizing"
+import type {
+  Direction,
+  PaneKey,
+  Side,
+  Zone,
+} from "../../../split-panes/model/pane-layout"
+import type { EdgeMove } from "../../../split-panes"
+import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import type { Message, Transcript } from "../../model/transcript"
 import type {
   Initiator,
@@ -49,7 +55,7 @@ const workspaceSlice = createSlice({
         sessionId: string
         target?: PaneKey
         side?: Side
-        room: WorkspaceRoom | undefined
+        room: PaneRoom | undefined
         replace?: boolean
       }>,
     ) => panes.openBeside(state, payload),
@@ -61,7 +67,7 @@ const workspaceSlice = createSlice({
         sessionId: string
         target: PaneKey
         zone: Zone
-        room: WorkspaceRoom | undefined
+        room: PaneRoom | undefined
       }>,
     ) => panes.dropSession(state, payload),
     paneMoved: (
@@ -72,7 +78,7 @@ const workspaceSlice = createSlice({
         pane: PaneKey
         target: PaneKey
         zone: Zone
-        room: WorkspaceRoom | undefined
+        room: PaneRoom | undefined
       }>,
     ) => panes.movePane(state, payload),
     paneNudged: (
@@ -82,17 +88,15 @@ const workspaceSlice = createSlice({
       }: Payload<{
         pane: PaneKey
         direction: Direction
-        room: WorkspaceRoom | undefined
+        room: PaneRoom | undefined
       }>,
     ) => panes.nudgePane(state, payload),
     panesFitted: (
       state,
       { payload }: Payload<{ room: { width: number; height: number } }>,
     ) => panes.fitPanes(state, payload),
-    resizePanes: (
-      state,
-      { payload }: Payload<{ edge: PaneEdge; fraction: number; pair: number }>,
-    ) => panes.resizePanes(state, payload),
+    resizePanes: (state, { payload }: Payload<EdgeMove>) =>
+      panes.resizePanes(state, payload),
     equalizePanes: (state) => panes.equalizePanes(state),
     paneClosed: (state, { payload }: Payload<{ pane: PaneKey; draftId?: string }>) =>
       panes.closePane(state, payload),
@@ -106,7 +110,7 @@ const workspaceSlice = createSlice({
         model?: ModelRef
         beside?: Side
         target?: PaneKey
-        room?: WorkspaceRoom
+        room?: PaneRoom
       }>,
     ) => panes.createDraft(state, payload),
 
@@ -129,7 +133,7 @@ const workspaceSlice = createSlice({
         channelId: string
         beside?: boolean
         draftId?: string
-        room?: WorkspaceRoom
+        room?: PaneRoom
       }>,
     ) => navigation.openChannel(state, payload),
     revealSession: (state, { payload }: Payload<{ sessionId: string }>) =>

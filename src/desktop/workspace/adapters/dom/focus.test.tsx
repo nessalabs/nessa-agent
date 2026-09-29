@@ -20,7 +20,7 @@ import { shallowEqual } from "react-redux"
 import { useWorkspaceSelector, useWorkspaceStore } from "../store/hooks"
 import { workspaceActions } from "../store/slice"
 import { selectFocusedPaneKey, selectShownSessionIds } from "../store/selectors"
-import { panesOf } from "../../model/pane-layout"
+import { panesOf } from "../../../split-panes/model/pane-layout"
 import { emptyTranscript, type Transcript } from "../../model/transcript"
 import { settle, testStore } from "../../testing"
 import { focusedPaneAttribute, useFocusFollowsPane } from "./focus"
@@ -45,7 +45,7 @@ function Page() {
       <button type="button" data-list-row>
         A row in a list
       </button>
-      <div className="workspace-panes">
+      <div className="split-panes-grid" data-split-grid>
         {(panes ? panesOf(panes) : []).map((pane, index) => (
           <article
             key={pane.key}

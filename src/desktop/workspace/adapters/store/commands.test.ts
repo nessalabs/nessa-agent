@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest"
 import { WorkspaceSourceError } from "../../application/ports"
-import { panesOf } from "../../model/pane-layout"
+import { panesOf } from "../../../split-panes/model/pane-layout"
 import { emptyTranscript } from "../../model/transcript"
 import type { WorkspaceIndex } from "../../model/workspace-index"
 import {
@@ -61,7 +61,7 @@ async function ready(source = fakeSource()) {
 }
 
 const shown = (store: ReturnType<typeof testStore>) =>
-  panesOf(store.getState().workspace.panes!).map((pane) => pane.sessionId)
+  panesOf(store.getState().workspace.panes!).map((pane) => pane.item)
 
 const outboxOf = (store: ReturnType<typeof testStore>, sessionId: string) =>
   store.getState().workspace.outbox[sessionId] ?? []

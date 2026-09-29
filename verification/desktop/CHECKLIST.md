@@ -84,7 +84,7 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   jitter does not flicker it. _Check:_ `drag.mjs` (`boundary-jitter`).
 - [ ] **The zone settles at rest**: approached fast, then still for 300 ms, a
   1px nudge changes nothing; a release after a pause drops on the zone at
-  rest. _Check:_ `drag.mjs` (`rest-settles`); unit tests `model/drag.test.ts`.
+  rest. _Check:_ `drag.mjs` (`rest-settles`); unit tests `split-panes/model/drag.test.ts`.
 - [ ] **The middle of a tall pane offers Swap.** _Check:_ `drag.mjs` (`swap-in-tall-pane`).
 - [ ] **Escape, or a release outside the window, cancels**: the copy flies
   home, the layout is unchanged, nothing is left lifted or transformed.
@@ -98,7 +98,8 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   lifted right after, every pane stays inside the window every frame, nothing
   is painted under the controls, and the release drops nothing. _Check:_
   `drag.mjs` (`resize-mid-drag`, `command-mid-drag`); the rest in unit tests
-  (`adapters/dom/drag.test.tsx`).
+  (`split-panes/adapters/dom/drag.test.tsx`,
+  `workspace/adapters/dom/split-panes-drag.test.tsx`).
 - [ ] **Only panes a person can see are targets**: a session carried while
   the overview covers the panes offers no zone and no placeholder, and its
   release changes nothing. _Check:_ `drag.mjs` (`overview-session-drop`, sessions in the sidebar).
@@ -122,13 +123,16 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   task — before the copy is made, or lifted but before any preview — changes
   nothing. _Check:_ `drag.mjs` (`flick`). A release commits the zone shown as
   the button lifts, never one decided again then (a heading aging out as it
-  lifts cancels nothing). _Check:_ unit tests `model/drag.test.ts`,
-  `adapters/dom/drag.test.tsx`.
+  lifts cancels nothing). _Check:_ unit tests `split-panes/model/drag.test.ts`,
+  `split-panes/adapters/dom/drag.test.tsx`,
+  `workspace/adapters/dom/split-panes-drag.test.tsx`.
 - [ ] **Only the primary button carries**: the right button joining the left
   mid-drag ends the drag; nothing is carried after it and its release drops
   nothing. _Check:_ `drag.mjs` (`chord-right-button`).
 - [ ] **Nothing carried is painted under the window's controls**, the corner
-  pane's copy included, every frame. _Check:_ `drag.mjs` (`copy-under-controls`).
+  pane's copy included, every frame, and the corner pane's copy lays its
+  header out as the pane does, its title as far in (± 2 px). _Check:_
+  `drag.mjs` (`copy-under-controls`).
 - [ ] **No text selection is left behind**, during or after a drag. _Check:_
   `drag.mjs` (`sweep-across-zones`, `outside-cancels`).
 - [ ] **Preview equals commit** — the placeholder marks exactly the rect the
@@ -140,8 +144,9 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   own size; each change of size runs one way, never past where it goes,
   with nothing painted under the controls and no title drawn stretched.
   _Check:_ `drag.mjs` (`copy-takes-slot-shape`; `--shots <dir>` saves it
-  below, beside, and over its own place); unit tests `model/drag.test.ts`,
-  `adapters/dom/drag.test.tsx`.
+  below, beside, and over its own place); unit tests `split-panes/model/drag.test.ts`,
+  `split-panes/adapters/dom/drag.test.tsx`,
+  `workspace/adapters/dom/split-panes-drag.test.tsx`.
 - [ ] **Every pane previews the shape it lands at**: with a zone shown and
   the pointer at rest, each pane is painted at the rect the drop then gives
   it (± 2 px), its conversation centred across that shape (± 2 px), its

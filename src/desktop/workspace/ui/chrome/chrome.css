@@ -35,7 +35,7 @@
   outline: none;
 }
 
-:where(.workspace :focus-visible:not(textarea, input, .workspace-edge)),
+:where(.workspace :focus-visible:not(textarea, input, .desktop-resize-edge)),
 :where(.workspace .desktop-chip:focus-visible) {
   outline: 1.5px solid var(--desktop-focus-ring);
   outline-offset: -1.5px;
@@ -46,14 +46,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* Chrome is read, not selected: a double-click on a label selects nothing. */
-.workspace-titlebar,
-.workspace-edge,
-.workspace-drag-ghost {
-  -webkit-user-select: none;
-  user-select: none;
 }
 
 /* Shared by everything that simply appears. */
@@ -99,6 +91,9 @@
   gap: 2px;
   padding-left: var(--desktop-window-controls-inset);
   padding-right: 8px;
+  /* Chrome is read, not selected: a double-click on a label selects nothing. */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .workspace-icon-button {
@@ -242,60 +237,18 @@
   }
 }
 
-/* ——— Resize edges ——— */
-
-.workspace-edge {
-  position: relative;
-  width: var(--desktop-gutter);
-  flex: none;
-  cursor: col-resize;
-  touch-action: none;
-}
+/* ——— Resize edges (`src/desktop/ui/resize-edge.tsx`) ——— */
 
 /*
  * A folded session list's edge, where it folded: out of the flow, so the
  * columns beside it keep their places, and dragged out it opens the list.
  */
-.workspace-edge-folded {
+.desktop-resize-edge.workspace-edge-folded {
   position: absolute;
   z-index: 5;
   top: 0;
   bottom: 0;
   left: calc(var(--workspace-sidebar-width) + var(--desktop-gutter));
-}
-
-/* A glow runs along the edge near the pointer, in the theme's edge light. */
-.workspace-edge::before {
-  content: "";
-  position: absolute;
-  inset: calc(var(--desktop-gutter) + var(--desktop-radius)) 2.5px;
-  pointer-events: none;
-  background: radial-gradient(
-    ellipse 3px 90px at 50%
-      calc(var(--workspace-glow, 50%) - var(--desktop-gutter) - var(--desktop-radius)),
-    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
-    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
-    transparent 100%
-  );
-  opacity: 0;
-  transition: opacity var(--desktop-fast) ease;
-}
-
-.workspace-edge:hover::before,
-.workspace-edge:focus-visible::before,
-.workspace-edge:active::before {
-  opacity: 1;
-}
-
-html[data-workspace-resizing],
-html[data-workspace-resizing] * {
-  cursor: col-resize !important;
-  user-select: none !important;
-}
-
-html[data-workspace-resizing="y"],
-html[data-workspace-resizing="y"] * {
-  cursor: row-resize !important;
 }
 
 /* ——— The sidebar's foot ——— */
@@ -393,175 +346,39 @@ html[data-workspace-resizing="y"] * {
   margin-left: 4px;
 }
 
-/* ——— Carrying a pane or a session (`adapters/dom/drag.ts`) ——— */
-
-/*
- * The copy carried: the pane itself, cloned once, at its own size. The
- * carrier is moved to the pointer, one to one; the copy is drawn about it,
- * gliding from where it was grabbed until its centre is under the pointer
- * (`drag.ts`). Translucent and lifted. On a drop its box scales into the
- * place it takes while its content counter-scales, so it never lays out again.
- */
-/*
- * Everything carried is drawn in this layer, which begins below the titlebar
- * row and clips what passes above it: nothing carried is painted under the
- * window's controls (ADR 238 › _Drag and drop_). The carrier inside it is
- * placed back at the window's origin, so it moves in the pointer's own
- * coordinates.
- */
-.workspace-drag-layer {
-  position: fixed;
-  z-index: 60;
-  inset: var(--desktop-titlebar-height) 0 0 0;
-  overflow: clip;
-  pointer-events: none;
-}
-
-.workspace-drag-carrier {
-  position: absolute;
-  top: calc(-1 * var(--desktop-titlebar-height));
-  left: 0;
-  width: 0;
-  height: 0;
-  pointer-events: none;
-  will-change: transform;
-}
-
-/* Where the copy was grabbed, gliding to where its centre is under the pointer. */
-.workspace-drag-glider {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 0;
-  height: 0;
-  will-change: transform;
-}
-
-.workspace-drag-ghost {
-  position: absolute;
-  top: 0;
-  left: 0;
-  /*
-   * Its size set once per shape it takes (`drag.ts`): nothing inside it lays
-   * out anything outside.
-   */
-  contain: strict;
-  overflow: hidden;
-  border-radius: var(--desktop-radius);
-  opacity: 0.85;
-  pointer-events: none;
-  transform-origin: 0 0;
-  will-change: transform;
-  /* Lifted: one soft shadow, cheap enough to paint on the frame the drag begins. */
-  box-shadow: 0 18px 36px -14px rgb(0 0 0 / 65%);
-}
-
-/* Made as the press begins, it waits on the page unseen until the press becomes a drag. */
-.workspace-drag-ghost[data-waiting] {
-  opacity: 0;
-}
-
-.workspace-drag-ghost-inner {
-  position: absolute;
-  inset: 0;
-  transform-origin: 0 0;
-}
+/* ——— Carrying a pane or a session (`split-panes/adapters/dom/drag.ts`) ——— */
 
 /* One screen of the conversation, moved to where it was scrolled by transform (`drag.ts`). */
-.workspace-drag-ghost .workspace-transcript {
+.split-panes-ghost .workspace-transcript {
   overflow: hidden;
 }
 
 /* A session's copy shows its latest words at the foot, as a conversation opens. */
-.workspace-drag-ghost .workspace-drag-ghost-latest {
+.split-panes-ghost .workspace-carried-latest {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
 }
 
-.workspace-drag-ghost .workspace-drag-ghost-pane {
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  animation: none;
-  background: color-mix(in oklab, var(--background) 88%, var(--foreground));
-}
-
-/* A picture: nothing in it blurs what is behind, moves on its own, or eases. */
-.workspace-drag-ghost * {
-  animation: none !important;
-  transition: none !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
-}
-
-.workspace-drag-ghost .workspace-pane-name {
+.split-panes-ghost .workspace-pane-name {
   opacity: 1;
   transform: none;
 }
 
 /*
- * Where the drop would land: a calm placeholder at exactly the rect the pane
- * will take — a soft fill and a hairline in the theme's edge light, a pane's
- * radius. It moves between zones on its own; less motion, it moves at once.
- */
-.workspace-drag-placeholder {
-  position: fixed;
-  contain: strict;
-  z-index: 59;
-  top: 0;
-  left: 0;
-  border-radius: var(--desktop-radius);
-  background: color-mix(in oklab, var(--desktop-light-edge) 9%, transparent);
-  box-shadow: inset 0 0 0 1px
-    color-mix(in oklab, var(--desktop-light-edge) 40%, transparent);
-  pointer-events: none;
-  animation: workspace-fade-in var(--desktop-fast) ease both;
-  transition:
-    transform var(--desktop-base) var(--desktop-ease),
-    width var(--desktop-base) var(--desktop-ease),
-    height var(--desktop-base) var(--desktop-ease);
-}
-
-/*
- * Over the page while something is carried: the grabbing hand wherever the
- * pointer goes, and nothing under it hovered or selected. One element of its
- * own, so beginning a drag restyles it alone, not every element of the window
- * as an inherited cursor or selection on the root would.
- */
-.workspace-drag-shield {
-  position: fixed;
-  z-index: 58;
-  inset: 0;
-  contain: strict;
-  cursor: grabbing;
-}
-
-/*
- * A drop that folds the sidebar for room shows it before it happens: the
- * sidebar slides away and the session list follows, as the fold would move
- * them. Only while the sidebar is still open — the moment the drop folds it,
+ * A drop that folds the sidebar for room — taking the spare room it gives
+ * (`data-drag-takes-spare`) — shows it before it happens: the sidebar slides
+ * away and the session list follows, as the fold would move them. Only while the sidebar is still open — the moment the drop folds it,
  * its own closed look takes over, so the commit measures where things are.
  */
-.workspace[data-drag-folds][data-sidebar="open"] .workspace-sidebar {
+.workspace[data-drag-takes-spare][data-sidebar="open"] .workspace-sidebar {
   transform: translateX(calc(-100% - 2 * var(--desktop-gutter) - 48px));
 }
 
-.workspace[data-drag-folds][data-sidebar="open"] .workspace-list {
+.workspace[data-drag-takes-spare][data-sidebar="open"] .workspace-list {
   transform: translateX(
     calc(-1 * (var(--workspace-sidebar-width) + var(--desktop-gutter)))
   );
-}
-
-/* Said to assistive technology, drawn nowhere. */
-.workspace-visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
 }
 
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */

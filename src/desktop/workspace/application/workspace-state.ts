@@ -10,7 +10,12 @@
  */
 import type { WorkspaceFailureReason } from "../model/failure"
 import type { Channel, ModelRef, Section, SessionSummary } from "../model/workspace-index"
-import { focusedPane, panesOf, paneShowing, type PaneLayout } from "../model/pane-layout"
+import {
+  focusedPane,
+  panesOf,
+  paneShowing,
+  type PaneLayout,
+} from "../../split-panes/model/pane-layout"
 import { keptConversations, retention, type Removal } from "../model/retention"
 import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overview/filter"
 import { drawn, type SideColumn } from "../../model/side-column"
@@ -222,7 +227,7 @@ export function withSession(
 
 /** The sessions the panes show, drafts among them. */
 function paneIds(panes: PaneLayout | null): string[] {
-  return panes ? panesOf(panes).map((pane) => pane.sessionId) : []
+  return panes ? panesOf(panes).map((pane) => pane.item) : []
 }
 
 /**
@@ -375,7 +380,7 @@ export function toggled(
 /** The channel of the session in the focused pane, draft or not. */
 export function focusedChannel(state: WorkspaceState): string | undefined {
   if (!state.panes) return undefined
-  const sessionId = focusedPane(state.panes).sessionId
+  const sessionId = focusedPane(state.panes).item
   return sessionOf(state, sessionId)?.channelId ?? draftOf(state, sessionId)?.channelId
 }
 

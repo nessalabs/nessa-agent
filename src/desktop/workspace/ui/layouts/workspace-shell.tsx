@@ -27,8 +27,9 @@ import { useWindowWidth } from "../../../adapters/window-width"
 import { draggedEdge } from "../../../model/side-column"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../../ui/history-buttons"
-import { useWorkspaceDrag } from "../../adapters/dom/drag"
-import { FlipScope } from "../../adapters/dom/flip"
+import { ResizeEdge } from "../../../ui/resize-edge"
+import { workspaceDragOptions } from "../../adapters/dom/split-panes-drag"
+import { FlipScope, useSplitPanesDrag, type SplitPanesSource } from "../../../split-panes"
 import { useFocusFollowsPane } from "../../adapters/dom/focus"
 import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortcuts"
 import { useFitOnResize } from "../../adapters/dom/window-width"
@@ -65,11 +66,15 @@ import {
   selectSidebarOpen,
   selectView,
 } from "../../adapters/store/selectors"
-import { layoutShape, panesOf, type Direction } from "../../model/pane-layout"
+import { workspaceSplitPanes } from "../../adapters/store/split-panes-source"
+import {
+  layoutShape,
+  panesOf,
+  type Direction,
+} from "../../../split-panes/model/pane-layout"
 import type { SwitcherRow } from "../../model/session-search"
 import { columnWidth, sessionListLimits, type ColumnLimits } from "../../model/window-fit"
 import { IconButton } from "../chrome/icon-button"
-import { ResizeEdge } from "../chrome/resize-edge"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
 import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
@@ -289,7 +294,10 @@ export function WorkspaceShell({
     switcher !== null,
   )
   useFocusFollowsPane(store, root)
-  useWorkspaceDrag(store, root)
+  // The panes' drag spans the window: sessions are picked up from its lists.
+  const splitPanes = useMemo(() => workspaceSplitPanes(store), [store])
+  const dragOptions = useMemo(() => workspaceDragOptions(store), [store])
+  useSplitPanesDrag(root, splitPanes, dragOptions)
   const peek = useEdgePeek(!sidebarOpen, sidebarOpen)
   // What fills the content region: the panes, or the Agents overview over them.
   const overviewShown = useWorkspaceSelector(selectOverviewOpen)
@@ -409,6 +417,7 @@ export function WorkspaceShell({
                 sidebarWidth={sidebarWidth}
                 listWidth={listWidth}
                 top={top}
+                splitPanes={splitPanes}
               />
               <OverviewLayer root={root} />
               {switcher ? (
@@ -455,6 +464,7 @@ const Columns = memo(function Columns({
   sidebarWidth,
   listWidth,
   top,
+  splitPanes,
 }: {
   region: SidebarRegion
   root: RefObject<HTMLElement | null>
@@ -463,6 +473,8 @@ const Columns = memo(function Columns({
   sidebarWidth: number
   listWidth: number
   top: ReturnType<typeof IconButton> | undefined
+  /** The panes' source, which the chat area's grid and the window's drag share. */
+  splitPanes: SplitPanesSource
 }) {
   const dispatch = useWorkspaceDispatch()
   const sidebarFrom = useRef<number | null>(0)
@@ -513,7 +525,7 @@ const Columns = memo(function Columns({
           onMove={dragList}
         />
       ) : null}
-      <PaneGrid />
+      <PaneGrid source={splitPanes} />
     </>
   )
 })

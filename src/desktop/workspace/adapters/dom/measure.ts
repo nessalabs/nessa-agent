@@ -11,11 +11,12 @@
  * panes stay laid out under the Agents overview, so what is measured while it
  * is open is the room they have.
  */
-import { paneLimits } from "../../model/pane-layout"
-import type { WorkspaceRoom } from "../../model/pane-sizing"
+import { gridOf } from "../../../split-panes"
+import { paneLimits } from "../../../split-panes/model/pane-layout"
+import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 
-export function measureWorkspace(page: ParentNode = document): WorkspaceRoom | undefined {
-  const grid = page.querySelector<HTMLElement>(".workspace-panes")
+export function measureWorkspace(page: ParentNode = document): PaneRoom | undefined {
+  const grid = gridOf(page)
   if (!grid) return undefined
   const root = grid.closest<HTMLElement>("[data-workspace]")
   const sidebar =

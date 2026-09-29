@@ -49,6 +49,14 @@ The binding constraints:
 The desktop window gets a `workspace` vertical in `src/desktop/workspace/`,
 laid out feature-first with roles below, like `src/conversation/`.
 
+Since [253](../todo/253-split-panes-component.md), the split panes — the pane
+layout, its sizing, drops and the drag's phases (`model/`), the drag, FLIP
+and Tab order (`adapters/dom/`), and the grid (`ui/`) — live in
+`src/desktop/split-panes/`, which the workspace wraps through one
+`SplitPanesSource`; the paths below that name them are that module's, and
+the resize edge is the desktop's (`src/desktop/ui/resize-edge.tsx`). The
+behaviour set down here is unchanged by the move.
+
 - **`model/`** holds pure values and rules:
   - the **index**'s types (`model/workspace-index.ts`: `Section`, `Channel`,
     `SessionSummary`, the session's model from the SDK catalogue) — see
@@ -160,13 +168,15 @@ time, the source or the page's measure of the panes' room is needed
 `closePane`, `sendMessage`, `approve`, `deny`, …), taking them from the
 store's thunk extra argument following
 [dependency injection](../../design/dependency-injection.md):
-`WorkspaceDependencies` carries `measure(): WorkspaceRoom | undefined`,
+`WorkspaceDependencies` carries `measure(): PaneRoom | undefined`,
 composed in `src/desktop/dependencies.ts` from `adapters/dom/measure.ts`.
 An agent drives the window as a person does, so `movePane` and `dropSession`
 measure the room as they run, like every other command that places a pane.
 The drag alone is given the room it read as its press began: it previews
-with `previewDrop` and commits with `commitDrop`, both in that room, and
-neither is a command an agent is meant to dispatch. The
+with `dropOutcome` of the layout its source reads and commits with
+`commitDrop`, through the split panes' source
+(`adapters/store/split-panes-source.ts`), both in that room, and the commit
+is not a command an agent is meant to dispatch. The
 thunks live beside the slice rather than in `application/`, because the
 architecture check keeps Redux out of `application/`, as it does for the
 conversation vertical. What follows from a change whoever caused it — reading
@@ -176,7 +186,7 @@ that one owner: opening a session, the index's first session, and a
 shown session the source marks unread again all reach it.
 
 **One fit rule for every change of layout.** Split, open beside, drop, move
-and the keyboard's nudge all go through `arrange` in `model/pane-sizing.ts`:
+and the keyboard's nudge all go through `arrange` in `split-panes/model/pane-sizing.ts`:
 the new layout is taken if every pane is readable (300 × 220) in the room the
 page measures — the grid's laid-out size, never a flight's transformed box —
 rebalancing shares where it must; else if it is once the sidebar folds; else
@@ -281,10 +291,10 @@ caret went away (an answered approval), it lands there too. Focus in a dialog
 or a menu, or in a list walked with the arrow keys, is left alone. Closing ⌘K
 without a pick, or Settings, gives focus back to what opened it.
 
-**Drag and drop** is carried by the pointer (`adapters/dom/drag.ts`), not the
+**Drag and drop** is carried by the pointer (`split-panes/adapters/dom/drag.ts`), not the
 browser's drag, and a pane's header carries the pane, never the window (no
 drag region in it). What a press becomes is one pure state machine,
-`model/drag.ts` (`stepDrag`); the adapter sends it every event and draws the
+`split-panes/model/drag.ts` (`stepDrag`); the adapter sends it every event and draws the
 phase it answers with. What the page made for a press or a drag is held in
 the phase itself, so there is one answer to whether a drag is live. Its
 rules, few on purpose (_Keep patching the drag_, below): **one aim point, the
@@ -317,8 +327,8 @@ button carries**; and **the zone settles at rest**.
 | dropping, cancelling | the copy's flight ends (`landed`) | idle | — |
 | dropping, cancelling | anything else, a press included | unchanged | a press while the copy still flies starts nothing |
 
-What the copy and the panes are drawn at (`copyShape`, `model/drag.ts`; the
-drawing is `adapters/dom/drag.ts`):
+What the copy and the panes are drawn at (`copyShape`, `split-panes/model/drag.ts`; the
+drawing is `split-panes/adapters/dom/drag.ts`):
 
 | while carrying | the copy | a pane the drop would move or resize |
 | --- | --- | --- |
@@ -378,7 +388,7 @@ shape is `made.drawing.shape`, and a pane's the preview's own motion —
 neither is read back.
 
 The copy is drawn in a layer that begins below the titlebar row
-(`.workspace-drag-layer`), so nothing carried is ever painted under the
+(`.split-panes-layer`), so nothing carried is ever painted under the
 window's controls, whatever it passes over. The folded sidebar revealed from
 the window's edge (the peek) neither shows nor hides while a pointer button
 is held — a press freezes it (_Side columns_, above) — so the side columns
@@ -386,7 +396,7 @@ the press read are the ones there until the release. A peek still sliding in
 as the press reads it is taken as covering where it is sliding to, its
 settled rect, never the part of the way it has come.
 
-Where the pointer is decides the zone (`aimAt`, `model/drop.ts`):
+Where the pointer is decides the zone (`aimAt`, `split-panes/model/drop.ts`):
 
 | the pointer | zone |
 | --- | --- |
@@ -431,8 +441,9 @@ press on what can be carried, and the drag it becomes, select nothing
 (`selectstart`) and leave nothing selected; while carrying, one element over the page holds the
 grabbing hand. Only transforms move — but the copy, laid out once per zone
 change at the slot's size, as above; the zone is announced in a polite live
-region; with less motion, nothing but the copy moves. `model/drag.test.ts`
-has a test for each row above, and `adapters/dom/drag.test.tsx` for the page's
+region; with less motion, nothing but the copy moves. `split-panes/model/drag.test.ts`
+has a test for each row above, `split-panes/adapters/dom/drag.test.tsx` for
+what the drag asks of any host, and `adapters/dom/split-panes-drag.test.tsx` for the page's
 side of them (the click a release makes, a control's own press, the carried
 session unlisted, Settings' Escape, nothing read after the press, the copy
 laid out at its slot and the panes drawn at their would-be rects, never
@@ -737,7 +748,7 @@ the source holds, at a glance — and is used nowhere else; the port method is
   commit phase needs neither.
 - **Drag state in the store.** What the pointer carries lives only as long as
   the pointer holds it and no agent asks for it; its phase is a pure value
-  (`model/drag.ts`) the drag adapter holds, asking the store only when the
+  (`split-panes/model/drag.ts`) the drag adapter holds, asking the store only when the
   zone changes.
 - **Keep patching the drag.** Three review rounds each found new cases in it
   (a blended aim point the eye did not follow, a zone that did not settle, a

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { panesOf } from "../../model/pane-layout"
+import { panesOf } from "../../../split-panes/model/pane-layout"
 import type { Message } from "../../model/transcript"
 import { emptyTranscript } from "../../model/transcript"
 import { astra, summary, testIndex } from "../../testing"
@@ -30,8 +30,7 @@ const loaded = () =>
     read: "r",
   })
 
-const shown = (state: WorkspaceState) =>
-  panesOf(state.panes!).map((pane) => pane.sessionId)
+const shown = (state: WorkspaceState) => panesOf(state.panes!).map((pane) => pane.item)
 
 const message = (id: string, text: string, at = 500): Message => ({
   id,

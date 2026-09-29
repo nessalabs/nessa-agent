@@ -1,5 +1,5 @@
 /**
- * FLIP for the workspace: a layout change lands at once, and what moved plays
+ * FLIP for a host's panes and columns: a layout change lands at once, and what moved plays
  * back from where it was by transform alone, so no frame of the motion lays
  * out text again.
  *
@@ -17,12 +17,13 @@
  * - `data-flip="slide"` with `data-flip-id`: slides sideways. A slide inside
  *   another slide moves only by its own difference.
  *
- * While anything flies, the scope's root carries `data-flipping`, which the
+ * While anything flies, the scope's root carries `data-split-flipping`, which the
  * stylesheet uses to pause blur and large shadows.
  */
 import { Component, type ReactNode, type RefObject } from "react"
 import { slideAnimation } from "../../../adapters/hold-still"
 import { letGoOfDragPreview } from "./drag"
+import { marks } from "./marks"
 import { durationToken, motionToken } from "../../../adapters/motion"
 
 type Rects = { panes: Map<string, DOMRect>; slides: Map<string, DOMRect> }
@@ -88,8 +89,9 @@ export function flyPane(
   // so mid-flight its controls would float inside the box, or be cut off at
   // its edge; it waits out of sight and comes back as the pane lands.
   const resized = Math.abs(sx - 1) > 0.02 || Math.abs(sy - 1) > 0.02
-  const header = children.find(({ element }) =>
-    element.classList.contains("workspace-pane-header"),
+  // The part held to the pane's top left (`data-split-keeps`): its header.
+  const header = children.find(
+    ({ element }) => element.getAttribute(marks.keeps) === "top-left",
   )?.element
   const hiding =
     resized && header
@@ -187,13 +189,13 @@ export class FlipScope extends Component<{
     const flying = play(root, snapshot)
     this.flights = flying
     if (flying.length === 0) {
-      delete root.dataset.flipping
+      root.removeAttribute(marks.flipping)
       return
     }
-    root.dataset.flipping = ""
+    root.setAttribute(marks.flipping, "")
     Promise.all(flying.map((flight) => flight.finished))
       .then(() => {
-        if (this.flights === flying) delete root.dataset.flipping
+        if (this.flights === flying) root.removeAttribute(marks.flipping)
       })
       .catch(() => undefined)
   }

@@ -23,7 +23,7 @@
  */
 import type { WorkspaceFailureReason } from "../model/failure"
 import type { ModelRef, WorkspaceIndex, SessionSummary } from "../model/workspace-index"
-import type { WorkspaceRoom } from "../model/pane-sizing"
+import type { PaneRoom } from "../../split-panes/model/pane-sizing"
 import type { Transcript } from "../model/transcript"
 import type { AgentsFilter } from "../model/overview/filter"
 
@@ -172,7 +172,7 @@ export interface WorkspaceDependencies {
    * layout asks it, whoever dispatches it, and with nothing measured places
    * nothing new.
    */
-  readonly measure: () => WorkspaceRoom | undefined
+  readonly measure: () => PaneRoom | undefined
   /**
    * Where the Agents overview's filter is remembered between launches: read
    * once, into the store's first state, and written on each change

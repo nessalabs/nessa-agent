@@ -124,7 +124,7 @@ it("reads where every pane landed before any flight starts, so the page lays out
               data-flip-id={id}
               data-left={(swapped ? 1 - index : index) * 500}
             >
-              <header className="workspace-pane-header" />
+              <header className="workspace-pane-header" data-split-keeps="top-left" />
               <div className="workspace-pane-body" />
             </article>
           ))}

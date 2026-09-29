@@ -10,7 +10,7 @@ import {
 import { closePane } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectSession } from "../../adapters/store/selectors"
-import type { PaneKey } from "../../model/pane-layout"
+import type { PaneKey } from "../../../split-panes/model/pane-layout"
 import { AgentTile } from "../chrome/agent-tile"
 import { IconButton } from "../chrome/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
@@ -49,8 +49,11 @@ export const PaneHeader = memo(function PaneHeader({
       <ContextMenuTrigger asChild>
         <header
           className="workspace-pane-header"
+          // Held to the pane's top left as a drag's preview reshapes it.
+          data-split-keeps="top-left"
           data-tauri-drag-region={multi ? undefined : true}
-          // With more than one pane, the bar carries the pane (`adapters/dom/drag.ts`).
+          // With more than one pane, the bar carries the pane
+          // (`split-panes/adapters/dom/drag.ts`).
           data-drag-pane={multi ? pane : undefined}
         >
           <div

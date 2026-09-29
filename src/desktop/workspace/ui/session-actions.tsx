@@ -4,7 +4,7 @@
  * open it beside the focused pane (⌘-click), and its context menu.
  */
 import { shallowEqual } from "react-redux"
-import { paneShowing } from "../model/pane-layout"
+import { paneShowing } from "../../split-panes/model/pane-layout"
 import { knownToSource } from "../model/revision"
 import {
   archiveSession,

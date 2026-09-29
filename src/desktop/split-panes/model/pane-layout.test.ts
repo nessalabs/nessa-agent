@@ -19,13 +19,13 @@ import {
   type PaneLayout,
 } from "./pane-layout"
 
-/** The layout as rows of session ids per column, the way a person would draw it. */
+/** The layout as rows of item ids per column, the way a person would draw it. */
 const drawn = (layout: PaneLayout) =>
-  layout.columns.map((column) => column.panes.map((pane) => pane.sessionId))
+  layout.columns.map((column) => column.panes.map((pane) => pane.item))
 
-const keyOf = (layout: PaneLayout, sessionId: string) => {
-  const pane = paneShowing(layout, sessionId)
-  if (!pane) throw new Error(`no pane shows ${sessionId}`)
+const keyOf = (layout: PaneLayout, item: string) => {
+  const pane = paneShowing(layout, item)
+  if (!pane) throw new Error(`no pane shows ${item}`)
   return pane.key
 }
 
@@ -46,7 +46,7 @@ describe("a pane layout", () => {
   it("starts as one focused pane", () => {
     const layout = singlePane("a")
     expect(drawn(layout)).toEqual([["a"]])
-    expect(focusedPane(layout).sessionId).toBe("a")
+    expect(focusedPane(layout).item).toBe("a")
     expect(paneCount(layout)).toBe(1)
   })
 
@@ -55,7 +55,7 @@ describe("a pane layout", () => {
     const two = splitPane(one, keyOf(one, "a"), "right", "b")
     expect(drawn(two)).toEqual([["a"], ["b"]])
     expect(two.columns.map((column) => column.share)).toEqual([0.5, 0.5])
-    expect(focusedPane(two).sessionId).toBe("b")
+    expect(focusedPane(two).item).toBe("b")
   })
 
   it("splits left before the target's column", () => {
@@ -72,7 +72,7 @@ describe("a pane layout", () => {
     expect(up.columns[1].panes.map((pane) => pane.share)).toEqual([0.5, 0.25, 0.25])
   })
 
-  it("never shows one session twice", () => {
+  it("never shows one item twice", () => {
     const one = singlePane("a")
     expect(splitPane(one, keyOf(one, "a"), "right", "a")).toBe(one)
   })
@@ -111,11 +111,11 @@ describe("a pane layout", () => {
     const three = threePanes()
     expect(focusPane(three, 999)).toBe(three)
     const focused = focusPane(three, keyOf(three, "a"))
-    expect(focusedPane(focused).sessionId).toBe("a")
+    expect(focusedPane(focused).item).toBe("a")
     expect(focusPane(focused, keyOf(three, "a"))).toBe(focused)
   })
 
-  it("shows a session in a pane in place, and changes nothing when it already does", () => {
+  it("shows an item in a pane in place, and changes nothing when it already does", () => {
     const one = singlePane("a")
     expect(drawn(showInPane(one, keyOf(one, "a"), "b"))).toEqual([["b"]])
     expect(showInPane(one, keyOf(one, "a"), "a")).toBe(one)
@@ -146,14 +146,14 @@ describe("closing a pane", () => {
   it("moves focus to the next pane in reading order, or the previous", () => {
     const three = threePanes()
     const b = focusPane(three, keyOf(three, "b"))
-    expect(focusedPane(removePane(b, keyOf(three, "b"))).sessionId).toBe("c")
+    expect(focusedPane(removePane(b, keyOf(three, "b"))).item).toBe("c")
     const c = focusPane(three, keyOf(three, "c"))
-    expect(focusedPane(removePane(c, keyOf(three, "c"))).sessionId).toBe("b")
+    expect(focusedPane(removePane(c, keyOf(three, "c"))).item).toBe("b")
   })
 
   it("keeps focus where it was when another pane closes", () => {
     const three = focusPane(threePanes(), 1)
-    expect(focusedPane(removePane(three, keyOf(three, "c"))).sessionId).toBe("a")
+    expect(focusedPane(removePane(three, keyOf(three, "c"))).item).toBe("a")
   })
 
   it("ignores a pane it does not have", () => {
@@ -174,7 +174,7 @@ describe("moving panes", () => {
     const swapped = movePane(three, keyOf(three, "a"), keyOf(three, "c"), "center")
     expect(drawn(swapped)).toEqual([["c"], ["b", "a"]])
     expect(swapped.columns[0].share).toBe(three.columns[0].share)
-    expect(focusedPane(swapped).sessionId).toBe("a")
+    expect(focusedPane(swapped).item).toBe("a")
   })
 
   it("moves a pane to a side of another, keeping its key", () => {
@@ -262,7 +262,7 @@ describe("evening out", () => {
 })
 
 describe("a layout's shape", () => {
-  it("changes when panes move, and not when they are resized or show another session", () => {
+  it("changes when panes move, and not when they are resized or show another item", () => {
     const three = threePanes()
     const shape = layoutShape(three)
     expect(layoutShape(equalizePanes(three))).toBe(shape)
@@ -274,18 +274,18 @@ describe("a layout's shape", () => {
   })
 })
 
-describe("a session is never shown twice", () => {
-  it("focuses the pane already showing a session rather than show it in another", () => {
+describe("an item is never shown twice", () => {
+  it("focuses the pane already showing an item rather than show it in another", () => {
     const two = splitPane(singlePane("a"), 1, "right", "b")
     const again = showInPane(two, 1, "b")
-    expect(panesOf(again).map((pane) => pane.sessionId)).toEqual(["a", "b"])
-    expect(focusedPane(again).sessionId).toBe("b")
+    expect(panesOf(again).map((pane) => pane.item)).toEqual(["a", "b"])
+    expect(focusedPane(again).item).toBe("b")
   })
 
-  it("shows a session in the pane named, and focuses it", () => {
+  it("shows an item in the pane named, and focuses it", () => {
     const two = splitPane(singlePane("a"), 1, "right", "b")
     const shown = showInPane(two, 1, "c")
-    expect(panesOf(shown).map((pane) => pane.sessionId)).toEqual(["c", "b"])
+    expect(panesOf(shown).map((pane) => pane.item)).toEqual(["c", "b"])
     expect(focusedPane(shown).key).toBe(1)
     expect(showInPane(two, 999, "c")).toBe(two)
   })

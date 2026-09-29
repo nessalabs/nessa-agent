@@ -13,7 +13,7 @@ import {
   type PaneLayout,
 } from "./pane-layout"
 
-/** A pane's rectangle as fractions of the workspace, and its place in the grid. */
+/** A pane's rectangle as fractions of the grid, and its place in it. */
 export interface PanePlacement {
   readonly key: PaneKey
   readonly x: number
@@ -122,12 +122,12 @@ export function placements(columns: PaneLayout["columns"]): {
 
 /**
  * The room the panes have: the grid's size as laid out — never as a flight
- * of motion draws it mid-way — and the width the sidebar would give up if it
- * folded (its width and gutter; zero when it is folded already). Measured by
- * the page (`adapters/dom/measure.ts`) and handed to every command that
- * changes the layout, whoever dispatches it.
+ * of motion draws it mid-way — and `spare`, the width the host could give
+ * the grid beside it if a change needs it (a sidebar that would fold away:
+ * its width and gutter; zero when there is none to give). Measured by the
+ * host's page and handed to every change of layout, whoever asks for it.
  */
-export interface WorkspaceRoom {
+export interface PaneRoom {
   readonly width: number
   readonly height: number
   readonly spare: number
@@ -237,36 +237,36 @@ function sameGrid(a: PaneLayout, b: PaneLayout): boolean {
   )
 }
 
-/** A change of layout the room allows, and whether the sidebar folds to make it. */
+/** A change of layout the room allows, and whether it takes the host's spare room to make it. */
 export interface Arranged {
   readonly layout: PaneLayout
-  readonly foldSidebar: boolean
+  readonly takesSpare: boolean
 }
 
 /**
  * The one rule every command that changes the layout goes through — split,
  * open beside, drop, move, nudge — whoever dispatches it: `candidate` is
  * taken if it leaves every pane readable in the room, rebalanced where it
- * must be; else if it does once the sidebar folds; else not at all. A
+ * must be; else if it does in the room and its spare together; else not at all. A
  * change that only swaps panes keeps every size, and is always taken. With
  * no measurement there is no room to speak of, and nothing new is placed.
  */
 export function arrange(
   before: PaneLayout,
   candidate: PaneLayout,
-  room: WorkspaceRoom | undefined,
+  room: PaneRoom | undefined,
 ): Arranged | null {
   if (candidate === before) return null
-  if (sameGrid(before, candidate)) return { layout: candidate, foldSidebar: false }
+  if (sameGrid(before, candidate)) return { layout: candidate, takesSpare: false }
   if (!room) return null
   const here = fitted(candidate, room)
-  if (here) return { layout: here, foldSidebar: false }
+  if (here) return { layout: here, takesSpare: false }
   if (room.spare <= 0) return null
-  const folded = fitted(candidate, {
+  const widened = fitted(candidate, {
     width: room.width + room.spare,
     height: room.height,
   })
-  return folded ? { layout: folded, foldSidebar: true } : null
+  return widened ? { layout: widened, takesSpare: true } : null
 }
 
 /** The two sides of an edge, in pixels along its axis, as the room lays them out. */

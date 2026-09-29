@@ -20,12 +20,7 @@ import {
   paneCount,
   panesOf,
   type PaneKey,
-} from "../../model/pane-layout"
-import {
-  placements,
-  type EdgePlacement,
-  type PanePlacement,
-} from "../../model/pane-sizing"
+} from "../../../split-panes/model/pane-layout"
 import {
   branchSessions,
   channelActivity,
@@ -170,18 +165,6 @@ export const selectChannelIdsIn = (state: Root, sectionId: string): readonly str
 export const selectFocusedChannel = (state: Root): string | undefined =>
   focusedChannel(state.workspace)
 
-const noPlacements = { panes: [] as PanePlacement[], edges: [] as EdgePlacement[] }
-
-const selectColumns = (state: Root) => state.workspace.panes?.columns
-
-/**
- * Where every pane and edge is drawn; recomputed only when the columns change,
- * not when focus moves, so focusing a pane renders the two panes it concerns.
- */
-export const selectPlacements = createSelector([selectColumns], (columns) =>
-  columns ? placements(columns) : noPlacements,
-)
-
 export const selectPaneCount = (state: Root) =>
   state.workspace.panes ? paneCount(state.workspace.panes) : 0
 
@@ -189,17 +172,15 @@ export const selectFocusedPaneKey = (state: Root): PaneKey | null =>
   state.workspace.panes ? focusedPane(state.workspace.panes).key : null
 
 export const selectFocusedSessionId = (state: Root): string | null =>
-  state.workspace.panes ? focusedPane(state.workspace.panes).sessionId : null
+  state.workspace.panes ? focusedPane(state.workspace.panes).item : null
 
 /** The session a pane shows. */
 export const selectPaneSession = (state: Root, pane: PaneKey): string | null =>
-  state.workspace.panes
-    ? (paneByKey(state.workspace.panes, pane)?.sessionId ?? null)
-    : null
+  state.workspace.panes ? (paneByKey(state.workspace.panes, pane)?.item ?? null) : null
 
 /** The sessions on screen, in reading order. */
 export const selectShownSessionIds = createSelector([selectPanes], (panes) =>
-  panes ? panesOf(panes).map((pane) => pane.sessionId) : [],
+  panes ? panesOf(panes).map((pane) => pane.item) : [],
 )
 
 export const selectStatusCounts = createSelector([listed], statusCounts)

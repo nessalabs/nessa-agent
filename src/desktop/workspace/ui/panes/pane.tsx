@@ -1,12 +1,4 @@
-import {
-  memo,
-  startTransition,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react"
+import { memo, startTransition, useCallback, useEffect, useRef, useState } from "react"
 import { focusPane, sendMessage } from "../../adapters/store/commands"
 import {
   useWorkspaceDispatch,
@@ -24,23 +16,10 @@ import { focusedPaneAttribute } from "../../adapters/dom/focus"
 import { durationToken } from "../../../adapters/motion"
 import { usePictureInConversationsPreference } from "../../../adapters/window-preferences"
 import { HeaderSliver } from "../../../ui/header-art"
-import type { PanePlacement } from "../../model/pane-sizing"
+import type { PaneFrame } from "../../../split-panes"
+import type { PanePlacement } from "../../../split-panes/model/pane-sizing"
 import { Conversation, PaneHome } from "./conversation"
 import { PaneHeader } from "./pane-header"
-
-/** Where a pane is drawn, as the custom properties the stylesheet places it by. */
-function placementStyle(placement: PanePlacement): CSSProperties {
-  return {
-    "--cx": placement.x,
-    "--cw": placement.width,
-    "--ci": placement.column,
-    "--cn": placement.columns,
-    "--ry": placement.y,
-    "--rh": placement.height,
-    "--ri": placement.row,
-    "--rn": placement.rows,
-  } as CSSProperties
-}
 
 /**
  * One pane: its header, and a new session's home or a conversation. It
@@ -48,16 +27,19 @@ function placementStyle(placement: PanePlacement): CSSProperties {
  * session's own content is read further down, so a reply streaming here
  * renders this pane's transcript and nothing else.
  *
- * A session or another pane carried over it (`adapters/dom/drag.ts`) lands
- * by zone: a side splits, the middle opens in place or swaps. Sending a new
- * session's first message measures its home first, so the composer can glide
- * into the conversation.
+ * A session or another pane carried over it (`split-panes/adapters/dom/drag.ts`)
+ * lands by zone: a side splits, the middle opens in place or swaps. Sending a
+ * new session's first message measures its home first, so the composer can
+ * glide into the conversation.
  */
 export const Pane = memo(function Pane({
   placement,
+  frame,
   multi,
 }: {
   placement: PanePlacement
+  /** What the grid puts on the pane's root: where it is placed, and its names (`SplitPanes`). */
+  frame: PaneFrame
   multi: boolean
 }) {
   const key = placement.key
@@ -134,11 +116,7 @@ export const Pane = memo(function Pane({
   return (
     <article
       className="workspace-pane"
-      style={placementStyle(placement)}
-      data-flip="pane"
-      data-flip-id={key}
-      data-pane-key={key}
-      data-corner={placement.corner || undefined}
+      {...frame}
       data-focused={(focused && multi) || undefined}
       {...{ [focusedPaneAttribute]: focused || undefined }}
       aria-label={sessionTitle ?? (draft ? "New session" : "Empty pane")}
@@ -159,12 +137,13 @@ export const Pane = memo(function Pane({
         multi={multi}
         titleShown={listed && !headingVisible}
       />
-      <div className="workspace-pane-body">
+      <div className="workspace-pane-body" data-split-through>
         {!filled ? null : showHome ? (
           <div
             key={`home-${sessionId}`}
             ref={homeRef}
             className="workspace-pane-home"
+            data-split-keeps="middle"
             data-leaving={(!draft && arrival !== null) || undefined}
           >
             <PaneHome sessionId={sessionId} onSend={sendFromHome} />

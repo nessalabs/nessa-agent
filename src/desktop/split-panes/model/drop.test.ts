@@ -338,22 +338,20 @@ describe("what a drop leaves", () => {
     expect(moved?.layout.columns).toHaveLength(1)
   })
 
-  it("puts a session in a new pane on a side, minted the layout's next key, or in the pane's place", () => {
-    const split = dropOutcome(two, { kind: "session", sessionId: "c" }, 1, "bottom", room)
+  it("puts an item in a new pane on a side, minted the layout's next key, or in the pane's place", () => {
+    const split = dropOutcome(two, { kind: "item", item: "c" }, 1, "bottom", room)
     expect(split).toMatchObject({ does: "split", lands: two.nextKey })
     expect(
-      dropOutcome(two, { kind: "session", sessionId: "c" }, 1, "center", room),
+      dropOutcome(two, { kind: "item", item: "c" }, 1, "center", room),
     ).toMatchObject({
       does: "replace",
       lands: 1,
     })
   })
 
-  it("goes to a session already on screen, whatever the zone", () => {
+  it("goes to an item already on screen, whatever the zone", () => {
     for (const zone of zones)
-      expect(
-        dropOutcome(two, { kind: "session", sessionId: "b" }, 1, zone, room),
-      ).toMatchObject({
+      expect(dropOutcome(two, { kind: "item", item: "b" }, 1, zone, room)).toMatchObject({
         does: "go-to",
         lands: 2,
       })
@@ -361,9 +359,7 @@ describe("what a drop leaves", () => {
 
   it("offers nothing where the room refuses, or for a pane dropped on itself", () => {
     const narrow = { width: 500, height: 300, spare: 0 }
-    expect(
-      dropOutcome(two, { kind: "session", sessionId: "c" }, 1, "left", narrow),
-    ).toBeNull()
+    expect(dropOutcome(two, { kind: "item", item: "c" }, 1, "left", narrow)).toBeNull()
     expect(dropOutcome(two, { kind: "pane", pane: 1 }, 1, "left", room)).toBeNull()
   })
 })

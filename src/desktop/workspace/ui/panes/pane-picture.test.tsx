@@ -10,7 +10,9 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import { loadWorkspace, newSession, openBeside } from "../../adapters/store/commands"
-import { selectFocusedPaneKey, selectPlacements } from "../../adapters/store/selectors"
+import { paneFrame } from "../../../split-panes/testing"
+import { placements as placementsOf } from "../../../split-panes/model/pane-sizing"
+import { selectFocusedPaneKey, selectPanes } from "../../adapters/store/selectors"
 import { useHeaderImage } from "../../../adapters/header-image"
 import { ClockProvider } from "../../adapters/dom/clock"
 import { fakeSource, settle, testStore } from "../../testing"
@@ -48,19 +50,30 @@ afterEach(async () => {
   )
 })
 
+/** Where each pane is placed, as the grid places it. */
+const placed = (store: ReturnType<typeof testStore>) => {
+  const panes = selectPanes(store.getState())
+  return panes ? placementsOf(panes.columns).panes : []
+}
+
 async function panes(withHome = false) {
   const store = testStore(fakeSource())
   await store.dispatch(loadWorkspace())
   store.dispatch(openBeside({ sessionId: "c" }))
   if (withHome) store.dispatch(newSession({ beside: "bottom" }))
   await settle()
-  const placements = selectPlacements(store.getState()).panes
+  const placements = placed(store)
   await act(async () =>
     root.render(
       <Provider store={store}>
         <ClockProvider now={() => 1000}>
           {placements.map((placement) => (
-            <Pane key={placement.key} placement={placement} multi />
+            <Pane
+              key={placement.key}
+              placement={placement}
+              frame={paneFrame(placement)}
+              multi
+            />
           ))}
         </ClockProvider>
       </Provider>,
@@ -125,9 +138,7 @@ it("moves a GIF only in the focused pane; the others show its first frame", asyn
   const focused = selectFocusedPaneKey(store.getState())
   const pictureOf = (key: number | null) =>
     host.querySelector(`[data-pane-key="${key}"] [data-sliver] img`)?.getAttribute("src")
-  const other = selectPlacements(store.getState()).panes.find(
-    (placement) => placement.key !== focused,
-  )?.key
+  const other = placed(store).find((placement) => placement.key !== focused)?.key
   expect(pictureOf(focused)).toBe("blob:picture-1")
   expect(pictureOf(other ?? null)).toBe("blob:picture-2")
   await act(async () => extra.unmount())

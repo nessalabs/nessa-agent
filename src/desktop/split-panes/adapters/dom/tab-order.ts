@@ -1,8 +1,9 @@
 /**
  * Tab walks the panes in the order they are seen — down each column, then
  * across — whatever order they were opened in. A pane keeps its place in the
- * page (so a move keeps its scroll and focus: `ui/panes/pane-grid.tsx`), so
- * the browser's own order is the order of opening; at a pane's first or last
+ * page (the grid renders panes in the order they were opened, so a move
+ * keeps its scroll and focus), so the browser's own order is the order of
+ * opening; at a pane's first or last
  * stop, Tab is taken here to the next pane on screen instead, and past the
  * last to what follows the panes.
  */

@@ -11,7 +11,7 @@ import {
 } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectPaneCount, selectSession } from "../../adapters/store/selectors"
-import type { Direction, PaneKey } from "../../model/pane-layout"
+import type { Direction, PaneKey } from "../../../split-panes/model/pane-layout"
 import { MenuItem, MenuSeparator, MenuShortcut } from "../../../ui/menu"
 import { useWorkspaceFrame, type ShortcutCommand } from "../workspace-frame"
 
