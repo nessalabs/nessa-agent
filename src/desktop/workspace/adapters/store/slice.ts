@@ -15,7 +15,8 @@ import type {
   Side,
   Zone,
 } from "../../../split-panes/model/pane-layout"
-import type { PaneEdge, PaneRoom } from "../../../split-panes/model/pane-sizing"
+import type { EdgeMove } from "../../../split-panes"
+import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import type { Message, Transcript } from "../../model/transcript"
 import type {
   Initiator,
@@ -94,10 +95,8 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ room: { width: number; height: number } }>,
     ) => panes.fitPanes(state, payload),
-    resizePanes: (
-      state,
-      { payload }: Payload<{ edge: PaneEdge; fraction: number; pair: number }>,
-    ) => panes.resizePanes(state, payload),
+    resizePanes: (state, { payload }: Payload<EdgeMove>) =>
+      panes.resizePanes(state, payload),
     equalizePanes: (state) => panes.equalizePanes(state),
     paneClosed: (state, { payload }: Payload<{ pane: PaneKey; draftId?: string }>) =>
       panes.closePane(state, payload),

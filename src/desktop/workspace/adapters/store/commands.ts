@@ -38,7 +38,7 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import * as panesUseCases from "../../application/usecases/panes"
-import type { Carried } from "../../../split-panes/model/drop"
+import type { Drop } from "../../../split-panes"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import { workspaceActions } from "./slice"
 
@@ -270,17 +270,7 @@ export function measureRoom(): WorkspaceCommand<PaneRoom | undefined> {
  * through the split panes' source; an agent moves a pane with `movePane` or
  * opens a session with `dropSession`, which measure the room as they run.
  */
-export function commitDrop({
-  carried,
-  target,
-  zone,
-  room,
-}: {
-  carried: Carried
-  target: PaneKey
-  zone: Zone
-  room: PaneRoom | undefined
-}): WorkspaceCommand {
+export function commitDrop({ carried, target, zone, room }: Drop): WorkspaceCommand {
   return (dispatch) => {
     dispatch(
       carried.kind === "pane"
