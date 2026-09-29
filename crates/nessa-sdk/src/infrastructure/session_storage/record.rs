@@ -59,7 +59,7 @@ impl RecordStorage {
         self.runtime().await.map(|_| ())
     }
 
-    async fn runtime(&self) -> Result<&Runtime<SqliteStore>, StorageError> {
+    pub(super) async fn runtime(&self) -> Result<&Runtime<SqliteStore>, StorageError> {
         self.runtime
             .get_or_try_init(|| async {
                 let options = self.options.clone();
@@ -331,7 +331,7 @@ impl SessionStorageLease for RecordLease {
     }
 }
 
-fn store_error(error: event_stream::Error) -> StorageError {
+pub(super) fn store_error(error: event_stream::Error) -> StorageError {
     match error {
         event_stream::Error::StoreCorrupt(detail) => StorageError::Corrupt(detail),
         event_stream::Error::StoreInUse => StorageError::Busy,

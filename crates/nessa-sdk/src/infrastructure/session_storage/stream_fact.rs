@@ -114,6 +114,37 @@ fn schema(id: &str) -> SchemaRef {
     }
 }
 
+/// The wire tag for a validated physical frame schema. The bounded source
+/// shares this mapping with the writer's schema IDs.
+pub(crate) fn frame_tag(event: &NewEvent) -> Result<u8, FactFrameError> {
+    match (event.schema.id.as_str(), event.schema.version) {
+        (START_SCHEMA, 1) => Ok(1),
+        (PIECE_SCHEMA, 1) => Ok(2),
+        (SEAL_SCHEMA, 1) => Ok(3),
+        (ABORT_SCHEMA, 1) => Ok(4),
+        _ => Err(FactFrameError::Conflict),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn schema_for_tag(tag: u8) -> Result<SchemaRef, FactFrameError> {
+    match tag {
+        1 => Ok(schema(START_SCHEMA)),
+        2 => Ok(schema(PIECE_SCHEMA)),
+        3 => Ok(schema(SEAL_SCHEMA)),
+        4 => Ok(schema(ABORT_SCHEMA)),
+        _ => Err(FactFrameError::Invalid),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn validate_start_offset(start: &NewEvent, position: u64) -> Result<(), FactFrameError> {
+    if parse_start(start)?.attempt_start != position {
+        return Err(FactFrameError::Invalid);
+    }
+    Ok(())
+}
+
 fn event(
     key: &FactKey,
     attempt_start: u64,
@@ -385,7 +416,7 @@ fn abort_event(start: &NewEvent, prefix_end: u64) -> Result<NewEvent, FactFrameE
     ))
 }
 
-fn validate_abort_prefix(
+pub(crate) fn validate_abort_prefix(
     prefix: &[NewEvent],
     abort: &NewEvent,
     start_offset: u64,
