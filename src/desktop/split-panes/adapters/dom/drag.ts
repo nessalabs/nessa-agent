@@ -74,6 +74,13 @@ import { paneLimits } from "../../model/pane-layout"
 import { placements, type PanePlacement, type PaneRoom } from "../../model/pane-sizing"
 import { durationToken, motionToken } from "../../../adapters/motion"
 
+/**
+ * Set on the host's root while a drop shown would take the room the host can
+ * give up (`takesSpare`): what the host's stylesheet previews the giving-up by.
+ * Published here, so a stylesheet and its tests name it from this one place.
+ */
+export const takesSpareAttribute = "data-drag-takes-spare"
+
 /** Marks the preview's own motion. */
 const dragPreview = "split-panes-preview"
 
@@ -649,8 +656,8 @@ export function useSplitPanesDrag(
             )
           : [],
       )
-      if (scope.hasAttribute("data-drag-takes-spare") !== Boolean(outcome?.takesSpare))
-        scope.toggleAttribute("data-drag-takes-spare", Boolean(outcome?.takesSpare))
+      if (scope.hasAttribute(takesSpareAttribute) !== Boolean(outcome?.takesSpare))
+        scope.toggleAttribute(takesSpareAttribute, Boolean(outcome?.takesSpare))
       if (outcome && landing && !("dragReflow" in scope.dataset))
         scope.dataset.dragReflow = ""
       if (!reducedMotion())
@@ -1083,7 +1090,7 @@ export function useSplitPanesDrag(
         made.drawing.shape.motion?.cancel()
         made.drawing.shape.counter?.cancel()
         ;[...previewed.keys()].forEach(letGo)
-        scope.removeAttribute("data-drag-takes-spare")
+        scope.removeAttribute(takesSpareAttribute)
         tidy(made)
         landed(made)
         return
@@ -1091,7 +1098,7 @@ export function useSplitPanesDrag(
       preview(made, null, null)
       const back = flyTo(made, made.home, true)
       const panes = [...previewed.keys()]
-      scope.removeAttribute("data-drag-takes-spare")
+      scope.removeAttribute(takesSpareAttribute)
       tidy(made)
       void back.finished
         .catch(() => undefined)
@@ -1117,7 +1124,7 @@ export function useSplitPanesDrag(
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
           // The host's preview of taking its spare room, measured through by the commit, goes now.
-          scope.removeAttribute("data-drag-takes-spare")
+          scope.removeAttribute(takesSpareAttribute)
           letGoOfDragPreview(scope)
           previewed.clear()
         }),

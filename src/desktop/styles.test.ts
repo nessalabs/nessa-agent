@@ -4,6 +4,7 @@
  */
 import { readFileSync } from "node:fs"
 import { expect, it } from "vitest"
+import { takesSpareAttribute } from "./split-panes"
 
 const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8")
 
@@ -109,10 +110,28 @@ it("keeps the list's inline title out from under the window's controls while a d
     new URL("./workspace/ui/session-list/session-list.css", import.meta.url),
     "utf8",
   )
-  const selector = '.workspace[data-drag-takes-spare][data-sidebar="open"]'
+  // The attribute is the drag's own (`takesSpareAttribute`), never retyped.
+  const selector = `.workspace[${takesSpareAttribute}][data-sidebar="open"]`
+  expect(sheet).toContain(selector)
   const body = sheet.slice(sheet.indexOf(selector)).split("}")[0]
   expect(body).toContain(".desktop-column-title")
   expect(body).toMatch(/opacity:\s*0;/)
+})
+
+it("previews a fold on the attribute the drag sets, in every sheet that previews one", () => {
+  // A rule on any other name matches nothing: the preview silently stops.
+  const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8")
+  for (const path of [
+    "./workspace/ui/chrome/chrome.css",
+    "./workspace/ui/session-list/session-list.css",
+  ]) {
+    const sheet = read(path)
+    const named = [...sheet.matchAll(/\[(data-drag-[a-z-]+)\]\[data-sidebar/g)].map(
+      (match) => match[1],
+    )
+    expect(named.length, path).toBeGreaterThan(0)
+    for (const name of named) expect(name, path).toBe(takesSpareAttribute)
+  }
 })
 
 it("names what a flight restyles, so beginning one restyles a few elements, not every one in every pane", () => {
