@@ -1093,7 +1093,7 @@ html:not(.dark) [data-surface] {
   animation: none;
 }
 
-.workspace-panes[data-multi]
+.split-panes-grid[data-multi]
   .workspace-pane:not([data-focused])
   .desktop-header[data-sliver] {
   opacity: 0.24;

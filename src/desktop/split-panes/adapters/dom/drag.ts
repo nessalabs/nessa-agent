@@ -75,7 +75,7 @@ import { placements, type PanePlacement, type PaneRoom } from "../../model/pane-
 import { durationToken, motionToken } from "../../../adapters/motion"
 
 /** Marks the preview's own motion. */
-const dragPreview = "workspace-drag-preview"
+const dragPreview = "split-panes-preview"
 
 /** The preview's animations under each drag root, so they can be let go without a search. */
 const previews = new WeakMap<Element, Set<Animation>>()
@@ -465,7 +465,7 @@ export function useSplitPanesDrag(
     if (!scope) return
 
     const announcer = document.createElement("div")
-    announcer.className = "workspace-visually-hidden"
+    announcer.className = "split-panes-announcer"
     announcer.setAttribute("role", "status")
     announcer.setAttribute("aria-live", "polite")
     scope.append(announcer)
@@ -624,7 +624,7 @@ export function useSplitPanesDrag(
       }
       const fresh = !drawing.outline
       const element = drawing.outline ?? document.createElement("div")
-      element.className = "workspace-drag-placeholder"
+      element.className = "split-panes-placeholder"
       Object.assign(element.style, {
         transform: `translate(${box.left}px, ${box.top}px)`,
         width: `${box.width}px`,
@@ -795,7 +795,7 @@ export function useSplitPanesDrag(
       size: { width: number; height: number },
     ) => {
       const ghost = document.createElement("div")
-      ghost.className = "workspace-drag-ghost"
+      ghost.className = "split-panes-ghost"
       ghost.setAttribute("aria-hidden", "true")
       ghost.inert = true
       Object.assign(ghost.style, {
@@ -804,7 +804,7 @@ export function useSplitPanesDrag(
         transform: `translate(${-size.width / 2}px, ${-size.height / 2}px)`,
       })
       const inner = document.createElement("div")
-      inner.className = "workspace-drag-ghost-inner"
+      inner.className = "split-panes-ghost-inner"
       ghost.append(inner)
       const stripped = [...alwaysStripped, ...(options.stripped ?? [])]
       const picture = (
@@ -855,7 +855,7 @@ export function useSplitPanesDrag(
         if (pane) {
           const copy = picture(pane, onScreenOnly)
           copy.removeAttribute("style")
-          copy.classList.add("workspace-drag-ghost-pane")
+          copy.classList.add("split-panes-ghost-pane")
           const typed = pane.querySelectorAll("textarea")
           copy.querySelectorAll("textarea").forEach((field, index) => {
             field.value = typed[index]?.value ?? ""
@@ -871,7 +871,7 @@ export function useSplitPanesDrag(
         picture,
         focusedPane: layout ? paneElement(layout.focused) : null,
       })
-      copy.classList.add("workspace-drag-ghost-pane")
+      copy.classList.add("split-panes-ghost-pane")
       inner.append(copy)
       return { ghost, inner }
     }
@@ -939,14 +939,14 @@ export function useSplitPanesDrag(
       const { ghost, inner } = ghostFor(carried, pressed, size)
       const grab = { x: x - home.left, y: y - home.top }
       const layer = document.createElement("div")
-      layer.className = "workspace-drag-layer"
+      layer.className = "split-panes-layer"
       layer.setAttribute("aria-hidden", "true")
       const carrier = document.createElement("div")
-      carrier.className = "workspace-drag-carrier"
+      carrier.className = "split-panes-carrier"
       carrier.style.transform = `translate(${x}px, ${y}px)`
       // The copy is drawn about its centre; the glider holds it where it was grabbed.
       const glider = document.createElement("div")
-      glider.className = "workspace-drag-glider"
+      glider.className = "split-panes-glider"
       glider.style.transform = `translate(${size.width / 2 - grab.x}px, ${size.height / 2 - grab.y}px)`
       // On the page, unseen, until the press becomes a drag.
       ghost.dataset.waiting = ""
@@ -955,7 +955,7 @@ export function useSplitPanesDrag(
       layer.append(carrier)
       scope.append(layer)
       const shield = document.createElement("div")
-      shield.className = "workspace-drag-shield"
+      shield.className = "split-panes-shield"
       shield.setAttribute("aria-hidden", "true")
       return {
         layer,

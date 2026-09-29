@@ -1,9 +1,10 @@
 /*
- * The chat area and its panes. Panes are placed from the layout's fractions
- * (`--cx`, `--cw`, … set by the pane), so one keeps its identity when it
- * moves. A change of layout lands at once; each pane then travels from where
- * it was by transform alone (`split-panes/adapters/dom/flip.tsx`), so no
- * frame of the motion reflows text.
+ * The chat area and its panes. The grid and where each pane is placed are the
+ * split panes' (`split-panes/ui/split-panes.css`): a pane is placed from the
+ * layout's fractions, so one keeps its identity when it moves, and a change
+ * of layout lands at once, each pane then travelling from where it was by
+ * transform alone (`split-panes/adapters/dom/flip.tsx`), so no frame of the
+ * motion reflows text. What a pane looks like is here.
  */
 .workspace-chat {
   display: flex;
@@ -17,19 +18,7 @@
   padding-left: var(--desktop-gutter);
 }
 
-.workspace-panes {
-  --g: var(--desktop-gutter);
-  position: relative;
-  flex: 1;
-  min-width: 0;
-}
-
 .workspace-pane {
-  position: absolute;
-  left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g));
-  width: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cw));
-  top: calc((100% - (var(--rn) - 1) * var(--g)) * var(--ry) + var(--ri) * var(--g));
-  height: calc((100% - (var(--rn) - 1) * var(--g)) * var(--rh));
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -76,11 +65,11 @@ html:not(.dark) .workspace-pane[data-focused] {
     0 16px 40px -18px rgb(0 0 0 / 24%);
 }
 
-.workspace-panes[data-multi] .workspace-pane:not([data-focused]) {
+.split-panes-grid[data-multi] .workspace-pane:not([data-focused]) {
   background: color-mix(in oklab, var(--foreground) 2%, transparent);
 }
 
-html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused]) {
+html:not(.dark) .split-panes-grid[data-multi] .workspace-pane:not([data-focused]) {
   background: color-mix(in oklab, var(--background) 30%, white);
 }
 
@@ -129,10 +118,6 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
   box-shadow: none;
 }
 
-.workspace:is([data-flipping], [data-drag-reflow]) .workspace-pane-edge {
-  visibility: hidden;
-}
-
 /*
  * The picture's band waits out of sight while panes travel, and fades back
  * once they land: it begins after the window's controls only where a pane
@@ -142,46 +127,6 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
 .workspace:is([data-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {
   opacity: 0;
   transition: none;
-}
-
-/* ——— Edges between panes: the gutter itself, lit near the pointer ——— */
-
-.workspace-panes > .workspace-pane-edge {
-  position: absolute;
-}
-
-.workspace-panes > .workspace-pane-edge[data-axis="x"] {
-  top: 0;
-  bottom: 0;
-  left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g));
-}
-
-.workspace-panes > .workspace-pane-edge[data-axis="y"] {
-  left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g));
-  width: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cw));
-  top: calc((100% - (var(--rn) - 1) * var(--g)) * var(--ry) + var(--ri) * var(--g));
-  height: var(--g);
-  cursor: row-resize;
-}
-
-.workspace-panes > .workspace-pane-edge[data-axis="x"]::before {
-  inset: var(--desktop-radius) 2.5px;
-  background: radial-gradient(
-    ellipse 3px 90px at 50% calc(var(--workspace-glow, 50%) - var(--desktop-radius)),
-    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
-    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
-    transparent 100%
-  );
-}
-
-.workspace-panes > .workspace-pane-edge[data-axis="y"]::before {
-  inset: 2.5px var(--desktop-radius);
-  background: radial-gradient(
-    ellipse 90px 3px at calc(var(--workspace-glow, 50%) - var(--desktop-radius)) 50%,
-    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
-    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
-    transparent 100%
-  );
 }
 
 /* ——— The pane's header ——— */
@@ -213,14 +158,14 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
   transition: opacity var(--desktop-base) ease;
 }
 
-.workspace-panes[data-multi] .workspace-pane-header {
+.split-panes-grid[data-multi] .workspace-pane-header {
   cursor: grab;
   /* Carries the pane, never the window (`pane-header.tsx`). */
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
 
-.workspace-panes[data-multi] .workspace-pane-header:active {
+.split-panes-grid[data-multi] .workspace-pane-header:active {
   cursor: grabbing;
 }
 
@@ -236,7 +181,7 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
   padding-left: var(--desktop-titlebar-safe-start);
 }
 
-.workspace-panes[data-multi] .workspace-pane:not([data-focused]) .workspace-pane-header {
+.split-panes-grid[data-multi] .workspace-pane:not([data-focused]) .workspace-pane-header {
   opacity: 0.72;
 }
 
@@ -319,7 +264,7 @@ html:not(.dark) .workspace-panes[data-multi] .workspace-pane:not([data-focused])
   margin: 0;
 }
 
-.workspace-panes > .workspace-empty {
+.split-panes-grid > .workspace-empty {
   position: absolute;
   inset: 0;
 }

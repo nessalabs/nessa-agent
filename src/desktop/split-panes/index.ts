@@ -35,4 +35,5 @@ export { useSplitPanesDrag, type SplitPanesDragOptions } from "./adapters/dom/dr
 export { FlipScope } from "./adapters/dom/flip"
 export { paneTabOrder } from "./adapters/dom/tab-order"
 export { ResizeEdge } from "./ui/resize-edge"
+export { paneFrame, SplitPanes, type PaneFrame, type ShownPane } from "./ui/split-panes"
 export type { Drop, EdgeMove, SplitPanesSource } from "./application/ports"

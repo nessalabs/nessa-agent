@@ -39,11 +39,7 @@ import {
 } from "../../application/workspace-state"
 import * as panesUseCases from "../../application/usecases/panes"
 import type { Carried } from "../../../split-panes/model/drop"
-import {
-  edgeSides as edgeSidesIn,
-  type PaneEdge,
-  type PaneRoom,
-} from "../../../split-panes/model/pane-sizing"
+import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import { workspaceActions } from "./slice"
 
 export const {
@@ -256,21 +252,6 @@ export function fitPanes(): WorkspaceCommand {
   return (dispatch, _getState, { measure }) => {
     const room = measure()
     if (room) dispatch(panesFitted({ room }))
-  }
-}
-
-/**
- * The two sides of an edge between panes, in pixels, as the room the page
- * measures lays them out — where a drag of it starts from, whatever a flight
- * of motion draws meanwhile.
- */
-export function edgeSides(
-  edge: PaneEdge,
-): WorkspaceCommand<{ before: number; after: number } | null> {
-  return (_dispatch, getState, { measure }) => {
-    const panes = getState().workspace.panes
-    const room = measure()
-    return panes && room ? edgeSidesIn(panes, edge, room) : null
   }
 }
 

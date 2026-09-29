@@ -28,7 +28,12 @@ import { draggedEdge } from "../../../model/side-column"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../../ui/history-buttons"
 import { workspaceDragOptions } from "../../adapters/dom/split-panes-drag"
-import { FlipScope, ResizeEdge, useSplitPanesDrag } from "../../../split-panes"
+import {
+  FlipScope,
+  ResizeEdge,
+  useSplitPanesDrag,
+  type SplitPanesSource,
+} from "../../../split-panes"
 import { useFocusFollowsPane } from "../../adapters/dom/focus"
 import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortcuts"
 import { useFitOnResize } from "../../adapters/dom/window-width"
@@ -416,6 +421,7 @@ export function WorkspaceShell({
                 sidebarWidth={sidebarWidth}
                 listWidth={listWidth}
                 top={top}
+                splitPanes={splitPanes}
               />
               <OverviewLayer root={root} />
               {switcher ? (
@@ -462,6 +468,7 @@ const Columns = memo(function Columns({
   sidebarWidth,
   listWidth,
   top,
+  splitPanes,
 }: {
   region: SidebarRegion
   root: RefObject<HTMLElement | null>
@@ -470,6 +477,8 @@ const Columns = memo(function Columns({
   sidebarWidth: number
   listWidth: number
   top: ReturnType<typeof IconButton> | undefined
+  /** The panes' source, which the chat area's grid and the window's drag share. */
+  splitPanes: SplitPanesSource
 }) {
   const dispatch = useWorkspaceDispatch()
   const sidebarFrom = useRef<number | null>(0)
@@ -520,7 +529,7 @@ const Columns = memo(function Columns({
           onMove={dragList}
         />
       ) : null}
-      <PaneGrid />
+      <PaneGrid source={splitPanes} />
     </>
   )
 })

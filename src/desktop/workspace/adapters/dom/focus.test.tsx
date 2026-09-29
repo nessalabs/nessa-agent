@@ -45,7 +45,7 @@ function Page() {
       <button type="button" data-list-row>
         A row in a list
       </button>
-      <div className="workspace-panes">
+      <div className="split-panes-grid" data-split-grid>
         {(panes ? panesOf(panes) : []).map((pane, index) => (
           <article
             key={pane.key}

@@ -100,7 +100,7 @@ export function useFocusFollowsPane(
       if (!lost && active.closest('[role="dialog"], [role="menu"], [aria-modal="true"]'))
         return
       const inFocused = !lost && active.closest(`[${focusedPaneAttribute}]`) !== null
-      const grid = scope.querySelector(".workspace-panes")
+      const grid = scope.querySelector("[data-split-grid]")
       const inOtherPane = !lost && !inFocused && grid?.contains(active) === true
       if (lost || inOtherPane || (moved && !inFocused)) follow()
     }
@@ -124,7 +124,7 @@ export function useFocusFollowsPane(
     const onFocusIn = (event: FocusEvent) => {
       const target = event.target as Element | null
       last =
-        target && scope.querySelector(".workspace-panes")?.contains(target)
+        target && scope.querySelector("[data-split-grid]")?.contains(target)
           ? target
           : null
     }

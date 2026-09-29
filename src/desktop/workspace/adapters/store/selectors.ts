@@ -22,11 +22,6 @@ import {
   type PaneKey,
 } from "../../../split-panes/model/pane-layout"
 import {
-  placements,
-  type EdgePlacement,
-  type PanePlacement,
-} from "../../../split-panes/model/pane-sizing"
-import {
   branchSessions,
   channelActivity,
   groupByStatus,
@@ -169,18 +164,6 @@ export const selectChannelIdsIn = (state: Root, sectionId: string): readonly str
 /** The channel of the session in the focused pane. */
 export const selectFocusedChannel = (state: Root): string | undefined =>
   focusedChannel(state.workspace)
-
-const noPlacements = { panes: [] as PanePlacement[], edges: [] as EdgePlacement[] }
-
-const selectColumns = (state: Root) => state.workspace.panes?.columns
-
-/**
- * Where every pane and edge is drawn; recomputed only when the columns change,
- * not when focus moves, so focusing a pane renders the two panes it concerns.
- */
-export const selectPlacements = createSelector([selectColumns], (columns) =>
-  columns ? placements(columns) : noPlacements,
-)
 
 export const selectPaneCount = (state: Root) =>
   state.workspace.panes ? paneCount(state.workspace.panes) : 0

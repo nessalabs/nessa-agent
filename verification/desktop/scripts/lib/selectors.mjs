@@ -22,7 +22,7 @@ export const css = {
   // Panes (data-pane-key is the pane's identity; data-pane-focused marks the focused one)
   pane: "[data-pane-key]",
   focusedPane: "[data-pane-key][data-pane-focused]",
-  paneGrid: ".workspace-panes", // class: the grid the panes are laid out in — the box the drag measures
+  paneGrid: "[data-split-grid]", // the grid the panes are laid out in — the box the drag measures
   paneHeader: ".workspace-pane-header", // class: a pane's header, which carries the drag
   paneDragHandle: "[data-drag-pane]",
   paneTitle: "[data-drag-pane] .workspace-pane-title", // class: where a pane is grabbed by its title
@@ -31,11 +31,11 @@ export const css = {
   composer: "[data-pane-key] textarea",
   transcript: ".workspace-transcript", // class
   dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot
-  dragLayer: ".workspace-drag-layer", // class: what is carried is drawn in it, below the titlebar row
-  dragGhost: ".workspace-drag-ghost", // class: the translucent copy the pointer carries
-  dragCarrier: ".workspace-drag-carrier", // class: holds the copy at the pointer
-  dragPlaceholder: ".workspace-drag-placeholder", // class: where a drop would land
-  dragShield: ".workspace-drag-shield", // class: holds the pointer while carrying
+  dragLayer: ".split-panes-layer", // class: what is carried is drawn in it, below the titlebar row
+  dragGhost: ".split-panes-ghost", // class: the translucent copy the pointer carries
+  dragCarrier: ".split-panes-carrier", // class: holds the copy at the pointer
+  dragPlaceholder: ".split-panes-placeholder", // class: where a drop would land
+  dragShield: ".split-panes-shield", // class: holds the pointer while carrying
   lifted: "[data-lifted]",
   dragging: "[data-workspace][data-dragging]",
   dropAnnouncer: '[data-workspace] [role="status"][aria-live="polite"]',
@@ -172,7 +172,7 @@ export const keys = {
 
 /**
  * How the drop announcer says a zone (`saying` in
- * src/desktop/workspace/adapters/dom/drag.ts): a vertical zone is "above" or
+ * src/desktop/split-panes/adapters/dom/drag.ts): a vertical zone is "above" or
  * "below" the pane — never "above of" — a side zone "left of" or "right of".
  */
 export const zoneSaid = {

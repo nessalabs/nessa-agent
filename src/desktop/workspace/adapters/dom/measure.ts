@@ -15,7 +15,7 @@ import { paneLimits } from "../../../split-panes/model/pane-layout"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 
 export function measureWorkspace(page: ParentNode = document): PaneRoom | undefined {
-  const grid = page.querySelector<HTMLElement>(".workspace-panes")
+  const grid = page.querySelector<HTMLElement>("[data-split-grid]")
   if (!grid) return undefined
   const root = grid.closest<HTMLElement>("[data-workspace]")
   const sidebar =

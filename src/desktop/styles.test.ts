@@ -119,10 +119,9 @@ it("names what a flight restyles, so beginning one restyles a few elements, not 
   // `.workspace[data-flipping] .workspace-pane > *` made the browser restyle all
   // ~1,100 elements of four panes as a flight began: a rule whose subject is any
   // element cannot be aimed. Named, it restyles two per pane.
-  const sheet = readFileSync(
-    new URL("./workspace/ui/panes/panes.css", import.meta.url),
-    "utf8",
-  )
+  const sheet = ["./workspace/ui/panes/panes.css", "./split-panes/ui/split-panes.css"]
+    .map((path) => readFileSync(new URL(path, import.meta.url), "utf8"))
+    .join("\n")
   const flightRules =
     sheet.match(/^[^{}/]*\[data-(?:flipping|drag-reflow)\][^{]*\{/gm) ?? []
   expect(flightRules.length).toBeGreaterThan(0)
@@ -215,18 +214,18 @@ it("moves Settings' sidebar by transform, never by animating its width", () => {
 })
 
 it("draws everything carried in a layer that begins below the titlebar row and clips there", () => {
-  const chrome = readFileSync(
-    new URL("./workspace/ui/chrome/chrome.css", import.meta.url),
+  const sheet = readFileSync(
+    new URL("./split-panes/ui/split-panes.css", import.meta.url),
     "utf8",
   )
-  const body = (selector: string) => chrome.slice(chrome.indexOf(selector)).split("}")[0]
+  const body = (selector: string) => sheet.slice(sheet.indexOf(selector)).split("}")[0]
   // Nothing carried is painted under the window's controls, whatever it passes over.
-  const layer = body(".workspace-drag-layer {")
+  const layer = body(".split-panes-layer {")
   expect(layer).toMatch(/inset:\s*var\(--desktop-titlebar-height\) 0 0 0/)
   expect(layer).toMatch(/overflow:\s*clip/)
   expect(layer).toMatch(/position:\s*fixed/)
   // The carrier inside it is placed back at the window's origin, not fixed past the clip.
-  const carrier = body(".workspace-drag-carrier {")
+  const carrier = body(".split-panes-carrier {")
   expect(carrier).toMatch(/position:\s*absolute/)
   expect(carrier).toMatch(/top:\s*calc\(-1 \* var\(--desktop-titlebar-height\)\)/)
 })

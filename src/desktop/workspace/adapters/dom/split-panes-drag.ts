@@ -31,7 +31,7 @@ export function carriedSession(store: DesktopStore): SplitPanesDragOptions["copy
     const transcript = document.createElement("div")
     // Its latest words at the foot, as a conversation opens: set by the copy's
     // own layout, not a scroll (`chrome.css`).
-    transcript.className = "workspace-transcript workspace-drag-ghost-latest"
+    transcript.className = "workspace-transcript workspace-carried-latest"
     const content = document.createElement("div")
     content.className = "workspace-transcript-inner"
     const heading = document.createElement("div")

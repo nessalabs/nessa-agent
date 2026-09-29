@@ -1,0 +1,270 @@
+/*
+ * Split panes: the grid and where its panes are placed, the edges that resize
+ * them, and what a drag draws (`adapters/dom/drag.ts`). A pane's own look —
+ * its surface, header, focus — is its host's; what is here is what places,
+ * resizes and carries it. Panes are placed from the layout's fractions
+ * (`--cx`, `--cw`, … the frame sets on each pane's root), so one keeps its
+ * identity when it moves; a change of layout lands at once and each pane
+ * travels from where it was by transform alone (`adapters/dom/flip.tsx`).
+ */
+
+/* ——— The grid ——— */
+
+.split-panes-grid {
+  --g: var(--desktop-gutter);
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+/* A pane at its placement: the frame's custom properties, as the grid's fractions. */
+.split-panes-grid > [data-pane-key] {
+  position: absolute;
+  left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g));
+  width: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cw));
+  top: calc((100% - (var(--rn) - 1) * var(--g)) * var(--ry) + var(--ri) * var(--g));
+  height: calc((100% - (var(--rn) - 1) * var(--g)) * var(--rh));
+}
+
+/* ——— Resize edges: the gutter itself, lit near the pointer ——— */
+
+.split-panes-edge {
+  position: relative;
+  width: var(--desktop-gutter);
+  flex: none;
+  cursor: col-resize;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* A glow runs along the edge near the pointer, in the theme's edge light. */
+.split-panes-edge::before {
+  content: "";
+  position: absolute;
+  inset: calc(var(--desktop-gutter) + var(--desktop-radius)) 2.5px;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 3px 90px at 50%
+      calc(var(--split-panes-glow, 50%) - var(--desktop-gutter) - var(--desktop-radius)),
+    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
+    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
+    transparent 100%
+  );
+  opacity: 0;
+  transition: opacity var(--desktop-fast) ease;
+}
+
+.split-panes-edge:hover::before,
+.split-panes-edge:focus-visible::before,
+.split-panes-edge:active::before {
+  opacity: 1;
+}
+
+/* While an edge is dragged the cursor holds everywhere, and nothing selects (`pointer-resize.ts`). */
+html[data-split-panes-resizing],
+html[data-split-panes-resizing] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+html[data-split-panes-resizing="y"],
+html[data-split-panes-resizing="y"] * {
+  cursor: row-resize !important;
+}
+
+/* An edge between panes, placed as the panes are. */
+.split-panes-grid > .split-panes-pane-edge {
+  position: absolute;
+}
+
+.split-panes-grid > .split-panes-pane-edge[data-axis="x"] {
+  top: 0;
+  bottom: 0;
+  left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g));
+}
+
+.split-panes-grid > .split-panes-pane-edge[data-axis="y"] {
+  left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g));
+  width: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cw));
+  top: calc((100% - (var(--rn) - 1) * var(--g)) * var(--ry) + var(--ri) * var(--g));
+  height: var(--g);
+  cursor: row-resize;
+}
+
+.split-panes-grid > .split-panes-pane-edge[data-axis="x"]::before {
+  inset: var(--desktop-radius) 2.5px;
+  background: radial-gradient(
+    ellipse 3px 90px at 50% calc(var(--split-panes-glow, 50%) - var(--desktop-radius)),
+    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
+    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
+    transparent 100%
+  );
+}
+
+.split-panes-grid > .split-panes-pane-edge[data-axis="y"]::before {
+  inset: 2.5px var(--desktop-radius);
+  background: radial-gradient(
+    ellipse 90px 3px at calc(var(--split-panes-glow, 50%) - var(--desktop-radius)) 50%,
+    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
+    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
+    transparent 100%
+  );
+}
+
+/*
+ * While panes travel — a flight (`data-flipping`), or a drag's preview of
+ * where a drop would put them (`data-drag-reflow`) — the edges between them
+ * wait out of sight.
+ */
+:is([data-flipping], [data-drag-reflow]) .split-panes-pane-edge {
+  visibility: hidden;
+}
+
+/* ——— Carrying a pane or an item (`adapters/dom/drag.ts`) ——— */
+
+/*
+ * The copy carried: the pane itself, cloned once, at its own size. The
+ * carrier is moved to the pointer, one to one; the copy is drawn about it,
+ * gliding from where it was grabbed until its centre is under the pointer
+ * (`drag.ts`). Translucent and lifted. On a drop its box scales into the
+ * place it takes while its content counter-scales, so it never lays out again.
+ */
+/*
+ * Everything carried is drawn in this layer, which begins below the titlebar
+ * row and clips what passes above it: nothing carried is painted under the
+ * window's controls (ADR 238 › _Drag and drop_). The carrier inside it is
+ * placed back at the window's origin, so it moves in the pointer's own
+ * coordinates.
+ */
+.split-panes-layer {
+  position: fixed;
+  z-index: 60;
+  inset: var(--desktop-titlebar-height) 0 0 0;
+  overflow: clip;
+  pointer-events: none;
+}
+
+.split-panes-carrier {
+  position: absolute;
+  top: calc(-1 * var(--desktop-titlebar-height));
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  will-change: transform;
+}
+
+/* Where the copy was grabbed, gliding to where its centre is under the pointer. */
+.split-panes-glider {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  will-change: transform;
+}
+
+.split-panes-ghost {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /*
+   * Its size set once per shape it takes (`drag.ts`): nothing inside it lays
+   * out anything outside.
+   */
+  contain: strict;
+  overflow: hidden;
+  border-radius: var(--desktop-radius);
+  opacity: 0.85;
+  pointer-events: none;
+  transform-origin: 0 0;
+  will-change: transform;
+  /* Lifted: one soft shadow, cheap enough to paint on the frame the drag begins. */
+  box-shadow: 0 18px 36px -14px rgb(0 0 0 / 65%);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Made as the press begins, it waits on the page unseen until the press becomes a drag. */
+.split-panes-ghost[data-waiting] {
+  opacity: 0;
+}
+
+.split-panes-ghost-inner {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+}
+
+/* The pane copied, or what the host made of an item, filling the copy. */
+.split-panes-ghost .split-panes-ghost-pane {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  animation: none;
+  background: color-mix(in oklab, var(--background) 88%, var(--foreground));
+}
+
+/* A picture: nothing in it blurs what is behind, moves on its own, or eases. */
+.split-panes-ghost * {
+  animation: none !important;
+  transition: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/*
+ * Where the drop would land: a calm placeholder at exactly the rect the pane
+ * will take — a soft fill and a hairline in the theme's edge light, a pane's
+ * radius. It moves between zones on its own; less motion, it moves at once.
+ */
+.split-panes-placeholder {
+  position: fixed;
+  contain: strict;
+  z-index: 59;
+  top: 0;
+  left: 0;
+  border-radius: var(--desktop-radius);
+  background: color-mix(in oklab, var(--desktop-light-edge) 9%, transparent);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklab, var(--desktop-light-edge) 40%, transparent);
+  pointer-events: none;
+  animation: split-panes-fade-in var(--desktop-fast) ease both;
+  transition:
+    transform var(--desktop-base) var(--desktop-ease),
+    width var(--desktop-base) var(--desktop-ease),
+    height var(--desktop-base) var(--desktop-ease);
+}
+
+@keyframes split-panes-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/*
+ * Over the page while something is carried: the grabbing hand wherever the
+ * pointer goes, and nothing under it hovered or selected. One element of its
+ * own, so beginning a drag restyles it alone, not every element of the window
+ * as an inherited cursor or selection on the root would.
+ */
+.split-panes-shield {
+  position: fixed;
+  z-index: 58;
+  inset: 0;
+  contain: strict;
+  cursor: grabbing;
+}
+
+/* The zone, said to assistive technology and drawn nowhere. */
+.split-panes-announcer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

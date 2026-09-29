@@ -12,9 +12,9 @@ it("measures the grid as laid out, whatever transform a flight draws it with", (
   const page = document.createElement("div")
   page.innerHTML = `<div data-workspace data-sidebar="open">
       <aside class="workspace-sidebar"></aside>
-      <div class="workspace-panes" style="transform: scale(0.5)"></div>
+      <div data-split-grid style="transform: scale(0.5)"></div>
     </div>`
-  const grid = page.querySelector<HTMLElement>(".workspace-panes")!
+  const grid = page.querySelector<HTMLElement>("[data-split-grid]")!
   box(grid, 900, 700)
   // What a flight would report mid-way; the room must not read it.
   grid.getBoundingClientRect = () => new DOMRect(0, 0, 450, 350)
@@ -26,9 +26,9 @@ it("counts no spare room for a sidebar already folded, and no room without a gri
   const page = document.createElement("div")
   page.innerHTML = `<div data-workspace data-sidebar="closed">
       <aside class="workspace-sidebar"></aside>
-      <div class="workspace-panes"></div>
+      <div data-split-grid></div>
     </div>`
-  box(page.querySelector<HTMLElement>(".workspace-panes")!, 900, 700)
+  box(page.querySelector<HTMLElement>("[data-split-grid]")!, 900, 700)
   expect(measureWorkspace(page)?.spare).toBe(0)
   expect(measureWorkspace(document.createElement("div"))).toBeUndefined()
 })
