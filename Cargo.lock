@@ -2992,6 +2992,7 @@ dependencies = [
  "libc",
  "markdown",
  "nessa-local-storage",
+ "nessa-sync",
  "percent-encoding",
  "rusqlite",
  "serde",
@@ -3041,6 +3042,14 @@ dependencies = [
  "tungstenite",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "nessa-sync"
+version = "0.1.0"
+source = "git+https://github.com/nessalabs/sync-engine?rev=1044e56f2fc1eaa2e165b98d31041c0541d5a273#1044e56f2fc1eaa2e165b98d31041c0541d5a273"
+dependencies = [
+ "sha2",
 ]
 
 [[package]]

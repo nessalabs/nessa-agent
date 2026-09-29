@@ -135,3 +135,39 @@ An inline fact has one start record if the complete payload fits 64 KiB. Otherwi
 6. Reject a changed complete body with no seal before it can be aborted. Fail A, then B in an extended two-decision save, and verify exact full-sequence retry and unresolved load. Fail physical cleanup after Reset, restart, and verify the retired SQLite rows and original prompt payload are gone before erasure succeeds. At the gateway, a lost cleanup acknowledgement keeps the tombstone unfinished; a retry preserves the original actor, request and provider-erasure evidence.
 7. Cancel a manager flush after the SQLite fact commits but before its reply reaches the caller. Pending evidence retains the same lease generation; a later flush acknowledges the completed receipt without appending a duplicate fact. A second equal observation advances to a distinct generation and is saved separately. Exercise a canceled wait before commit, an extended same-generation sequence, changed/truncated prefixes, stale/skipped generations, and an incomplete batch refusing the next generation. Keep the original bounded close and panic-attribution conformance tests passing. Restart a gateway after an incomplete erase and verify its tombstone refuses product commands until deletion retry finishes.
 8. Submit local-result revisions through the public record lease: failure to success and changed success are refused before append; success to diagnostic failure retains the known outcome, and failure to another failure is allowed. A two-decision batch whose first revision is invalid must be refused even when its final candidate equals the prior valid snapshot. Reopen to verify only accepted revisions replay.
+
+## Bounded read source for #276
+
+The read source shares the server's already opened event runtime. It never acquires
+the SDK writer lease, creates a stream, or repairs a partial write. A source is
+bound to one existing stream incarnation and the host's origin identity. It
+maps each physical event to one dense sync position. Its payload carries the
+physical schema tag and exact frame bytes; the semantic receiver maintains an
+applied fact cursor separately from the downloaded physical checkpoint.
+
+| Current source state | Event or ordering | Result |
+| --- | --- | --- |
+| Existing stream, validated terminal at zero | Head read during a complete append | Scan in physical order to the last validated inline start, seal, or abort; return that terminal position. |
+| Validated terminal before an incomplete start or pieces | Head read before seal | Return the prior terminal; a page cannot expose the incomplete suffix. |
+| Incomplete suffix | Matching seal commits after the head read | A later head read validates the full attempt and advances to its seal. The earlier fixed target stays unchanged. |
+| Incomplete suffix | Writer or recovery commits a matching abort | A later head read advances through the abort without producing a semantic fact. |
+| Captured terminal head | Page read while the writer appends | Return a contiguous bounded prefix no later than the captured target; later writes do not change that page's target. |
+| Reader is catching up while the writer keeps appending | A head request observes a physical tail, then newer facts commit before each read | Validate only through the tail captured for that request and return the last terminal at or before it. The next head request may advance. Other readers must not wait for a moving tail to become idle. |
+| Reader has a historical fixed target | Newer facts commit before or during its page request | Validate the requested terminal through that target only; do not first catch the shared worker up to the current tail. Return the bounded page or a typed invalid-target result. |
+| Captured terminal head | Reply drops after receiver commit | Receiver reloads its durable physical checkpoint; repeated pages have the same IDs and bytes. Semantic application remains atomic with its separate applied cursor. |
+| Reader bound to an incarnation | Reset or deletion replaces the stream | Refuse the old scope with identity-changed; a new incarnation needs an explicit receiver reset. |
+| Reader bound to an incarnation | Wrong origin, stream, incarnation or schema, a gap, malformed frame, or a target inside a fact | Return a typed refusal before exposing an unvalidated page. |
+| Read queued on the source worker | Caller drops its wait or SDK shuts down | The owned worker finishes or reports unavailable; it does not mutate storage or take over writer recovery. |
+| Shared source worker is busy | Authorized clients submit more reads than its 64-command queue can retain | Admit at most 64 waiting commands; return `SourceError::Unavailable` immediately for the excess request, with no source read or allocated backlog. A client may retry after backoff. When the last source drops, the worker drains admitted commands and exits even if the queue was full. |
+| Repeated authorized reads on the same source | More head and page requests arrive | Clones share one worker and its last validated terminal. A repeated head checks for new records from that point. An old fixed target outside the bounded remembered-head set is revalidated from the stream prefix before paging. |
+| Receiver has a downloaded physical prefix ending inside a chunked fact | Receiver process restarts | Reload the durable physical checkpoint and staged frames; leave the semantic applied cursor at the prior terminal. Continue from the physical checkpoint, then validate the seal and atomically advance the applied cursor with its projection. |
+| Receiver commits a page and projection but its reply is lost | Receiver process restarts | Reload both cursors and the projected state from the same local transaction. Rechecking the source starts after the downloaded checkpoint; do not apply the prior fact again. |
+| Receiver receives a foreign scope, position gap, changed frame schema, or invalid seal | Before local transaction | Refuse the page or semantic projection with typed failure. Keep both durable cursors and the prior projection unchanged. |
+
+The development loopback endpoint from sync-engine serves authorized head and
+page reads. It has no wake subscription. A receiver catches a write that lands
+between a captured head and its idle decision by rechecking the head after the
+fixed-target pass, then polling or reconnecting after a failed check. Push wake
+delivery and production authorization/routes remain [#260](https://github.com/nessalabs/nessa-agent/issues/260)
+work; this slice makes no subsecond delivery claim. The loopback test reports
+actual framed transport payload and protocol bytes, including retries.

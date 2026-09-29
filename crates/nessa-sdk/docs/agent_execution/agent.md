@@ -180,6 +180,15 @@ requires one temporary full-history copy, without imposing a total-history cap.
   holds an exclusive writer lease per conversation. Initialize it before
   accepting conversations and drain it after the agents stop. Create independent
   session IDs for separate chats.
+- `RecordStorage::record_source` opens a reader over an existing conversation
+  stream without taking that lease. Clone the source for separate authorized
+  requests so they share its validated head and one worker. Its sync-engine
+  `RecordSource` methods run on that worker and must be invoked from a blocking host thread. The
+  head stops at the last validated inline fact, seal, or abort. Pages carry exact
+  physical frame bytes under a schema tag and are limited to 64 records and
+  512 KiB total payload. Downloaded physical progress does not itself mean a
+  semantic fact has been applied. A reset changes the incarnation and refuses
+  the old source; receiver reset and authorization belong to their host owners.
 - `SessionManager::snapshot()` returns the last acknowledged snapshot, or `None`
   before initialization. An unsuccessful save never appears there as committed.
 - A failed input save prevents provider dispatch. Observation/save failures remain
