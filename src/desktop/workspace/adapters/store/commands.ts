@@ -26,7 +26,7 @@ import {
   type WorkspaceUpdate,
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
-import type { ModelRef } from "../../model/workspace-index"
+import { consistentIndex, contradicts, type ModelRef } from "../../model/workspace-index"
 import { fromSource, knownToSource } from "../../model/revision"
 import {
   answering,
@@ -117,6 +117,10 @@ export function loadWorkspace(): WorkspaceCommand<Promise<void>> {
           "The index listed sessions at a revision the source could not have sent",
           unusable.map((session) => session.id),
         )
+      // Left out by the reducer (`consistentIndex`); said here, by id.
+      const { contradictions } = consistentIndex(index)
+      if (contradicts(contradictions))
+        console.warn("The index contradicted itself; left out, by id:", contradictions)
       dispatch(indexLoaded({ index, draftId: newId(), read }))
     } catch (error) {
       dispatch(indexFailed({ reason: failureReason(error), read }))

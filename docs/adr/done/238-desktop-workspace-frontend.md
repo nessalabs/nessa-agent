@@ -140,6 +140,8 @@ has not spoken of (revision 0) is the window's own and stays. A pane is never
 left showing a session that is not there: a removal closes the pane showing
 it, and the last pane starts over as a new session's home in the same channel.
 
+**The index is taken as far as it holds together** (`consistentIndex`, `model/workspace-index.ts`): one section, channel or session per id — the first listed — each channel under a section the index lists, each session in a channel it keeps; what contradicts the rest is left out and said by id where the index is received, never opened where the sidebar cannot reach it.
+
 **What is kept of what is not shown** (`model/retention.ts`, as data): every
 conversation a pane shows; those the open Agents overview shows, up to 24,
 the chosen one first, then the waiting ones most recently active first; and

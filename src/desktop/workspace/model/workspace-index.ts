@@ -61,6 +61,64 @@ export interface WorkspaceIndex {
   readonly sessions: readonly SessionSummary[]
 }
 
+/** What an index said that contradicts the rest of it, by id: left out. */
+export interface IndexContradictions {
+  readonly sections: readonly string[]
+  readonly channels: readonly string[]
+  readonly sessions: readonly string[]
+}
+
+/**
+ * The index as the workspace takes it: one section, channel or session per
+ * id — the first listed — each channel under a section the index lists, and
+ * each session in a channel it keeps. The index comes from outside the
+ * window, and a channel under no section, or a session in no channel, would
+ * be held but reachable from nowhere the window shows; an id listed twice
+ * would have two owners. What is left out is said (`contradictions`), never
+ * guessed at.
+ */
+export function consistentIndex(index: WorkspaceIndex): {
+  readonly index: WorkspaceIndex
+  readonly contradictions: IndexContradictions
+} {
+  const firsts = <T extends { readonly id: string }>(
+    items: readonly T[],
+    belongs: (item: T) => boolean,
+  ) => {
+    const kept = new Map<string, T>()
+    const left: string[] = []
+    for (const item of items)
+      if (!kept.has(item.id) && belongs(item)) kept.set(item.id, item)
+      else left.push(item.id)
+    return { kept, left }
+  }
+  const sections = firsts(index.sections, () => true)
+  const channels = firsts(index.channels, (channel) =>
+    sections.kept.has(channel.sectionId),
+  )
+  const sessions = firsts(index.sessions, (session) =>
+    channels.kept.has(session.channelId),
+  )
+  return {
+    index: {
+      sections: [...sections.kept.values()],
+      channels: [...channels.kept.values()],
+      sessions: [...sessions.kept.values()],
+    },
+    contradictions: {
+      sections: sections.left,
+      channels: channels.left,
+      sessions: sessions.left,
+    },
+  }
+}
+
+/** Whether an index contradicts itself anywhere. */
+export const contradicts = (contradictions: IndexContradictions): boolean =>
+  contradictions.sections.length > 0 ||
+  contradictions.channels.length > 0 ||
+  contradictions.sessions.length > 0
+
 /** The agent that runs a model, by its provider; Claude for a provider nessa runs no agent for. */
 export function agentOf(model: ModelRef): AgentId {
   return agentForProvider(model.provider) ?? "claude"

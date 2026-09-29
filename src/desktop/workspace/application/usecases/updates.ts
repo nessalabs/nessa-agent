@@ -9,6 +9,7 @@ import type { WorkspaceFailureReason } from "../../model/failure"
 import {
   byRecency,
   defaultModel,
+  consistentIndex,
   type WorkspaceIndex,
   type SessionSummary,
 } from "../../model/workspace-index"
@@ -151,12 +152,18 @@ function removeSession(
  */
 export function indexLoaded(
   state: WorkspaceState,
-  { index, draftId, read }: { index: WorkspaceIndex; draftId: string; read: string },
+  {
+    index: given,
+    draftId,
+    read,
+  }: { index: WorkspaceIndex; draftId: string; read: string },
 ): WorkspaceState {
   const asked = state.reading.find((pending) => pending.read === read)
   if (asked?.outrun) return { ...state, reading: readAnswered(state.reading, read) }
-  const channels = new Set(index.channels.map((channel) => channel.id))
-  const inChannel = index.sessions.filter((session) => channels.has(session.channelId))
+  // One owner of what an index may say (`consistentIndex`): what contradicts
+  // the rest of it is left out, so a session is listed only where it shows.
+  const index = consistentIndex(given).index
+  const inChannel = index.sessions
   const listed = new Set(inChannel.map((session) => session.id))
   const kept = new Set(asked?.heard ?? [])
   const heard = inChannel.reduce(summaryHeard, {

@@ -534,6 +534,28 @@ describe("the index read again: the resync", () => {
     expect(resynced.drafts.fresh.channelId).toBe("desktop")
   })
 
+  it("takes an index that contradicts itself as far as it holds together", () => {
+    // A channel under a section the index does not list is reachable from
+    // nowhere in the sidebar: it and its session are left out, not opened.
+    const index = testIndex()
+    const taken = indexLoaded(initialWorkspace, {
+      index: {
+        ...index,
+        sections: [...index.sections, index.sections[0]],
+        channels: [
+          ...index.channels,
+          { ...index.channels[0], id: "orphan", sectionId: "gone" },
+        ],
+        sessions: [...index.sessions, summary("stranded", "orphan", 10)],
+      },
+      draftId: "x",
+      read: "r",
+    })
+    expect(taken.channels.map((c) => c.id)).not.toContain("orphan")
+    expect(taken.sessions.stranded).toBeUndefined()
+    expect(taken.sections).toHaveLength(index.sections.length)
+  })
+
   it("takes out a session listed in a channel the index no longer lists", () => {
     const index = testIndex()
     const resynced = indexLoaded(indexRequested(loaded(), { read: "r" }), {

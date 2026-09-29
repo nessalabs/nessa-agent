@@ -11,7 +11,7 @@ vi.mock("../../model/composer-options", async (load) => {
   }
 })
 
-const { defaultModel } = await import("./workspace-index")
+const { consistentIndex, contradicts, defaultModel } = await import("./workspace-index")
 const { defaultComposerModel, composerModels } =
   await import("../../model/composer-options")
 
@@ -29,5 +29,72 @@ describe("the model a new session starts on", () => {
     catalogue.empty = true
     expect(defaultModel()).toBeUndefined()
     catalogue.empty = false
+  })
+})
+
+describe("the index the workspace takes", () => {
+  const section = (id: string) => ({ id, name: id })
+  const channel = (id: string, sectionId: string) => ({
+    id,
+    name: id,
+    sectionId,
+    private: false,
+    topic: "",
+  })
+  const session = (id: string, channelId: string) => ({
+    id,
+    channelId,
+    title: id,
+    agent: "claude" as const,
+    model: { provider: "anthropic", modelId: "claude-opus-5" },
+    status: "idle" as const,
+    startedAt: 1,
+    updatedAt: 1,
+    preview: "",
+    pinned: false,
+    unread: false,
+    revision: 1,
+  })
+
+  it("takes an index that contradicts nothing as it is", () => {
+    const index = {
+      sections: [section("s")],
+      channels: [channel("c", "s")],
+      sessions: [session("a", "c")],
+    }
+    const taken = consistentIndex(index)
+    expect(taken.index).toEqual(index)
+    expect(contradicts(taken.contradictions)).toBe(false)
+  })
+
+  it("leaves out a channel under no section it lists, and the sessions in it", () => {
+    const taken = consistentIndex({
+      sections: [section("s")],
+      channels: [channel("c", "s"), channel("orphan", "gone")],
+      sessions: [session("a", "c"), session("stranded", "orphan")],
+    })
+    expect(taken.index.channels.map((c) => c.id)).toEqual(["c"])
+    expect(taken.index.sessions.map((c) => c.id)).toEqual(["a"])
+    expect(taken.contradictions).toEqual({
+      sections: [],
+      channels: ["orphan"],
+      sessions: ["stranded"],
+    })
+  })
+
+  it("keeps the first of an id listed twice, section, channel or session", () => {
+    const taken = consistentIndex({
+      sections: [section("s"), { id: "s", name: "again" }],
+      channels: [channel("c", "s"), { ...channel("c", "s"), name: "again" }],
+      sessions: [session("a", "c"), { ...session("a", "c"), title: "again" }],
+    })
+    expect(taken.index.sections).toEqual([section("s")])
+    expect(taken.index.channels).toEqual([channel("c", "s")])
+    expect(taken.index.sessions.map((s) => s.title)).toEqual(["a"])
+    expect(taken.contradictions).toEqual({
+      sections: ["s"],
+      channels: ["c"],
+      sessions: ["a"],
+    })
   })
 })

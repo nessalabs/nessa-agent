@@ -1081,6 +1081,35 @@ describe("the index read again", () => {
     expect(JSON.stringify(logged)).not.toContain("keychain password")
   })
 
+  it("says, by id, what an index that contradicts itself had left out", async () => {
+    const source = fakeSource()
+    const index = testIndex()
+    source.index = () =>
+      Promise.resolve({
+        ...index,
+        channels: [
+          ...index.channels,
+          { ...index.channels[0], id: "orphan", sectionId: "gone" },
+        ],
+        sessions: [...index.sessions, summary("stranded", "orphan", 1)],
+      })
+    const warn = console.warn
+    const logged: unknown[][] = []
+    console.warn = (...args: unknown[]) => void logged.push(args)
+    try {
+      const { store } = await ready(source)
+      expect(store.getState().workspace.sessions.stranded).toBeUndefined()
+    } finally {
+      console.warn = warn
+    }
+    expect(logged).toEqual([
+      [
+        "The index contradicted itself; left out, by id:",
+        { sections: [], channels: ["orphan"], sessions: ["stranded"] },
+      ],
+    ])
+  })
+
   it("says so when the index lists a session at a revision the source could not have sent", async () => {
     const source = fakeSource()
     const index = testIndex()
