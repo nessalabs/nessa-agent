@@ -23,10 +23,14 @@ use crate::{
     },
     agents::{domain::AgentId, infrastructure::AgentLaunchFiles},
     attachments::infrastructure::ModelImageNormalizer,
-    conversation::application::{ConversationAgents, ConversationDependencies, ConversationLimits},
+    conversation::application::{
+        ConversationAgents, ConversationDependencies, ConversationLimits, ConversationRepository,
+        ReceiverAuthority,
+    },
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
         DurableConversationFileLinkAudit, DurableConversationModeAudit, LocalConversationStore,
+        LocalReceiverAuthority,
     },
 };
 use crate::{
@@ -178,6 +182,7 @@ pub(super) async fn product_state(
     // and that answer belongs in what setup is told. Nothing else between here
     // and its use depends on the order.
     let packaged_agents = bundle.is_some();
+    let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
     let (conversations, agent_probe, warm_ups) = match &settings.agents {
         Some(agents) => {
             let built = conversations(
@@ -185,10 +190,17 @@ pub(super) async fn product_state(
                 directory,
                 agent_credentials.clone(),
                 packaged_agents,
+                &CedarPolicyEvaluator::profile_digest(),
             )
             .await?;
             (
-                Some((built.service, built.attachments, built.agents_catalog)),
+                Some((
+                    built.service,
+                    built.attachments,
+                    built.agents_catalog,
+                    built.receivers,
+                    built.metadata,
+                )),
                 built.agent_probe,
                 built.warm_ups,
             )
@@ -202,7 +214,6 @@ pub(super) async fn product_state(
             Vec::new(),
         ),
     };
-    let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
     });
@@ -237,9 +248,10 @@ pub(super) async fn product_state(
             }));
     }
     product.browser_http_allowed = config.browser_http_allowed();
-    if let Some((service, attachments, agents_catalog)) = conversations {
+    if let Some((service, attachments, agents_catalog, receivers, metadata)) = conversations {
         product = product
             .with_conversations(Arc::new(service))
+            .with_passive_read(receivers, metadata)
             .with_attachments(attachments)
             .with_agents_catalog(agents_catalog);
     }
@@ -298,6 +310,8 @@ fn launch_files(
 /// Everything building the conversation stack settled.
 struct BuiltConversations {
     service: ConversationService,
+    receivers: Arc<dyn ReceiverAuthority>,
+    metadata: Arc<dyn ConversationRepository>,
     attachments: AttachmentService,
     agents_catalog: AgentsListResult,
     /// Which configured agents this run cannot start even though they are
@@ -317,6 +331,7 @@ async fn conversations(
     _directory: &Path,
     _credentials: Arc<dyn AgentCredentialSource>,
     _packaged_agents: bool,
+    _policy_revision: &str,
 ) -> Result<BuiltConversations, RunError> {
     Err(RunError::Agent(
         "ACP agents require Unix process supervision".into(),
@@ -336,6 +351,7 @@ async fn conversations(
     directory: &Path,
     credentials: Arc<dyn AgentCredentialSource>,
     packaged_agents: bool,
+    policy_revision: &str,
 ) -> Result<BuiltConversations, RunError> {
     let mut warm_ups = Vec::new();
     let root = conversation_root(
@@ -374,6 +390,12 @@ async fn conversations(
                 cause,
             )
         })?,
+    );
+    let receiver_path = root.join("receiver-access.sqlite3");
+    let receivers: Arc<dyn ReceiverAuthority> = Arc::new(
+        LocalReceiverAuthority::open(&receiver_path, policy_revision, clock.clone()).map_err(
+            |cause| RunError::opening(crate::core::Dataset::ReceiverAccess, &receiver_path, cause),
+        )?,
     );
     let current_opencode_model = opencode
         .configured()
@@ -546,7 +568,7 @@ async fn conversations(
             deletion_audit,
             attachments: Some(attachments.conversations),
             summaries: metadata.clone(),
-            listing: metadata,
+            listing: metadata.clone(),
             provider_sessions: erasers,
             deletion_budgets: super::agent_budgets::deletion(),
             message_commit_clock: Arc::new(
@@ -563,6 +585,8 @@ async fn conversations(
     }
     Ok(BuiltConversations {
         service,
+        receivers,
+        metadata,
         attachments: attachments.service,
         agents_catalog,
         agent_probe: resolver,

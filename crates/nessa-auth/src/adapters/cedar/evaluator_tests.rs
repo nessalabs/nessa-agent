@@ -57,6 +57,40 @@ fn checked_in_bundle_is_valid() {
 }
 
 #[test]
+fn read_grant_allows_only_read_for_its_exact_resource() {
+    let (context, _, resource, mut snapshot) = request_values();
+    let read = Action::new("conversation.read").unwrap();
+    let write = Action::new("conversation.write").unwrap();
+    snapshot.credential = Credential::new(
+        context.credential_id().clone(),
+        context.principal_id().clone(),
+        context.organization_id().clone(),
+        context.audience_id().clone(),
+        100,
+        200,
+        vec![Grant::new(read.clone(), resource.clone())],
+    )
+    .unwrap();
+    let evaluator = CedarPolicyEvaluator::new().unwrap();
+    assert_eq!(
+        evaluator.evaluate(&context, &read, &resource, &snapshot),
+        Ok(Decision::Allow)
+    );
+    assert_eq!(
+        evaluator.evaluate(&context, &write, &resource, &snapshot),
+        Ok(Decision::Deny)
+    );
+    let other = Resource::new(
+        context.organization_id().clone(),
+        ResourceId::new("another-gateway").unwrap(),
+    );
+    assert_eq!(
+        evaluator.evaluate(&context, &read, &other, &snapshot),
+        Ok(Decision::Deny)
+    );
+}
+
+#[test]
 fn malformed_schema_is_rejected() {
     assert!(CedarPolicyEvaluator::from_sources("not json", POLICIES).is_err());
 }

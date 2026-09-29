@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! Environment -> private runtime config -> auth + ConversationService
+//!                                   -> receiver authority + owner repository
 //!                                   -> fixed providers + OpenCode static profile
 //!                                   -> current-agent resolver -> managed adapter + native store
 //!                                   -> shared CLI/gateway native installer

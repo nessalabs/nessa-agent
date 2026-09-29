@@ -379,8 +379,10 @@ sets, we need measurements and a suitable freshness/admission contract.
 
 ## 12. How a new feature would use this
 
-Suppose we later implement reading conversations. This is a future example;
-`conversation.read` is not an implemented action in today's Cedar profile.
+The Cedar profile now includes `conversation.read` for passive sync admission.
+The existing `conversation.read` product view still requires `conversation.write`
+because it can open an Agent; bounded passive routes land in #296 and #297.
+For another action, follow this path:
 
 1. Define the operation and its Nessa-owned action name.
 2. Resolve the conversation and its owning organization from trusted storage.
@@ -397,7 +399,7 @@ method mapping, resource lookup, grants, and enforcement must agree.
 
 | Read | What to look for |
 | --- | --- |
-| [Policies](../../../crates/nessa-auth/src/adapters/cedar/policies.cedar) | Two explicit allowing rules and three overriding restrictions |
+| [Policies](../../../crates/nessa-auth/src/adapters/cedar/policies.cedar) | Explicit allowing rules and three overriding restrictions |
 | [Schema](../../../crates/nessa-auth/src/adapters/cedar/schema.json) | Actor/resource attributes and the supported actions |
 | [Cedar adapter](../../../crates/nessa-auth/src/adapters/cedar/mod.rs) | Trusted fact projection, exact grant matching, and error handling |
 | [AuthorizeAction](../../../crates/nessa-auth/src/application/authorization.rs) | Current state and credential checks before policy evaluation |

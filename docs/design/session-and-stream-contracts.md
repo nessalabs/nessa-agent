@@ -194,6 +194,37 @@ old identity.
 
 ## Interactions and authorization
 
+### Passive receiver read admission (#295)
+
+The gateway owns the receiver binding and its durable access epoch. A verified
+credential selects a binding; neither a request parameter nor a socket identifier
+may select or create one. The binding's owner and target are compared with current
+conversation ownership before constructing an exact record or catalogue scope.
+Source reads start only after this admission. The current credential and membership
+snapshot orders admission against a concurrent authorization change; a bounded
+read already admitted may finish, while the next read checks again.
+The record scope is the exact tuple `(receiver ID, server origin, conversation
+stream ID, source incarnation, physical record schema, durable access epoch)`.
+The source supplies its origin, stream, incarnation and schema; the gateway
+compares the requested tuple before `head` or `page`. The catalogue selector is
+`(organization ID, owner principal ID, receiver ID, durable access epoch)` and
+does not require a conversation ID. #297 will add the catalogue source's own
+incarnation/revision facts when its source contract lands. The authenticated
+principal must equal the binding owner before either selector is admitted.
+
+| Starting state | Event and ordering | Result |
+| --- | --- | --- |
+| Active binding, current epoch | Valid read, current credential and owner, then source | Admit exact server-built scope for this receiver and target |
+| Active binding | Socket reconnect without authority change | Keep receiver identity and epoch; recheck current access |
+| Active binding | Credential revocation wins before snapshot read | Deny before source |
+| Active binding | Snapshot read wins before revocation publication | That bounded read may finish; later read denies |
+| Active binding | Binding revocation or embedded policy profile change | Advance persisted epoch and deny old scope before source |
+| Revoked binding | Explicit regrant | Keep receiver identity, advance epoch again; old scope stays stale |
+| Any binding | Wrong receiver, owner, target, stale epoch, or unavailable authority | Deny before source |
+
+The pairing ceremony and bounded record and catalogue transport belong to their
+separate issues. This admission contract applies to both future source routes.
+
 A pending approval includes `approvalId`, conversation/turn IDs, a preview,
 deadline, and the offered choices: `choiceId`, label, allow/deny, and once/session
 scope. The binding privately maps these Nessa choices to actual provider options.

@@ -105,6 +105,7 @@ impl RunError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dataset {
     ConversationMetadata,
+    ReceiverAccess,
     BrowserSessions,
 }
 
@@ -112,6 +113,7 @@ impl fmt::Display for Dataset {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::ConversationMetadata => "conversation metadata",
+            Self::ReceiverAccess => "receiver access",
             Self::BrowserSessions => "browser sessions",
         })
     }

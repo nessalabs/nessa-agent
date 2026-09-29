@@ -38,6 +38,13 @@ when { principal.active && principal.role == "admin" };
 
 permit (
     principal is Nessa::Actor,
+    action == Nessa::Action::"conversation.read",
+    resource is Nessa::Resource
+)
+when { principal.active && (principal.role == "member" || principal.role == "admin") };
+
+permit (
+    principal is Nessa::Actor,
     action == Nessa::Action::"conversation.write",
     resource is Nessa::Resource
 )
