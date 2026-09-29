@@ -248,8 +248,8 @@ writing the full defaults on first launch is buying.
   four desktop shared parts the rule names (motion, reduced motion, hold
   still, the resize edge).
   `scripts/architecture/split-panes-boundary.mjs` refuses the rest, in every
-  form of import it reads (named, side-effect, `import()`, `vi.mock` and
-  `vi.importActual`/`vi.importMock`; not `require()`, path aliases or
+  form of import it reads (named, side-effect, `import()`, `vi.mock`,
+  `vi.doMock` and `vi.importActual`/`vi.importMock`; not `require()`, path aliases or
   specifiers built at runtime, which the source does not use); a test may
   still read a stylesheet's text by URL.
   A name of the page's a host writes out whole, or reads through `dataset`,

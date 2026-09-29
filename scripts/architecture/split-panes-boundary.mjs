@@ -25,7 +25,7 @@
 import { posix } from "node:path"
 
 const module = "src/desktop/split-panes"
-/** The desktop's shared parts split panes use: motion, reduced motion, and the resize edge. */
+/** The desktop's shared parts split panes use: motion, reduced motion, hold still, and the resize edge. */
 const shared = new Set([
   "src/desktop/adapters/hold-still",
   "src/desktop/adapters/motion",

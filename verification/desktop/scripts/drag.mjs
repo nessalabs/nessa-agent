@@ -1251,14 +1251,19 @@ Object.assign(checks, {
         },
         [box, title],
       )
-    // The pane measured, and lifted, must be the corner's, alone in the
-    // window's row — or the check compares two plainly padded headers.
+    // The pane measured, and lifted, must be the corner's, with both side
+    // columns closed so its header steps past the controls — or the check
+    // compares two plainly padded headers.
     const cornered = await page.evaluate(
-      ([pane, corner]) => document.querySelector(pane)?.hasAttribute(corner) ?? false,
-      [css.pane, "data-split-corner"],
+      ([pane, corner, alone]) =>
+        !!document.querySelector(pane)?.matches(corner) &&
+        !!document.querySelector(alone),
+      [css.pane, css.cornerPane, css.panesAlone],
     )
     if (!cornered)
-      throw new CannotRun("the first pane is not the corner's: nothing to compare")
+      throw new CannotRun(
+        "the first pane is not the corner's alone in the window's row: nothing to compare",
+      )
     const inPane = await titleIn(css.pane, css.titleText)
     let inCopy = null
     await sampler.watch(
