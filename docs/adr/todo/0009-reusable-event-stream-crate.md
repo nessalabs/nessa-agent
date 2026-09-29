@@ -34,6 +34,8 @@ incomplete. As of 2026-09-12, the SDK pins revision
 ADR's storage integration: no event runtime or durable store is constructed.
 The commit, replay, and lifecycle requirements below still need to be tested in Nessa.
 
+The first integration targets newly created conversations. Existing JSONL histories remain on their current path; importing them is deferred and is not part of issue #275. The [semantic record writer design](../../design/semantic-record-writer.md) gives the current commit boundaries and ordering table.
+
 ## One instance, one record source
 
 The server's startup code opens the local storage adapter and creates one stream
