@@ -404,6 +404,33 @@ TypeScript, backend and frontend, tests, scripts, configuration, and docs.
   resulting file tree and module maps, check moved links and stale references,
   and run checks appropriate to the change before reporting completion.
 
+## Tracking work on the project board
+
+Every issue in progress is on the
+[Nessa Agents project](https://github.com/orgs/nessalabs/projects/1), and its
+**Status** says where the work stands. Whoever works on an issue moves it
+there themselves: a person, an agent, and each agent a coordinator delegates
+to. The board is only true if the one doing the work updates it at each step,
+not someone reconstructing it afterwards.
+
+| When | Status |
+| --- | --- |
+| An issue is filed | **Backlog**. File it on the board: `gh issue create --project "Nessa Agents"` |
+| It is scoped and nothing blocks it | **Ready** |
+| Work on it begins: its branch or worktree is made, or its first commit | **In progress** |
+| Its pull request is opened | **In review** |
+| Its pull request merges, or the issue is closed as done | **Done** |
+| Work stops before it is done | Back to **Ready** or **Backlog**, with a comment on the issue saying where it was left and why |
+
+- An issue that belongs to another repository (nessa_ui owns the UI package)
+  is filed there and added to the board all the same.
+- A pull request names its issue (`Refs #N` or `Closes #N`), so the board links
+  the two.
+- Moving an item needs the `project` scope on the GitHub CLI
+  (`gh auth refresh -s project`). The commands are `gh project item-list 1
+  --owner nessalabs` to find the item and `gh project item-edit` to set its
+  Status. A move that fails is reported to the person, not skipped silently.
+
 ## Domain-driven design boundaries
 
 Follow pure domain-driven design. New backend contexts are organized into
