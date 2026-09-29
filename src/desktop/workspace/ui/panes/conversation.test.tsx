@@ -144,3 +144,20 @@ describe("a pane's composer shows the model the next message is sent with", () =
     expect(await sentWith(store, source, draftId)).toEqual(astra)
   })
 })
+
+describe("a new session's home in a pane", () => {
+  it("holds its one composer in the dock's box, which a small pane docks at its foot as a conversation's", async () => {
+    const store = testStore()
+    await store.dispatch(loadWorkspace())
+    await settle()
+    const draftId = store.dispatch(newSession())
+    if (!draftId) throw new Error("no draft")
+    await mount(store, <PaneHome sessionId={draftId} onSend={() => {}} />)
+    // Which shape it takes is the pane's container query (`conversation.css`);
+    // either way it is this composer, so nothing typed is lost between them.
+    expect(host.querySelectorAll(".desktop-composer")).toHaveLength(1)
+    expect(
+      host.querySelector(".desktop-home .workspace-dock > .desktop-composer"),
+    ).not.toBeNull()
+  })
+})

@@ -64,10 +64,6 @@
 .workspace-heading h2 {
   max-width: 100%;
   margin: 0;
-  font-size: var(--desktop-text-display);
-  font-weight: 650;
-  letter-spacing: -0.022em;
-  line-height: 1.25;
   overflow-wrap: anywhere;
   text-wrap: balance;
   background: linear-gradient(
@@ -80,6 +76,29 @@
   color: transparent;
   -webkit-user-select: text;
   user-select: text;
+}
+
+/*
+ * A title's type in a pane: a conversation's heading, and the greeting of a
+ * new session's home docked in a small pane (`conversation.css`), which asks
+ * for the same `workspace-docked` container the dock does. A short, stacked
+ * pane keeps its room for the conversation: the title steps down a size.
+ */
+@container workspace-docked (width >= 0) {
+  .workspace-heading h2,
+  .workspace-pane-home .desktop-greeting {
+    font-size: var(--desktop-text-display);
+    font-weight: 650;
+    letter-spacing: -0.022em;
+    line-height: 1.25;
+  }
+
+  @container workspace-pane (max-height: 520px) {
+    .workspace-heading h2,
+    .workspace-pane-home .desktop-greeting {
+      font-size: var(--desktop-text-title);
+    }
+  }
 }
 
 .workspace-heading h2::selection {
@@ -367,16 +386,12 @@ html:not(.dark) .workspace-diff del {
 
 /*
  * A short, stacked pane keeps its room for the conversation: the heading
- * tightens.
+ * tightens, and its title steps down (above).
  */
 @container workspace-pane (max-height: 520px) {
   .workspace-heading {
     gap: 4px;
     padding: 8px 0 4px;
-  }
-
-  .workspace-heading h2 {
-    font-size: var(--desktop-text-title);
   }
 }
 

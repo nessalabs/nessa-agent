@@ -202,6 +202,29 @@ first (`model/window-fit.ts`, asking the same `columnsFit`); where even that
 cannot fit them, each pane's composer takes a compact, one-line form rather
 than be clipped.
 
+**A new session's home takes its pane's shape** (`ui/panes/conversation.css`,
+issue #285). In a pane at least 640px each way the home is the window's own:
+the scene, "Working late?" and the composer's card. In a smaller pane — split
+beside or below another, or in a short window — it takes a conversation's
+shape: the scene steps aside, the greeting sits in the middle of the room
+above the composer at a conversation title's size, and the composer docks at
+the pane's foot exactly as a conversation's does. The pane's own size decides,
+by the container query the pane already is (`workspace-pane`), never the
+window's. It is one composer in both shapes: the home holds it in the dock's
+box (`Home`'s `composerClassName`), and the dock's rules, and a title's type,
+ask for a `workspace-docked` container around them, which a conversation
+always is and a home only while small, so the dock and the title are each
+written once. Nothing is remounted, so the draft, the caret, the model chosen
+and a long draft's page all stay as they were across the threshold; the page
+still opens in either shape, and in a small pane the arrival has nowhere to
+glide — the composer is already where the conversation docks it — so only the
+first message rises and the greeting lifts away. Crossing the threshold, as a
+pane is resized or split, the greeting and composer settle into their new
+places (`--desktop-slow`, opacity and transform only: each shape names its own
+keyframes, so a change of shape plays them again) under the panes' own flight;
+with less motion they are simply there. `responsive.mjs --only home-shape`
+holds all of it in Chromium and WebKit, against the conversation beside it.
+
 **Side columns: chosen, or folded for room** (`src/desktop/model/side-column.ts`,
 shared by the workspace's sidebar and session list and by Settings' sidebar):
 
@@ -364,7 +387,8 @@ in what the content is laid out at, chosen by measurement:
   foot, as a taller pane docks it (held to the top with the rest, it
   floated mid-pane), and what is held to the top cut where the composer
   begins, by as much as the pane is shorter, so it never runs under it; a
-  new session's home held to the middle; its header
+  new session's home held to the middle — a small one's docked composer
+  with it, not to the foot; its header
   held to the top left, so it steps
   past the window's controls where it rests in the corner and nothing of it
   passes under them. Centring down as well was tried: a pane shorter than

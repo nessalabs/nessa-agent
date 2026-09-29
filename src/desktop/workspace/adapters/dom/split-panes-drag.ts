@@ -27,7 +27,8 @@ export function carriedSession(store: DesktopStore): SplitPanesDragOptions["copy
     const tile = pressed.querySelector(".workspace-agent-tile")
     if (tile) header.append(picture(tile))
     const body = document.createElement("div")
-    body.className = "workspace-pane-body"
+    // A conversation's body, so its heading and dock take a conversation's shape.
+    body.className = "workspace-pane-body workspace-conversation"
     const transcript = document.createElement("div")
     // Its latest words at the foot, as a conversation opens: set by the copy's
     // own layout, not a scroll (`chrome.css`).
@@ -73,13 +74,11 @@ export function carriedSession(store: DesktopStore): SplitPanesDragOptions["copy
     }
     transcript.append(content)
     body.append(transcript)
-    // The composer it will have: the focused pane's, as it stands.
-    const dock = focusedPane?.querySelector(
-      ".workspace-dock, .workspace-pane-home .desktop-composer",
-    )
+    // The composer it will have: the focused pane's, as it stands — a
+    // conversation's dock, or a new session's home's, docked or not.
+    const dock = focusedPane?.querySelector(".workspace-dock")
     if (dock) {
       const composer = picture(dock)
-      composer.classList.add("workspace-dock")
       composer.querySelectorAll("textarea").forEach((field) => (field.value = ""))
       body.append(composer)
     }

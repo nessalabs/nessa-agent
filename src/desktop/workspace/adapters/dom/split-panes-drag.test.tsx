@@ -33,7 +33,7 @@ import { measureWorkspace } from "./measure"
 import { workspaceSplitPanes } from "../store/split-panes-source"
 import { useSplitPanesDrag } from "../../../split-panes"
 import { classes, gridOf, marks } from "../../../split-panes"
-import { workspaceDragOptions } from "./split-panes-drag"
+import { carriedSession, workspaceDragOptions } from "./split-panes-drag"
 
 let host: HTMLDivElement
 /** Every animation asked for, and of what. */
@@ -395,6 +395,36 @@ it("copies one screen of the conversation, what is scrolled above standing in as
   expect((copied as HTMLElement | null)?.style.transform).toBe("translateY(-300px)")
   expect(host.querySelector(`.${classes.ghost}`)?.hasAttribute(marks.waiting)).toBe(false)
   await act(async () => root.unmount())
+})
+
+it("gives a carried session the composer of a new session's home it would open beside, emptied, in a conversation's shape", async () => {
+  const store = testStore()
+  await store.dispatch(loadWorkspace())
+  await settle()
+  // The focused pane is a new session's home, its composer in the box that docks it.
+  const focusedPane = document.createElement("article")
+  focusedPane.innerHTML =
+    '<div class="workspace-pane-home"><div class="desktop-home"><h1 class="desktop-greeting">Working late?</h1>' +
+    '<div class="desktop-home-composer workspace-dock"><form class="desktop-composer"><textarea></textarea></form></div></div></div>'
+  const field = focusedPane.querySelector("textarea")
+  if (field) field.value = "a draft of its own"
+  const pressed = document.createElement("div")
+  pressed.textContent = "Session d"
+  const copy = carriedSession(store)?.("d", {
+    pressed,
+    picture: (element) => element.cloneNode(true) as HTMLElement,
+    focusedPane,
+  })
+  // A conversation's body, which the dock's rules and the title's type ask for (`conversation.css`).
+  expect(copy?.querySelector(".workspace-pane-body")?.classList).toContain(
+    "workspace-conversation",
+  )
+  const docks = copy?.querySelectorAll(".workspace-pane-body > .workspace-dock") ?? []
+  expect(docks).toHaveLength(1)
+  expect(docks[0]?.querySelector(".desktop-composer textarea")).not.toBeNull()
+  expect(docks[0]?.querySelector("textarea")?.value).toBe("")
+  // The home's greeting is no part of it.
+  expect(copy?.querySelector(".desktop-greeting")).toBeNull()
 })
 
 it("draws the copy in the frame the drag begins, and what the zone would do in the next", async () => {
