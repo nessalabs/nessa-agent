@@ -52,6 +52,11 @@ interface Held {
 
 let held: Held | null = null
 let asked = false
+/**
+ * A picture chosen or cleared since storage was first asked: what the person
+ * did then is newer than whatever that read finds, cleared or not.
+ */
+let touched = false
 const listeners = new Set<() => void>()
 const notify = () => listeners.forEach((listener) => listener())
 
@@ -70,8 +75,9 @@ function subscribe(listener: () => void) {
     asked = true
     run<unknown>("readonly", (objects) => objects.get(key))
       .then((stored) => {
-        // A picture chosen while storage was being read is the newer one.
-        if (stored instanceof Blob && !held) hold(stored)
+        // A picture chosen, or the picture cleared, while storage was being
+        // read is the newer word: the read's answer is let go.
+        if (stored instanceof Blob && !touched) hold(stored)
       })
       .catch(() => {})
   }
@@ -117,11 +123,13 @@ export function useHeaderImage() {
   const image = useSyncExternalStore(subscribe, () => held?.blob ?? null)
 
   const choose = useCallback((next: Blob) => {
+    touched = true
     hold(next)
     run("readwrite", (objects) => objects.put(next, key)).catch(() => {})
   }, [])
 
   const clear = useCallback(() => {
+    touched = true
     hold(null)
     run("readwrite", (objects) => objects.delete(key)).catch(() => {})
   }, [])
