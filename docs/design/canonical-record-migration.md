@@ -33,10 +33,12 @@ The Nessa payload schema is versioned independently of `event-stream`'s generic 
 | Family | Meaning and owner | Required identity |
 | --- | --- | --- |
 | Imported baseline | Coherent validated legacy session at a frozen cut; SDK import owns it | Session ID, which names the journal under its lease, and the validated cut digest |
-| Command accepted | Canonical input, verified actor, request ID, allocated execution/turn IDs and acceptance response; SDK admission owns it | Conversation, request ID, operation and target |
-| Provider observation | Normalized display or interaction fact after the SDK accepts its source identity | Conversation, owning execution and observation ID |
-| Scheduling/stop decision | Local stage, cause, actor and target, separate from provider acknowledgement | Conversation, owning execution and transition ID |
-| Settlement/recovery | Provider result, local result, cleanup and uncertainty as separate facts | Conversation, owning execution and attempt ID |
+| Command accepted | Exact `ExecutionRequest`, submission mode, verified actor and initial acknowledgement; SDK admission owns it | Conversation and stable `execution_id`, which is the SDK's submission key |
+| Provider observation | Normalized `ExecutionEvent` after the SDK accepts its source identity | Conversation, owning `execution_id` and zero-based observation ordinal |
+| Scheduling/stop decision | Queue order, local stage, cause, actor and target, separate from provider acknowledgement | Conversation, owning `execution_id` and per-invocation transition ordinal; queue decisions use stream order |
+| Settlement/recovery | Provider report, local result, cleanup and uncertainty as separate facts | Conversation and owning `execution_id`; a superseding fact names the fact it corrects |
+
+For a newly created conversation, the SDK first commits its session identity, provider identity and recovery context as the stream's opening fact. An imported conversation gets those values from its sealed baseline. The SDK has no separate request ID or attempt ID in `SessionSnapshot`; `ExecutionRequest.execution_id` is its stable submission key. Do not mint a second correlation key for the record format. The gateway conversation catalogue owns whether that conversation exists and who can see it. Gateway deletion must leave a durable tombstone or equivalent deletion fence in that owner before a migrated or cached SDK record can be exposed again. The exact gateway deletion transaction belongs to [#275](https://github.com/nessalabs/nessa-agent/issues/275); a baseline cannot make a deleted conversation live.
 
 The baseline may need several bounded payload records because a validated legacy snapshot can exceed one event limit. Its opening record names the source session and digest of the validated semantic cut; numbered pieces carry exact bytes; a final seal states their count, total bytes and digest. The fold exposes a baseline only after checking that seal and the opening identity. Deterministic event IDs and exact retry bytes let an interrupted import resume without duplicating pieces. The payload uses Nessa-owned typed snapshot field mappings and bounds, not a second copy of the JSONL journal contract. The importer checks that decoding the pieces reconstructs a `SessionSnapshot` passing the same application validation as the source.
 
