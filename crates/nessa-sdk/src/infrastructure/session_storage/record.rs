@@ -641,6 +641,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn first_generation_is_initial_on_fresh_reopened_and_reset_writers() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("generation-boundary").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, initial) = opening(&id);
+        assert!(matches!(
+            lease
+                .save_changes(generation(2), initial.clone(), vec![opened.clone()])
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(lease.load().await.unwrap(), None);
+        lease
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                initial.clone(),
+                vec![opened.clone()],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+
+        let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
+        let context = SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        };
+        let restored =
+            records::fold_changes(Some(&initial), std::slice::from_ref(&context)).unwrap();
+        assert!(matches!(
+            lease
+                .save_changes(generation(2), restored.clone(), vec![context.clone()])
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(lease.load().await.unwrap(), Some(initial.clone()));
+        lease
+            .save_changes(SessionSaveGeneration::initial(), restored, vec![context])
+            .await
+            .unwrap();
+
+        lease.erase().await.unwrap();
+        assert_eq!(lease.load().await.unwrap(), None);
+        assert!(matches!(
+            lease
+                .save_changes(generation(2), initial.clone(), vec![opened.clone()])
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(lease.load().await.unwrap(), None);
+        lease
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                initial.clone(),
+                vec![opened],
+            )
+            .await
+            .unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(initial));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn erase_clears_an_unresolved_live_writer_even_with_an_empty_physical_tail() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("sessions");

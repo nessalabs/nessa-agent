@@ -236,7 +236,9 @@ acknowledges it without a second append; a valid added suffix continues from
 the committed prefix. The manager advances the generation only when it clears
 pending evidence after a successful save. Later equal observations use separate
 generations and are stored separately. A record writer fences an incomplete
-generation, while a completed receipt remains readable and erasable.
+generation, while a completed receipt remains readable and erasable. A fresh
+writer starts at the initial generation, including the replacement stream
+incarnation installed by Reset on the same lease.
 
 `SessionStorageLease::erase` resets the session stream under its exclusive lease
 and drains retired physical records before reporting success. An uncertain reset

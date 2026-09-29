@@ -21,12 +21,13 @@ use std::{error::Error, fmt, future::Future, pin::Pin};
 /// Asynchronous storage result borrowing its adapter for `'a` and returning `T`.
 pub type StorageFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StorageError>> + Send + 'a>>;
 
-/// Lease-scoped identity of one ordered SDK save decision sequence.
+/// Identity of one ordered SDK save decision sequence within a stream incarnation.
 ///
 /// A retry keeps the same generation, including when its decision sequence has
 /// gained a valid suffix. Advance only after the caller has acknowledged the
-/// save and cleared its pending decisions. A newly opened lease starts at
-/// [`Self::initial`]; generations are not persisted across lease lifetimes.
+/// save and cleared its pending decisions. A newly opened writer starts at
+/// [`Self::initial`], including after Reset installs a replacement writer on
+/// the same exclusive lease. Generations are not persisted across writers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionSaveGeneration(u64);
 
@@ -37,7 +38,7 @@ impl Default for SessionSaveGeneration {
 }
 
 impl SessionSaveGeneration {
-    /// First generation for a newly opened lease.
+    /// First generation for a newly opened writer or post-Reset incarnation.
     pub const fn initial() -> Self {
         Self(0)
     }
@@ -415,7 +416,7 @@ pub trait SessionStorageLease: Send + Sync {
     /// exact retry finishes or acknowledges it without duplicating the prefix;
     /// a validated suffix may extend it. Only an acknowledged save advances
     /// to the next generation. Distinct generations may contain equal bytes.
-    /// Snapshot adapters ignore this lease-scoped identity.
+    /// Snapshot adapters ignore this stream-incarnation identity.
     fn save_changes(
         &self,
         _generation: SessionSaveGeneration,

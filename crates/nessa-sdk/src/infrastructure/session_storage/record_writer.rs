@@ -138,7 +138,8 @@ impl RecordWriter {
             return Err(corrupt("conversation fact conflicts with physical history"));
         }
         let next_batch = match self.batch_generation {
-            None => true,
+            None if generation == SessionSaveGeneration::initial() => true,
+            None => return Err(corrupt("first session save generation is not initial")),
             Some(current) if generation == current => false,
             Some(current)
                 if self.batch_complete
