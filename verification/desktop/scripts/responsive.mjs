@@ -32,6 +32,13 @@
  *                   Escape, and Tab past its end, close it onto its chip; with
  *                   the system's reduced motion, nothing animates and the words
  *                   that were shown are not drawn
+ *   home-shape      a new session's home in a pane smaller than 640px either
+ *                   way takes a conversation's shape: its composer docked at
+ *                   the foot as the conversation's beside it is, the scene
+ *                   gone, "Working late?" in the middle at the conversation
+ *                   title's size; a larger pane keeps the scene and the card;
+ *                   the draft and the caret survive each crossing, which
+ *                   settles by opacity and transform alone
  *
  * With --shots <dir>, screenshots of each width go there for a person to look at.
  */
@@ -42,7 +49,15 @@ import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, names } from "./lib/selectors.mjs"
-import { frames, hideColumns, openPanes, settled, until } from "./lib/workspace.mjs"
+import {
+  frames,
+  hideColumns,
+  openPanes,
+  paneCount,
+  paneCountIs,
+  settled,
+  until,
+} from "./lib/workspace.mjs"
 
 const longTail =
   " --config=/Users/nessa/Library/Application-Support/nessa/releases/very/deep/path/release-signing-configuration.json"
@@ -257,6 +272,211 @@ const checks = {
       await shot(options, page, `settings-${engine}-${width}`)
     }
     return { widths: seen, failures }
+  },
+  "home-shape": async ({ page, engine, layout, options }) => {
+    const failures = []
+    const seen = []
+    const draft = "A draft that crosses the threshold"
+    const tolerance = 1.5
+    // The home's shape, and the conversation's beside it, as drawn.
+    const measure = () =>
+      page.evaluate((sel) => {
+        const box = (e) => {
+          if (!e) return null
+          const r = e.getBoundingClientRect()
+          return { x: r.x, y: r.y, w: r.width, h: r.height }
+        }
+        const type = (e) => {
+          if (!e) return null
+          const s = getComputedStyle(e)
+          return { size: s.fontSize, weight: s.fontWeight, tracking: s.letterSpacing }
+        }
+        const home = document.querySelector(sel.paneHome)
+        const homePane = home?.closest(sel.pane)
+        const other = [...document.querySelectorAll(sel.pane)].find(
+          (p) => p !== homePane && p.querySelector(sel.conversationDock),
+        )
+        const field = home?.querySelector(sel.field)
+        const scene = document.querySelector(sel.homeScene)
+        return {
+          pane: box(homePane),
+          body: box(homePane?.querySelector(sel.paneBody)),
+          composer: box(home?.querySelector(sel.composerCard)),
+          greeting: box(home?.querySelector(".desktop-greeting")),
+          greetingType: type(document.querySelector(sel.greeting)),
+          scene: scene ? scene.checkVisibility() : false,
+          text: field?.value ?? null,
+          caret: document.activeElement === field,
+          beside: other
+            ? {
+                pane: box(other),
+                composer: box(
+                  other.querySelector(`${sel.conversationDock} ${sel.composerCard}`),
+                ),
+                titleType: type(other.querySelector(sel.conversationTitle)),
+              }
+            : null,
+        }
+      }, css)
+    const docked = (m, tag) => {
+      if (!m.pane || !m.composer) return failures.push(`${tag}: no home in a pane`)
+      const foot = m.pane.y + m.pane.h - (m.composer.y + m.composer.h)
+      if (m.beside?.composer) {
+        const theirs =
+          m.beside.pane.y + m.beside.pane.h - (m.beside.composer.y + m.beside.composer.h)
+        if (Math.abs(foot - theirs) > tolerance)
+          failures.push(
+            `${tag}: the home's composer is ${Math.round(foot)}px from its pane's foot, the conversation's ${Math.round(theirs)}px`,
+          )
+        if (Math.abs(m.composer.h - m.beside.composer.h) > tolerance)
+          failures.push(
+            `${tag}: the home's composer is ${Math.round(m.composer.h)}px tall, the conversation's ${Math.round(m.beside.composer.h)}px`,
+          )
+        const inset = (c, p) => c.x - p.x
+        if (
+          Math.abs(inset(m.composer, m.pane) - inset(m.beside.composer, m.beside.pane)) >
+          tolerance
+        )
+          failures.push(
+            `${tag}: the home's composer is inset ${Math.round(inset(m.composer, m.pane))}px, the conversation's ${Math.round(inset(m.beside.composer, m.beside.pane))}px`,
+          )
+        const a = m.greetingType
+        const b = m.beside.titleType
+        if (
+          b &&
+          (!a || a.size !== b.size || a.weight !== b.weight || a.tracking !== b.tracking)
+        )
+          failures.push(
+            `${tag}: greeting set ${JSON.stringify(a)}, the conversation's title ${JSON.stringify(b)}`,
+          )
+      } else if (foot > 24)
+        failures.push(
+          `${tag}: the home's composer is ${Math.round(foot)}px from its pane's foot`,
+        )
+      if (m.scene) failures.push(`${tag}: the scene is shown in a small pane`)
+      if (m.greeting && m.body) {
+        const across = m.greeting.x + m.greeting.w / 2 - (m.pane.x + m.pane.w / 2)
+        const down = m.greeting.y + m.greeting.h / 2 - (m.body.y + m.composer.y) / 2
+        if (Math.abs(across) > tolerance || Math.abs(down) > tolerance)
+          failures.push(
+            `${tag}: the greeting is ${Math.round(across)}px across and ${Math.round(down)}px down from the middle above the composer`,
+          )
+      }
+    }
+    const card = (m, tag) => {
+      if (!m.pane || !m.composer) return failures.push(`${tag}: no home in a pane`)
+      const foot = m.pane.y + m.pane.h - (m.composer.y + m.composer.h)
+      if (foot < 120)
+        failures.push(
+          `${tag}: the card sits ${Math.round(foot)}px from the pane's foot, docked`,
+        )
+      if (!m.scene) failures.push(`${tag}: no scene in a large pane`)
+      if (parseFloat(m.greetingType?.size ?? "0") < 28)
+        failures.push(
+          `${tag}: the greeting is ${m.greetingType?.size}, not the home's own size`,
+        )
+    }
+    const kept = (m, tag) => {
+      if (m.text !== draft)
+        failures.push(`${tag}: the draft reads ${JSON.stringify(m.text)}`)
+      if (!m.caret) failures.push(`${tag}: the caret left the home's composer`)
+    }
+    const record = async (tag, m) => {
+      seen.push({
+        tag,
+        pane: m.pane && `${Math.round(m.pane.w)}×${Math.round(m.pane.h)}`,
+        composerFoot:
+          m.pane &&
+          m.composer &&
+          Math.round(m.pane.y + m.pane.h - m.composer.y - m.composer.h),
+        greeting: m.greetingType?.size,
+      })
+      await shot(options, page, `home-${engine}-${layout}-${tag}`)
+    }
+    // Only what settles, by opacity and transform, may move when the shape
+    // changes: each settling the home starts is noted as it starts.
+    const watchSettling = () =>
+      page.evaluate((sel) => {
+        window.__homeSettling = []
+        document
+          .querySelector(sel.paneHome)
+          ?.addEventListener("animationstart", (event) => {
+            if (!event.animationName.startsWith("workspace-home")) return
+            const animation = event.target
+              .getAnimations()
+              .find((a) => a.animationName === event.animationName)
+            window.__homeSettling.push({
+              name: event.animationName,
+              properties: (animation?.effect.getKeyframes() ?? []).flatMap((k) =>
+                Object.keys(k).filter(
+                  (p) =>
+                    ![
+                      "offset",
+                      "easing",
+                      "composite",
+                      "computedOffset",
+                      "opacity",
+                      "transform",
+                    ].includes(p),
+                ),
+              ),
+            })
+          })
+      }, css)
+    const settling = () => page.evaluate(() => window.__homeSettling ?? [])
+
+    // A conversation, and a new session's home opened beside it.
+    const row = page.locator(css.sessionRow).nth(1)
+    if (!(await row.count())) throw new CannotRun(`no session row (${css.sessionRow})`)
+    await row.click()
+    await settled(page)
+    await page.keyboard.press(keys.newSessionBeside)
+    await paneCountIs(page, 2)
+    await settled(page)
+    await page.locator(`${css.paneHome} ${css.field}`).click()
+    await page.keyboard.type(draft)
+    const small = await measure()
+    docked(small, "beside a conversation")
+    await record("small", small)
+
+    // The conversation closes: the home takes the whole room, and the card.
+    await watchSettling()
+    await page.keyboard.press(keys.focusPane(1))
+    await page.keyboard.press(keys.closePane)
+    await paneCountIs(page, 1)
+    // The caret comes back to the draft, as a person would put it.
+    await page.locator(`${css.paneHome} ${css.field}`).click()
+    await frames(page, 2)
+    const moved = await settling()
+    if (!moved.some((m) => m.name === "workspace-home-card"))
+      failures.push("crossing to the card: nothing settles, it jumps")
+    const laidOut = moved.flatMap((m) => m.properties)
+    if (laidOut.length)
+      failures.push(`crossing lays out: it animates ${[...new Set(laidOut)].join(", ")}`)
+    await settled(page)
+    const large = await measure()
+    card(large, "alone")
+    kept(large, "alone")
+    await record("large", large)
+
+    // The window shortens under 640px of pane: docked again, the draft and caret kept.
+    await page.setViewportSize({ width: 1440, height: 640 })
+    await frames(page, 2)
+    await settled(page)
+    const short = await measure()
+    docked(short, "a short window")
+    kept(short, "a short window")
+    await record("short", short)
+
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await frames(page, 2)
+    await settled(page)
+    const back = await measure()
+    card(back, "tall again")
+    kept(back, "tall again")
+    await record("back", back)
+    if ((await paneCount(page)) !== 1) failures.push("a pane opened or closed on its own")
+    return { shapes: seen, failures }
   },
 }
 
@@ -779,7 +999,7 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
 const meta = {
   name: "responsive",
   summary:
-    "approval card, composer controls and thinking control, column titles and Settings at many widths",
+    "approval card, composer controls and thinking control, column titles, Settings and a pane's home at many sizes",
   defaults: { engine: "chromium,webkit", layout: "columns" },
   options: { only: { type: "string" } },
   help: `

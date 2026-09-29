@@ -32,7 +32,13 @@ export const css = {
   paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
   transcript: ".workspace-transcript", // class
-  dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot
+  dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
+  conversationDock: ".workspace-conversation .workspace-dock", // class: a conversation's composer, never a home's
+  paneHome: ".workspace-pane-home", // class: a new session's home in a pane
+  homeScene: ".workspace-pane-home .desktop-header", // class: the home's night scene or picture
+  greeting: ".workspace-pane-home .desktop-greeting", // class: "Working late?"
+  conversationTitle: ".workspace-heading h2", // class: a conversation's title, atop its transcript
+  composerCard: ".desktop-composer", // class: the composer's card
   dragLayer: ".split-panes-layer", // class: what is carried is drawn in it, below the titlebar row
   dragGhost: ".split-panes-ghost", // class: the translucent copy the pointer carries
   dragCarrier: ".split-panes-carrier", // class: holds the copy at the pointer
