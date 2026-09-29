@@ -415,8 +415,9 @@ export interface SplitPanesDragOptions {
    * The copy carried for an item pressed outside the grid (`data-drag-item`),
    * built detached — never put on the page, and nothing on the page read
    * after the press. `pressed` is what was pressed; `picture` copies an
-   * element as the drag copies a pane (ids, labels and the module's marks
-   * stripped); `focusedPane` is the focused pane's element, if drawn.
+   * element as the drag copies a pane (ids, labels, and the marks that
+   * would make it something to carry, aim at or mid-drag stripped: see
+   * `alwaysStripped`); `focusedPane` is the focused pane's element, if drawn.
    */
   readonly copyOf: (
     item: string,

@@ -26,7 +26,8 @@
  * from here; any module may import the pure model's files, and a host's own
  * model and use cases, which may not import React, must; a test may take
  * `testing.ts`. The module imports no host — only the few of the desktop
- * window's shared parts the rule names (motion, the resize edge).
+ * window's shared parts the rule names (motion, reduced motion, hold still,
+ * the resize edge).
  * `scripts/architecture/split-panes-boundary.mjs` holds both.
  *
  * The module keeps no layout: a drop, a resize, an equalize or a fit is

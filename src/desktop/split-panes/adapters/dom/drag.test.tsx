@@ -440,6 +440,8 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   // A picture of the pane as it looks — in the corner, its header starts
   // where the pane's does — but nothing to carry, aim at, or mid-drag.
   expect(element(`.${classes.ghost} article`).hasAttribute(marks.corner)).toBe(true)
+  // Only `dragPane` is on the pane as it is pictured; the others are set
+  // after the copy is made, and are listed so that stays true.
   for (const name of [marks.dragPane, marks.dragItem, marks.carrying, marks.lifted])
     expect(element(`.${classes.ghost}`).querySelector(`[${name}]`), name).toBeNull()
   expect(copy.hasAttribute("data-host-mark")).toBe(false)

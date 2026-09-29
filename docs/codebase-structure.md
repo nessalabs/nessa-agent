@@ -245,10 +245,13 @@ writing the full defaults on first launch is buying.
   `ui/panes/pane-grid.tsx`). Other modules import the barrel, any of the pure
   model's files (a model or use case, which may not import React, must), and
   — from a test — `split-panes/testing`; split panes import no host, only the
-  few desktop shared parts the rule names (motion, reduced motion, the resize
-  edge).
-  `scripts/architecture/split-panes-boundary.mjs` refuses the rest, however
-  the import is written; a test may still read a stylesheet's text by URL.
+  four desktop shared parts the rule names (motion, reduced motion, hold
+  still, the resize edge).
+  `scripts/architecture/split-panes-boundary.mjs` refuses the rest, in every
+  form of import it reads (named, side-effect, `import()`, `vi.mock` and
+  `vi.importActual`/`vi.importMock`; not `require()`, path aliases or
+  specifiers built at runtime, which the source does not use); a test may
+  still read a stylesheet's text by URL.
   A name of the page's a host writes out whole, or reads through `dataset`,
   is held to the published ones by `src/desktop/styles.test.ts`; one built
   at runtime is not read. The resize edge that the grid and the side

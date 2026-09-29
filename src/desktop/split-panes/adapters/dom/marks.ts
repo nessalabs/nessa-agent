@@ -1,7 +1,8 @@
 /**
  * Every name on the page a host writes for split panes, or reads from them —
- * published here, once, so a host's code and tests derive them and never
- * retype them. Each begins `data-split-`, `data-drag-` or `split-panes-`, so
+ * published here, once. A host's code and tests derive them where they can,
+ * and spell them where JSX needs a literal attribute; either way they are
+ * held to this set. Each begins `data-split-`, `data-drag-` or `split-panes-`, so
  * a host's stylesheets, which cannot import this, are held to it by what
  * they spell: `src/desktop/styles.test.ts` refuses any name of those three
  * families, written out whole in a host's stylesheet, code or test, or in a
