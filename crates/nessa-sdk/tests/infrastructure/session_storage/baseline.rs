@@ -10,6 +10,80 @@ use nessa_sdk::infrastructure::session_storage::{
     commit_baseline_candidate, decode_baseline, encode_baseline, load_baseline,
     BaselineImportError, BaselineLoad, BaselineSection,
 };
+use std::io::Write;
+
+#[tokio::test]
+async fn legacy_tail_recovery_or_corruption_decides_whether_a_baseline_can_be_imported() {
+    let directory = tempfile::tempdir().unwrap();
+    let legacy_root = directory.path().join("legacy");
+    private::create_directory(&legacy_root).unwrap();
+    let legacy = LocalFileStorage::new(&legacy_root).unwrap();
+    let source = snapshot("legacy-cut");
+    let lease = legacy.open(source.id.clone()).await.unwrap();
+    lease.save(source.clone()).await.unwrap();
+    let path = journal_path(&legacy_root, "legacy-cut");
+    let committed = std::fs::read(&path).unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"{\"sequence\":2")
+        .unwrap();
+
+    let recovered = SessionSnapshot::load_saved(&*lease, &source.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_same(&recovered, &source);
+    assert_eq!(std::fs::read(&path).unwrap(), committed);
+
+    let runtime =
+        Runtime::<MemoryStore>::open(MemoryStoreOptions::default(), RuntimeConfig::default())
+            .await
+            .unwrap();
+    let stream = runtime
+        .create_stream(&StreamId::new("legacy-cut").unwrap())
+        .await
+        .unwrap();
+    let export = encode_baseline(&recovered).unwrap();
+    commit_baseline_candidate(&runtime, &stream, &export)
+        .await
+        .unwrap();
+    let BaselineLoad::Sealed {
+        snapshot: imported, ..
+    } = load_baseline(&runtime, &stream).await.unwrap()
+    else {
+        panic!("recovered committed prefix was not imported");
+    };
+    assert_same(&imported, &source);
+
+    let corrupt_source = snapshot("corrupt-cut");
+    let corrupt_lease = legacy.open(corrupt_source.id.clone()).await.unwrap();
+    corrupt_lease.save(corrupt_source.clone()).await.unwrap();
+    let corrupt_path = journal_path(&legacy_root, "corrupt-cut");
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&corrupt_path)
+        .unwrap()
+        .write_all(b"{broken}\n")
+        .unwrap();
+    assert!(matches!(
+        SessionSnapshot::load_saved(&*corrupt_lease, &corrupt_source.id).await,
+        Err(StorageError::Corrupt(_))
+    ));
+    let corrupt_target = runtime
+        .create_stream(&StreamId::new("corrupt-cut").unwrap())
+        .await
+        .unwrap();
+    assert!(matches!(
+        load_baseline(&runtime, &corrupt_target).await.unwrap(),
+        BaselineLoad::Absent
+    ));
+    runtime
+        .shutdown(std::time::Duration::from_secs(2))
+        .await
+        .unwrap();
+}
 
 #[tokio::test]
 async fn saved_session_baseline_round_trip_preserves_input_observation_and_receipt() {
