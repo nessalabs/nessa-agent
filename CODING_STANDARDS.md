@@ -427,9 +427,23 @@ not someone reconstructing it afterwards.
 - A pull request names its issue (`Refs #N` or `Closes #N`), so the board links
   the two.
 - Moving an item needs the `project` scope on the GitHub CLI
-  (`gh auth refresh -s project`). The commands are `gh project item-list 1
-  --owner nessalabs` to find the item and `gh project item-edit` to set its
-  Status. A move that fails is reported to the person, not skipped silently.
+  (`gh auth refresh -s project`). Find the item by its issue, never by listing
+  the board: `gh project item-list` returns only 30 items unless given
+  `--limit`, so a busy board hides the issue. The lookup returns the item id
+  directly, with no board-size limit:
+
+  ```sh
+  gh api graphql -F n=<issue> -f query='query($n:Int!){repository(owner:"nessalabs",name:"nessa-agent"){issue(number:$n){projectItems(first:20){nodes{id project{number}}}}}}' \
+    --jq '.data.repository.issue.projectItems.nodes[] | select(.project.number == 1) | .id'
+  ```
+
+  For an issue in another repository, change `name` (and `owner` if it differs).
+  Get the project id with `gh project view 1 --owner nessalabs --format json
+  --jq .id`, and the **Status** field id and option ids with `gh project
+  field-list 1 --owner nessalabs --format json`. Then `gh project item-edit
+  --project-id <project id> --id <item id> --field-id <Status field id>
+  --single-select-option-id <option id>` sets the Status. A move that fails is
+  reported to the person, not skipped silently.
 
 ## Domain-driven design boundaries
 
