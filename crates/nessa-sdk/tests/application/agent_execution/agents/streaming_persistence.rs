@@ -117,6 +117,7 @@ impl StreamingTest {
             wait_for_close: true,
             outcome: Ok(ExecutionOutcome::Completed),
             outcome_after_close,
+            yield_after_close: Mutex::new(false),
         });
         let (started_sender, started) = watch::channel(false);
         // The first backend message proves execute has started. Keep its output
@@ -468,6 +469,98 @@ async fn failed_deadline_save_stops_provider_with_typed_storage_failure() {
         test.backend.calls.closes.lock().unwrap().as_slice(),
         &[SessionCloseRequest::ExecutionFailed]
     );
+}
+
+#[tokio::test]
+async fn failed_deadline_save_waits_for_delayed_settlement_after_confirmed_cleanup() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test =
+        StreamingTest::with_clock_and_outcome(clock.clone(), Some(Ok(ExecutionOutcome::Cancelled)))
+            .await;
+    *test.backend.yield_after_close.lock().unwrap() = true;
+    let running = test.start().await;
+    test.text("pending").await;
+    test.storage.fail_next();
+    clock.advance(Duration::from_millis(100));
+    let result = tokio::time::timeout(Duration::from_secs(2), running)
+        .await
+        .expect("confirmed cleanup must settle")
+        .unwrap();
+    let Err(AgentError::StorageAfterExecution {
+        execution_result, ..
+    }) = &result
+    else {
+        panic!("{result:?}");
+    };
+    assert_eq!(execution_result.as_ref(), &Ok(ExecutionOutcome::Cancelled));
+    let saved = test.storage.snapshot();
+    assert_eq!(saved.invocations[0].result, Some(result));
+    assert_eq!(
+        saved.invocations[0]
+            .provider_report
+            .as_ref()
+            .unwrap()
+            .provider_result(),
+        Some(&Ok(ExecutionOutcome::Cancelled))
+    );
+}
+
+#[tokio::test]
+async fn stalled_threshold_save_polls_stop_and_settlement_before_release() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test = StreamingTest::with_clock(clock).await;
+    let running = test.start().await;
+    let (saving, release_save) = test.storage.pause_next_save();
+    let threshold = test.send(ExecutionUpdate::Message(MessageChunk::text(
+        "x".repeat(16 * 1024),
+    )));
+    saving.await.unwrap();
+    let close = tokio::spawn({
+        let agent = test.agent.clone();
+        async move { agent.close(actor()).await }
+    });
+    let mut settled = test.settled.clone();
+    tokio::time::timeout(Duration::from_secs(2), settled.wait_for(|ready| *ready))
+        .await
+        .expect("supervisor must poll settlement during threshold save")
+        .unwrap();
+    assert_pending(threshold).await;
+    release_save.send(()).unwrap();
+    test.send(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled))
+        .await
+        .unwrap();
+    let _ = close.await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(2), running)
+        .await
+        .expect("settlement completed")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn stalled_consequential_save_polls_stop_and_settlement_before_release() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test = StreamingTest::with_clock(clock).await;
+    let running = test.start().await;
+    let (saving, release_save) = test.storage.pause_next_save();
+    let terminal = test.send(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled));
+    saving.await.unwrap();
+    let close = tokio::spawn({
+        let agent = test.agent.clone();
+        async move { agent.close(actor()).await }
+    });
+    let mut settled = test.settled.clone();
+    tokio::time::timeout(Duration::from_secs(2), settled.wait_for(|ready| *ready))
+        .await
+        .expect("supervisor must poll settlement during consequential save")
+        .unwrap();
+    assert_pending(terminal).await;
+    release_save.send(()).unwrap();
+    let _ = close.await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(2), running)
+        .await
+        .expect("consequential result completed")
+        .unwrap();
+    assert_eq!(result, Ok(ExecutionOutcome::Cancelled));
 }
 
 #[tokio::test]

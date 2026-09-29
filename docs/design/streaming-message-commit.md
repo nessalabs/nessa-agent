@@ -21,6 +21,15 @@ A wake reacquires the evidence lock and checks the generation and deadline befor
 calling the same save owner. The manager never reads a clock or sleeps through a
 concrete runtime directly.
 
+The supervisor has one save state for every trigger. In `Polling` it may admit
+one provider event or a due timer. In `Saving` it owns that single manager future,
+pauses event ingress, and keeps polling Stop and the provider execution future.
+An acknowledged save returns to `Polling`; a failed save retains its typed error,
+asks the existing lifecycle owner to clean up, and awaits settlement after
+confirmed cleanup. Unconfirmed cleanup permits only an already-ready reply.
+The manager's evidence lock remains the sole writer and serialization point;
+there is no second save queue.
+
 | Ordering | Required result | Enforcer |
 | --- | --- | --- |
 | One small message, then silence | Save begins at the fixed 100 ms deadline without another provider event. | Supervisor timer branch and manager generation check. |
@@ -29,11 +38,13 @@ concrete runtime directly.
 | Timer and threshold become ready together | One generation receives one in-flight append, with no empty save. | `save_observed` under the evidence lock. |
 | Append is slow | One save remains in flight; bounded provider ingress and cancellation work retain capacity. | Supervisor polling and existing output limits. |
 | Another save holds evidence while the provider settles or Stop arrives | The supervisor still polls settlement and Stop; it waits for evidence as a select branch. | Nonblocking deadline inspection and supervised lock reacquisition. |
-| Timer save stalls while Stop and provider settlement become ready | The same in-flight save retains evidence ownership; the supervisor records Stop and the provider outcome without polling another observation or waiting for the save to finish. Once the save settles, normal evidence ordering resumes. | A supervisor-owned pending flush future and deferred provider outcome. |
+| Timer, threshold, or consequential save stalls while Stop and provider settlement become ready | The same in-flight save retains evidence ownership; the supervisor records Stop and the provider outcome without polling another observation or waiting for the save to finish. Once the save settles, normal evidence ordering resumes. | One supervisor-owned save future and deferred provider outcome for every trigger. |
 | An unowned local-cancellation report arrives during a stalled timer save, then Stop arrives before the save returns | The later Stop cannot authorize the earlier report. The reply is refused as a protocol error, no local-cancellation report is saved, and cleanup retains the actual Stop actor. | Capture the existing work cancellation authority when the provider reply is polled, then validate that captured fact when the evidence lock becomes available. |
 | Append definitely fails | Exact facts and generation remain pending; normal dispatch is fenced by typed storage supervision. | `save_observed` acknowledgement boundary and Agent failure path. |
-| Timer save fails as a provider outcome becomes ready | A ready provider outcome remains recorded before the typed storage failure and cleanup are finalized; a failed timer save cannot erase the independent provider result. | Ready-outcome poll before failure finalization and the existing provider-report owner. |
-| Timer save fails after a provider outcome was already recorded but trailing text remained pending | The prior success or failure remains the `StorageAfterExecution.execution_result`; cleanup retires the attachment without substituting a storage error for the known provider outcome. | Separate result and storage-failure slots in the supervisor. |
+| Any supervised save fails as a provider outcome becomes ready | A ready provider outcome remains recorded before the typed storage failure and cleanup are finalized; a failed save cannot erase the independent provider result. | Separate result and storage-failure slots in the supervisor. |
+| Any supervised save fails and confirmed cleanup precedes a delayed provider outcome | Confirmed cleanup requires the backend to settle admitted work. The supervisor continues polling through a pending yield and records the actual report and result within `StorageAfterExecution`. | The existing observation-save failure transition, with no timer-only settlement shortcut. |
+| Any supervised save fails and cleanup is unconfirmed | The supervisor captures an already-ready reply but does not await a reply the backend cannot promise or invent a successful result. | Existing uncertain-cleanup settlement boundary. |
+| A save fails after a provider outcome was already recorded but trailing text remained pending | The prior success or failure remains the `StorageAfterExecution.execution_result`; cleanup retires the attachment without substituting a storage error for the known provider outcome. | Separate result and storage-failure slots in the supervisor. |
 | Append may have committed but acknowledgement is lost | Retry presents the same record bytes and identity; storage reconciles it once. | Semantic record writer and pending generation retention. |
 | Stop during stalled append | The write keeps lease ownership; stop cause and provider cleanup are independently bounded. | Session lifecycle and storage lease supervision. |
 | Shutdown/crash at a save boundary | A write may be source-visible before its acknowledgement; the manager advances its committed snapshot only after acknowledgement or exact reconciliation. Replay exposes the physical commit once and never executes tools. | Semantic record writer reconciliation, `committed` update after save, and storage replay. |

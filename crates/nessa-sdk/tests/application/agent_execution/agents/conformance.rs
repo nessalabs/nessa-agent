@@ -78,6 +78,7 @@ struct WorkflowBackend {
     execution_fault: Mutex<Option<ProviderOperationFailure>>,
     execution_report: Mutex<Option<ExecutionReport>>,
     report_polled: watch::Sender<bool>,
+    yield_after_close: AtomicBool,
     exhaust_prepare_budget: AtomicUsize,
     shutdowns: Mutex<Vec<SessionCloseRequest>>,
 }
@@ -158,6 +159,9 @@ impl ProviderSessionBackend for WorkflowBackend {
             self.dispatched.notify_one();
             if let Some(gate) = gate {
                 tokio::select! { _ = gate => {}, _ = closed.changed() => {} }
+            }
+            if self.yield_after_close.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
             }
             self.target.lock().unwrap().take();
             if let Some(report) = self.execution_report.lock().unwrap().clone() {
@@ -327,6 +331,7 @@ fn workflow_backend() -> Arc<WorkflowBackend> {
         execution_fault: Mutex::new(None),
         execution_report: Mutex::new(None),
         report_polled: watch::channel(false).0,
+        yield_after_close: AtomicBool::new(false),
         exhaust_prepare_budget: AtomicUsize::new(0),
         shutdowns: Mutex::new(Vec::new()),
     })

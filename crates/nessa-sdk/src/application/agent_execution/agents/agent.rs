@@ -34,7 +34,8 @@ use crate::application::agent_execution::providers::{
     ProviderOperationResult, ProviderSessionState, SessionCloseRequest,
 };
 use crate::application::agent_execution::sessions::{
-    AttachmentOpenFailureSource, ProviderContext, SessionManager, StorageError,
+    AttachmentOpenFailureSource, InvocationCancellationEvent, ProviderContext, SessionManager,
+    StorageError,
 };
 use crate::domain::{
     agent_execution::executions::ExecutionOutcome,
@@ -43,10 +44,41 @@ use crate::domain::{
 use std::{
     future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
+    pin::Pin,
     sync::{Arc, RwLock},
     task::Poll,
 };
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, watch, Mutex};
+
+// All observation and timer saves use this same supervisor-owned wait. Evidence
+// remains locked by the manager's one save future while ingress is paused.
+async fn await_supervised_save<Save, Execution, Failure>(
+    save: Save,
+    mut execution: Pin<&mut Execution>,
+    stop_notice: &mut watch::Receiver<Option<InvocationCancellationEvent>>,
+    stop_observed: &mut bool,
+    pending_provider_outcome: &mut Option<(
+        ProviderExecutionReply,
+        Option<InvocationCancellationEvent>,
+    )>,
+    result_known: bool,
+) -> Result<(), Failure>
+where
+    Save: Future<Output = Result<(), Failure>>,
+    Execution: Future<Output = (ProviderExecutionReply, Option<InvocationCancellationEvent>)>,
+{
+    tokio::pin!(save);
+    loop {
+        tokio::select! {
+            biased;
+            _ = stop_notice.changed(), if !*stop_observed => *stop_observed = true,
+            outcome = &mut execution, if !result_known && pending_provider_outcome.is_none() => {
+                *pending_provider_outcome = Some(outcome);
+            }
+            saved = &mut save => return saved,
+        }
+    }
+}
 
 /// One agent conversation. Clones share its provider context, hooks, and storage.
 /// Configure the provider and manager once; all runtime controls go through Agent.
@@ -858,7 +890,7 @@ impl Agent {
         let mut observation_failure = None;
         let mut stop_after_ready_settlement = false;
         let mut pending_provider_outcome = None;
-        let mut pending_timer_failure: Option<StorageError> = None;
+        let mut pending_save_failure: Option<StorageError> = None;
         loop {
             if let Some((outcome, cancellation_at_reply)) = pending_provider_outcome.take() {
                 let mut cleanup_failure = None;
@@ -943,7 +975,7 @@ impl Agent {
                 // event path too. Do not poll another ready item after that failure.
                 ended = true;
             }
-            if let Some(error) = pending_timer_failure.take() {
+            if let Some(error) = pending_save_failure.take() {
                 storage_failure.get_or_insert(error.clone());
                 let cleanup = self
                     .shutdown_after_failure(SessionCloseRequest::ExecutionFailed)
@@ -952,17 +984,19 @@ impl Agent {
                     stop_after_ready_settlement = !cleanup.is_confirmed();
                     observation_failure = Some(cleanup_error);
                 }
-                if result.is_none() {
-                    // Cleanup can make an execution reply ready. Give that
-                    // independent reply one poll before settling storage
-                    // failure as the only known execution outcome.
+                if !cleanup.is_confirmed() && result.is_none() && pending_provider_outcome.is_none()
+                {
+                    // An unconfirmed cleanup cannot promise eventual settlement.
+                    // Preserve a reply only if it is already ready.
                     tokio::select! {
                         biased;
                         outcome = &mut execution => pending_provider_outcome = Some(outcome),
                         _ = async {} => result = Some(Err(AgentError::Storage(error))),
                     }
                 }
-                ended = true;
+                if !cleanup.is_confirmed() {
+                    ended = true;
+                }
                 continue;
             }
             if result.is_some() && ended {
@@ -999,25 +1033,15 @@ impl Agent {
                     }
                 }, if !ended && storage_failure.is_none() => {
                     if let Some(Some((generation, _))) = message_deadline {
-                        let flush = self.inner.manager.flush_due_messages(generation);
-                        tokio::pin!(flush);
-                        loop {
-                            tokio::select! {
-                                biased;
-                                _ = stop_notice.changed(), if !stop_observed => {
-                                    stop_observed = true;
-                                }
-                                outcome = &mut execution, if result.is_none() && pending_provider_outcome.is_none() => {
-                                    pending_provider_outcome = Some(outcome);
-                                }
-                                flush_result = &mut flush => {
-                                    if let Err(error) = flush_result {
-                                        storage_failure.get_or_insert(error.clone());
-                                        pending_timer_failure = Some(error);
-                                    }
-                                    break;
-                                }
-                            }
+                        if let Err(error) = await_supervised_save(
+                            self.inner.manager.flush_due_messages(generation),
+                            execution.as_mut(),
+                            &mut stop_notice,
+                            &mut stop_observed,
+                            &mut pending_provider_outcome,
+                            result.is_some(),
+                        ).await {
+                            pending_save_failure = Some(error);
                         }
                     }
                 }
@@ -1055,24 +1079,31 @@ impl Agent {
                                     terminal = Some(*outcome);
                                 }
                             }
-                            if let Err(error) = self.inner.manager.validate_event_retention(&event).await {
+                            if let Err(error) = await_supervised_save(
+                                self.inner.manager.validate_event_retention(&event),
+                                execution.as_mut(),
+                                &mut stop_notice,
+                                &mut stop_observed,
+                                &mut pending_provider_outcome,
+                                result.is_some(),
+                            ).await {
                                 let (failure, confirmed) = self.stop_after_observation_failure(error, ObservationFailureCause::ExecutionFailed).await;
                                 observation_failure = Some(failure);
                                 ended = true;
                                 stop_after_ready_settlement = !confirmed;
                                 continue;
                             }
-                            match self.inner.manager.event(event.clone()).await {
+                            match await_supervised_save(
+                                self.inner.manager.event(event.clone()),
+                                execution.as_mut(),
+                                &mut stop_notice,
+                                &mut stop_observed,
+                                &mut pending_provider_outcome,
+                                result.is_some(),
+                            ).await {
                                 Ok(()) => { let _ = self.inner.updates.send(event); }
                                 Err(error) => {
-                                    storage_failure.get_or_insert(error);
-                                    // Cleanup must still run even when saving observations fails.
-                                    let cleanup = self.shutdown_after_failure(SessionCloseRequest::ExecutionFailed).await;
-                                    if let Err(error) = cleanup.clone().into_result() {
-                                        stop_after_ready_settlement = !cleanup.is_confirmed();
-                                        observation_failure = Some(error);
-                                        ended = true;
-                                    }
+                                    pending_save_failure = Some(error);
                                 }
                             }
                         }
@@ -1092,7 +1123,7 @@ impl Agent {
                 // Drain observations already available at settlement, including a
                 // second terminal event. A conforming stream may remain open for
                 // the next invocation, so do not await future observations here.
-                _ = async {}, if admission_rejected || (result.is_some() && terminal.is_some()) => break,
+                _ = async {}, if admission_rejected || (result.is_some() && (terminal.is_some() || storage_failure.is_some())) => break,
             }
         }
         self.inner.manager.retire_observations(&input.execution_id);
