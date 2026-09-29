@@ -347,6 +347,37 @@ async fn agent_with_backend() -> (Agent, Arc<Backend>) {
         .unwrap();
     (agent, backend)
 }
+
+#[tokio::test]
+async fn control_admitted_before_provider_reply_cannot_first_poll_after_unusable_state() {
+    for session_state in [
+        ProviderSessionState::CleanupRequired,
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+        ProviderSessionState::CleanupReported(CleanupReport::unconfirmed(
+            AgentError::CleanupUncertain,
+        )),
+    ] {
+        let (agent, _) = agent_with_backend().await;
+        let control = agent.accept_control().unwrap();
+        let invocation = agent.inner.lifecycle.accept_work().unwrap();
+        agent
+            .inner
+            .lifecycle
+            .record_provider_state(&invocation, &session_state);
+        let delegated = Arc::new(AtomicUsize::new(0));
+        let attempted = delegated.clone();
+        let result = agent
+            .run_control(control, async move {
+                attempted.fetch_add(1, Ordering::SeqCst);
+                Ok::<(), ProviderOperationFailure>(())
+            })
+            .await;
+        assert_eq!(result, Err(AgentError::Closed), "{session_state:?}");
+        assert_eq!(delegated.load(Ordering::SeqCst), 0);
+    }
+}
 async fn reattach(agent: &Agent) {
     agent.close(actor()).await.unwrap();
     let authorization = agent

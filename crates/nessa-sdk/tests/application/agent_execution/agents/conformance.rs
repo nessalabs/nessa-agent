@@ -78,6 +78,7 @@ struct WorkflowBackend {
     execution_fault: Mutex<Option<ProviderOperationFailure>>,
     execution_report: Mutex<Option<ExecutionReport>>,
     report_polled: watch::Sender<bool>,
+    question_calls: AtomicUsize,
     yield_after_close: AtomicBool,
     exhaust_prepare_budget: AtomicUsize,
     shutdowns: Mutex<Vec<SessionCloseRequest>>,
@@ -223,6 +224,7 @@ impl ProviderSessionBackend for WorkflowBackend {
     }
     fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async {
+            self.question_calls.fetch_add(1, Ordering::SeqCst);
             Err(ProviderOperationFailure::new(
                 AgentError::Unsupported("this fixture asks nothing".into()),
                 ProviderSessionState::Usable,
@@ -331,6 +333,7 @@ fn workflow_backend() -> Arc<WorkflowBackend> {
         execution_fault: Mutex::new(None),
         execution_report: Mutex::new(None),
         report_polled: watch::channel(false).0,
+        question_calls: AtomicUsize::new(0),
         yield_after_close: AtomicBool::new(false),
         exhaust_prepare_budget: AtomicUsize::new(0),
         shutdowns: Mutex::new(Vec::new()),
@@ -559,6 +562,8 @@ async fn invocation_modes_retain_provider_settlement_when_its_save_panics() {
 
 #[path = "conformance/automatic_cleanup.rs"]
 mod automatic_cleanup;
+
+mod control_state_at_reply;
 
 mod unconfirmed_drain;
 

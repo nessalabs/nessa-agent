@@ -80,24 +80,11 @@ async fn stop_after_unowned_report_during_timer_save_cannot_authorize_it() {
     bounded(report_polled.wait_for(|polled| *polled))
         .await
         .unwrap();
+    assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Absent);
     let close = tokio::spawn({
         let agent = agent.clone();
         async move { agent.close(actor()).await }
     });
-    bounded(async {
-        loop {
-            if backend
-                .shutdowns
-                .lock()
-                .unwrap()
-                .contains(&SessionCloseRequest::Explicit(actor()))
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await;
     release_save.send(()).unwrap();
     let result = bounded(running).await.unwrap();
     let Err(AgentError::ExecutionObservation {
@@ -114,7 +101,7 @@ async fn stop_after_unowned_report_during_timer_save_cannot_authorize_it() {
     assert!(record.provider_report.is_none());
     assert!(record.local_outcome.is_none());
     assert!(record.local_cancellation.is_none());
-    assert!(backend
+    assert!(!backend
         .shutdowns
         .lock()
         .unwrap()

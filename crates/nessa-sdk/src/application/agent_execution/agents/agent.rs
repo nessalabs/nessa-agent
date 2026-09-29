@@ -877,7 +877,15 @@ impl Agent {
             let outcome = attached.session.execute(input.clone()).await;
             // Capture the existing stop authority with the reply. A later Stop
             // cannot retroactively authorize an earlier cancellation report.
-            (outcome, work.cancellation())
+            let cancellation_at_reply = work.cancellation();
+            // Session usability is a live lifecycle fact. Apply it before this
+            // future exposes the reply, even when an observation save is stalled.
+            if let ProviderExecutionReply::Finished(report) = &outcome {
+                self.inner
+                    .lifecycle
+                    .record_provider_state(work, report.session_state());
+            }
+            (outcome, cancellation_at_reply)
         });
         let mut stop_observed = false;
         let mut result = None;
@@ -929,9 +937,6 @@ impl Agent {
                     if settlement.source() == ExecutionReportSource::LocalCancellation
                         && cancellation.is_none()
                     {
-                        self.inner
-                            .lifecycle
-                            .record_provider_state(work, settlement.session_state());
                         let error = AgentError::Protocol(
                             "local cancellation report has no invocation stop".into(),
                         );
@@ -946,9 +951,6 @@ impl Agent {
                         ended = true;
                         continue;
                     }
-                    self.inner
-                        .lifecycle
-                        .record_provider_state(work, settlement.session_state());
                     provider_result = settlement.provider_result().cloned();
                     if let ProviderSessionState::CleanupReported(cleanup) =
                         settlement.session_state()

@@ -29,6 +29,11 @@ asks the existing lifecycle owner to clean up, and awaits settlement after
 confirmed cleanup. Unconfirmed cleanup permits only an already-ready reply.
 The manager's evidence lock remains the sole writer and serialization point;
 there is no second save queue.
+When the provider replies, the one execution future first captures existing
+invocation stop authority, then applies its reported provider session state to
+the lifecycle before exposing the reply to the supervisor. Durable report and
+result saves may wait behind an in-flight observation save; control admission
+and already-admitted control polling read the lifecycle state immediately.
 
 | Ordering | Required result | Enforcer |
 | --- | --- | --- |
@@ -40,7 +45,10 @@ there is no second save queue.
 | Append is slow | One save remains in flight; bounded provider ingress and cancellation work retain capacity. | Supervisor polling and existing output limits. |
 | Another save holds evidence while the provider settles or Stop arrives | The supervisor still polls settlement and Stop; it waits for evidence as a select branch. | Nonblocking deadline inspection and supervised lock reacquisition. |
 | Timer, threshold, or consequential save stalls while Stop and provider settlement become ready | The same in-flight save retains evidence ownership; the supervisor records Stop and the provider outcome without polling another observation or waiting for the save to finish. Once the save settles, normal evidence ordering resumes. | One supervisor-owned save future and deferred provider outcome for every trigger. |
-| An unowned local-cancellation report arrives during a stalled timer save, then Stop arrives before the save returns | The later Stop cannot authorize the earlier report. The reply is refused as a protocol error, no local-cancellation report is saved, and cleanup retains the actual Stop actor. | Capture the existing work cancellation authority when the provider reply is polled, then validate that captured fact when the evidence lock becomes available. |
+| A provider reports `CleanupRequired` during a stalled save, then a new or already-admitted control is polled | The lifecycle fences the provider generation at reply receipt; no control reaches that backend while durable report persistence waits. | Capture cancellation first, then apply the existing provider-state transition inside the one execution future. |
+| A provider reports confirmed or unconfirmed `CleanupReported` during a stalled save | Confirmed cleanup retires the provider generation; unconfirmed cleanup blocks it. Neither status admits a control during the save, and its audit meaning is retained for later report processing. | Existing lifecycle reconciliation at reply receipt, with durable report persistence deferred. |
+| A provider reports `Usable` during a stalled save | Controls remain admissible and delegate to the same live backend while the independent report save waits. | Existing lifecycle transition leaves usable provider admission open. |
+| An unowned local-cancellation report confirms cleanup during a stalled timer save, then explicit Stop arrives before the save returns | The later Stop cannot authorize the earlier report. The reply is refused as a protocol error, no local-cancellation report is saved, and the already-retired provider receives no invented explicit close. | Capture existing work cancellation authority before applying the provider's confirmed cleanup at reply receipt; validate that captured fact when evidence becomes available. |
 | Append definitely fails | Exact facts and generation remain pending; normal dispatch is fenced by typed storage supervision. | `save_observed` acknowledgement boundary and Agent failure path. |
 | Any supervised save fails as a provider outcome becomes ready | A ready provider outcome remains recorded before the typed storage failure and cleanup are finalized; a failed save cannot erase the independent provider result. | Separate result and storage-failure slots in the supervisor. |
 | A failed save has already captured a provider reply and its report save stalls | The known storage failure starts the admission fence and cleanup before waiting for a second report save. The captured reply and receipt-time cancellation authority survive for later persistence. | Process the shared save-failure transition before deferred provider-report persistence. |
