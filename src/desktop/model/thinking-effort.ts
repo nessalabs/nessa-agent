@@ -1,7 +1,7 @@
 /**
  * The thinking control's rules, apart from its drawing
- * (`ui/thinking-control.tsx`): which level a key or the pointer picks, the
- * order the track's stops light in when the level changes, and where the
+ * (`ui/thinking-control.tsx`): which level a key picks, where along the
+ * slider the pointer is and which level that snaps to, and where the
  * control's popover sits by its chip. The levels themselves are
  * `composer-options.ts`'s (`thinkingLevels`); nothing here names one — every
  * rule is by position among however many a model offers. Pixels and indexes
@@ -10,8 +10,9 @@
 import type { Box } from "./tooltip-placement"
 
 /**
- * The level a key moves to from `index` among `count`: the arrows step one
- * (right and up are more thinking), Home and End go to either end. Undefined
+ * The level a key moves to from `index` among `count`: the arrows and Page
+ * Up and Down step one (right and up are more thinking) — the levels are
+ * few, so a page is one — and Home and End go to either end. Undefined
  * when the key is not one of these, or would not move — the control then
  * leaves the key alone.
  */
@@ -23,9 +24,9 @@ export function levelAfterKey(
   if (count === 0) return undefined
   const last = count - 1
   const next =
-    key === "ArrowRight" || key === "ArrowUp"
+    key === "ArrowRight" || key === "ArrowUp" || key === "PageUp"
       ? Math.min(last, index + 1)
-      : key === "ArrowLeft" || key === "ArrowDown"
+      : key === "ArrowLeft" || key === "ArrowDown" || key === "PageDown"
         ? Math.max(0, index - 1)
         : key === "Home"
           ? 0
@@ -36,35 +37,33 @@ export function levelAfterKey(
 }
 
 /**
- * The stop under the pointer at `x`, on a track starting at `left` and
- * `width` wide, divided evenly among `count` stops. Past either end it is
- * the stop at that end, so a drag that overshoots still lands.
+ * Where along the slider the pointer at `x` stands, as a level position from
+ * 0 to `count - 1` — between levels while it is dragged — on a track starting
+ * at `left` and `width` wide, with the levels evenly spaced from end to end.
+ * Past either end it is that end, so a drag that overshoots still lands.
  */
-export function stopAt(x: number, left: number, width: number, count: number): number {
+export function positionAt(
+  x: number,
+  left: number,
+  width: number,
+  count: number,
+): number {
   if (count <= 1 || width <= 0) return 0
-  const along = Math.floor(((x - left) / width) * count)
+  const along = ((x - left) / width) * (count - 1)
   return Math.max(0, Math.min(count - 1, along))
 }
 
-/**
- * Where each stop falls in the wave that runs along the track when the
- * level changes from `from` to `to`: rising, the stops that light do so one
- * after another away from where it was (0 first); falling, those that dim go
- * back towards where it lands, the farthest first. Stops that do not change
- * are 0. The stylesheet multiplies these by its stagger token, which reduced
- * motion makes zero.
- */
-export function stopDelays(from: number, to: number, count: number): number[] {
-  return Array.from({ length: count }, (_, stop) => {
-    if (to > from && stop > from && stop <= to) return stop - from - 1
-    if (to < from && stop > to && stop <= from) return from - stop
-    return 0
-  })
+/** The level a position snaps to: the nearest one. */
+export function nearestLevel(position: number): number {
+  return Math.round(position)
 }
 
-/** How far along the scale a stop stands, from 0 (the least) to 1 (the most). */
-export function stopRank(stop: number, count: number): number {
-  return count <= 1 ? 1 : stop / (count - 1)
+/**
+ * How far along the track a position stands, from 0 (the least) to 1 (the
+ * most). A model's only level stands at the end.
+ */
+export function fractionAlong(position: number, count: number): number {
+  return count <= 1 ? 1 : position / (count - 1)
 }
 
 export type PopoverSide = "above" | "below"

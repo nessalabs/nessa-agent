@@ -19,10 +19,12 @@
  *                   scrolls to the end, the list begins below it, and the list's
  *                   top edge fades (its mask) rather than cutting a row
  *   thinking-control the composer's thinking control (ADR 238 › The thinking
- *                   control), from the keyboard alone: it opens onto the level
- *                   chosen, the arrows, Home and End change the level and the
- *                   keyboard follows, and in every frame of every change — Fast
- *                   too — the composer, its controls and the popover hold their
+ *                   control): from the keyboard it opens onto the slider, the
+ *                   arrows, Home and End change the level, and only Ultra, past
+ *                   Max, is marked apart; dragged, the knob follows the pointer,
+ *                   the level is the nearest and let go it settles on it; in
+ *                   every frame of every change — the drag and Fast too — the
+ *                   composer, its controls and the popover hold their
  *                   place; a level's change animates transform and opacity only;
  *                   Escape, and Tab past its end, close it onto its chip; with
  *                   the system's reduced motion, nothing animates and the words
@@ -430,20 +432,23 @@ function drift(frames, part) {
   return Math.round(most * 100) / 100
 }
 
-/** Which stop is checked and which has the keyboard, by position (the levels are the page's). */
+/** Where the slider stands and what has the keyboard, by position (the levels are the page's). */
 const thinkingState = (page, chip) =>
   page.evaluate(
     ([sel, chipSelector]) => {
-      const stops = [...document.querySelectorAll(sel.thinkingStop)]
+      const knob = document.querySelector(sel.thinkingSlider)
+      const popover = document.querySelector(sel.thinkingPopover)
       return {
-        open: document.querySelector(sel.thinkingPopover) !== null,
-        count: stops.length,
-        checked: stops.findIndex((s) => s.getAttribute("aria-checked") === "true"),
-        focused: stops.indexOf(document.activeElement),
+        open: popover !== null,
+        count: knob ? Number(knob.getAttribute("aria-valuemax")) + 1 : 0,
+        checked: knob ? Number(knob.getAttribute("aria-valuenow")) : -1,
+        checkedLabel: knob?.getAttribute("aria-valuetext"),
+        knobFocused: knob !== null && document.activeElement === knob,
+        ultra:
+          document.querySelector(sel.thinkingTrack)?.hasAttribute("data-ultra") ?? false,
+        utmost: popover?.hasAttribute("data-utmost") ?? false,
         chipFocused: document.activeElement === document.querySelector(chipSelector),
         chipLabel: document.querySelector(chipSelector)?.getAttribute("aria-label"),
-        checkedLabel: stops.find((s) => s.getAttribute("aria-checked") === "true")
-          ?.ariaLabel,
       }
     },
     [css, chip],
@@ -496,11 +501,9 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
   await settled(page)
   const opened = await thinkingState(page, chip)
   if (opened.count < 3)
-    throw new CannotRun(`the popover offers ${opened.count} levels; the walk needs 3`)
-  if (opened.focused !== opened.checked)
-    failures.push(
-      `opened with the keyboard on stop ${opened.focused}, not the chosen ${opened.checked}`,
-    )
+    throw new CannotRun(`the slider offers ${opened.count} levels; the walk needs 3`)
+  if (!opened.knobFocused)
+    failures.push("opened with the keyboard elsewhere than the slider")
   await shot(options, page, `thinking-${engine}-opened`)
 
   // Home first, so every step after it has somewhere to go.
@@ -518,13 +521,58 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
     await sampling(`${key} to stop ${want}`, () => page.keyboard.press(key))
     now = await thinkingState(page, chip)
     if (now.checked !== want)
-      failures.push(`${key}: the level is stop ${now.checked}, not ${want}`)
-    if (now.focused !== now.checked)
-      failures.push(`${key}: the keyboard is on stop ${now.focused}, not the level's`)
+      failures.push(`${key}: the level is ${now.checked}, not ${want}`)
+    if (!now.knobFocused) failures.push(`${key}: the keyboard left the slider`)
     if (now.chipLabel !== `Thinking level: ${now.checkedLabel}`)
       failures.push(`${key}: the chip says "${now.chipLabel}"`)
+    // Past Max, where the model has Ultra, is the one level marked apart; below it none is.
+    if (now.utmost !== (now.ultra && now.checked === now.count - 1))
+      failures.push(
+        `${key}: at level ${now.checked} the popover is${now.utmost ? "" : " not"} marked utmost`,
+      )
     if (key === keys.end) await shot(options, page, `thinking-${engine}-utmost`)
   }
+
+  // The pointer: pressed near the start and dragged most of the way from the
+  // second level to the third, the knob follows it and the level is the
+  // nearest; let go, the knob settles on that level's place.
+  const track = await page.locator(css.thinkingTrack).boundingBox()
+  const midline = track.y + track.height / 2
+  const toward = 1.7 / (now.count - 1)
+  let held
+  await sampling("drag", async () => {
+    await page.mouse.move(track.x + 2, midline)
+    await page.mouse.down()
+    await page.mouse.move(track.x + track.width * toward, midline, { steps: 12 })
+    await frames(page, 2)
+    const knob = await page.locator(css.thinkingSlider).boundingBox()
+    held = {
+      pointer: track.x + track.width * toward,
+      knob: knob.x + knob.width / 2,
+      state: await thinkingState(page, chip),
+    }
+    await page.mouse.up()
+  })
+  const dropped = await thinkingState(page, chip)
+  const knob = await page.locator(css.thinkingSlider).boundingBox()
+  const settledAt = knob.x + knob.width / 2
+  const levelAt = track.x + (track.width * 2) / (now.count - 1)
+  const drag = {
+    followed: Math.round((held.knob - held.pointer) * 100) / 100,
+    heldLevel: held.state.checked,
+    level: dropped.checked,
+    settled: Math.round((settledAt - levelAt) * 100) / 100,
+  }
+  if (Math.abs(drag.followed) > 2)
+    failures.push(`drag: the held knob stood ${drag.followed}px from the pointer`)
+  if (drag.heldLevel !== 2 || drag.level !== 2)
+    failures.push(
+      `drag: the level was ${drag.heldLevel} held and ${drag.level} let go, not 2`,
+    )
+  if (Math.abs(drag.settled) > 1)
+    failures.push(
+      `drag: let go, the knob settled ${drag.settled}px from its level's place`,
+    )
   const changes = moves.filter((m) => m.name !== "fast")
   if (!changes.some((m) => m.running > 0))
     failures.push("no level change animated at all: the sampler saw nothing")
@@ -545,8 +593,8 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
     if (pressed !== "true")
       failures.push(`Fast mode's toggle is aria-pressed="${pressed}"`)
     const after = await thinkingState(page, chip)
-    if (after.checked !== now.checked)
-      failures.push(`Fast changed the level from stop ${now.checked} to ${after.checked}`)
+    if (after.checked !== dropped.checked)
+      failures.push(`Fast changed the level from ${dropped.checked} to ${after.checked}`)
   }
 
   await page.keyboard.press(keys.escape)
@@ -610,7 +658,7 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
     await reduced.close()
   }
 
-  return { opened, moves, reduced: still, failures }
+  return { opened, moves, drag, reduced: still, failures }
 }
 
 const meta = {

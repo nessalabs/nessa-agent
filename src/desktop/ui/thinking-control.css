@@ -1,37 +1,48 @@
 /*
  * The thinking control (`thinking-control.tsx`): the composer's chip, and a
  * popover of the window's glass (`.desktop-popover`, `styles.css`) holding a
- * heading, Fast mode, the chosen level's name and one line about it, and a
- * track of stops.
+ * heading, Fast mode, the level's name and one line about it, and a slider.
  *
  *   ┌─ 14px ─────────────────────────────────────┐
  *   │ Thinking                         ( ⚡ Fast ) │  24px row
  *   │ High                                         │  15px name
  *   │ Works it through                             │  12px line, one line always
- *   │ ━━━━━━━  ━━━━━━━  ━━━━━━━  ───────           │  6px bars on 22px stops
- *   └──────────────────────────────────────────────┘
+ *   │ ━━━━━━━━━━━━━━━━━━━━●─────── ┄┄┄┄┄           │  3px track, 12px knob;
+ *   └──────────────────────────────────────────────┘  Ultra's own segment last
  *
- * Effort reads as rising three ways: the bars fill from the left up to the
- * level, each lit bar brighter than the one before it (`--stop-rank`, 0 to
- * 1), and the chosen bar glows by its rank. The most a model will think
- * (`data-utmost`) is the one moment: a bloom of the theme's light in the
- * popover's corner and a light run once along the lit track. Every colour is
- * the theme's own light (`--desktop-light-*`), which a header picture tints.
+ * Effort reads as rising along the track: its fill is the theme's own light
+ * (`--desktop-light-*`, which a header picture tints), faint at the start and
+ * brightening to full towards the top end, and the knob's halo grows with
+ * it. A model that thinks past Max (`data-ultra`) has Ultra as a segment of
+ * its own after a hairline gap, drawn in the theme's two lights; reaching it
+ * (`data-utmost`) is the one moment — a bloom of those lights in the
+ * popover's corner and a light run once along the fill.
  *
- * Motion is transform and opacity alone, on the window's tokens: the bars
- * fill and empty as a wave (`--stop-delay`, from `stopDelays`), the words
- * cross-fade, rising when the level rises and falling when it falls. Nothing
- * here changes size with the level — the words hold one line, the track its
- * stops — so neither the popover nor the composer moves. With less motion
- * nothing animates at all.
+ * Motion is transform and opacity alone, on the window's tokens: the knob and
+ * the fill glide together to the level and settle, the words cross-fade,
+ * rising when the level rises and falling when it falls. While the knob is
+ * dragged it follows the pointer with no easing. Nothing here changes size
+ * with the level, so neither the popover nor the composer moves. With less
+ * motion nothing animates at all.
  */
 
 .desktop-thinking {
   --thinking-ink: var(--desktop-light-edge);
-  --thinking-rest: color-mix(in oklab, var(--foreground) 9%, transparent);
-  --thinking-rest-hover: color-mix(in oklab, var(--foreground) 16%, transparent);
-  --thinking-glow: color-mix(in oklab, var(--thinking-ink) 55%, transparent);
-  --thinking-stagger: calc(var(--desktop-stagger) / 2);
+  --thinking-rest: color-mix(in oklab, var(--foreground) 11%, transparent);
+  --thinking-knob: oklch(0.97 0 0);
+  --thinking-halo: color-mix(in oklab, var(--thinking-ink) 60%, transparent);
+  /* Ultra's segment: the theme's two lights, made opaque enough to read. */
+  --thinking-ultra-a: color-mix(
+    in oklab,
+    var(--desktop-light-edge) 70%,
+    var(--desktop-light-high)
+  );
+  --thinking-ultra-b: color-mix(
+    in oklab,
+    var(--desktop-light-edge) 45%,
+    var(--desktop-light-low)
+  );
+  --thinking-glide: var(--desktop-base) var(--desktop-settle);
   --thinking-from: -5px;
   --thinking-to: 5px;
 
@@ -40,7 +51,7 @@
   left: 0;
   z-index: 900;
   width: 248px;
-  padding: 10px 14px 9px;
+  padding: 10px 14px 6px;
   overflow: hidden;
   color: var(--foreground);
   font: 400 var(--desktop-text-body) / 16px var(--nessa-font-sans);
@@ -57,10 +68,20 @@
 /* On a light window the lights are too pale to read as a fill: leaned toward the ink. */
 html:not(.dark) .desktop-thinking {
   --thinking-ink: color-mix(in oklab, var(--desktop-light-edge), var(--foreground) 62%);
-  --thinking-rest: color-mix(in oklab, var(--foreground) 10%, transparent);
-  --thinking-rest-hover: color-mix(in oklab, var(--foreground) 18%, transparent);
-  /* A glow of ink on a light window is a shadow: here it is the theme's light, faint. */
-  --thinking-glow: color-mix(in oklab, var(--desktop-light-edge) 70%, transparent);
+  --thinking-rest: color-mix(in oklab, var(--foreground) 12%, transparent);
+  --thinking-knob: #fff;
+  /* A halo of ink on a light window is a shadow: here it is the theme's light. */
+  --thinking-halo: color-mix(in oklab, var(--desktop-light-edge) 80%, transparent);
+  --thinking-ultra-a: color-mix(
+    in oklab,
+    var(--thinking-ink) 70%,
+    var(--desktop-light-high)
+  );
+  --thinking-ultra-b: color-mix(
+    in oklab,
+    var(--thinking-ink) 45%,
+    var(--desktop-light-low)
+  );
 }
 
 .desktop-thinking[data-rising] {
@@ -85,11 +106,13 @@ html:not(.dark) .desktop-thinking {
 }
 
 /*
- * Fast is a setting of its own, not a level: a small pill that holds a fill
- * while on (a selection is a fill), its bolt filled, beside the heading
- * rather than on the track.
+ * Fast is speed, not effort: a small pill beside the heading, never on the
+ * track. On, it holds a fill (a selection is a fill), its bolt filled and
+ * leaning forward, and as it turns on two short streaks run back past the
+ * bolt once.
  */
 .desktop-thinking-fast {
+  position: relative;
   width: auto;
   height: 24px;
   gap: 4px;
@@ -123,16 +146,40 @@ html:not(.dark) .desktop-thinking {
   height: 13px;
   flex-shrink: 0;
   stroke-width: 1.75;
+  transition: transform var(--thinking-glide);
 }
 
 .desktop-thinking-fast[aria-pressed="true"] svg {
   fill: currentColor;
-  animation: desktop-thinking-zap var(--desktop-slow) var(--desktop-spring);
+  transform: skewX(-12deg);
 }
 
-@keyframes desktop-thinking-zap {
+.desktop-thinking-streaks {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 7px;
+  height: 5px;
+  margin-top: -2.5px;
+  background:
+    linear-gradient(currentColor, currentColor) 0 0 / 100% 1px no-repeat,
+    linear-gradient(currentColor, currentColor) 3px 100% / 4px 1px no-repeat;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.desktop-thinking-fast[aria-pressed="true"] .desktop-thinking-streaks {
+  animation: desktop-thinking-streak calc(var(--desktop-slow) * 1.5) var(--desktop-out);
+}
+
+@keyframes desktop-thinking-streak {
   from {
-    transform: scale(0.7);
+    opacity: 0.8;
+    transform: translateX(6px);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-3px);
   }
 }
 
@@ -165,16 +212,6 @@ html:not(.dark) .desktop-thinking {
   white-space: nowrap;
 }
 
-/* The most a model will think carries the theme's light in its name. */
-.desktop-thinking[data-utmost]
-  .desktop-thinking-words:not([data-leaving])
-  .desktop-thinking-name {
-  background: linear-gradient(90deg, var(--foreground) 10%, var(--thinking-ink));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
 .desktop-thinking-words[data-entering] {
   animation: desktop-thinking-enter var(--desktop-slow) var(--desktop-out) both;
 }
@@ -204,91 +241,193 @@ html:not(.dark) .desktop-thinking {
   }
 }
 
-/* ——— The track ——— */
+/* ——— The slider ——— */
 
-.desktop-thinking-track {
+/* The pointer's room: a 24px band around a 3px track, the knob's width inset at each end. */
+.desktop-thinking-slider {
   position: relative;
-  display: grid;
-  grid-auto-columns: 1fr;
-  grid-auto-flow: column;
-  gap: 2px;
-  margin: 8px -3px 0;
+  height: 24px;
+  margin: 6px 6px 0;
   touch-action: none;
-}
-
-.desktop-thinking-stop {
-  position: relative;
-  display: flex;
-  height: 22px;
-  align-items: center;
-  padding: 0 3px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  outline: none;
   cursor: default;
 }
 
-.desktop-thinking-bar {
-  position: relative;
-  height: 6px;
-  flex: 1;
-  overflow: hidden;
+.desktop-thinking-rail {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 3px;
+  margin-top: -1.5px;
   border-radius: 999px;
+}
+
+.desktop-thinking-rest {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
   background: var(--thinking-rest);
-  transition: background-color var(--desktop-fast) ease;
 }
 
-.desktop-thinking-stop:not([data-lit]):hover .desktop-thinking-bar {
-  background: var(--thinking-rest-hover);
+/*
+ * Ultra's segment stands apart from the scale by a hairline gap before it,
+ * cut from the track and its fill — both fixed to the track — by one mask.
+ */
+.desktop-thinking-slider[data-ultra] :is(.desktop-thinking-rest, .desktop-thinking-fill) {
+  --gap-at: calc(var(--ultra-from) * 100%);
+  -webkit-mask: linear-gradient(
+    90deg,
+    #000 calc(var(--gap-at) - 2px),
+    transparent calc(var(--gap-at) - 2px),
+    transparent calc(var(--gap-at) + 2px),
+    #000 calc(var(--gap-at) + 2px)
+  );
+  mask: linear-gradient(
+    90deg,
+    #000 calc(var(--gap-at) - 2px),
+    transparent calc(var(--gap-at) - 2px),
+    transparent calc(var(--gap-at) + 2px),
+    #000 calc(var(--gap-at) + 2px)
+  );
 }
 
-.desktop-thinking-stop:focus-visible .desktop-thinking-bar {
+/* Unreached, Ultra's segment already holds a trace of the lights it will fill with. */
+.desktop-thinking-beyond,
+.desktop-thinking-glow {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: calc(var(--ultra-from) * 100% + 2px);
+  border-radius: inherit;
+}
+
+.desktop-thinking-beyond {
+  background: linear-gradient(90deg, var(--thinking-ultra-a), var(--thinking-ultra-b));
+  opacity: 0.4;
+}
+
+.desktop-thinking-slider:not([data-ultra])
+  :is(.desktop-thinking-beyond, .desktop-thinking-glow) {
+  display: none;
+}
+
+/* Reached, it glows: the lights spill a little past the segment. */
+.desktop-thinking-glow {
+  box-shadow:
+    0 0 6px 0.5px var(--thinking-ultra-a),
+    0 0 14px 2px color-mix(in oklab, var(--thinking-ultra-b) 60%, transparent);
+  opacity: 0;
+  transition: opacity var(--desktop-slow) var(--desktop-out) var(--desktop-fast);
+}
+
+.desktop-thinking[data-utmost] .desktop-thinking-glow {
+  opacity: 1;
+}
+
+/* On a light window a glow of the ink is a shadow: there it is the theme's light. */
+html:not(.dark) .desktop-thinking-glow {
+  box-shadow:
+    0 0 6px 0.5px var(--desktop-light-edge),
+    0 0 14px 2px var(--desktop-light-high);
+}
+
+/*
+ * The fill is revealed, not stretched: a clip slides in from the left to the
+ * knob while the gradient inside it slides back by as much, so the light
+ * stays fixed to the track — faint at its start, full at Max, the lights
+ * past it — and only what is revealed changes. Both move by transform.
+ */
+.desktop-thinking-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  transform: translateX(calc((var(--position) - 1) * 100%));
+  transition: transform var(--thinking-glide);
+}
+
+.desktop-thinking-fill {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--thinking-ink) 30%, transparent) 0%,
+    var(--thinking-ink) calc(var(--ultra-from) * 100%),
+    var(--thinking-ultra-a) calc(var(--ultra-from) * 100%),
+    var(--thinking-ultra-b) 100%
+  );
+  transform: translateX(calc((1 - var(--position)) * 100%));
+  transition: transform var(--thinking-glide);
+}
+
+/* The levels between the ends, as notches of the popover's own ground. */
+.desktop-thinking-tick {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 2px;
+  margin: -1px 0 0 -1px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--foreground) 45%, var(--popover));
+  opacity: 0.8;
+}
+
+/* The knob rides a carriage the slider's width, moved by the fraction it stands at. */
+.desktop-thinking-carriage {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform: translateX(calc(var(--position) * 100%));
+  transition: transform var(--thinking-glide);
+}
+
+.desktop-thinking-knob {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: var(--thinking-knob);
+  box-shadow:
+    0 0 0 0.5px rgb(0 0 0 / 18%),
+    0 1px 3px rgb(0 0 0 / 35%);
+  outline: none;
+  pointer-events: auto;
+  transition: transform var(--desktop-fast) var(--desktop-out);
+}
+
+/* Its halo: the fill's light, stronger the further along it stands. */
+.desktop-thinking-knob::before {
+  position: absolute;
+  z-index: -1;
+  inset: -5px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, var(--thinking-halo), transparent);
+  content: "";
+  opacity: calc(0.15 + 0.85 * var(--position));
+  transition: opacity var(--thinking-glide);
+}
+
+.desktop-thinking-knob:focus-visible {
   outline: 1.5px solid var(--desktop-focus-ring);
   outline-offset: 2.5px;
 }
 
-/*
- * The fill: a pill the bar's size, slid in from the left and brighter the
- * further along the scale it stands. Rising, the bars light one after
- * another from where the level was; falling, they empty back towards it.
- */
-.desktop-thinking-fill {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: var(--thinking-ink);
-  opacity: calc(0.4 + 0.6 * var(--stop-rank));
-  transform: translateX(-101%);
-  transition: transform var(--desktop-slow) var(--desktop-out)
-    calc(var(--stop-delay) * var(--thinking-stagger));
+/* Held, the knob grows a little and follows the pointer exactly. */
+.desktop-thinking-slider[data-dragging] .desktop-thinking-knob {
+  transform: scale(1.2);
 }
 
-.desktop-thinking-stop[data-lit] .desktop-thinking-fill {
-  transform: none;
+.desktop-thinking-slider[data-dragging]
+  :is(.desktop-thinking-clip, .desktop-thinking-fill, .desktop-thinking-carriage),
+.desktop-thinking-slider[data-dragging] .desktop-thinking-knob::before {
+  transition: none;
 }
 
-/* The chosen stop glows, more the higher it stands. */
-.desktop-thinking-stop::before {
-  position: absolute;
-  top: 50%;
-  right: 3px;
-  left: 3px;
-  height: 6px;
-  margin-top: -3px;
-  border-radius: 999px;
-  box-shadow: 0 0 12px 1px var(--thinking-glow);
-  content: "";
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--desktop-slow) var(--desktop-out);
-}
-
-.desktop-thinking-stop[data-current]::before {
-  opacity: calc(0.15 + 0.85 * var(--stop-rank));
-}
-
-/* ——— The most a model will think ——— */
+/* ——— Ultra: effort at its most ——— */
 
 .desktop-thinking-bloom {
   position: absolute;
@@ -310,20 +449,38 @@ html:not(.dark) .desktop-thinking[data-utmost] .desktop-thinking-bloom {
   opacity: 0.55;
 }
 
-/* A light that runs once along the lit bars as Max is reached, after they have filled. */
+.desktop-thinking[data-utmost] .desktop-thinking-knob::before {
+  inset: -7px;
+  background: radial-gradient(closest-side, var(--thinking-ultra-a), transparent);
+}
+
+/* The name carries the lights too. */
+.desktop-thinking[data-utmost]
+  .desktop-thinking-words:not([data-leaving])
+  .desktop-thinking-name {
+  background: linear-gradient(90deg, var(--foreground) 20%, var(--thinking-ultra-a));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* A light that runs once along the fill as Ultra is reached, after the knob lands. */
 .desktop-thinking-sheen {
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 30%;
   background: linear-gradient(
     90deg,
-    transparent 0%,
-    color-mix(in oklab, white 75%, transparent) 50%,
-    transparent 100%
+    transparent,
+    color-mix(in oklab, white 80%, transparent),
+    transparent
   );
   opacity: 0;
   transform: translateX(-100%);
-  animation: desktop-thinking-sheen calc(var(--desktop-slow) * 2) var(--desktop-ease)
-    calc(var(--desktop-base) + var(--stop-rank) * var(--desktop-slow)) both;
+  animation: desktop-thinking-sheen calc(var(--desktop-slow) * 3) var(--desktop-ease)
+    var(--desktop-base) both;
 }
 
 @keyframes desktop-thinking-sheen {
@@ -331,12 +488,12 @@ html:not(.dark) .desktop-thinking[data-utmost] .desktop-thinking-bloom {
     opacity: 0;
     transform: translateX(-100%);
   }
-  35% {
+  30% {
     opacity: 1;
   }
   100% {
     opacity: 0;
-    transform: translateX(100%);
+    transform: translateX(340%);
   }
 }
 
@@ -383,17 +540,21 @@ html:not(.dark) .desktop-thinking[data-utmost] .desktop-thinking-bloom {
 :root[data-motion="reduced"]
   :is(
     .desktop-thinking-fast,
-    .desktop-thinking-bar,
+    .desktop-thinking-fast svg,
+    .desktop-thinking-clip,
     .desktop-thinking-fill,
+    .desktop-thinking-carriage,
+    .desktop-thinking-knob,
     .desktop-thinking-bloom,
+    .desktop-thinking-glow,
     .desktop-chip-thinking .desktop-fast-mark,
     .desktop-chip-thinking[data-fast] > svg:first-child
   ),
-:root[data-motion="reduced"] .desktop-thinking-stop::before {
+:root[data-motion="reduced"] .desktop-thinking-knob::before {
   transition: none;
 }
 
 :root[data-motion="reduced"]
-  :is(.desktop-thinking-words, .desktop-thinking-sheen, .desktop-thinking-fast svg) {
+  :is(.desktop-thinking-words, .desktop-thinking-sheen, .desktop-thinking-streaks) {
   animation: none;
 }

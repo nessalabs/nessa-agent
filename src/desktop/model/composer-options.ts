@@ -83,7 +83,10 @@ export interface ThinkingLevel {
   readonly value: string
   readonly label: string
   readonly description: string
-  /** The most a model will think: the composer marks it apart from the others. */
+  /**
+   * Beyond Max: the most any model will think, offered only by a model that
+   * has it (`ultraThinkingFor`). The thinking control sets it apart.
+   */
   readonly utmost?: true
 }
 
@@ -91,22 +94,76 @@ export const thinkingLevels: readonly ThinkingLevel[] = [
   { value: "low", label: "Low", description: "Quick answers" },
   { value: "medium", label: "Medium", description: "Balanced" },
   { value: "high", label: "High", description: "Works it through" },
+  { value: "max", label: "Max", description: "Thinks as long as it needs" },
   {
-    value: "max",
-    label: "Max",
-    description: "Thinks as long as it needs",
+    value: "ultra",
+    label: "Ultra",
+    description: "Its deepest thinking, past Max",
     utmost: true,
   },
 ]
 
 export const defaultThinkingLevel = "medium"
 
-/** A model that does not reason offers no levels, and the control says so. */
+/**
+ * Models that offer Ultra thinking, past Max. The SDK catalog records only
+ * whether a model reasons — by design it prescribes no provider's effort
+ * levels (`crates/nessa-sdk/README.md`) — so, as with Fast mode below, they
+ * are listed here by provider and model until the catalog carries it.
+ */
+const ultraThinkingModels: readonly { provider: string; modelId: string }[] = [
+  { provider: "anthropic", modelId: "claude-opus-5" },
+  { provider: "openai", modelId: "gpt-6-astra" },
+]
+
+/** Whether a model thinks past Max, at Ultra. */
+export function ultraThinkingFor(model: ComposerModel | undefined): boolean {
+  return listed(ultraThinkingModels, model)
+}
+
+/**
+ * The levels a model accepts: none for a model that does not reason, and
+ * Ultra only for one that has it.
+ */
 export function thinkingLevelsFor(
   model: ComposerModel | undefined,
 ): readonly ThinkingLevel[] {
-  return model?.reasoning ? thinkingLevels : []
+  if (!model?.reasoning) return []
+  const ultra = ultraThinkingFor(model)
+  return thinkingLevels.filter((level) => !level.utmost || ultra)
 }
+
+/**
+ * Which of `levels` stands for `value`: the level itself, or — for a level
+ * this model does not offer, Ultra on a model that stops at Max — the highest
+ * it offers below it, so a choice carried across a change of model is shown
+ * as near as the model allows and never as a lower one than it can give.
+ * An unknown value is the first level.
+ */
+export function offeredLevelIndex(
+  levels: readonly ThinkingLevel[],
+  value: string,
+): number {
+  const exact = levels.findIndex((level) => level.value === value)
+  if (exact >= 0) return exact
+  const rank = thinkingLevels.findIndex((level) => level.value === value)
+  if (rank < 0) return 0
+  let below = 0
+  levels.forEach((level, index) => {
+    if (thinkingLevels.findIndex((known) => known.value === level.value) <= rank)
+      below = index
+  })
+  return below
+}
+
+const listed = (
+  entries: readonly { provider: string; modelId: string }[],
+  model: ComposerModel | undefined,
+) =>
+  model !== undefined &&
+  entries.some(
+    (entry) => entry.provider === model.provider && entry.modelId === model.modelId,
+  )
 
 /**
  * Models that offer Fast mode. The SDK catalog does not record it yet, so it
@@ -118,12 +175,7 @@ const fastModeModels: readonly { provider: string; modelId: string }[] = [
 
 /** Whether the thinking control offers Fast mode for this model. */
 export function fastModeFor(model: ComposerModel | undefined): boolean {
-  return (
-    model !== undefined &&
-    fastModeModels.some(
-      (entry) => entry.provider === model.provider && entry.modelId === model.modelId,
-    )
-  )
+  return listed(fastModeModels, model)
 }
 
 /**

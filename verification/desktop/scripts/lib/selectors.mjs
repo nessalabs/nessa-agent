@@ -70,12 +70,13 @@ export const css = {
   overviewScroll: ".agents-overview-scroll", // class: the list's scroller, under the header
 
   // The composer's thinking control (src/desktop/ui/thinking-control.tsx): a chip
-  // opening a popover whose stops are a radio group; the levels are read from
+  // opening a popover holding a slider; the levels are read from
   // the page, never named here (their owner is src/desktop/model/composer-options.ts)
   composerForm: ".desktop-composer", // class: a composer, whose place must not move
   thinkingChip: 'button[aria-haspopup="dialog"][aria-label^="Thinking level"]',
   thinkingPopover: '[role="dialog"][aria-label="Thinking"]',
-  thinkingStop: '[role="dialog"][aria-label="Thinking"] [role="radio"]',
+  thinkingSlider: '[role="dialog"][aria-label="Thinking"] [role="slider"]',
+  thinkingTrack: ".desktop-thinking-slider", // class: the slider's pointer room; data-ultra when the model has Ultra
   thinkingFast: '[role="dialog"][aria-label="Thinking"] button[aria-label="Fast mode"]',
   thinkingLeaving: ".desktop-thinking-words[data-leaving]", // class: the words that were shown
 

@@ -1,17 +1,20 @@
 /**
  * The composer's thinking control: a chip that opens a small popover of the
- * window's glass, in which a track of stops — one per level the model
- * offers — fills and brightens in the theme's own light as the level rises,
- * the level's name and one line about it cross-fading above, and Fast mode
- * a toggle of its own beside the heading.
+ * window's glass, holding a slider of thinking effort — a thin track whose
+ * fill brightens in the theme's own light towards its top end, and a small
+ * knob dragged along it that settles on the nearest level — with the level's
+ * name and one line about it cross-fading above, and Fast mode a toggle of
+ * its own beside the heading. A model that thinks past Max offers Ultra as a
+ * segment of its own at the track's end, where effort is at its most.
  *
  * It is the window's own rather than nessa_ui's `ModelThinkingControl`, whose
- * popover has no place for a level's description and swaps its label rather
- * than cross-fading it, and draws a continuous slider rather than stops (ADR
- * 238 › The thinking control). nessa_ui's `ModelFastMode` is the Fast toggle.
+ * popover has no place for a level's description, swaps its label rather
+ * than cross-fading it, and draws its slider its own way with nothing to
+ * restyle it by (ADR 238 › The thinking control). nessa_ui's `ModelFastMode`
+ * is the Fast toggle.
  *
- * The levels are `model/composer-options.ts`'s, and every rule of the track —
- * keys, the pointer, the order its stops light in, where the popover sits —
+ * The levels are `model/composer-options.ts`'s, and every rule of the slider —
+ * keys, where the pointer is and which level that is, where the popover sits —
  * is `model/thinking-effort.ts`'s. Motion is transform and opacity, on the
  * window's tokens, and none at all with less motion (`thinking-control.css`).
  * The chip is the same size whatever the level, so the composer never moves
@@ -30,13 +33,13 @@ import {
 } from "react"
 import { createPortal } from "react-dom"
 import { ModelFastMode } from "@nessa-ui/react/model-capability-controls"
-import type { ThinkingLevel } from "../model/composer-options"
+import { offeredLevelIndex, type ThinkingLevel } from "../model/composer-options"
 import {
+  fractionAlong,
   levelAfterKey,
+  nearestLevel,
   placePopover,
-  stopAt,
-  stopDelays,
-  stopRank,
+  positionAt,
 } from "../model/thinking-effort"
 import { DesktopIcon } from "./icons"
 import "./thinking-control.css"
@@ -51,7 +54,7 @@ export interface ThinkingControlProps {
 }
 
 /**
- * What the words above the track show, and what they showed before, so the
+ * What the words above the slider show, and what they showed before, so the
  * two cross-fade; `turn` counts the changes, so each one's fade is new.
  */
 interface Reading {
@@ -66,16 +69,17 @@ export function ThinkingControl({
   onValueChange,
   fastMode,
 }: ThinkingControlProps) {
-  const found = levels.findIndex((level) => level.value === value)
-  const index = found >= 0 ? found : 0
+  const index = offeredLevelIndex(levels, value)
   const selected = levels.at(index)
   const unavailable = levels.length === 0
   const [open, setOpen] = useState(false)
   const shown = open && !unavailable
   const triggerRef = useRef<HTMLButtonElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const stopRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const knobRef = useRef<HTMLSpanElement>(null)
   const [home, setHome] = useState<HTMLElement | null>(null)
+  // Where the knob is held while it is dragged, in levels; null at rest.
+  const [dragged, setDragged] = useState<number | null>(null)
   const id = useId()
 
   // The words follow the level; the level before stays, fading, beneath them.
@@ -88,10 +92,12 @@ export function ThinkingControl({
     setReading({ index, previous: reading.index, turn: reading.turn + 1 })
   const previous = reading.previous === undefined ? undefined : levels[reading.previous]
   const rising = reading.previous === undefined || index > reading.previous
-  const delays = stopDelays(reading.previous ?? index, index, levels.length)
+  const count = levels.length
+  const ultraAt = levels.findIndex((level) => level.utmost)
 
   const close = useCallback((refocus: boolean) => {
     setOpen(false)
+    setDragged(null)
     if (refocus) triggerRef.current?.focus({ preventScroll: true })
   }, [])
 
@@ -129,12 +135,9 @@ export function ThinkingControl({
     return () => window.removeEventListener("resize", place)
   }, [shown, home])
 
-  // Opened, the keyboard lands on the level chosen, so the arrows work at once.
+  // Opened, the keyboard lands on the knob, so the arrows work at once.
   useEffect(() => {
-    if (!shown) return
-    contentRef.current
-      ?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')
-      ?.focus({ preventScroll: true })
+    if (shown) knobRef.current?.focus({ preventScroll: true })
   }, [shown])
 
   // A press anywhere else closes it, leaving focus to whatever was pressed.
@@ -151,39 +154,34 @@ export function ThinkingControl({
     return () => document.removeEventListener("pointerdown", onPointerDown, true)
   }, [shown, close])
 
-  const onTrackKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const next = levelAfterKey(event.key, index, levels.length)
+  const onKnobKeyDown = (event: KeyboardEvent<HTMLSpanElement>) => {
+    const next = levelAfterKey(event.key, index, count)
     if (next === undefined) return
     event.preventDefault()
     choose(next)
-    stopRefs.current[next]?.focus({ preventScroll: true })
   }
 
-  // The track is also dragged along, like a slider: the stop under the pointer is the level.
-  const dragging = useRef(false)
+  // Pressed anywhere along it, the knob comes to the pointer and follows it,
+  // the level following the nearest; let go, it settles on that level.
   const follow = (event: PointerEvent<HTMLDivElement>) => {
     const track = event.currentTarget.getBoundingClientRect()
-    const next = stopAt(event.clientX, track.left, track.width, levels.length)
-    choose(next)
-    return next
+    const position = positionAt(event.clientX, track.left, track.width, count)
+    setDragged(position)
+    choose(nearestLevel(position))
   }
-  const onTrackPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (!event.isPrimary || event.button !== 0) return
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (!event.isPrimary || event.button !== 0 || count <= 1) return
     event.preventDefault()
-    dragging.current = true
     event.currentTarget.setPointerCapture(event.pointerId)
-    const next = follow(event)
-    stopRefs.current[next]?.focus({ preventScroll: true })
+    knobRef.current?.focus({ preventScroll: true })
+    follow(event)
   }
-  const onTrackPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    if (!dragging.current) return
-    const next = follow(event)
-    stopRefs.current[next]?.focus({ preventScroll: true })
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (dragged !== null) follow(event)
   }
-  const endDrag = () => {
-    dragging.current = false
-  }
+  const letGo = () => setDragged(null)
 
+  const position = dragged ?? index
   const popover = shown ? (
     <div
       ref={contentRef}
@@ -207,7 +205,7 @@ export function ThinkingControl({
         // rather than for wherever the page's order would drop it.
         const reachable = [
           ...event.currentTarget.querySelectorAll<HTMLElement>(
-            'button:not([disabled]):not([tabindex="-1"])',
+            'button:not([disabled]), [role="slider"]',
           ),
         ]
         const edge = event.shiftKey ? reachable.at(0) : reachable.at(-1)
@@ -216,8 +214,8 @@ export function ThinkingControl({
         close(true)
       }}
       onBlur={(event) => {
-        // Focus gone elsewhere — Tab past its end, say — closes it; to its own
-        // chip it does not, or the chip's click would open it again.
+        // Focus gone elsewhere closes it; to its own chip it does not, or the
+        // chip's click would open it again.
         const next = event.relatedTarget
         if (
           next instanceof Node &&
@@ -239,6 +237,7 @@ export function ThinkingControl({
             onPressedChange={fastMode.onPressedChange}
             icon={
               <>
+                <span className="desktop-thinking-streaks" aria-hidden="true" />
                 <DesktopIcon name="fast" />
                 <span>Fast</span>
               </>
@@ -246,7 +245,7 @@ export function ThinkingControl({
           />
         ) : null}
       </div>
-      {/* What the chosen stop says, drawn large; its radio already says it to a screen reader. */}
+      {/* The level in words, drawn large; the slider already says it to a screen reader. */}
       <div className="desktop-thinking-reading" aria-hidden="true">
         {previous ? (
           <span
@@ -268,53 +267,63 @@ export function ThinkingControl({
         </span>
       </div>
       <div
-        role="radiogroup"
-        aria-labelledby={`${id}-caption`}
-        className="desktop-thinking-track"
-        onKeyDown={onTrackKeyDown}
-        onPointerDown={onTrackPointerDown}
-        onPointerMove={onTrackPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onLostPointerCapture={endDrag}
+        className="desktop-thinking-slider"
+        data-dragging={dragged === null ? undefined : ""}
+        data-ultra={ultraAt >= 0 ? "" : undefined}
+        style={
+          {
+            "--position": fractionAlong(position, count),
+            // Where Ultra's own segment begins: the level before it, Max.
+            "--ultra-from": ultraAt > 0 ? fractionAlong(ultraAt - 1, count) : 1,
+          } as CSSProperties
+        }
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={letGo}
+        onPointerCancel={letGo}
+        onLostPointerCapture={letGo}
       >
-        {levels.map((level, stop) => (
-          <button
-            key={level.value}
-            ref={(element) => {
-              stopRefs.current[stop] = element
-            }}
-            type="button"
-            role="radio"
-            aria-checked={stop === index}
-            aria-label={level.label}
-            aria-describedby={`${id}-says-${stop}`}
-            tabIndex={stop === index ? 0 : -1}
-            // A screen reader's activation is a click with no pointer before it.
-            onClick={() => choose(stop)}
-            className="desktop-thinking-stop"
-            data-lit={stop <= index ? "" : undefined}
-            data-current={stop === index ? "" : undefined}
-            data-utmost={level.utmost ? "" : undefined}
-            style={
-              {
-                "--stop-rank": stopRank(stop, levels.length),
-                "--stop-delay": delays[stop],
-              } as CSSProperties
-            }
-          >
-            <span className="desktop-thinking-bar">
-              <span className="desktop-thinking-fill" />
-              {selected?.utmost && stop <= index ? (
-                // Max reached: a light runs once along the lit track.
-                <span key={`sheen-${reading.turn}`} className="desktop-thinking-sheen" />
-              ) : null}
-            </span>
-            <span id={`${id}-says-${stop}`} hidden>
-              {level.description}
-            </span>
-          </button>
-        ))}
+        <span className="desktop-thinking-rail" aria-hidden="true">
+          <span className="desktop-thinking-rest" />
+          <span className="desktop-thinking-beyond" />
+          <span className="desktop-thinking-glow" />
+          <span className="desktop-thinking-clip">
+            <span className="desktop-thinking-fill" />
+            {selected?.utmost ? (
+              // Ultra reached: a light runs once along the fill.
+              <span key={`sheen-${reading.turn}`} className="desktop-thinking-sheen" />
+            ) : null}
+          </span>
+          {/* The levels between the ends; where Ultra's segment begins, its gap marks Max. */}
+          {levels.map((level, stop) =>
+            stop === 0 || stop === count - 1 || stop === ultraAt - 1 ? null : (
+              <span
+                key={level.value}
+                className="desktop-thinking-tick"
+                style={{ left: `${fractionAlong(stop, count) * 100}%` }}
+              />
+            ),
+          )}
+        </span>
+        <span className="desktop-thinking-carriage">
+          <span
+            ref={knobRef}
+            role="slider"
+            tabIndex={0}
+            aria-labelledby={`${id}-caption`}
+            aria-orientation="horizontal"
+            aria-valuemin={0}
+            aria-valuemax={Math.max(0, count - 1)}
+            aria-valuenow={index}
+            aria-valuetext={selected?.label}
+            aria-describedby={`${id}-says`}
+            className="desktop-thinking-knob"
+            onKeyDown={onKnobKeyDown}
+          />
+        </span>
+        <span id={`${id}-says`} hidden>
+          {selected?.description}
+        </span>
       </div>
     </div>
   ) : null

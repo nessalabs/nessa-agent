@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 /**
  * The thinking control: a chip naming the level, opening a popover whose
- * stops are a radio group the keyboard walks, which Escape or a press
- * elsewhere closes, with Fast mode a toggle of its own.
+ * slider the keyboard and the pointer move between the model's levels —
+ * Ultra, past Max, only where the model has it — which Escape, Tab past its
+ * ends or a press elsewhere closes, with Fast mode a toggle of its own.
  */
 import { act, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
-import { thinkingLevels } from "../model/composer-options"
+import { thinkingLevels, type ThinkingLevel } from "../model/composer-options"
 import { ThinkingControl } from "./thinking-control"
 
 let host: HTMLDivElement
@@ -27,16 +28,19 @@ afterEach(async () => {
   host.remove()
 })
 
+const upToMax = thinkingLevels.filter((level) => !level.utmost)
 const chosen: string[] = []
 
 function Harness({
-  levels = thinkingLevels,
+  levels = upToMax,
   fast,
+  initial = "medium",
 }: {
-  levels?: typeof thinkingLevels
+  levels?: readonly ThinkingLevel[]
   fast?: boolean
+  initial?: string
 }) {
-  const [value, setValue] = useState("medium")
+  const [value, setValue] = useState(initial)
   const [pressed, setPressed] = useState(false)
   return (
     <ThinkingControl
@@ -57,20 +61,26 @@ const chip = () => {
   return button
 }
 const popover = () => document.querySelector<HTMLElement>('[role="dialog"]')
-const radios = () => [
-  ...document.querySelectorAll<HTMLButtonElement>('[role="radiogroup"] [role="radio"]'),
-]
-const checked = () =>
-  radios().find((radio) => radio.getAttribute("aria-checked") === "true")?.ariaLabel
-const key = (target: Element, name: string) =>
+const slider = () => {
+  const knob = document.querySelector<HTMLElement>('[role="slider"]')
+  if (!knob) throw new Error("no slider")
+  return knob
+}
+const said = () => slider().getAttribute("aria-valuetext")
+const key = (target: Element | null, name: string, shiftKey = false) =>
   act(async () => {
-    target.dispatchEvent(
-      new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }),
+    target?.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: name,
+        shiftKey,
+        bubbles: true,
+        cancelable: true,
+      }),
     )
   })
 const open = async () => act(async () => chip().click())
 
-it("names the level on its chip, and opens onto the level chosen", async () => {
+it("names the level on its chip, and opens onto a slider at the level chosen", async () => {
   await act(async () => root.render(<Harness />))
   expect(chip().getAttribute("aria-label")).toBe("Thinking level: Medium")
   expect(chip().getAttribute("aria-expanded")).toBe("false")
@@ -78,53 +88,55 @@ it("names the level on its chip, and opens onto the level chosen", async () => {
   expect(chip().getAttribute("aria-expanded")).toBe("true")
   // Drawn inside the chip's surface, not at the page's end.
   expect(host.contains(popover())).toBe(true)
-  expect(radios().map((radio) => radio.ariaLabel)).toEqual([
-    "Low",
-    "Medium",
-    "High",
-    "Max",
-  ])
-  expect(checked()).toBe("Medium")
-  expect(document.activeElement).toBe(radios()[1])
-  // Only the chosen stop is in the Tab order.
-  expect(radios().map((radio) => radio.tabIndex)).toEqual([-1, 0, -1, -1])
+  expect(slider().getAttribute("aria-valuemin")).toBe("0")
+  expect(slider().getAttribute("aria-valuemax")).toBe("3")
+  expect(slider().getAttribute("aria-valuenow")).toBe("1")
+  expect(said()).toBe("Medium")
+  expect(
+    document.getElementById(slider().getAttribute("aria-describedby") ?? "")?.textContent,
+  ).toBe("Balanced")
+  expect(document.activeElement).toBe(slider())
 })
 
-it("walks the levels with the keys, and says each one's line", async () => {
+it("moves between the levels with the keys", async () => {
   chosen.length = 0
   await act(async () => root.render(<Harness />))
   await open()
-  await key(radios()[1], "ArrowRight")
-  expect(checked()).toBe("High")
-  expect(document.activeElement).toBe(radios()[2])
-  await key(radios()[2], "End")
-  expect(checked()).toBe("Max")
+  await key(slider(), "ArrowRight")
+  expect(said()).toBe("High")
+  await key(slider(), "End")
+  expect(said()).toBe("Max")
   // At the end, a further step is left alone.
-  await key(radios()[3], "ArrowRight")
-  await key(radios()[3], "Home")
-  expect(checked()).toBe("Low")
-  expect(chosen).toEqual(["high", "max", "low"])
-  expect(chip().getAttribute("aria-label")).toBe("Thinking level: Low")
-  const said = document.getElementById(radios()[0].getAttribute("aria-describedby") ?? "")
-  expect(said?.textContent).toBe("Quick answers")
+  await key(slider(), "ArrowUp")
+  await key(slider(), "Home")
+  expect(said()).toBe("Low")
+  await key(slider(), "PageUp")
+  expect(said()).toBe("Medium")
+  expect(chosen).toEqual(["high", "max", "low", "medium"])
+  expect(chip().getAttribute("aria-label")).toBe("Thinking level: Medium")
+  expect(document.activeElement).toBe(slider())
 })
 
-it("picks a level activated with no pointer, as a screen reader does", async () => {
+it("ends at Max for a model without Ultra, and past it at Ultra for one with it", async () => {
   await act(async () => root.render(<Harness />))
   await open()
-  await act(async () => radios()[3].click())
-  expect(checked()).toBe("Max")
-})
-
-it("lights the stops up to the level, and marks the most a model will think", async () => {
-  await act(async () => root.render(<Harness />))
-  await open()
-  const lit = () => radios().map((radio) => radio.hasAttribute("data-lit"))
-  expect(lit()).toEqual([true, true, false, false])
+  const segment = () => document.querySelector(".desktop-thinking-slider")
+  expect(segment()?.hasAttribute("data-ultra")).toBe(false)
+  await key(slider(), "End")
+  expect(said()).toBe("Max")
   expect(popover()?.hasAttribute("data-utmost")).toBe(false)
-  await key(radios()[1], "End")
-  expect(lit()).toEqual([true, true, true, true])
+  await act(async () => root.render(<Harness levels={thinkingLevels} />))
+  expect(segment()?.hasAttribute("data-ultra")).toBe(true)
+  expect(slider().getAttribute("aria-valuemax")).toBe("4")
+  await key(slider(), "End")
+  expect(said()).toBe("Ultra")
+  // Ultra's the one moment: the popover is marked for it.
   expect(popover()?.hasAttribute("data-utmost")).toBe(true)
+})
+
+it("shows Ultra chosen on a model that stops at Max as Max", async () => {
+  await act(async () => root.render(<Harness initial="ultra" />))
+  expect(chip().getAttribute("aria-label")).toBe("Thinking level: Max")
 })
 
 it("cross-fades the words: what was shown stays, leaving, beneath the new", async () => {
@@ -137,14 +149,26 @@ it("cross-fades the words: what was shown stays, leaving, beneath the new", asyn
     }))
   // Opening shows the level at rest, with nothing leaving.
   expect(words()).toEqual([{ name: "Medium", leaving: false }])
-  await key(radios()[1], "ArrowRight")
+  await key(slider(), "ArrowRight")
   expect(words()).toEqual([
     { name: "Medium", leaving: true },
     { name: "High", leaving: false },
   ])
   expect(popover()?.hasAttribute("data-rising")).toBe(true)
-  await key(radios()[2], "ArrowLeft")
+  await key(slider(), "ArrowLeft")
   expect(popover()?.hasAttribute("data-rising")).toBe(false)
+})
+
+it("stands the knob and fill at the level's fraction of the track", async () => {
+  await act(async () => root.render(<Harness levels={thinkingLevels} />))
+  await open()
+  const track = () =>
+    document.querySelector<HTMLElement>(".desktop-thinking-slider")?.style
+  expect(track()?.getPropertyValue("--position")).toBe("0.25")
+  // Ultra's segment begins at Max, the level before it.
+  expect(track()?.getPropertyValue("--ultra-from")).toBe("0.75")
+  await key(slider(), "End")
+  expect(track()?.getPropertyValue("--position")).toBe("1")
 })
 
 it("closes on Escape, giving the keyboard back to its chip, and takes the key", async () => {
@@ -155,7 +179,7 @@ it("closes on Escape, giving the keyboard back to its chip, and takes the key", 
     reachedWindow = !event.defaultPrevented
   }
   window.addEventListener("keydown", onKey)
-  await key(radios()[1], "Escape")
+  await key(slider(), "Escape")
   window.removeEventListener("keydown", onKey)
   expect(popover()).toBeNull()
   expect(document.activeElement).toBe(chip())
@@ -164,29 +188,18 @@ it("closes on Escape, giving the keyboard back to its chip, and takes the key", 
 
 it("leaves for its chip when Tab runs past either end", async () => {
   await act(async () => root.render(<Harness fast />))
-  const tab = (target: Element | null, shiftKey: boolean) =>
-    act(async () => {
-      target?.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Tab",
-          shiftKey,
-          bubbles: true,
-          cancelable: true,
-        }),
-      )
-    })
   const fast = () => document.querySelector('[aria-label="Fast mode"]')
   await open()
-  // Shift-Tab from the level goes back to Fast, inside it: the browser moves that, not the control.
-  await tab(radios()[1], true)
+  // Shift-Tab from the slider goes back to Fast, inside it: the browser moves that.
+  await key(slider(), "Tab", true)
   expect(popover()).not.toBeNull()
-  // Tab from the level, its last part, leaves.
-  await tab(radios()[1], false)
+  // Tab from the slider, its last part, leaves.
+  await key(slider(), "Tab")
   expect(popover()).toBeNull()
   expect(document.activeElement).toBe(chip())
   // Shift-Tab from Fast, its first, leaves too.
   await open()
-  await tab(fast(), true)
+  await key(fast(), "Tab", true)
   expect(popover()).toBeNull()
   expect(document.activeElement).toBe(chip())
 })
@@ -214,7 +227,7 @@ it("offers Fast as a toggle of its own, shown on the chip while on", async () =>
   expect(fast?.getAttribute("aria-pressed")).toBe("true")
   expect(chip().dataset.fast).toBe("on")
   // The level is not Fast's: it stays where it was.
-  expect(checked()).toBe("Medium")
+  expect(said()).toBe("Medium")
 })
 
 it("has no Fast where the model does not offer it", async () => {
