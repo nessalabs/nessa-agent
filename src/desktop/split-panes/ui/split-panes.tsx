@@ -17,7 +17,7 @@ import {
   type EdgePlacement,
   type PanePlacement,
 } from "../model/pane-sizing"
-import { ResizeEdge } from "./resize-edge"
+import { ResizeEdge } from "../../ui/resize-edge"
 import "./split-panes.css"
 
 /**

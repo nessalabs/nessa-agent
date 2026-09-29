@@ -1,8 +1,9 @@
 /*
- * Split panes: the grid and where its panes are placed, the edges that resize
- * them, and what a drag draws (`adapters/dom/drag.ts`). A pane's own look —
- * its surface, header, focus — is its host's; what is here is what places,
- * resizes and carries it. Panes are placed from the layout's fractions
+ * Split panes: the grid and where its panes are placed, where the edges that
+ * resize them stand, and what a drag draws (`adapters/dom/drag.ts`). A pane's
+ * own look — its surface, header, focus — is its host's, and an edge's look
+ * the desktop's (`src/desktop/ui/resize-edge.css`); what is here places,
+ * resizes and carries a pane. Panes are placed from the layout's fractions
  * (`--cx`, `--cw`, … the frame sets on each pane's root), so one keeps its
  * identity when it moves; a change of layout lands at once and each pane
  * travels from where it was by transform alone (`adapters/dom/flip.tsx`).
@@ -26,54 +27,8 @@
   height: calc((100% - (var(--rn) - 1) * var(--g)) * var(--rh));
 }
 
-/* ——— Resize edges: the gutter itself, lit near the pointer ——— */
+/* ——— Edges between panes: the desktop's `ResizeEdge`, placed as the panes are ——— */
 
-.split-panes-edge {
-  position: relative;
-  width: var(--desktop-gutter);
-  flex: none;
-  cursor: col-resize;
-  touch-action: none;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-/* A glow runs along the edge near the pointer, in the theme's edge light. */
-.split-panes-edge::before {
-  content: "";
-  position: absolute;
-  inset: calc(var(--desktop-gutter) + var(--desktop-radius)) 2.5px;
-  pointer-events: none;
-  background: radial-gradient(
-    ellipse 3px 90px at 50%
-      calc(var(--split-panes-glow, 50%) - var(--desktop-gutter) - var(--desktop-radius)),
-    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
-    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
-    transparent 100%
-  );
-  opacity: 0;
-  transition: opacity var(--desktop-fast) ease;
-}
-
-.split-panes-edge:hover::before,
-.split-panes-edge:focus-visible::before,
-.split-panes-edge:active::before {
-  opacity: 1;
-}
-
-/* While an edge is dragged the cursor holds everywhere, and nothing selects (`pointer-resize.ts`). */
-html[data-split-panes-resizing],
-html[data-split-panes-resizing] * {
-  cursor: col-resize !important;
-  user-select: none !important;
-}
-
-html[data-split-panes-resizing="y"],
-html[data-split-panes-resizing="y"] * {
-  cursor: row-resize !important;
-}
-
-/* An edge between panes, placed as the panes are. */
 .split-panes-grid > .split-panes-pane-edge {
   position: absolute;
 }
@@ -95,7 +50,7 @@ html[data-split-panes-resizing="y"] * {
 .split-panes-grid > .split-panes-pane-edge[data-axis="x"]::before {
   inset: var(--desktop-radius) 2.5px;
   background: radial-gradient(
-    ellipse 3px 90px at 50% calc(var(--split-panes-glow, 50%) - var(--desktop-radius)),
+    ellipse 3px 90px at 50% calc(var(--desktop-edge-glow, 50%) - var(--desktop-radius)),
     color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
     color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
     transparent 100%
@@ -105,7 +60,7 @@ html[data-split-panes-resizing="y"] * {
 .split-panes-grid > .split-panes-pane-edge[data-axis="y"]::before {
   inset: 2.5px var(--desktop-radius);
   background: radial-gradient(
-    ellipse 90px 3px at calc(var(--split-panes-glow, 50%) - var(--desktop-radius)) 50%,
+    ellipse 90px 3px at calc(var(--desktop-edge-glow, 50%) - var(--desktop-radius)) 50%,
     color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
     color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
     transparent 100%

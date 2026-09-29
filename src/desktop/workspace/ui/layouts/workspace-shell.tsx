@@ -27,13 +27,9 @@ import { useWindowWidth } from "../../../adapters/window-width"
 import { draggedEdge } from "../../../model/side-column"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../../ui/history-buttons"
+import { ResizeEdge } from "../../../ui/resize-edge"
 import { workspaceDragOptions } from "../../adapters/dom/split-panes-drag"
-import {
-  FlipScope,
-  ResizeEdge,
-  useSplitPanesDrag,
-  type SplitPanesSource,
-} from "../../../split-panes"
+import { FlipScope, useSplitPanesDrag, type SplitPanesSource } from "../../../split-panes"
 import { useFocusFollowsPane } from "../../adapters/dom/focus"
 import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortcuts"
 import { useFitOnResize } from "../../adapters/dom/window-width"

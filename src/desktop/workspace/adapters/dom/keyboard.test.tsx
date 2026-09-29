@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 /**
  * The keyboard's ways around the workspace that the pointer has others for:
- * the context-menu key on a row. Tab through the panes and a resize edge's
- * standing are the split panes' own (`split-panes/adapters/dom/tab-order.test.tsx`,
- * `split-panes/ui/resize-edge.test.tsx`).
+ * the context-menu key on a row. Tab through the panes is the split panes'
+ * own (`split-panes/adapters/dom/tab-order.test.tsx`), and a resize edge's
+ * standing the desktop's (`src/desktop/ui/resize-edge.test.tsx`).
  */
 import { describe, expect, it } from "vitest"
 import { contextMenuFromKey } from "./context-menu-key"

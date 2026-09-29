@@ -42,6 +42,5 @@ export {
   type SplitPanesDragOptions,
 } from "./adapters/dom/drag"
 export { FlipScope } from "./adapters/dom/flip"
-export { ResizeEdge } from "./ui/resize-edge"
 export { paneFrame, SplitPanes, type PaneFrame, type ShownPane } from "./ui/split-panes"
 export type { Drop, EdgeMove, SplitPanesSource } from "./application/ports"

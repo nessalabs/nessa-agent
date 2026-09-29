@@ -35,7 +35,7 @@
   outline: none;
 }
 
-:where(.workspace :focus-visible:not(textarea, input, .split-panes-edge)),
+:where(.workspace :focus-visible:not(textarea, input, .desktop-resize-edge)),
 :where(.workspace .desktop-chip:focus-visible) {
   outline: 1.5px solid var(--desktop-focus-ring);
   outline-offset: -1.5px;
@@ -237,13 +237,13 @@
   }
 }
 
-/* ——— Resize edges (`split-panes/ui/resize-edge.tsx`) ——— */
+/* ——— Resize edges (`src/desktop/ui/resize-edge.tsx`) ——— */
 
 /*
  * A folded session list's edge, where it folded: out of the flow, so the
  * columns beside it keep their places, and dragged out it opens the list.
  */
-.split-panes-edge.workspace-edge-folded {
+.desktop-resize-edge.workspace-edge-folded {
   position: absolute;
   z-index: 5;
   top: 0;

@@ -2,7 +2,7 @@
  * Dragging a boundary: reports the pointer's travel along one axis since the
  * press, with the pointer captured so the drag survives leaving the edge.
  * Moves are coalesced to one per frame. While a drag runs, the document is
- * marked `data-split-panes-resizing` with the axis, so the cursor holds
+ * marked `data-desktop-resizing` with the axis, so the cursor holds
  * everywhere and nothing selects text — and the mark goes however the drag
  * ends: released, cancelled, capture lost, or the edge itself unmounted.
  */
@@ -29,7 +29,7 @@ export function usePointerResize(
     if (start.current === null) return
     start.current = null
     cancelAnimationFrame(frame.current)
-    delete document.documentElement.dataset.splitPanesResizing
+    delete document.documentElement.dataset.desktopResizing
   })
   useEffect(() => {
     const finish = end.current
@@ -44,7 +44,7 @@ export function usePointerResize(
       onStart()
       event.currentTarget.setPointerCapture(event.pointerId)
       start.current = at(event)
-      document.documentElement.dataset.splitPanesResizing = axis
+      document.documentElement.dataset.desktopResizing = axis
     },
     onPointerMove(event: ReactPointerEvent<HTMLElement>) {
       if (start.current === null) return
