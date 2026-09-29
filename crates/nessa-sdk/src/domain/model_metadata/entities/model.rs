@@ -1,5 +1,5 @@
 use super::super::{
-    value_objects::{ImageInputLimits, ModelDescription, ModelFeatures, ModelKey},
+    value_objects::{EffortLevels, ImageInputLimits, ModelDescription, ModelFeatures, ModelKey},
     MetadataError,
 };
 use crate::domain::common::value_objects::TokenLimits;
@@ -13,6 +13,7 @@ pub struct ModelMetadata {
     features: ModelFeatures,
     limits: TokenLimits,
     image_input: Option<ImageInputLimits>,
+    effort_levels: Option<EffortLevels>,
 }
 impl ModelMetadata {
     pub fn new(
@@ -27,6 +28,7 @@ impl ModelMetadata {
             features,
             limits,
             image_input: None,
+            effort_levels: None,
         }
     }
     /// The same model with its published image input limits. A model whose
@@ -40,6 +42,25 @@ impl ModelMetadata {
         }
         Ok(Self {
             image_input: Some(limits),
+            ..self
+        })
+    }
+    /// The same model with the reasoning effort levels its provider publishes.
+    /// A model whose features say it does not reason cannot have levels.
+    ///
+    /// # Errors
+    ///
+    /// [`MetadataError::Invalid`] naming `reasoning effort` when the features
+    /// do not list reasoning.
+    pub fn with_effort_levels(self, levels: EffortLevels) -> Result<Self, MetadataError> {
+        if !self.features.reasoning() {
+            return Err(MetadataError::Invalid {
+                field: "reasoning effort",
+                reason: "levels require reasoning",
+            });
+        }
+        Ok(Self {
+            effort_levels: Some(levels),
             ..self
         })
     }
@@ -60,5 +81,12 @@ impl ModelMetadata {
     /// an image for that model, so it is offered none.
     pub fn image_input(&self) -> Option<&ImageInputLimits> {
         self.image_input.as_ref()
+    }
+    /// The reasoning effort levels the provider publishes for this model,
+    /// least first, in its own names. `None` for a model that does not reason,
+    /// and for one whose levels are not recorded: there is then no level to
+    /// choose, and none is invented.
+    pub fn effort_levels(&self) -> Option<&EffortLevels> {
+        self.effort_levels.as_ref()
     }
 }

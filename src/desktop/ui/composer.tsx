@@ -11,7 +11,6 @@ import {
   composerProviders,
   contextLabel,
   defaultThinkingLevel,
-  fastModeFor,
   shortModelName,
   thinkingLevelsFor,
   type ComposerModel,
@@ -227,7 +226,7 @@ export function Composer({
               onValueChange={setThinking}
               // Fast is remembered while switching models, but only offered on one that has it.
               fastMode={
-                fastModeFor(model)
+                model && model.fastMode
                   ? { pressed: fast, onPressedChange: setFast }
                   : undefined
               }

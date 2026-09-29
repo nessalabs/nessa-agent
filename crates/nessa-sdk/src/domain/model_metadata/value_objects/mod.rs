@@ -5,6 +5,7 @@
 //! ```text
 //! identity.rs      ModelProvider + ModelKey (provider + model ID)
 //! capabilities.rs  Modalities + ModelFeatures
+//! reasoning.rs     EffortLevel + EffortLevels (a provider's own names, in its order)
 //! description.rs   ModelDescription (uses common Date)
 //! image_input.rs   ImageInputLimits, ImageInputViolation (uses common ImageMediaType)
 //!                         |
@@ -18,7 +19,9 @@ mod capabilities;
 mod description;
 mod identity;
 mod image_input;
+mod reasoning;
 pub use capabilities::{Modalities, ModelFeatures};
 pub use description::ModelDescription;
 pub use identity::{ModelKey, ModelProvider};
 pub use image_input::{ImageInputLimits, ImageInputViolation};
+pub use reasoning::{EffortLevel, EffortLevels};

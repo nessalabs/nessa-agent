@@ -24,20 +24,38 @@ impl Modalities {
     }
 }
 
+/// Which features a model is published with, or a binding can deliver.
+///
+/// The same flags describe both, so a binding's declaration is a ceiling the
+/// model's facts are intersected with. What a feature offers in detail — a
+/// reasoning model's effort levels, an image model's limits — is recorded on
+/// the model entity, and only where the flag here is set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModelFeatures {
     input: Modalities,
     output: Modalities,
     tool_use: bool,
     reasoning: bool,
+    fast_mode: bool,
 }
 impl ModelFeatures {
-    pub fn new(input: Modalities, output: Modalities, tool_use: bool, reasoning: bool) -> Self {
+    /// - `reasoning`: the model reasons before answering, or the binding can
+    ///   run a reasoning model's reasoning selection.
+    /// - `fast_mode`: the provider offers a faster output mode for the model,
+    ///   or the binding can turn it on. Speed, not reasoning effort.
+    pub fn new(
+        input: Modalities,
+        output: Modalities,
+        tool_use: bool,
+        reasoning: bool,
+        fast_mode: bool,
+    ) -> Self {
         Self {
             input,
             output,
             tool_use,
             reasoning,
+            fast_mode,
         }
     }
     pub fn input(self) -> Modalities {
@@ -51,5 +69,8 @@ impl ModelFeatures {
     }
     pub fn reasoning(self) -> bool {
         self.reasoning
+    }
+    pub fn fast_mode(self) -> bool {
+        self.fast_mode
     }
 }

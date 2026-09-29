@@ -1,7 +1,7 @@
 use crate::domain::common::value_objects::TokenLimits;
 use crate::domain::model_metadata::{
     entities::ModelMetadata,
-    value_objects::{ImageInputLimits, Modalities, ModelFeatures, ModelKey},
+    value_objects::{EffortLevels, ImageInputLimits, Modalities, ModelFeatures, ModelKey},
 };
 use std::{error::Error, fmt};
 
@@ -30,6 +30,7 @@ pub enum CapabilityRequirement {
     Output(Modality),
     ToolUse,
     Reasoning,
+    FastMode,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,6 +74,7 @@ pub struct EffectiveCapabilities {
     features: ModelFeatures,
     limits: TokenLimits,
     image_input: Option<ImageInputLimits>,
+    effort_levels: Option<EffortLevels>,
 }
 impl EffectiveCapabilities {
     /// Binding and model ceilings intersect; explicit configuration must fit.
@@ -122,16 +124,22 @@ impl EffectiveCapabilities {
                 });
             }
         }
+        let reasoning = published.reasoning() && binding.features.reasoning();
+        // The levels go with reasoning: a binding that cannot run the model's
+        // reasoning selection offers none of its levels.
+        let effort_levels = reasoning.then(|| model.effort_levels().cloned()).flatten();
         Ok(Self {
             model: model.key().clone(),
             features: ModelFeatures::new(
                 input,
                 output,
                 published.tool_use() && binding.features.tool_use(),
-                published.reasoning() && binding.features.reasoning(),
+                reasoning,
+                published.fast_mode() && binding.features.fast_mode(),
             ),
             limits: configured_limits,
             image_input,
+            effort_levels,
         })
     }
     pub fn model(&self) -> &ModelKey {
@@ -147,12 +155,19 @@ impl EffectiveCapabilities {
     pub fn image_input(&self) -> Option<&ImageInputLimits> {
         self.image_input.as_ref()
     }
+    /// The model's published effort levels, present exactly when reasoning is
+    /// offered and the model records its levels. Never more than the model
+    /// publishes; a harness's own narrower list is not read here.
+    pub fn effort_levels(&self) -> Option<&EffortLevels> {
+        self.effort_levels.as_ref()
+    }
     pub fn supports(&self, requirement: CapabilityRequirement) -> bool {
         match requirement {
             CapabilityRequirement::Input(modality) => supports(self.features.input(), modality),
             CapabilityRequirement::Output(modality) => supports(self.features.output(), modality),
             CapabilityRequirement::ToolUse => self.features.tool_use(),
             CapabilityRequirement::Reasoning => self.features.reasoning(),
+            CapabilityRequirement::FastMode => self.features.fast_mode(),
         }
     }
     /// Validate requirements and a token budget before accepting input.

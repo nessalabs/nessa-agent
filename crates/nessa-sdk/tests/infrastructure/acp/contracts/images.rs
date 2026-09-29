@@ -161,7 +161,10 @@ fn image_provider_from(
         }),
         output: text,
         tool_use: true,
-        reasoning: true,
+        reasoning: Some(ReasoningDto {
+            effort_levels: vec![],
+        }),
+        fast_mode: false,
         max_context_window_tokens: 1000,
         max_output_tokens: 200,
         knowledge_cutoff: "2026-01".into(),

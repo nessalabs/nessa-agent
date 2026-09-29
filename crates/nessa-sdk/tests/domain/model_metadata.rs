@@ -12,11 +12,15 @@ use nessa_sdk::domain::model_metadata::{
     value_objects::Modalities,
     value_objects::ModelDescription,
     value_objects::ModelFeatures,
+    value_objects::{EffortLevel, EffortLevels},
     value_objects::{ModelKey, ModelProvider},
     MetadataError,
 };
 
 fn model(provider: ModelProvider, image: bool) -> ModelMetadata {
+    model_that_reasons(provider, image, false)
+}
+fn model_that_reasons(provider: ModelProvider, image: bool, reasoning: bool) -> ModelMetadata {
     ModelMetadata::new(
         ModelKey::new(provider, "test-model".into()).unwrap(),
         ModelDescription::new(
@@ -29,6 +33,7 @@ fn model(provider: ModelProvider, image: bool) -> ModelMetadata {
             Modalities::new(true, image, false).unwrap(),
             Modalities::new(true, false, false).unwrap(),
             true,
+            reasoning,
             false,
         ),
         TokenLimits::new(1000, 100).unwrap(),
@@ -84,9 +89,13 @@ fn modality_sets_require_support_and_preserve_explicit_false_values() {
     assert!(audio.audio());
     assert!(!audio.text());
     assert!(!audio.image());
-    let features = ModelFeatures::new(audio, audio, false, false);
+    let features = ModelFeatures::new(audio, audio, false, false, false);
     assert!(!features.tool_use());
     assert!(!features.reasoning());
+    assert!(!features.fast_mode());
+    let features = ModelFeatures::new(audio, audio, false, true, true);
+    assert!(features.reasoning());
+    assert!(features.fast_mode());
 }
 
 #[test]
@@ -326,6 +335,85 @@ fn image_limits_require_the_image_input_modality() {
         model(ModelProvider::Anthropic, false).with_image_input(limits),
         Err(MetadataError::Invalid {
             field: "image input",
+            ..
+        })
+    ));
+}
+
+fn level(name: &str) -> EffortLevel {
+    EffortLevel::new(name.into()).unwrap()
+}
+
+#[test]
+fn effort_level_names_are_held_to_the_alphabet_providers_write_them_in() {
+    for valid in ["low", "xhigh", "max", "none", "level-2", "extra_high", "a"] {
+        assert_eq!(level(valid).as_str(), valid);
+    }
+    let longest = "a".repeat(EffortLevel::MAX_LEN);
+    assert_eq!(level(&longest).as_str(), longest);
+    for invalid in [
+        String::new(),
+        "a".repeat(EffortLevel::MAX_LEN + 1),
+        "High".into(),
+        "2high".into(),
+        "-low".into(),
+        "x high".into(),
+        "low\n".into(),
+        "haut\u{e9}".into(),
+    ] {
+        assert!(
+            matches!(
+                EffortLevel::new(invalid.clone()),
+                Err(MetadataError::Invalid {
+                    field: "reasoning effort",
+                    ..
+                })
+            ),
+            "{invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn effort_levels_keep_the_providers_order_and_refuse_none_or_a_repeat() {
+    let levels = EffortLevels::new(vec![level("none"), level("max"), level("low")]).unwrap();
+    // The provider's order, not any sorting of the names.
+    assert_eq!(
+        levels
+            .levels()
+            .iter()
+            .map(EffortLevel::as_str)
+            .collect::<Vec<_>>(),
+        ["none", "max", "low"]
+    );
+    for invalid in [
+        EffortLevels::new(vec![]),
+        EffortLevels::new(vec![level("low"), level("high"), level("low")]),
+    ] {
+        assert!(
+            matches!(
+                invalid,
+                Err(MetadataError::Invalid {
+                    field: "reasoning effort",
+                    ..
+                })
+            ),
+            "{invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn effort_levels_require_reasoning() {
+    let levels = EffortLevels::new(vec![level("low"), level("high")]).unwrap();
+    let reasons = model_that_reasons(ModelProvider::Anthropic, false, true);
+    assert_eq!(reasons.effort_levels(), None);
+    let recorded = reasons.with_effort_levels(levels.clone()).unwrap();
+    assert_eq!(recorded.effort_levels(), Some(&levels));
+    assert!(matches!(
+        model(ModelProvider::Anthropic, false).with_effort_levels(levels),
+        Err(MetadataError::Invalid {
+            field: "reasoning effort",
             ..
         })
     ));

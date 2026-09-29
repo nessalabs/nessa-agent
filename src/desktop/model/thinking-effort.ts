@@ -3,7 +3,7 @@
  * (`ui/thinking-control.tsx`): which level a key picks, where along the
  * slider the pointer is and which level that snaps to, and how much room
  * the control's popover keeps by its chip. The levels themselves are
- * `composer-options.ts`'s (`thinkingLevels`); nothing here names one — every
+ * `composer-options.ts`'s (`thinkingLevelsFor`); nothing here names one — every
  * rule is by position among however many a model offers. Pixels and indexes
  * in, indexes and pixels out; nothing here reads the page.
  */

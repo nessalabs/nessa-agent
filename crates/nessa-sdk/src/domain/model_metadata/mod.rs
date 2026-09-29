@@ -5,6 +5,7 @@
 //! application import --> Catalog --> ModelMetadata --> value objects
 //!                        aggregate    entity           identity
 //!                                                     capabilities
+//!                                                     reasoning effort
 //!                                                     description
 //! ```
 //! The catalog checks the collection; each model holds validated values.

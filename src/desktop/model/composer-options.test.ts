@@ -1,32 +1,35 @@
 import { describe, expect, it } from "vitest"
+import catalog from "../../../crates/nessa-sdk/data/models.json"
 import {
   agentForProvider,
   composerModels,
   contextLabel,
   defaultComposerModel,
-  fastModeFor,
   groupByProvider,
   providerLabel,
-  thinkingLevels,
   thinkingLevelsFor,
   offeredLevelIndex,
-  ultraThinkingFor,
-  ultraThinkingModels,
-  fastModeModels,
   levelRank,
   type ComposerModel,
   shortModelName,
 } from "./composer-options"
 
-function model(provider: string, modelId: string, reasoning = true): ComposerModel {
+function model(
+  provider: string,
+  modelId: string,
+  effortLevels: readonly string[] | null = ["low", "medium", "high", "max"],
+): ComposerModel {
   return {
     provider,
     modelId,
     displayName: modelId,
-    reasoning,
+    reasoning: effortLevels === null ? null : { effortLevels },
+    fastMode: false,
     maxContextWindowTokens: 200_000,
   }
 }
+const values = (levels: readonly { value: string }[]) =>
+  levels.map((level) => level.value)
 
 describe("groupByProvider", () => {
   it("keeps catalog order within and between providers", () => {
@@ -82,61 +85,55 @@ describe("contextLabel", () => {
 })
 
 describe("thinkingLevelsFor", () => {
-  it("offers no levels to a model that does not reason", () => {
-    expect(thinkingLevelsFor(model("x", "y", false))).toEqual([])
+  it("offers no levels to a model that does not reason, or has none recorded", () => {
+    expect(thinkingLevelsFor(model("x", "y", null))).toEqual([])
+    expect(thinkingLevelsFor(model("x", "y", []))).toEqual([])
     expect(thinkingLevelsFor(undefined)).toEqual([])
   })
 
-  it("offers a reasoning model the levels up to Max", () => {
-    expect(thinkingLevelsFor(model("x", "y")).map((level) => level.value)).toEqual([
-      "low",
-      "medium",
-      "high",
-      "max",
+  it("offers exactly the levels the model publishes, in its provider's order", () => {
+    const levels = thinkingLevelsFor(model("x", "y", ["none", "low", "xhigh", "max"]))
+    expect(values(levels)).toEqual(["none", "low", "xhigh", "max"])
+    expect(levels.map((level) => level.label)).toEqual([
+      "None",
+      "Low",
+      "Extra high",
+      "Max",
     ])
+    expect(levels.every((level) => level.description.length > 0)).toBe(true)
+    expect(levels.some((level) => level.utmost)).toBe(false)
   })
 
-  it("offers Ultra, past Max, only to a model that has it", () => {
-    const opus = model("anthropic", "claude-opus-5")
-    expect(ultraThinkingFor(opus)).toBe(true)
-    expect(thinkingLevelsFor(opus).map((level) => level.value)).toEqual([
-      "low",
-      "medium",
-      "high",
-      "max",
-      "ultra",
-    ])
-    expect(ultraThinkingFor(model("openai", "gpt-6-astra"))).toBe(true)
-    expect(ultraThinkingFor(model("anthropic", "claude-sonnet-5"))).toBe(false)
-    expect(ultraThinkingFor(model("openai", "claude-opus-5"))).toBe(false)
-    expect(ultraThinkingFor(undefined)).toBe(false)
-    // A model with Ultra listed but no reasoning still offers nothing.
-    expect(thinkingLevelsFor(model("anthropic", "claude-opus-5", false))).toEqual([])
+  it("marks only a level published past Max as Ultra, the utmost", () => {
+    const levels = thinkingLevelsFor(model("x", "y", ["low", "max", "ultra"]))
+    expect(levels.map((level) => level.utmost ?? false)).toEqual([false, false, true])
+    expect(levels[2]).toMatchObject({ label: "Ultra", utmost: true })
+    // A name the control does not word is shown as its provider writes it.
+    expect(thinkingLevelsFor(model("x", "y", ["turbo"]))[0]).toMatchObject({
+      value: "turbo",
+      label: "Turbo",
+    })
   })
-})
 
-describe("the models listed for Ultra and Fast", () => {
-  // Until the SDK catalogue records them (#302), a model renamed there must not
-  // silently lose Ultra or Fast here.
-  it.each([
-    ["Ultra", ultraThinkingModels],
-    ["Fast", fastModeModels],
-  ])("names only models in the SDK catalogue, for %s", (_, listed) => {
-    for (const entry of listed)
-      expect(
-        composerModels.some(
-          (known) => known.provider === entry.provider && known.modelId === entry.modelId,
-        ),
-        `${entry.provider}/${entry.modelId}`,
-      ).toBe(true)
+  it("offers each catalogue model the levels and Fast mode its entry records", () => {
+    for (const entry of catalog.models) {
+      const composer = composerModels.find(
+        (known) => known.provider === entry.provider && known.modelId === entry.modelId,
+      )
+      expect(values(thinkingLevelsFor(composer)), entry.modelId).toEqual(
+        entry.reasoning?.effortLevels ?? [],
+      )
+      expect(composer?.fastMode, entry.modelId).toBe(entry.fastMode)
+    }
   })
 })
 
 describe("levelRank", () => {
-  it("stands each level where it is among them all, whichever model offers it", () => {
-    expect(levelRank("low")).toBe(0)
-    expect(levelRank("max")).toBe(3)
-    expect(levelRank("ultra")).toBe(4)
+  it("stands each worded level where it is among them all, whichever model offers it", () => {
+    expect(levelRank("none")).toBe(0)
+    expect(levelRank("low")).toBe(1)
+    expect(levelRank("xhigh")).toBe(4)
+    expect(levelRank("max")).toBe(5)
     expect(levelRank("turbo")).toBe(-1)
     expect(levelRank(undefined)).toBe(-1)
   })
@@ -144,29 +141,32 @@ describe("levelRank", () => {
 
 describe("offeredLevelIndex", () => {
   const upToMax = thinkingLevelsFor(model("x", "y"))
-  const withUltra = thinkingLevelsFor(model("anthropic", "claude-opus-5"))
+  const wide = thinkingLevelsFor(
+    model("x", "y", ["none", "low", "medium", "high", "xhigh", "max", "ultra"]),
+  )
 
   it("is the level itself where the model offers it", () => {
     expect(offeredLevelIndex(upToMax, "high")).toBe(2)
-    expect(offeredLevelIndex(withUltra, "ultra")).toBe(4)
+    expect(offeredLevelIndex(wide, "ultra")).toBe(6)
   })
 
-  it("shows Ultra on a model that stops at Max as Max, never lower", () => {
-    expect(offeredLevelIndex(upToMax, "ultra")).toBe(3)
+  it("shows a level the model lacks as the highest it offers below it", () => {
+    expect(offeredLevelIndex(upToMax, "xhigh")).toBe(2)
+    // Below all it offers: its least.
+    expect(offeredLevelIndex(upToMax, "none")).toBe(0)
+    // A level past Max stands below nothing, so a carried High is never shown as it.
+    expect(
+      offeredLevelIndex(
+        thinkingLevelsFor(model("x", "y", ["low", "max", "ultra"])),
+        "high",
+      ),
+    ).toBe(0)
   })
 
-  it("shows a value it does not know as the first level", () => {
+  it("shows a value it does not word as the first level", () => {
     expect(offeredLevelIndex(upToMax, "turbo")).toBe(0)
+    expect(offeredLevelIndex(upToMax, "ultra")).toBe(0)
     expect(offeredLevelIndex([], "high")).toBe(0)
-  })
-})
-
-describe("fastModeFor", () => {
-  it("offers Fast mode on Claude Opus 5 and not on other models", () => {
-    expect(fastModeFor(model("anthropic", "claude-opus-5"))).toBe(true)
-    expect(fastModeFor(model("anthropic", "claude-sonnet-5"))).toBe(false)
-    expect(fastModeFor(model("openai", "claude-opus-5"))).toBe(false)
-    expect(fastModeFor(undefined)).toBe(false)
   })
 })
 
@@ -175,7 +175,8 @@ describe("a model's short name", () => {
     provider,
     modelId: displayName,
     displayName,
-    reasoning: false,
+    reasoning: null,
+    fastMode: false,
     maxContextWindowTokens: 1,
   })
   const catalogue = [
@@ -194,12 +195,5 @@ describe("a model's short name", () => {
   it("keeps a name whole where nothing is shared, or it is the only one", () => {
     expect(shortModelName(catalogue[2], catalogue)).toBe("GPT-6 Astra")
     expect(shortModelName(catalogue[4], catalogue)).toBe("Solo One")
-  })
-
-  it("marks only Ultra as the utmost thinking level, the one past Max", () => {
-    expect(
-      thinkingLevels.filter((level) => level.utmost).map((level) => level.value),
-    ).toEqual(["ultra"])
-    expect(thinkingLevels.at(-1)?.utmost).toBe(true)
   })
 })

@@ -5,7 +5,9 @@ pub(super) use crate::application::agent_execution::permissions::*;
 pub(super) use crate::application::agent_execution::providers::ExecutableUseSnapshot;
 pub(super) use crate::application::agent_execution::providers::*;
 pub(super) use crate::application::agent_execution::sessions::SessionManager;
-pub(super) use crate::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
+pub(super) use crate::application::dto::{
+    ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto, ReasoningDto,
+};
 pub(super) use crate::domain::agent_execution::{
     executions::*, permissions::*, prompts::*, questions::*, sessions::ExecutionFinish,
 };
@@ -199,7 +201,10 @@ pub(super) fn test_acp_configuration(
         image_input: None,
         output: text,
         tool_use: true,
-        reasoning: true,
+        reasoning: Some(ReasoningDto {
+            effort_levels: vec![],
+        }),
+        fast_mode: false,
         max_context_window_tokens: 1000,
         max_output_tokens: 200,
         knowledge_cutoff: "2026-01".into(),
@@ -273,7 +278,10 @@ pub(super) fn codex_configuration(
         input: text,
         output: text,
         tool_use: true,
-        reasoning: true,
+        reasoning: Some(ReasoningDto {
+            effort_levels: vec![],
+        }),
+        fast_mode: false,
         max_context_window_tokens: 1000,
         max_output_tokens: 200,
         knowledge_cutoff: "2026-01".into(),
@@ -370,7 +378,8 @@ pub(super) fn opencode_configuration(
         input: text,
         output: text,
         tool_use: true,
-        reasoning: false,
+        reasoning: None,
+        fast_mode: false,
         max_context_window_tokens: 1000,
         max_output_tokens: 200,
         knowledge_cutoff: "2026-01".into(),
@@ -458,7 +467,8 @@ pub(super) fn test_opencode_binding_on_a_model_that_takes_images_from(
             audio: false,
         },
         tool_use: true,
-        reasoning: false,
+        reasoning: None,
+        fast_mode: false,
         max_context_window_tokens: 1000,
         max_output_tokens: 200,
         knowledge_cutoff: "2026-01".into(),

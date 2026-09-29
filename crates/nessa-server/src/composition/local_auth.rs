@@ -640,7 +640,7 @@ fn agent_catalog(
                         model_id: model.model_id.clone(),
                         display_name: model.display_name.clone(),
                         max_context_window_tokens: u64::from(model.max_context_window_tokens),
-                        reasoning: model.reasoning,
+                        reasoning: model.reasoning.is_some(),
                         image_input: model.image_input.is_some(),
                         approval_modes: modes.iter().copied().map(wire_mode_choice).collect(),
                     }

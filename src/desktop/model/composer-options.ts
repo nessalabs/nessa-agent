@@ -3,14 +3,17 @@ import type { AgentId } from "../../onboarding/model/onboarding"
 
 /**
  * What the composer offers: the SDK's model catalog, grouped by provider, and
- * the thinking levels a reasoning model accepts. The catalog is read from the
- * file the SDK owns, never retyped here.
+ * the thinking levels and Fast mode each model is published with. The catalog
+ * is read from the file the SDK owns, never retyped here.
  */
 export interface ComposerModel {
   provider: string
   modelId: string
   displayName: string
-  reasoning: boolean
+  /** `null` for a model that does not reason; its levels, provider's order, where it does. */
+  reasoning: { effortLevels: readonly string[] } | null
+  /** Whether the provider publishes a fast mode for the model. */
+  fastMode: boolean
   maxContextWindowTokens: number
 }
 
@@ -80,65 +83,67 @@ export function contextLabel(tokens: number): string {
 
 /** A thinking level a reasoning model accepts, as the composer offers it. */
 export interface ThinkingLevel {
+  /** The provider's own name for the level, as the catalogue records it. */
   readonly value: string
   readonly label: string
   readonly description: string
   /**
-   * Beyond Max: the most any model will think, offered only by a model that
-   * has it (`ultraThinkingFor`). The thinking control sets it apart.
+   * Past Max: a level the model's provider publishes beyond its `max`, the
+   * most it will think. The thinking control sets it apart as Ultra. Only a
+   * model whose catalogue entry lists one has it.
    */
   readonly utmost?: true
 }
 
-export const thinkingLevels: readonly ThinkingLevel[] = [
-  { value: "low", label: "Low", description: "Quick answers" },
-  { value: "medium", label: "Medium", description: "Balanced" },
-  { value: "high", label: "High", description: "Works it through" },
-  { value: "max", label: "Max", description: "Thinks as long as it needs" },
-  {
-    value: "ultra",
-    label: "Ultra",
-    description: "Its deepest thinking, past Max",
-    utmost: true,
-  },
+/**
+ * How the thinking control words the level names providers publish, least
+ * first. This is the control's look, not the SDK's: the catalogue keeps each
+ * provider's names and order (ADR 302), and nothing here adds a level to a
+ * model — a model is offered exactly the levels its entry lists. The order
+ * here only says how near one name stands to another, for a choice carried
+ * from one model to the next (`offeredLevelIndex`).
+ */
+const levelWords: readonly { name: string; label: string; description: string }[] = [
+  { name: "none", label: "None", description: "Answers without thinking" },
+  { name: "low", label: "Low", description: "Quick answers" },
+  { name: "medium", label: "Medium", description: "Balanced" },
+  { name: "high", label: "High", description: "Works it through" },
+  { name: "xhigh", label: "Extra high", description: "Stays with long, hard work" },
+  { name: "max", label: "Max", description: "Thinks as long as it needs" },
 ]
 
 export const defaultThinkingLevel = "medium"
 
 /**
- * Models that offer Ultra thinking, past Max. The SDK catalog records only
- * whether a model reasons — by design it prescribes no provider's effort
- * levels (`crates/nessa-sdk/README.md`) — so, as with Fast mode below, they
- * are listed here by provider and model until the catalog carries it.
- */
-export const ultraThinkingModels: readonly { provider: string; modelId: string }[] = [
-  { provider: "anthropic", modelId: "claude-opus-5" },
-  { provider: "openai", modelId: "gpt-6-astra" },
-]
-
-/** Whether a model thinks past Max, at Ultra. */
-export function ultraThinkingFor(model: ComposerModel | undefined): boolean {
-  return listed(ultraThinkingModels, model)
-}
-
-/**
- * The levels a model accepts: none for a model that does not reason, and
- * Ultra only for one that has it.
+ * The levels a model accepts, least first: exactly those its catalogue entry
+ * lists, in its provider's order — none for a model that does not reason or
+ * has none recorded. A level listed after `max` is Ultra (`utmost`). A name
+ * with no words above is shown as the provider writes it.
  */
 export function thinkingLevelsFor(
   model: ComposerModel | undefined,
 ): readonly ThinkingLevel[] {
-  if (!model?.reasoning) return []
-  const ultra = ultraThinkingFor(model)
-  return thinkingLevels.filter((level) => !level.utmost || ultra)
+  const names = model?.reasoning?.effortLevels ?? []
+  const max = names.indexOf("max")
+  return names.map((name, index) => {
+    const words = levelWords.find((entry) => entry.name === name)
+    const utmost = max >= 0 && index > max
+    return {
+      value: name,
+      label: words?.label ?? name.charAt(0).toUpperCase() + name.slice(1),
+      description: words?.description ?? (utmost ? "Its deepest thinking, past Max" : ""),
+      ...(utmost ? { utmost: true as const } : {}),
+    }
+  })
 }
 
 /**
  * Which of `levels` stands for `value`: the level itself, or — for a level
- * this model does not offer, Ultra on a model that stops at Max — the highest
- * it offers below it, so a choice carried across a change of model is shown
- * as near as the model allows and never as a lower one than it can give.
- * An unknown value is the first level.
+ * this model does not offer — the highest it offers below it, so a choice
+ * carried across a change of model is shown as near as the model allows and
+ * never as a lower one than it can give; the first level where it offers
+ * none below. Only levels whose names are worded (`levelWords`) stand below
+ * or above anything. An unknown value is the first level.
  */
 export function offeredLevelIndex(
   levels: readonly ThinkingLevel[],
@@ -150,39 +155,18 @@ export function offeredLevelIndex(
   if (rank < 0) return 0
   let below = 0
   levels.forEach((level, index) => {
-    if (levelRank(level.value) <= rank) below = index
+    const standing = levelRank(level.value)
+    if (standing >= 0 && standing <= rank) below = index
   })
   return below
 }
 
 /**
- * Where a level stands among all the levels there are, least first — the
- * same whichever model offers it; -1 for a value that is not a level.
+ * Where a level's name stands among the names the control words, least
+ * first — the same whichever model offers it; -1 for a name it does not word.
  */
 export function levelRank(value: string | undefined): number {
-  return thinkingLevels.findIndex((level) => level.value === value)
-}
-
-const listed = (
-  entries: readonly { provider: string; modelId: string }[],
-  model: ComposerModel | undefined,
-) =>
-  model !== undefined &&
-  entries.some(
-    (entry) => entry.provider === model.provider && entry.modelId === model.modelId,
-  )
-
-/**
- * Models that offer Fast mode. The SDK catalog does not record it yet, so it
- * is listed here by provider and model until the catalog carries it.
- */
-export const fastModeModels: readonly { provider: string; modelId: string }[] = [
-  { provider: "anthropic", modelId: "claude-opus-5" },
-]
-
-/** Whether the thinking control offers Fast mode for this model. */
-export function fastModeFor(model: ComposerModel | undefined): boolean {
-  return listed(fastModeModels, model)
+  return levelWords.findIndex((entry) => entry.name === value)
 }
 
 /**

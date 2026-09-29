@@ -160,13 +160,28 @@ Host authorization and conversation lifecycle checks remain separate decisions.
 The catalog's context window is the published model ceiling; a harness's configured
 window may be narrower. The implemented catalog does not read harness settings.
 
+Reasoning follows the same rule
+([ADR 302](../../adr/todo/302-catalogue-reasoning-options.md)). A catalog entry
+records `reasoning` as `null`, or as the effort levels its provider publishes,
+in the provider's own names and order. Beside it, `fastMode` records whether
+the provider offers a faster output mode for the model. The SDK never maps one
+provider's levels onto another's. A surface that shows them on one control, such
+as the desktop's thinking slider, does that mapping itself. The snapshot keeps
+the levels only where the binding can run reasoning. Fast mode is a flag the
+binding intersects like tool use. No binding sends either to its agent today,
+so the effective snapshot offers neither. When a binding reads a level option
+its agent advertises in its session configuration, that option narrows the
+catalog's levels and never widens them. The result is the catalog's levels the
+agent also offers, matched by exact name and kept in catalog order. That
+narrowing is not implemented yet.
+
 | Feature family | Nessa representation to grow toward | What must stay honest |
 | --- | --- | --- |
 | Messages and multimodal input | Typed text, image, file/resource parts and output content | Reject unsupported parts; do not silently drop them |
 | Tools and approvals | Tool lifecycle events plus correlated interaction requests/responses | External harnesses keep tool execution and approval semantics; Nessa policy can further restrict access |
 | Questions and elicitation | Typed interaction variants, including structured forms where supported | Asking a question is distinct from authorizing a tool |
 | Output schema | Typed structured-output request and validated result | Native support and Nessa-owned validation/retry are different mechanisms with different costs |
-| Reasoning and mode | Advertised options and effective configuration | Do not invent equivalent effort levels across providers or fabricate hidden reasoning |
+| Reasoning and mode | Published effort levels and fast mode in the catalog, narrowed by the binding into the effective configuration (ADR 302) | Do not invent equivalent effort levels across providers or fabricate hidden reasoning |
 | Memory and recovery | Transcript reading, native resume, fork, and checkpoint as separate capabilities | A replay cursor is not an agent checkpoint; transcript copying is not native resume |
 | Subagents and handoffs | Child identities, relationships, lifecycle and delegated output | Preserve provider ownership; orchestration features are not universal |
 | Files and artifacts | Authorized resource references, edits, citations, provenance | Provider paths/URLs need translation and access checks, not blind forwarding |

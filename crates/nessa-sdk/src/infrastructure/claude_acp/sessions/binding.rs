@@ -84,7 +84,8 @@ impl ClaudeAcpProvider {
         let input = Modalities::new(true, config.images.is_some(), false)
             .expect("text modality is nonempty");
         let restrictions = BindingRestrictions::new(
-            ModelFeatures::new(input, text, config.tools_enabled, false),
+            // No effort level or fast mode is sent to the agent, so neither is offered.
+            ModelFeatures::new(input, text, config.tools_enabled, false, false),
             // This first profile deliberately excludes extended context and
             // larger output modes. These are binding ceilings, not model facts.
             TokenLimits::new(200_000, 64_000).expect("valid native profile ceilings"),
