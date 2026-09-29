@@ -27,6 +27,7 @@ const loaded = () =>
   indexLoaded(initialWorkspace, {
     index: testIndex(),
     draftId: "unused",
+    read: "r",
   })
 
 const shown = (state: WorkspaceState) =>
@@ -459,7 +460,7 @@ describe("what the person changes", () => {
 
 describe("what is typed and not sent", () => {
   const loadedState = () =>
-    indexLoaded(initialWorkspace, { index: testIndex(), draftId: "unused" })
+    indexLoaded(initialWorkspace, { index: testIndex(), draftId: "unused", read: "r" })
 
   it("is kept beside the session, whoever writes it, and outlives the pane showing another", () => {
     const typed = composerTextChanged(loadedState(), {

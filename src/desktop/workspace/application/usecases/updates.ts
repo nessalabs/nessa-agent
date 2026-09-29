@@ -128,18 +128,20 @@ function removeSession(
  *
  * A session the source spoke of that the index does not list, or lists
  * in a channel it does not list, is gone: it is taken out as any removal is,
- * at the revision held, unless the stream brought it while the read was on
- * its way — the read may be the older of the two. A session the source has
- * not spoken of yet (revision 0) is the window's own, and stays.
+ * at the revision held, unless the stream brought it since this read
+ * (`read`) was asked — the read may be the older of the two. What the
+ * stream brought before this read was asked, even while another read was
+ * on its way, this read is the newer word on. A session the source has not
+ * spoken of yet (revision 0) is the window's own, and stays.
  */
 export function indexLoaded(
   state: WorkspaceState,
-  { index, draftId }: { index: WorkspaceIndex; draftId: string },
+  { index, draftId, read }: { index: WorkspaceIndex; draftId: string; read: string },
 ): WorkspaceState {
   const channels = new Set(index.channels.map((channel) => channel.id))
   const inChannel = index.sessions.filter((session) => channels.has(session.channelId))
   const listed = new Set(inChannel.map((session) => session.id))
-  const kept = new Set(state.reading?.heard ?? [])
+  const kept = new Set(state.reading.find((asked) => asked.read === read)?.heard ?? [])
   const heard = inChannel.reduce(summaryHeard, {
     ...state,
     sections: index.sections,
@@ -169,7 +171,7 @@ export function indexLoaded(
     ...reconciled,
     status: "ready",
     failure: null,
-    reading: readAnswered(state.reading),
+    reading: readAnswered(state.reading, read),
   }
   if (state.panes) {
     // A channel the index no longer lists is not looked at.
@@ -209,22 +211,26 @@ export function indexLoaded(
   )
 }
 
-/** One read of the index answered: what the stream brought is let go with the last. */
-function readAnswered(reading: WorkspaceState["reading"]): WorkspaceState["reading"] {
-  if (!reading) return null
-  return reading.reads > 1 ? { ...reading, reads: reading.reads - 1 } : null
+/** The read `read` answered, or failed: what the stream brought since it was asked goes with it. */
+function readAnswered(
+  reading: WorkspaceState["reading"],
+  read: string,
+): WorkspaceState["reading"] {
+  return reading.some((asked) => asked.read === read)
+    ? reading.filter((asked) => asked.read !== read)
+    : reading
 }
 
 /**
- * The index is being read: after a failure, nothing to say until it
- * answers; and until it does, what the stream brings is noted, so the read
- * does not take out a session it may predate.
+ * The index is being read, as `read`: after a failure, nothing to say until
+ * it answers; and until it does, what the stream brings is noted against
+ * it, so the read does not take out a session it may predate.
  */
-export function indexRequested(state: WorkspaceState): WorkspaceState {
-  const reading = {
-    reads: (state.reading?.reads ?? 0) + 1,
-    heard: state.reading?.heard ?? [],
-  }
+export function indexRequested(
+  state: WorkspaceState,
+  { read }: { read: string },
+): WorkspaceState {
+  const reading = [...state.reading, { read, heard: [] }]
   return state.status === "failed"
     ? { ...state, status: "loading", failure: null, reading }
     : { ...state, reading }
@@ -233,9 +239,9 @@ export function indexRequested(state: WorkspaceState): WorkspaceState {
 /** The index could not be read. A workspace already open stays open. */
 export function indexFailed(
   state: WorkspaceState,
-  { reason }: { reason: WorkspaceFailureReason },
+  { reason, read }: { reason: WorkspaceFailureReason; read: string },
 ): WorkspaceState {
-  const reading = readAnswered(state.reading)
+  const reading = readAnswered(state.reading, read)
   if (state.status === "ready")
     return reading === state.reading ? state : { ...state, reading }
   return { ...state, status: "failed", failure: reason, reading }
@@ -243,8 +249,8 @@ export function indexFailed(
 
 /**
  * An update from the source, applied when it is newer than what is held. A
- * summary brought while the index is being read is noted, so that read
- * cannot take the session out.
+ * summary brought while the index is being read is noted against every read
+ * on its way, so none of them can take the session out.
  */
 export function updateReceived(
   state: WorkspaceState,
@@ -253,12 +259,14 @@ export function updateReceived(
   switch (update.kind) {
     case "session": {
       const heard = summaryHeard(state, update.session)
-      const reading = heard.reading
-      if (heard === state || !reading || reading.heard.includes(update.session.id))
+      const id = update.session.id
+      if (heard === state || heard.reading.every((asked) => asked.heard.includes(id)))
         return heard
       return {
         ...heard,
-        reading: { ...reading, heard: [...reading.heard, update.session.id] },
+        reading: heard.reading.map((asked) =>
+          asked.heard.includes(id) ? asked : { ...asked, heard: [...asked.heard, id] },
+        ),
       }
     }
     case "transcript":

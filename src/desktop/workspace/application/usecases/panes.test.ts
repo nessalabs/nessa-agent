@@ -22,6 +22,7 @@ const loaded = () =>
   indexLoaded(initialWorkspace, {
     index: testIndex(),
     draftId: "unused",
+    read: "r",
   })
 
 /** Session ids per column, as drawn. */
@@ -109,6 +110,7 @@ describe("opening beside", () => {
         sessions: [...index.sessions, summary("e", "gateway", 50)],
       },
       draftId: "unused",
+      read: "r",
     })
     state = openBeside(state, { sessionId: "b", room: roomy })
     state = openBeside(state, { sessionId: "c", side: "bottom", room: roomy })

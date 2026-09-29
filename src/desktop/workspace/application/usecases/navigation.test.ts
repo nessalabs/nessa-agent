@@ -25,6 +25,7 @@ const loaded = () =>
   indexLoaded(initialWorkspace, {
     index: testIndex(),
     draftId: "unused",
+    read: "r",
   })
 
 const shown = (state: WorkspaceState) =>

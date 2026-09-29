@@ -55,17 +55,24 @@ export interface Tree {
 
 export type LoadStatus = "loading" | "ready" | "failed"
 
+/** A read of the index on its way, and the sessions the stream brought since it was asked. */
+export interface IndexRead {
+  readonly read: string
+  readonly heard: readonly string[]
+}
+
 export interface WorkspaceState {
   readonly status: LoadStatus
   /** Why the index could not be read, when it could not. */
   readonly failure: WorkspaceFailureReason | null
   /**
-   * While a read of the index is on its way: how many, and the sessions
-   * the stream brought meanwhile, which the read may predate — a session it
-   * does not list is taken out unless it is one of these. `null` when no read
-   * is on its way.
+   * The reads of the index on their way, each by the name it was asked
+   * under, with the sessions the stream brought since that read was asked —
+   * which the read may predate. A session a read does not list is taken out
+   * unless the stream brought it since that same read was asked: what came
+   * before it, the read is the newer word on. Empty when none is on its way.
    */
-  readonly reading: { readonly reads: number; readonly heard: readonly string[] } | null
+  readonly reading: readonly IndexRead[]
   readonly sections: readonly Section[]
   readonly channels: readonly Channel[]
   readonly sessions: Readonly<Record<string, SessionSummary>>
@@ -135,7 +142,7 @@ export interface OverviewState {
 export const initialWorkspace: WorkspaceState = {
   status: "loading",
   failure: null,
-  reading: null,
+  reading: [],
   sections: [],
   channels: [],
   sessions: {},

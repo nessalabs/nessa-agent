@@ -126,8 +126,12 @@ resync**: it sends `{ kind: "resync" }` on its stream when it reconnects or
 finds a gap, and `followWorkspace` reads the index again; a source that cannot
 tell never sends one, and the window then resyncs only when it opens or the
 person asks (Try Again). The in-memory source loses nothing, and never sends one. The one exception is a
-session the stream brought while the read was on its way, which the read may
-predate: it stays, until a later read says otherwise. A session the source
+session the stream brought after that read was asked, which the read may
+predate: it stays, until a later read says otherwise. Each read notes what
+the stream brings from when it is asked (`reading`, by the name it was asked
+under), so with two reads on their way, a session brought before the second
+was asked is kept by the first and taken out by the second, whichever
+answers first. A session the source
 has not spoken of (revision 0) is the window's own and stays. A pane is never
 left showing a session that is not there: a removal closes the pane showing
 it, and the last pane starts over as a new session's home in the same channel.
@@ -669,7 +673,7 @@ leave a read or a send hanging. The one mark the window clears itself is
 | a session is shown | marked read, and the source told | nothing more | the mark stays cleared | marked unread again while shown: read again |
 | a shown session's transcript is read | the heading | the conversation, unless a newer one arrived meanwhile | the pane says why, and is not read again until "Try Again" (`retryTranscript`); a failure no pane shows any more is not kept, so the session is read afresh when shown again | the newer of it and the read's answer is kept, in either order |
 | the index is read | nothing yet | the workspace opens on its first session; summaries the stream already brought, if newer, are kept | the workspace says why, with "Try Again" | a removal that arrived first keeps the session out |
-| the index is read again (the resync) | nothing | a session it does not list, or lists in a channel it does not list, is taken out at the revision held — its pane closes, or the last starts over; every conversation on screen is read again, a read asked before that read of the index set aside and its answer let go — each answer paired with the read that asked it (`read`, on `indexRequested`, `indexLoaded`, `indexFailed`), in whatever order they arrive | an open workspace stays open, as it was | a summary the stream brought while the read was on its way stays |
+| the index is read again (the resync) | nothing | a session it does not list, or lists in a channel it does not list, is taken out at the revision held — its pane closes, or the last starts over; every conversation on screen is read again, a read asked before that read of the index set aside and its answer let go — each answer paired with the read that asked it (`read`, on `indexRequested`, `indexLoaded`, `indexFailed`), in whatever order they arrive | an open workspace stays open, as it was | a summary the stream brought after that read was asked stays — noted per read, so a read asked after it is the newer word |
 | the source sends `resync` (it reconnected, or found a gap) | nothing | the index is read again, as above | as above | as above |
 | a shown session's transcript read is answered with one the window cannot use (another session's, revision 0) | — | a fault, logged; the pane says why, with "Try Again" | — | — |
 | an update at a revision the source could not have sent | — | let go, logged where received | — | — |

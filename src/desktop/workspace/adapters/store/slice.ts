@@ -163,8 +163,8 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ index: WorkspaceIndex; draftId: string; read: string }>,
     ) => updates.indexLoaded(state, payload),
-    indexRequested: (state, _action: Payload<{ read: string }>) =>
-      updates.indexRequested(state),
+    indexRequested: (state, { payload }: Payload<{ read: string }>) =>
+      updates.indexRequested(state, payload),
     indexFailed: (
       state,
       { payload }: Payload<{ reason: WorkspaceFailureReason; read: string }>,

@@ -27,6 +27,7 @@ const loaded = () =>
   indexLoaded(initialWorkspace, {
     index: testIndex(),
     draftId: "unused",
+    read: "r",
   })
 
 const shown = (state: WorkspaceState) =>
@@ -57,6 +58,7 @@ describe("the index arriving", () => {
     const state = indexLoaded(initialWorkspace, {
       index: { ...testIndex(), sessions: [] },
       draftId: "first",
+      read: "r",
     })
     expect(shown(state)).toEqual(["first"])
     expect(state.drafts.first.channelId).toBe("desktop")
@@ -66,6 +68,7 @@ describe("the index arriving", () => {
     const state = indexLoaded(initialWorkspace, {
       index: { sections: [], channels: [], sessions: [] },
       draftId: "first",
+      read: "r",
     })
     expect(state.panes).toBeNull()
     expect(state.status).toBe("ready")
@@ -76,12 +79,13 @@ describe("the index arriving", () => {
     const again = indexLoaded(two, {
       index: testIndex(),
       draftId: "x",
+      read: "r",
     })
     expect(again.panes).toBe(two.panes)
   })
 
   it("says why it could not be read", () => {
-    const state = indexFailed(initialWorkspace, { reason: "unavailable" })
+    const state = indexFailed(initialWorkspace, { reason: "unavailable", read: "r" })
     expect(state.status).toBe("failed")
     expect(state.failure).toBe("unavailable")
   })
@@ -194,6 +198,7 @@ describe("what goes with a session", () => {
         ),
       },
       draftId: "x",
+      read: "r",
     })
     expect(unreadShown(state)).toEqual(["a"])
     expect(unreadShown(loaded())).toEqual([])
@@ -274,6 +279,7 @@ describe("what goes with a session", () => {
         sessions: [summary("new", "desktop", 900, "running")],
       },
       draftId: "unused",
+      read: "r",
     })
     expect(reread.drafts).toEqual({})
     expect(reread.sessions.new.revision).toBe(1)
@@ -341,20 +347,20 @@ describe("what goes with a session", () => {
 
   it("keeps an open workspace open when a later read of the index fails", () => {
     const state = loaded()
-    expect(indexFailed(state, { reason: "unavailable" })).toBe(state)
+    expect(indexFailed(state, { reason: "unavailable", read: "r" })).toBe(state)
   })
 
   it("says nothing while the index is read again after a failure", () => {
-    const failed = indexFailed(initialWorkspace, { reason: "unavailable" })
-    expect(indexRequested(failed)).toMatchObject({
+    const failed = indexFailed(initialWorkspace, { reason: "unavailable", read: "r" })
+    expect(indexRequested(failed, { read: "r" })).toMatchObject({
       status: "loading",
       failure: null,
     })
     const ready = loaded()
-    expect(indexRequested(ready)).toMatchObject({
+    expect(indexRequested(ready, { read: "r" })).toMatchObject({
       status: "ready",
       failure: null,
-      reading: { reads: 1, heard: [] },
+      reading: [{ read: "r", heard: [] }],
     })
   })
 
@@ -408,6 +414,7 @@ describe("replacements out of order", () => {
     const state = indexLoaded(early, {
       index: testIndex(),
       draftId: "x",
+      read: "r",
     })
     expect(state.sessions.a).toMatchObject({ status: "idle", revision: 7 })
     expect(state.sessions.b.revision).toBe(1)
@@ -422,6 +429,7 @@ describe("replacements out of order", () => {
     const state = indexLoaded(removed, {
       index: testIndex(),
       draftId: "x",
+      read: "r",
     })
     expect(state.sessions.b).toBeUndefined()
   })
@@ -473,6 +481,7 @@ describe("replacements out of order", () => {
     const again = indexLoaded(viewing, {
       index: testIndex(),
       draftId: "x",
+      read: "r",
     })
     expect(again.view).toEqual(viewing.view)
   })
@@ -493,9 +502,10 @@ describe("the index read again: the resync", () => {
 
   it("takes out a session it no longer lists, closing its pane, and keeps it out", () => {
     const two = openBeside(loaded(), { sessionId: "c", room: roomy })
-    const resynced = indexLoaded(indexRequested(two), {
+    const resynced = indexLoaded(indexRequested(two, { read: "r" }), {
       index: without("c"),
       draftId: "x",
+      read: "r",
     })
     expect(resynced.sessions.c).toBeUndefined()
     expect(shown(resynced)).toEqual(["a"])
@@ -515,9 +525,10 @@ describe("the index read again: the resync", () => {
   })
 
   it("starts the last pane over when the session it shows is no longer listed", () => {
-    const resynced = indexLoaded(indexRequested(loaded()), {
+    const resynced = indexLoaded(indexRequested(loaded(), { read: "r" }), {
       index: without("a"),
       draftId: "fresh",
+      read: "r",
     })
     expect(shown(resynced)).toEqual(["fresh"])
     expect(resynced.drafts.fresh.channelId).toBe("desktop")
@@ -525,47 +536,75 @@ describe("the index read again: the resync", () => {
 
   it("takes out a session listed in a channel the index no longer lists", () => {
     const index = testIndex()
-    const resynced = indexLoaded(indexRequested(loaded()), {
+    const resynced = indexLoaded(indexRequested(loaded(), { read: "r" }), {
       index: {
         ...index,
         channels: index.channels.filter((channel) => channel.id !== "gateway"),
       },
       draftId: "x",
+      read: "r",
     })
     expect(resynced.sessions.d).toBeUndefined()
     expect(Object.keys(resynced.sessions).sort()).toEqual(["a", "b", "c"])
   })
 
   it("keeps a session the stream brought while the read was on its way", () => {
-    const asked = indexRequested(loaded())
+    const asked = indexRequested(loaded(), { read: "r" })
     const brought = updateReceived(asked, {
       update: { kind: "session", session: summary("z", "gateway", 900) },
     })
-    const resynced = indexLoaded(brought, { index: testIndex(), draftId: "x" })
+    const resynced = indexLoaded(brought, { index: testIndex(), draftId: "x", read: "r" })
     expect(resynced.sessions.z).toBeDefined()
-    expect(resynced.reading).toBeNull()
+    expect(resynced.reading).toEqual([])
     // Heard before the read was asked, it is not: the read is the newer word.
     const early = updateReceived(loaded(), {
       update: { kind: "session", session: summary("z", "gateway", 900) },
     })
-    const reread = indexLoaded(indexRequested(early), {
+    const reread = indexLoaded(indexRequested(early, { read: "r" }), {
       index: testIndex(),
       draftId: "x",
+      read: "r",
     })
     expect(reread.sessions.z).toBeUndefined()
   })
 
-  it("keeps what the stream brought until the last of two reads on their way answers", () => {
-    const twice = indexRequested(indexRequested(loaded()))
+  it("keeps what the stream brought for each read asked before it, until that read answers", () => {
+    const twice = indexRequested(indexRequested(loaded(), { read: "r1" }), { read: "r2" })
     const brought = updateReceived(twice, {
       update: { kind: "session", session: summary("z", "gateway", 900) },
     })
-    const first = indexLoaded(brought, { index: testIndex(), draftId: "x" })
+    const first = indexLoaded(brought, { index: testIndex(), draftId: "x", read: "r1" })
     expect(first.sessions.z).toBeDefined()
-    expect(first.reading).toEqual({ reads: 1, heard: ["z"] })
-    const second = indexLoaded(first, { index: testIndex(), draftId: "y" })
+    expect(first.reading).toEqual([{ read: "r2", heard: ["z"] }])
+    const second = indexLoaded(first, { index: testIndex(), draftId: "y", read: "r2" })
     expect(second.sessions.z).toBeDefined()
-    expect(second.reading).toBeNull()
+    expect(second.reading).toEqual([])
+  })
+
+  it("takes out what the stream brought before a read was asked, though an older read was on its way", () => {
+    // Read r1 is on its way; the stream brings z; read r2 is asked after it,
+    // and its index — the newer word — no longer lists z (its removal lost).
+    const one = indexRequested(loaded(), { read: "r1" })
+    const brought = updateReceived(one, {
+      update: { kind: "session", session: summary("z", "gateway", 900) },
+    })
+    const two = indexRequested(brought, { read: "r2" })
+    // r2 answers first: z came before it, so it goes.
+    const newer = indexLoaded(two, { index: testIndex(), draftId: "x", read: "r2" })
+    expect(newer.sessions.z).toBeUndefined()
+    expect(newer.reading).toEqual([{ read: "r1", heard: ["z"] }])
+    // In the other order, r1 keeps it — it may predate z — and r2 then takes it out.
+    const older = indexLoaded(two, { index: testIndex(), draftId: "x", read: "r1" })
+    expect(older.sessions.z).toBeDefined()
+    const both = indexLoaded(older, { index: testIndex(), draftId: "y", read: "r2" })
+    expect(both.sessions.z).toBeUndefined()
+    expect(both.reading).toEqual([])
+  })
+
+  it("lets a failed read's notes go with it, and no other read's", () => {
+    const two = indexRequested(indexRequested(loaded(), { read: "r1" }), { read: "r2" })
+    const failed = indexFailed(two, { reason: "unavailable", read: "r1" })
+    expect(failed.reading).toEqual([{ read: "r2", heard: [] }])
   })
 
   it("keeps a session the source has not spoken of yet: it is the window's own", () => {
@@ -575,22 +614,24 @@ describe("the index read again: the resync", () => {
       sessionId: "new",
       message: { id: "m1", role: "user", at: 1, parts: [{ kind: "text", text: "hi" }] },
     })
-    const resynced = indexLoaded(indexRequested(started), {
+    const resynced = indexLoaded(indexRequested(started, { read: "r" }), {
       index: testIndex(),
       draftId: "x",
+      read: "r",
     })
     expect(resynced.sessions.new.revision).toBe(0)
   })
 
   it("looks at another channel when the one looked at is no longer listed", () => {
     const index = testIndex()
-    const resynced = indexLoaded(indexRequested(loaded()), {
+    const resynced = indexLoaded(indexRequested(loaded(), { read: "r" }), {
       index: {
         ...index,
         channels: index.channels.filter((channel) => channel.id !== "desktop"),
         sessions: index.sessions.filter((session) => session.channelId !== "desktop"),
       },
       draftId: "x",
+      read: "r",
     })
     expect(resynced.view).toEqual({ channelId: "empty" })
   })
@@ -626,6 +667,7 @@ describe("what is kept of sessions no pane shows", () => {
         sessions: [...testIndex().sessions, ...sessions],
       },
       draftId: "x",
+      read: "r",
     })
     const held = sessions.reduce(
       (current, session) =>
