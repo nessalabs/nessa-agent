@@ -161,9 +161,18 @@ async fn source_reads_owner_scoped_current_values_and_rejects_wrong_scope() {
     .unwrap_err();
     assert_eq!(error, CatalogueSourceError::OversizedEntry);
     let mut blocking = source.clone();
+    let invalid_payload = tokio::task::spawn_blocking({
+        let request = request.clone();
+        let id = page.entries[0].key.id.clone();
+        move || blocking.resolve(&request.pass, &id, MAX_CATALOGUE_PAYLOAD_BYTES + 1)
+    })
+    .await
+    .unwrap();
+    assert_eq!(invalid_payload, Err(CatalogueSourceError::InvalidRequest));
+    let mut blocking = source.clone();
     let invalid_page = tokio::task::spawn_blocking({
         let mut request = request.clone();
-        request.max_entries = MAX_CATALOGUE_PAGE + 1;
+        request.max_entries = MAX_CATALOGUE_ENTRIES + 1;
         move || blocking.manifest(&request)
     })
     .await

@@ -5,8 +5,6 @@ use super::ConversationFuture;
 use crate::conversation::domain::{Conversation, ConversationId, ConversationSummary};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 
-pub const MAX_CATALOGUE_PAGE: usize = 256;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogueHead {
     pub incarnation: String,

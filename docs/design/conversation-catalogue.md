@@ -42,8 +42,9 @@ unknown, and only a retained deletion marker says deleted.
 
 The manifest reads one short transaction per page and releases it before any
 payload read. It does not use offsets or hold a snapshot across pages. Page
-size and payload size are bounded by the sync contract. The source stores no
-per-receiver state or history.
+size and payload size consume sync-engine's exported `MAX_CATALOGUE_ENTRIES`
+and `MAX_CATALOGUE_PAYLOAD_BYTES`. The source stores no per-receiver state or
+history.
 
 The metadata tests in `crates/nessa-server/tests/conversation/store.rs` cover
 creation, summary, archive, deletion and mode revisions; failure rollback;

@@ -6,7 +6,7 @@ use crate::conversation::{
         ConversationCreationDisposition, ConversationError, ConversationFuture,
         ConversationListing, ConversationModeApplication, ConversationModeRequest,
         ConversationModeRequestState, ConversationRepository, ConversationSummaries,
-        ListedConversation, ListedConversations, UnfinishedDeletions, MAX_CATALOGUE_PAGE,
+        ListedConversation, ListedConversations, UnfinishedDeletions,
     },
     domain::{
         Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
@@ -20,6 +20,7 @@ use nessa_local_database::{
     OpenError, Schema,
 };
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
+use nessa_sync::replication::catalogue::MAX_CATALOGUE_ENTRIES;
 use serde::{Deserialize, Serialize};
 use std::{
     path::Path,
@@ -1146,7 +1147,7 @@ impl ConversationCatalogue for LocalConversationStore {
             limit,
         } = request;
         self.run(move |connection| {
-            if limit == 0 || limit > MAX_CATALOGUE_PAGE || boundary <= completed {
+            if limit == 0 || limit > MAX_CATALOGUE_ENTRIES || boundary <= completed {
                 return Err(ConversationError::CatalogueInvalidRequest);
             }
             if after.as_ref().is_some_and(|key| key.creation == 0 || key.creation > boundary) {

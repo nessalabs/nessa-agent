@@ -5,14 +5,15 @@
 use crate::conversation::{
     application::{
         CatalogueDescriptor, CatalogueKey, CataloguePageRequest, CatalogueValue,
-        ConversationCaller, ConversationCatalogue, ConversationError, MAX_CATALOGUE_PAGE,
+        ConversationCaller, ConversationCatalogue, ConversationError,
     },
     domain::ConversationId,
 };
 use nessa_sync::replication::{
     catalogue::{
         CataloguePass, CatalogueSource, CatalogueSourceError, EntryKey, ManifestEntry,
-        ManifestPage, ManifestRequest, ResolvedEntry,
+        ManifestPage, ManifestRequest, ResolvedEntry, MAX_CATALOGUE_ENTRIES,
+        MAX_CATALOGUE_PAYLOAD_BYTES,
     },
     domain::{Id, Scope},
 };
@@ -250,7 +251,7 @@ async fn read_manifest(
         return Err(CatalogueSourceError::IdentityChanged);
     }
     if request.max_entries == 0
-        || request.max_entries > MAX_CATALOGUE_PAGE
+        || request.max_entries > MAX_CATALOGUE_ENTRIES
         || request.pass.boundary <= request.pass.completed
         || request.pass.generation == 0
     {
@@ -298,7 +299,7 @@ async fn read_resolved(
     if pass.scope != *expected {
         return Err(CatalogueSourceError::IdentityChanged);
     }
-    if bound == 0 || bound > 1024 * 1024 {
+    if bound == 0 || bound > MAX_CATALOGUE_PAYLOAD_BYTES {
         return Err(CatalogueSourceError::InvalidRequest);
     }
     let id = ConversationId::new(id.as_str()).map_err(|_| CatalogueSourceError::InvalidRequest)?;

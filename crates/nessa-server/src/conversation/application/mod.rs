@@ -76,7 +76,7 @@ mod service;
 mod view;
 pub use catalogue::{
     CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
-    CatalogueValue, ConversationCatalogue, MAX_CATALOGUE_PAGE,
+    CatalogueValue, ConversationCatalogue,
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use ports::{
