@@ -187,7 +187,7 @@
 }
 
 /* The row stays in place, quieter, while its pill is carried. */
-.workspace-session[data-dragging] {
+.workspace-session[data-drag-carrying] {
   opacity: 0.45;
   transition: opacity var(--desktop-base) ease;
 }

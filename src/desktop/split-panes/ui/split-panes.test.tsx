@@ -11,6 +11,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import type { EdgeMove, SplitPanesSource } from "../application/ports"
 import { focusPane, singlePane, splitPane, type PaneLayout } from "../model/pane-layout"
+import { gridOf, marks } from "../adapters/dom/marks"
 import { SplitPanes, type ShownPane } from "./split-panes"
 
 let host: HTMLDivElement
@@ -98,7 +99,7 @@ async function mounted(fake: ReturnType<typeof fakeSource>) {
 }
 
 const grid = () => {
-  const found = host.querySelector<HTMLElement>("[data-split-grid]")
+  const found = gridOf(host)
   if (!found) throw new Error("no grid")
   return found
 }
@@ -113,17 +114,17 @@ it("puts the frame on the host's own pane root, with nothing around it", async (
   expect(first.dataset.paneKey).toBe("1")
   expect(first.dataset.flip).toBe("pane")
   expect(first.dataset.flipId).toBe("1")
-  expect(first.hasAttribute("data-corner")).toBe(true)
+  expect(first.hasAttribute(marks.corner)).toBe(true)
   expect(first.style.getPropertyValue("--cw")).toBe("0.5")
   expect(first.hasAttribute("data-multi-host")).toBe(true)
-  expect(grid().hasAttribute("data-multi")).toBe(true)
+  expect(grid().hasAttribute(marks.multi)).toBe(true)
   expect(host.querySelector(".host-empty")).toBeNull()
 })
 
 it("shows the host's empty state while there are no panes", async () => {
   await mounted(fakeSource(null))
   expect(grid().querySelector(".host-empty")?.textContent).toBe("Nothing open")
-  expect(grid().hasAttribute("data-multi")).toBe(false)
+  expect(grid().hasAttribute(marks.multi)).toBe(false)
 })
 
 it("renders again when the arrangement changes, and not when only focus moves", async () => {

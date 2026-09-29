@@ -73,13 +73,7 @@ import type { PaneKey, PaneLayout, Zone } from "../../model/pane-layout"
 import { paneLimits } from "../../model/pane-layout"
 import { placements, type PanePlacement, type PaneRoom } from "../../model/pane-sizing"
 import { durationToken, motionToken } from "../../../adapters/motion"
-
-/**
- * Set on the host's root while a drop shown would take the room the host can
- * give up (`takesSpare`): what the host's stylesheet previews the giving-up by.
- * Published here, so a stylesheet and its tests name it from this one place.
- */
-export const takesSpareAttribute = "data-drag-takes-spare"
+import { classes, gridOf, marks } from "./marks"
 
 /** Marks the preview's own motion. */
 const dragPreview = "split-panes-preview"
@@ -92,8 +86,8 @@ const cornered = new WeakMap<Element, Set<HTMLElement>>()
 
 /** Whether `pane`'s header steps past the window's controls now. */
 const steppedAside = (pane: HTMLElement) => {
-  const corner = pane.getAttribute("data-drag-corner")
-  return corner === "yes" || (corner !== "no" && pane.hasAttribute("data-corner"))
+  const corner = pane.getAttribute(marks.dragCorner)
+  return corner === "yes" || (corner !== "no" && pane.hasAttribute(marks.corner))
 }
 
 /**
@@ -104,13 +98,13 @@ const steppedAside = (pane: HTMLElement) => {
 function markCorner(root: Element, pane: HTMLElement, corner: boolean | null) {
   const held = cornered.get(root) ?? new Set<HTMLElement>()
   cornered.set(root, held)
-  const differs = corner !== null && corner !== pane.hasAttribute("data-corner")
+  const differs = corner !== null && corner !== pane.hasAttribute(marks.corner)
   if (differs) held.add(pane)
   else held.delete(pane)
   const value = differs ? (corner ? "yes" : "no") : null
-  if (pane.getAttribute("data-drag-corner") === value) return
-  if (value) pane.setAttribute("data-drag-corner", value)
-  else pane.removeAttribute("data-drag-corner")
+  if (pane.getAttribute(marks.dragCorner) === value) return
+  if (value) pane.setAttribute(marks.dragCorner, value)
+  else pane.removeAttribute(marks.dragCorner)
 }
 
 function track(root: Element, animation: Animation): Animation {
@@ -368,14 +362,14 @@ interface PanePart {
 }
 
 /** What a part may be marked as keeping to (`data-split-keeps`); unmarked is the top. */
-const marks = ["top-left", "foot", "middle"] as const
+const keepings = ["top-left", "foot", "middle"] as const
 
-const isMark = (value: string | undefined): value is (typeof marks)[number] =>
-  marks.some((mark) => mark === value)
+const isMark = (value: string | undefined): value is (typeof keepings)[number] =>
+  keepings.some((keeping) => keeping === value)
 
 /** What a part keeps to, as the host marked it; unmarked, or marked with anything else, the top. */
 function keepsOf(element: HTMLElement): PanePart["keeps"] {
-  const marked = element.dataset.splitKeeps
+  const marked = element.getAttribute(marks.keeps) ?? undefined
   return isMark(marked) ? marked : "top"
 }
 
@@ -411,7 +405,7 @@ function partsOf(pane: HTMLElement): PanePart[] {
   }
   const within = (element: Element): HTMLElement[] =>
     Array.from(element.children, (child) =>
-      child.hasAttribute("data-split-through") ? within(child) : [child as HTMLElement],
+      child.hasAttribute(marks.through) ? within(child) : [child as HTMLElement],
     ).flat()
   return within(pane).map(part)
 }
@@ -443,7 +437,11 @@ export interface SplitPanesDragOptions {
   readonly stripped?: readonly string[]
 }
 
-/** What a copy leaves out of what it pictures: identity, focus and the drag's own marks. */
+/**
+ * What a copy leaves out of what it pictures: identity, focus, and every mark
+ * of the module's — a copy is a picture, never a pane, a part, or something
+ * to carry.
+ */
 const alwaysStripped = [
   "id",
   "tabindex",
@@ -453,8 +451,7 @@ const alwaysStripped = [
   "data-pane-key",
   "data-flip",
   "data-flip-id",
-  "data-drag-pane",
-  "data-lifted",
+  ...Object.values(marks),
 ]
 
 /**
@@ -554,7 +551,7 @@ export function useSplitPanesDrag(
       const from = drawnNow(pane, real)
       const target = to ?? real
       const opacity = { from: from.opacity, to: to && fade ? 0.2 : 1 }
-      const resting = to ? corner : pane.hasAttribute("data-corner")
+      const resting = to ? corner : pane.hasAttribute(marks.corner)
       // A header stepped past the window's controls stays so until its pane
       // has moved out from under them.
       const leaving = steppedAside(pane) && !resting
@@ -631,7 +628,7 @@ export function useSplitPanesDrag(
       }
       const fresh = !drawing.outline
       const element = drawing.outline ?? document.createElement("div")
-      element.className = "split-panes-placeholder"
+      element.className = classes.placeholder
       Object.assign(element.style, {
         transform: `translate(${box.left}px, ${box.top}px)`,
         width: `${box.width}px`,
@@ -656,10 +653,10 @@ export function useSplitPanesDrag(
             )
           : [],
       )
-      if (scope.hasAttribute(takesSpareAttribute) !== Boolean(outcome?.takesSpare))
-        scope.toggleAttribute(takesSpareAttribute, Boolean(outcome?.takesSpare))
-      if (outcome && landing && !("dragReflow" in scope.dataset))
-        scope.dataset.dragReflow = ""
+      if (scope.hasAttribute(marks.takesSpare) !== Boolean(outcome?.takesSpare))
+        scope.toggleAttribute(marks.takesSpare, Boolean(outcome?.takesSpare))
+      if (outcome && landing && !scope.hasAttribute(marks.reflow))
+        scope.setAttribute(marks.reflow, "")
       if (!reducedMotion())
         for (const [key, box] of real) {
           const pane = paneElement(key)
@@ -802,7 +799,7 @@ export function useSplitPanesDrag(
       size: { width: number; height: number },
     ) => {
       const ghost = document.createElement("div")
-      ghost.className = "split-panes-ghost"
+      ghost.className = classes.ghost
       ghost.setAttribute("aria-hidden", "true")
       ghost.inert = true
       Object.assign(ghost.style, {
@@ -834,9 +831,9 @@ export function useSplitPanesDrag(
        * never a scroll, which would lay the copy out at once.
        */
       const onScreenOnly = (from: Element, to: Element) => {
-        const scroller = from.querySelector<HTMLElement>("[data-split-scroll]")
+        const scroller = from.querySelector<HTMLElement>(`[${marks.scroll}]`)
         const content = scroller?.firstElementChild
-        const copied = to.querySelector<HTMLElement>("[data-split-scroll] > :first-child")
+        const copied = to.querySelector<HTMLElement>(`[${marks.scroll}] > :first-child`)
         if (!scroller || !content || !copied) return
         const view = scroller.getBoundingClientRect()
         const parts = Array.from(content.children, (child) =>
@@ -899,7 +896,7 @@ export function useSplitPanesDrag(
       y: number,
     ): Made | null => {
       const layout = layoutNow()
-      const panes = scope.querySelector<HTMLElement>("[data-split-grid]")
+      const panes = gridOf(scope)
       const room = source.measure()
       if (!layout || !panes || !room) return null
       const rect = panes.getBoundingClientRect()
@@ -946,23 +943,23 @@ export function useSplitPanesDrag(
       const { ghost, inner } = ghostFor(carried, pressed, size)
       const grab = { x: x - home.left, y: y - home.top }
       const layer = document.createElement("div")
-      layer.className = "split-panes-layer"
+      layer.className = classes.layer
       layer.setAttribute("aria-hidden", "true")
       const carrier = document.createElement("div")
-      carrier.className = "split-panes-carrier"
+      carrier.className = classes.carrier
       carrier.style.transform = `translate(${x}px, ${y}px)`
       // The copy is drawn about its centre; the glider holds it where it was grabbed.
       const glider = document.createElement("div")
       glider.className = "split-panes-glider"
       glider.style.transform = `translate(${size.width / 2 - grab.x}px, ${size.height / 2 - grab.y}px)`
       // On the page, unseen, until the press becomes a drag.
-      ghost.dataset.waiting = ""
+      ghost.setAttribute(marks.waiting, "")
       glider.append(ghost)
       carrier.append(glider)
       layer.append(carrier)
       scope.append(layer)
       const shield = document.createElement("div")
-      shield.className = "split-panes-shield"
+      shield.className = classes.shield
       shield.setAttribute("aria-hidden", "true")
       return {
         layer,
@@ -1003,7 +1000,7 @@ export function useSplitPanesDrag(
       window.getSelection()?.removeAllRanges()
       // With the pointer from its first frame, and seen from it.
       carrier.style.transform = `translate(${at.x}px, ${at.y}px)`
-      delete ghost.dataset.waiting
+      ghost.removeAttribute(marks.waiting)
       drawing.glide = glider.animate(
         [
           {
@@ -1014,9 +1011,9 @@ export function useSplitPanesDrag(
         { ...made.motion, fill: "forwards" },
       )
       scope.append(shield)
-      scope.dataset.dragging = what.kind
-      pressed.dataset.dragging = ""
-      if (what.kind === "pane") paneElement(what.pane)?.setAttribute("data-lifted", "")
+      scope.setAttribute(marks.carrying, what.kind)
+      pressed.setAttribute(marks.carrying, "")
+      if (what.kind === "pane") paneElement(what.pane)?.setAttribute(marks.lifted, "")
       try {
         // The shield holds the pointer: its hand shows wherever the pointer goes.
         shield.setPointerCapture(pointerId)
@@ -1058,13 +1055,13 @@ export function useSplitPanesDrag(
       const { outline } = drawing
       const unmark = () => {
         outline?.remove()
-        delete scope.dataset.dragging
-        delete pressed.dataset.dragging
+        scope.removeAttribute(marks.carrying)
+        pressed.removeAttribute(marks.carrying)
         scope
-          .querySelectorAll("[data-lifted]")
-          .forEach((pane) => pane.removeAttribute("data-lifted"))
+          .querySelectorAll(`[${marks.lifted}]`)
+          .forEach((pane) => pane.removeAttribute(marks.lifted))
         // Blur and shadows come back; a flight of the drop's own holds them itself.
-        delete scope.dataset.dragReflow
+        scope.removeAttribute(marks.reflow)
         announcer.textContent = ""
       }
       // A frame after the one that commits the drop.
@@ -1090,7 +1087,7 @@ export function useSplitPanesDrag(
         made.drawing.shape.motion?.cancel()
         made.drawing.shape.counter?.cancel()
         ;[...previewed.keys()].forEach(letGo)
-        scope.removeAttribute(takesSpareAttribute)
+        scope.removeAttribute(marks.takesSpare)
         tidy(made)
         landed(made)
         return
@@ -1098,14 +1095,14 @@ export function useSplitPanesDrag(
       preview(made, null, null)
       const back = flyTo(made, made.home, true)
       const panes = [...previewed.keys()]
-      scope.removeAttribute(takesSpareAttribute)
+      scope.removeAttribute(marks.takesSpare)
       tidy(made)
       void back.finished
         .catch(() => undefined)
         .then(() => {
           panes.forEach(letGo)
           // Back where they were: blur and shadows return, unless a drag began meanwhile.
-          if (!carried()) delete scope.dataset.dragReflow
+          if (!carried()) scope.removeAttribute(marks.reflow)
           landed(made)
         })
     }
@@ -1124,7 +1121,7 @@ export function useSplitPanesDrag(
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
           // The host's preview of taking its spare room, measured through by the commit, goes now.
-          scope.removeAttribute(takesSpareAttribute)
+          scope.removeAttribute(marks.takesSpare)
           letGoOfDragPreview(scope)
           previewed.clear()
         }),
@@ -1214,13 +1211,15 @@ export function useSplitPanesDrag(
       // (a chord), never a press; a press of another pointer is not the drag's.
       if (event.button !== 0 || phase.kind !== "idle") return
       const target = event.target as Element
-      const pressed = target.closest<HTMLElement>("[data-drag-pane], [data-drag-item]")
+      const pressed = target.closest<HTMLElement>(
+        `[${marks.dragPane}], [${marks.dragItem}]`,
+      )
       if (!pressed || !scope.contains(pressed)) return
       // A control inside what is carried keeps its own press.
       const control = target.closest("button, input, textarea, a, [role='menuitem']")
       if (control && control !== pressed && pressed.contains(control)) return
-      const pane = pressed.dataset.dragPane
-      const item = pressed.dataset.dragItem
+      const pane = pressed.getAttribute(marks.dragPane) ?? undefined
+      const item = pressed.getAttribute(marks.dragItem) ?? undefined
       const what: Carried | null =
         pane !== undefined
           ? { kind: "pane", pane: Number(pane) }

@@ -2,19 +2,24 @@
  * What the stylesheet promises about motion, read from the stylesheet: the
  * glide a first message's composer lands on never passes its place.
  */
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync, statSync } from "node:fs"
+import { join, relative } from "node:path"
+import { fileURLToPath } from "node:url"
 import { expect, it } from "vitest"
-import { takesSpareAttribute } from "./split-panes"
+import { classes, marks } from "./split-panes"
 
 const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8")
 
 /**
  * A pane in the window's corner — or where a drag's preview would put it
- * there (`data-drag-corner`, `split-panes/adapters/dom/drag.ts`), and not
+ * there (`marks.dragCorner`, `split-panes/adapters/dom/drag.ts`), and not
  * where it would leave — as the stylesheets select it.
  */
 const cornered = `.workspace[data-panes-alone]
-  .workspace-pane:is([data-corner]:not([data-drag-corner="no"]), [data-drag-corner="yes"])
+  .workspace-pane:is(
+    [${marks.corner}]:not([${marks.dragCorner}="no"]),
+    [${marks.dragCorner}="yes"]
+  )
 `
 
 it("glides without overshoot: the composer lands, and never passes its place", () => {
@@ -110,12 +115,42 @@ it("keeps the list's inline title out from under the window's controls while a d
     new URL("./workspace/ui/session-list/session-list.css", import.meta.url),
     "utf8",
   )
-  // The attribute is the drag's own (`takesSpareAttribute`), never retyped.
-  const selector = `.workspace[${takesSpareAttribute}][data-sidebar="open"]`
+  // The attribute is the drag's own (`marks.takesSpare`), never retyped.
+  const selector = `.workspace[${marks.takesSpare}][data-sidebar="open"]`
   expect(sheet).toContain(selector)
   const body = sheet.slice(sheet.indexOf(selector)).split("}")[0]
   expect(body).toContain(".desktop-column-title")
   expect(body).toMatch(/opacity:\s*0;/)
+})
+
+it("spells every split-panes name a host uses as split-panes publishes it", () => {
+  // A host's stylesheet cannot import the names (`marks`, `classes`), and a
+  // host's code or a verification script that retypes one keeps working
+  // until the module renames it — then matches nothing, silently. Every name
+  // the module puts on the page begins with one of these, so any a host
+  // spells from those families must be a published one.
+  const published = new Set<string>([...Object.values(marks), ...Object.values(classes)])
+  const family =
+    /(?<![/\w-])(?:data-(?:split|drag)|split-panes)-[a-z][a-z-]*(?![\w-]|\.[a-z])/g
+  const desktop = fileURLToPath(new URL(".", import.meta.url))
+  const root = join(desktop, "../..")
+  const walk = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name)
+      if (statSync(path).isDirectory()) return name === "split-panes" ? [] : walk(path)
+      return /\.(css|tsx?|mjs)$/.test(name) ? [path] : []
+    })
+  const files = [...walk(desktop), ...walk(join(root, "verification/desktop/scripts"))]
+  const unpublished = files.flatMap((path) =>
+    [...readFileSync(path, "utf8").matchAll(family)]
+      .map((match) => match[0])
+      .filter((name) => !published.has(name))
+      .map((name) => `${relative(root, path)}: ${name}`),
+  )
+  expect(unpublished).toEqual([])
+  // And the families are what the module sets: none of its names is outside them.
+  for (const name of published)
+    expect(name).toMatch(/^(?:data-(?:split|drag)|split-panes)-/)
 })
 
 it("previews a fold on the attribute the drag sets, in every sheet that previews one", () => {
@@ -130,12 +165,12 @@ it("previews a fold on the attribute the drag sets, in every sheet that previews
       (match) => match[1],
     )
     expect(named.length, path).toBeGreaterThan(0)
-    for (const name of named) expect(name, path).toBe(takesSpareAttribute)
+    for (const name of named) expect(name, path).toBe(marks.takesSpare)
   }
 })
 
 it("names what a flight restyles, so beginning one restyles a few elements, not every one in every pane", () => {
-  // `.workspace[data-flipping] .workspace-pane > *` made the browser restyle all
+  // `.workspace[data-split-flipping] .workspace-pane > *` made the browser restyle all
   // ~1,100 elements of four panes as a flight began: a rule whose subject is any
   // element cannot be aimed. Named, it restyles two per pane.
   const sheet = ["./workspace/ui/panes/panes.css", "./split-panes/ui/split-panes.css"]
@@ -218,7 +253,7 @@ it("paints nothing of a pane under the window's controls: its content below the 
   expect(
     body(
       panes,
-      ".workspace:is([data-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {",
+      ".workspace:is([data-split-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {",
     ),
   ).toMatch(/opacity:\s*0/)
 })

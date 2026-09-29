@@ -226,7 +226,7 @@ export async function lift(page, index = 0) {
   await page.waitForSelector(css.dragGhost, { state: "attached", timeout: 2000 })
   for (let i = 1; i <= 6; i++) await page.mouse.move(at.x + i * 5, at.y + i * 5)
   try {
-    await page.waitForSelector(`${css.dragGhost}:not([data-waiting])`, {
+    await page.waitForSelector(`${css.dragGhost}:not([data-drag-waiting])`, {
       state: "visible",
       timeout: 2000,
     })

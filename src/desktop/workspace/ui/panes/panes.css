@@ -65,11 +65,11 @@ html:not(.dark) .workspace-pane[data-focused] {
     0 16px 40px -18px rgb(0 0 0 / 24%);
 }
 
-.split-panes-grid[data-multi] .workspace-pane:not([data-focused]) {
+.split-panes-grid[data-split-multi] .workspace-pane:not([data-focused]) {
   background: color-mix(in oklab, var(--foreground) 2%, transparent);
 }
 
-html:not(.dark) .split-panes-grid[data-multi] .workspace-pane:not([data-focused]) {
+html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-focused]) {
   background: color-mix(in oklab, var(--background) 30%, white);
 }
 
@@ -77,19 +77,19 @@ html:not(.dark) .split-panes-grid[data-multi] .workspace-pane:not([data-focused]
  * The pane being carried leaves its place empty and dimmed — its slot, which
  * a preview moves to where it would land, under the placeholder.
  */
-.workspace-pane[data-lifted] {
+.workspace-pane[data-drag-lifted] {
   background: color-mix(in oklab, var(--foreground) 2%, transparent);
   box-shadow: inset 0 0 0 1px var(--desktop-rim);
 }
 
 /* Its two parts, faded rather than hidden: an inherited property would restyle all they hold. */
-.workspace-pane[data-lifted] > .workspace-pane-header,
-.workspace-pane[data-lifted] > .workspace-pane-body {
+.workspace-pane[data-drag-lifted] > .workspace-pane-header,
+.workspace-pane[data-drag-lifted] > .workspace-pane-body {
   opacity: 0;
 }
 
 /*
- * While panes travel — a flight (`data-flipping`), or a drag's preview of
+ * While panes travel — a flight (`data-split-flipping`), or a drag's preview of
  * where a drop would put them (`data-drag-reflow`) — nothing inside them
  * repaints expensively: the glass blur and deep shadows wait until they have
  * landed. One set of rules for both, so a drop that hands a preview over to a
@@ -97,22 +97,24 @@ html:not(.dark) .split-panes-grid[data-multi] .workspace-pane:not([data-focused]
  * as `> *`: a rule whose subject is any element makes the browser restyle
  * every element in every pane as a flight begins; named, two per pane.
  */
-.workspace:is([data-flipping], [data-drag-reflow]) .workspace-pane,
-.workspace:is([data-flipping], [data-drag-reflow])
+.workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane,
+.workspace:is([data-split-flipping], [data-drag-reflow])
   .workspace-pane
   > .workspace-pane-header,
-.workspace:is([data-flipping], [data-drag-reflow])
+.workspace:is([data-split-flipping], [data-drag-reflow])
   .workspace-pane
   > .workspace-pane-body {
   will-change: transform;
 }
 
-.workspace:is([data-flipping], [data-drag-reflow]) .workspace-pane {
+.workspace:is([data-split-flipping], [data-drag-reflow]) .workspace-pane {
   box-shadow: inset 0 0 0 1px var(--desktop-rim);
   transition: none;
 }
 
-.workspace:is([data-flipping], [data-drag-reflow]) .workspace-pane .desktop-composer {
+.workspace:is([data-split-flipping], [data-drag-reflow])
+  .workspace-pane
+  .desktop-composer {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   box-shadow: none;
@@ -124,7 +126,7 @@ html:not(.dark) .split-panes-grid[data-multi] .workspace-pane:not([data-focused]
  * rests in the corner (`styles.css`), so a pane sliding out of the corner, or
  * into it, would carry it beneath them.
  */
-.workspace:is([data-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {
+.workspace:is([data-split-flipping], [data-drag-reflow]) .desktop-header[data-sliver] {
   opacity: 0;
   transition: none;
 }
@@ -158,14 +160,14 @@ html:not(.dark) .split-panes-grid[data-multi] .workspace-pane:not([data-focused]
   transition: opacity var(--desktop-base) ease;
 }
 
-.split-panes-grid[data-multi] .workspace-pane-header {
+.split-panes-grid[data-split-multi] .workspace-pane-header {
   cursor: grab;
   /* Carries the pane, never the window (`pane-header.tsx`). */
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
 
-.split-panes-grid[data-multi] .workspace-pane-header:active {
+.split-panes-grid[data-split-multi] .workspace-pane-header:active {
   cursor: grabbing;
 }
 
@@ -176,12 +178,17 @@ html:not(.dark) .split-panes-grid[data-multi] .workspace-pane:not([data-focused]
  * would leave.
  */
 .workspace[data-panes-alone]
-  .workspace-pane:is([data-corner]:not([data-drag-corner="no"]), [data-drag-corner="yes"])
+  .workspace-pane:is(
+    [data-split-corner]:not([data-drag-corner="no"]),
+    [data-drag-corner="yes"]
+  )
   .workspace-pane-header {
   padding-left: var(--desktop-titlebar-safe-start);
 }
 
-.split-panes-grid[data-multi] .workspace-pane:not([data-focused]) .workspace-pane-header {
+.split-panes-grid[data-split-multi]
+  .workspace-pane:not([data-focused])
+  .workspace-pane-header {
   opacity: 0.72;
 }
 
@@ -234,7 +241,7 @@ html:not(.dark) .split-panes-grid[data-multi] .workspace-pane:not([data-focused]
   opacity: 1;
 }
 
-.workspace[data-dragging] .workspace-pane-actions {
+.workspace[data-drag-carrying] .workspace-pane-actions {
   opacity: 0;
 }
 

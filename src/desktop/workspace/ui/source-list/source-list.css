@@ -369,7 +369,7 @@ html:not(.dark) .workspace-sidebar {
 }
 
 /* The row stays in place, quieter, while its pill is carried. */
-.workspace-sidebar [data-dragging] {
+.workspace-sidebar [data-drag-carrying] {
   opacity: 0.45;
 }
 

@@ -15,6 +15,7 @@ import { dropOutcome } from "../../model/drop"
 import { panesOf, singlePane, splitPane, type PaneLayout } from "../../model/pane-layout"
 import type { PaneRoom } from "../../model/pane-sizing"
 import { saying, useSplitPanesDrag, type SplitPanesDragOptions } from "./drag"
+import { classes, gridOf, marks } from "./marks"
 
 let host: HTMLDivElement
 /** Every animation asked for, and of what. */
@@ -151,7 +152,7 @@ async function mounted(fake: Fake, opts: SplitPanesDragOptions = options()) {
 }
 
 function layOut() {
-  const grid = host.querySelector<HTMLElement>("[data-split-grid]")
+  const grid = gridOf(host)
   if (grid) grid.getBoundingClientRect = () => new DOMRect(0, 0, 1100, 800)
   host.querySelectorAll<HTMLElement>("[data-pane-key]").forEach((pane, index) => {
     pane.getBoundingClientRect = () => new DOMRect(index * 554, 0, 546, 800)
@@ -197,7 +198,7 @@ const element = (selector: string) => {
   return found
 }
 const said = () => host.querySelector('[role="status"]')?.textContent
-const carrying = () => host.querySelector("[data-dragging]") !== null
+const carrying = () => host.querySelector(`[${marks.carrying}]`) !== null
 /** Pane 1 lifted and held over the middle of pane 2: a swap, shown. */
 const liftOntoTwo = async () => {
   await press(60, 16, element('[data-drag-pane="1"]'))
@@ -246,7 +247,7 @@ it("ends at once when a value the source watches changes, and not when it is the
   fake.change({ watched: [{ open: true }] })
   await frames()
   expect(carrying()).toBe(false)
-  expect(host.querySelector("[data-waiting], [data-lifted]")).toBeNull()
+  expect(host.querySelector(`[${marks.waiting}], [${marks.lifted}]`)).toBeNull()
   pointer("pointerup", 827, 400)
   await frames()
   expect(fake.state.drops).toEqual([])
@@ -318,7 +319,7 @@ it("offers no zone while the source says no pane can be aimed at", async () => {
   const root = await mounted(fake)
   await liftOntoTwo()
   expect(said()).toBe("")
-  expect(host.querySelector(".split-panes-placeholder")).toBeNull()
+  expect(host.querySelector(`.${classes.placeholder}`)).toBeNull()
   pointer("pointerup", 827, 400)
   await frames()
   expect(fake.state.drops).toEqual([])
@@ -337,24 +338,24 @@ it("marks the root while a drop would take the host's spare room, and clears it 
   }
   await frames()
   expect(said()).toBe("Split right of Pane a")
-  expect(scope?.hasAttribute("data-drag-takes-spare")).toBe(true)
+  expect(scope?.hasAttribute(marks.takesSpare)).toBe(true)
   // Over the pane's middle, a replace takes nothing.
   pointer("pointermove", 250, 400)
   await new Promise((resolve) => setTimeout(resolve, 200))
   await frames()
   expect(said()).toBe("Open in place of Pane a")
-  expect(scope?.hasAttribute("data-drag-takes-spare")).toBe(false)
+  expect(scope?.hasAttribute(marks.takesSpare)).toBe(false)
   for (const x of [300, 400, 480]) {
     pointer("pointermove", x, 400)
     await new Promise((resolve) => setTimeout(resolve, 4))
   }
   await frames()
-  expect(scope?.hasAttribute("data-drag-takes-spare")).toBe(true)
+  expect(scope?.hasAttribute(marks.takesSpare)).toBe(true)
   // Let go home: cleared.
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 480, 400)
   await frames()
-  expect(scope?.hasAttribute("data-drag-takes-spare")).toBe(false)
+  expect(scope?.hasAttribute(marks.takesSpare)).toBe(false)
   // Ended at once by a change: cleared too.
   await press(10, 10, element("[data-drag-item]"))
   for (const x of [200, 300, 400, 480]) {
@@ -362,10 +363,10 @@ it("marks the root while a drop would take the host's spare room, and clears it 
     await new Promise((resolve) => setTimeout(resolve, 4))
   }
   await frames()
-  expect(scope?.hasAttribute("data-drag-takes-spare")).toBe(true)
+  expect(scope?.hasAttribute(marks.takesSpare)).toBe(true)
   fake.change({ watched: [{}] })
   await frames()
-  expect(scope?.hasAttribute("data-drag-takes-spare")).toBe(false)
+  expect(scope?.hasAttribute(marks.takesSpare)).toBe(false)
   pointer("pointerup", 480, 400)
   await act(async () => root.unmount())
 })
@@ -375,12 +376,15 @@ it("carries the host's copy of an item, and a picture of a pane without the host
   const root = await mounted(fake, options({ stripped: ["data-host-mark"] }))
   await press(10, 10, element("[data-drag-item]"))
   pointer("pointermove", 40, 40)
-  expect(element(".split-panes-ghost").textContent).toBe("copy of x")
+  expect(element(`.${classes.ghost}`).textContent).toBe("copy of x")
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 40, 40)
   await frames()
   await liftOntoTwo()
-  const copy = element(".split-panes-ghost [data-split-keeps='top-left']")
+  const copy = element(`.${classes.ghost} header`)
+  // A picture, never a pane or its parts: none of the module's marks is copied.
+  for (const name of Object.values(marks))
+    expect(element(`.${classes.ghost}`).querySelector(`[${name}]`), name).toBeNull()
   expect(copy.hasAttribute("data-host-mark")).toBe(false)
   expect(copy.hasAttribute("data-drag-pane")).toBe(false)
   // The pane itself keeps them.
@@ -421,7 +425,8 @@ it("copies one screen of what the host marks as scrolling", async () => {
   const scroller = element('[data-pane-key="1"] [data-split-scroll]')
   Object.defineProperty(scroller, "scrollTop", { value: 120 })
   await liftOntoTwo()
-  const copied = element(".split-panes-ghost [data-split-scroll] > :first-child")
+  // The scroller's content in the copy, found by the fixture's own shape: the copy keeps no marks.
+  const copied = element(`.${classes.ghost} article > div > div > div`)
   expect(copied.style.transform).toBe("translateY(-120px)")
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 827, 400)

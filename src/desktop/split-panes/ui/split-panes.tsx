@@ -18,6 +18,7 @@ import {
   type PanePlacement,
 } from "../model/pane-sizing"
 import { ResizeEdge } from "../../ui/resize-edge"
+import { classes, marks } from "../adapters/dom/marks"
 import "./split-panes.css"
 
 /**
@@ -27,14 +28,14 @@ import "./split-panes.css"
  * custom properties `split-panes.css` places a pane by); the rest name it to
  * FLIP (`data-flip`, `data-flip-id`) and to the drag (`data-pane-key`), and
  * mark the top-left pane, which clears the window's controls when nothing is
- * beside it (`data-corner`).
+ * beside it (`data-split-corner`).
  */
 export interface PaneFrame {
   readonly style: CSSProperties
   readonly "data-flip": "pane"
   readonly "data-flip-id": PaneKey
   readonly "data-pane-key": PaneKey
-  readonly "data-corner": true | undefined
+  readonly "data-split-corner": true | undefined
 }
 
 /** A pane as the grid hands it to the host to render. */
@@ -61,7 +62,7 @@ export function paneFrame(placement: PanePlacement): PaneFrame {
     "data-flip": "pane",
     "data-flip-id": placement.key,
     "data-pane-key": placement.key,
-    "data-corner": placement.corner || undefined,
+    [marks.corner]: placement.corner || undefined,
   }
 }
 
@@ -125,10 +126,10 @@ export const SplitPanes = memo(function SplitPanes({
   }, [source])
   return (
     <div
-      className="split-panes-grid"
-      data-split-grid
+      className={classes.grid}
+      {...{ [marks.grid]: "" }}
       ref={gridRef}
-      data-multi={multi || undefined}
+      {...{ [marks.multi]: multi || undefined }}
       onKeyDown={tabOrder}
     >
       {panes.length === 0 ? empty : null}

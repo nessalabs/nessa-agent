@@ -17,6 +17,7 @@
  * handler is the other direction (a click or Tab into a pane focuses it).
  */
 import { useEffect, type RefObject } from "react"
+import { gridOf } from "../../../split-panes"
 import { focusedPane } from "../../../split-panes/model/pane-layout"
 import type { DesktopStore } from "../../../store"
 
@@ -100,7 +101,7 @@ export function useFocusFollowsPane(
       if (!lost && active.closest('[role="dialog"], [role="menu"], [aria-modal="true"]'))
         return
       const inFocused = !lost && active.closest(`[${focusedPaneAttribute}]`) !== null
-      const grid = scope.querySelector("[data-split-grid]")
+      const grid = gridOf(scope)
       const inOtherPane = !lost && !inFocused && grid?.contains(active) === true
       if (lost || inOtherPane || (moved && !inFocused)) follow()
     }
@@ -123,10 +124,7 @@ export function useFocusFollowsPane(
 
     const onFocusIn = (event: FocusEvent) => {
       const target = event.target as Element | null
-      last =
-        target && scope.querySelector("[data-split-grid]")?.contains(target)
-          ? target
-          : null
+      last = target && gridOf(scope)?.contains(target) ? target : null
     }
     // Focus falls to the page when what held it is taken away; the browser says so
     // unevenly, so the panes' changes are watched instead.

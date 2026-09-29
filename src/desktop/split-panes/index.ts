@@ -36,11 +36,8 @@
  * preview holds to a point, `data-split-through` on a wrapper to look
  * inside, `data-split-scroll` on the scroller a copy shows one screen of.
  */
-export {
-  takesSpareAttribute,
-  useSplitPanesDrag,
-  type SplitPanesDragOptions,
-} from "./adapters/dom/drag"
+export { useSplitPanesDrag, type SplitPanesDragOptions } from "./adapters/dom/drag"
+export { classes, gridOf, marks } from "./adapters/dom/marks"
 export { FlipScope } from "./adapters/dom/flip"
 export { paneFrame, SplitPanes, type PaneFrame, type ShownPane } from "./ui/split-panes"
 export type { Drop, EdgeMove, SplitPanesSource } from "./application/ports"

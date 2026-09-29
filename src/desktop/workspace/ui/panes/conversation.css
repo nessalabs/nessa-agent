@@ -78,7 +78,9 @@
 }
 
 /* A pane you are not in keeps its composer's choices, dimmed until you return. */
-.split-panes-grid[data-multi] .workspace-pane:not([data-focused]) .desktop-composer-row {
+.split-panes-grid[data-split-multi]
+  .workspace-pane:not([data-focused])
+  .desktop-composer-row {
   opacity: 0.55;
 }
 

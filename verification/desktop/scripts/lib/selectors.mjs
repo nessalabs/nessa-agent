@@ -36,8 +36,8 @@ export const css = {
   dragCarrier: ".split-panes-carrier", // class: holds the copy at the pointer
   dragPlaceholder: ".split-panes-placeholder", // class: where a drop would land
   dragShield: ".split-panes-shield", // class: holds the pointer while carrying
-  lifted: "[data-lifted]",
-  dragging: "[data-workspace][data-dragging]",
+  lifted: "[data-drag-lifted]",
+  dragging: "[data-workspace][data-drag-carrying]",
   dropAnnouncer: '[data-workspace] [role="status"][aria-live="polite"]',
 
   // Quick switcher (⌘K, ⌘\\)

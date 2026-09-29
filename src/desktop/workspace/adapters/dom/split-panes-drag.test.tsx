@@ -32,6 +32,7 @@ import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import { measureWorkspace } from "./measure"
 import { workspaceSplitPanes } from "../store/split-panes-source"
 import { useSplitPanesDrag } from "../../../split-panes"
+import { classes, gridOf, marks } from "../../../split-panes"
 import { workspaceDragOptions } from "./split-panes-drag"
 
 let host: HTMLDivElement
@@ -170,7 +171,7 @@ async function mounted(
       ),
     )
   await render()
-  const grid = host.querySelector<HTMLElement>("[data-split-grid]")
+  const grid = gridOf(host)
   if (!grid) throw new Error("no grid")
   Object.defineProperty(grid, "offsetWidth", { value: 1100 })
   Object.defineProperty(grid, "offsetHeight", { value: 800 })
@@ -184,7 +185,7 @@ async function mounted(
   return { store, root }
 }
 
-const carrier = () => host.querySelector<HTMLElement>(".split-panes-carrier")
+const carrier = () => host.querySelector<HTMLElement>(`.${classes.carrier}`)
 const said = () => host.querySelector('[role="status"]')?.textContent
 const header = (key: number) => {
   const found = host.querySelector(`[data-drag-pane="${key}"]`)
@@ -194,10 +195,10 @@ const header = (key: number) => {
 /** Nothing of a drag is left on the page. */
 const nothingLeft = () => {
   expect(carrier()).toBeNull()
-  expect(host.querySelector(".split-panes-placeholder")).toBeNull()
-  expect(host.querySelector(".split-panes-shield")).toBeNull()
-  expect(host.querySelector("[data-dragging]")).toBeNull()
-  expect(host.querySelector("[data-lifted]")).toBeNull()
+  expect(host.querySelector(`.${classes.placeholder}`)).toBeNull()
+  expect(host.querySelector(`.${classes.shield}`)).toBeNull()
+  expect(host.querySelector(`[${marks.carrying}]`)).toBeNull()
+  expect(host.querySelector(`[${marks.lifted}]`)).toBeNull()
 }
 const apart = () => new Promise((resolve) => setTimeout(resolve, 4))
 
@@ -205,7 +206,7 @@ it("carries the copy under the pointer, gliding to its centre, and commits the z
   const { store, root } = await mounted()
   await press(60, 16, header(1))
   pointer("pointermove", 90, 40)
-  const ghost = host.querySelector<HTMLElement>(".split-panes-ghost")
+  const ghost = host.querySelector<HTMLElement>(`.${classes.ghost}`)
   expect(ghost?.textContent).toContain("a")
   // The carrier is the pointer; the copy is drawn about its centre (273, 400),
   // held where it was grabbed, 60, 16 from its corner, and glides until its
@@ -224,7 +225,7 @@ it("carries the copy under the pointer, gliding to its centre, and commits the z
   await frames()
   expect(carrier()?.style.transform).toBe("translate(827px, 400px)")
   expect(said()).toBe("Swap with Session c")
-  expect(host.querySelector(".split-panes-placeholder")).not.toBeNull()
+  expect(host.querySelector(`.${classes.placeholder}`)).not.toBeNull()
   pointer("pointerup", 827, 400)
   await frames()
   const after = store.getState().workspace.panes
@@ -354,12 +355,10 @@ it("takes away what it made for a press that never becomes a drag", async () => 
   await press(60, 16, header(1))
   // Made once the press's frame has painted, unseen.
   await painted()
-  expect(host.querySelector(".split-panes-ghost")?.hasAttribute("data-waiting")).toBe(
-    true,
-  )
+  expect(host.querySelector(`.${classes.ghost}`)?.hasAttribute(marks.waiting)).toBe(true)
   pointer("pointerup", 61, 16)
   nothingLeft()
-  expect(host.querySelector(".split-panes-ghost")).toBeNull()
+  expect(host.querySelector(`.${classes.ghost}`)).toBeNull()
   await act(async () => root.unmount())
 })
 
@@ -381,9 +380,9 @@ it("copies one screen of the conversation, what is scrolled above standing in as
   pane.setAttribute("data-pane-focused", "")
   await press(60, 16, header(1))
   pointer("pointermove", 90, 40)
-  const ghost = host.querySelector(".split-panes-ghost")
+  const ghost = host.querySelector(`.${classes.ghost}`)
   expect(ghost?.querySelector("[data-tauri-drag-region], [data-pane-focused]")).toBeNull()
-  const copied = host.querySelector(".split-panes-ghost .workspace-transcript-inner")
+  const copied = host.querySelector(`.${classes.ghost} .workspace-transcript-inner`)
   const parts = [...(copied?.querySelectorAll("[data-part]") ?? [])]
   expect(parts.map((part) => part.textContent)).toEqual([
     "a part 1",
@@ -394,9 +393,7 @@ it("copies one screen of the conversation, what is scrolled above standing in as
   expect((copied?.firstElementChild as HTMLElement | null)?.style.height).toBe("200px")
   // Where it was scrolled to, by transform: a scroll would lay the copy out at once.
   expect((copied as HTMLElement | null)?.style.transform).toBe("translateY(-300px)")
-  expect(host.querySelector(".split-panes-ghost")?.hasAttribute("data-waiting")).toBe(
-    false,
-  )
+  expect(host.querySelector(`.${classes.ghost}`)?.hasAttribute(marks.waiting)).toBe(false)
   await act(async () => root.unmount())
 })
 
@@ -409,13 +406,11 @@ it("draws the copy in the frame the drag begins, and what the zone would do in t
   const frame = () => act(async () => queued.splice(0).forEach((run) => run(0)))
   pointer("pointermove", 830, 400)
   pointer("pointermove", 827, 400)
-  expect(host.querySelector(".split-panes-ghost")?.hasAttribute("data-waiting")).toBe(
-    false,
-  )
+  expect(host.querySelector(`.${classes.ghost}`)?.hasAttribute(marks.waiting)).toBe(false)
   await frame()
-  expect(host.querySelector(".split-panes-placeholder")).toBeNull()
+  expect(host.querySelector(`.${classes.placeholder}`)).toBeNull()
   await frame()
-  expect(host.querySelector(".split-panes-placeholder")).not.toBeNull()
+  expect(host.querySelector(`.${classes.placeholder}`)).not.toBeNull()
   window.requestAnimationFrame = request
   pointer("pointerup", 830, 400)
   await act(async () => root.unmount())
@@ -442,9 +437,7 @@ it("lifts only once its copy is made: a move before then reads nothing and lifts
   // Made once the frame has painted, unseen: the next move lifts it where the pointer is.
   await painted()
   expect(reads).toBeGreaterThan(0)
-  expect(host.querySelector(".split-panes-ghost")?.hasAttribute("data-waiting")).toBe(
-    true,
-  )
+  expect(host.querySelector(`.${classes.ghost}`)?.hasAttribute(marks.waiting)).toBe(true)
   pointer("pointermove", 826, 400)
   expect(carrier()?.style.transform).toBe("translate(826px, 400px)")
   pointer("pointermove", 825, 400)
@@ -467,7 +460,7 @@ it("commits only a drop that was previewed: a flick, in any engine's timing, cha
   await painted()
   await frames()
   nothingLeft()
-  expect(host.querySelector(".split-panes-ghost")).toBeNull()
+  expect(host.querySelector(`.${classes.ghost}`)).toBeNull()
   expect(store.getState().workspace.panes).toBe(before)
   // Lifted, and let go over a zone before its preview was shown: home.
   await press(60, 16, header(1))
@@ -503,7 +496,7 @@ it("carries with the primary button alone: another button ends the press or the 
   // its release taken by the menu it opens, the next primary press still carries.
   pointer("pointerdown", 60, 16, header(1), { button: 2, buttons: 2 })
   await painted()
-  expect(host.querySelector(".split-panes-ghost")).toBeNull()
+  expect(host.querySelector(`.${classes.ghost}`)).toBeNull()
   await press(60, 16, header(1))
   pointer("pointermove", 90, 40)
   expect(carrier()).not.toBeNull()
@@ -549,7 +542,7 @@ it("leaves a press on a control inside a header to the control", async () => {
   pointer("pointermove", 827, 400)
   await frames()
   expect(carrier()).toBeNull()
-  expect(host.querySelector(".split-panes-ghost")).toBeNull()
+  expect(host.querySelector(`.${classes.ghost}`)).toBeNull()
   pointer("pointerup", 827, 400)
   await act(async () => root.unmount())
 })
@@ -597,7 +590,7 @@ it("never aims over a side column: the sidebar revealed over the panes is no zon
   await act(async () => new Promise((resolve) => setTimeout(resolve, restAfter + 30)))
   await frames()
   expect(said()).toBe("")
-  expect(host.querySelector(".split-panes-placeholder")).toBeNull()
+  expect(host.querySelector(`.${classes.placeholder}`)).toBeNull()
   // Past its edge, pane a is a target as ever.
   pointer("pointermove", 300, 400)
   await frames()
@@ -787,7 +780,7 @@ it("aims at the pointer: off the grid at nothing, a gutter at the pane nearest, 
   pointer("pointermove", 273, 400)
   await frames()
   expect(said()).toBe("")
-  expect(host.querySelector(".split-panes-placeholder")).toBeNull()
+  expect(host.querySelector(`.${classes.placeholder}`)).toBeNull()
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
   pointer("pointerup", 273, 400)
   await act(async () => root.unmount())
@@ -795,8 +788,8 @@ it("aims at the pointer: off the grid at nothing, a gutter at the pane nearest, 
 
 it("draws the copy at the slot it would land in, and the panes at the rects the drop gives them — none stretched — and at their own with no zone", async () => {
   const { store, root } = await mounted()
-  const ghost = () => host.querySelector<HTMLElement>(".split-panes-ghost")
-  const placeholder = () => host.querySelector<HTMLElement>(".split-panes-placeholder")
+  const ghost = () => host.querySelector<HTMLElement>(`.${classes.ghost}`)
+  const placeholder = () => host.querySelector<HTMLElement>(`.${classes.placeholder}`)
   const pane = (key: number) =>
     host.querySelector<HTMLElement>(`[data-pane-key="${key}"]`) ?? new HTMLElement()
   /** The last transform of the last animation asked of `element`. */
@@ -859,8 +852,8 @@ it("draws the copy at the slot it would land in, and the panes at the rects the 
     `translate(-277px, 202px) scale(${1100 / 546}, ${396 / 800})`,
   )
   // Pane a's slot would be the window's corner: its header steps past the controls there.
-  expect(pane(1).getAttribute("data-drag-corner")).toBe("yes")
-  expect(pane(2).getAttribute("data-drag-corner")).toBeNull()
+  expect(pane(1).getAttribute(marks.dragCorner)).toBe("yes")
+  expect(pane(2).getAttribute(marks.dragCorner)).toBeNull()
   // Its content is scaled back as a pane that shape lays it out: the header
   // held to the top left, the transcript to the top — centred across (273
   // is half the width it has) as it grows, held left as it shrinks — cut
@@ -889,7 +882,7 @@ it("draws the copy at the slot it would land in, and the panes at the rects the 
   expect(lastDrawn(ghost())).toBe("translate(-273px, -400px) scale(1, 1)")
   expect(lastDrawn(pane(2))).toBe("translate(0px, 0px) scale(1, 1)")
   // Out from under the controls once its motion ends — here, at once — its header steps back.
-  expect(pane(1).getAttribute("data-drag-corner")).toBeNull()
+  expect(pane(1).getAttribute(marks.dragCorner)).toBeNull()
   // Back above it and dropped: it lands at the slot previewed; no pane keeps a size of the drag's.
   for (const y of [400, 300, 200, 100, 30]) {
     pointer("pointermove", 827, y)
@@ -903,7 +896,7 @@ it("draws the copy at the slot it would land in, and the panes at the rects the 
   expect((after ? panesOf(after) : []).map((each) => each.item)).toEqual(["a", "c"])
   for (const each of host.querySelectorAll<HTMLElement>("[data-pane-key]")) {
     expect([each.style.width, each.style.height]).toEqual(["", ""])
-    expect(each.hasAttribute("data-drag-corner")).toBe(false)
+    expect(each.hasAttribute(marks.dragCorner)).toBe(false)
   }
   nothingLeft()
   await act(async () => root.unmount())
@@ -933,7 +926,7 @@ it("ends press and drag when the page loses the pointer: a later move and releas
   pointer("pointermove", 827, 400)
   await frames()
   host
-    .querySelector(".split-panes-shield")
+    .querySelector(`.${classes.shield}`)
     ?.dispatchEvent(new PointerEvent("lostpointercapture"))
   await frames()
   nothingLeft()
@@ -1038,7 +1031,7 @@ it("offers no zone while the overview covers the panes: a session carried there 
   await act(async () => new Promise((resolve) => setTimeout(resolve, restAfter + 30)))
   await frames()
   expect(said()).toBe("")
-  expect(host.querySelector(".split-panes-placeholder")).toBeNull()
+  expect(host.querySelector(`.${classes.placeholder}`)).toBeNull()
   pointer("pointerup", 827, 400)
   await frames()
   expect(store.getState().workspace.panes).toBe(before)

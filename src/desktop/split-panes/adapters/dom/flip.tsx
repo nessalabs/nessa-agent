@@ -17,12 +17,13 @@
  * - `data-flip="slide"` with `data-flip-id`: slides sideways. A slide inside
  *   another slide moves only by its own difference.
  *
- * While anything flies, the scope's root carries `data-flipping`, which the
+ * While anything flies, the scope's root carries `data-split-flipping`, which the
  * stylesheet uses to pause blur and large shadows.
  */
 import { Component, type ReactNode, type RefObject } from "react"
 import { slideAnimation } from "../../../adapters/hold-still"
 import { letGoOfDragPreview } from "./drag"
+import { marks } from "./marks"
 import { durationToken, motionToken } from "../../../adapters/motion"
 
 type Rects = { panes: Map<string, DOMRect>; slides: Map<string, DOMRect> }
@@ -90,7 +91,7 @@ export function flyPane(
   const resized = Math.abs(sx - 1) > 0.02 || Math.abs(sy - 1) > 0.02
   // The part held to the pane's top left (`data-split-keeps`): its header.
   const header = children.find(
-    ({ element }) => element.dataset.splitKeeps === "top-left",
+    ({ element }) => element.getAttribute(marks.keeps) === "top-left",
   )?.element
   const hiding =
     resized && header
@@ -188,13 +189,13 @@ export class FlipScope extends Component<{
     const flying = play(root, snapshot)
     this.flights = flying
     if (flying.length === 0) {
-      delete root.dataset.flipping
+      root.removeAttribute(marks.flipping)
       return
     }
-    root.dataset.flipping = ""
+    root.setAttribute(marks.flipping, "")
     Promise.all(flying.map((flight) => flight.finished))
       .then(() => {
-        if (this.flights === flying) delete root.dataset.flipping
+        if (this.flights === flying) root.removeAttribute(marks.flipping)
       })
       .catch(() => undefined)
   }

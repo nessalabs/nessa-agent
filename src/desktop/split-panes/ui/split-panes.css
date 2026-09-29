@@ -68,11 +68,11 @@
 }
 
 /*
- * While panes travel — a flight (`data-flipping`), or a drag's preview of
+ * While panes travel — a flight (`data-split-flipping`), or a drag's preview of
  * where a drop would put them (`data-drag-reflow`) — the edges between them
  * wait out of sight.
  */
-:is([data-flipping], [data-drag-reflow]) .split-panes-pane-edge {
+:is([data-split-flipping], [data-drag-reflow]) .split-panes-pane-edge {
   visibility: hidden;
 }
 
@@ -142,7 +142,7 @@
 }
 
 /* Made as the press begins, it waits on the page unseen until the press becomes a drag. */
-.split-panes-ghost[data-waiting] {
+.split-panes-ghost[data-drag-waiting] {
   opacity: 0;
 }
 
