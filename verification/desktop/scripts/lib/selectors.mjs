@@ -75,6 +75,8 @@ export const css = {
   composerForm: ".desktop-composer", // class: a composer, whose place must not move
   thinkingChip: 'button[aria-haspopup="dialog"][aria-label^="Thinking level"]',
   thinkingPopover: '[role="dialog"][aria-label="Thinking"]',
+  modelChip: '[data-slot="model-picker-trigger"]', // the composer's model picker
+  modelOption: '.desktop-model-picker [role="option"]', // class: a model in the picker
   thinkingSlider: '[role="dialog"][aria-label="Thinking"] [role="slider"]',
   thinkingTrack: ".desktop-thinking-slider", // class: the slider's pointer room; data-ultra when the model has Ultra
   thinkingFast: '[role="dialog"][aria-label="Thinking"] button[aria-label="Fast mode"]',
@@ -211,6 +213,12 @@ export const names = {
   /** Sample sessions (in-memory source) that each wait on one approval. */
   approvalSessions: ["Release build signing", "Notarize the macOS", "Reconnect storm"],
   denyOnce: "Deny",
+  /**
+   * Models the thinking check switches between (their Ultra is listed in
+   * src/desktop/model/composer-options.ts; the check confirms each on the page).
+   */
+  modelWithUltra: "Claude Opus 5",
+  modelWithoutUltra: "Claude Sonnet 5",
   alwaysAllow: "Always Allow",
 }
 

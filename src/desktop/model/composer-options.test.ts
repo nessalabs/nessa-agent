@@ -11,6 +11,9 @@ import {
   thinkingLevelsFor,
   offeredLevelIndex,
   ultraThinkingFor,
+  ultraThinkingModels,
+  fastModeModels,
+  levelRank,
   type ComposerModel,
   shortModelName,
 } from "./composer-options"
@@ -103,11 +106,39 @@ describe("thinkingLevelsFor", () => {
       "max",
       "ultra",
     ])
+    expect(ultraThinkingFor(model("openai", "gpt-6-astra"))).toBe(true)
     expect(ultraThinkingFor(model("anthropic", "claude-sonnet-5"))).toBe(false)
     expect(ultraThinkingFor(model("openai", "claude-opus-5"))).toBe(false)
     expect(ultraThinkingFor(undefined)).toBe(false)
     // A model with Ultra listed but no reasoning still offers nothing.
     expect(thinkingLevelsFor(model("anthropic", "claude-opus-5", false))).toEqual([])
+  })
+})
+
+describe("the models listed for Ultra and Fast", () => {
+  // Until the SDK catalogue records them (#302), a model renamed there must not
+  // silently lose Ultra or Fast here.
+  it.each([
+    ["Ultra", ultraThinkingModels],
+    ["Fast", fastModeModels],
+  ])("names only models in the SDK catalogue, for %s", (_, listed) => {
+    for (const entry of listed)
+      expect(
+        composerModels.some(
+          (known) => known.provider === entry.provider && known.modelId === entry.modelId,
+        ),
+        `${entry.provider}/${entry.modelId}`,
+      ).toBe(true)
+  })
+})
+
+describe("levelRank", () => {
+  it("stands each level where it is among them all, whichever model offers it", () => {
+    expect(levelRank("low")).toBe(0)
+    expect(levelRank("max")).toBe(3)
+    expect(levelRank("ultra")).toBe(4)
+    expect(levelRank("turbo")).toBe(-1)
+    expect(levelRank(undefined)).toBe(-1)
   })
 })
 

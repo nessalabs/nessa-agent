@@ -33,14 +33,19 @@ import {
 } from "react"
 import { createPortal } from "react-dom"
 import { ModelFastMode } from "@nessa-ui/react/model-capability-controls"
-import { offeredLevelIndex, type ThinkingLevel } from "../model/composer-options"
+import {
+  levelRank,
+  offeredLevelIndex,
+  type ThinkingLevel,
+} from "../model/composer-options"
 import {
   fractionAlong,
   levelAfterKey,
   nearestLevel,
-  placePopover,
+  popoverSpacing,
   positionAt,
 } from "../model/thinking-effort"
+import { placeTooltip } from "../model/tooltip-placement"
 import { DesktopIcon } from "./icons"
 import "./thinking-control.css"
 
@@ -54,12 +59,14 @@ export interface ThinkingControlProps {
 }
 
 /**
- * What the words above the slider show, and what they showed before, so the
- * two cross-fade; `turn` counts the changes, so each one's fade is new.
+ * The level the words above the slider show, and — only when it changed while
+ * the popover was open — the level they showed before, so the two cross-fade.
+ * Both are levels' values, never positions: the list of levels changes with
+ * the model. `turn` counts the changes, so each one's fade is new.
  */
 interface Reading {
-  readonly index: number
-  readonly previous: number | undefined
+  readonly value: string | undefined
+  readonly previous: string | undefined
   readonly turn: number
 }
 
@@ -82,16 +89,24 @@ export function ThinkingControl({
   const [dragged, setDragged] = useState<number | null>(null)
   const id = useId()
 
-  // The words follow the level; the level before stays, fading, beneath them.
+  // The words follow the level, the level before staying, fading, beneath
+  // them. Opening forgets it (the chip's click), so only a change made while
+  // the popover is open cross-fades.
   const [reading, setReading] = useState<Reading>({
-    index,
+    value: selected?.value,
     previous: undefined,
     turn: 0,
   })
-  if (reading.index !== index)
-    setReading({ index, previous: reading.index, turn: reading.turn + 1 })
-  const previous = reading.previous === undefined ? undefined : levels[reading.previous]
-  const rising = reading.previous === undefined || index > reading.previous
+  if (reading.value !== selected?.value)
+    setReading({
+      value: selected?.value,
+      previous: reading.value,
+      turn: reading.turn + 1,
+    })
+  const previous = levels.find((level) => level.value === reading.previous)
+  const rising =
+    reading.previous === undefined ||
+    levelRank(selected?.value ?? "") > levelRank(reading.previous)
   const count = levels.length
   const ultraAt = levels.findIndex((level) => level.utmost)
 
@@ -101,38 +116,55 @@ export function ThinkingControl({
     if (refocus) triggerRef.current?.focus({ preventScroll: true })
   }, [])
 
+  // Any level chosen is recorded, the one already shown too: Ultra carried to
+  // a model that stops at Max shows as Max, and choosing Max there means Max.
   const choose = (next: number) => {
     const level = levels.at(next)
-    if (!level || next === index) return
+    if (!level || level.value === value) return
     onValueChange(level.value)
   }
 
-  // Placed before it paints, and again when the window changes size; the
-  // first frame of its rise is already in its place.
+  // Placed before it paints, and kept on its chip every frame while open:
+  // the chip moves without the window changing size — a column folding, a
+  // pane opening beside, the panes' own travel — and the popover goes with it.
   useLayoutEffect(() => {
     if (!shown) return
+    let frame = 0
+    let last = ""
     const place = () => {
       const trigger = triggerRef.current
       const content = contentRef.current
       if (!trigger || !content) return
       const anchor = trigger.getBoundingClientRect()
-      const placed = placePopover(
+      const size = { width: content.offsetWidth, height: content.offsetHeight }
+      const room = { width: window.innerWidth, height: window.innerHeight }
+      const seen = [anchor.left, anchor.top, anchor.width, anchor.height]
+        .concat(size.width, size.height, room.width, room.height)
+        .join()
+      if (seen === last) return
+      last = seen
+      const placed = placeTooltip(
         {
           left: anchor.left,
           top: anchor.top,
           width: anchor.width,
           height: anchor.height,
         },
-        { width: content.offsetWidth, height: content.offsetHeight },
-        { width: window.innerWidth, height: window.innerHeight },
+        size,
+        room,
+        { prefer: "above", align: "end", spacing: popoverSpacing },
       )
       content.style.left = `${placed.x}px`
       content.style.top = `${placed.y}px`
       content.dataset.side = placed.side
     }
+    const follow = () => {
+      place()
+      frame = requestAnimationFrame(follow)
+    }
     place()
-    window.addEventListener("resize", place)
-    return () => window.removeEventListener("resize", place)
+    frame = requestAnimationFrame(follow)
+    return () => cancelAnimationFrame(frame)
   }, [shown, home])
 
   // Opened, the keyboard lands on the knob, so the arrows work at once.
@@ -289,8 +321,8 @@ export function ThinkingControl({
           <span className="desktop-thinking-glow" />
           <span className="desktop-thinking-clip">
             <span className="desktop-thinking-fill" />
-            {selected?.utmost ? (
-              // Ultra reached: a light runs once along the fill.
+            {selected?.utmost && reading.previous !== undefined ? (
+              // Ultra reached while open: a light runs once along the fill.
               <span key={`sheen-${reading.turn}`} className="desktop-thinking-sheen" />
             ) : null}
           </span>
@@ -346,6 +378,8 @@ export function ThinkingControl({
         onClick={(event) => {
           if (shown) return close(false)
           setHome(event.currentTarget.closest<HTMLElement>("[data-surface]"))
+          // Opened, it shows the level at rest: no fade from an earlier change.
+          setReading((current) => ({ ...current, previous: undefined }))
           setOpen(true)
         }}
       >

@@ -1,10 +1,12 @@
 /**
- * Where a tooltip sits beside the control it names: on the side the control
- * prefers (below for the window's own controls, above for the composer's
- * chips), flipped to the other when it will not fit there or would cover
- * `avoid` — the window's traffic lights — and shifted along to stay inside
- * the window with a margin. It never covers the control it names. Pixels in,
- * pixels out; nothing here reads the page.
+ * Where a floating thing sits beside the control it belongs to — a tooltip by
+ * the control it names, the thinking control's popover by its chip: on the
+ * side the control prefers (below for the window's own controls, above for
+ * the composer's chips), flipped to the other when it will not fit there or
+ * would cover `avoid` — the window's traffic lights — and shifted along to
+ * stay inside the window with a margin. Along the control it is centred, or
+ * its trailing edge on the control's (`align: "end"`). It never covers the
+ * control. Pixels in, pixels out; nothing here reads the page.
  */
 export interface Box {
   readonly left: number
@@ -34,11 +36,24 @@ export function placeTooltip(
   anchor: Box,
   tip: { readonly width: number; readonly height: number },
   window: { readonly width: number; readonly height: number },
-  { prefer = "below", avoid }: { prefer?: TooltipSide; avoid?: Box } = {},
+  {
+    prefer = "below",
+    avoid,
+    align = "centre",
+    spacing = tooltipSpacing,
+  }: {
+    prefer?: TooltipSide
+    avoid?: Box
+    align?: "centre" | "end"
+    spacing?: { readonly gap: number; readonly margin: number }
+  } = {},
 ): TooltipPlacement {
-  const { gap, margin } = tooltipSpacing
-  const centred = anchor.left + anchor.width / 2 - tip.width / 2
-  const x = Math.max(margin, Math.min(centred, window.width - margin - tip.width))
+  const { gap, margin } = spacing
+  const along =
+    align === "end"
+      ? anchor.left + anchor.width - tip.width
+      : anchor.left + anchor.width / 2 - tip.width / 2
+  const x = Math.max(margin, Math.min(along, window.width - margin - tip.width))
   const yOn = (side: TooltipSide) =>
     side === "below" ? anchor.top + anchor.height + gap : anchor.top - gap - tip.height
   const usable = (side: TooltipSide) => {

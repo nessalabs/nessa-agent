@@ -625,19 +625,23 @@ it offered that still fits is kept: its `ModelFastMode` is the Fast toggle.
   Low to Max and then Ultra, marked `utmost`: the most any model will think,
   offered only by a model that has it (`ultraThinkingFor`,
   `thinkingLevelsFor`). A choice carried to a model without it shows as Max,
-  never lower (`offeredLevelIndex`). Which models have Ultra is a table beside
+  never lower (`offeredLevelIndex`), and a level chosen there is recorded as
+  chosen, Max included. Which models have Ultra is a table beside
   Fast mode's, by provider and model: the SDK catalogue records only whether a
   model reasons, and by its own rule prescribes no provider's effort levels
   (`crates/nessa-sdk/README.md`), so the table stays here until the catalogue
   carries it — a change to the SDK's contract that is its own issue. Every rule
   of the slider — which level a key picks, where the pointer is and which level
-  that snaps to, where the popover sits — is `model/thinking-effort.ts`'s, by
-  position, naming no level.
+  that snaps to — is `model/thinking-effort.ts`'s, by position, naming no
+  level; where the popover sits is the tooltip's rule (`placeTooltip`, aligned
+  to the chip's trailing edge), kept on the chip every frame while it is open,
+  so a column folding or a pane opening beside carries it along.
 - **Effort reads as rising.** A slider: a thin track whose fill is the theme's
   own light (`--desktop-light-*`, which a header picture tints), faint at its
   start and full at Max, and a small knob whose halo grows with it. Above it,
   the level's name and one line about it cross-fade, rising as the level rises
-  and falling as it falls. A model with Ultra ends its track with Ultra's own
+  and falling as it falls — only for a change made while it is open; it opens
+  at rest. A model with Ultra ends its track with Ultra's own
   segment after a hairline gap, holding a trace of the theme's two lights;
   reaching it is the one moment — the segment glows, the lights bloom in the
   popover's corner, and a light runs once along the fill. A model without it
@@ -666,10 +670,13 @@ it offered that still fits is kept: its `ModelFastMode` is the Fast toggle.
 
 `responsive.mjs --only thinking-control` holds it in Chromium and WebKit: every
 frame of every change and of a drag, the composer, its controls and the
-popover in place; the held knob on the pointer and, let go, on its level; only
-Ultra marked apart; only transform and opacity animated; and with the system's
-reduced motion, nothing (`verification/desktop/CHECKLIST.md` › _Composer and
-approval card_).
+popover in place; the held knob on the pointer and, let go, on its level; the
+popover on its chip as ⌘B and ⌥⌘S move it; only Ultra marked apart, and on a
+model that ends at Max the carried Ultra shown and chosen as Max; only
+transform and opacity animated; and with the system's reduced motion, nothing
+(`verification/desktop/CHECKLIST.md` › _Composer and approval card_).
+`perf-budget.mjs` holds its walk to Ultra and its drag to the frame budget
+(`thinking-walk`, `thinking-drag`).
 
 ### Interaction and visual rules
 

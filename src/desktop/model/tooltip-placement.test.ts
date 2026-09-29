@@ -41,3 +41,39 @@ describe("where a tooltip sits", () => {
     expect(placed.side).toBe("below")
   })
 })
+
+describe("where a popover sits by its chip", () => {
+  const popover = { width: 248, height: 120 }
+  const chip = (left: number, top: number) => ({ left, top, width: 40, height: 30 })
+  const beside = {
+    prefer: "above",
+    align: "end",
+    spacing: { gap: 10, margin: 12 },
+  } as const
+
+  it("sits above with its trailing edge on the chip's, its own gap away", () => {
+    expect(placeTooltip(chip(700, 600), popover, window, beside)).toEqual({
+      x: 740 - 248,
+      y: 600 - 10 - 120,
+      side: "above",
+    })
+  })
+
+  it("shifts along to stay inside the window by its own margin", () => {
+    expect(placeTooltip(chip(20, 600), popover, window, beside).x).toBe(12)
+    expect(placeTooltip(chip(990, 600), popover, window, beside).x).toBe(1000 - 12 - 248)
+  })
+
+  it("goes below only when above would come nearer the window's edge than the margin", () => {
+    expect(placeTooltip(chip(700, 11 + 10 + 120), popover, window, beside).side).toBe(
+      "below",
+    )
+    expect(placeTooltip(chip(700, 12 + 10 + 120), popover, window, beside).side).toBe(
+      "above",
+    )
+    // Room for neither: it stays on the side it prefers.
+    expect(
+      placeTooltip(chip(700, 60), popover, { width: 1000, height: 200 }, beside).side,
+    ).toBe("above")
+  })
+})

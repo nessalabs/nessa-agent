@@ -79,6 +79,12 @@ const key = (target: Element | null, name: string, shiftKey = false) =>
     )
   })
 const open = async () => act(async () => chip().click())
+const words = () =>
+  [...document.querySelectorAll(".desktop-thinking-words")].map((element) => ({
+    name: element.querySelector(".desktop-thinking-name")?.textContent,
+    leaving: element.hasAttribute("data-leaving"),
+    entering: element.hasAttribute("data-entering"),
+  }))
 
 it("names the level on its chip, and opens onto a slider at the level chosen", async () => {
   await act(async () => root.render(<Harness />))
@@ -142,21 +148,48 @@ it("shows Ultra chosen on a model that stops at Max as Max", async () => {
 it("cross-fades the words: what was shown stays, leaving, beneath the new", async () => {
   await act(async () => root.render(<Harness />))
   await open()
-  const words = () =>
-    [...document.querySelectorAll(".desktop-thinking-words")].map((element) => ({
-      name: element.querySelector(".desktop-thinking-name")?.textContent,
-      leaving: element.hasAttribute("data-leaving"),
-    }))
   // Opening shows the level at rest, with nothing leaving.
-  expect(words()).toEqual([{ name: "Medium", leaving: false }])
+  expect(words()).toEqual([{ name: "Medium", leaving: false, entering: false }])
   await key(slider(), "ArrowRight")
   expect(words()).toEqual([
-    { name: "Medium", leaving: true },
-    { name: "High", leaving: false },
+    { name: "Medium", leaving: true, entering: false },
+    { name: "High", leaving: false, entering: true },
   ])
   expect(popover()?.hasAttribute("data-rising")).toBe(true)
   await key(slider(), "ArrowLeft")
   expect(popover()?.hasAttribute("data-rising")).toBe(false)
+})
+
+it("records Max chosen from the keys where Ultra is shown as Max", async () => {
+  chosen.length = 0
+  await act(async () => root.render(<Harness initial="ultra" />))
+  await open()
+  expect(said()).toBe("Max")
+  await key(slider(), "End")
+  expect(chosen).toEqual(["max"])
+})
+
+it("opens at rest after a change: nothing fades, and Ultra's light does not run again", async () => {
+  await act(async () => root.render(<Harness levels={thinkingLevels} />))
+  await open()
+  await key(slider(), "End")
+  expect(document.querySelector(".desktop-thinking-sheen")).not.toBeNull()
+  await key(slider(), "Escape")
+  await open()
+  expect(words()).toEqual([{ name: "Ultra", leaving: false, entering: false }])
+  expect(document.querySelector(".desktop-thinking-sheen")).toBeNull()
+})
+
+it("fades from no level it was not showing when the model changes while closed", async () => {
+  function Switching({ levels }: { levels: readonly ThinkingLevel[] }) {
+    return <ThinkingControl levels={levels} value="high" onValueChange={() => {}} />
+  }
+  await act(async () => root.render(<Switching levels={upToMax} />))
+  // A model that does not reason, then one with Ultra, all while closed.
+  await act(async () => root.render(<Switching levels={[]} />))
+  await act(async () => root.render(<Switching levels={thinkingLevels} />))
+  await open()
+  expect(words()).toEqual([{ name: "High", leaving: false, entering: false }])
 })
 
 it("stands the knob and fill at the level's fraction of the track", async () => {

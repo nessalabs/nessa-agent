@@ -22,7 +22,10 @@
  *                   control): from the keyboard it opens onto the slider, the
  *                   arrows, Home and End change the level, and only Ultra, past
  *                   Max, is marked apart; dragged, the knob follows the pointer,
- *                   the level is the nearest and let go it settles on it; in
+ *                   the level is the nearest and let go it settles on it; its
+ *                   popover stays on its chip as ⌘B and ⌥⌘S move it; on a model
+ *                   that ends at Max, the walk ends there, Ultra carried to it
+ *                   shows as Max, and Max chosen there stays Max; in
  *                   every frame of every change — the drag and Fast too — the
  *                   composer, its controls and the popover hold their
  *                   place; a level's change animates transform and opacity only;
@@ -612,6 +615,118 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
   if (!tabbed.chipFocused)
     failures.push("Tab past the popover's end did not land on the chip")
 
+  // The popover stays on its chip when the chip moves with no change of the
+  // window's size: a column folding (⌘B), the session list going (⌥⌘S).
+  const opens = async () => {
+    await page.locator(chip).focus()
+    await page.keyboard.press(keys.enter)
+    if (!(await until(page, (sel) => document.querySelector(sel), css.thinkingPopover)))
+      throw new Error("Return on the chip did not open the thinking popover")
+    await settled(page)
+  }
+  const edges = () =>
+    page.evaluate(
+      ([sel, chipSelector]) => {
+        const c = document.querySelector(chipSelector)?.getBoundingClientRect()
+        const p = document.querySelector(sel.thinkingPopover)?.getBoundingClientRect()
+        return c && p
+          ? { chipRight: c.right, chipTop: c.top, right: p.right, bottom: p.bottom }
+          : null
+      },
+      [css, chip],
+    )
+  await opens()
+  const following = []
+  const start = await edges()
+  for (const [name, chord] of [
+    ["⌘B", keys.toggleSidebar],
+    ["⌥⌘S", keys.toggleSessionList],
+  ]) {
+    await page.keyboard.press(chord)
+    await frames(page, 2)
+    await settled(page)
+    await frames(page, 2)
+    const now = await edges()
+    if (!now) {
+      failures.push(`${name}: the thinking popover closed as its chip moved`)
+      break
+    }
+    const row = {
+      name,
+      chipMoved: Math.round(now.chipRight - start.chipRight),
+      right: Math.round((now.right - now.chipRight) * 100) / 100,
+      above: Math.round((now.chipTop - now.bottom) * 100) / 100,
+    }
+    following.push(row)
+    if (Math.abs(row.right) > 1)
+      failures.push(`${name}: the popover's edge is ${row.right}px from its chip's`)
+    if (Math.abs(row.above - 10) > 1)
+      failures.push(`${name}: the popover ends ${row.above}px above its chip, not 10`)
+  }
+  if (!following.some((row) => row.chipMoved !== 0))
+    failures.push(
+      "⌘B and ⌥⌘S did not move the chip: nothing showed the popover following",
+    )
+  await page.keyboard.press(keys.escape)
+  await page.keyboard.press(keys.toggleSidebar)
+  await page.keyboard.press(keys.toggleSessionList)
+  await settled(page)
+
+  // A model whose track ends at Max, and Ultra carried to it: shown as Max,
+  // and Max chosen there is Max, not the Ultra carried back.
+  const pick = async (model) => {
+    await page.locator(`${css.focusedPane} ${css.modelChip}`).click()
+    const option = page.locator(css.modelOption, { hasText: model }).first()
+    await option.waitFor({ timeout: 3000 })
+    await option.click()
+    await settled(page)
+  }
+  await opens()
+  await page.keyboard.press(keys.end)
+  const carried = await thinkingState(page, chip)
+  await page.keyboard.press(keys.escape)
+  if (!carried.ultra) throw new CannotRun("the new session's model has no Ultra")
+  await pick(names.modelWithoutUltra)
+  const shownAs = await thinkingState(page, chip)
+  await opens()
+  const upToMax = await thinkingState(page, chip)
+  if (upToMax.ultra)
+    throw new CannotRun(
+      `${names.modelWithoutUltra} has Ultra now; name another in selectors.mjs`,
+    )
+  const noUltra = { count: upToMax.count, carriedShownAs: shownAs.chipLabel }
+  if (
+    shownAs.chipLabel !== `Thinking level: ${upToMax.checkedLabel}` ||
+    upToMax.checked !== upToMax.count - 1
+  )
+    failures.push(
+      `Ultra carried to a model without it shows as "${shownAs.chipLabel}", not its last level`,
+    )
+  // End there, on the Max already shown, chooses Max: back on the model with
+  // Ultra, it is still Max rather than the Ultra carried.
+  await page.keyboard.press(keys.end)
+  await page.keyboard.press(keys.escape)
+  await pick(names.modelWithUltra)
+  noUltra.backOnUltra = (await thinkingState(page, chip)).chipLabel
+  if (!/Max$/.test(noUltra.backOnUltra ?? ""))
+    failures.push(
+      `Max chosen on ${names.modelWithoutUltra} came back as "${noUltra.backOnUltra}"`,
+    )
+  // The walk on a track that ends at Max: it ends there, and nothing is marked apart.
+  await pick(names.modelWithoutUltra)
+  await opens()
+  for (const [key, want] of [
+    [keys.home, 0],
+    [keys.end, upToMax.count - 1],
+  ]) {
+    await sampling(`no Ultra: ${key} to ${want}`, () => page.keyboard.press(key))
+    const now = await thinkingState(page, chip)
+    if (now.checked !== want)
+      failures.push(`no Ultra: ${key} left the level at ${now.checked}`)
+    if (now.utmost) failures.push(`no Ultra: level ${now.checked} is marked utmost`)
+  }
+  await page.keyboard.press(keys.escape)
+
   // With the system's reduced motion, the same walk animates nothing.
   const reduced = await openPage(page.context().browser(), {
     url: page.url(),
@@ -658,7 +773,7 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
     await reduced.close()
   }
 
-  return { opened, moves, drag, reduced: still, failures }
+  return { opened, moves, drag, following, noUltra, reduced: still, failures }
 }
 
 const meta = {

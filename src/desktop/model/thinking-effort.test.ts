@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest"
-import {
-  levelAfterKey,
-  placePopover,
-  popoverSpacing,
-  fractionAlong,
-  nearestLevel,
-  positionAt,
-} from "./thinking-effort"
+import { levelAfterKey, fractionAlong, nearestLevel, positionAt } from "./thinking-effort"
 
 describe("levelAfterKey", () => {
   it("steps one level with the arrows: right and up are more thinking", () => {
@@ -23,11 +16,14 @@ describe("levelAfterKey", () => {
     expect(levelAfterKey("End", 1, 4)).toBe(3)
   })
 
-  it("leaves a key alone when it would not move, or is not one of its keys", () => {
-    expect(levelAfterKey("ArrowRight", 3, 4)).toBeUndefined()
-    expect(levelAfterKey("ArrowLeft", 0, 4)).toBeUndefined()
-    expect(levelAfterKey("Home", 0, 4)).toBeUndefined()
-    expect(levelAfterKey("End", 3, 4)).toBeUndefined()
+  it("stays at an end when a key would step past it, so the level is still chosen", () => {
+    expect(levelAfterKey("ArrowRight", 3, 4)).toBe(3)
+    expect(levelAfterKey("ArrowLeft", 0, 4)).toBe(0)
+    expect(levelAfterKey("Home", 0, 4)).toBe(0)
+    expect(levelAfterKey("End", 3, 4)).toBe(3)
+  })
+
+  it("leaves a key alone that is not one of its keys", () => {
     expect(levelAfterKey("Enter", 1, 4)).toBeUndefined()
     expect(levelAfterKey("a", 1, 4)).toBeUndefined()
   })
@@ -75,45 +71,5 @@ describe("fractionAlong", () => {
 
   it("stands a model's only level at the end", () => {
     expect(fractionAlong(0, 1)).toBe(1)
-  })
-})
-
-describe("placePopover", () => {
-  const popover = { width: 248, height: 120 }
-  const window = { width: 1280, height: 800 }
-  const { gap, margin } = popoverSpacing
-
-  it("sits above the chip with its trailing edge on the chip's", () => {
-    const chip = { left: 1000, top: 700, width: 40, height: 30 }
-    expect(placePopover(chip, popover, window)).toEqual({
-      x: 1040 - 248,
-      y: 700 - gap - 120,
-      side: "above",
-    })
-  })
-
-  it("shifts along to stay inside the window", () => {
-    const nearLeft = { left: 20, top: 700, width: 40, height: 30 }
-    expect(placePopover(nearLeft, popover, window).x).toBe(margin)
-    const nearRight = { left: 1270, top: 700, width: 40, height: 30 }
-    expect(placePopover(nearRight, popover, window).x).toBe(1280 - margin - 248)
-  })
-
-  it("goes below only when above would leave the window and below would not", () => {
-    const high = { left: 1000, top: 60, width: 40, height: 30 }
-    expect(placePopover(high, popover, window)).toMatchObject({
-      y: 60 + 30 + gap,
-      side: "below",
-    })
-    // Above, it would sit inside the window yet closer to its edge than the margin.
-    const nearTop = { left: 1000, top: margin - 1 + gap + 120, width: 40, height: 30 }
-    expect(placePopover(nearTop, popover, window).side).toBe("below")
-    const clear = { left: 1000, top: margin + gap + 120, width: 40, height: 30 }
-    expect(placePopover(clear, popover, window).side).toBe("above")
-    // Room for neither: it stays above, the side a composer's controls expect.
-    const cramped = { left: 1000, top: 60, width: 40, height: 30 }
-    expect(placePopover(cramped, popover, { width: 1280, height: 200 }).side).toBe(
-      "above",
-    )
   })
 })

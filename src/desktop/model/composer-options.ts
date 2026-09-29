@@ -111,7 +111,7 @@ export const defaultThinkingLevel = "medium"
  * levels (`crates/nessa-sdk/README.md`) — so, as with Fast mode below, they
  * are listed here by provider and model until the catalog carries it.
  */
-const ultraThinkingModels: readonly { provider: string; modelId: string }[] = [
+export const ultraThinkingModels: readonly { provider: string; modelId: string }[] = [
   { provider: "anthropic", modelId: "claude-opus-5" },
   { provider: "openai", modelId: "gpt-6-astra" },
 ]
@@ -146,14 +146,21 @@ export function offeredLevelIndex(
 ): number {
   const exact = levels.findIndex((level) => level.value === value)
   if (exact >= 0) return exact
-  const rank = thinkingLevels.findIndex((level) => level.value === value)
+  const rank = levelRank(value)
   if (rank < 0) return 0
   let below = 0
   levels.forEach((level, index) => {
-    if (thinkingLevels.findIndex((known) => known.value === level.value) <= rank)
-      below = index
+    if (levelRank(level.value) <= rank) below = index
   })
   return below
+}
+
+/**
+ * Where a level stands among all the levels there are, least first — the
+ * same whichever model offers it; -1 for a value that is not a level.
+ */
+export function levelRank(value: string | undefined): number {
+  return thinkingLevels.findIndex((level) => level.value === value)
 }
 
 const listed = (
@@ -169,7 +176,7 @@ const listed = (
  * Models that offer Fast mode. The SDK catalog does not record it yet, so it
  * is listed here by provider and model until the catalog carries it.
  */
-const fastModeModels: readonly { provider: string; modelId: string }[] = [
+export const fastModeModels: readonly { provider: string; modelId: string }[] = [
   { provider: "anthropic", modelId: "claude-opus-5" },
 ]
 
