@@ -9,6 +9,7 @@
 //! opening an existing session creates nothing for one that never was.
 use nessa_local_storage as private;
 mod asked_questions;
+mod baseline;
 mod benchmark;
 mod custom_storage;
 mod declined_reviews;

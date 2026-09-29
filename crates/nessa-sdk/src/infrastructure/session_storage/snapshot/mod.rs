@@ -14,6 +14,10 @@
 //! the journal's byte size. No previous history is re-encoded during a normal save.
 //! Cancellation maps an undispatched local decision and caller separately from
 //! scheduling edges and provider settlement reports.
+//! `baseline` reuses these typed field mappings to represent one validated
+//! snapshot as bounded import pieces. Its seal prevents a partial candidate from
+//! being decoded; it does not commit pieces or select a new writer.
+mod baseline;
 mod cancellation;
 mod decode;
 mod errors;
@@ -25,4 +29,7 @@ mod scheduling;
 mod settlement;
 mod tools;
 pub(super) use crate::application::agent_execution::sessions::validation::validate;
+pub use baseline::{
+    decode_baseline, encode_baseline, BaselineExport, BaselinePiece, BaselineSeal, BaselineSection,
+};
 pub(super) use journal::{encode, read};

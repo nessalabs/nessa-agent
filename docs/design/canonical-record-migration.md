@@ -1,6 +1,6 @@
 # Canonical conversation records and legacy import
 
-**Status:** proposed implementation contract for [#274](https://github.com/nessalabs/nessa-agent/issues/274), under [#258](https://github.com/nessalabs/nessa-agent/issues/258). The current SDK still writes leased JSONL session journals. This design does not claim that a production record runtime is composed yet.
+**Status:** proposed cutover contract for [#274](https://github.com/nessalabs/nessa-agent/issues/274), under [#258](https://github.com/nessalabs/nessa-agent/issues/258). A pure baseline codec now reuses the SDK's typed snapshot field mappings and verifies bounded pieces plus a seal. The current SDK still writes leased JSONL session journals; no production record runtime or importer is composed yet.
 
 ## What becomes authoritative
 

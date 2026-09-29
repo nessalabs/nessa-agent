@@ -18,7 +18,7 @@ use nessa_sdk::domain::agent_execution::executions::{
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStorage};
 use serde_json::{json, Value};
 
-fn pending(ids: &[&str]) -> SessionSnapshot {
+pub(super) fn pending(ids: &[&str]) -> SessionSnapshot {
     let mut value = snapshot("queue-evidence");
     value.invocations.clear();
     for name in ids {
