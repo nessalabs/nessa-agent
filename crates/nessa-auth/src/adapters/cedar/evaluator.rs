@@ -8,6 +8,7 @@ use cedar_policy::{
     Authorizer, Context, Decision as CedarDecision, PolicySet, Request, Schema, ValidationMode,
     Validator,
 };
+use sha2::{Digest, Sha256};
 use std::str::FromStr;
 
 use super::entities::{cedar_uid, entities};
@@ -28,6 +29,13 @@ pub struct CedarPolicyEvaluator {
 }
 
 impl CedarPolicyEvaluator {
+    /// Identity of the embedded read policy and schema for receiver epochs.
+    pub fn profile_digest() -> String {
+        let mut digest = Sha256::new();
+        digest.update(SCHEMA.as_bytes());
+        digest.update(POLICIES.as_bytes());
+        format!("{:x}", digest.finalize())
+    }
     /// Load and strictly validate the checked-in schema and policy bundle.
     pub fn new() -> Result<Self, AccessError> {
         Self::from_sources(SCHEMA, POLICIES)
@@ -76,7 +84,7 @@ impl PolicyEvaluator for CedarPolicyEvaluator {
     ) -> Result<Decision, AccessError> {
         if !matches!(
             action.as_str(),
-            SERVER_READ | CREDENTIAL_MANAGE | "conversation.write"
+            SERVER_READ | CREDENTIAL_MANAGE | "conversation.read" | "conversation.write"
         ) {
             return Ok(Decision::Deny);
         }

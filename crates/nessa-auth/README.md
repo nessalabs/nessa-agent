@@ -150,8 +150,8 @@ allow-all evaluator.
 4. Cedar evaluates the action, organization, membership role, and exact credential
    grant. Dispatch only for `Ok(Decision::Allow)`; Deny and errors both block it.
 
-The initial profile permits `server.read` and `conversation.write` for active members/admins and
-`credential.manage` for active admins. Both require an exact action/resource grant
+The profile permits `server.read`, `conversation.read`, and `conversation.write` for active members/admins and
+`credential.manage` for active admins. Each requires an exact action/resource grant
 and matching identity/organization. Unknown actions are denied. An admin's narrow
 credential does not inherit broader permissions. Cedar evaluation diagnostics
 containing errors are treated as failures even if another policy could permit.

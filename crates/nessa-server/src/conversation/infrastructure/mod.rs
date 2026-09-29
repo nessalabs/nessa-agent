@@ -3,7 +3,14 @@
 //! `LocalConversationStore` keeps ownership records, tombstones and summaries
 //! with approval-mode requests in one private SQLite database (`schema.sql`, opened by
 //! `nessa-local-database`), and is the repository, the summaries and the
-//! listing and the owner-scoped catalogue at once:
+//! listing and the owner-scoped catalogue at once.
+//!
+//! `LocalReceiverAuthority` keeps server-minted receiver bindings, durable access
+//! epochs and transition evidence in its own private SQLite dataset. It supplies
+//! passive admission; `exact_record_scope` combines its admitted receiver and
+//! epoch with the SDK source's physical identity before a bounded read.
+//!
+//! Ports and local files:
 //!
 //! ```text
 //!   ConversationRepository ─┐
@@ -22,7 +29,11 @@
 //! answer about its own record of a session into the deletion, unchanged.
 //! `DurableConversationModeAudit` keeps application and recovery evidence in
 //! separate immutable files keyed by the conversation, request and phase.
+mod receiver_authority;
 mod store;
+pub use receiver_authority::{LocalReceiverAuthority, ReceiverChangeError};
+mod record_scope;
+pub use record_scope::exact_record_scope;
 pub use store::LocalConversationStore;
 
 mod catalogue_source;

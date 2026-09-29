@@ -41,3 +41,7 @@ pub mod infrastructure;
 #[cfg(test)]
 #[path = "../../tests/conversation/agreement.rs"]
 mod agreement_tests;
+
+#[cfg(test)]
+#[path = "../../tests/conversation/passive_read.rs"]
+mod passive_read_tests;

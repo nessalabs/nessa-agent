@@ -2,7 +2,9 @@ use super::generated::AgentsListResult;
 use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::attachments::{application::AttachmentService, entrypoint::http::UploadRoute};
-use crate::conversation::application::ConversationService;
+use crate::conversation::application::{
+    ConversationRepository, ConversationService, ReceiverAuthority,
+};
 use axum::extract::FromRef;
 use nessa_auth::{
     application::{
@@ -49,6 +51,8 @@ pub struct ProductRouteState {
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) policy: Arc<dyn PolicyEvaluator>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
+    /// Passive reads use these independent authorities without opening an Agent.
+    pub(crate) passive_read: Option<(Arc<dyn ReceiverAuthority>, Arc<dyn ConversationRepository>)>,
     pub(crate) agent_installations: Option<Arc<dyn AgentInstallations>>,
     pub(crate) installs: Arc<Semaphore>,
     pub(crate) agents_catalog: Option<Arc<AgentsListResult>>,
@@ -125,6 +129,7 @@ impl ProductRouteState {
             policy: dependencies.policy,
             admin: None,
             conversations: None,
+            passive_read: None,
             agents_catalog: None,
             agent_installations: None,
             installs: Arc::new(Semaphore::new(1)),
@@ -156,6 +161,16 @@ impl ProductRouteState {
     /// Share server-owned Agents across authenticated sockets. No socket owns cleanup.
     pub fn with_conversations(mut self, service: Arc<ConversationService>) -> Self {
         self.conversations = Some(service);
+        self
+    }
+
+    /// Bind the server-owned receiver state and conversation ownership source.
+    pub fn with_passive_read(
+        mut self,
+        receivers: Arc<dyn ReceiverAuthority>,
+        conversations: Arc<dyn ConversationRepository>,
+    ) -> Self {
+        self.passive_read = Some((receivers, conversations));
         self
     }
 

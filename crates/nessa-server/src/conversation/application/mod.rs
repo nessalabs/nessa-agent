@@ -10,6 +10,9 @@
 //! A bounded read projection consumes SDK observations independently of sockets.
 //! Service -> ConversationAttachments: a message may refer only to images this
 //! conversation uploaded, and closing the conversation lets them go.
+//! Passive read admission -> current auth, durable receiver binding, then
+//! ownership repository. It never opens an Agent or a record source; #296/#297
+//! supply bounded source transport after admission.
 //! Service -> ConversationFileLinkAudit: a message may also point at files on
 //! this machine by path. Nothing is uploaded and nothing is held for those, so
 //! what is recorded is who pointed the agent at them.
@@ -68,17 +71,22 @@
 mod catalogue;
 mod error;
 mod locks;
+mod passive_read;
 mod ports;
 mod projection;
 mod provider_sessions;
 mod retries;
 mod service;
 mod view;
+pub use crate::conversation::domain::ReceiverBinding;
 pub use catalogue::{
     CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
     CatalogueValue, ConversationCatalogue,
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
+pub use passive_read::{
+    AdmitPassiveRead, CatalogueReadScope, ReadRefusal, ReceiverAuthority, ReceiverReadScope,
+};
 pub use ports::{
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationCause,

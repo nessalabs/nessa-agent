@@ -141,7 +141,7 @@ fn validate_grants(grants: &str) -> Result<(), RunError> {
     if !grants.split(',').all(|grant| {
         matches!(
             grant,
-            "server.read" | "conversation.write" | "credential.manage"
+            "server.read" | "conversation.read" | "conversation.write" | "credential.manage"
         ) && seen.insert(grant)
     }) {
         return Err(failure("grants must be distinct supported actions"));

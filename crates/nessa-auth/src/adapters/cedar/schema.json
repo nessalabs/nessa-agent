@@ -83,6 +83,30 @@
           }
         }
       },
+      "conversation.read": {
+        "appliesTo": {
+          "principalTypes": [
+            "Actor"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "credentialAllows": {
+                "type": "Boolean",
+                "required": true
+              },
+              "identityMatches": {
+                "type": "Boolean",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
       "conversation.write": {
         "appliesTo": {
           "principalTypes": [

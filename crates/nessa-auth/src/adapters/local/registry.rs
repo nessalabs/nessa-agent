@@ -1615,7 +1615,10 @@ fn validate_grants(
             grant.resource.id != gateway_id
                 || !matches!(
                     grant.action.as_str(),
-                    "server.read" | "credential.manage" | "conversation.write"
+                    "server.read"
+                        | "credential.manage"
+                        | "conversation.read"
+                        | "conversation.write"
                 )
                 || (!administrative_allowed && grant.action == "credential.manage")
         })

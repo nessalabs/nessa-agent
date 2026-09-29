@@ -486,8 +486,10 @@ async fn dispatch_authorized(
             let context = session.context();
             let now = state.clock.unix_seconds();
             let grants_supported = params.grants.iter().all(|grant| {
-                matches!(grant.action.as_str(), "server.read" | "conversation.write")
-                    && grant.resource.organization_id == context.organization_id().as_str()
+                matches!(
+                    grant.action.as_str(),
+                    "server.read" | "conversation.read" | "conversation.write"
+                ) && grant.resource.organization_id == context.organization_id().as_str()
                     && grant.resource.id == state.gateway_id().as_str()
             });
             if params.request_id.is_empty()
@@ -1191,6 +1193,45 @@ mod tests {
             panic!("response expected")
         };
         assert_eq!(response.error.unwrap().code, "invalid_request");
+    }
+
+    #[tokio::test]
+    async fn passive_read_grant_cannot_call_agent_or_mutation_routes() {
+        let (state, authority) = fixture(MembershipRole::Member);
+        {
+            let mut snapshot = authority.snapshot.lock().unwrap();
+            let organization = snapshot.credential.organization_id().clone();
+            snapshot.credential = Credential::new(
+                CredentialId::new("credential").unwrap(),
+                PrincipalId::new("principal").unwrap(),
+                organization.clone(),
+                AudienceId::new("gateway").unwrap(),
+                100,
+                200,
+                vec![Grant::new(
+                    Action::new("conversation.read").unwrap(),
+                    Resource::new(organization, ResourceId::new("gateway-resource").unwrap()),
+                )],
+            )
+            .unwrap();
+        }
+        let session = authenticate(&state).await;
+        for method in [
+            "conversation.read",
+            "conversation.list",
+            "conversation.send",
+            "conversation.answer",
+            "conversation.answerQuestion",
+            "conversation.archive",
+            "conversation.delete",
+        ] {
+            let OutgoingMessage::Response(response) =
+                dispatch(&state, &session, request("read-only", method)).await
+            else {
+                panic!("response expected");
+            };
+            assert_eq!(response.error.unwrap().code, "forbidden", "{method}");
+        }
     }
 
     #[tokio::test]

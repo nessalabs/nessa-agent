@@ -194,6 +194,50 @@ old identity.
 
 ## Interactions and authorization
 
+### Passive receiver read admission (#295)
+
+The gateway owns the receiver binding and its durable access epoch. A verified
+credential selects a binding; neither a request parameter nor a socket identifier
+may select or create one. The binding's owner and target are compared with current
+conversation ownership before constructing an exact record or catalogue scope.
+Source reads start only after this admission. The current credential and membership
+snapshot orders admission against a concurrent authorization change; a bounded
+read already admitted may finish, while the next read checks again.
+The record scope is the exact tuple `(receiver ID, server origin, conversation
+stream ID, source incarnation, physical record schema, durable access epoch)`.
+The source supplies its origin, stream, incarnation and schema; the gateway
+compares the requested tuple before `head` or `page`. The catalogue selector is
+`(organization ID, owner principal ID, receiver ID, durable access epoch)` and
+does not require a conversation ID. #297 will add the catalogue source's own
+incarnation/revision facts when its source contract lands. The authenticated
+principal must equal the binding owner before either selector is admitted.
+
+| Starting state | Event and ordering | Result |
+| --- | --- | --- |
+| Active binding, current epoch | Valid read, current credential and owner, then source | Admit exact server-built scope for this receiver and target |
+| Active binding | Socket reconnect without authority change | Keep receiver identity and epoch; recheck current access |
+| Active binding | Credential revocation wins before snapshot read | Deny before source |
+| Active binding | Snapshot read wins before revocation publication | That bounded read may finish; later read denies |
+| Active binding | Binding revocation or embedded policy profile change | Advance persisted epoch and deny old scope before source |
+| Revoked binding | Explicit regrant | Keep receiver identity, advance epoch again; old scope stays stale |
+| Any binding | Wrong receiver, owner, target, stale epoch, or unavailable authority | Deny before source |
+| No binding | Pairing initiated by a principal whose ID is `system` | Record an actor-kind initiator with that exact ID; reopen accepts the paired binding |
+| Active or revoked binding | Revocation/regrant initiated by principal `system`, then reopen or policy change | Retain actor-kind attribution through the transition; a policy change records system-kind attribution with no principal ID |
+| No binding | Pair with a valid actor and request ID | One receiver transition owner creates active epoch 1; SQLite commits the binding and matching evidence together |
+| Active binding | Revoke with no replacement credential | That owner creates inactive epoch + 1; any replacement, repeated revoke, malformed request ID, or exhausted epoch refuses before write |
+| Revoked binding | Regrant with a different credential | That owner creates active epoch + 1; same credential or any other state/credential mismatch refuses before write |
+| Active or revoked binding | Embedded policy revision changes | That owner preserves credential and active state and advances epoch; unchanged revision writes no transition |
+| Any binding | History replay or a SQLite write fails | Replay invokes the same transition owner and compares complete before/after evidence; malformed history fails startup. Expected key collisions report conflict, operational write failures report unavailable, and the transaction rolls back all receiver/evidence writes. |
+| Admitted read | Record or catalogue source fails | Report unverifiable source failure; source errors cannot impersonate an admission refusal. |
+
+Receiver transition attribution is a tagged fact: `principal` with a validated
+principal ID, or `system` with no principal ID. The string value `system` is a
+valid principal ID and does not select the system tag. History validation checks
+the tag, ID presence, cause, and the before/after receiver state together.
+
+The pairing ceremony and bounded record and catalogue transport belong to their
+separate issues. This admission contract applies to both future source routes.
+
 A pending approval includes `approvalId`, conversation/turn IDs, a preview,
 deadline, and the offered choices: `choiceId`, label, allow/deny, and once/session
 scope. The binding privately maps these Nessa choices to actual provider options.

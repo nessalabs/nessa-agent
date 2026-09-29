@@ -6,6 +6,9 @@ Each request checks current membership and the `conversation.write` grant;
 conversation metadata further limits access to its organization and creator.
 The credential identity supplies the verified surface attribution. Client metadata
 cannot impersonate another surface or principal.
+The existing `conversation.read` view retains the write grant because it may
+attach an Agent. The separate passive receiver admission uses `conversation.read`
+as an authorization action; its bounded source routes follow in #296 and #297.
 
 ```text
 Panel Send -> NessaClient.conversation.send -> authorized gateway command
