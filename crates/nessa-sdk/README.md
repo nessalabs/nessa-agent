@@ -16,7 +16,7 @@ are already implemented.
 ## Model data
 
 [data/models.json](data/models.json) is the single catalog, checked against official
-provider documentation on **2026-09-11**. It contains the current general-purpose
+provider documentation on **2026-09-29**. It contains the current general-purpose
 OpenAI lineup (GPT-6 Astra, GPT-5.6 Sol, Terra, Luna) and Anthropic lineup (Claude
 Fable 5.1, Opus 5, Sonnet 5, Haiku 4.5). Each entry links its source. The lineup is
 selected from the [OpenAI catalog](https://developers.openai.com/api/docs/models)
@@ -41,10 +41,33 @@ of its own. A model that lists image input without recorded limits, as the OpenA
 entries do today, is offered no images: nothing could prepare one for it.
 
 Entries expose identity, display name, input/output modalities, tool use,
-reasoning support, context window, standard maximum output, knowledge cutoff,
+reasoning, fast mode, context window, standard maximum output, knowledge cutoff,
 and documentation URL. Required features are booleans, including explicit false
 values. Tool-mediated image generation does not mean native image output.
-Reasoning support does not prescribe provider-specific effort parameters.
+
+`reasoning` is required. It is `null` for a model that does not reason, and
+otherwise `{ "effortLevels": [...] }`: the effort levels the provider publishes,
+least effort first, in its own names and order (`none` through `max` for the
+GPT-5.6 models, `low` through `max` with `xhigh` for Claude). The list is empty
+where the model reasons but no level is recorded: Haiku 4.5 takes a thinking
+budget rather than a level, MiniMax M3 only turns thinking on or off, and the
+OpenCode Zen free models publish nothing about it. Levels are never mapped onto
+another provider's; that belongs to whatever shows them
+([ADR 302](../../docs/adr/todo/302-catalogue-reasoning-options.md)). `fastMode`
+records whether the provider publishes a faster output mode for the model. It
+is speed, not a reasoning level.
+
+Sources for these two fields, beyond each entry's own page:
+- Claude's levels come from the
+  [effort guide](https://platform.claude.com/docs/en/build-with-claude/effort),
+  and its Fast models from the
+  [fast mode guide](https://platform.claude.com/docs/en/build-with-claude/fast-mode),
+  which names Opus 5 alone among these.
+- OpenAI's levels come from each model's page and the
+  [reasoning guide](https://developers.openai.com/api/docs/guides/reasoning).
+- The OpenAI [fast mode guide](https://developers.openai.com/api/docs/guides/fast-mode)
+  defers to the [pricing page](https://developers.openai.com/api/docs/pricing)
+  for supported models. Its Fast table lists all four OpenAI entries.
 Knowledge cutoffs retain the precision each provider publishes. Token limits are
 descriptive model ceilings. `maxContextWindowTokens` is not a runtime default.
 Codex can configure its context window through local config/user settings; a
@@ -93,9 +116,12 @@ and token ceilings), and configured `TokenLimits`. Reuse the validated model fro
 the domain catalog; a selected application metadata DTO can also be mapped through
 `ModelMetadata::try_from`.
 
-The factory intersects model and binding input/output modalities, tool use, and
-reasoning support. A binding can remove support but cannot enable a model-false
-feature. No shared input or output modality is a setup error. Explicit configured
+The factory intersects model and binding input/output modalities, tool use,
+reasoning, and fast mode. A binding can remove support but cannot enable a
+model-false feature. The model's effort levels stay in the snapshot
+(`effort_levels()`) only while reasoning does. No binding sends an effort level
+or fast mode to its agent yet, so today's bindings declare both unsupported
+([#310](https://github.com/nessalabs/nessa-agent/issues/310)). No shared input or output modality is a setup error. Explicit configured
 context/output limits above either ceiling fail with `ConfiguredLimitExceeded`;
 valid smaller limits are retained exactly. The snapshot owns its model identity,
 features, and limits independently of other selections.
@@ -113,7 +139,7 @@ use nessa_sdk::domain::model_metadata::value_objects::{Modalities, ModelFeatures
 // `model` is a borrowed ModelMetadata. These limits must fit that model.
 let text = Modalities::new(true, false, false)?;
 let binding = BindingRestrictions::new(
-    ModelFeatures::new(text, text, true, false),
+    ModelFeatures::new(text, text, true, false, false),
     TokenLimits::new(100_000, 16_000)?,
 );
 let snapshot = EffectiveCapabilities::new(
@@ -237,6 +263,7 @@ domain/
     value_objects/
       identity.rs       ModelProvider, ModelKey
       capabilities.rs   Modalities, ModelFeatures
+      reasoning.rs      EffortLevel, EffortLevels
       description.rs    ModelDescription
     entities/
       model.rs          ModelMetadata

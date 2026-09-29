@@ -97,6 +97,7 @@ export const css = {
   modelChip: '[data-slot="model-picker-trigger"]', // the composer's model picker
   modelPicker: '[data-slot="model-picker-content"]', // its list, a model each role="option"
   modelOption: '.desktop-model-picker [role="option"]', // class: a model in the picker
+  modelProviderTab: '.desktop-model-picker [role="tab"]', // class: a provider's tab in the picker
   thinkingSlider: '[role="dialog"][aria-label="Thinking"] [role="slider"]',
   thinkingTrack: ".desktop-thinking-slider", // class: the slider's pointer room; data-ultra when the model has Ultra
   thinkingFast: '[role="dialog"][aria-label="Thinking"] button[aria-label="Fast mode"]',
@@ -159,6 +160,12 @@ export const safeAreaTokens = {
 export const modules = {
   drop: "/src/desktop/split-panes/model/drop.ts",
 }
+
+/** The SDK's model catalogue, which the composer reads; scripts read it too, never retype it. */
+export const catalogueFile = new URL(
+  "../../../../crates/nessa-sdk/data/models.json",
+  import.meta.url,
+)
 
 /** localStorage keys the scripts seed before the page loads. */
 export const storage = {
@@ -243,11 +250,17 @@ export const names = {
   storySessionId: "retry-budget",
   denyOnce: "Deny",
   /**
-   * Models the thinking check switches between (their Ultra is listed in
-   * src/desktop/model/composer-options.ts; the check confirms each on the page).
+   * Models the thinking check switches between, by what the SDK catalogue
+   * (`catalogueFile`) publishes for them; the check confirms each there before
+   * judging the page. No catalogue model publishes a level past Max today, so
+   * none is named for Ultra: the check holds that none draws it.
    */
-  modelWithUltra: "Claude Opus 5",
-  modelWithoutUltra: "Claude Sonnet 5",
+  modelWithFast: "Claude Opus 5",
+  modelWithoutFast: "Claude Sonnet 5",
+  /** Reasons, with no effort level recorded: the thinking chip is disabled. */
+  modelWithoutLevels: "Claude Haiku 4.5",
+  /** Its least level is None, which `modelWithoutFast` does not offer. */
+  modelWithLeastLevel: "GPT-5.6 Sol",
   alwaysAllow: "Always Allow",
 }
 

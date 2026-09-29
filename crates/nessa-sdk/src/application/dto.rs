@@ -9,6 +9,22 @@ pub struct ModalitiesDto {
     pub audio: bool,
 }
 
+/// A reasoning model's published reasoning options.
+///
+/// Where a model does not reason, the field holding this is `null`: required,
+/// so a catalogue entry that leaves it out is refused rather than read as a
+/// model that does not reason.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReasoningDto {
+    /// The effort levels the provider publishes, least effort first, in the
+    /// provider's own names and order: never mapped onto another provider's.
+    /// Each is a lowercase letter, then lowercase letters, digits, `-` or `_`,
+    /// at most 32 bytes; at most 16 of them, none repeated. Empty when the
+    /// model reasons but no level is recorded for it, so none is offered.
+    pub effort_levels: Vec<String>,
+}
+
 /// Projection of the same immutable snapshot used for command validation.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -18,7 +34,12 @@ pub struct EffectiveCapabilitiesDto {
     pub input: ModalitiesDto,
     pub output: ModalitiesDto,
     pub tool_use: bool,
-    pub reasoning: bool,
+    /// Offered reasoning, `null` where the model or the binding offers none.
+    /// Its levels are the model's published ones, present only where the
+    /// binding can run them.
+    pub reasoning: Option<ReasoningDto>,
+    /// Fast mode, where both the model and the binding offer it.
+    pub fast_mode: bool,
     pub context_window_tokens: u32,
     pub max_output_tokens: u32,
 }
@@ -55,7 +76,13 @@ pub struct ModelMetadataDto {
     pub image_input: Option<ImageInputLimitsDto>,
     pub output: ModalitiesDto,
     pub tool_use: bool,
-    pub reasoning: bool,
+    /// `null` for a model that does not reason; see [`ReasoningDto`]. The key
+    /// is required even then.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub reasoning: Option<ReasoningDto>,
+    /// Whether the provider publishes a fast mode for this model: faster
+    /// output, not a reasoning effort level.
+    pub fast_mode: bool,
     /// Published model ceiling, not the binding's default/configured context window
     /// or an independent maximum input allowance.
     pub max_context_window_tokens: u32,

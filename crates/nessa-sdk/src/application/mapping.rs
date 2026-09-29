@@ -1,5 +1,7 @@
 //! Explicit DTO/domain translation; constructors remain the only invariant owners.
-use super::dto::{EffectiveCapabilitiesDto, ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
+use super::dto::{
+    EffectiveCapabilitiesDto, ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto, ReasoningDto,
+};
 use crate::domain::common::value_objects::TokenLimits;
 use crate::domain::common::value_objects::{Date, ImageMediaType, Url};
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
@@ -9,6 +11,7 @@ use crate::domain::model_metadata::{
     value_objects::Modalities,
     value_objects::ModelDescription,
     value_objects::ModelFeatures,
+    value_objects::{EffortLevel, EffortLevels},
     value_objects::{ModelKey, ModelProvider},
     MetadataError,
 };
@@ -28,6 +31,33 @@ impl From<Modalities> for ModalitiesDto {
         }
     }
 }
+/// The DTO form of reasoning: `None` where there is none, and the levels —
+/// empty where none are recorded — where there is.
+fn reasoning_dto(reasoning: bool, levels: Option<&EffortLevels>) -> Option<ReasoningDto> {
+    reasoning.then(|| ReasoningDto {
+        effort_levels: levels
+            .map(|levels| {
+                levels
+                    .levels()
+                    .iter()
+                    .map(|level| level.as_str().into())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+/// The levels a reasoning DTO records, `None` when it records none.
+fn effort_levels(reasoning: ReasoningDto) -> Result<Option<EffortLevels>, MetadataError> {
+    if reasoning.effort_levels.is_empty() {
+        return Ok(None);
+    }
+    let levels = reasoning
+        .effort_levels
+        .into_iter()
+        .map(EffortLevel::new)
+        .collect::<Result<_, _>>()?;
+    EffortLevels::new(levels).map(Some)
+}
 impl From<&EffectiveCapabilities> for EffectiveCapabilitiesDto {
     fn from(snapshot: &EffectiveCapabilities) -> Self {
         Self {
@@ -36,7 +66,8 @@ impl From<&EffectiveCapabilities> for EffectiveCapabilitiesDto {
             input: snapshot.features().input().into(),
             output: snapshot.features().output().into(),
             tool_use: snapshot.features().tool_use(),
-            reasoning: snapshot.features().reasoning(),
+            reasoning: reasoning_dto(snapshot.features().reasoning(), snapshot.effort_levels()),
+            fast_mode: snapshot.features().fast_mode(),
             context_window_tokens: snapshot.limits().max_context_window(),
             max_output_tokens: snapshot.limits().max_output(),
         }
@@ -66,6 +97,8 @@ impl TryFrom<ModelMetadataDto> for ModelMetadata {
                 )
             })
             .transpose()?;
+        let reasoning = dto.reasoning.is_some();
+        let effort_levels = dto.reasoning.map(effort_levels).transpose()?.flatten();
         let model = Self::new(
             ModelKey::new(
                 ModelProvider::try_from(dto.provider.as_str())?,
@@ -80,12 +113,17 @@ impl TryFrom<ModelMetadataDto> for ModelMetadata {
                 dto.input.try_into()?,
                 dto.output.try_into()?,
                 dto.tool_use,
-                dto.reasoning,
+                reasoning,
+                dto.fast_mode,
             ),
             TokenLimits::new(dto.max_context_window_tokens, dto.max_output_tokens)?,
         );
-        match image_input {
-            Some(limits) => model.with_image_input(limits),
+        let model = match image_input {
+            Some(limits) => model.with_image_input(limits)?,
+            None => model,
+        };
+        match effort_levels {
+            Some(levels) => model.with_effort_levels(levels),
             None => Ok(model),
         }
     }
@@ -112,7 +150,8 @@ impl From<&ModelMetadata> for ModelMetadataDto {
             }),
             output: model.features().output().into(),
             tool_use: model.features().tool_use(),
-            reasoning: model.features().reasoning(),
+            reasoning: reasoning_dto(model.features().reasoning(), model.effort_levels()),
+            fast_mode: model.features().fast_mode(),
             max_context_window_tokens: model.limits().max_context_window(),
             max_output_tokens: model.limits().max_output(),
         }

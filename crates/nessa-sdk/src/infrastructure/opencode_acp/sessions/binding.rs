@@ -171,7 +171,8 @@ impl OpencodeAcpProvider {
     ///     image_input: None,
     ///     output: text,
     ///     tool_use: true,
-    ///     reasoning: false,
+    ///     reasoning: None,
+    ///     fast_mode: false,
     ///     max_context_window_tokens: 100_000,
     ///     max_output_tokens: 4096,
     ///     knowledge_cutoff: "2026-01".into(),
@@ -390,7 +391,8 @@ fn capabilities(
     // the day this comment needs reading again.
     let input = Modalities::new(true, image_input, false).expect("text modality is nonempty");
     let restrictions = BindingRestrictions::new(
-        ModelFeatures::new(input, text, true, false),
+        // No effort level or fast mode is sent to the agent, so neither is offered.
+        ModelFeatures::new(input, text, true, false, false),
         // Binding ceilings, not model or Opencode facts. OpenCode Zen reports
         // nothing about the windows of the models it serves — and rotates which
         // ones it serves — so these bound what this binding admits rather than

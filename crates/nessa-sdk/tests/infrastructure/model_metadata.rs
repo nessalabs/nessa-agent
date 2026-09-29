@@ -12,7 +12,7 @@ fn fixture() -> Value {
             "provider": "openai", "modelId": "test-model", "displayName": "Test model",
             "input": { "text": true, "image": true, "audio": false },
             "output": { "text": true, "image": false, "audio": false },
-            "toolUse": true, "reasoning": false,
+            "toolUse": true, "reasoning": null, "fastMode": false,
             "maxContextWindowTokens": 1000, "maxOutputTokens": 100,
             "knowledgeCutoff": "2026-01", "documentationUrl": "https://example.com/model"
         }]
@@ -125,23 +125,38 @@ fn each_feature_requires_an_explicit_boolean_including_false() {
             assert!(matches!(parse(&value), Err(LoadCatalogError::Json(_))));
         }
     }
-    for field in ["toolUse", "reasoning"] {
+    // `reasoning` is required even for a model that does not reason, where it
+    // is `null`: an entry that leaves it out is refused, not read as `null`.
+    for field in ["toolUse", "reasoning", "fastMode"] {
         let mut value = fixture();
         value["models"][0].as_object_mut().unwrap().remove(field);
-        assert!(matches!(parse(&value), Err(LoadCatalogError::Json(_))));
+        assert!(
+            matches!(parse(&value), Err(LoadCatalogError::Json(_))),
+            "{field}"
+        );
     }
+    let mut value = fixture();
+    value["models"][0]["reasoning"] = json!({});
+    assert!(matches!(parse(&value), Err(LoadCatalogError::Json(_))));
     for invalid in [Value::Null, json!("unknown"), json!(1)] {
         let mut value = fixture();
         value["models"][0]["input"]["audio"] = invalid;
         assert!(matches!(parse(&value), Err(LoadCatalogError::Json(_))));
     }
-    assert!(!parse(&fixture()).unwrap().models()[0].reasoning);
+    assert_eq!(parse(&fixture()).unwrap().models()[0].reasoning, None);
 }
 
 #[test]
 fn rejects_unknown_fields_at_every_level() {
-    for pointer in ["", "/models/0", "/models/0/input", "/models/0/output"] {
+    for pointer in [
+        "",
+        "/models/0",
+        "/models/0/input",
+        "/models/0/output",
+        "/models/0/reasoning",
+    ] {
         let mut value = fixture();
+        value["models"][0]["reasoning"] = json!({ "effortLevels": ["low"] });
         value
             .pointer_mut(pointer)
             .unwrap()
@@ -296,5 +311,87 @@ fn unsupported_provider_is_rejected_during_import_and_selection() {
             catalog.select(provider, "test-model"),
             Err(CatalogError::Invalid { .. })
         ));
+    }
+}
+
+/// The shape `reasoning` had before it carried levels is not read: one
+/// current contract, no second reader for the old boolean.
+#[test]
+fn reasoning_is_null_or_its_options_never_a_boolean() {
+    for invalid in [json!(true), json!(false), json!(["low"]), json!("low")] {
+        let mut value = fixture();
+        value["models"][0]["reasoning"] = invalid.clone();
+        assert!(
+            matches!(parse(&value), Err(LoadCatalogError::Json(_))),
+            "{invalid}"
+        );
+    }
+    let mut value = fixture();
+    value["models"][0]["reasoning"] = json!({ "effortLevels": ["low", "xhigh", "max"] });
+    value["models"][0]["fastMode"] = json!(true);
+    let catalog = parse(&value).unwrap();
+    let model = &catalog.models()[0];
+    assert_eq!(
+        model.reasoning.as_ref().unwrap().effort_levels,
+        ["low", "xhigh", "max"]
+    );
+    assert!(model.fast_mode);
+}
+
+#[test]
+fn malformed_effort_levels_fail_loading_as_invalid_metadata() {
+    for levels in [
+        json!(["low", "low"]),
+        json!(["High"]),
+        json!([""]),
+        json!(["a".repeat(33)]),
+        json!((0..17)
+            .map(|index| format!("level-{index}"))
+            .collect::<Vec<_>>()),
+    ] {
+        let mut value = fixture();
+        value["models"][0]["reasoning"] = json!({ "effortLevels": levels.clone() });
+        assert!(
+            matches!(
+                parse(&value),
+                Err(LoadCatalogError::Invalid(CatalogError::Invalid { .. }))
+            ),
+            "{levels}"
+        );
+    }
+}
+
+/// What the providers publish, as recorded on the catalogue's verification
+/// date (ADR 302). Asserted so that a change to a model's levels or fast mode
+/// is made on purpose, with its source, rather than slipped in.
+#[test]
+fn shipped_catalog_records_each_models_published_levels_and_fast_mode() {
+    let file = File::open(concat!(env!("CARGO_MANIFEST_DIR"), "/data/models.json")).unwrap();
+    let catalog = load_catalog(file).unwrap();
+    let openai_5_6 = &["none", "low", "medium", "high", "xhigh", "max"][..];
+    let five = &["low", "medium", "high", "xhigh", "max"][..];
+    let unrecorded = &[][..];
+    for (model_id, levels, fast_mode) in [
+        ("gpt-6-astra", five, true),
+        ("gpt-5.6-sol", openai_5_6, true),
+        ("gpt-5.6-terra", openai_5_6, true),
+        ("gpt-5.6-luna", openai_5_6, true),
+        ("claude-fable-5-1", five, false),
+        ("claude-opus-5", five, true),
+        ("claude-sonnet-5", five, false),
+        ("claude-haiku-4-5-20251001", unrecorded, false),
+        ("opencode/minimax-m3", unrecorded, false),
+        ("opencode/nemotron-3-ultra-free", unrecorded, false),
+        ("opencode/big-pickle", unrecorded, false),
+        ("opencode/mimo-v2.5-free", unrecorded, false),
+    ] {
+        let model = catalog
+            .models()
+            .into_iter()
+            .find(|model| model.model_id == model_id)
+            .unwrap();
+        let reasoning = model.reasoning.as_ref().expect(model_id);
+        assert_eq!(reasoning.effort_levels, levels, "{model_id}");
+        assert_eq!(model.fast_mode, fast_mode, "{model_id}");
     }
 }

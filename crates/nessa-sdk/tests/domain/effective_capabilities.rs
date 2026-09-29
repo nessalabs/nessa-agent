@@ -8,18 +8,38 @@ use nessa_sdk::domain::{
     model_metadata::{
         entities::ModelMetadata,
         value_objects::{
-            ImageInputLimits, Modalities, ModelDescription, ModelFeatures, ModelKey, ModelProvider,
+            EffortLevel, EffortLevels, ImageInputLimits, Modalities, ModelDescription,
+            ModelFeatures, ModelKey, ModelProvider,
         },
     },
 };
 
 fn features(image: bool, audio: bool, tool_use: bool, reasoning: bool) -> ModelFeatures {
+    features_with_fast_mode(image, audio, tool_use, reasoning, false)
+}
+fn features_with_fast_mode(
+    image: bool,
+    audio: bool,
+    tool_use: bool,
+    reasoning: bool,
+    fast_mode: bool,
+) -> ModelFeatures {
     ModelFeatures::new(
         Modalities::new(true, image, audio).unwrap(),
         Modalities::new(true, image, audio).unwrap(),
         tool_use,
         reasoning,
+        fast_mode,
     )
+}
+fn effort_levels(names: &[&str]) -> EffortLevels {
+    EffortLevels::new(
+        names
+            .iter()
+            .map(|name| EffortLevel::new((*name).into()).unwrap())
+            .collect(),
+    )
+    .unwrap()
 }
 fn limits(context: u32, output: u32) -> TokenLimits {
     TokenLimits::new(context, output).unwrap()
@@ -55,9 +75,17 @@ fn binding(features: ModelFeatures) -> BindingRestrictions {
 
 #[test]
 fn restrictions_only_remove_features_for_every_boolean_combination() {
-    for model_mask in 0..16 {
-        for binding_mask in 0..16 {
-            let f = |mask| features(mask & 1 != 0, mask & 2 != 0, mask & 4 != 0, mask & 8 != 0);
+    for model_mask in 0..32 {
+        for binding_mask in 0..32 {
+            let f = |mask| {
+                features_with_fast_mode(
+                    mask & 1 != 0,
+                    mask & 2 != 0,
+                    mask & 4 != 0,
+                    mask & 8 != 0,
+                    mask & 16 != 0,
+                )
+            };
             let model = model("one", f(model_mask));
             let snapshot =
                 EffectiveCapabilities::new(&model, binding(f(binding_mask)), limits(700, 100))
@@ -67,6 +95,7 @@ fn restrictions_only_remove_features_for_every_boolean_combination() {
                 (2, vec![R::Input(M::Audio), R::Output(M::Audio)]),
                 (4, vec![R::ToolUse]),
                 (8, vec![R::Reasoning]),
+                (16, vec![R::FastMode]),
             ] {
                 for requirement in requirements {
                     let supported = model_mask & binding_mask & bit != 0;
@@ -141,7 +170,7 @@ fn incompatible_input_or_output_modalities_fail_construction() {
         assert_eq!(
             EffectiveCapabilities::new(
                 &model,
-                binding(ModelFeatures::new(input, output, false, false)),
+                binding(ModelFeatures::new(input, output, false, false, false)),
                 limits(600, 100)
             ),
             Err(expected)
@@ -186,6 +215,7 @@ fn input_and_output_intersect_independently_for_all_nonempty_modality_sets() {
                             modalities(model_output),
                             false,
                             false,
+                            false,
                         ),
                     );
                     let result = EffectiveCapabilities::new(
@@ -193,6 +223,7 @@ fn input_and_output_intersect_independently_for_all_nonempty_modality_sets() {
                         binding(ModelFeatures::new(
                             modalities(binding_input),
                             modalities(binding_output),
+                            false,
                             false,
                             false,
                         )),
@@ -300,7 +331,7 @@ fn errors_explain_unsupported_inputs_and_budget_configuration_without_provider_a
     let build = |input, output, configured| {
         EffectiveCapabilities::new(
             &model,
-            binding(ModelFeatures::new(input, output, false, false)),
+            binding(ModelFeatures::new(input, output, false, false, false)),
             configured,
         )
         .unwrap_err()
@@ -387,4 +418,51 @@ fn image_input_is_offered_only_with_recorded_limits_and_carries_them() {
     .unwrap();
     assert!(!text_binding.supports(R::Input(M::Image)));
     assert_eq!(text_binding.image_input(), None);
+}
+
+/// Rows of ADR 302's table: the levels go with reasoning, exactly as the model
+/// publishes them, and only where the binding can run reasoning.
+#[test]
+fn effort_levels_are_the_models_own_and_go_with_reasoning() {
+    let reasons = features(false, false, false, true);
+    let published = effort_levels(&["none", "low", "xhigh", "max"]);
+    let recorded = bare_model("recorded", reasons)
+        .with_effort_levels(published.clone())
+        .unwrap();
+
+    // Model and binding both reason: the model's levels, in its own order.
+    let offered =
+        EffectiveCapabilities::new(&recorded, binding(reasons), limits(800, 150)).unwrap();
+    assert!(offered.supports(R::Reasoning));
+    assert_eq!(offered.effort_levels(), Some(&published));
+
+    // A binding that cannot run reasoning removes the levels with it.
+    let narrowed = EffectiveCapabilities::new(
+        &recorded,
+        binding(features(false, false, false, false)),
+        limits(800, 150),
+    )
+    .unwrap();
+    assert!(!narrowed.supports(R::Reasoning));
+    assert_eq!(narrowed.effort_levels(), None);
+
+    // A model that reasons with no levels recorded is offered none.
+    let unrecorded = EffectiveCapabilities::new(
+        &bare_model("unrecorded", reasons),
+        binding(reasons),
+        limits(800, 150),
+    )
+    .unwrap();
+    assert!(unrecorded.supports(R::Reasoning));
+    assert_eq!(unrecorded.effort_levels(), None);
+
+    // A binding that reasons cannot give a model that does not any levels.
+    let silent = EffectiveCapabilities::new(
+        &bare_model("silent", features(false, false, false, false)),
+        binding(reasons),
+        limits(800, 150),
+    )
+    .unwrap();
+    assert!(!silent.supports(R::Reasoning));
+    assert_eq!(silent.effort_levels(), None);
 }

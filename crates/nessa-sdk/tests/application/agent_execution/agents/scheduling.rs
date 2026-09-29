@@ -73,7 +73,8 @@ fn capabilities() -> &'static EffectiveCapabilities {
             image_input: None,
             output: text,
             tool_use: true,
-            reasoning: false,
+            reasoning: None,
+            fast_mode: false,
             max_context_window_tokens: 1000,
             max_output_tokens: 100,
             knowledge_cutoff: "2026-01".into(),
@@ -83,7 +84,10 @@ fn capabilities() -> &'static EffectiveCapabilities {
         let text = Modalities::new(true, false, false).unwrap();
         EffectiveCapabilities::new(
             &model,
-            BindingRestrictions::new(ModelFeatures::new(text, text, true, false), model.limits()),
+            BindingRestrictions::new(
+                ModelFeatures::new(text, text, true, false, false),
+                model.limits(),
+            ),
             model.limits(),
         )
         .unwrap()

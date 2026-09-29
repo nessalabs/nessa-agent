@@ -2,7 +2,7 @@
 //! selects, what it refuses to proceed without, and what survives translation.
 use super::support::*;
 use crate::application::agent_execution::providers::ApprovalMode;
-use crate::application::dto::ModelMetadataDto;
+use crate::application::dto::{ModelMetadataDto, ReasoningDto};
 use crate::domain::agent_execution::tools::ToolContent;
 
 #[tokio::test]
@@ -398,7 +398,10 @@ async fn a_binding_codex_cannot_honour_is_refused_before_a_process_starts() {
         input: text,
         output: text,
         tool_use: true,
-        reasoning: true,
+        reasoning: Some(ReasoningDto {
+            effort_levels: vec![],
+        }),
+        fast_mode: false,
         max_context_window_tokens: 1000,
         max_output_tokens: 200,
         knowledge_cutoff: "2026-01".into(),

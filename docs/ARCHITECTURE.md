@@ -102,8 +102,8 @@ tile; on the right how — the design system's access mode, as its shield alone,
 redrawn in `styles.css` as Lucide outlines (shield, shield-check, shield-off) masked over
 its own icon so nothing in `nessa_ui` changes, and
 beside send the thinking level, as a brain icon whose slider names the level,
-offered only to a reasoning model, with the control's Fast toggle on models
-`fastModeFor` lists (the catalog does not record Fast yet) and a small bolt
+offering exactly the effort levels the catalog lists for the model (ADR 302),
+with the control's Fast toggle where the catalog records `fastMode` and a small bolt
 beside the brain while Fast is on. They rest as quiet
 text chips in one colour, open frosted menus that spring into place, and hold
 no state beyond the page yet. The composer has no rim and does not change when

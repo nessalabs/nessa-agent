@@ -1235,7 +1235,8 @@ pub(crate) fn capabilities(image_input: bool) -> EffectiveCapabilities {
         }),
         output: text,
         tool_use: true,
-        reasoning: false,
+        reasoning: None,
+        fast_mode: false,
         max_context_window_tokens: 100_000,
         max_output_tokens: 4096,
         knowledge_cutoff: "2026-01".into(),
@@ -1247,7 +1248,7 @@ pub(crate) fn capabilities(image_input: bool) -> EffectiveCapabilities {
     EffectiveCapabilities::new(
         &model,
         BindingRestrictions::new(
-            ModelFeatures::new(input, output, true, false),
+            ModelFeatures::new(input, output, true, false, false),
             model.limits(),
         ),
         model.limits(),

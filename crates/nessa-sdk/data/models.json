@@ -1,5 +1,5 @@
 {
-  "verifiedOn": "2026-09-11",
+  "verifiedOn": "2026-09-29",
   "models": [
     {
       "provider": "openai",
@@ -16,7 +16,8 @@
         "audio": false
       },
       "toolUse": true,
-      "reasoning": true,
+      "reasoning": { "effortLevels": ["low", "medium", "high", "xhigh", "max"] },
+      "fastMode": true,
       "maxContextWindowTokens": 1050000,
       "maxOutputTokens": 128000,
       "knowledgeCutoff": "2026-04-30",
@@ -37,7 +38,8 @@
         "audio": false
       },
       "toolUse": true,
-      "reasoning": true,
+      "reasoning": { "effortLevels": ["none", "low", "medium", "high", "xhigh", "max"] },
+      "fastMode": true,
       "maxContextWindowTokens": 1050000,
       "maxOutputTokens": 128000,
       "knowledgeCutoff": "2026-02-16",
@@ -58,7 +60,8 @@
         "audio": false
       },
       "toolUse": true,
-      "reasoning": true,
+      "reasoning": { "effortLevels": ["none", "low", "medium", "high", "xhigh", "max"] },
+      "fastMode": true,
       "maxContextWindowTokens": 1050000,
       "maxOutputTokens": 128000,
       "knowledgeCutoff": "2026-02-16",
@@ -79,7 +82,8 @@
         "audio": false
       },
       "toolUse": true,
-      "reasoning": true,
+      "reasoning": { "effortLevels": ["none", "low", "medium", "high", "xhigh", "max"] },
+      "fastMode": true,
       "maxContextWindowTokens": 1050000,
       "maxOutputTokens": 128000,
       "knowledgeCutoff": "2026-02-16",
@@ -107,7 +111,8 @@
         "audio": false
       },
       "toolUse": true,
-      "reasoning": true,
+      "reasoning": { "effortLevels": ["low", "medium", "high", "xhigh", "max"] },
+      "fastMode": false,
       "maxContextWindowTokens": 1000000,
       "maxOutputTokens": 128000,
       "knowledgeCutoff": "2026-06",
@@ -135,7 +140,8 @@
         "audio": false
       },
       "toolUse": true,
-      "reasoning": true,
+      "reasoning": { "effortLevels": ["low", "medium", "high", "xhigh", "max"] },
+      "fastMode": true,
       "maxContextWindowTokens": 1000000,
       "maxOutputTokens": 128000,
       "knowledgeCutoff": "2026-05",
@@ -163,7 +169,8 @@
         "audio": false
       },
       "toolUse": true,
-      "reasoning": true,
+      "reasoning": { "effortLevels": ["low", "medium", "high", "xhigh", "max"] },
+      "fastMode": false,
       "maxContextWindowTokens": 1000000,
       "maxOutputTokens": 128000,
       "knowledgeCutoff": "2026-01",
@@ -191,7 +198,8 @@
         "audio": false
       },
       "toolUse": true,
-      "reasoning": true,
+      "reasoning": { "effortLevels": [] },
+      "fastMode": false,
       "maxContextWindowTokens": 200000,
       "maxOutputTokens": 64000,
       "knowledgeCutoff": "2025-02",
@@ -212,7 +220,8 @@
         "audio": false
       },
       "toolUse": true,
-      "reasoning": true,
+      "reasoning": { "effortLevels": [] },
+      "fastMode": false,
       "maxContextWindowTokens": 512000,
       "maxOutputTokens": 128000,
       "knowledgeCutoff": "2026-01",
@@ -233,7 +242,8 @@
         "audio": false
       },
       "toolUse": true,
-      "reasoning": true,
+      "reasoning": { "effortLevels": [] },
+      "fastMode": false,
       "maxContextWindowTokens": 1000000,
       "maxOutputTokens": 128000,
       "knowledgeCutoff": "2026-02",
@@ -254,7 +264,8 @@
         "audio": false
       },
       "toolUse": true,
-      "reasoning": true,
+      "reasoning": { "effortLevels": [] },
+      "fastMode": false,
       "maxContextWindowTokens": 200000,
       "maxOutputTokens": 32000,
       "knowledgeCutoff": "2025-01",
@@ -275,7 +286,8 @@
         "audio": false
       },
       "toolUse": true,
-      "reasoning": true,
+      "reasoning": { "effortLevels": [] },
+      "fastMode": false,
       "maxContextWindowTokens": 200000,
       "maxOutputTokens": 32000,
       "knowledgeCutoff": "2024-12",

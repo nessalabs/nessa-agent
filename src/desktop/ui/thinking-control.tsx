@@ -33,11 +33,7 @@ import {
 } from "react"
 import { createPortal } from "react-dom"
 import { ModelFastMode } from "@nessa-ui/react/model-capability-controls"
-import {
-  levelRank,
-  offeredLevelIndex,
-  type ThinkingLevel,
-} from "../model/composer-options"
+import { offeredLevelIndex, type ThinkingLevel } from "../model/composer-options"
 import {
   fractionAlong,
   levelAfterKey,
@@ -103,10 +99,11 @@ export function ThinkingControl({
       previous: reading.value,
       turn: reading.turn + 1,
     })
-  const previous = levels.find((level) => level.value === reading.previous)
-  const rising =
-    reading.previous === undefined ||
-    levelRank(selected?.value ?? "") > levelRank(reading.previous)
+  const previousAt = levels.findIndex((level) => level.value === reading.previous)
+  const previous = previousAt >= 0 ? levels[previousAt] : undefined
+  // More or less thinking is the model's own order, least first, as its
+  // catalogue entry lists it; a level no longer offered reads as rising.
+  const rising = reading.previous === undefined || previousAt < 0 || index > previousAt
   const count = levels.length
   const ultraAt = levels.findIndex((level) => level.utmost)
 
@@ -116,8 +113,9 @@ export function ThinkingControl({
     if (refocus) triggerRef.current?.focus({ preventScroll: true })
   }, [])
 
-  // Any level chosen is recorded, the one already shown too: Ultra carried to
-  // a model that stops at Max shows as Max, and choosing Max there means Max.
+  // Any level chosen is recorded, the one already shown too: a level carried
+  // from another model shows as the nearest this one offers below it, or its
+  // least (`offeredLevelIndex`), and choosing that level here means it.
   const choose = (next: number) => {
     const level = levels.at(next)
     if (!level || level.value === value) return

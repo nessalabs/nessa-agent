@@ -183,8 +183,10 @@ const scenarios = {
         ? null
         : `cancel changed the layout (${b.order} → ${a.order}) or left the copy`,
   },
-  // The thinking control: every level from the least to the most, with Ultra's
-  // moment at the end, and the knob dragged along the whole track.
+  // The thinking control: every level of the new session's model from the
+  // least to the most, and the knob dragged along the whole track. Ultra's
+  // moment is walked only on a model that publishes a level past Max; none in
+  // the catalogue does today (ADR 302).
   "thinking-walk": {
     setup: openThinking,
     act: async (p) => {

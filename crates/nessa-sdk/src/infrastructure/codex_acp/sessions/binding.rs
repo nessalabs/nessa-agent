@@ -94,7 +94,8 @@ impl CodexAcpProvider {
         }
         let text = Modalities::new(true, false, false).expect("text modality is nonempty");
         let restrictions = BindingRestrictions::new(
-            ModelFeatures::new(text, text, true, false),
+            // No effort level or fast mode is sent to the agent, so neither is offered.
+            ModelFeatures::new(text, text, true, false, false),
             // Binding ceilings for this first profile, not model or Codex facts.
             // Codex owns its own context window and compacts it without telling
             // Nessa, and takes no per-turn output limit through ACP, so these

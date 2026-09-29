@@ -757,16 +757,16 @@ for a level's description, swaps its label rather than cross-fading it, and
 offers nothing to restyle its slider by; nessa_ui is out of scope here. What
 it offered that still fits is kept: its `ModelFastMode` is the Fast toggle.
 
-- **One owner of the levels.** `thinkingLevels` in `model/composer-options.ts`,
-  Low to Max and then Ultra, marked `utmost`: the most any model will think,
-  offered only by a model that has it (`ultraThinkingFor`,
-  `thinkingLevelsFor`). A choice carried to a model without it shows as Max,
-  never lower (`offeredLevelIndex`), and a level chosen there is recorded as
-  chosen, Max included. Which models have Ultra is a table beside
-  Fast mode's, by provider and model: the SDK catalogue records only whether a
-  model reasons, and by its own rule prescribes no provider's effort levels
-  (`crates/nessa-sdk/README.md`), so the table stays here until the catalogue
-  carries it — a change to the SDK's contract that is its own issue. Every rule
+- **One owner of the levels.** The SDK catalogue: each model's effort levels
+  in its provider's names and order, and whether it has Fast mode
+  ([ADR 302](../todo/302-catalogue-reasoning-options.md), which replaced the
+  Ultra and Fast tables this record first kept here). `thinkingLevelsFor` in
+  `model/composer-options.ts` offers exactly the levels a model's entry lists,
+  worded for the slider, and marks a level listed past `max` as Ultra,
+  `utmost`. No catalogue model lists one today, so Ultra is offered nowhere yet.
+  A choice carried to a model without it shows as the highest level it offers
+  below it (`offeredLevelIndex`), and a level chosen there is recorded as
+  chosen. Every rule
   of the slider — which level a key picks, where the pointer is and which level
   that snaps to — is `model/thinking-effort.ts`'s, by position, naming no
   level; where the popover sits is the tooltip's rule (`placeTooltip`, aligned
@@ -807,11 +807,12 @@ it offered that still fits is kept: its `ModelFastMode` is the Fast toggle.
 `responsive.mjs --only thinking-control` holds it in Chromium and WebKit: every
 frame of every change and of a drag, the composer, its controls and the
 popover in place; the held knob on the pointer and, let go, on its level; the
-popover on its chip as ⌘B and ⌥⌘S move it; only Ultra marked apart, and on a
-model that ends at Max the carried Ultra shown and chosen as Max; only
+popover on its chip as ⌘B and ⌥⌘S move it; only Ultra marked apart; each
+model it names offering exactly its catalogue levels and Fast, and a level
+carried to a model without it shown as that model's nearest and chosen there; only
 transform and opacity animated; and with the system's reduced motion, nothing
 (`verification/desktop/CHECKLIST.md` › _Composer and approval card_).
-`perf-budget.mjs` holds its walk to Ultra and its drag to the frame budget
+`perf-budget.mjs` holds its walk from least to most and its drag to the frame budget
 (`thinking-walk`, `thinking-drag`).
 
 ### Interaction and visual rules
@@ -972,9 +973,10 @@ the source holds, at a glance — and is used nowhere else; the port method is
 - **Separate stops rather than a slider.** Tried first (four bars filling one
   after another); a continuous track with a knob to drag reads as one scale of
   effort and was preferred, so the slider was kept and given the window's look.
-- **Ultra in the SDK catalogue.** The right long-term home, but the catalogue
-  deliberately prescribes no provider's effort levels and its reader refuses
-  unknown fields; changing that is the SDK's decision, not this control's.
+- **Ultra in the SDK catalogue.** The right long-term home, but changing the
+  catalogue was the SDK's decision, not this control's. It was made in
+  [ADR 302](../todo/302-catalogue-reasoning-options.md), which records each
+  provider's own levels and leaves the mapping onto the slider here.
 - **Build the icon provider in nessa_ui now.** It is the right home, but
   nessa_ui is out of scope for this work. Mirroring the contract keeps the swap
   mechanical.

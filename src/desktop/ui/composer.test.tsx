@@ -81,3 +81,32 @@ it("shows the model it is given, and only that", async () => {
   expect(shown()).toContain("Choose model")
   await act(async () => root.unmount())
 })
+
+it("offers Fast and the levels only where the catalogue records them for the model", async () => {
+  const root = createRoot(host)
+  const render = (modelId: string) =>
+    act(async () =>
+      root.render(
+        <Composer
+          page={false}
+          onPageChange={() => {}}
+          text=""
+          onTextChange={() => {}}
+          model={{ provider: "anthropic", modelId }}
+          onModelChange={() => {}}
+        />,
+      ),
+    )
+  const chip = () => host.querySelector<HTMLButtonElement>(".desktop-chip-thinking")
+  // Claude Opus 5 publishes Fast; Claude Sonnet 5 does not; Claude Haiku 4.5
+  // reasons with no level recorded (crates/nessa-sdk/data/models.json).
+  await render("claude-opus-5")
+  expect(chip()?.dataset.fast).toBe("off")
+  expect(chip()?.disabled).toBe(false)
+  await render("claude-sonnet-5")
+  expect(chip()?.dataset.fast).toBeUndefined()
+  expect(chip()?.disabled).toBe(false)
+  await render("claude-haiku-4-5-20251001")
+  expect(chip()?.disabled).toBe(true)
+  await act(async () => root.unmount())
+})

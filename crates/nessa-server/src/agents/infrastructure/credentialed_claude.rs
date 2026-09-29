@@ -207,7 +207,7 @@ mod tests {
     use nessa_sdk::{
         application::{
             agent_execution::providers::ExecutableUseSnapshot,
-            dto::{ModalitiesDto, ModelMetadataDto},
+            dto::{ModalitiesDto, ModelMetadataDto, ReasoningDto},
         },
         domain::agent_execution::{
             permissions::PermissionOfferPolicy,
@@ -263,7 +263,10 @@ mod tests {
             image_input: None,
             output: text,
             tool_use: true,
-            reasoning: true,
+            reasoning: Some(ReasoningDto {
+                effort_levels: vec![],
+            }),
+            fast_mode: false,
             max_context_window_tokens: 1_000_000,
             max_output_tokens: 32_000,
             knowledge_cutoff: "2026-01".into(),

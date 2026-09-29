@@ -23,9 +23,12 @@
  *                   arrows, Home and End change the level, and only Ultra, past
  *                   Max, is marked apart; dragged, the knob follows the pointer,
  *                   the level is the nearest and let go it settles on it; its
- *                   popover stays on its chip as ⌘B and ⌥⌘S move it; on a model
- *                   that ends at Max, the walk ends there, Ultra carried to it
- *                   shows as Max, and Max chosen there stays Max; in
+ *                   popover stays on its chip as ⌘B and ⌥⌘S move it; each model
+ *                   named in selectors.mjs offers exactly the levels the SDK
+ *                   catalogue publishes for it, Fast only where it has it, and
+ *                   Ultra only past a published Max (ADR 302); a level carried
+ *                   to a model without it shows as that model's nearest, and
+ *                   chosen there stays chosen; in
  *                   every frame of every change — the drag and Fast too — the
  *                   composer, its controls and the popover hold their
  *                   place; a level's change animates transform and opacity only;
@@ -61,13 +64,14 @@
  * otherwise; the rest in the columns layout.
  * With --shots <dir>, screenshots of each width go there for a person to look at.
  */
-import { mkdirSync } from "node:fs"
+import { mkdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
 import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import {
+  catalogueFile,
   content,
   css,
   keys,
@@ -1049,60 +1053,132 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
   await page.keyboard.press(keys.toggleSessionList)
   await settled(page)
 
-  // A model whose track ends at Max, and Ultra carried to it: shown as Max,
-  // and Max chosen there is Max, not the Ultra carried back.
+  // Each model as the SDK catalogue publishes it (ADR 302): exactly its
+  // levels, Fast only where it has it, Ultra only past a published `max`.
+  // The catalogue is read, never retyped; the models named in selectors.mjs
+  // are confirmed against it before anything is judged.
+  const catalogue = JSON.parse(readFileSync(catalogueFile, "utf8")).models
+  const entry = (name) => {
+    const found = catalogue.find((model) => model.displayName === name)
+    if (!found)
+      throw new CannotRun(
+        `${name} is not in the SDK catalogue; name another in selectors.mjs`,
+      )
+    return found
+  }
+  const published = (name) => entry(name).reasoning?.effortLevels ?? []
+  const pastMax = (levels) =>
+    levels.indexOf("max") >= 0 && levels.indexOf("max") < levels.length - 1
   const pick = async (model) => {
     await page.locator(`${css.focusedPane} ${css.modelChip}`).click()
     const option = page.locator(css.modelOption, { hasText: model }).first()
-    await option.waitFor({ timeout: 3000 })
+    await page.locator(css.modelOption).first().waitFor({ timeout: 3000 })
+    // The picker shows one provider's models at a time: look under each tab.
+    const tabs = page.locator(css.modelProviderTab)
+    for (let tab = 0; !(await option.count()) && tab < (await tabs.count()); tab++)
+      await tabs.nth(tab).click()
+    if (!(await option.count()))
+      throw new CannotRun(`${model} is not in the model picker`)
     await option.click()
     await settled(page)
   }
+  // What the page offers for the model shown: its levels' names, least
+  // first, whether Ultra's segment is drawn, and whether Fast is offered.
+  const offered = async () => {
+    if (await page.locator(chip).isDisabled())
+      return { levels: [], ultra: false, fast: false, disabled: true }
+    await opens()
+    const levels = []
+    await page.keyboard.press(keys.home)
+    let state = await thinkingState(page, chip)
+    for (let stop = 0; stop < state.count; stop++) {
+      levels.push(state.checkedLabel)
+      await page.keyboard.press(keys.right)
+      state = await thinkingState(page, chip)
+    }
+    const fast = (await page.locator(css.thinkingFast).count()) > 0
+    await page.keyboard.press(keys.escape)
+    return { levels, ultra: state.ultra, fast, disabled: false }
+  }
+  const catalogueModels = {}
+  const premises = [
+    [names.modelWithFast, (e) => e.fastMode && published(e.displayName).length >= 3],
+    [names.modelWithoutFast, (e) => !e.fastMode && published(e.displayName).length >= 3],
+    [
+      names.modelWithoutLevels,
+      (e) => e.reasoning !== null && published(e.displayName).length === 0,
+    ],
+    [names.modelWithLeastLevel, (e) => published(e.displayName)[0] === "none"],
+  ]
+  for (const [name, holds] of premises)
+    if (!holds(entry(name)))
+      throw new CannotRun(
+        `${name} no longer is what selectors.mjs says; name another there`,
+      )
+  if (published(names.modelWithoutFast).includes("none"))
+    throw new CannotRun(
+      `${names.modelWithoutFast} offers None; the carry below needs one that does not`,
+    )
+  for (const name of [
+    names.modelWithFast,
+    names.modelWithoutFast,
+    names.modelWithoutLevels,
+    names.modelWithLeastLevel,
+  ]) {
+    await pick(name)
+    const onPage = await offered()
+    const levels = published(name)
+    catalogueModels[name] = { published: levels, fast: entry(name).fastMode, ...onPage }
+    if (onPage.levels.length !== levels.length)
+      failures.push(
+        `${name}: offers ${onPage.levels.length} levels, the catalogue ${levels.length}`,
+      )
+    if (onPage.disabled !== (levels.length === 0))
+      failures.push(`${name}: the chip is${onPage.disabled ? "" : " not"} disabled`)
+    if (onPage.fast !== (entry(name).fastMode && levels.length > 0))
+      failures.push(`${name}: Fast is${onPage.fast ? "" : " not"} offered`)
+    if (onPage.ultra !== pastMax(levels))
+      failures.push(`${name}: Ultra's segment is${onPage.ultra ? "" : " not"} drawn`)
+  }
+  const ultraAdvertised = catalogue
+    .filter((model) => pastMax(model.reasoning?.effortLevels ?? []))
+    .map((model) => model.displayName)
+
+  // A level carried to a model without it: None, from a model whose least it
+  // is, shows on one without it as that model's least — and chosen there, it
+  // is that level back on the first model, not the None carried.
+  await pick(names.modelWithLeastLevel)
   await opens()
-  await page.keyboard.press(keys.end)
-  const carried = await thinkingState(page, chip)
+  await page.keyboard.press(keys.home)
+  const carriedFrom = await thinkingState(page, chip)
   await page.keyboard.press(keys.escape)
-  if (!carried.ultra) throw new CannotRun("the new session's model has no Ultra")
-  await pick(names.modelWithoutUltra)
+  await pick(names.modelWithoutFast)
   const shownAs = await thinkingState(page, chip)
   await opens()
-  const upToMax = await thinkingState(page, chip)
-  if (upToMax.ultra)
-    throw new CannotRun(
-      `${names.modelWithoutUltra} has Ultra now; name another in selectors.mjs`,
-    )
-  const noUltra = { count: upToMax.count, carriedShownAs: shownAs.chipLabel }
+  const least = await thinkingState(page, chip)
+  const carried = {
+    from: carriedFrom.checkedLabel,
+    shownAs: shownAs.chipLabel,
+    ultraAdvertised,
+    models: catalogueModels,
+  }
   if (
-    shownAs.chipLabel !== `Thinking level: ${upToMax.checkedLabel}` ||
-    upToMax.checked !== upToMax.count - 1
+    least.checked !== 0 ||
+    shownAs.chipLabel !== `Thinking level: ${least.checkedLabel}`
   )
     failures.push(
-      `Ultra carried to a model without it shows as "${shownAs.chipLabel}", not its last level`,
+      `None carried to ${names.modelWithoutFast} shows as "${shownAs.chipLabel}", not its least level`,
     )
-  // End there, on the Max already shown, chooses Max: back on the model with
-  // Ultra, it is still Max rather than the Ultra carried.
-  await page.keyboard.press(keys.end)
+  // Home there, on the level already shown, chooses it.
+  await page.keyboard.press(keys.home)
   await page.keyboard.press(keys.escape)
-  await pick(names.modelWithUltra)
-  noUltra.backOnUltra = (await thinkingState(page, chip)).chipLabel
-  if (!/Max$/.test(noUltra.backOnUltra ?? ""))
+  await pick(names.modelWithLeastLevel)
+  carried.back = (await thinkingState(page, chip)).chipLabel
+  if (carried.back !== `Thinking level: ${least.checkedLabel}`)
     failures.push(
-      `Max chosen on ${names.modelWithoutUltra} came back as "${noUltra.backOnUltra}"`,
+      `${least.checkedLabel} chosen on ${names.modelWithoutFast} came back as "${carried.back}"`,
     )
-  // The walk on a track that ends at Max: it ends there, and nothing is marked apart.
-  await pick(names.modelWithoutUltra)
-  await opens()
-  for (const [key, want] of [
-    [keys.home, 0],
-    [keys.end, upToMax.count - 1],
-  ]) {
-    await sampling(`no Ultra: ${key} to ${want}`, () => page.keyboard.press(key))
-    const now = await thinkingState(page, chip)
-    if (now.checked !== want)
-      failures.push(`no Ultra: ${key} left the level at ${now.checked}`)
-    if (now.utmost) failures.push(`no Ultra: level ${now.checked} is marked utmost`)
-  }
-  await page.keyboard.press(keys.escape)
+  await pick(names.modelWithFast)
 
   // With the system's reduced motion, the same walk animates nothing.
   const reduced = await openPage(page.context().browser(), {
@@ -1150,7 +1226,7 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
     await reduced.close()
   }
 
-  return { opened, moves, drag, following, noUltra, reduced: still, failures }
+  return { opened, moves, drag, following, carried, reduced: still, failures }
 }
 
 checks["overview-counts"] = async ({ page, engine, options }) => {
