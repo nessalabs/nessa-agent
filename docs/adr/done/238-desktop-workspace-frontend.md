@@ -340,7 +340,7 @@ drawing is `split-panes/adapters/dom/drag.ts`):
 | the zone changes, even mid-change | from the size it is drawn at now to the new one, `--desktop-base` on `--desktop-ease`, one way, never past it | from where it is drawn now, the same |
 | released onto the zone shown | flies from the pointer into the placeholder's rect | lands where it was previewed: `FlipScope` lets the preview go and finds nothing to fly |
 | cancelled home | flies home, back to its own size | back to its own place and size |
-| less motion | changes size at once | does not move (nothing but the copy moves); the placeholder marks the slot |
+| less motion | changes size at once | takes the rect the drop gives it at once, never gliding, and is let go as the drop lays it out there (`FlipScope`, which flies nothing); the placeholder marks the slot. Left where it is, a swap would show only the placeholder, under the copy: nothing would say the other pane moves (#286) |
 
 Neither the copy nor a pane is ever drawn stretched: each grows or shrinks
 into its shape by a scale its content undoes at each of twelve steps (as a
@@ -444,7 +444,7 @@ press on what can be carried, and the drag it becomes, select nothing
 (`selectstart`) and leave nothing selected; while carrying, one element over the page holds the
 grabbing hand. Only transforms move — but the copy, laid out once per zone
 change at the slot's size, as above; the zone is announced in a polite live
-region; with less motion, nothing but the copy moves. `split-panes/model/drag.test.ts`
+region; with less motion, nothing glides: the copy and the panes take their shapes at once. `split-panes/model/drag.test.ts`
 has a test for each row above, `split-panes/adapters/dom/drag.test.tsx` for
 what the drag asks of any host, and `adapters/dom/split-panes-drag.test.tsx` for the page's
 side of them (the click a release makes, a control's own press, the carried

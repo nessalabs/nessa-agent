@@ -36,9 +36,9 @@
  * pane is known from the preview's own motion, never read back. The
  * preview's motion is marked (`dragPreview`) so `FlipScope` measures through
  * it at the drop and lets it go before it measures where things landed. With
- * less motion, nothing moves: the copy follows the pointer and the place it
- * would land is outlined. The zone is said to assistive technology as it
- * changes.
+ * less motion, nothing glides: the copy follows the pointer, and the panes
+ * and the copy take the drop's rects at once. The zone is said to assistive
+ * technology as it changes.
  *
  * A host takes part by marking what can be carried: `data-drag-pane` (a
  * pane's key, on its header) or `data-drag-item` (an item's id, on a row
@@ -663,21 +663,23 @@ export function useSplitPanesDrag(
         scope.toggleAttribute(marks.takesSpare, Boolean(outcome?.takesSpare))
       if (outcome && landing && !scope.hasAttribute(marks.reflow))
         scope.setAttribute(marks.reflow, "")
-      if (!reducedMotion())
-        for (const [key, box] of real) {
-          const pane = paneElement(key)
-          if (!pane) continue
-          const to = landing?.get(key) ?? null
-          const replaced = outcome?.does === "replace" && key === outcome.lands
-          reflow(
-            made,
-            pane,
-            box,
-            outcome && to ? inside(to, landingGrid(grid, spare)) : null,
-            replaced,
-            corners.has(key),
-          )
-        }
+      // With less motion too: the panes take their rects at once
+      // (`--desktop-base` is 0ms), or a swap's placeholder, under the copy,
+      // would be all that showed.
+      for (const [key, box] of real) {
+        const pane = paneElement(key)
+        if (!pane) continue
+        const to = landing?.get(key) ?? null
+        const replaced = outcome?.does === "replace" && key === outcome.lands
+        reflow(
+          made,
+          pane,
+          box,
+          outcome && to ? inside(to, landingGrid(grid, spare)) : null,
+          replaced,
+          corners.has(key),
+        )
+      }
       const lands = outcome && landing ? (landing.get(outcome.lands) ?? null) : null
       placeholder(made, lands && inside(lands, landingGrid(grid, spare)))
       announcer.textContent =

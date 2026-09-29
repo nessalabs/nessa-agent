@@ -38,8 +38,11 @@
  *                        pane's header and presses within the reveal's 350 ms hide: the
  *                        reveal stays, every frame of the drag; over it is no zone, just past
  *                        it a pane is a target; released away, it hides
- *   reduced-motion       with less motion, nothing but the copy moves: no pane is drawn
- *                        off its place while a zone is shown, and the placeholder marks it
+ *   reduced-motion       with Motion set to Reduced, a pane carried over the middle of the
+ *                        one beside it: that one is drawn in the carried pane's place, at
+ *                        once — no frame draws it on its way — the placeholder marks the
+ *                        slot, and the release swaps them with no frame drawing a pane
+ *                        off where it lands
  *   copy-takes-slot-shape  a tall pane carried below a wide one: at rest with the zone shown,
  *                        the copy is the placeholder's size, its centre on the pointer; over
  *                        its own place (no zone) it is its own size; each change of size is
@@ -61,7 +64,7 @@ import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { safeArea, safeAreaInit, summarize } from "./lib/safe-area.mjs"
-import { content, css, keys, modules, zoneSaid } from "./lib/selectors.mjs"
+import { content, css, keys, modules, storage, zoneSaid } from "./lib/selectors.mjs"
 import {
   dragResidue,
   frames,
@@ -1017,40 +1020,66 @@ Object.assign(checks, {
     return { pressedAfterLeaving: Math.round(pressedAfter), failures }
   },
   "reduced-motion": async (page, layout, fresh) => {
-    const still = await fresh({ reducedMotion: "reduce" })
+    // Motion set to Reduced in the window's own settings, as the app window
+    // that showed no swap was (#286); the system's setting takes the same path.
+    const still = await fresh({ prefs: { [storage.motion]: "reduced" } })
     const list = await threeColumns(still, layout)
-    const target = list[2]
-    await still.evaluate((sel) => {
-      window.__moved = new Set()
-      window.__watch = true
-      const tick = () => {
-        document.querySelectorAll(sel.pane).forEach((p) => {
-          if (p.closest(sel.dragGhost)) return
-          const t = getComputedStyle(p).transform
-          if (t !== "none" && !new DOMMatrix(t).isIdentity)
-            window.__moved.add(p.dataset.paneKey)
-        })
-        if (window.__watch) requestAnimationFrame(tick)
-      }
-      requestAnimationFrame(tick)
-    }, css)
+    const [own, next] = list
+    const shapes = await recordShapes(still)
     await lift(still, 0)
-    await still.mouse.move(target.x + target.w - 20, target.y + target.h / 2, {
-      steps: 20,
-    })
-    const said = await zoneSays(still, zoneSaid.any)
+    // Over the middle of the pane beside it: a swap.
+    await still.mouse.move(next.x + next.w / 2, next.y + next.h / 2, { steps: 20 })
+    const said = await zoneSays(still, zoneSaid.swap)
     await still.waitForTimeout(300)
     const placeholders = await still.locator(css.dragPlaceholder).count()
-    const moved = await still.evaluate(() => {
-      window.__watch = false
-      return [...window.__moved]
-    })
-    await letGo(still, { escape: true })
+    const recorded = await shapes.stop()
+    const before = list.map((p) => p.key)
+    const landing = await recordShapes(still)
+    await still.mouse.up()
+    await settled(still)
+    // Nothing flies with less motion: the drop's marks go two frames on.
+    await frames(still, 4)
+    const landed = await landing.stop()
+    const after = await order(still)
     const failures = []
-    if (!said) throw new CannotRun("no zone was offered over the far pane")
-    if (moved.length)
-      failures.push(`panes drawn off their place with less motion: ${moved.join(", ")}`)
+    if (!said) throw new CannotRun("no swap was offered over the pane beside it")
+    // The pane beside it is drawn where the drop puts it — in the carried
+    // pane's place.
+    const drawn = recorded.at(-1)?.panes.find((p) => p.key === next.key) ?? next
+    if (!near(drawn.x, own.x) || !near(drawn.w, own.w))
+      failures.push(
+        `with a swap shown, the pane beside is drawn ${px(drawn)}, not in the carried pane's place ${px(own)}`,
+      )
+    // And gets there at once: while the zone said stays the same, no pane
+    // is drawn anywhere new from one frame to the next.
+    const glided = recorded.slice(1).flatMap((f, i) => {
+      const prior = recorded[i]
+      if (f.zone !== prior.zone) return []
+      return f.panes.filter((p) => {
+        const was = prior.panes.find((q) => q.key === p.key)
+        return was && (!near(p.x, was.x) || !near(p.y, was.y) || !near(p.w, was.w))
+      })
+    })
+    if (glided.length)
+      failures.push(
+        `with less motion, a pane glided: ${px(glided[0])} (${glided.length} frames)`,
+      )
+    // Released, each pane is where the preview drew it, every frame: the
+    // preview goes as the drop lays them out, never drawing them moved again.
+    const final = landed.at(-1)?.panes ?? []
+    const jumped = landed.flatMap((f) =>
+      f.panes.filter((p) => {
+        const end = final.find((q) => q.key === p.key)
+        return end && (!near(p.x, end.x) || !near(p.w, end.w))
+      }),
+    )
+    if (jumped.length)
+      failures.push(
+        `released, a pane was drawn off where it landed: ${px(jumped[0])} (${jumped.length} frames)`,
+      )
     if (!placeholders) failures.push("no placeholder marks where the drop would land")
+    if (after.join(",") !== [before[1], before[0], ...before.slice(2)].join(","))
+      failures.push(`released on the swap shown: ${before} became ${after}`)
     failures.push(...residueFailures(await dragResidue(still)))
     return { failures }
   },
