@@ -2,7 +2,9 @@
  * What a source file imports, as the specifiers it names — every way a
  * module can be reached from text: a named import or a re-export, a
  * side-effect import (a stylesheet), a dynamic import, and a test's
- * `vi.mock`, which stands in for the module it names.
+ * `vi.mock`, `vi.doMock`, `vi.importActual` and `vi.importMock`, which stand
+ * in for, or reach, the module they name. Not `require()` or a path alias:
+ * the source uses neither.
  *
  * Pure text, like every rule here: `check-architecture.mjs` runs on bare Node.
  * It reads string literals only; a specifier built at runtime is not an
@@ -15,8 +17,8 @@ const forms = [
   /(?:^|[;\s])import\s+["']([^"']+)["']/g,
   // a dynamic import
   /\bimport\s*\(\s*["']([^"']+)["']/g,
-  // vi.mock and vi.doMock
-  /\bvi\.(?:do)?[mM]ock\s*\(\s*["']([^"']+)["']/g,
+  // vi.mock, vi.doMock, vi.importActual, vi.importMock
+  /\bvi\.(?:(?:do)?[mM]ock|importActual|importMock)\s*(?:<[^>]*>)?\s*\(\s*["']([^"']+)["']/g,
 ]
 
 export function importedPaths(text) {

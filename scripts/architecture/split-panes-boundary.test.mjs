@@ -40,7 +40,6 @@ test("split panes import themselves, packages and the desktop's shared parts", (
     'import "./split-panes.css"',
     'import { ResizeEdge } from "../../ui/resize-edge"',
     'import { reducedMotion } from "../../adapters/motion-preference"',
-    'import { x } from "../../model/side-column"',
   ])
     assert.deepEqual(refused(own, text), [], text)
 })
@@ -53,6 +52,10 @@ test("split panes import no host", () => {
     'import type { DesktopStore } from "../../../store"',
     'import { SettingsHost } from "../../../settings"',
     'import { host } from "../../../../host"',
+    'import { DesktopWindow } from "../../../ui/desktop-window"',
+    'import { DesktopApp } from "../../../ui/desktop-app"',
+    'import { Composer } from "../../../ui/composer"',
+    'const real = await vi.importActual("../../../workspace")',
     'vi.mock("../../../workspace/adapters/store/commands")',
   ])
     assert.equal(refused(own, text).length, 1, text)

@@ -10,9 +10,11 @@
  *   (`split-panes/testing`; `check-architecture.mjs` keeps every `testing`
  *   entry to tests). Nothing else of the module — an adapter, a component,
  *   a stylesheet — is anyone else's to import.
- * - Inside it, a module imports itself, packages, and the desktop window's
- *   shared parts (`src/desktop/adapters/`, `src/desktop/ui/`,
- *   `src/desktop/model/`) and nothing else: no host, the workspace included.
+ * - Inside it, a module imports itself, packages, and the few of the desktop
+ *   window's shared parts it uses, named below — never a folder of them:
+ *   `src/desktop/ui/` also holds the window's composition
+ *   (`desktop-window.tsx` mounts the workspace and Settings), so a folder
+ *   would let a host in. No host, the workspace included.
  *
  * Reading a stylesheet's text by URL in a test (`readFileSync(new URL(…))`)
  * is not an import and is not this rule's business: a sheet is read as the
@@ -23,7 +25,13 @@
 import { posix } from "node:path"
 
 const module = "src/desktop/split-panes"
-const shared = ["src/desktop/adapters/", "src/desktop/ui/", "src/desktop/model/"]
+/** The desktop's shared parts split panes use: motion, reduced motion, and the resize edge. */
+const shared = new Set([
+  "src/desktop/adapters/hold-still",
+  "src/desktop/adapters/motion",
+  "src/desktop/adapters/motion-preference",
+  "src/desktop/ui/resize-edge",
+])
 
 /** Where a relative specifier in `path` points, from the repository root, without an extension. */
 function resolved(path, specifier) {
@@ -56,9 +64,9 @@ export function splitPanesBoundaryViolations(path, specifiers) {
       violations.push(
         `other modules import the split-panes barrel, its model or its testing entry, not ${specifier} (ADR 253)`,
       )
-    if (ownFile && !inside(target) && !shared.some((part) => target.startsWith(part)))
+    if (ownFile && !inside(target) && !shared.has(target))
       violations.push(
-        `split panes import no host, only the desktop's shared parts: not ${specifier} (ADR 253)`,
+        `split panes import no host, only the desktop's shared parts they name: not ${specifier} (ADR 253)`,
       )
   }
   return violations

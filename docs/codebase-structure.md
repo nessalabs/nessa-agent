@@ -245,7 +245,8 @@ writing the full defaults on first launch is buying.
   `ui/panes/pane-grid.tsx`). Other modules import the barrel, any of the pure
   model's files (a model or use case, which may not import React, must), and
   — from a test — `split-panes/testing`; split panes import no host, only the
-  desktop window's shared parts (`src/desktop/adapters/`, `ui/`, `model/`).
+  few desktop shared parts the rule names (motion, reduced motion, the resize
+  edge).
   `scripts/architecture/split-panes-boundary.mjs` refuses the rest, however
   the import is written; a test may still read a stylesheet's text by URL.
   A name of the page's a host writes out whole, or reads through `dataset`,

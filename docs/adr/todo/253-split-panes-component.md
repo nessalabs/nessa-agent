@@ -138,9 +138,14 @@ Where the code refined the contract above, and why:
   files — any module may import them, and a host's model and use cases,
   which may not import React, must — or, from a test, `split-panes/testing`;
   inside it, an import out of it must be one of the desktop window's shared
-  parts (`src/desktop/adapters/`, `ui/`, `model/`), never a host. Every form
-  of import is read: named, side-effect (a stylesheet), dynamic, and
-  `vi.mock`. A test reading a stylesheet's text by URL is not an import and
+  parts it names (motion, reduced motion, `hold-still`, the resize edge) —
+  never a folder of them, since `src/desktop/ui/` also holds the window's
+  composition, which mounts the workspace — and never a host. The forms of
+  import read are named imports and re-exports, side-effect imports (a
+  stylesheet), dynamic `import()`, and `vi.mock`, `vi.doMock`,
+  `vi.importActual` and `vi.importMock`; not `require()` or a path alias,
+  which the source does not use, and not a specifier built at runtime. A
+  test reading a stylesheet's text by URL is not an import and
   is allowed: the sheet is published text.
 - **What a host sees of the page is published, not retyped**
   (`adapters/dom/marks.ts`): `marks` (attributes), `classes`, and `gridOf`.

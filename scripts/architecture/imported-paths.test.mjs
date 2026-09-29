@@ -14,6 +14,8 @@ test("every way a module is reached from text is an import", () => {
     'const f = await import("./f")',
     'vi.mock("./g", () => ({}))',
     'vi.doMock("./h")',
+    'const i = await vi.importActual<typeof import("./i")>("./i")',
+    'const j = await vi.importMock("./j")',
   ].join("\n")
   assert.deepEqual(importedPaths(text).sort(), [
     "../b",
@@ -24,6 +26,9 @@ test("every way a module is reached from text is an import", () => {
     "./f",
     "./g",
     "./h",
+    "./i",
+    "./i",
+    "./j",
   ])
 })
 
