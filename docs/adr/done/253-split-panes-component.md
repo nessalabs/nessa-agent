@@ -11,7 +11,7 @@ which settled the behaviour; this record settles only where it lives and how
 a host talks to it. Nothing a person sees changes.
 
 - **Date:** 2026-09-28
-- **Status:** proposed; implemented, in review
+- **Status:** accepted; implemented in #279
 
 ## Context
 
