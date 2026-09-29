@@ -7,6 +7,8 @@
   flex: 1;
   min-height: 0;
   flex-direction: column;
+  /* Its shape's name, for settling a change of shape (below); a small pane's names its own. */
+  --workspace-home-settle: workspace-home-card;
 }
 
 .workspace-pane-home > .desktop-home {
@@ -26,6 +28,11 @@
  * draft still opens the page, in either shape.
  */
 @container workspace-pane (width < 640px) or (height < 640px) {
+  /* Named, so a change of shape can be told and settled (below). */
+  .workspace-pane-home {
+    --workspace-home-settle: workspace-home-docked;
+  }
+
   .workspace-pane-home > .desktop-home:not([data-page]) {
     container-name: workspace-docked;
     padding: 0;
@@ -40,12 +47,17 @@
     flex: 1;
   }
 
+  /*
+   * The composer at the foot whether or not the greeting is shown (Settings ›
+   * greeting): the greeting's own auto margins take the room above it first.
+   */
   .workspace-pane-home > .desktop-home:not([data-page]) .desktop-home-inner {
     display: flex;
     min-height: 0;
     max-width: none;
     flex: 1;
     flex-direction: column;
+    justify-content: flex-end;
   }
 
   .workspace-pane-home > .desktop-home:not([data-page]) .desktop-greeting {
@@ -57,18 +69,15 @@
 
 /*
  * Changing shape, as the pane is resized or split, the greeting and the
- * composer settle into their new places rather than jump: each shape names
- * its own settling, and a new name plays it again. Opacity and transform
- * only, so nothing is laid out twice.
+ * composer settle into their new places rather than jump. Only a change of
+ * shape plays it: the pane marks its home `data-reshaped` when the shape
+ * named above changes under it (`adapters/dom/home-shape.ts`), so a home that
+ * appears plays nothing of its own, and a large one is the window's home as
+ * it always was. Each shape names its own settling, and a new name plays it
+ * again. Opacity and transform only, so nothing is laid out twice.
  */
-.workspace-pane-home .desktop-home-inner > * {
-  animation: workspace-home-card var(--desktop-slow) var(--desktop-out) both;
-}
-
-@container workspace-pane (width < 640px) or (height < 640px) {
-  .workspace-pane-home .desktop-home-inner > * {
-    animation-name: workspace-home-docked;
-  }
+.workspace-pane-home[data-reshaped] .desktop-home-inner > * {
+  animation: var(--workspace-home-settle) var(--desktop-slow) var(--desktop-out) both;
 }
 
 @keyframes workspace-home-card {
@@ -291,7 +300,6 @@
 
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
 :root[data-motion="reduced"] .workspace-pane-home[data-leaving] .desktop-header,
-:root[data-motion="reduced"] .workspace-pane-home[data-leaving] .desktop-greeting,
-:root[data-motion="reduced"] .workspace-pane-home .desktop-home-inner > * {
+:root[data-motion="reduced"] .workspace-pane-home[data-leaving] .desktop-greeting {
   animation: none;
 }

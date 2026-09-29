@@ -12,6 +12,7 @@ import {
   selectSession,
 } from "../../adapters/store/selectors"
 import { measureArrival, type Arrival } from "../../adapters/dom/arrival"
+import { settleOnReshape } from "../../adapters/dom/home-shape"
 import { focusedPaneAttribute } from "../../adapters/dom/focus"
 import { durationToken } from "../../../adapters/motion"
 import { usePictureInConversationsPreference } from "../../../adapters/window-preferences"
@@ -111,6 +112,13 @@ export const Pane = memo(function Pane({
   }, [])
 
   const showHome = draft || arrival !== null
+  // A new session's home settles when its pane changes its shape, not as it appears.
+  const homeShown = filled && showHome
+  useEffect(() => {
+    const home = homeRef.current
+    if (!homeShown || !home) return
+    return settleOnReshape(home)
+  }, [homeShown, sessionId])
   const [picture] = usePictureInConversationsPreference()
   const pictured = picture === "on"
   return (

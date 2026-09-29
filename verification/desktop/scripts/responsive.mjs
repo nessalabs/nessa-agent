@@ -34,11 +34,14 @@
  *                   that were shown are not drawn
  *   home-shape      a new session's home in a pane smaller than 640px either
  *                   way takes a conversation's shape: its composer docked at
- *                   the foot as the conversation's beside it is, the scene
- *                   gone, "Working late?" in the middle at the conversation
- *                   title's size; a larger pane keeps the scene and the card;
- *                   the draft and the caret survive each crossing, which
- *                   settles by opacity and transform alone
+ *                   the foot as the conversation's beside it is, with the
+ *                   greeting on and off, the scene gone, "Working late?" in
+ *                   the middle at the conversation title's size; a larger
+ *                   pane keeps the scene and the card; a home appearing plays
+ *                   no settling, and each crossing plays one, by opacity and
+ *                   transform alone, and none with less motion; the same
+ *                   field, its draft, the model and an open page survive each
+ *                   crossing, and the caret's focus and position each resize
  *
  * With --shots <dir>, screenshots of each width go there for a person to look at.
  */
@@ -48,7 +51,7 @@ import { join } from "node:path"
 import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { css, keys, names } from "./lib/selectors.mjs"
+import { css, keys, names, preferenceEvents, storage } from "./lib/selectors.mjs"
 import {
   frames,
   hideColumns,
@@ -277,6 +280,8 @@ const checks = {
     const failures = []
     const seen = []
     const draft = "A draft that crosses the threshold"
+    // Where the caret is put before a crossing, and must be after it: not the end.
+    const caretAt = draft.length - 5
     const tolerance = 1.5
     // The home's shape, and the conversation's beside it, as drawn.
     const measure = () =>
@@ -306,7 +311,12 @@ const checks = {
           greetingType: type(document.querySelector(sel.greeting)),
           scene: scene ? scene.checkVisibility() : false,
           text: field?.value ?? null,
-          caret: document.activeElement === field,
+          focused: !!field && document.activeElement === field,
+          caret: field?.selectionStart ?? null,
+          // The field the crossings began with, marked below: the same one, not a new one.
+          same: field?.__homeShapeField === true,
+          model: home?.querySelector(sel.modelChip)?.textContent ?? null,
+          page: home?.querySelector(sel.homePage) !== null,
           beside: other
             ? {
                 pane: box(other),
@@ -343,8 +353,9 @@ const checks = {
         const a = m.greetingType
         const b = m.beside.titleType
         if (
+          a &&
           b &&
-          (!a || a.size !== b.size || a.weight !== b.weight || a.tracking !== b.tracking)
+          (a.size !== b.size || a.weight !== b.weight || a.tracking !== b.tracking)
         )
           failures.push(
             `${tag}: greeting set ${JSON.stringify(a)}, the conversation's title ${JSON.stringify(b)}`,
@@ -376,10 +387,20 @@ const checks = {
           `${tag}: the greeting is ${m.greetingType?.size}, not the home's own size`,
         )
     }
-    const kept = (m, tag) => {
-      if (m.text !== draft)
+    // What a crossing keeps: the same field, its draft, the model, the page
+    // or the card — and, where nothing else moved focus, the caret and its place.
+    const kept = (m, tag, want) => {
+      if (!m.same) failures.push(`${tag}: the composer's field was made anew`)
+      if (m.text !== want.text)
         failures.push(`${tag}: the draft reads ${JSON.stringify(m.text)}`)
-      if (!m.caret) failures.push(`${tag}: the caret left the home's composer`)
+      if (m.model !== want.model)
+        failures.push(`${tag}: the model reads ${m.model}, was ${want.model}`)
+      if (m.page !== want.page)
+        failures.push(`${tag}: the page is ${m.page ? "open" : "closed"}, was not`)
+      if (!want.caret) return
+      if (!m.focused) failures.push(`${tag}: the caret left the home's composer`)
+      else if (m.caret !== want.caret)
+        failures.push(`${tag}: the caret is at ${m.caret}, was at ${want.caret}`)
     }
     const record = async (tag, m) => {
       seen.push({
@@ -389,93 +410,205 @@ const checks = {
           m.pane &&
           m.composer &&
           Math.round(m.pane.y + m.pane.h - m.composer.y - m.composer.h),
-        greeting: m.greetingType?.size,
+        greeting: m.greetingType?.size ?? "off",
+        caret: m.focused ? m.caret : "elsewhere",
       })
       await shot(options, page, `home-${engine}-${layout}-${tag}`)
     }
-    // Only what settles, by opacity and transform, may move when the shape
-    // changes: each settling the home starts is noted as it starts.
-    const watchSettling = () =>
-      page.evaluate((sel) => {
-        window.__homeSettling = []
-        document
-          .querySelector(sel.paneHome)
-          ?.addEventListener("animationstart", (event) => {
-            if (!event.animationName.startsWith("workspace-home")) return
-            const animation = event.target
-              .getAnimations()
-              .find((a) => a.animationName === event.animationName)
-            window.__homeSettling.push({
-              name: event.animationName,
-              properties: (animation?.effect.getKeyframes() ?? []).flatMap((k) =>
-                Object.keys(k).filter(
-                  (p) =>
-                    ![
-                      "offset",
-                      "easing",
-                      "composite",
-                      "computedOffset",
-                      "opacity",
-                      "transform",
-                    ].includes(p),
-                ),
-              ),
-            })
-          })
-      }, css)
-    const settling = () => page.evaluate(() => window.__homeSettling ?? [])
+    // Every settling a home starts, from the page's first frame, noted as it
+    // starts: only a change of shape may play one, by opacity and transform.
+    await page.evaluate(() => {
+      window.__homeSettling = []
+      document.addEventListener("animationstart", (event) => {
+        if (!event.animationName.startsWith("workspace-home")) return
+        const animation = event.target
+          .getAnimations()
+          .find((a) => a.animationName === event.animationName)
+        window.__homeSettling.push({
+          name: event.animationName,
+          properties: (animation?.effect.getKeyframes() ?? []).flatMap((k) =>
+            Object.keys(k).filter(
+              (p) =>
+                ![
+                  "offset",
+                  "easing",
+                  "composite",
+                  "computedOffset",
+                  "opacity",
+                  "transform",
+                ].includes(p),
+            ),
+          ),
+        })
+      })
+    })
+    const settling = () =>
+      page.evaluate(() => window.__homeSettling.splice(0, window.__homeSettling.length))
+    const settles = async (tag, name) => {
+      const moved = await settling()
+      if (!name) {
+        if (moved.length)
+          failures.push(`${tag}: plays ${moved.map((m) => m.name).join(", ")}`)
+        return
+      }
+      if (!moved.some((m) => m.name === name))
+        failures.push(`${tag}: nothing settles (${name}), it jumps`)
+      const laidOut = moved.flatMap((m) => m.properties)
+      if (laidOut.length)
+        failures.push(`${tag}: it animates ${[...new Set(laidOut)].join(", ")}`)
+    }
+    const homeField = page.locator(`${css.paneHome} ${css.field}`)
+    // The caret put in the draft, `caretAt` along it, by the keyboard.
+    const placeCaret = async () => {
+      await homeField.click()
+      await page.keyboard.press("End")
+      for (let i = draft.length; i > caretAt; i--) await page.keyboard.press("ArrowLeft")
+    }
+    const resize = async (height) => {
+      await page.setViewportSize({ width: 1440, height })
+      await frames(page, 2)
+      await settled(page)
+    }
 
-    // A conversation, and a new session's home opened beside it.
+    // A new session's home alone in a large pane is the window's home as it
+    // appears, with nothing of the settling played on the way in.
+    await page.keyboard.press(keys.newSession)
+    await need(page, css.paneHome, "a new session's home")
+    await settled(page)
+    await settles("appearing alone in a large pane")
+
+    // A conversation, and a new session's home opened beside it: small, and
+    // docked as it appears, again with nothing played on the way in.
     const row = page.locator(css.sessionRow).nth(1)
     if (!(await row.count())) throw new CannotRun(`no session row (${css.sessionRow})`)
     await row.click()
     await settled(page)
+    await settling()
     await page.keyboard.press(keys.newSessionBeside)
     await paneCountIs(page, 2)
+    await need(page, css.paneHome, "a new session's home")
     await settled(page)
-    await page.locator(`${css.paneHome} ${css.field}`).click()
+    await settles("appearing beside a conversation")
+    await homeField.click()
     await page.keyboard.type(draft)
+    await page.evaluate((sel) => {
+      document.querySelector(`${sel.paneHome} ${sel.field}`).__homeShapeField = true
+    }, css)
+    // Another model than the one it starts with.
+    const first = (await measure()).model
+    await page.locator(`${css.paneHome} ${css.modelChip}`).click()
+    const other = page.locator(
+      `${css.modelPicker} [role="option"][aria-selected="false"]`,
+    )
+    if (!(await other.count())) throw new CannotRun("no other model to choose")
+    await other.first().click()
+    await settled(page)
     const small = await measure()
+    if (small.model === first) throw new CannotRun(`the model stayed ${first}`)
     docked(small, "beside a conversation")
     await record("small", small)
+    const want = { text: draft, model: small.model, page: false, caret: null }
 
     // The conversation closes: the home takes the whole room, and the card.
-    await watchSettling()
+    // Closing moves focus by its own key, so the caret is not asked after here.
     await page.keyboard.press(keys.focusPane(1))
     await page.keyboard.press(keys.closePane)
     await paneCountIs(page, 1)
-    // The caret comes back to the draft, as a person would put it.
-    await page.locator(`${css.paneHome} ${css.field}`).click()
     await frames(page, 2)
-    const moved = await settling()
-    if (!moved.some((m) => m.name === "workspace-home-card"))
-      failures.push("crossing to the card: nothing settles, it jumps")
-    const laidOut = moved.flatMap((m) => m.properties)
-    if (laidOut.length)
-      failures.push(`crossing lays out: it animates ${[...new Set(laidOut)].join(", ")}`)
+    await settles("crossing to the card", "workspace-home-card")
     await settled(page)
     const large = await measure()
     card(large, "alone")
-    kept(large, "alone")
+    kept(large, "alone", want)
     await record("large", large)
 
-    // The window shortens under 640px of pane: docked again, the draft and caret kept.
-    await page.setViewportSize({ width: 1440, height: 640 })
-    await frames(page, 2)
-    await settled(page)
+    // The window shortens under 640px of pane, and grows again: nothing but
+    // the pane moves, so the caret stays where it was put, and in the field.
+    await placeCaret()
+    want.caret = caretAt
+    await settling()
+    await resize(640)
+    await settles("crossing to the dock", "workspace-home-docked")
     const short = await measure()
     docked(short, "a short window")
-    kept(short, "a short window")
+    kept(short, "a short window", want)
     await record("short", short)
-
-    await page.setViewportSize({ width: 1440, height: 900 })
-    await frames(page, 2)
-    await settled(page)
+    await resize(900)
+    await settles("crossing back to the card", "workspace-home-card")
     const back = await measure()
     card(back, "tall again")
-    kept(back, "tall again")
+    kept(back, "tall again", want)
     await record("back", back)
-    if ((await paneCount(page)) !== 1) failures.push("a pane opened or closed on its own")
+
+    // A long draft opens the page, and a crossing keeps it open.
+    await page.keyboard.press("End")
+    for (let i = 0; i < 8; i++) await page.keyboard.press("Shift+Enter")
+    await settled(page)
+    const long = await measure()
+    if (!long.page) {
+      // Typing that went nowhere is the failure already reported, not the page's.
+      if (failures.length) return { shapes: seen, failures }
+      throw new CannotRun("a long draft did not open the page")
+    }
+    const paged = { ...want, text: long.text, page: true, caret: long.caret }
+    await resize(640)
+    kept(await measure(), "a short window, the page open", paged)
+    await resize(900)
+    kept(await measure(), "tall again, the page open", paged)
+
+    for (let i = 0; i < 8; i++) await page.keyboard.press("Backspace")
+    await settled(page)
+
+    // The composer's opacity on the frame after a crossing: settling, it is
+    // still coming in; with less motion, it is simply there.
+    const crossing = async (height) => {
+      await page.setViewportSize({ width: 1440, height })
+      await frames(page, 1)
+      const opacity = await page.evaluate(
+        (sel) =>
+          getComputedStyle(document.querySelector(`${sel.paneHome} ${sel.dock}`)).opacity,
+        css,
+      )
+      await settled(page)
+      return Number(opacity)
+    }
+    const moving = await crossing(640)
+    await resize(900)
+    if (!(moving < 1))
+      failures.push(
+        `the frame after a crossing, the composer is already there (${moving})`,
+      )
+    await page.emulateMedia({ reducedMotion: "reduce" })
+    await frames(page, 2)
+    const still = await crossing(640)
+    if (still !== 1) failures.push(`with less motion, the composer fades in (${still})`)
+    await resize(900)
+    await page.emulateMedia({ reducedMotion: "no-preference" })
+    seen.push({ tag: "opacity the frame after", moving, still })
+
+    // With the greeting off (Settings), the composer still docks at the foot.
+    await page.evaluate(
+      ([key, event]) => {
+        localStorage.setItem(key, "off")
+        window.dispatchEvent(new CustomEvent(event, { detail: "off" }))
+      },
+      [storage.greeting, preferenceEvents.greeting],
+    )
+    // A conversation in the pane again, and a new home beside it.
+    await row.click()
+    await settled(page)
+    if (await page.locator(css.paneHome).count())
+      throw new CannotRun("the session row did not open in the pane")
+    await page.keyboard.press(keys.newSessionBeside)
+    await paneCountIs(page, 2)
+    await need(page, css.paneHome, "a new session's home")
+    await settled(page)
+    const bare = await measure()
+    if (bare.greeting) failures.push("the greeting shows with the greeting off")
+    if (!bare.beside) throw new CannotRun("no conversation beside the home")
+    docked(bare, "with the greeting off")
+    await record("no-greeting", bare)
+    if ((await paneCount(page)) !== 2) failures.push("a pane opened or closed on its own")
     return { shapes: seen, failures }
   },
 }

@@ -146,15 +146,17 @@ describe("a pane's composer shows the model the next message is sent with", () =
 })
 
 describe("a new session's home in a pane", () => {
-  it("holds its one composer in the dock's box, which a small pane docks at its foot as a conversation's", async () => {
+  it("holds its one composer in the dock's box, the box a conversation's composer sits in", async () => {
     const store = testStore()
     await store.dispatch(loadWorkspace())
     await settle()
     const draftId = store.dispatch(newSession())
     if (!draftId) throw new Error("no draft")
     await mount(store, <PaneHome sessionId={draftId} onSend={() => {}} />)
-    // Which shape it takes is the pane's container query (`conversation.css`);
-    // either way it is this composer, so nothing typed is lost between them.
+    // Which shape it takes is the pane's container query (`conversation.css`),
+    // which a DOM without layout cannot run: where a small pane docks this box,
+    // and that the draft and caret survive, `responsive.mjs --only home-shape`
+    // measures in a browser.
     expect(host.querySelectorAll(".desktop-composer")).toHaveLength(1)
     expect(
       host.querySelector(".desktop-home .workspace-dock > .desktop-composer"),

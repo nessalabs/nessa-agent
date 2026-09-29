@@ -3,7 +3,9 @@
  * focused, or what it shows — a split, ⌘N, ⌘W, ⌘1–4, a session opened from
  * ⌘K, an agent's dispatch — the caret lands in that pane's composer once it
  * is on the page. So does focus that falls to the page because what held it
- * went away: an answered approval, a closed pane.
+ * went away: an answered approval, a closed pane — or was hidden by the
+ * stylesheet, as a small pane's home hides its scene and the Customize
+ * control in it (`ui/panes/conversation.css`).
  *
  * When another pane takes focus, the caret goes with it from wherever it
  * was but a dialog or a menu. When only what the focused pane shows
@@ -122,24 +124,36 @@ export function useFocusFollowsPane(
       requestAnimationFrame(() => settle(moved))
     })
 
+    // Focus falls to the page when what held it is taken away, or hidden by
+    // the stylesheet; the browser says so unevenly, so the panes' changes,
+    // and the size of what holds focus, are watched instead.
+    const fellAway = (away: (held: Element) => boolean) => () => {
+      if (!last || !away(last)) return
+      const active = document.activeElement
+      // Hidden, it may still hold focus as this runs (WebKit does), before the browser lets go.
+      if (active !== document.body && active !== last) return
+      last = null
+      follow()
+    }
+    const watcher = new MutationObserver(fellAway((held) => !held.isConnected))
+    watcher.observe(scope, { childList: true, subtree: true })
+    // A hidden element has no box.
+    const hiding =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(fellAway((held) => held.getClientRects().length === 0))
     const onFocusIn = (event: FocusEvent) => {
       const target = event.target as Element | null
       last = target && gridOf(scope)?.contains(target) ? target : null
+      hiding?.disconnect()
+      if (last) hiding?.observe(last)
     }
-    // Focus falls to the page when what held it is taken away; the browser says so
-    // unevenly, so the panes' changes are watched instead.
-    const watcher = new MutationObserver(() => {
-      if (last && !last.isConnected && document.activeElement === document.body) {
-        last = null
-        follow()
-      }
-    })
-    watcher.observe(scope, { childList: true, subtree: true })
     scope.addEventListener("focusin", onFocusIn)
     return () => {
       stop()
       unsubscribe()
       watcher.disconnect()
+      hiding?.disconnect()
       scope.removeEventListener("focusin", onFocusIn)
     }
   }, [store, root])
