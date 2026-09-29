@@ -55,6 +55,80 @@ pub struct SessionSnapshot {
     /// provider dispatch; restoration clears pending membership without replay.
     pub queue_history: Vec<QueueHistoryRecord>,
 }
+
+/// One SDK decision retained for an atomic semantic-record save.
+///
+/// A record writer receives these in decision order. Existing snapshot adapters
+/// may use the accompanying snapshot alone. No variant authorizes replay to run
+/// a provider or tool effect.
+#[derive(Clone, Debug)]
+pub enum SessionChange {
+    /// The first empty state of a newly created conversation.
+    Opened {
+        /// Conversation identity.
+        id: SessionId,
+        /// Provider identity selected for this conversation.
+        provider: ProviderIdentity,
+        /// Initial recoverable provider context, usually absent.
+        context: ProviderContext,
+    },
+    /// Exact input and pending receipt accepted before provider work.
+    InputAccepted(Box<InvocationRecord>),
+    /// Actual queue membership, selection, restoration or order decision.
+    QueueDecision(QueueHistoryRecord),
+    /// Local lifecycle edge for the named invocation.
+    SchedulingTransition {
+        /// Invocation identity.
+        execution_id: ExecutionId,
+        /// The validated new edge.
+        event: InvocationSchedulingEvent,
+    },
+    /// Provider observation owned by a dispatched invocation.
+    ProviderObservation(ExecutionEvent),
+    /// Audit and storage acknowledgement of an earlier accepted input.
+    ReceiptUpdated {
+        /// Invocation identity.
+        execution_id: ExecutionId,
+        /// Previously retained acknowledgement.
+        before: SubmissionAcknowledgement,
+        /// New acknowledgement.
+        after: SubmissionAcknowledgement,
+    },
+    /// Undispatched local stop with its cause and caller.
+    StopDecision {
+        /// Invocation identity.
+        execution_id: ExecutionId,
+        /// Stop evidence.
+        event: InvocationCancellationEvent,
+    },
+    /// Provider settlement and the first dispatched local stop, if any.
+    ProviderReport {
+        /// Invocation identity.
+        execution_id: ExecutionId,
+        /// Provider-owned result evidence.
+        report: ExecutionReport,
+        /// Stop evidence required for a local-cancellation report.
+        local_stop: Option<InvocationCancellationEvent>,
+    },
+    /// A local result superseding the prior saved result, if any.
+    LocalSettlement {
+        /// Invocation identity.
+        execution_id: ExecutionId,
+        /// Previously saved result.
+        before: Option<Result<ExecutionOutcome, AgentError>>,
+        /// Newly saved result.
+        after: Result<ExecutionOutcome, AgentError>,
+        /// Earlier successful local outcome retained across a later failure.
+        local_outcome: Option<ExecutionOutcome>,
+    },
+    /// The provider context needed to resume an existing provider session.
+    ProviderContext {
+        /// Previously saved context.
+        before: ProviderContext,
+        /// Newly saved context.
+        after: ProviderContext,
+    },
+}
 impl SessionSnapshot {
     /// Maximum durable invocation records retained by one conversation.
     pub const MAX_INVOCATIONS: usize = 1024;
@@ -286,6 +360,22 @@ pub trait SessionStorageLease: Send + Sync {
     /// does not imply that provider work was rolled back, or that no write reached
     /// storage. Successful return must satisfy the adapter's durability contract.
     fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()>;
+
+    /// Saves a snapshot together with the exact SDK decisions that produced it.
+    /// Record adapters persist `changes` as one atomic logical transition and
+    /// validate that applying them to the last committed state yields `snapshot`.
+    /// Existing snapshot adapters use the complete snapshot as their authority.
+    /// A failed or uncertain write leaves the caller's decision sequence
+    /// pending. A record adapter retains its first encoded bytes for that
+    /// sequence and reconciles the same physical IDs before accepting a later
+    /// sequence.
+    fn save_changes(
+        &self,
+        snapshot: SessionSnapshot,
+        _changes: Vec<SessionChange>,
+    ) -> StorageFuture<'_, ()> {
+        self.save(snapshot)
+    }
 
     /// Erases this session's saved history, so that it has no snapshot.
     ///

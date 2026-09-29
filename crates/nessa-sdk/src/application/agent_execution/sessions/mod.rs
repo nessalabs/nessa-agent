@@ -13,7 +13,8 @@
 //! ```text
 //! Agent -> SessionManager -> SessionStorageLease -> storage adapter
 //! Agent lifecycle -> AttachmentLease -> provider cleanup + protective writer lease
-//! SessionManager -> SessionSnapshot (input, scheduling, observations, settlement)
+//! SessionManager -> SessionSnapshot + ordered SessionChange decisions
+//!                -> SessionStorageLease
 //!                       |-> validation -> domain InvocationHistory / permission rules
 //!                                      |-> retention -> live controller limits
 //! ```
@@ -50,6 +51,6 @@ pub use manager::SessionManager;
 pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource};
 pub use storage::{
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
-    QueueHistoryRecord, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-    StorageFuture, SubmissionAcknowledgement,
+    QueueHistoryRecord, SessionChange, SessionSnapshot, SessionStorage, SessionStorageLease,
+    StorageError, StorageFuture, SubmissionAcknowledgement,
 };

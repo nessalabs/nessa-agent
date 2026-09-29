@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 struct FaultLease {
     inner: Box<dyn SessionStorageLease>,
     fail_save: AtomicBool,
+    changes: std::sync::Mutex<Vec<Vec<SessionChange>>>,
 }
 impl SessionStorageLease for FaultLease {
     fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
@@ -27,6 +28,14 @@ impl SessionStorageLease for FaultLease {
             }
             self.inner.save(snapshot).await
         })
+    }
+    fn save_changes(
+        &self,
+        snapshot: SessionSnapshot,
+        changes: Vec<SessionChange>,
+    ) -> StorageFuture<'_, ()> {
+        self.changes.lock().unwrap().push(changes);
+        self.save(snapshot)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.inner.erase()
@@ -67,6 +76,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
     let lease = Arc::new(FaultLease {
         inner: storage.open(id.clone()).await.unwrap(),
         fail_save: AtomicBool::new(false),
+        changes: std::sync::Mutex::new(Vec::new()),
     });
     let active = invocation("active", false);
     let active_id = active.request.execution_id.clone();
@@ -97,6 +107,66 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
     };
     manager.begin_dispatch(&active_id);
     (manager, lease, active_id)
+}
+
+#[tokio::test]
+async fn failed_observation_save_retries_the_same_decisions_in_order() {
+    let (manager, lease, active) = manager(0).await;
+    manager.event(text(&active)).await.unwrap();
+    assert!(lease.changes.lock().unwrap().is_empty());
+
+    lease.fail_save.store(true, Ordering::SeqCst);
+    assert!(manager
+        .event(ExecutionEvent::new(
+            active,
+            ExecutionUpdate::Finished(ExecutionOutcome::Completed),
+        ))
+        .await
+        .is_err());
+    lease.fail_save.store(false, Ordering::SeqCst);
+    manager.flush_observed().await.unwrap();
+
+    let saves = lease.changes.lock().unwrap();
+    assert_eq!(saves.len(), 2);
+    for changes in saves.iter() {
+        assert_eq!(changes.len(), 2);
+        assert!(matches!(changes[0], SessionChange::ProviderObservation(_)));
+        assert!(matches!(changes[1], SessionChange::ProviderObservation(_)));
+    }
+    assert_eq!(
+        format!("{:?}", saves[0]),
+        format!("{:?}", saves[1]),
+        "a retry keeps the same typed changes"
+    );
+}
+
+#[tokio::test]
+async fn definitely_rejected_admission_does_not_leak_into_the_next_record_batch() {
+    let (manager, lease, _) = manager(0).await;
+    let request = ExecutionRequest {
+        execution_id: ExecutionId::new("new-input").unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("new input").unwrap()),
+        estimated_input_tokens: 1,
+        reserved_output_tokens: 1,
+    };
+    let actor = ActionContext::new("user", "test", "invoke").unwrap();
+
+    lease.fail_save.store(true, Ordering::SeqCst);
+    assert!(manager.begin(request.clone(), actor.clone()).await.is_err());
+    assert_eq!(manager.snapshot().await.unwrap().invocations.len(), 1);
+    lease.fail_save.store(false, Ordering::SeqCst);
+    assert_eq!(manager.begin(request, actor).await.unwrap(), 1);
+
+    let saves = lease.changes.lock().unwrap();
+    assert_eq!(saves.len(), 2);
+    for changes in saves.iter() {
+        assert_eq!(changes.len(), 1);
+        assert!(matches!(
+            &changes[0],
+            SessionChange::InputAccepted(record)
+                if record.request.execution_id.as_str() == "new-input"
+        ));
+    }
 }
 fn text(id: &ExecutionId) -> ExecutionEvent {
     ExecutionEvent::new(
