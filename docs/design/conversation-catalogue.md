@@ -32,6 +32,7 @@ unknown, and only a retained deletion marker says deleted.
 | Earlier key changes after its page | Its change revision exceeds `H` | The next pass selects it. |
 | Source reply or receiver commit is lost | A retry reads current source data under the saved pass | Receiver progress, not a reply, decides continuation. |
 | Owner, incarnation, or access epoch changes | Refuse with a typed mismatch | Receiver explicitly resets under current authorization; old live values are cleared and absence stays unknown. |
+| An owner's head is missing or disagrees with the largest retained change revision | Refuse head, page, resolve and new creation as unavailable; retain all existing rows unchanged | A damaged counter cannot publish an empty catalogue or reuse an existing revision. Another owner remains readable. |
 | Own row is unreadable | Refuse the read as unavailable | Progress does not advance. Another owner's damaged row is outside the query. |
 
 The manifest reads one short transaction per page and releases it before any

@@ -153,6 +153,35 @@ fn stored_time(value: u64) -> Result<i64, ConversationError> {
     i64::try_from(value).map_err(|_| ConversationError::Metadata)
 }
 
+/// The head and the latest retained row are one fact. No row for a new owner
+/// means zero; a missing counter beside existing conversations is damage.
+fn owner_head(
+    connection: &Connection,
+    organization: &OrganizationId,
+    owner: &PrincipalId,
+) -> Result<i64, ConversationError> {
+    let head: Option<i64> = connection
+        .query_row(
+            "SELECT head FROM catalogue_owners WHERE organization = ?1 AND owner = ?2",
+            params![organization.as_str(), owner.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(failed)?;
+    let latest: Option<i64> = connection
+        .query_row(
+            "SELECT MAX(change_revision) FROM conversations WHERE organization = ?1 AND owner = ?2",
+            params![organization.as_str(), owner.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(failed)?;
+    match (head, latest) {
+        (None, None) => Ok(0),
+        (Some(head), Some(latest)) if head > 0 && head == latest => Ok(head),
+        _ => Err(ConversationError::Metadata),
+    }
+}
+
 /// Allocate inside the transaction that changes the owner's visible value.
 /// A missing owner row for an existing conversation is damage, not a new epoch.
 fn next_revision(
@@ -160,7 +189,12 @@ fn next_revision(
     conversation: &Conversation,
     creating: bool,
 ) -> Result<i64, ConversationError> {
-    if creating {
+    let head = owner_head(
+        connection,
+        conversation.organization(),
+        conversation.owner(),
+    )?;
+    if creating && head == 0 {
         connection
             .execute(
                 "INSERT OR IGNORE INTO catalogue_owners (organization, owner, head)
@@ -171,6 +205,8 @@ fn next_revision(
                 ],
             )
             .map_err(failed)?;
+    } else if head == 0 {
+        return Err(ConversationError::Metadata);
     }
     let changed = connection
         .execute(
@@ -1091,18 +1127,10 @@ impl ConversationCatalogue for LocalConversationStore {
                     |row| row.get(0),
                 )
                 .map_err(failed)?;
-            let revision: Option<i64> = transaction
-                .query_row(
-                    "SELECT head FROM catalogue_owners WHERE organization = ?1 AND owner = ?2",
-                    params![organization.as_str(), owner.as_str()],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(failed)?;
+            let revision = owner_head(&transaction, &organization, &owner)?;
             Ok(CatalogueHead {
                 incarnation,
-                revision: u64::try_from(revision.unwrap_or(0))
-                    .map_err(|_| ConversationError::Metadata)?,
+                revision: u64::try_from(revision).map_err(|_| ConversationError::Metadata)?,
             })
         })
     }
@@ -1133,11 +1161,8 @@ impl ConversationCatalogue for LocalConversationStore {
             let cursor_id = after.as_ref().map(|key| key.id.to_string()).unwrap_or_default();
             let transaction = connection.transaction().map_err(failed)?;
             catalogue_incarnation(&transaction, &incarnation)?;
-            let head: Option<i64> = transaction.query_row(
-                "SELECT head FROM catalogue_owners WHERE organization = ?1 AND owner = ?2",
-                params![organization.as_str(), owner.as_str()], |row| row.get(0),
-            ).optional().map_err(failed)?;
-            if boundary > head.unwrap_or(0) {
+            let head = owner_head(&transaction, &organization, &owner)?;
+            if boundary > head {
                 return Err(ConversationError::CatalogueInvalidRequest);
             }
             let mut statement = transaction.prepare(&format!(
@@ -1182,6 +1207,7 @@ impl ConversationCatalogue for LocalConversationStore {
         self.run(move |connection| {
             let transaction = connection.transaction().map_err(failed)?;
             catalogue_incarnation(&transaction, &incarnation)?;
+            owner_head(&transaction, &organization, &owner)?;
             let row = transaction.query_row(
                 "SELECT creation_revision, change_revision,
                         EXISTS (SELECT 1 FROM deletions WHERE conversation_id = ?1)

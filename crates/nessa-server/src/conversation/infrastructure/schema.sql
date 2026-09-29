@@ -31,11 +31,14 @@ CREATE TABLE conversations (
     model TEXT NOT NULL,
     approval_mode TEXT NOT NULL CHECK (approval_mode IN ('ask', 'auto', 'full')),
     creation_revision INTEGER NOT NULL CHECK (creation_revision > 0),
-    change_revision INTEGER NOT NULL CHECK (change_revision >= creation_revision)
+    change_revision INTEGER NOT NULL CHECK (change_revision >= creation_revision),
+    FOREIGN KEY (organization, owner) REFERENCES catalogue_owners (organization, owner)
 ) STRICT;
 CREATE INDEX conversations_by_owner ON conversations (organization, owner);
 CREATE INDEX conversations_catalogue ON conversations
     (organization, owner, creation_revision, id);
+CREATE INDEX conversations_change_revision ON conversations
+    (organization, owner, change_revision DESC);
 
 -- One correlated approval-mode decision. The pending row fences turn
 -- admission until recovery has established the authoritative committed mode.

@@ -546,6 +546,8 @@ async fn a_row_that_cannot_be_read_is_refused_and_never_read_as_absent() {
         .await
         .unwrap();
     let raw = raw(&path);
+    // This test deliberately writes impossible rows to exercise restoration.
+    raw.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
     // Each change is committed, so the store's own connection reads it, and
     // then put back as the store wrote it.
     let change_deletion = |change: &str| {
@@ -985,12 +987,20 @@ fn a_file_that_is_not_a_database_is_refused_as_unreadable() {
 fn many(path: &Path, owner: &str, count: usize) {
     let mut raw = raw(path);
     let transaction = raw.transaction().unwrap();
+    transaction.execute(
+        "INSERT OR IGNORE INTO catalogue_owners (organization, owner, head) VALUES ('org', ?1, 0)",
+        [owner],
+    ).unwrap();
     for n in 0..count {
         let id = new_id().to_string();
+        let revision: i64 = transaction.query_row(
+            "UPDATE catalogue_owners SET head = head + 1 WHERE organization = 'org' AND owner = ?1 RETURNING head",
+            [owner], |row| row.get(0),
+        ).unwrap();
         transaction
             .execute(
-                "INSERT INTO conversations VALUES (?1, 'org', ?2, 'panel', 'create', 1, 'claude', 'test-model', 'ask', 1, 1)",
-                params![id, owner],
+                "INSERT INTO conversations VALUES (?1, 'org', ?2, 'panel', 'create', 1, 'claude', 'test-model', 'ask', ?3, ?3)",
+                params![id, owner, revision],
             )
             .unwrap();
         transaction
@@ -1525,4 +1535,112 @@ async fn a_failed_creation_does_not_publish_an_owner_or_spend_a_revision() {
         (current.descriptor.key.creation, current.descriptor.revision),
         (1, 1)
     );
+}
+
+#[tokio::test]
+async fn a_missing_owner_head_cannot_publish_empty_or_reuse_a_revision() {
+    let opened = opened();
+    let live = new_id();
+    let deleted = new_id();
+    let foreign = new_id();
+    opened.store.create(owned(&live)).await.unwrap();
+    opened.store.create(owned(&deleted)).await.unwrap();
+    opened
+        .store
+        .record_deletion(&deleted, deletion("delete"))
+        .await
+        .unwrap();
+    opened
+        .store
+        .create(owned_by(&foreign, "org", "bob", 1))
+        .await
+        .unwrap();
+    let incarnation = opened
+        .store
+        .head(&org(), &alice())
+        .await
+        .unwrap()
+        .incarnation;
+    let raw = raw(&opened.path);
+    raw.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+    raw.execute(
+        "DELETE FROM catalogue_owners WHERE organization = 'org' AND owner = 'alice'",
+        [],
+    )
+    .unwrap();
+    assert!(matches!(
+        opened.store.head(&org(), &alice()).await,
+        Err(ConversationError::Metadata)
+    ));
+    assert!(matches!(
+        opened
+            .store
+            .page(catalogue_request(alice(), &incarnation, 0, 3, None, 4))
+            .await,
+        Err(ConversationError::Metadata)
+    ));
+    assert!(matches!(
+        opened
+            .store
+            .resolve(&org(), &alice(), &incarnation, &live)
+            .await,
+        Err(ConversationError::Metadata)
+    ));
+    let newcomer = new_id();
+    assert!(matches!(
+        opened.store.create(owned(&newcomer)).await,
+        Err(ConversationError::Metadata)
+    ));
+    assert!(ConversationRepository::load(&opened.store, &newcomer)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(ConversationRepository::load(&opened.store, &live)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(ConversationRepository::load(&opened.store, &deleted)
+        .await
+        .unwrap()
+        .unwrap()
+        .deletion()
+        .is_some());
+    let bob = PrincipalId::new("bob").unwrap();
+    assert_eq!(opened.store.head(&org(), &bob).await.unwrap().revision, 1);
+    assert!(opened
+        .store
+        .resolve(&org(), &bob, &incarnation, &foreign)
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn a_regressed_owner_head_is_unavailable_before_a_new_revision() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    opened.store.record(&id, said("hello", 2)).await.unwrap();
+    let raw = raw(&opened.path);
+    raw.execute(
+        "UPDATE catalogue_owners SET head = 1 WHERE organization = 'org' AND owner = 'alice'",
+        [],
+    )
+    .unwrap();
+    assert!(matches!(
+        opened.store.head(&org(), &alice()).await,
+        Err(ConversationError::Metadata)
+    ));
+    assert!(matches!(
+        opened.store.record(&id, said("later", 3)).await,
+        Err(ConversationError::Metadata)
+    ));
+    let revision: i64 = raw
+        .query_row(
+            "SELECT change_revision FROM conversations WHERE id = ?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(revision, 2);
 }
