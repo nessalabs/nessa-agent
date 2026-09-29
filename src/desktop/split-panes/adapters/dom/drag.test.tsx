@@ -7,7 +7,7 @@
  * each held here; the workspace's own wiring of it is tested beside the
  * workspace (`workspace/adapters/dom/split-panes-drag.test.tsx`).
  */
-import { act, useRef } from "react"
+import { act, useRef, useSyncExternalStore, type RefObject } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import type { Drop, SplitPanesSource } from "../../application/ports"
@@ -15,20 +15,38 @@ import { dropOutcome } from "../../model/drop"
 import { panesOf, singlePane, splitPane, type PaneLayout } from "../../model/pane-layout"
 import type { PaneRoom } from "../../model/pane-sizing"
 import { saying, useSplitPanesDrag, type SplitPanesDragOptions } from "./drag"
+import { FlipScope } from "./flip"
 import { classes, gridOf, marks } from "./marks"
 
 let host: HTMLDivElement
-/** Every animation asked for, and of what. */
-const animated: { element: Element; keyframes: Keyframe[] }[] = []
+/** Every animation asked for, of what, and whether it was let go. */
+const animated: {
+  element: Element
+  keyframes: Keyframe[]
+  duration: unknown
+  cancelled: boolean
+}[] = []
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   // jsdom neither animates nor lays out: animations end at once, boxes are set by hand.
   const finished = Promise.resolve()
   animated.length = 0
-  Element.prototype.animate = function (this: Element, keyframes) {
-    animated.push({ element: this, keyframes: keyframes as Keyframe[] })
-    return { cancel() {}, finished, id: "" } as unknown as Animation
+  Element.prototype.animate = function (this: Element, keyframes, timing) {
+    const asked = {
+      element: this,
+      keyframes: keyframes as Keyframe[],
+      duration: typeof timing === "object" ? timing.duration : timing,
+      cancelled: false,
+    }
+    animated.push(asked)
+    return {
+      cancel() {
+        asked.cancelled = true
+      },
+      finished,
+      id: "",
+    } as unknown as Animation
   }
   Element.prototype.getAnimations = () => []
   host = document.createElement("div")
@@ -105,6 +123,32 @@ function Host({ fake, options }: { fake: Fake; options: SplitPanesDragOptions })
   const root = useRef<HTMLDivElement>(null)
   useSplitPanesDrag(root, fake.source, options)
   const layout = fake.layout()
+  return <Page root={root} layout={layout} />
+}
+
+/**
+ * A host that draws the layout as the source changes, in a `FlipScope` as
+ * the workspace's grid is — jsdom resolves no motion tokens, so it flies
+ * nothing, as with less motion.
+ */
+function FlippingHost({ fake, options }: { fake: Fake; options: SplitPanesDragOptions }) {
+  const root = useRef<HTMLDivElement>(null)
+  useSplitPanesDrag(root, fake.source, options)
+  const layout = useSyncExternalStore(fake.source.subscribe, fake.layout)
+  return (
+    <FlipScope shape={JSON.stringify(layout?.columns)} root={root}>
+      <Page root={root} layout={layout} />
+    </FlipScope>
+  )
+}
+
+function Page({
+  root,
+  layout,
+}: {
+  root: RefObject<HTMLDivElement | null>
+  layout: PaneLayout | null
+}) {
   return (
     <div ref={root}>
       <div className="cover" data-drag-item="x">
@@ -150,9 +194,13 @@ const options = (
 })
 
 /** Two panes, a and b, side by side in an 1100 × 800 grid, laid out by hand. */
-async function mounted(fake: Fake, opts: SplitPanesDragOptions = options()) {
+async function mounted(
+  fake: Fake,
+  opts: SplitPanesDragOptions = options(),
+  Drawn: typeof Host = Host,
+) {
   const root = createRoot(host)
-  await act(async () => root.render(<Host fake={fake} options={opts} />))
+  await act(async () => root.render(<Drawn fake={fake} options={opts} />))
   layOut()
   return root
 }
@@ -237,6 +285,40 @@ it("previews the outcome of the layout the source holds, and commits it through 
   expect(items(fake)).toEqual(["b", "a"])
   expect(carrying()).toBe(false)
   await act(async () => root.unmount())
+})
+
+it("with less motion, previews a swap at once — the other pane drawn where the drop puts it — and lets it go as the drop lands", async () => {
+  // As the person's window is set: Settings › Appearance › Motion, Reduced (#286).
+  document.documentElement.dataset.motion = "reduced"
+  try {
+    const fake = fakeSource(two())
+    const root = await mounted(fake, options(), FlippingHost)
+    await liftOntoTwo()
+    expect(said()).toBe("Swap with Pane b")
+    // The placeholder alone would mark pane b's own rect, under the copy:
+    // pane b is drawn in pane a's place, and pane a in b's, with no glide.
+    const drawnAt = (key: number) =>
+      animated
+        .filter(({ element: of }) => of === element(`[data-pane-key="${key}"]`))
+        .at(-1)
+    expect(String(drawnAt(2)?.keyframes.at(-1)?.transform)).toMatch(
+      /^translate\(-554px, 0px\) scale\(1, 1\)$/,
+    )
+    expect(String(drawnAt(1)?.keyframes.at(-1)?.transform)).toMatch(
+      /^translate\(554px, 0px\) scale\(1, 1\)$/,
+    )
+    expect(drawnAt(2)?.duration).toBe(0)
+    // Dropped: the panes are laid out where the preview drew them, and the
+    // preview is let go as they are — left on, it would draw them moved again.
+    const preview = animated.filter(({ element: of }) => of.closest("[data-pane-key]"))
+    act(() => pointer("pointerup", 827, 400))
+    expect(items(fake)).toEqual(["b", "a"])
+    expect(preview.filter(({ cancelled }) => !cancelled)).toEqual([])
+    await frames()
+    await act(async () => root.unmount())
+  } finally {
+    delete document.documentElement.dataset.motion
+  }
 })
 
 it("ends at once when a value the source watches changes, and not when it is the same", async () => {

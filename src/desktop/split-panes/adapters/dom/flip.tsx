@@ -178,14 +178,21 @@ export class FlipScope extends Component<{
     return measure(root)
   }
 
-  componentDidUpdate(_previous: unknown, _state: unknown, snapshot: Rects | null) {
+  componentDidUpdate(
+    previous: Readonly<{ shape: string }>,
+    _state: unknown,
+    snapshot: Rects | null,
+  ) {
     const root = this.props.root.current
-    if (!snapshot || !root) return
-    this.flights.forEach((flight) => flight.cancel())
+    if (!root) return
     // A drag's preview put panes where this change puts them: measured through
     // it before the change, it is let go before measuring where they landed,
-    // so a drop that lands where it previewed has nowhere to fly.
-    letGoOfDragPreview(root)
+    // so a drop that lands where it previewed has nowhere to fly. With less
+    // motion nothing is measured, but the preview goes all the same: left
+    // on, it would draw the landed panes moved again.
+    if (previous.shape !== this.props.shape) letGoOfDragPreview(root)
+    if (!snapshot) return
+    this.flights.forEach((flight) => flight.cancel())
     const flying = play(root, snapshot)
     this.flights = flying
     if (flying.length === 0) {
