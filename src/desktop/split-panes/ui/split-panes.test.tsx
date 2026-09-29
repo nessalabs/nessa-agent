@@ -11,6 +11,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import type { EdgeMove, SplitPanesSource } from "../application/ports"
 import { focusPane, singlePane, splitPane, type PaneLayout } from "../model/pane-layout"
+import type { PaneRoom } from "../model/pane-sizing"
 import { gridOf, marks } from "../adapters/dom/marks"
 import { SplitPanes, type ShownPane } from "./split-panes"
 
@@ -42,12 +43,21 @@ afterEach(async () => {
   host.remove()
 })
 
-function fakeSource(start: PaneLayout | null) {
+/**
+ * A host's source that records what it is asked. It can give what a host may:
+ * no room measured (`room: null`), or no layout — told (`change(null)`) or
+ * not yet (`withhold()`, as a layout that goes between two events).
+ */
+function fakeSource(
+  start: PaneLayout | null,
+  { room = { width: 1100, height: 800, spare: 0 } }: { room?: PaneRoom | null } = {},
+) {
   let layout = start
+  let withheld = false
   const listeners = new Set<() => void>()
   const asked = { resized: [] as EdgeMove[], equalized: 0, fitted: 0 }
   const source: SplitPanesSource = {
-    layout: () => layout,
+    layout: () => (withheld ? null : layout),
     subscribe: (onChange) => {
       listeners.add(onChange)
       return () => listeners.delete(onChange)
@@ -55,7 +65,7 @@ function fakeSource(start: PaneLayout | null) {
     watched: () => [],
     holds: () => true,
     targetable: () => true,
-    measure: () => ({ width: 1100, height: 800, spare: 0 }),
+    measure: () => room ?? undefined,
     commitDrop: () => {},
     resize: (move) => asked.resized.push(move),
     equalize: () => asked.equalized++,
@@ -64,7 +74,10 @@ function fakeSource(start: PaneLayout | null) {
   return {
     source,
     asked,
-    change: async (next: PaneLayout) => {
+    withhold: () => {
+      withheld = true
+    },
+    change: async (next: PaneLayout | null) => {
       layout = next
       await act(async () => listeners.forEach((listener) => listener()))
     },
@@ -159,4 +172,32 @@ it("resizes, evens and fits through the source", async () => {
   const fitted = fake.asked.fitted
   await act(async () => observed.find((each) => each.target === grid())?.resized())
   expect(fake.asked.fitted).toBe(fitted + 1)
+})
+
+it("asks nothing of an edge moved with no room measured, or with the layout gone", async () => {
+  const unmeasured = fakeSource(two(), { room: null })
+  await mounted(unmeasured)
+  const edgeOf = () => {
+    const found = grid().querySelector<HTMLElement>('[role="separator"]')
+    if (!found) throw new Error("no edge")
+    return found
+  }
+  const nudge = () =>
+    act(async () =>
+      edgeOf().dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      ),
+    )
+  await nudge()
+  expect(unmeasured.asked.resized).toEqual([])
+  // Measured, but the layout gone before the host has said so.
+  const gone = fakeSource(two())
+  await mounted(gone)
+  gone.withhold()
+  await nudge()
+  expect(gone.asked.resized).toEqual([])
+  // Said: the grid shows the host's empty state, and no edge.
+  await gone.change(null)
+  expect(grid().querySelector('[role="separator"]')).toBeNull()
+  expect(grid().querySelector(".host-empty")).not.toBeNull()
 })

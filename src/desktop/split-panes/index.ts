@@ -39,5 +39,5 @@
 export { useSplitPanesDrag, type SplitPanesDragOptions } from "./adapters/dom/drag"
 export { classes, gridOf, marks } from "./adapters/dom/marks"
 export { FlipScope } from "./adapters/dom/flip"
-export { paneFrame, SplitPanes, type PaneFrame, type ShownPane } from "./ui/split-panes"
+export { SplitPanes, type PaneFrame, type ShownPane } from "./ui/split-panes"
 export type { Drop, EdgeMove, SplitPanesSource } from "./application/ports"

@@ -250,6 +250,7 @@ for (const file of walk(src)) {
       if (!/(?:^|\/)split-panes(?:\/|$)/.test(item)) continue
       if (/(?:^|\/)split-panes(?:\/index)?$/.test(item)) continue
       if (/(?:^|\/)split-panes\/model\/[^/]+$/.test(item)) continue
+      if (/(?:^|\/)split-panes\/testing$/.test(item)) continue
       fail(
         file,
         "other modules import the split-panes barrel or its model, not its internals",

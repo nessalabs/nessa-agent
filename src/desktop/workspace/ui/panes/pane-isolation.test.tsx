@@ -10,7 +10,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { focusPane, loadWorkspace, openBeside } from "../../adapters/store/commands"
-import { paneFrame } from "../../../split-panes"
+import { paneFrame } from "../../../split-panes/testing"
 import { placements as placementsOf } from "../../../split-panes/model/pane-sizing"
 import {
   selectFocusedSessionId,

@@ -37,10 +37,14 @@ beforeEach(() => {
 
 afterEach(() => host.remove())
 
-/** A host's source over a layout it keeps itself, applying a drop as the drag previews it. */
+/**
+ * A host's source over a layout it keeps itself, applying a drop as the drag
+ * previews it. Each answer can be what a host may give: no room measured
+ * (`room: undefined`), no layout (`change({ layout: null })`).
+ */
 function fakeSource(
   start: PaneLayout,
-  room: PaneRoom = { width: 1100, height: 800, spare: 0 },
+  { room = { width: 1100, height: 800, spare: 0 } }: { room?: PaneRoom | null } = {},
 ) {
   let layout: PaneLayout | null = start
   const listeners = new Set<() => void>()
@@ -68,7 +72,7 @@ function fakeSource(
     targetable: () => state.targetable,
     measure: () => {
       state.measured++
-      return room
+      return room ?? undefined
     },
     commitDrop: (drop) => {
       state.drops.push(drop)
@@ -86,8 +90,8 @@ function fakeSource(
     source,
     state,
     /** A change the host makes, told to whoever listens. */
-    change: (next: Partial<{ layout: PaneLayout; watched: unknown[] }>) => {
-      if (next.layout) layout = next.layout
+    change: (next: Partial<{ layout: PaneLayout | null; watched: unknown[] }>) => {
+      if (next.layout !== undefined) layout = next.layout
       if (next.watched) state.watched = next.watched
       changed()
     },
@@ -272,6 +276,53 @@ it("ends at once when the panes' arrangement changes under it, but not when only
   await act(async () => root.unmount())
 })
 
+it("makes nothing for a press when the source measures no room, and lifts nothing after", async () => {
+  const fake = fakeSource(two(), { room: null })
+  const root = await mounted(fake)
+  await press(60, 16, element(`[${marks.dragPane}="1"]`))
+  // Measured once, as the press's frame painted: nothing to draw a drag in, so the press ends.
+  expect(fake.state.measured).toBe(1)
+  expect(host.querySelector(`.${classes.ghost}`)).toBeNull()
+  // The press is over, not left pending: a selection may start again.
+  const selecting = new Event("selectstart", { bubbles: true, cancelable: true })
+  element(`[${marks.dragPane}="1"]`).dispatchEvent(selecting)
+  expect(selecting.defaultPrevented).toBe(false)
+  pointer("pointermove", 90, 40)
+  pointer("pointermove", 827, 400)
+  await frames()
+  expect(carrying()).toBe(false)
+  pointer("pointerup", 827, 400)
+  await frames()
+  expect(fake.state.drops).toEqual([])
+  await act(async () => root.unmount())
+})
+
+it("ends a press, and a drag, the moment the source has no layout", async () => {
+  const fake = fakeSource(two())
+  const root = await mounted(fake)
+  // Pressed, before its copy is made: the layout goes, the press ends, nothing is made.
+  pointer("pointerdown", 60, 16, element(`[${marks.dragPane}="1"]`))
+  fake.change({ layout: null })
+  await painted()
+  expect(host.querySelector(`.${classes.ghost}`)).toBeNull()
+  pointer("pointermove", 827, 400)
+  await frames()
+  expect(carrying()).toBe(false)
+  pointer("pointerup", 827, 400)
+  await frames()
+  // Carrying: the layout goes, the drag ends at once, nothing is dropped.
+  fake.change({ layout: two() })
+  await liftOntoTwo()
+  expect(carrying()).toBe(true)
+  fake.change({ layout: null })
+  await frames()
+  expect(carrying()).toBe(false)
+  pointer("pointerup", 827, 400)
+  await frames()
+  expect(fake.state.drops).toEqual([])
+  await act(async () => root.unmount())
+})
+
 it("ends at once when the carried item is no longer held", async () => {
   const fake = fakeSource(two())
   const root = await mounted(fake)
@@ -328,7 +379,9 @@ it("offers no zone while the source says no pane can be aimed at", async () => {
 
 it("marks the root while a drop would take the host's spare room, and clears it when let go", async () => {
   // One pane in a grid too narrow for two: a split fits only with the spare room.
-  const fake = fakeSource(singlePane("a"), { width: 500, height: 800, spare: 400 })
+  const fake = fakeSource(singlePane("a"), {
+    room: { width: 500, height: 800, spare: 400 },
+  })
   const root = await mounted(fake)
   const scope = element("[data-split-grid]").parentElement
   await press(10, 10, element("[data-drag-item]"))
