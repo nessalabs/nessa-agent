@@ -23,6 +23,8 @@ pub(super) struct RecordWriter {
     cursor: Cursor,
     committed: Option<SessionSnapshot>,
     pending: Option<Pending>,
+    inflight_base: Option<Option<SessionSnapshot>>,
+    committed_prefix: Vec<Vec<u8>>,
     blocked: bool,
 }
 
@@ -42,6 +44,8 @@ impl RecordWriter {
             cursor: Cursor::new(stream, 0),
             committed: None,
             pending: None,
+            inflight_base: None,
+            committed_prefix: Vec::new(),
             blocked: false,
         };
         loop {
@@ -99,7 +103,7 @@ impl RecordWriter {
         if self.blocked {
             return Err(corrupt("conversation fact conflicts with physical history"));
         }
-        if self.pending.is_some() {
+        if self.pending.is_some() || !self.committed_prefix.is_empty() {
             return Err(StorageError::Unresolved);
         }
         Ok(self.committed.clone())
@@ -113,6 +117,10 @@ impl RecordWriter {
         &self.stream
     }
 
+    pub(super) fn has_unresolved_fact(&self) -> bool {
+        self.pending.is_some() || !self.committed_prefix.is_empty() || self.blocked
+    }
+
     pub(super) async fn save<R: EventRuntime>(
         &mut self,
         runtime: &R,
@@ -122,16 +130,22 @@ impl RecordWriter {
         if self.blocked {
             return Err(corrupt("conversation fact conflicts with physical history"));
         }
-        records::confirm_candidate(&self.id, self.committed.as_ref(), changes, observed)?;
-        let mut remaining = changes;
+        let base = self.inflight_base.as_ref().unwrap_or(&self.committed);
+        records::confirm_candidate(&self.id, base.as_ref(), changes, observed)?;
+        let encoded = changes
+            .iter()
+            .map(snapshot::encode_semantic_change)
+            .collect::<Result<Vec<_>, _>>()?;
+        if !encoded.starts_with(&self.committed_prefix) {
+            return Err(corrupt(
+                "committed semantic decision prefix changed before reconciliation",
+            ));
+        }
+        let mut remaining = &changes[self.committed_prefix.len()..];
         if let Some(pending) = self.pending.as_ref() {
             if remaining.len() < pending.changes.len()
-                || remaining
-                    .iter()
-                    .take(pending.changes.len())
-                    .map(snapshot::encode_semantic_change)
-                    .collect::<Result<Vec<_>, _>>()?
-                    != pending.changes
+                || encoded[self.committed_prefix.len()..].get(..pending.changes.len())
+                    != Some(pending.changes.as_slice())
             {
                 return Err(corrupt(
                     "pending semantic decision changed before reconciliation",
@@ -153,9 +167,13 @@ impl RecordWriter {
                 .expect("pending was retained across commit");
             self.cursor = cursor;
             self.committed = Some(pending.candidate);
-            remaining = &remaining[pending.changes.len()..];
+            let pending_len = pending.changes.len();
+            self.committed_prefix.extend(pending.changes);
+            remaining = &remaining[pending_len..];
         }
         if remaining.is_empty() {
+            self.inflight_base = None;
+            self.committed_prefix.clear();
             return Ok(());
         }
         let candidate = records::fold_changes(self.committed.as_ref(), remaining)?;
@@ -167,10 +185,10 @@ impl RecordWriter {
             key,
             body: snapshot::encode_semantic_batch(remaining)?,
         };
-        let encoded = remaining
-            .iter()
-            .map(snapshot::encode_semantic_change)
-            .collect::<Result<Vec<_>, _>>()?;
+        if self.inflight_base.is_none() {
+            self.inflight_base = Some(self.committed.clone());
+        }
+        let encoded = encoded[self.committed_prefix.len()..].to_vec();
         self.pending = Some(Pending {
             fact,
             changes: encoded,
@@ -201,6 +219,8 @@ impl RecordWriter {
         let pending = self.pending.take().expect("pending was just installed");
         self.cursor = cursor;
         self.committed = Some(pending.candidate);
+        self.inflight_base = None;
+        self.committed_prefix.clear();
         Ok(())
     }
 }

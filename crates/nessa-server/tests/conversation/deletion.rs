@@ -1453,6 +1453,106 @@ async fn busy_under_the_deletion_s_own_lease_is_left_not_carried_on() {
     }
 }
 
+/// Models a reset that committed before its physical cleanup was acknowledged.
+struct CleanupReplyFailsOnce {
+    storage: Arc<InMemoryStorage>,
+    fail_first: Arc<std::sync::atomic::AtomicBool>,
+}
+
+struct CleanupReplyLease {
+    lease: Box<dyn SessionStorageLease>,
+    fail_first: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl SessionStorage for CleanupReplyFailsOnce {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        self.storage.open(id)
+    }
+
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        Box::pin(async move {
+            Ok(self.storage.open_existing(id).await?.map(|lease| {
+                Box::new(CleanupReplyLease {
+                    lease,
+                    fail_first: self.fail_first.clone(),
+                }) as Box<dyn SessionStorageLease>
+            }))
+        })
+    }
+}
+
+impl SessionStorageLease for CleanupReplyLease {
+    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+        self.lease.load()
+    }
+
+    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+        self.lease.save(snapshot)
+    }
+
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        Box::pin(async move {
+            self.lease.erase().await?;
+            if self.fail_first.swap(false, Ordering::SeqCst) {
+                return Err(StorageError::Io(
+                    "injected cleanup acknowledgement loss".into(),
+                ));
+            }
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn cleanup_failure_keeps_deletion_unfinished_and_retry_keeps_original_evidence() {
+    let fixture = deleting();
+    let id = talked_in(&fixture).await;
+    fixture.service.shutdown().await.unwrap();
+    let service = service_with(
+        &fixture,
+        fixture.repository.clone(),
+        Arc::new(CleanupReplyFailsOnce {
+            storage: fixture.storage.clone(),
+            fail_first: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        }),
+    );
+    let failures = incomplete(service.delete(id.clone(), caller("delete-1")).await);
+    assert!(matches!(
+        failures.history,
+        Some(ConversationError::Storage(StorageError::Io(_)))
+    ));
+    let unfinished = tombstone(&fixture, &id);
+    assert!(!unfinished.erased());
+    assert!(unfinished.provider_erasure().is_some());
+    let first_audit = fixture.audit.records.lock().unwrap()[0].clone();
+    assert_eq!(first_audit.initiator_principal_id.as_str(), "person");
+    assert_eq!(first_audit.correlation_id, "delete-1");
+
+    service
+        .delete(id.clone(), caller("delete-2"))
+        .await
+        .unwrap();
+    let finished = tombstone(&fixture, &id);
+    assert!(finished.erased());
+    assert_eq!(finished.initiator(), unfinished.initiator());
+    assert_eq!(finished.surface(), unfinished.surface());
+    assert_eq!(finished.request(), unfinished.request());
+    assert_eq!(finished.provider_erasure(), unfinished.provider_erasure());
+    for audit in fixture.audit.records.lock().unwrap().iter() {
+        assert_eq!(
+            audit.initiator_principal_id,
+            first_audit.initiator_principal_id
+        );
+        assert_eq!(audit.correlation_id, first_audit.correlation_id);
+        assert_eq!(audit.provider_erasure, first_audit.provider_erasure);
+        assert_eq!(audit.provider_session_id, first_audit.provider_session_id);
+    }
+    service.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_close_that_fails_with_a_deadline_of_its_own_is_not_the_stop_budget() {
     let fixture = deleting();

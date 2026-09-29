@@ -112,8 +112,8 @@ and it is decided here in that light.
    second writer can appear; the lease is waited for briefly, since a stopped
    agent's last handles let go of it just after the stop), the conversation's
    uploads (released with their own per-hold evidence, even when the deletion
-   record failed), and its summary. The journal's empty `.lock` file is kept:
-   unlinking it while held would let a second opener lock a new file beside it.
+   record failed), and its summary. The record stream is reset and its retired
+   physical rows are cleaned up before erasure is reported complete.
    The history and summary are erased only once the agent's answer is settled
    and recorded: Nessa's record of what was said never goes before the
    agent's. Uploads go regardless, since no agent is left to read them.
@@ -172,16 +172,14 @@ slots taken, its agent still stopping, or its history held is handed to the same
 a delete somebody asked for, rather than spending those attempts. The deletion record is
 always written in the name of the request that decided it.
 
-A journal too damaged to read the provider session from keeps the delete
-incomplete. The journal is `s-<encoded-id>.jsonl` — the conversation's
-identity as lowercase, unpadded base32hex of its bytes (`SessionPaths` in
-`nessa-sdk`'s `session_storage/paths.rs`) — and the gateway logs its full path
-when it cannot read it. The operator's remedy is to move that journal out of
-the sessions directory, leaving its `.lock` in place: the next delete or
-gateway start records the deletion with no provider session and
-`providerErasure: "session_unknown"` — never `no_provider_session`, which
-would claim the history named none — and finishes. The moved-aside file is
-then the only link to the agent's own transcript.
+A conversation record too damaged to read the provider session from keeps the
+delete incomplete. The record stream lives in the shared SQLite database;
+moving a per-session file cannot repair it. The gateway reports the corrupt
+record and retains the deletion tombstone for operator investigation. The
+operator must preserve the database and its evidence before a separate repair
+procedure can establish the provider session identity or authorize a deletion
+outcome. The gateway does not infer `no_provider_session` from unreadable
+history.
 
 **A conversation record that cannot be read.** Conversation metadata is one
 database ([196](196-conversation-metadata-database.md)). A record, tombstone or
@@ -207,7 +205,7 @@ the row-to-test mapping after it.
 | `live` | none: not deleted |
 | `fenced` | written; history `Unread`; no provider erasure |
 | `read·none` | history `Absent`; erasure `no_provider_session` (settled in the same step) |
-| `read·unknown` | history `Unknown` (a lease with no journal); erasure `session_unknown` (settled in the same step) |
+| `read·unknown` | history `Unknown` (a lease with no saved snapshot); erasure `session_unknown` (settled in the same step) |
 | `read·session` | history `Recorded(session)`; no provider erasure yet |
 | `settled` | `Recorded(session)` and an erasure: `deleted`, `archived`, `acknowledged`, `not_listed`, `not_supported` or `no_handler` |
 | `erased` | `erased: true`: finished |
@@ -234,7 +232,7 @@ finishes it.
 | 3 | `fenced`…`erased` | Any other command, a create included | owner: `conversation_deleted`; others: `conversation_not_found` | unchanged | nothing | — |
 | 4 | any | Delete after retirement has begun | `temporarily_unavailable`: not known | none written by this delete | nothing | — |
 | 5 | `fenced` | History never opened | continues as row 1 | `read·none` | no agent asked | — |
-| 6 | `fenced` | History lease exists, journal gone | continues as row 1 | `read·unknown` | no agent asked | — |
+| 6 | `fenced` | History lease exists, saved snapshot absent | continues as row 1 | `read·unknown` | no agent asked | — |
 | 7 | `fenced` | History unreadable, or names another session | unfinished | `fenced` | uploads let go; history, summary kept; no deletion record | left |
 | 8 | `fenced` | Agent's stop not confirmed within `stopMs` | unfinished | `fenced` | nothing: not even uploads | `ForRelease` |
 | 8b | `fenced` | The agent's stop fails outright: its close fails, or its launch's cleanup cannot be confirmed | unfinished | `fenced` | nothing: not even uploads | left |

@@ -30,5 +30,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 [dev-dependencies]
 markdown = "1.0"
 percent-encoding = "2"
+rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
 tokio = { version = "1", features = ["test-util", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }

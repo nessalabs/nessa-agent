@@ -122,6 +122,7 @@ impl RecordStorage {
                     state: AsyncMutex::new(LeaseState {
                         writer,
                         reset_pending: None,
+                        cleanup_pending: false,
                     }),
                     #[cfg(test)]
                     lose_reset_reply,
@@ -210,9 +211,26 @@ struct LeaseInner {
 struct LeaseState {
     writer: RecordWriter,
     reset_pending: Option<LifecycleRequest>,
+    cleanup_pending: bool,
 }
 
 impl LeaseState {
+    async fn reconcile_erasure(&mut self, inner: &LeaseInner) -> Result<(), StorageError> {
+        self.reconcile_reset(inner).await?;
+        if !self.cleanup_pending {
+            return Ok(());
+        }
+        const MAX_CLEANUP_PASSES: usize = 1024;
+        for _ in 0..MAX_CLEANUP_PASSES {
+            let progress = inner.runtime.cleanup_retired().await.map_err(store_error)?;
+            if !progress.remaining {
+                self.cleanup_pending = false;
+                return Ok(());
+            }
+        }
+        Err(StorageError::Unresolved)
+    }
+
     async fn reconcile_reset(&mut self, inner: &LeaseInner) -> Result<(), StorageError> {
         let Some(request) = self.reset_pending.clone() else {
             return Ok(());
@@ -246,7 +264,7 @@ impl SessionStorageLease for RecordLease {
         Box::pin(async move {
             tokio::spawn(async move {
                 let mut state = inner.state.lock().await;
-                state.reconcile_reset(&inner).await?;
+                state.reconcile_erasure(&inner).await?;
                 state.writer.readable_snapshot()
             })
             .await
@@ -268,7 +286,7 @@ impl SessionStorageLease for RecordLease {
         Box::pin(async move {
             tokio::spawn(async move {
                 let mut state = inner.state.lock().await;
-                state.reconcile_reset(&inner).await?;
+                state.reconcile_erasure(&inner).await?;
                 state.writer.save(&inner.runtime, &snapshot, &changes).await
             })
             .await
@@ -281,10 +299,15 @@ impl SessionStorageLease for RecordLease {
         Box::pin(async move {
             tokio::spawn(async move {
                 let mut state = inner.state.lock().await;
-                if state.reset_pending.is_some() {
-                    return state.reconcile_reset(&inner).await;
+                if state.reset_pending.is_some() || state.cleanup_pending {
+                    return state.reconcile_erasure(&inner).await;
                 }
                 let key = state.writer.stream().clone();
+                let bounds = inner.runtime.bounds(&key).await.map_err(store_error)?;
+                if bounds.tail.offset == 0 && !state.writer.has_unresolved_fact() {
+                    state.cleanup_pending = true;
+                    return state.reconcile_erasure(&inner).await;
+                }
                 let mut digest = Sha256::new();
                 digest.update(key.id.as_str().as_bytes());
                 digest.update(key.incarnation.0);
@@ -295,7 +318,8 @@ impl SessionStorageLease for RecordLease {
                     expected: key,
                     action: LifecycleAction::Reset,
                 });
-                state.reconcile_reset(&inner).await
+                state.cleanup_pending = true;
+                state.reconcile_erasure(&inner).await
             })
             .await
             .map_err(|error| StorageError::Io(error.to_string()))?
@@ -332,6 +356,36 @@ mod tests {
         },
     };
     use event_stream::{infrastructure::SqliteFailureInjection, EventSink, StreamId};
+    use rusqlite::Connection;
+
+    fn sql(root: &std::path::Path, statement: &str) {
+        Connection::open(root.join("records.sqlite3"))
+            .unwrap()
+            .execute_batch(statement)
+            .unwrap();
+    }
+
+    fn payload_rows(root: &std::path::Path, text: &str) -> i64 {
+        Connection::open(root.join("records.sqlite3"))
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM event_records WHERE instr(payload, CAST(?1 AS BLOB)) > 0",
+                [text],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn retired_rows(root: &std::path::Path) -> i64 {
+        Connection::open(root.join("records.sqlite3"))
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM event_streams WHERE retired=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
 
     fn opening(id: &SessionId) -> (SessionChange, SessionSnapshot) {
         let change = SessionChange::Opened {
@@ -341,6 +395,124 @@ mod tests {
         };
         let snapshot = records::fold_changes(None, std::slice::from_ref(&change)).unwrap();
         (change, snapshot)
+    }
+
+    #[tokio::test]
+    async fn erase_removes_retired_prompt_rows_and_retries_cleanup_after_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let mut storage = RecordStorage::new(&root).unwrap();
+        storage.options.failure_injection = Some(SqliteFailureInjection::BeforeCleanupCommit);
+        let id = SessionId::new("erase-private").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, mut snapshot) = opening(&id);
+        lease
+            .save_changes(snapshot.clone(), vec![opened])
+            .await
+            .unwrap();
+        let secret = "NESSA_ERASE_PRIVATE_INPUT_275";
+        let input = InvocationRecord {
+            target_event_offset: None,
+            submission: SubmissionMode::Immediate,
+            request: ExecutionRequest {
+                execution_id: ExecutionId::new("private-input").unwrap(),
+                user_message: UserMessage::text_only(PromptText::new(secret).unwrap()),
+                estimated_input_tokens: 1,
+                reserved_output_tokens: 1,
+            },
+            actor: ActionContext::new("user", "panel", "send").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Pending,
+            events: Vec::new(),
+            scheduling: Vec::new(),
+            cancellation: None,
+            provider_report: None,
+            local_cancellation: None,
+            local_outcome: None,
+            result: None,
+        };
+        let change = SessionChange::InputAccepted(Box::new(input));
+        snapshot = records::fold_changes(Some(&snapshot), std::slice::from_ref(&change)).unwrap();
+        lease.save_changes(snapshot, vec![change]).await.unwrap();
+        assert!(payload_rows(&root, secret) > 0);
+        assert!(matches!(lease.erase().await, Err(StorageError::Io(_))));
+        assert!(retired_rows(&root) > 0);
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let reopened = RecordStorage::new(&root).unwrap();
+        let lease = reopened.open_existing(id).await.unwrap().unwrap();
+        lease.erase().await.unwrap();
+        assert_eq!(lease.load().await.unwrap(), None);
+        assert_eq!(payload_rows(&root, secret), 0);
+        assert_eq!(retired_rows(&root), 0);
+        drop(lease);
+        reopened.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retry_of_extended_decisions_skips_exact_committed_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("retry-prefix").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, prior) = opening(&id);
+        lease
+            .save_changes(prior.clone(), vec![opened])
+            .await
+            .unwrap();
+        let a_context = ProviderContext::Recorded(ExecutionSessionId::new("ctx-A").unwrap());
+        let b_context = ProviderContext::Recorded(ExecutionSessionId::new("ctx-B").unwrap());
+        let a = SessionChange::ProviderContext {
+            before: prior.provider_context.clone(),
+            after: a_context.clone(),
+        };
+        let b = SessionChange::ProviderContext {
+            before: a_context.clone(),
+            after: b_context.clone(),
+        };
+        let first = records::fold_changes(Some(&prior), std::slice::from_ref(&a)).unwrap();
+        let both = records::fold_changes(Some(&prior), &[a.clone(), b.clone()]).unwrap();
+        sql(&root, "CREATE TRIGGER reject_test BEFORE INSERT ON event_records BEGIN SELECT RAISE(ABORT, 'injected failure A'); END");
+        assert!(matches!(
+            lease.save_changes(first, vec![a.clone()]).await,
+            Err(StorageError::Io(_))
+        ));
+        sql(&root, "DROP TRIGGER reject_test; CREATE TRIGGER reject_test BEFORE INSERT ON event_records WHEN instr(NEW.payload, CAST('ctx-B' AS BLOB)) > 0 BEGIN SELECT RAISE(ABORT, 'injected failure B'); END");
+        assert!(matches!(
+            lease
+                .save_changes(both.clone(), vec![a.clone(), b.clone()])
+                .await,
+            Err(StorageError::Io(_))
+        ));
+        assert_eq!(lease.load().await, Err(StorageError::Unresolved));
+        sql(&root, "DROP TRIGGER reject_test");
+        lease.save_changes(both.clone(), vec![a, b]).await.unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(both));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn erase_clears_an_unresolved_live_writer_even_with_an_empty_physical_tail() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let mut storage = RecordStorage::new(&root).unwrap();
+        storage.options.failure_injection = Some(SqliteFailureInjection::BeforeCommit);
+        let id = SessionId::new("erase-unresolved").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, snapshot) = opening(&id);
+        assert!(matches!(
+            lease.save_changes(snapshot, vec![opened]).await,
+            Err(StorageError::Io(_))
+        ));
+        assert_eq!(lease.load().await, Err(StorageError::Unresolved));
+        lease.erase().await.unwrap();
+        assert_eq!(lease.load().await.unwrap(), None);
+        assert_eq!(retired_rows(&root), 0);
+        drop(lease);
+        storage.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -514,6 +686,7 @@ mod tests {
             "{first_erase:?}"
         );
         assert_eq!(lease.load().await.unwrap(), None);
+        assert_eq!(retired_rows(&root), 0);
         drop(lease);
         let reopened = storage.open_existing(id).await.unwrap().unwrap();
         assert_eq!(reopened.load().await.unwrap(), None);

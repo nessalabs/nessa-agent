@@ -344,6 +344,9 @@ pub(crate) fn decode_first(records: &[NewEvent]) -> Result<FactDecode, FactFrame
         body.extend_from_slice(piece);
     }
     let Some(seal) = records.get(needed - 1) else {
+        if Sha256::digest(&body).as_slice() != digest {
+            return Err(FactFrameError::Invalid);
+        }
         return Ok(FactDecode::Partial);
     };
     check_event(seal, &key, attempt_start, "seal", SEAL_SCHEMA)?;
@@ -467,6 +470,12 @@ pub(crate) async fn read_next_fact(
                 return Ok(FactRead::Complete { fact, cursor });
             }
         }
+    }
+    if !matches!(
+        decode_first(&events).map_err(FactCommitError::Frame)?,
+        FactDecode::Partial
+    ) {
+        return Err(FactCommitError::InvalidStream);
     }
     Ok(FactRead::Partial)
 }
@@ -645,6 +654,7 @@ mod tests {
         assert_ne!(records[0].payload, changed_records[0].payload);
         let mut corrupt = records;
         corrupt[1].payload = changed_records[1].payload.clone();
+        assert_eq!(decode_first(&corrupt[..65]), Err(FactFrameError::Invalid));
         assert_eq!(decode_first(&corrupt), Err(FactFrameError::Invalid));
     }
 
@@ -718,6 +728,59 @@ mod tests {
             read_next_fact(&runtime, &stream, &committed).await,
             Err(FactCommitError::Frame(_))
         ));
+        assert!(
+            runtime
+                .shutdown(Duration::from_secs(5))
+                .await
+                .unwrap()
+                .closed
+        );
+    }
+
+    #[tokio::test]
+    async fn all_pieces_with_changed_bytes_and_no_seal_refuse_abort() {
+        let directory = tempfile::tempdir().unwrap();
+        let options = SqliteOptions::new(directory.path().join("corrupt-tail.sqlite3"));
+        let config = RuntimeConfig {
+            events: EventConfig {
+                max_bytes: 1024 * 1024,
+                minimum_persistence: PersistenceProfile::ProcessRestart,
+            },
+            ..RuntimeConfig::default()
+        };
+        let runtime = Runtime::<SqliteStore>::open(options, config).await.unwrap();
+        let stream = runtime
+            .create_stream(&StreamId::new("conversation").unwrap())
+            .await
+            .unwrap();
+        let start = Cursor::new(stream.clone(), 0);
+        let fact = FramedFact {
+            key: key(),
+            body: vec![b'x'; 200_000],
+        };
+        let frames = frame_fact(&fact, 1).unwrap();
+        let mut changed = fact.clone();
+        changed.body[0] = b'y';
+        let changed_frames = frame_fact(&changed, 1).unwrap();
+        for (index, frame) in frames.iter().enumerate().take(frames.len() - 1) {
+            let mut frame = frame.clone();
+            if index == 1 {
+                frame.payload = changed_frames[1].payload.clone();
+            }
+            runtime.append(&stream, frame).await.unwrap();
+        }
+        assert!(matches!(
+            read_next_fact(&runtime, &stream, &start).await,
+            Err(FactCommitError::Frame(FactFrameError::Invalid))
+        ));
+        assert!(matches!(
+            abort_partial_fact(&runtime, &stream, &start).await,
+            Err(FactCommitError::Frame(FactFrameError::Invalid))
+        ));
+        assert_eq!(
+            runtime.bounds(&stream).await.unwrap().tail.offset,
+            (frames.len() - 1) as u64
+        );
         assert!(
             runtime
                 .shutdown(Duration::from_secs(5))

@@ -411,11 +411,11 @@ pub trait SessionStorageLease: Send + Sync {
     /// it finishes, even if its caller stops waiting.
     ///
     /// # Errors
-    /// Returns a backend error when removal cannot be acknowledged. The history
-    /// may then still be present, in whole, and repeating the erase under a
-    /// lease completes it. The supplied adapters remove the history in one
-    /// step, so a failed erase leaves it whole rather than partly removed
-    /// (`a_failed_file_erase_is_typed_and_leaves_the_history_whole`).
+    /// Returns a backend error when removal cannot be acknowledged. A reset
+    /// may already have committed while retired physical rows still await
+    /// cleanup. The adapter fences later loads and saves until a retry
+    /// reconciles the reset and completes physical cleanup. A deletion caller
+    /// keeps its durable deletion intent until that retry succeeds.
     fn erase(&self) -> StorageFuture<'_, ()>;
 }
 

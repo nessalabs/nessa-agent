@@ -223,12 +223,15 @@ before successful acknowledgement. Mandatory permission audit remains separate.
 
 The record adapter saves typed SDK decisions in one SQLite stream per session.
 Each complete fact folds into the restored snapshot without invoking the provider.
-An incomplete fact fences normal restoration until its exact bytes are reconciled;
-changed-byte reuse is corruption. A pre-existing per-session JSONL history is
-refused unchanged before a stream is created.
+An incomplete fact retains its exact bytes for retry by the live writer. After a
+restart, a validated incomplete tail is durably aborted under the exclusive
+lease before restoration; a malformed tail is refused as corruption. A
+pre-existing per-session JSONL history is refused unchanged before a stream is
+created.
 
-`SessionStorageLease::erase` resets the session stream under its exclusive lease.
-An uncertain reset is reconciled before another load or save. Erasure does not
+`SessionStorageLease::erase` resets the session stream under its exclusive lease
+and drains retired physical records before reporting success. An uncertain reset
+or cleanup is reconciled before another load or save. Erasure does not
 retire the identity; a later semantic save begins a new history. It does not touch
 the provider's own record of its context.
 

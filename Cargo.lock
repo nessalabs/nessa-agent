@@ -2993,6 +2993,7 @@ dependencies = [
  "markdown",
  "nessa-local-storage",
  "percent-encoding",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
