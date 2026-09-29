@@ -215,6 +215,51 @@ fn apply_history<T>(
     Ok(result)
 }
 
+/// Admission captures the exact target output prefix. A later injection may
+/// observe more output, but neither fact can borrow evidence from the future.
+fn validate_target_prefix(
+    snapshot: &SessionSnapshot,
+    positions: &HashMap<ExecutionId, usize>,
+    histories: &mut HashMap<ExecutionId, InvocationHistory>,
+    target: Option<&ExecutionId>,
+    offset: Option<usize>,
+    exact: bool,
+) -> Result<(), StorageError> {
+    let Some(target) = target else {
+        return offset
+            .is_none()
+            .then_some(())
+            .ok_or_else(|| corrupt("targetless input has a steering offset"));
+    };
+    let record = positions
+        .get(target)
+        .and_then(|index| snapshot.invocations.get(*index))
+        .ok_or_else(|| corrupt("steering target is not a prior invocation"))?;
+    let count = record.events.len();
+    if offset.is_none_or(|offset| {
+        if exact {
+            offset != count
+        } else {
+            offset > count
+        }
+    }) {
+        return Err(corrupt(
+            "steering offset is outside the prior target history",
+        ));
+    }
+    if let Some(history) = histories.get(target) {
+        return history
+            .validate_steering_target()
+            .map_err(|error| corrupt(error.to_string()));
+    }
+    let history = super::validation::invocation_history(record)?;
+    history
+        .validate_steering_target()
+        .map_err(|error| corrupt(error.to_string()))?;
+    histories.insert(target.clone(), history);
+    Ok(())
+}
+
 #[derive(Clone, Copy, Default)]
 struct ProviderEvidence {
     observations: bool,
@@ -336,6 +381,17 @@ pub(crate) fn fold_changes(
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("input precedes session open"))?;
+                validate_target_prefix(
+                    snapshot,
+                    &positions,
+                    &mut histories,
+                    record
+                        .scheduling
+                        .first()
+                        .and_then(|event| event.target.as_ref()),
+                    record.target_event_offset,
+                    true,
+                )?;
                 if positions.contains_key(&record.request.execution_id) {
                     return Err(corrupt("execution identity was accepted twice"));
                 }
@@ -395,6 +451,20 @@ pub(crate) fn fold_changes(
                 next_evidence.validate(&snapshot.provider_context)?;
                 if event.stage == InvocationStage::Running && !queue.selected(execution_id) {
                     return Err(corrupt("queued dispatch has no prior queue selection"));
+                }
+                if event.stage == InvocationStage::Injected {
+                    let record = positions
+                        .get(execution_id)
+                        .and_then(|index| snapshot.invocations.get(*index))
+                        .ok_or_else(|| corrupt("semantic fact has no accepted input"))?;
+                    validate_target_prefix(
+                        snapshot,
+                        &positions,
+                        &mut histories,
+                        event.target.as_ref(),
+                        record.target_event_offset,
+                        false,
+                    )?;
                 }
                 let record = invocation_at(snapshot, &positions, execution_id)?;
                 apply_history(&mut histories, record, |history| {

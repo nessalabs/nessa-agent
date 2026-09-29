@@ -440,6 +440,31 @@ mod tests {
         }))
     }
 
+    fn steering_input(
+        execution_id: ExecutionId,
+        target: ExecutionId,
+        offset: usize,
+    ) -> SessionChange {
+        let actor = ActionContext::new("user", "phone", "send").unwrap();
+        let mut change = accepted_input(
+            execution_id,
+            SubmissionMode::Steering,
+            vec![InvocationSchedulingEvent {
+                kind: InvocationKind::Steering,
+                target: Some(target),
+                before: None,
+                stage: InvocationStage::Queued,
+                cause: SchedulingCause::Submitted,
+                actor: Some(actor),
+            }],
+        );
+        let SessionChange::InputAccepted(record) = &mut change else {
+            unreachable!("steering helper accepts an input")
+        };
+        record.target_event_offset = Some(offset);
+        change
+    }
+
     fn rows(root: &std::path::Path) -> i64 {
         Connection::open(root.join("records.sqlite3"))
             .unwrap()
@@ -1387,6 +1412,144 @@ mod tests {
         let lease = storage.open_existing(id).await.unwrap().unwrap();
         assert_eq!(lease.load().await.unwrap(), Some(snapshot));
         drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn steering_requires_a_dispatched_target_and_its_current_output_offset() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        for (name, offset) in [("target-before-dispatch", 0), ("future-target-output", 1)] {
+            let id = SessionId::new(name).unwrap();
+            let lease = storage.open(id.clone()).await.unwrap();
+            let recorded = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+            let opened = SessionChange::Opened {
+                id: id.clone(),
+                provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+                context: recorded,
+            };
+            let initial = records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
+            lease
+                .save_changes(generation(0), initial.clone(), vec![opened])
+                .await
+                .unwrap();
+            let target = ExecutionId::new("target").unwrap();
+            let steering = ExecutionId::new("steering").unwrap();
+            let actor = ActionContext::new("user", "phone", "send").unwrap();
+            let accepted_target = accepted_input(
+                target.clone(),
+                SubmissionMode::Queued,
+                vec![InvocationSchedulingEvent {
+                    kind: InvocationKind::Queued,
+                    target: None,
+                    before: None,
+                    stage: InvocationStage::Queued,
+                    cause: SchedulingCause::Submitted,
+                    actor: Some(actor.clone()),
+                }],
+            );
+            let admitted = SessionChange::QueueDecision(QueueHistoryRecord {
+                mutation: QueueMutation::Admitted {
+                    id: target.clone(),
+                    kind: InvocationKind::Queued,
+                },
+                actor: Some(actor),
+                scheduling_length: Some(1),
+            });
+            let selected = SessionChange::QueueDecision(QueueHistoryRecord {
+                mutation: QueueMutation::Selected { id: target.clone() },
+                actor: None,
+                scheduling_length: Some(1),
+            });
+            let running = SessionChange::SchedulingTransition {
+                execution_id: target.clone(),
+                event: InvocationSchedulingEvent {
+                    kind: InvocationKind::Queued,
+                    target: None,
+                    before: Some(InvocationStage::Queued),
+                    stage: InvocationStage::Running,
+                    cause: SchedulingCause::Dispatched,
+                    actor: None,
+                },
+            };
+            let output = SessionChange::ProviderObservation(ExecutionEvent::new(
+                target.clone(),
+                ExecutionUpdate::Message(MessageChunk::text("target output")),
+            ));
+            let accepted_steering = steering_input(steering.clone(), target.clone(), offset);
+            let injected = SessionChange::SchedulingTransition {
+                execution_id: steering,
+                event: InvocationSchedulingEvent {
+                    kind: InvocationKind::Steering,
+                    target: Some(target),
+                    before: Some(InvocationStage::Queued),
+                    stage: InvocationStage::Injected,
+                    cause: SchedulingCause::SteeringInjected,
+                    actor: None,
+                },
+            };
+            let valid = if offset == 0 {
+                vec![
+                    accepted_target.clone(),
+                    admitted.clone(),
+                    selected.clone(),
+                    running.clone(),
+                    accepted_steering.clone(),
+                    injected.clone(),
+                    output.clone(),
+                ]
+            } else {
+                vec![
+                    accepted_target.clone(),
+                    admitted.clone(),
+                    selected.clone(),
+                    running.clone(),
+                    output.clone(),
+                    accepted_steering.clone(),
+                    injected.clone(),
+                ]
+            };
+            let invalid = if offset == 0 {
+                vec![
+                    accepted_target,
+                    admitted,
+                    accepted_steering,
+                    injected,
+                    selected,
+                    running,
+                    output,
+                ]
+            } else {
+                vec![
+                    accepted_target,
+                    admitted,
+                    selected,
+                    running,
+                    accepted_steering,
+                    injected,
+                    output,
+                ]
+            };
+            let observed = records::fold_changes(Some(&initial), &valid).unwrap();
+            let retained = rows(&root);
+            assert!(matches!(
+                lease
+                    .save_changes(generation(1), observed.clone(), invalid)
+                    .await,
+                Err(StorageError::Corrupt(_))
+            ));
+            assert_eq!(rows(&root), retained);
+            assert_eq!(lease.load().await.unwrap(), Some(initial));
+            lease
+                .save_changes(generation(1), observed.clone(), valid)
+                .await
+                .unwrap();
+            drop(lease);
+            let reopened = storage.open_existing(id).await.unwrap().unwrap();
+            assert_eq!(reopened.load().await.unwrap(), Some(observed));
+            drop(reopened);
+        }
         storage.shutdown().await.unwrap();
     }
 
