@@ -56,6 +56,18 @@ another provider's; that belongs to whatever shows them
 ([ADR 302](../../docs/adr/todo/302-catalogue-reasoning-options.md)). `fastMode`
 records whether the provider publishes a faster output mode for the model. It
 is speed, not a reasoning level.
+
+Sources for these two fields, beyond each entry's own page:
+- Claude's levels come from the
+  [effort guide](https://platform.claude.com/docs/en/build-with-claude/effort),
+  and its Fast models from the
+  [fast mode guide](https://platform.claude.com/docs/en/build-with-claude/fast-mode),
+  which names Opus 5 alone among these.
+- OpenAI's levels come from each model's page and the
+  [reasoning guide](https://developers.openai.com/api/docs/guides/reasoning).
+- The OpenAI [fast mode guide](https://developers.openai.com/api/docs/guides/fast-mode)
+  defers to the [pricing page](https://developers.openai.com/api/docs/pricing)
+  for supported models. Its Fast table lists all four OpenAI entries.
 Knowledge cutoffs retain the precision each provider publishes. Token limits are
 descriptive model ceilings. `maxContextWindowTokens` is not a runtime default.
 Codex can configure its context window through local config/user settings; a
@@ -108,7 +120,8 @@ The factory intersects model and binding input/output modalities, tool use,
 reasoning, and fast mode. A binding can remove support but cannot enable a
 model-false feature. The model's effort levels stay in the snapshot
 (`effort_levels()`) only while reasoning does. No binding sends an effort level
-or fast mode to its agent yet, so today's bindings declare both unsupported. No shared input or output modality is a setup error. Explicit configured
+or fast mode to its agent yet, so today's bindings declare both unsupported
+([#310](https://github.com/nessalabs/nessa-agent/issues/310)). No shared input or output modality is a setup error. Explicit configured
 context/output limits above either ceiling fail with `ConfiguredLimitExceeded`;
 valid smaller limits are retained exactly. The snapshot owns its model identity,
 features, and limits independently of other selections.

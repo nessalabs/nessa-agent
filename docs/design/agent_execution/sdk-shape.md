@@ -173,7 +173,8 @@ so the effective snapshot offers neither. When a binding reads a level option
 its agent advertises in its session configuration, that option narrows the
 catalog's levels and never widens them. The result is the catalog's levels the
 agent also offers, matched by exact name and kept in catalog order. That
-narrowing is not implemented yet.
+narrowing, and a binding that sends a level or fast mode, are not implemented
+yet ([#310](https://github.com/nessalabs/nessa-agent/issues/310)).
 
 | Feature family | Nessa representation to grow toward | What must stay honest |
 | --- | --- | --- |

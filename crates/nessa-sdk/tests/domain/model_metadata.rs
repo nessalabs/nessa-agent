@@ -418,3 +418,32 @@ fn effort_levels_require_reasoning() {
         })
     ));
 }
+
+#[test]
+fn a_model_lists_at_most_sixteen_levels() {
+    let named = |count: usize| {
+        (0..count)
+            .map(|index| level(&format!("level-{index}")))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(EffortLevels::MAX_LEVELS, 16);
+    assert_eq!(
+        EffortLevels::new(named(EffortLevels::MAX_LEVELS))
+            .unwrap()
+            .levels()
+            .len(),
+        16
+    );
+    let refused = EffortLevels::new(named(EffortLevels::MAX_LEVELS + 1)).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "reasoning effort: must list at most 16 levels"
+    );
+    // A repeat is still found at the far end of the longest list.
+    let mut repeated = named(EffortLevels::MAX_LEVELS - 1);
+    repeated.push(level("level-0"));
+    assert_eq!(
+        EffortLevels::new(repeated).unwrap_err().to_string(),
+        "reasoning effort: levels must not repeat"
+    );
+}

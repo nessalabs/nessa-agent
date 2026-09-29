@@ -3,6 +3,7 @@
 #![deny(missing_docs)]
 
 use super::super::MetadataError;
+use std::collections::HashSet;
 
 fn invalid(reason: &'static str) -> MetadataError {
     MetadataError::Invalid {
@@ -62,19 +63,29 @@ impl EffortLevel {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EffortLevels(Vec<EffortLevel>);
 impl EffortLevels {
+    /// Most levels one model may list. Providers publish a handful (six at
+    /// most today); the bound keeps a catalogue read at startup from holding,
+    /// or checking, an unbounded list.
+    pub const MAX_LEVELS: usize = 16;
+
     /// `levels`: least effort first, in the provider's order; at least one,
-    /// none repeated. The order is the provider's and is kept as given: names
-    /// alone cannot say which of two levels is more.
+    /// at most [`Self::MAX_LEVELS`], none repeated. The order is the
+    /// provider's and is kept as given: names alone cannot say which of two
+    /// levels is more.
     ///
     /// # Errors
     ///
     /// [`MetadataError::Invalid`] naming `reasoning effort` when `levels` is
-    /// empty or names a level twice.
+    /// empty, longer than [`Self::MAX_LEVELS`], or names a level twice.
     pub fn new(levels: Vec<EffortLevel>) -> Result<Self, MetadataError> {
         if levels.is_empty() {
             return Err(invalid("must list at least one level"));
         }
-        if (1..levels.len()).any(|index| levels[..index].contains(&levels[index])) {
+        if levels.len() > Self::MAX_LEVELS {
+            return Err(invalid("must list at most 16 levels"));
+        }
+        let mut seen = HashSet::with_capacity(levels.len());
+        if !levels.iter().all(|level| seen.insert(level.as_str())) {
             return Err(invalid("levels must not repeat"));
         }
         Ok(Self(levels))

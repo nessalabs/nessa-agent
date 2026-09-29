@@ -46,7 +46,7 @@ because a binding declares the same flags as ceilings. The levels are an
 `EffortLevels` value on `ModelMetadata`, allowed only where the features say the
 model reasons, as `ImageInputLimits` requires image input. Each `EffortLevel` is
 a lowercase letter then lowercase letters, digits, `-` or `_`, at most 32 bytes;
-a list is non-empty and never repeats a name. `EffectiveCapabilities`
+a list holds 1 to 16 levels and never repeats a name. `EffectiveCapabilities`
 intersects both flags with the binding and keeps the levels exactly when
 reasoning survives. The DTOs mirror the file, and an empty list maps to no
 `EffortLevels`.
@@ -54,7 +54,9 @@ reasoning survives. The DTOs mirror the file, and an empty list maps to no
 The SDK never maps one provider's levels onto another's. The desktop reads the
 same file, as it already did, and words the names for its slider: it offers
 exactly the listed levels, marks a level listed after `max` as Ultra, and shows
-Fast where `fastMode` is true.
+Fast where `fastMode` is true. Within one model, which level is more is the
+entry's own order, including for the slider's rising and falling. The
+desktop's ranking of names is used only to carry a choice to another model.
 
 | Model `reasoning` | Binding reasoning | Effective levels | Desktop slider |
 | --- | --- | --- | --- |
@@ -82,7 +84,7 @@ are the catalogue's levels the agent also offers, matched by exact name and
 kept in catalogue order. An agent's level the catalogue does not list is not
 offered, and no match leaves no levels. This change builds none of it: it needs
 a binding that sends an effort level, which none does yet, so it is follow-up
-work with its own issue.
+work, tracked in [#310](https://github.com/nessalabs/nessa-agent/issues/310).
 
 ## Alternatives considered
 

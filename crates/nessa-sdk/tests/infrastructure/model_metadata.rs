@@ -345,6 +345,9 @@ fn malformed_effort_levels_fail_loading_as_invalid_metadata() {
         json!(["High"]),
         json!([""]),
         json!(["a".repeat(33)]),
+        json!((0..17)
+            .map(|index| format!("level-{index}"))
+            .collect::<Vec<_>>()),
     ] {
         let mut value = fixture();
         value["models"][0]["reasoning"] = json!({ "effortLevels": levels.clone() });
@@ -371,8 +374,8 @@ fn shipped_catalog_records_each_models_published_levels_and_fast_mode() {
     for (model_id, levels, fast_mode) in [
         ("gpt-6-astra", five, true),
         ("gpt-5.6-sol", openai_5_6, true),
-        ("gpt-5.6-terra", openai_5_6, false),
-        ("gpt-5.6-luna", openai_5_6, false),
+        ("gpt-5.6-terra", openai_5_6, true),
+        ("gpt-5.6-luna", openai_5_6, true),
         ("claude-fable-5-1", five, false),
         ("claude-opus-5", five, true),
         ("claude-sonnet-5", five, false),

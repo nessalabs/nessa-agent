@@ -164,6 +164,8 @@ export function offeredLevelIndex(
 /**
  * Where a level's name stands among the names the control words, least
  * first — the same whichever model offers it; -1 for a name it does not word.
+ * Only for carrying a choice from one model to another (`offeredLevelIndex`):
+ * within one model, which level is more is its own order.
  */
 export function levelRank(value: string | undefined): number {
   return levelWords.findIndex((entry) => entry.name === value)

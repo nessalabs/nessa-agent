@@ -20,8 +20,8 @@ pub struct ReasoningDto {
     /// The effort levels the provider publishes, least effort first, in the
     /// provider's own names and order: never mapped onto another provider's.
     /// Each is a lowercase letter, then lowercase letters, digits, `-` or `_`,
-    /// at most 32 bytes; none repeated. Empty when the model reasons but no
-    /// level is recorded for it, so none is offered.
+    /// at most 32 bytes; at most 16 of them, none repeated. Empty when the
+    /// model reasons but no level is recorded for it, so none is offered.
     pub effort_levels: Vec<String>,
 }
 

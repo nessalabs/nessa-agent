@@ -185,6 +185,32 @@ it("records Low chosen from the keys where a carried None is shown as Low", asyn
   expect(chosen).toEqual(["low"])
 })
 
+it("reads a step as rising or falling by the model's own order, Ultra included", async () => {
+  // Ultra has no words of its own in the control; its place past Max is the
+  // model's order, and the step to it rises.
+  await act(async () => root.render(<Harness levels={withUltra} initial="max" />))
+  await open()
+  await key(slider(), "ArrowRight")
+  expect(said()).toBe("Ultra")
+  expect(popover()?.hasAttribute("data-rising")).toBe(true)
+  await key(slider(), "ArrowLeft")
+  expect(said()).toBe("Max")
+  expect(popover()?.hasAttribute("data-rising")).toBe(false)
+  // Two names the control does not word, in the provider's order.
+  await act(async () =>
+    root.render(
+      <Harness
+        key="unworded"
+        levels={publishing(["gentle", "fierce"])}
+        initial="gentle"
+      />,
+    ),
+  )
+  await open()
+  await key(slider(), "ArrowRight")
+  expect(popover()?.hasAttribute("data-rising")).toBe(true)
+})
+
 it("opens at rest after a change: nothing fades, and Ultra's light does not run again", async () => {
   await act(async () => root.render(<Harness levels={withUltra} />))
   await open()

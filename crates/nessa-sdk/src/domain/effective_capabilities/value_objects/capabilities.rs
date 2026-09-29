@@ -24,12 +24,24 @@ pub enum Modality {
     Audio,
 }
 
+/// A feature a command needs from the execution it is sent to, checked by
+/// [`EffectiveCapabilities::supports`] and [`EffectiveCapabilities::validate`]
+/// against the snapshot, never against the catalogue alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapabilityRequirement {
+    /// Content of this modality is sent to the model.
     Input(Modality),
+    /// Content of this modality is expected back.
     Output(Modality),
+    /// The model may call tools.
     ToolUse,
+    /// The model reasons. Supported only where both the model and the binding
+    /// do; the binding then offers the model's published effort levels
+    /// ([`EffectiveCapabilities::effort_levels`]).
     Reasoning,
+    /// Fast mode is on: faster output, not a reasoning level. Supported only
+    /// where the model publishes it and the binding can turn it on. No binding
+    /// can today, so it is unsupported everywhere for now.
     FastMode,
 }
 
