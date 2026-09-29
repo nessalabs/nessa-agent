@@ -37,6 +37,7 @@ use crate::application::agent_execution::sessions::{
     AttachmentOpenFailureSource, InvocationCancellationEvent, ProviderContext, SessionManager,
     StorageError,
 };
+use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
 use crate::domain::{
     agent_execution::executions::ExecutionOutcome,
     effective_capabilities::value_objects::EffectiveCapabilities,
@@ -89,6 +90,7 @@ pub struct Agent {
 pub(super) struct Inner {
     pub(super) instance_id: String,
     pub(super) approval_mode: RwLock<Option<ApprovalMode>>,
+    pub(super) effort_level: RwLock<Option<EffortLevel>>,
     pub(super) provider: Arc<dyn AgentProvider>,
     capabilities: EffectiveCapabilities,
     pub(super) audit: Arc<dyn ExecutionAudit>,
@@ -143,6 +145,82 @@ impl Agent {
                 .approval_mode
                 .write()
                 .expect("approval mode lock") = Some(mode);
+        }
+        drop(permit);
+        drop(scheduler);
+        result
+    }
+    /// The reasoning effort level this agent generation was configured with
+    /// or last verified through a live change. `None` means no level was sent
+    /// and the agent keeps its own default.
+    pub fn effort_level(&self) -> Option<EffortLevel> {
+        self.inner
+            .effort_level
+            .read()
+            .expect("effort level lock")
+            .clone()
+    }
+    /// The reasoning effort levels a person can choose now, least effort
+    /// first: the model's catalogue levels
+    /// ([`EffectiveCapabilities::effort_levels`]) that the connected agent
+    /// also offers ([`OperationCapabilities::effort_levels`]), in catalogue
+    /// order. `None` before the connection is negotiated, while it is being
+    /// restored, and wherever the model, the binding or the agent offers no
+    /// level. Never a level the catalogue does not list.
+    pub fn effort_levels(&self) -> Option<EffortLevels> {
+        self.capabilities()
+            .effort_levels()?
+            .restricted_to(self.operation_capabilities().effort_levels())
+    }
+    /// Apply and verify a reasoning effort level on an attached, idle provider
+    /// generation, as [`Self::set_approval_mode`] does for a preset: the
+    /// scheduler lock excludes queued admission and dispatch until the agent's
+    /// answer is checked, and the level it reports back must be `level`. Every
+    /// later admission records the verified level
+    /// ([`QueueAdmissionRecord::effort_level`](crate::application::agent_execution::executions::QueueAdmissionRecord::effort_level)).
+    ///
+    /// # Errors
+    ///
+    /// - [`AgentError::InvalidInput`] with [`ProviderSessionState::Usable`]
+    ///   when `level` is not one of [`Self::effort_levels`]; nothing is sent.
+    /// - [`AgentError::Busy`] with [`ProviderSessionState::Usable`] while an
+    ///   invocation is queued or running; nothing is sent.
+    /// - Any other failure carries explicit session status, and the previous
+    ///   level stays recorded; callers must retire an uncertain generation
+    ///   before admitting another turn.
+    pub async fn set_effort_level(&self, level: EffortLevel) -> ProviderOperationResult<()> {
+        if !self
+            .effort_levels()
+            .is_some_and(|offered| offered.contains(&level))
+        {
+            return Err(ProviderOperationFailure::new(
+                AgentError::InvalidInput(format!(
+                    "effort level {} is not offered by this agent",
+                    level.as_str()
+                )),
+                ProviderSessionState::Usable,
+            ));
+        }
+        let scheduler = self.inner.scheduler.lock().await;
+        if !scheduler.is_idle() || self.inner.lifecycle.active().is_some() {
+            return Err(ProviderOperationFailure::new(
+                AgentError::Busy,
+                ProviderSessionState::Usable,
+            ));
+        }
+        let permit = self.inner.lifecycle.accept_control().map_err(|error| {
+            ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+        })?;
+        let attached = self
+            .inner
+            .lifecycle
+            .attached_provider(&permit)
+            .map_err(|error| {
+                ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+            })?;
+        let result = attached.session.set_effort_level(level.clone()).await;
+        if result.is_ok() {
+            *self.inner.effort_level.write().expect("effort level lock") = Some(level);
         }
         drop(permit);
         drop(scheduler);
@@ -222,6 +300,7 @@ impl Agent {
             inner: Arc::new(Inner {
                 instance_id: uuid::Uuid::new_v4().to_string(),
                 approval_mode: RwLock::new(provider.approval_mode()),
+                effort_level: RwLock::new(provider.effort_level()),
                 provider,
                 capabilities,
                 audit,
@@ -336,6 +415,11 @@ impl Agent {
                                     };
                                     AttachmentAttemptFailure::new(failure.cause, source)
                                 })?;
+                            // A newly opened context runs at the level its
+                            // provider selects on open, not one a live change
+                            // made on an earlier context.
+                            *agent.inner.effort_level.write().expect("effort level lock") =
+                                provider.effort_level();
                             let published_evidence = lifecycle
                                 .publish_attachment(start.generation, attached)
                                 .map_err(|_| AttachmentAttemptFailure::from(AgentError::Closed))?;

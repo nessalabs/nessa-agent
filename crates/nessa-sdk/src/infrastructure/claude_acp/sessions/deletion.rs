@@ -102,6 +102,7 @@ mod tests {
             &ClaudeProfile::new(
                 None,
                 crate::application::agent_execution::providers::ApprovalMode::Ask,
+                None,
             ),
             &session,
             &cleanups,

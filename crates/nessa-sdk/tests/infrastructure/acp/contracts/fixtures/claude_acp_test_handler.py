@@ -45,8 +45,22 @@ def send(value):
 def result(id, value):
     send({"id": id, "result": value})
 
-def configs(selected=model, permission_mode="default"):
-    return {"configOptions": [{"id": "model", "currentValue": selected}, {"id": "mode", "currentValue": permission_mode}]}
+# claude-agent-acp 0.76.0 lists its effort option, category `thought_level`,
+# with its own `default` first; on Haiku 4.5 it lists none (`effort-none`).
+EFFORT_CHOICES = ["default", "low", "medium", "high", "xhigh", "max"]
+effort = "default"
+mode_selected = False
+
+
+def configs(selected=model, permission_mode=None):
+    if permission_mode is None:
+        permission_mode = approval_mode if mode_selected else "default"
+    options = [{"id": "model", "currentValue": selected}, {"id": "mode", "currentValue": permission_mode}]
+    if mode != "effort-none":
+        options.append({"id": "effort", "name": "Effort", "category": "thought_level", "type": "select",
+                        "currentValue": effort,
+                        "options": [{"value": value, "name": value} for value in EFFORT_CHOICES]})
+    return {"configOptions": options}
 
 def duplicate_configs(id):
     response = configs()
@@ -155,6 +169,17 @@ for line in sys.stdin:
         if method == "session/new" or mode != "resume-no-id":
             response["sessionId"] = "s" * 257 if mode == "oversized-session-id" else session
         result(msg["id"], response)
+    elif method == "session/set_config_option" and msg["params"]["configId"] == "effort":
+        requested = msg["params"]["value"]
+        with (root / "effort-steps").open("a") as log:
+            log.write(json.dumps(["effort", requested, mode_selected]) + "\n")
+        if requested not in EFFORT_CHOICES or mode == "effort-none":
+            send({"id": msg["id"], "error": {"code": -32603, "message": "Internal error",
+                  "data": {"details": "Invalid value for config option effort: " + requested}}})
+            continue
+        if mode != "effort-misreported":
+            effort = requested
+        result(msg["id"], configs())
     elif method == "session/set_config_option":
         if mode.startswith("live-approval"):
             requested = msg["params"]["value"]
@@ -195,6 +220,9 @@ for line in sys.stdin:
             update({"sessionUpdate": "current_mode_update", "currentModeId": "default"})
             update({"sessionUpdate": "available_commands_update", "availableCommands": []})
         assert msg["params"]["value"] == approval_mode
+        with (root / "effort-steps").open("a") as log:
+            log.write(json.dumps(["mode", msg["params"]["value"], mode_selected]) + "\n")
+        mode_selected = True
         if mode == "configuration-stall" or (mode == "configuration-stall-on-resume" and len(launches) > 1):
             record("configuration-wait", session)
             time.sleep(20)

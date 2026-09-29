@@ -42,6 +42,23 @@ pub trait ProviderSessionBackend: Send + Sync {
             ))
         })
     }
+    /// Apply and verify one reasoning effort level on the current provider
+    /// generation, as [`Self::set_approval_mode`] does for a preset. The
+    /// caller has already refused a level the agent does not offer
+    /// ([`ProviderOperationCapabilities::effort_levels`]). A failed or lost
+    /// response must not authorize another turn on that generation; a
+    /// verified level is selected again on any restored connection.
+    fn set_effort_level(
+        &self,
+        _level: crate::domain::model_metadata::value_objects::EffortLevel,
+    ) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async {
+            Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("live effort level change".into()),
+                ProviderSessionState::Usable,
+            ))
+        })
+    }
     /// Return currently established provider facts without I/O or restoration.
     /// Implementations should reset provider-derived facts before reconnecting and
     /// refresh them only after verification. [`ProviderSession`] resolves this raw
@@ -165,6 +182,12 @@ pub trait AgentProvider: Send + Sync {
     /// evidence can name the committed choice; other SDK providers return
     /// no such claim.
     fn approval_mode(&self) -> Option<super::ApprovalMode> {
+        None
+    }
+    /// Initial reasoning effort level this factory selects in every session
+    /// it opens, so admission evidence can name it. `None` — the default —
+    /// means no level is sent and the agent keeps its own default.
+    fn effort_level(&self) -> Option<crate::domain::model_metadata::value_objects::EffortLevel> {
         None
     }
     /// Exact provider/model/context configuration used to validate restoration.

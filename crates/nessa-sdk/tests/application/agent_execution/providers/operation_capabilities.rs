@@ -112,3 +112,29 @@ fn negotiated_provider_unsupported_is_preserved() {
         ElicitationForwardingCapability::SupportedWithCorrelatedRoundTrip
     );
 }
+
+#[test]
+fn offered_effort_levels_count_only_once_negotiated() {
+    use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
+    let levels = EffortLevels::new(
+        ["low", "high"]
+            .into_iter()
+            .map(|name| EffortLevel::new(name.into()).unwrap())
+            .collect(),
+    )
+    .unwrap();
+    let offered = levels.offered_by(["low", "high"]);
+    let reported = |negotiated| ProviderOperationCapabilities {
+        effort_levels: offered,
+        ..every_provider_feature_supported(negotiated)
+    };
+    assert_eq!(
+        OperationCapabilities::resolve(reported(true)).effort_levels(),
+        offered
+    );
+    // Opening or restoring: whatever an earlier connection offered is not claimed.
+    assert!(OperationCapabilities::resolve(reported(false))
+        .effort_levels()
+        .is_empty());
+    assert!(OperationCapabilities::default().effort_levels().is_empty());
+}

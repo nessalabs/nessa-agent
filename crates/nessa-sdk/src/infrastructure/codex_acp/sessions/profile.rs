@@ -5,9 +5,10 @@ use crate::application::agent_execution::providers::{ApprovalMode, ApprovalModeC
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
+use crate::domain::model_metadata::value_objects::EffortLevel;
 use crate::infrastructure::acp::fields::string;
 use crate::infrastructure::acp::profile::AcpProfile;
-use crate::infrastructure::acp::sessions::{configuration, AcpConfig};
+use crate::infrastructure::acp::sessions::{configuration, thought_level, AcpConfig};
 use crate::infrastructure::json_rpc::protocol;
 use serde_json::{json, Value};
 
@@ -67,19 +68,38 @@ pub(super) fn native_mode(mode: ApprovalMode) -> &'static str {
 }
 
 /// Codex's session contract: what this binding selects, checks, and retains.
+/// The id Codex's adapter gives its `thought_level` option. It lists the
+/// option only once a model is selected.
+const EFFORT: &str = "reasoning_effort";
+
 #[derive(Clone)]
 pub(super) struct CodexProfile {
     model: String,
     approval_mode: ApprovalMode,
+    /// `None` leaves the agent on its own default, and nothing is sent.
+    effort_level: Option<EffortLevel>,
     tools: ObservedTools,
 }
 impl CodexProfile {
-    pub(super) fn new(model: &str, approval_mode: ApprovalMode) -> Self {
+    pub(super) fn new(
+        model: &str,
+        approval_mode: ApprovalMode,
+        effort_level: Option<EffortLevel>,
+    ) -> Self {
         Self {
             model: model.to_owned(),
             approval_mode,
+            effort_level,
             tools: ObservedTools::default(),
         }
+    }
+    /// Once configured, the selected level is the agent's current one. Before
+    /// that the request that sets it may still be in flight.
+    fn verify_effort(&self, result: &Value, configured: bool) -> Result<(), AgentError> {
+        if !configured {
+            return Ok(());
+        }
+        thought_level::verify_selected(result, EFFORT, self.effort_level.as_ref())
     }
 }
 impl AcpProfile for CodexProfile {
@@ -140,10 +160,19 @@ impl AcpProfile for CodexProfile {
         // Model first: the approval preset is Codex's own state, but the model is
         // a selection the provider can refuse, and refusing it after the mode was
         // set would leave a session configured half the way this binding asked.
-        vec![
-            json!({"sessionId":session_id,"configId":"model","value":self.model}),
-            json!({"sessionId":session_id,"configId":"mode","value":native_mode(self.approval_mode)}),
-        ]
+        // The effort level follows the model, which is what makes Codex list
+        // its effort option at all.
+        [json!({"sessionId":session_id,"configId":"model","value":self.model})]
+            .into_iter()
+            .chain(
+                self.effort_level
+                    .iter()
+                    .map(|level| thought_level::selection(session_id, EFFORT, level)),
+            )
+            .chain([
+                json!({"sessionId":session_id,"configId":"mode","value":native_mode(self.approval_mode)}),
+            ])
+            .collect()
     }
     fn change_approval_mode(
         &mut self,
@@ -152,6 +181,15 @@ impl AcpProfile for CodexProfile {
     ) -> Result<Value, AgentError> {
         self.approval_mode = mode;
         Ok(json!({"sessionId":session_id,"configId":"mode","value":native_mode(mode)}))
+    }
+    fn change_effort_level(
+        &mut self,
+        session_id: &str,
+        level: EffortLevel,
+    ) -> Result<Value, AgentError> {
+        let request = thought_level::selection(session_id, EFFORT, &level);
+        self.effort_level = Some(level);
+        Ok(request)
     }
 
     fn verify_session(
@@ -164,7 +202,8 @@ impl AcpProfile for CodexProfile {
             result,
             &self.model,
             configured.then_some(native_mode(self.approval_mode)),
-        )
+        )?;
+        self.verify_effort(result, configured)
     }
 
     fn verify_update(
@@ -179,11 +218,14 @@ impl AcpProfile for CodexProfile {
             // higher: this profile sets the model before the mode, so between
             // those two requests a provider reporting its options is correct to
             // say the mode is not `read-only` yet.
-            "config_option_update" => configuration::verify_config(
-                update,
-                &self.model,
-                configured.then_some(native_mode(self.approval_mode)),
-            ),
+            "config_option_update" => {
+                configuration::verify_config(
+                    update,
+                    &self.model,
+                    configured.then_some(native_mode(self.approval_mode)),
+                )?;
+                self.verify_effort(update, configured)
+            }
             // A mode this binding has already put the session into, changing
             // afterwards, is a different matter: that is the session leaving
             // the approval policy it was given, whenever it arrives.

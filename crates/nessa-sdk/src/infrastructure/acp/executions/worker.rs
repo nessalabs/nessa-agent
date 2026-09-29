@@ -6,7 +6,7 @@ use super::super::{
     sessions::{
         binding::{Command, Completion, DispatchedPrompt},
         cleanup::ProcessCleanup,
-        AcpConfig,
+        thought_level, AcpConfig,
     },
 };
 #[cfg(all(test, unix))]
@@ -985,6 +985,9 @@ impl<P: AcpProfile> Worker<P> {
         self.profile
             .verify_session(&result, &self.capabilities, configuration.is_empty())?;
         let last = configuration.len().saturating_sub(1);
+        // The response held to the final state: what the agent offers is read
+        // from it once every selection has been applied.
+        let mut settled = result;
         for (step, params) in configuration.into_iter().enumerate() {
             let result = self
                 .rpc(
@@ -997,7 +1000,11 @@ impl<P: AcpProfile> Worker<P> {
                 .map_err(|error| startup_deadline(error, AgentStartupPhase::Configure, context))?;
             self.profile
                 .verify_session(&result, &self.capabilities, step == last)?;
+            settled = result;
         }
+        // An agent may only list its effort option once its model is selected
+        // (Codex does), so the levels are read from the settled response.
+        let effort_levels = thought_level::offered(&settled, &self.capabilities)?;
         self.configured = true;
         let profile_capabilities = self.profile.operation_capabilities(&init);
         self.operation_capabilities
@@ -1011,6 +1018,7 @@ impl<P: AcpProfile> Worker<P> {
                     .pointer("/agentCapabilities/sessionCapabilities/resume")
                     .is_some_and(Value::is_object),
                 supports_questions: questions_enabled,
+                effort_levels,
                 ..profile_capabilities
             });
         Ok(())
@@ -1171,7 +1179,7 @@ impl<P: AcpProfile> Worker<P> {
                         ProviderSessionState::CleanupRequired,
                     )));
                 }
-                Command::SetApprovalMode(_, reply) => {
+                Command::SetApprovalMode(_, reply) | Command::SetEffortLevel(_, reply) => {
                     let _ = reply.send(Err(AgentError::Closed));
                 }
             }
@@ -1288,6 +1296,9 @@ impl<P: AcpProfile> Worker<P> {
         command: Command,
     ) -> Result<(), WorkerFailure> {
         match command {
+            Command::SetEffortLevel(level, reply) => {
+                self.set_effort_level(execution, level, reply).await
+            }
             Command::SetApprovalMode(mode, reply) => {
                 self.set_approval_mode(execution, mode, reply).await
             }
@@ -1320,6 +1331,44 @@ impl<P: AcpProfile> Worker<P> {
         let params = match self
             .profile
             .change_approval_mode(execution.id().as_str(), mode)
+        {
+            Ok(params) => params,
+            Err(error) => {
+                let _ = reply.send(Err(error));
+                return Ok(());
+            }
+        };
+        let deadline = self.config.clock.now() + super::steering::RESPONSE_TIMEOUT;
+        let result = self
+            .rpc(
+                "session/set_config_option",
+                params,
+                deadline,
+                Some(execution),
+            )
+            .await
+            .and_then(|result| {
+                self.profile
+                    .verify_session(&result, &self.capabilities, true)
+            });
+        let _ = reply.send(result.clone());
+        result.map_err(WorkerFailure::from)
+    }
+    /// Apply and verify one reasoning effort level on an idle session, as
+    /// [`Self::set_approval_mode`] does for a preset.
+    async fn set_effort_level(
+        &mut self,
+        execution: &mut ExecutionController,
+        level: crate::domain::model_metadata::value_objects::EffortLevel,
+        reply: tokio::sync::oneshot::Sender<Result<(), AgentError>>,
+    ) -> Result<(), WorkerFailure> {
+        if self.active.is_some() || !self.permissions.is_empty() {
+            let _ = reply.send(Err(AgentError::Busy));
+            return Ok(());
+        }
+        let params = match self
+            .profile
+            .change_effort_level(execution.id().as_str(), level)
         {
             Ok(params) => params,
             Err(error) => {

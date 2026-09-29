@@ -1,5 +1,7 @@
 #![deny(missing_docs)]
 
+use crate::domain::model_metadata::value_objects::OfferedEffortLevels;
+
 /// Whether a provider can carry a denial for a permission review it raised.
 ///
 /// This says nothing about tools that do not pass through a permission review,
@@ -126,6 +128,12 @@ pub struct ProviderOperationCapabilities {
     pub elicitation_forwarding: ElicitationForwardingCapability,
     /// The verified agent can ask through ACP form elicitation with tools enabled.
     pub supports_questions: bool,
+    /// Which of the model's catalogue effort levels the connected agent also
+    /// offers, as positions in
+    /// [`EffectiveCapabilities::effort_levels`](crate::domain::effective_capabilities::value_objects::EffectiveCapabilities::effort_levels).
+    /// None where the binding sends no level, the agent advertises no effort
+    /// option, or nothing it advertises is a catalogue level.
+    pub effort_levels: OfferedEffortLevels,
 }
 
 /// Whether a configured Nessa policy can deny a tool before execution.
@@ -235,6 +243,7 @@ impl OperationCapabilities {
                 model_switch_reporting: ProviderModelSwitchReportingCapability::Unknown,
                 permission_deferral: ProviderPermissionDeferralCapability::Unknown,
                 elicitation_forwarding: ElicitationForwardingCapability::Unknown,
+                effort_levels: OfferedEffortLevels::default(),
                 ..provider
             }
         };
@@ -324,6 +333,14 @@ impl OperationCapabilities {
     /// Return effective incoming elicitation support.
     pub fn incoming_elicitation(self) -> IncomingElicitationCapability {
         self.incoming_elicitation
+    }
+
+    /// Which of the model's catalogue effort levels the connected agent
+    /// offers. None until negotiation completes, and none again while a
+    /// connection is being restored. Read as levels through
+    /// [`Agent::effort_levels`](crate::application::agent_execution::agents::Agent::effort_levels).
+    pub fn effort_levels(self) -> OfferedEffortLevels {
+        self.provider.effort_levels
     }
 }
 

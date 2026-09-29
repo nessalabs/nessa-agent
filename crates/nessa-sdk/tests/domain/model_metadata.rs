@@ -12,7 +12,7 @@ use nessa_sdk::domain::model_metadata::{
     value_objects::Modalities,
     value_objects::ModelDescription,
     value_objects::ModelFeatures,
-    value_objects::{EffortLevel, EffortLevels},
+    value_objects::{EffortLevel, EffortLevels, OfferedEffortLevels},
     value_objects::{ModelKey, ModelProvider},
     MetadataError,
 };
@@ -446,4 +446,61 @@ fn a_model_lists_at_most_sixteen_levels() {
         EffortLevels::new(repeated).unwrap_err().to_string(),
         "reasoning effort: levels must not repeat"
     );
+}
+
+fn names(levels: &EffortLevels) -> Vec<&str> {
+    levels.levels().iter().map(EffortLevel::as_str).collect()
+}
+
+fn catalogue(listed: &[&str]) -> EffortLevels {
+    EffortLevels::new(listed.iter().map(|name| level(name)).collect()).unwrap()
+}
+
+#[test]
+fn an_agent_narrows_the_catalogues_levels_and_never_widens_them() {
+    let gpt = catalogue(&["none", "low", "medium", "high", "xhigh", "max"]);
+    // codex-acp 1.12 on gpt-5.6-sol: no `none`, and an `ultra` past `max`.
+    let offered = gpt.offered_by(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    assert_eq!(
+        names(&gpt.restricted_to(offered).unwrap()),
+        ["low", "medium", "high", "xhigh", "max"]
+    );
+    // claude-agent-acp: its own `default` is not a catalogue level.
+    let opus = catalogue(&["low", "medium", "high", "xhigh", "max"]);
+    let offered = opus.offered_by(["default", "low", "medium", "high", "xhigh", "max"]);
+    assert_eq!(names(&opus.restricted_to(offered).unwrap()), names(&opus));
+}
+
+#[test]
+fn offered_levels_keep_the_catalogues_order_whatever_the_agents() {
+    let levels = catalogue(&["low", "medium", "high"]);
+    let offered = levels.offered_by(["high", "low"]);
+    assert_eq!(
+        names(&levels.restricted_to(offered).unwrap()),
+        ["low", "high"]
+    );
+}
+
+#[test]
+fn no_advertised_option_or_no_match_offers_no_level() {
+    let levels = catalogue(&["low", "high"]);
+    for advertised in [&[][..], &["ultra", "default"][..], &["LOW"][..]] {
+        let offered = levels.offered_by(advertised.iter().copied());
+        assert!(offered.is_empty(), "{advertised:?}");
+        assert_eq!(levels.restricted_to(offered), None, "{advertised:?}");
+    }
+    assert!(OfferedEffortLevels::default().is_empty());
+    assert_eq!(levels.restricted_to(OfferedEffortLevels::default()), None);
+}
+
+#[test]
+fn every_one_of_sixteen_levels_can_be_offered() {
+    let listed: Vec<String> = (0..EffortLevels::MAX_LEVELS)
+        .map(|index| format!("level-{index}"))
+        .collect();
+    let levels = catalogue(&listed.iter().map(String::as_str).collect::<Vec<_>>());
+    let offered = levels.offered_by(listed.iter().map(String::as_str));
+    assert_eq!(levels.restricted_to(offered).unwrap(), levels);
+    assert!(levels.contains(&level("level-15")));
+    assert!(!levels.contains(&level("level-16")));
 }
