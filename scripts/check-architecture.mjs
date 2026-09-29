@@ -16,6 +16,8 @@ import { setupGatePlacementViolations } from "./architecture/setup-gate-placemen
 import { standDownPlacementViolations } from "./architecture/stand-down-placement.mjs"
 import { composerBudgetViolations } from "./architecture/composer-budget.mjs"
 import { wholeWorkspaceViolations } from "./architecture/whole-workspace.mjs"
+import { importedPaths } from "./architecture/imported-paths.mjs"
+import { splitPanesBoundaryViolations } from "./architecture/split-panes-boundary.mjs"
 import {
   normalizedPath,
   rustBoundaryViolations,
@@ -93,13 +95,6 @@ for (const name of readdirSync(src)) {
   if (statSync(path).isFile() && /\.(ts|tsx)$/.test(name) && !srcRootAllowed.has(name)) {
     fail(path, "src root is the composition root; feature code belongs in a vertical")
   }
-}
-
-/** What a file imports, by its specifiers; a comment's example is not one (`withoutComments`). */
-function importedPaths(text) {
-  return [...withoutComments(text).matchAll(/from\s+["']([^"']+)["']/g)].map(
-    (match) => match[1],
-  )
 }
 
 for (const file of walk(src)) {
@@ -229,6 +224,9 @@ for (const file of walk(src)) {
   if (!path.startsWith("src/conversation/") && !path.endsWith(".test.ts")) {
     for (const item of imports) {
       if (!/conversation/.test(item)) continue
+      // Matched by name, so a stylesheet that happens to be called
+      // `conversation.css` (a workspace pane's) is no import of the vertical.
+      if (/\.css$/.test(item)) continue
       const barrel =
         /(?:^|\/)conversation$/.test(item) || /(?:^|\/)conversation\/index$/.test(item)
       const slice = /conversation\/adapters\/store\/slice$/.test(item)
@@ -241,21 +239,8 @@ for (const file of walk(src)) {
     }
   }
 
-  // Split panes are wrapped, not reached into (ADR 253): a host takes the
-  // barrel — what React renders, the drag, the port it implements — and its
-  // own model and use cases, which may not import React, take the pure model
-  // by its files. Nothing else of the module is anyone else's to import.
-  if (!path.startsWith("src/desktop/split-panes/")) {
-    for (const item of imports) {
-      if (!/(?:^|\/)split-panes(?:\/|$)/.test(item)) continue
-      if (/(?:^|\/)split-panes(?:\/index)?$/.test(item)) continue
-      if (/(?:^|\/)split-panes\/model\/[^/]+$/.test(item)) continue
-      if (/(?:^|\/)split-panes\/testing$/.test(item)) continue
-      fail(
-        file,
-        "other modules import the split-panes barrel or its model, not its internals",
-      )
-    }
+  for (const violation of splitPanesBoundaryViolations(path, imports)) {
+    fail(file, violation)
   }
 
   if (!path.startsWith("src/session/") && !path.endsWith(".test.ts")) {
