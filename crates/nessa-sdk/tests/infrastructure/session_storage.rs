@@ -360,8 +360,10 @@ fn child_record_source_server_probe() {
     };
     let server = LoopbackRecordServer::bind(0, config, move || Ok(source.clone())).unwrap();
     let port = server.local_addr().unwrap().port();
+    // Libtest's single-threaded runner leaves the child test name on the
+    // current line, so begin the protocol marker on a fresh line.
     println!(
-        "NESSA_RECORD_SOURCE_READY {port} {}",
+        "\nNESSA_RECORD_SOURCE_READY {port} {}",
         scope.incarnation().as_str()
     );
     std::io::stdout().flush().unwrap();
