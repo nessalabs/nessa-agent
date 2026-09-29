@@ -248,8 +248,9 @@ writing the full defaults on first launch is buying.
   desktop window's shared parts (`src/desktop/adapters/`, `ui/`, `model/`).
   `scripts/architecture/split-panes-boundary.mjs` refuses the rest, however
   the import is written; a test may still read a stylesheet's text by URL.
-  The page's names a host uses are held to the published ones by
-  `src/desktop/styles.test.ts`. The resize edge that the grid and the side
+  A name of the page's a host writes out whole, or reads through `dataset`,
+  is held to the published ones by `src/desktop/styles.test.ts`; one built
+  at runtime is not read. The resize edge that the grid and the side
   columns share is the desktop's (`src/desktop/ui/resize-edge.tsx`). See
   [adr/todo/253-split-panes-component.md](adr/todo/253-split-panes-component.md).
 - A preview offered under Settings › Advanced › Experimental is a window

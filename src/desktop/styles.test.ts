@@ -130,8 +130,14 @@ it("spells every split-panes name a host uses as split-panes publishes it", () =
   // the module puts on the page begins with one of these, so any a host
   // spells from those families must be a published one.
   const published = new Set<string>([...Object.values(marks), ...Object.values(classes)])
+  // A name ends where a name ends; only a file's own name, followed by its
+  // extension (`split-panes-drag.test.tsx`), is not one.
   const family =
-    /(?<![/\w-])(?:data-(?:split|drag)|split-panes)-[a-z][a-z-]*(?![\w-]|\.[a-z])/g
+    /(?<![/\w-])(?:data-(?:split|drag)|split-panes)-[a-z][a-z-]*(?![\w-]|\.(?:test\.)?(?:css|tsx?|mjs)\b)/g
+  // And a name read through `dataset` (`dataset.dragCarrying` is `data-drag-carrying`).
+  const viaDataset = /\bdataset\.((?:split|drag)[A-Z]\w*)/g
+  const kebab = (camel: string) =>
+    `data-${camel.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`
   const desktop = fileURLToPath(new URL(".", import.meta.url))
   const root = join(desktop, "../..")
   const walk = (dir: string): string[] =>
@@ -142,8 +148,12 @@ it("spells every split-panes name a host uses as split-panes publishes it", () =
     })
   const files = [...walk(desktop), ...walk(join(root, "verification/desktop/scripts"))]
   const unpublished = files.flatMap((path) =>
-    [...readFileSync(path, "utf8").matchAll(family)]
-      .map((match) => match[0])
+    [
+      ...[...readFileSync(path, "utf8").matchAll(family)].map((match) => match[0]),
+      ...[...readFileSync(path, "utf8").matchAll(viaDataset)].map((match) =>
+        kebab(match[1]),
+      ),
+    ]
       .filter((name) => !published.has(name))
       .map((name) => `${relative(root, path)}: ${name}`),
   )
@@ -176,9 +186,12 @@ it("names what a flight restyles, so beginning one restyles a few elements, not 
   const sheet = ["./workspace/ui/panes/panes.css", "./split-panes/ui/split-panes.css"]
     .map((path) => readFileSync(new URL(path, import.meta.url), "utf8"))
     .join("\n")
-  const flightRules =
-    sheet.match(/^[^{}/]*\[data-(?:flipping|drag-reflow)\][^{]*\{/gm) ?? []
-  expect(flightRules.length).toBeGreaterThan(0)
+  // The marks a flight and a preview set, as split-panes publishes them.
+  const marked = (name: string) =>
+    sheet.match(new RegExp(String.raw`^[^{}/]*\[${name}\][^{]*\{`, "gm")) ?? []
+  for (const name of [marks.flipping, marks.reflow])
+    expect(marked(name).length, name).toBeGreaterThan(0)
+  const flightRules = [...marked(marks.flipping), ...marked(marks.reflow)]
   for (const rule of flightRules) expect(rule, rule).not.toMatch(/(?:>|\s)\*\s*(?:,|\{)/)
 })
 

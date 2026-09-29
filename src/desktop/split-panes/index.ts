@@ -37,8 +37,10 @@
  * looks like is the host's.
  *
  * What a host may see of the page is published (`marks`, `classes`) and
- * nothing else is its to spell; `src/desktop/styles.test.ts` holds every
- * host file to it:
+ * nothing else is its to spell; `src/desktop/styles.test.ts` refuses an
+ * unpublished name of the three families written out whole in a host file
+ * or a verification script, or read through `dataset` (not one built at
+ * runtime):
  *
  * - it writes `data-drag-pane` (a pane's key, on what carries it),
  *   `data-drag-item` (an item's id, outside the grid), and on a pane's

@@ -3,8 +3,11 @@
  * published here, once, so a host's code and tests derive them and never
  * retype them. Each begins `data-split-`, `data-drag-` or `split-panes-`, so
  * a host's stylesheets, which cannot import this, are held to it by what
- * they spell (`src/desktop/styles.test.ts`): any name of those three
- * families a host uses must be one of these.
+ * they spell: `src/desktop/styles.test.ts` refuses any name of those three
+ * families, written out whole in a host's stylesheet, code or test, or in a
+ * verification script — or read as `dataset.splitX` / `dataset.dragX` — that
+ * is not one of these. A name built at runtime (a template, a joined string)
+ * is not something it can read.
  *
  * The frame's own names (`data-pane-key`, `data-flip`, `data-flip-id`) are
  * spread by the host from the grid's `frame` rather than spelled, and FLIP's

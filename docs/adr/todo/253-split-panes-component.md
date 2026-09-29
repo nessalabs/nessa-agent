@@ -146,8 +146,11 @@ Where the code refined the contract above, and why:
   (`adapters/dom/marks.ts`): `marks` (attributes), `classes`, and `gridOf`.
   Every name begins `data-split-`, `data-drag-` or `split-panes-`, so a
   host's stylesheets, which cannot import them, are held to them by what they
-  spell (`src/desktop/styles.test.ts`: any name of those families in a host
-  file or a verification script must be published). To make the families
+  spell (`src/desktop/styles.test.ts` refuses an unpublished name of those
+  families written out whole in a host's stylesheet, code or test or in a
+  verification script, or read as `dataset.splitX` / `dataset.dragX`; a name
+  built at runtime, from a template or joined strings, is not read — review
+  round 2 found the guard's reach overstated, and it is not grown further). To make the families
   total, `data-multi`, `data-corner`, `data-flipping`, `data-dragging`,
   `data-lifted` and `data-waiting` were renamed into them. The frame's
   `data-pane-key`, `data-flip` and `data-flip-id`, and FLIP's
