@@ -309,7 +309,7 @@ not reading the session, which stays unread.
   `layouts/` that only arrange them.
 
 The panes themselves are **split panes** (`src/desktop/split-panes/`,
-[ADR 253](adr/todo/253-split-panes-component.md)), a module any desktop
+[ADR 253](adr/done/253-split-panes-component.md)), a module any desktop
 surface can wrap; the workspace does. Its `model/` is pure: the pane layout
 (`pane-layout.ts`), columns of stacked panes with one focused, each showing an
 item the host gives meaning to (the workspace's, a session), whose operations

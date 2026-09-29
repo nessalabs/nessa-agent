@@ -256,7 +256,7 @@ writing the full defaults on first launch is buying.
   is held to the published ones by `src/desktop/styles.test.ts`; one built
   at runtime is not read. The resize edge that the grid and the side
   columns share is the desktop's (`src/desktop/ui/resize-edge.tsx`). See
-  [adr/todo/253-split-panes-component.md](adr/todo/253-split-panes-component.md).
+  [adr/done/253-split-panes-component.md](adr/done/253-split-panes-component.md).
 - A preview offered under Settings › Advanced › Experimental is a window
   preference that decides only whether the window offers a way in; the
   feature itself lives in the vertical that owns it, as the Agents overview —

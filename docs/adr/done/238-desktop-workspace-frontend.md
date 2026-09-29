@@ -49,7 +49,7 @@ The binding constraints:
 The desktop window gets a `workspace` vertical in `src/desktop/workspace/`,
 laid out feature-first with roles below, like `src/conversation/`.
 
-Since [253](../todo/253-split-panes-component.md), the split panes — the pane
+Since [253](253-split-panes-component.md), the split panes — the pane
 layout, its sizing, drops and the drag's phases (`model/`), the drag, FLIP
 and Tab order (`adapters/dom/`), and the grid (`ui/`) — live in
 `src/desktop/split-panes/`, which the workspace wraps through one
