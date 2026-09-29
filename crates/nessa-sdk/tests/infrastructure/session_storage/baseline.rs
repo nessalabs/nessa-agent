@@ -416,6 +416,26 @@ async fn sealed_baseline_reconstructs_the_saved_session_after_sqlite_restart() {
     };
     assert_same(&recovered, &source);
     assert_eq!(cursor.offset, export.pieces.len() as u64 + 2);
+    reopened
+        .append(
+            &same_stream,
+            NewEvent {
+                id: event_stream::EventId::new("later-semantic-fact").unwrap(),
+                schema: SchemaRef {
+                    id: SchemaId::new("nessa.test-later-fact").unwrap(),
+                    version: 1,
+                },
+                payload: Payload::copy_from_slice(b"later"),
+            },
+        )
+        .await
+        .unwrap();
+    let BaselineLoad::Sealed { cursor: again, .. } =
+        load_baseline(&reopened, &same_stream).await.unwrap()
+    else {
+        panic!("later facts hid the sealed baseline");
+    };
+    assert_eq!(again, cursor);
     assert!(
         reopened
             .shutdown(std::time::Duration::from_secs(5))
