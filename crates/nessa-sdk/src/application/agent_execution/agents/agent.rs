@@ -837,10 +837,15 @@ impl Agent {
             let _active =
                 match ActiveInvocation::new(&self.inner.lifecycle, input.execution_id.clone()) {
                     Ok(active) => active,
-                    Err(error) => return ProviderExecutionReply::Rejected(error),
+                    Err(error) => {
+                        return (ProviderExecutionReply::Rejected(error), work.cancellation());
+                    }
                 };
             work.mark_execution_started();
-            attached.session.execute(input.clone()).await
+            let outcome = attached.session.execute(input.clone()).await;
+            // Capture the existing stop authority with the reply. A later Stop
+            // cannot retroactively authorize an earlier cancellation report.
+            (outcome, work.cancellation())
         });
         let mut stop_observed = false;
         let mut result = None;
@@ -855,15 +860,13 @@ impl Agent {
         let mut pending_provider_outcome = None;
         let mut pending_timer_failure: Option<StorageError> = None;
         loop {
-            if let Some(outcome) = pending_provider_outcome.take() {
+            if let Some((outcome, cancellation_at_reply)) = pending_provider_outcome.take() {
                 let mut cleanup_failure = None;
                 admission_rejected = matches!(&outcome, ProviderExecutionReply::Rejected(_));
                 if let ProviderExecutionReply::Finished(settlement) = &outcome {
-                    // Read the admitted owner's first stop before adapter cleanup can
-                    // stop work itself. A report cannot authorize its own cancellation.
                     let cancellation = (settlement.source()
                         == ExecutionReportSource::LocalCancellation)
-                        .then(|| work.cancellation())
+                        .then_some(cancellation_at_reply)
                         .flatten();
                     if settlement.source() == ExecutionReportSource::LocalCancellation
                         && cancellation.is_none()

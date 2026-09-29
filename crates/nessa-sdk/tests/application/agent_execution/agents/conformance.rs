@@ -77,6 +77,7 @@ struct WorkflowBackend {
     cleanup: Mutex<CleanupReport>,
     execution_fault: Mutex<Option<ProviderOperationFailure>>,
     execution_report: Mutex<Option<ExecutionReport>>,
+    report_polled: watch::Sender<bool>,
     exhaust_prepare_budget: AtomicUsize,
     shutdowns: Mutex<Vec<SessionCloseRequest>>,
 }
@@ -161,6 +162,7 @@ impl ProviderSessionBackend for WorkflowBackend {
             self.target.lock().unwrap().take();
             if let Some(report) = self.execution_report.lock().unwrap().clone() {
                 output.send(None).unwrap();
+                self.report_polled.send_replace(true);
                 return ProviderExecutionReply::Finished(report);
             }
             let fault = self.execution_fault.lock().unwrap().clone();
@@ -324,6 +326,7 @@ fn workflow_backend() -> Arc<WorkflowBackend> {
         cleanup: Mutex::new(CleanupReport::confirmed(CloseOutcome { forced: false })),
         execution_fault: Mutex::new(None),
         execution_report: Mutex::new(None),
+        report_polled: watch::channel(false).0,
         exhaust_prepare_budget: AtomicUsize::new(0),
         shutdowns: Mutex::new(Vec::new()),
     })
