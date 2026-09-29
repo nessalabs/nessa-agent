@@ -124,6 +124,18 @@ export function loadWorkspace(): WorkspaceCommand<Promise<void>> {
   }
 }
 
+/** The session an update is of, whichever it is. */
+function sessionOfUpdate(update: Exclude<WorkspaceUpdate, { kind: "resync" }>): string {
+  switch (update.kind) {
+    case "session":
+      return update.session.id
+    case "session-removed":
+      return update.sessionId
+    case "transcript":
+      return update.transcript.sessionId
+  }
+}
+
 /** The revision an update carries, whichever it is. */
 function revisionOf(update: Exclude<WorkspaceUpdate, { kind: "resync" }>): number {
   switch (update.kind) {
@@ -150,7 +162,13 @@ export function followWorkspace(): WorkspaceCommand<() => void> {
         return
       }
       if (!fromSource({ revision: revisionOf(update) })) {
-        console.warn("The workspace source sent an update it could not have sent", update)
+        // Said by what it is and whose, never with what it holds: a transcript
+        // carries the person's words, code and commands.
+        console.warn("The workspace source sent an update it could not have sent", {
+          kind: update.kind,
+          sessionId: sessionOfUpdate(update),
+          revision: revisionOf(update),
+        })
         return
       }
       dispatch(

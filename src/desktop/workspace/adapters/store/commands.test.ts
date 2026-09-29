@@ -1053,11 +1053,32 @@ describe("the index read again", () => {
         kind: "session",
         session: summary("a", "desktop", 1, "idle", { revision: -1 }),
       })
+      source.emit({
+        kind: "transcript",
+        transcript: {
+          ...emptyTranscript("a"),
+          revision: 0,
+          messages: [
+            {
+              id: "m1",
+              role: "user",
+              at: 1,
+              parts: [{ kind: "text", text: "the release keychain password" }],
+            },
+          ],
+        },
+      })
     } finally {
       console.warn = warn
     }
     expect(store.getState().workspace).toBe(before)
-    expect(logged).toHaveLength(2)
+    expect(logged).toHaveLength(3)
+    // Said by what it is and whose, never with what it holds.
+    expect(logged[2]).toEqual([
+      "The workspace source sent an update it could not have sent",
+      { kind: "transcript", sessionId: "a", revision: 0 },
+    ])
+    expect(JSON.stringify(logged)).not.toContain("keychain password")
   })
 
   it("says so when the index lists a session at a revision the source could not have sent", async () => {
