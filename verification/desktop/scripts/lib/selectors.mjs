@@ -48,6 +48,7 @@ export const css = {
   // Side columns
   sidebar: ".workspace-sidebar", // class
   sessionList: ".workspace-list", // class
+  listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   sessionRow: "[data-drag-item]", // a session a drag can carry to a pane
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
 

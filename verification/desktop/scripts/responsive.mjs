@@ -12,6 +12,9 @@
  *                   below it where it does not ("The titlebar's safe area"): an
  *                   inline title never overlaps a titlebar control
  *   settings-fold   Settings' sidebar folds for room below a page of 420px
+ *   list-gutter     the session list's search field and a row sit as far from what
+ *                   is on their left — the sidebar's card, or with the sidebar
+ *                   away the window's edge — as from the panes on their right
  *   overview-header the Agents overview's header holds its place while its list
  *                   scrolls to the end, the list begins below it, and the list's
  *                   top edge fades (its mask) rather than cutting a row
@@ -293,6 +296,57 @@ checks["overview-header"] = async ({ page, engine, options }) => {
   if (!/^linear-gradient\((?:rgba\(0, 0, 0, 0\)|transparent)/.test(after.mask))
     failures.push(`the list's top edge has no fade (mask: "${after.mask}")`)
   return { before, after, failures }
+}
+
+checks["list-gutter"] = async ({ page, engine, layout, options }) => {
+  if (layout !== "columns")
+    return { skipped: "the session list is a column only in the columns layout" }
+  await need(page, css.listSearch, "the session list's search field")
+  const measure = () =>
+    page.evaluate((sel) => {
+      const box = (element) => element?.getBoundingClientRect() ?? null
+      const sidebar = document.querySelector(sel.workspace)?.dataset.sidebar
+      const left =
+        sidebar === "open" ? box(document.querySelector(sel.sidebar))?.right : 0
+      const panes = [...document.querySelectorAll(sel.pane)].map((pane) => box(pane).left)
+      const search = box(document.querySelector(sel.listSearch))
+      const row = box(document.querySelector(`${sel.sessionList} ${sel.sessionRow}`))
+      return {
+        sidebar,
+        left,
+        right: Math.min(...panes),
+        search: search && [search.left, search.right],
+        row: row && [row.left, row.right],
+      }
+    }, css)
+  const failures = []
+  const seen = []
+  for (const state of ["open", "closed"]) {
+    if (state === "closed") {
+      await page.keyboard.press(keys.toggleSidebar)
+      await frames(page, 2)
+      await settled(page)
+    }
+    const m = await measure()
+    if (m.sidebar !== state)
+      throw new CannotRun(`the sidebar is ${m.sidebar}, not ${state}`)
+    if (!m.search || !m.row)
+      throw new CannotRun("no search field or session row to measure")
+    await shot(options, page, `list-gutter-${engine}-${state}`)
+    for (const [name, [start, end]] of [
+      ["search field", m.search],
+      ["row", m.row],
+    ]) {
+      const before = start - m.left
+      const after = m.right - end
+      seen.push({ state, name, before: Math.round(before), after: Math.round(after) })
+      if (Math.abs(before - after) > 1)
+        failures.push(
+          `sidebar ${state}: the ${name} is ${Math.round(before)}px from what is on its left, ${Math.round(after)}px from the panes`,
+        )
+    }
+  }
+  return { gutters: seen, failures }
 }
 
 const meta = {
