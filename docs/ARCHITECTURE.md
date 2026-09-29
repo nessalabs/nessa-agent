@@ -37,7 +37,10 @@ place in the app switcher; closing it hides the window and returns the app to
 the menu bar alone, the way Alfred's preferences window comes and goes
 (`Host::set_dock_presence`, Regular or Accessory on macOS). The panel behaves as
 it always has, and the tray's Show Panel still toggles it. Without a tray,
-closing the window really closes it. On macOS an overlay titlebar retains the native traffic lights;
+closing the window hides it with its Dock icon kept, so a click on the Dock
+opens it again; where there is no Dock either, closing it quits the app
+(`desktop_window::on_close`) — it is never destroyed while the app runs on,
+since nothing could open it again. On macOS an overlay titlebar retains the native traffic lights;
 a fixed full-width WindowTitlebar places the sidebar toggle beside them, without
 a title label or divider. The desktop window's `trafficLightPosition` (16, 26)
 centres the native buttons 24px below the window's top, and the titlebar's

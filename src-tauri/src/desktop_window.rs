@@ -38,3 +38,49 @@ pub fn dismiss(window: &Window) {
     }
     platform::current().set_dock_presence(window.app_handle(), false);
 }
+
+/// What closing the desktop window does, by whether there is a menu bar item
+/// to open it again and whether the platform has a Dock to reopen it from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnClose {
+    /// Hidden, Dock icon and all: the menu bar item opens it again.
+    Dismiss,
+    /// Hidden, its Dock icon kept: clicking the Dock (`RunEvent::Reopen`)
+    /// opens it again, and the app menu can still quit.
+    Hide,
+    /// Nothing could open it again, so the app quits rather than run on with
+    /// no window and no way back.
+    Quit,
+}
+
+/// Decides what closing the desktop window does. A window let close is gone
+/// for good — `open` finds only windows that exist — so it is never let close
+/// while the app runs on.
+pub fn on_close(tray: bool, dock: bool) -> OnClose {
+    match (tray, dock) {
+        (true, _) => OnClose::Dismiss,
+        (false, true) => OnClose::Hide,
+        (false, false) => OnClose::Quit,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_a_tray_it_is_dismissed() {
+        assert_eq!(on_close(true, true), OnClose::Dismiss);
+        assert_eq!(on_close(true, false), OnClose::Dismiss);
+    }
+
+    #[test]
+    fn without_a_tray_the_dock_can_reopen_it_so_it_is_only_hidden() {
+        assert_eq!(on_close(false, true), OnClose::Hide);
+    }
+
+    #[test]
+    fn without_a_tray_or_a_dock_nothing_could_reopen_it_so_the_app_quits() {
+        assert_eq!(on_close(false, false), OnClose::Quit);
+    }
+}

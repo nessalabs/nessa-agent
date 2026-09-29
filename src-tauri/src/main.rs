@@ -232,9 +232,10 @@ fn main() {
                     }
                 }
             }
-            // Closing the desktop window hides it, and the Dock icon goes with
-            // it; the menu bar item opens it again. Without a tray there is no
-            // way back, so the window really closes.
+            // Closing the desktop window never destroys it while the app runs
+            // on: `desktop_window::on_close` says whether it is dismissed (a
+            // menu bar item opens it again), hidden with its Dock icon kept
+            // (the Dock reopens it), or the app quits (nothing could).
             if window.label() == desktop_window::DESKTOP_WINDOW {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     let tray = window
@@ -242,9 +243,18 @@ fn main() {
                         .try_state::<tray::Present>()
                         .map(|state| state.0)
                         .unwrap_or(false);
-                    if tray {
-                        api.prevent_close();
-                        desktop_window::dismiss(window);
+                    match desktop_window::on_close(tray, cfg!(target_os = "macos")) {
+                        desktop_window::OnClose::Dismiss => {
+                            api.prevent_close();
+                            desktop_window::dismiss(window);
+                        }
+                        desktop_window::OnClose::Hide => {
+                            api.prevent_close();
+                            if let Err(error) = window.hide() {
+                                eprintln!("[nessa] could not hide the desktop window: {error}");
+                            }
+                        }
+                        desktop_window::OnClose::Quit => window.app_handle().exit(0),
                     }
                 }
             }
