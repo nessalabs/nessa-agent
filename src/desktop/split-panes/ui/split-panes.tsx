@@ -35,7 +35,7 @@ export interface PaneFrame {
   readonly "data-flip": "pane"
   readonly "data-flip-id": PaneKey
   readonly "data-pane-key": PaneKey
-  readonly "data-split-corner": true | undefined
+  readonly [marks.corner]: true | undefined
 }
 
 /** A pane as the grid hands it to the host to render. */

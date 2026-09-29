@@ -35,9 +35,9 @@
  * what the workspace adds to a drag (`split-panes-drag.ts`), focus, the
  * panes' room, keys, the clock's ticks — as hooks and adapters beside the
  * tree, never as state; `adapters/storage/` keeps the overview's filter
- * between launches. The Agents overview is part of the workspace: its rules in `model/overview/`, its state in the
- * slice, its views in `ui/overview/`, answering and reading through the same
- * commands and effects as a pane.
+ * between launches. The Agents overview is part of the workspace: its rules
+ * in `model/overview/`, its state in the slice, its views in `ui/overview/`,
+ * answering and reading through the same commands and effects as a pane.
  *
  * `store.dispatch` is the agent entry point: every command here works
  * without a renderer.
