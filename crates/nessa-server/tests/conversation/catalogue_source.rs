@@ -11,6 +11,37 @@ use crate::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use uuid::Uuid;
 
+#[tokio::test]
+async fn failed_worker_start_returns_unavailable_without_scheduler_panic() {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let store = Arc::new(
+        super::super::store::LocalConversationStore::open(&private.join("metadata.sqlite3"))
+            .unwrap(),
+    );
+    let head = store
+        .head(&caller().organization_id, &caller().principal_id)
+        .await
+        .unwrap();
+    let result = NessaCatalogueSource::start_with_spawn(
+        store.clone(),
+        caller(),
+        scope(&head.incarnation),
+        |_run| Err(std::io::Error::other("injected thread failure")),
+        || panic!("runtime builder must not run after spawn fails"),
+    );
+    assert!(matches!(result, Err(CatalogueSourceError::Unavailable)));
+    let result = NessaCatalogueSource::start_with_spawn(
+        store,
+        caller(),
+        scope(&head.incarnation),
+        |run| thread::Builder::new().spawn(run),
+        || Err(std::io::Error::other("injected runtime failure")),
+    );
+    assert!(matches!(result, Err(CatalogueSourceError::Unavailable)));
+}
+
 #[test]
 fn source_head_finishes_when_caller_owns_the_only_blocking_slot() {
     let runtime = tokio::runtime::Builder::new_multi_thread()

@@ -38,6 +38,7 @@ unknown, and only a retained deletion marker says deleted.
 | A host constructs a source for another owner under a previously used stream key | Derive the stream identity from the authenticated organization and principal and refuse mismatched construction | Separate owners cannot be cached under one scope even if a caller reuses the other scope fields. |
 | Resolved live value exceeds the remaining page payload budget | Reject with `OversizedEntry` before returning payload | Cursor does not advance; a larger allowed budget or explicit handling is required. |
 | Source call occupies the caller runtime's only blocking thread | Execute metadata futures on a source-owned runtime with its own blocking pool | The metadata store's `spawn_blocking` read can finish without waiting for a free caller pool slot. |
+| Dedicated worker thread cannot start or its runtime cannot initialize | Build the runtime inside the worker and send an initialization result before returning a source | Construction returns typed `Unavailable` without dropping a Tokio runtime on the caller's scheduler thread. |
 | Sync-engine changes a catalogue page or payload bound | Consume its published bound in both Nessa's metadata port and adapter | The source's accepted request set stays aligned with the sync coordinator's accepted request set. |
 
 The manifest reads one short transaction per page and releases it before any

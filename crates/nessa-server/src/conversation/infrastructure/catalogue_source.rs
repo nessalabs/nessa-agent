@@ -95,56 +95,84 @@ impl NessaCatalogueSource {
         caller: ConversationCaller,
         scope: Scope,
     ) -> Result<Self, CatalogueSourceError> {
+        Self::start_with_spawn(
+            catalogue,
+            caller,
+            scope,
+            |run| {
+                thread::Builder::new()
+                    .name("nessa-catalogue-source".into())
+                    .spawn(run)
+            },
+            || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .max_blocking_threads(1)
+                    .build()
+            },
+        )
+    }
+
+    fn start_with_spawn(
+        catalogue: Arc<dyn ConversationCatalogue>,
+        caller: ConversationCaller,
+        scope: Scope,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<thread::JoinHandle<()>>,
+        make_runtime: impl FnOnce() -> std::io::Result<tokio::runtime::Runtime> + Send + 'static,
+    ) -> Result<Self, CatalogueSourceError> {
         if scope.schema() != &conversation_catalogue_schema()
             || scope.stream() != &conversation_catalogue_stream(&caller)
         {
             return Err(CatalogueSourceError::IdentityChanged);
         }
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .max_blocking_threads(1)
-            .build()
-            .map_err(|_| CatalogueSourceError::Unavailable)?;
         let (sender, receiver) = mpsc::sync_channel(QUEUE_CAPACITY);
+        let (ready, initialized) = mpsc::sync_channel(1);
         let expected = scope.clone();
-        let worker = thread::Builder::new()
-            .name("nessa-catalogue-source".into())
-            .spawn(move || {
-                while let Ok(command) = receiver.recv() {
-                    match command {
-                        Command::Head(scope, reply) => {
-                            let result = runtime.block_on(read_head(
-                                &*catalogue,
-                                &caller,
-                                &expected,
-                                &scope,
-                            ));
-                            let _ = reply.send(result);
-                        }
-                        Command::Manifest(request, reply) => {
-                            let result = runtime.block_on(read_manifest(
-                                &*catalogue,
-                                &caller,
-                                &expected,
-                                &request,
-                            ));
-                            let _ = reply.send(result);
-                        }
-                        Command::Resolve(pass, id, bound, reply) => {
-                            let result = runtime.block_on(read_resolved(
-                                &*catalogue,
-                                &caller,
-                                &expected,
-                                &pass,
-                                &id,
-                                bound,
-                            ));
-                            let _ = reply.send(result);
-                        }
+        let worker = spawn(Box::new(move || {
+            let runtime = match make_runtime() {
+                Ok(runtime) => runtime,
+                Err(_) => {
+                    let _ = ready.send(Err(CatalogueSourceError::Unavailable));
+                    return;
+                }
+            };
+            if ready.send(Ok(())).is_err() {
+                return;
+            }
+            while let Ok(command) = receiver.recv() {
+                match command {
+                    Command::Head(scope, reply) => {
+                        let result =
+                            runtime.block_on(read_head(&*catalogue, &caller, &expected, &scope));
+                        let _ = reply.send(result);
+                    }
+                    Command::Manifest(request, reply) => {
+                        let result = runtime.block_on(read_manifest(
+                            &*catalogue,
+                            &caller,
+                            &expected,
+                            &request,
+                        ));
+                        let _ = reply.send(result);
+                    }
+                    Command::Resolve(pass, id, bound, reply) => {
+                        let result = runtime.block_on(read_resolved(
+                            &*catalogue,
+                            &caller,
+                            &expected,
+                            &pass,
+                            &id,
+                            bound,
+                        ));
+                        let _ = reply.send(result);
                     }
                 }
-            })
-            .map_err(|_| CatalogueSourceError::Unavailable)?;
+            }
+        }))
+        .map_err(|_| CatalogueSourceError::Unavailable)?;
+        initialized
+            .recv()
+            .map_err(|_| CatalogueSourceError::Unavailable)??;
         Ok(Self {
             scope,
             worker: Arc::new(Worker {
