@@ -8,7 +8,8 @@
  * goes back to the panes. ⌘0, which opens the overview from anywhere in the
  * window as its sidebar entry does, is the window's (`ui/layouts/shortcuts.ts`).
  */
-import type { Binding, Chord } from "../../adapters/dom/shortcuts"
+import type { Chord } from "../../../model/keyboard"
+import type { Binding } from "../../adapters/dom/shortcuts"
 
 /** The overview's commands; the three answers are an approval card's own (`ApprovalChoice`). */
 export type OverviewCommand =

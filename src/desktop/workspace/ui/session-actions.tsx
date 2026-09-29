@@ -17,7 +17,8 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../adapters/store/ho
 import { selectPaneCount, selectPanes, selectSession } from "../adapters/store/selectors"
 import { useBesidePreference } from "../../adapters/window-preferences"
 import { MenuItem, MenuSeparator, MenuShortcut } from "../../ui/menu"
-import { commandKey, commandLabel } from "../adapters/dom/shortcuts"
+import { isMac } from "../../adapters/platform"
+import { commandKey, commandLabel } from "../../model/keyboard"
 
 /**
  * Whether a click or ↩ on a row asks for beside: the command key held, while
@@ -30,7 +31,7 @@ export function useBesideKey(): {
 } {
   const [preference] = useBesidePreference()
   const on = preference === "on"
-  return { on, asks: (event) => on && commandKey(event) }
+  return { on, asks: (event) => on && commandKey(event, isMac) }
 }
 
 /** Opens a session in place, or beside the focused pane with the command key held. */
@@ -78,7 +79,7 @@ export function SessionMenuItems({ sessionId }: { sessionId: string }) {
       {/* As ⌘-click does: beside when there is room, in the focused pane's place when not. */}
       <MenuItem onSelect={() => beside(sessionId)}>
         Open Beside
-        {besideKey.on ? <MenuShortcut>{commandLabel}Click</MenuShortcut> : null}
+        {besideKey.on ? <MenuShortcut>{commandLabel(isMac)}Click</MenuShortcut> : null}
       </MenuItem>
       {shown && count > 1 ? (
         <MenuItem onSelect={() => dispatch(closePane({ pane }))}>Close Pane</MenuItem>

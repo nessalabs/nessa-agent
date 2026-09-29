@@ -223,7 +223,10 @@ writing the full defaults on first launch is buying.
   overview, with its rules in `model/overview/`), with
   `testing.ts` the fake source and store its tests share. The
   window has its own store (`src/desktop/store.ts`) and composition
-  (`src/desktop/dependencies.ts`). Views select what they show — a pane its own
+  (`src/desktop/dependencies.ts`). How the window's keys are matched and
+  written on this platform is the window's, not the workspace's:
+  `src/desktop/model/keyboard.ts`, with the platform read once in
+  `src/desktop/adapters/platform.ts`. Views select what they show — a pane its own
   session, a row its own summary — and the architecture check refuses a view
   that selects the whole workspace. Settings is `src/desktop/settings/`
   (its map is `index.ts`), a typed catalogue (`model/`) rendered generically

@@ -8,7 +8,8 @@ import {
   selectShownSessionIds,
 } from "../../adapters/store/selectors"
 import { useNow } from "../../adapters/dom/clock"
-import { commandLabel } from "../../adapters/dom/shortcuts"
+import { isMac } from "../../../adapters/platform"
+import { commandLabel } from "../../../model/keyboard"
 import { sessionTime } from "../../model/time-labels"
 import { AgentTile } from "../chrome/agent-tile"
 import { StatusGlyph } from "../chrome/status-glyph"
@@ -62,7 +63,7 @@ export const ThreadRow = memo(function ThreadRow({
             onClick={(event) => actions.activate(event, session.id)}
             {...tooltip(
               kind === "branch" && actions.besideKey.on
-                ? `${session.title} — ${commandLabel}-click to open beside`
+                ? `${session.title} — ${commandLabel(isMac)}-click to open beside`
                 : session.title,
             )}
           >

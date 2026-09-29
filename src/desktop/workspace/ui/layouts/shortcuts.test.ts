@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { chordEvent, matchesChord } from "../../adapters/dom/shortcuts"
+import { chordEvent, matchesChord } from "../../../model/keyboard"
 import { workspaceShortcuts } from "./shortcuts"
 
 describe("the window's keyboard", () => {

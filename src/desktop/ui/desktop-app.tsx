@@ -20,6 +20,8 @@ import { EdgePeekStrip } from "./edge-peek-strip"
 import { useThemePreference } from "../adapters/theme-preference"
 import type { DesktopThemeId } from "../model/theme"
 import { composerModels, defaultComposerModel } from "../model/composer-options"
+import { chordLabel, matchesChord, type Chord } from "../model/keyboard"
+import { isMac } from "../adapters/platform"
 import {
   LEFT_DEFAULT_WIDTH,
   LEFT_MAX_WIDTH,
@@ -43,9 +45,10 @@ function positionEdgeGlow(event: PointerEvent<HTMLDivElement>) {
   edge.style.setProperty("--edge-glow-y", `${y}px`)
 }
 
-const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent)
-const shortcut = (keys: string) =>
-  isMac ? keys : keys.replace("⌥", "Alt+").replace("⌘", "Ctrl+")
+/** The chords this shell names, written and matched by the window's keyboard (`model/keyboard.ts`). */
+const sidebarChord: Chord = { code: "KeyB", command: true }
+const panelChord: Chord = { code: "KeyB", command: true, alt: true }
+const settingsChord: Chord = { code: "Comma", command: true }
 
 /** Composes the shell, sidebars, and split view without product/backend state. */
 export function DesktopApp({
@@ -98,8 +101,7 @@ export function DesktopApp({
   keysRef.current = { toggleRight, rightMaximized }
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const mod = isMac ? event.metaKey : event.ctrlKey
-      if (mod && event.altKey && event.code === "KeyB") {
+      if (matchesChord(event, panelChord, isMac)) {
         event.preventDefault()
         keysRef.current.toggleRight()
       } else if (event.key === "Escape" && keysRef.current.rightMaximized) {
@@ -112,9 +114,9 @@ export function DesktopApp({
   }, [])
 
   const leftAction = `${leftDocked ? "Hide" : "Show"} Sidebar`
-  const leftLabel = `${leftAction} (${shortcut("⌘B")})`
+  const leftLabel = `${leftAction} (${chordLabel(sidebarChord, isMac)})`
   const rightAction = `${rightShown ? "Hide" : "Show"} Panel`
-  const rightLabel = `${rightAction} (${shortcut("⌥⌘B")})`
+  const rightLabel = `${rightAction} (${chordLabel(panelChord, isMac)})`
   const maximizeLabel = rightMaximized ? "Restore Panel (Esc)" : "Expand Panel"
 
   const maximizeButton = (
@@ -142,7 +144,7 @@ export function DesktopApp({
       aria-label={rightLabel}
       aria-expanded={rightShown}
       aria-controls="right"
-      {...tooltip(rightAction, { shortcut: shortcut("⌥⌘B") })}
+      {...tooltip(rightAction, { shortcut: chordLabel(panelChord, isMac) })}
       onClick={toggleRight}
     >
       <DesktopIcon name="panelRight" />
@@ -183,7 +185,7 @@ export function DesktopApp({
               <SidebarTrigger
                 className="desktop-titlebar-button"
                 aria-label={leftLabel}
-                {...tooltip(leftAction, { shortcut: shortcut("⌘B") })}
+                {...tooltip(leftAction, { shortcut: chordLabel(sidebarChord, isMac) })}
                 aria-expanded={leftDocked}
                 aria-controls="left"
               >
@@ -355,7 +357,7 @@ function NavigationBody({
           type="button"
           className="desktop-identity-button min-w-0 flex-1 truncate"
           onClick={openSettings}
-          {...tooltip("Settings", { shortcut: shortcut("⌘,") })}
+          {...tooltip("Settings", { shortcut: chordLabel(settingsChord, isMac) })}
         >
           <span className="font-semibold">nessa</span>
           <span className="font-normal text-muted-foreground">Studio</span>

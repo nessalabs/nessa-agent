@@ -608,6 +608,15 @@ links here):
 - **Menus lead with icons only when every item has one.**
 - **Shortcuts are right-aligned** in menus and tooltips, and named only where
   they work (`ui/layouts/shortcuts.ts` labels them).
+- **A key is written as the platform writes it**: ⌃⌥⇧⌘ on a Mac, and
+  Ctrl+Alt+Shift elsewhere — Option is ⌥ on a Mac and Alt everywhere else.
+  One owner decides it for the whole window, the workspace, the classic shell
+  and Settings alike: `src/desktop/model/keyboard.ts` matches and writes a
+  chord, and `src/desktop/adapters/platform.ts` reads which platform it is,
+  once. A surface states its chords as data and asks there, so a label
+  cannot name a key its binding does not take (`model/keyboard.test.ts`,
+  and each surface's own labels in `settings-view.test.tsx` and
+  `adapters/dom/shortcuts.test.ts`).
 - **A pane's actions are "…" then "×"**, shown on hover.
 - **A submenu opens beside its item**, fully visible, never clipped by an
   ancestor, and takes the pointer.

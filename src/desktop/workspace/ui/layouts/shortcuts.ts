@@ -3,7 +3,8 @@
  * keyboard hook runs these and every menu and tooltip labels itself from
  * them, so a chord is named only where it works.
  */
-import type { Binding, Chord } from "../../adapters/dom/shortcuts"
+import type { Chord } from "../../../model/keyboard"
+import type { Binding } from "../../adapters/dom/shortcuts"
 import type { ShortcutCommand } from "../workspace-frame"
 
 const bind = (chord: Chord, command: ShortcutCommand): Binding<ShortcutCommand> => ({

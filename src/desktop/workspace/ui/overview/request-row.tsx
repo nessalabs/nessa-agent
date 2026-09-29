@@ -6,7 +6,9 @@ import {
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
 import { useNow } from "../../adapters/dom/clock"
-import { labelOf, matchesChord } from "../../adapters/dom/shortcuts"
+import { isMac } from "../../../adapters/platform"
+import { matchesChord } from "../../../model/keyboard"
+import { labelOf } from "../../adapters/dom/shortcuts"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectAnswer,
@@ -86,7 +88,7 @@ export const RequestRow = memo(function RequestRow({
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     const binding = overviewKeys.find((candidate) =>
-      matchesChord(event.nativeEvent, candidate.chord),
+      matchesChord(event.nativeEvent, candidate.chord, isMac),
     )
     if (!binding) {
       if (event.code === "Space" && event.target === event.currentTarget) {

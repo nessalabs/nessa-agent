@@ -11,7 +11,8 @@ import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectChannels, selectListedSessions } from "../../adapters/store/selectors"
 import { useNow } from "../../adapters/dom/clock"
 import { focusComposer } from "../../adapters/dom/focus"
-import { commandKey, commandLabel } from "../../adapters/dom/shortcuts"
+import { isMac } from "../../../adapters/platform"
+import { commandKey, commandLabel } from "../../../model/keyboard"
 import { agentName, agentOf } from "../../model/workspace-index"
 import { switcherRows, type SwitcherRow } from "../../model/session-search"
 import { sessionTime } from "../../model/time-labels"
@@ -146,7 +147,7 @@ export function QuickSwitcher({
     } else if (event.key === "Enter") {
       event.preventDefault()
       const row = rows[clamped]
-      if (row) choose(row, mode === "split" || commandKey(event))
+      if (row) choose(row, mode === "split" || commandKey(event, isMac))
     } else if (event.key === "Tab") {
       event.preventDefault()
     }
@@ -215,7 +216,9 @@ export function QuickSwitcher({
                   data-index={index}
                   className="workspace-result"
                   onPointerMove={() => index !== clamped && setActive(index)}
-                  onClick={(event) => choose(row, mode === "split" || commandKey(event))}
+                  onClick={(event) =>
+                    choose(row, mode === "split" || commandKey(event, isMac))
+                  }
                 >
                   {index === clamped ? <RowKeys mode={mode} /> : null}
                   {row.kind === "session" ? (
@@ -295,7 +298,7 @@ function RowKeys({ mode }: { mode: SwitcherMode }) {
         <>
           Open <kbd>↩</kbd>
           <span aria-hidden="true">·</span>
-          Beside <kbd>{commandLabel}↩</kbd>
+          Beside <kbd>{commandLabel(isMac)}↩</kbd>
         </>
       )}
     </span>

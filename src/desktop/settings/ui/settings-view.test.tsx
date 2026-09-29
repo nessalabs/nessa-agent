@@ -7,11 +7,20 @@
 import { act, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { chordEvent } from "../../model/keyboard"
 import { settingsCategories, setting, settingsEntries } from "../model/settings-catalogue"
 import { settingsTabPages } from "./settings-tabs"
 import { SettingsHost } from "./settings-view"
 import { testStore } from "../../workspace/testing"
+
+// The platform the window read, as each test says: a Mac unless it says otherwise.
+const platform = vi.hoisted(() => ({ mac: true }))
+vi.mock("../../adapters/platform", () => ({
+  get isMac() {
+    return platform.mac
+  },
+}))
 
 let root: Root
 let host: HTMLDivElement
@@ -39,6 +48,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
+  platform.mac = true
 })
 
 let setOpen: (open: boolean) => void = () => {}
@@ -108,6 +118,47 @@ describe("Settings over the window", () => {
     await resize(1440)
     expect(settings()?.dataset.sidebar).toBe("closed")
   })
+})
+
+describe("the keys Settings names", () => {
+  for (const [mac, sidebar, sessionList, open] of [
+    [true, "⌘B", "⌥⌘S", "⌘,"],
+    [false, "Ctrl+B", "Ctrl+Alt+S", "Ctrl+,"],
+  ] as const)
+    it(`writes them as ${mac ? "a Mac" : "elsewhere"} does, and takes the key it names`, async () => {
+      platform.mac = mac
+      await mount()
+      await act(async () => setOpen(true))
+      const toggle = document.querySelector<HTMLButtonElement>(
+        ".settings-titlebar-button",
+      )
+      expect(toggle?.getAttribute("aria-label")).toBe(`Hide Sidebar (${sidebar})`)
+      // The key the label names is the key that works.
+      await act(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            ...chordEvent({ code: "KeyB", command: true }, mac),
+            bubbles: true,
+          }),
+        )
+      })
+      expect(settings()?.dataset.sidebar).toBe("closed")
+      await act(async () =>
+        root.render(
+          <Provider store={testStore()}>
+            {(() => {
+              const Keyboard = settingsTabPages.keyboard
+              return <Keyboard />
+            })()}
+          </Provider>,
+        ),
+      )
+      const keys = [...host.querySelectorAll(".settings-kbd")].map(
+        (kbd) => kbd.textContent,
+      )
+      expect(keys).toContain(sessionList)
+      expect(keys).toContain(open)
+    })
 })
 
 describe("Advanced", () => {

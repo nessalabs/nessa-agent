@@ -11,7 +11,8 @@ import { reducedMotion } from "../../../adapters/motion-preference"
 import { useNow } from "../../adapters/dom/clock"
 import { durationToken } from "../../../adapters/motion"
 import { useReflow } from "../../adapters/dom/overview-reflow"
-import { matchesChord } from "../../adapters/dom/shortcuts"
+import { isMac } from "../../../adapters/platform"
+import { matchesChord } from "../../../model/keyboard"
 import {
   approve,
   deny,
@@ -275,7 +276,7 @@ export function AgentsOverview({
     if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target))
       return
     const binding = overviewKeys.find((candidate) =>
-      matchesChord(event.nativeEvent, candidate.chord),
+      matchesChord(event.nativeEvent, candidate.chord, isMac),
     )
     if (!binding) return
     if (binding.command === "reply") {
@@ -393,7 +394,8 @@ export function AgentsOverview({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return
       const leave = overviewKeys.find(
-        (binding) => binding.command === "leave" && matchesChord(event, binding.chord),
+        (binding) =>
+          binding.command === "leave" && matchesChord(event, binding.chord, isMac),
       )
       if (!leave) return
       if (section.current?.closest("[inert]")) return

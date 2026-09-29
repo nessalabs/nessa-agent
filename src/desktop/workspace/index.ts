@@ -29,7 +29,6 @@
 export { SessionsInSidebar } from "./ui/layouts/sessions-in-sidebar"
 export { ThreeColumns } from "./ui/layouts/three-columns"
 export { shortcutNames, workspaceShortcuts } from "./ui/layouts/shortcuts"
-export { chordLabel } from "./adapters/dom/shortcuts"
 export { ClockProvider } from "./adapters/dom/clock"
 export { focusComposer } from "./adapters/dom/focus"
 export { measureWorkspace } from "./adapters/dom/measure"

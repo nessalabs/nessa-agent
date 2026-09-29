@@ -1,6 +1,7 @@
 import { memo, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { useNow } from "../../adapters/dom/clock"
-import { matchesChord } from "../../adapters/dom/shortcuts"
+import { isMac } from "../../../adapters/platform"
+import { matchesChord } from "../../../model/keyboard"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectSession } from "../../adapters/store/selectors"
 import { sessionTime } from "../../model/time-labels"
@@ -49,7 +50,7 @@ export const SessionRow = memo(function SessionRow({
   // ↩ opens, where a button would otherwise take it as a click: a click peeks.
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     const binding = overviewKeys.find((candidate) =>
-      matchesChord(event.nativeEvent, candidate.chord),
+      matchesChord(event.nativeEvent, candidate.chord, isMac),
     )
     if (binding?.command !== "open") return
     event.preventDefault()

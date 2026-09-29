@@ -8,8 +8,9 @@ import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { isMac } from "../../../adapters/platform"
+import { chordEvent } from "../../../model/keyboard"
 import { ClockProvider } from "../../adapters/dom/clock"
-import { chordEvent } from "../../adapters/dom/shortcuts"
 import { focusPane, loadWorkspace, openBeside } from "../../adapters/store/commands"
 import { layoutShape, panesOf } from "../../model/pane-layout"
 import { settle, testStore } from "../../testing"
@@ -119,7 +120,7 @@ const press = (command: string) => {
   const binding = workspaceShortcuts.find((each) => each.command === command)
   if (!binding) throw new Error(`no ${command}`)
   window.dispatchEvent(
-    new KeyboardEvent("keydown", { ...chordEvent(binding.chord), bubbles: true }),
+    new KeyboardEvent("keydown", { ...chordEvent(binding.chord, isMac), bubbles: true }),
   )
 }
 

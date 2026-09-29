@@ -10,6 +10,8 @@ import {
 } from "react"
 import type { HostKind } from "../../../host/features"
 import { holdStill, slideFrom } from "../../adapters/hold-still"
+import { isMac } from "../../adapters/platform"
+import { chordLabel, commandKey, matchesChord, type Chord } from "../../model/keyboard"
 import { reducedMotion } from "../../adapters/motion-preference"
 import { useThemePreference } from "../../adapters/theme-preference"
 import { useEdgePeek } from "../../adapters/use-edge-peek"
@@ -59,8 +61,8 @@ export function openSettings() {
   window.dispatchEvent(new Event(openEvent))
 }
 
-const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent)
-const shortcut = (keys: string) => (isMac ? keys : keys.replace("⌘", "Ctrl+"))
+/** ⌘B shows and hides Settings' sidebar, as it does the window's. */
+const sidebarChord: Chord = { code: "KeyB", command: true }
 
 /** Each category's icon in the sidebar, for every category the catalogue has. */
 const categoryIcons: Record<SettingsCategoryId, DesktopIconRole> = {
@@ -199,10 +201,9 @@ function SettingsView({
   // Settings' own fields is the browser's default, and still happens.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const mod = isMac ? event.metaKey : event.ctrlKey
-      if (!mod && !event.ctrlKey) return
+      if (!commandKey(event, isMac) && !event.ctrlKey) return
       event.stopPropagation()
-      if (!mod || event.altKey || event.shiftKey || event.code !== "KeyB") return
+      if (!matchesChord(event, sidebarChord, isMac)) return
       event.preventDefault()
       toggleSidebar()
     }
@@ -278,7 +279,7 @@ function SettingsView({
   }
 
   const sidebarAction = `${sidebarOpen ? "Hide" : "Show"} Sidebar`
-  const sidebarLabel = `${sidebarAction} (${shortcut("⌘B")})`
+  const sidebarLabel = `${sidebarAction} (${chordLabel(sidebarChord, isMac)})`
 
   return (
     <div
@@ -306,7 +307,7 @@ function SettingsView({
           type="button"
           className="settings-titlebar-button"
           aria-label={sidebarLabel}
-          {...tooltip(sidebarAction, { shortcut: shortcut("⌘B") })}
+          {...tooltip(sidebarAction, { shortcut: chordLabel(sidebarChord, isMac) })}
           aria-expanded={sidebarOpen}
           aria-controls="settings-sidebar"
           onClick={toggleSidebar}

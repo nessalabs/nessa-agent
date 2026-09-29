@@ -5,6 +5,8 @@ import { useTintFromPicture } from "../../adapters/header-image"
 import { useThemePreference } from "../../adapters/theme-preference"
 import { agentForProvider, composerProviders } from "../../model/composer-options"
 import { iconFamilies } from "../../model/icon-family"
+import { chordLabel } from "../../model/keyboard"
+import { isMac } from "../../adapters/platform"
 import type { SettingsTabId } from "../model/settings-catalogue"
 import { desktopThemes } from "../../model/theme"
 import { workspaceLayouts, type WorkspaceLayoutId } from "../../model/workspace-layout"
@@ -19,7 +21,6 @@ import {
 } from "../../adapters/window-preferences"
 import { motionChoices } from "../../model/motion"
 import {
-  chordLabel,
   selectSessionListChosen,
   shortcutNames,
   toggleSessionList,
@@ -361,7 +362,7 @@ function KeyboardTab() {
           label="Settings"
           control={
             <kbd className="settings-kbd">
-              {chordLabel({ code: "Comma", command: true })}
+              {chordLabel({ code: "Comma", command: true }, isMac)}
             </kbd>
           }
         />
@@ -371,7 +372,9 @@ function KeyboardTab() {
           <ItemRow
             key={binding.command}
             label={shortcutNames[binding.command]}
-            control={<kbd className="settings-kbd">{chordLabel(binding.chord)}</kbd>}
+            control={
+              <kbd className="settings-kbd">{chordLabel(binding.chord, isMac)}</kbd>
+            }
           />
         ))}
       </Group>
