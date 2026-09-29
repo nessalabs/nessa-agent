@@ -23,6 +23,7 @@ use tokio::runtime::Handle;
 
 const SCHEMA: &str = "nessa.physical-frame.v1";
 const REMEMBERED_HEADS: usize = 64;
+const SOURCE_QUEUE_CAPACITY: usize = 64;
 
 /// The sync schema for physical Nessa frame payloads. The first payload byte
 /// identifies start (1), piece (2), seal (3), or abort (4); the remaining bytes
@@ -51,13 +52,28 @@ pub struct NessaRecordSource {
 }
 
 struct SourceWorker {
-    sender: mpsc::Sender<Command>,
+    sender: Option<mpsc::SyncSender<Command>>,
     thread: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+impl SourceWorker {
+    fn enqueue(&self, command: Command) -> Result<(), SourceError> {
+        self.sender
+            .as_ref()
+            .ok_or(SourceError::Unavailable)?
+            .try_send(command)
+            .map_err(|_| SourceError::Unavailable)
+    }
 }
 
 impl Drop for SourceWorker {
     fn drop(&mut self) {
-        let _ = self.sender.send(Command::Shutdown);
+        if let Some(sender) = self.sender.take() {
+            // A full queue must not block the final drop. Closing its sender
+            // also lets the worker exit after the admitted commands drain.
+            let _ = sender.try_send(Command::Shutdown);
+            drop(sender);
+        }
         if let Some(worker) = self.thread.get_mut().unwrap().take() {
             if Handle::try_current().is_err() {
                 let _ = worker.join();
@@ -78,7 +94,7 @@ impl NessaRecordSource {
     ) -> Result<Self, StorageError> {
         let stream_id = Id::new(stream.id.as_str()).expect("session ID fits sync identity");
         let incarnation = incarnation_id(&stream);
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(SOURCE_QUEUE_CAPACITY);
         let worker_origin = origin.clone();
         let worker = thread::Builder::new()
             .name("nessa-record-source".into())
@@ -105,7 +121,7 @@ impl NessaRecordSource {
             .map_err(|error| StorageError::Io(error.to_string()))?;
         Ok(Self {
             worker: Arc::new(SourceWorker {
-                sender,
+                sender: Some(sender),
                 thread: Mutex::new(Some(worker)),
             }),
             origin,
@@ -133,19 +149,13 @@ impl NessaRecordSource {
 impl RecordSource for NessaRecordSource {
     fn head(&mut self, scope: &Scope) -> Result<u64, SourceError> {
         let (reply, result) = mpsc::channel();
-        self.worker
-            .sender
-            .send(Command::Head(scope.clone(), reply))
-            .map_err(|_| SourceError::Unavailable)?;
+        self.worker.enqueue(Command::Head(scope.clone(), reply))?;
         result.recv().map_err(|_| SourceError::Unavailable)?
     }
 
     fn page(&mut self, request: &PageRequest) -> Result<Page, SourceError> {
         let (reply, result) = mpsc::channel();
-        self.worker
-            .sender
-            .send(Command::Page(request.clone(), reply))
-            .map_err(|_| SourceError::Unavailable)?;
+        self.worker.enqueue(Command::Page(request.clone(), reply))?;
         result.recv().map_err(|_| SourceError::Unavailable)?
     }
 }
@@ -457,6 +467,46 @@ mod tests {
         let record_envelope = 8 + (1 + 128) + scope + 4;
         let maximum = echoed_request + MAX_PAGE_RECORDS * record_envelope + MAX_PAGE_PAYLOAD;
         assert!(maximum < nessa_sync::replication::infrastructure::MAX_FRAME_BYTES);
+    }
+
+    #[test]
+    fn busy_source_refuses_excess_reads_and_full_queue_does_not_hold_shutdown() {
+        let (sender, receiver) = mpsc::sync_channel(SOURCE_QUEUE_CAPACITY);
+        let worker = SourceWorker {
+            sender: Some(sender),
+            thread: Mutex::new(None),
+        };
+        let scope = Scope::new(
+            id("receiver"),
+            id("origin"),
+            id("conversation"),
+            id("incarnation"),
+            physical_record_schema(),
+            id("epoch"),
+        );
+        for _ in 0..64 {
+            let (reply, _waiting_client) = mpsc::channel();
+            assert_eq!(
+                worker.enqueue(super::Command::Head(scope.clone(), reply)),
+                Ok(())
+            );
+        }
+        let (reply, _excess_client) = mpsc::channel();
+        assert_eq!(
+            worker.enqueue(super::Command::Head(scope, reply)),
+            Err(SourceError::Unavailable)
+        );
+        drop(worker);
+        for _ in 0..64 {
+            assert!(matches!(
+                receiver.try_recv(),
+                Ok(super::Command::Head(_, _))
+            ));
+        }
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
     }
 
     #[tokio::test]
