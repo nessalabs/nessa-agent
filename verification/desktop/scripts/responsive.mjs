@@ -12,6 +12,9 @@
  *                   below it where it does not ("The titlebar's safe area"): an
  *                   inline title never overlaps a titlebar control
  *   settings-fold   Settings' sidebar folds for room below a page of 420px
+ *   overview-header the Agents overview's header holds its place while its list
+ *                   scrolls to the end, the list begins below it, and the list's
+ *                   top edge fades (its mask) rather than cutting a row
  *
  * With --shots <dir>, screenshots of each width go there for a person to look at.
  */
@@ -238,6 +241,58 @@ const checks = {
     }
     return { widths: seen, failures }
   },
+}
+
+checks["overview-header"] = async ({ page, engine, options }) => {
+  // Short enough that the list must scroll.
+  await page.setViewportSize({ width: 1440, height: 560 })
+  await page.keyboard.press(keys.overview)
+  await need(page, css.overview, "the Agents overview")
+  await frames(page, 2)
+  await settled(page)
+  const read = () =>
+    page.evaluate((sel) => {
+      const header = document.querySelector(sel.overviewHeader)
+      const scroller = document.querySelector(sel.overviewScroll)
+      if (!header || !scroller) return null
+      const style = getComputedStyle(scroller)
+      return {
+        headerTop: header.getBoundingClientRect().top,
+        headerBottom: header.getBoundingClientRect().bottom,
+        scrollerTop: scroller.getBoundingClientRect().top,
+        scrollTop: scroller.scrollTop,
+        room: scroller.scrollHeight - scroller.clientHeight,
+        mask: style.maskImage || style.webkitMaskImage || "",
+      }
+    }, css)
+  const before = await read()
+  if (!before) throw new CannotRun(`no ${css.overviewHeader} or ${css.overviewScroll}`)
+  if (before.room < 40)
+    throw new CannotRun(
+      `the list scrolls only ${before.room}px at 1440 × 560: nothing to hold`,
+    )
+  await page.evaluate((sel) => {
+    const scroller = document.querySelector(sel.overviewScroll)
+    scroller.scrollTop = scroller.scrollHeight
+  }, css)
+  await frames(page, 2)
+  const after = await read()
+  await shot(options, page, `overview-header-${engine}`)
+  const failures = []
+  if (after.scrollTop < before.room - 1)
+    failures.push(`the list scrolled to ${after.scrollTop} of ${before.room}px`)
+  if (Math.abs(after.headerTop - before.headerTop) > 0.5)
+    failures.push(
+      `the header moved ${after.headerTop - before.headerTop}px as the list scrolled`,
+    )
+  if (after.scrollerTop < after.headerBottom - 0.5)
+    failures.push(
+      `the list begins at ${after.scrollerTop}px, under the header ending at ${after.headerBottom}px`,
+    )
+  // The fade: the mask begins transparent at the list's top edge.
+  if (!/^linear-gradient\((?:rgba\(0, 0, 0, 0\)|transparent)/.test(after.mask))
+    failures.push(`the list's top edge has no fade (mask: "${after.mask}")`)
+  return { before, after, failures }
 }
 
 const meta = {

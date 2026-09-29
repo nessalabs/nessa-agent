@@ -65,6 +65,8 @@ export const css = {
   overviewReplyPill: ".agents-reply-pill", // class
   overviewReplyField: "[data-reply-for] textarea", // data-reply-for is the session replied to
   overviewFilter: ".agents-filter", // class
+  overviewHeader: ".agents-overview-header", // class: the title, its counts and the filter
+  overviewScroll: ".agents-overview-scroll", // class: the list's scroller, under the header
 
   // Column heads (src/desktop/ui/column-header.tsx): data-title / data-placement are "inline" | "below"
   columnBar: ".desktop-column-bar", // class
