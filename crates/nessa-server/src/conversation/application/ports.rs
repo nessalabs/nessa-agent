@@ -330,7 +330,8 @@ pub struct ListedConversation {
 /// conversation broken.
 pub trait ConversationSummaries: Send + Sync {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<ConversationSummary>>;
-    /// Replace the conversation's summary with `summary`.
+    /// Replace the conversation's summary with `summary`. A deleted identity
+    /// refuses late writes, preserving its catalogue deletion marker.
     fn record(
         &self,
         id: &ConversationId,

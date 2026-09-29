@@ -61,6 +61,10 @@ pub enum ConversationError {
     Capacity,
     Unavailable,
     Metadata,
+    /// Catalogue request names another database incarnation.
+    CatalogueIdentityChanged,
+    /// Catalogue page or payload bound is outside the supported range.
+    CatalogueInvalidRequest,
     Audit,
     /// The SDK owns the submission receipt, but one or both mandatory evidence
     /// stores did not acknowledge admission.

@@ -356,7 +356,9 @@ fn permission_answer_failure(
 }
 fn error_code(error: &ConversationError) -> ConversationErrorCode {
     match error {
-        ConversationError::InvalidInput => ConversationErrorCode::InvalidRequest,
+        ConversationError::InvalidInput | ConversationError::CatalogueInvalidRequest => {
+            ConversationErrorCode::InvalidRequest
+        }
         ConversationError::ImagesUnsupported => ConversationErrorCode::ImageInputUnsupported,
         ConversationError::AttachmentNotFound => ConversationErrorCode::AttachmentNotFound,
         // Everything was let go and only the evidence of it was lost, so there
@@ -392,7 +394,8 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
         | ConversationError::RetirementAdmission { .. } => {
             ConversationErrorCode::TemporarilyUnavailable
         }
-        ConversationError::Storage(StorageError::IdentityMismatch)
+        ConversationError::CatalogueIdentityChanged
+        | ConversationError::Storage(StorageError::IdentityMismatch)
         | ConversationError::Agent(AgentError::Storage(StorageError::IdentityMismatch)) => {
             ConversationErrorCode::ConversationConfigurationChanged
         }

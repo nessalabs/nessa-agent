@@ -5,9 +5,10 @@ use super::store::{LocalConversationStore, LIST, UNFINISHED};
 use crate::agents::domain::AgentId;
 use crate::conversation::{
     application::{
-        ConversationCreationDisposition, ConversationError, ConversationListing,
-        ConversationModeApplication, ConversationModeRequest, ConversationModeRequestState,
-        ConversationRepository, ConversationSummaries,
+        CatalogueKey, CataloguePageRequest, ConversationCatalogue, ConversationCreationDisposition,
+        ConversationError, ConversationListing, ConversationModeApplication,
+        ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
+        ConversationSummaries,
     },
     domain::{
         Conversation, ConversationDeletion, ConversationId, ConversationSummary,
@@ -112,6 +113,7 @@ async fn mode_intent_and_commit_survive_restart_without_reapplying() {
         .finish_mode_change(&id, "mode-1", ConversationModeRequestState::Applied)
         .await
         .unwrap();
+    assert_eq!(opened.store.head(&org(), &alice()).await.unwrap().revision, 2);
     drop(opened.store);
     let reopened = LocalConversationStore::open(&opened.path).unwrap();
     assert_eq!(reopened.pending_mode_change(&id).await.unwrap(), None);
@@ -140,6 +142,7 @@ async fn mode_intent_and_commit_survive_restart_without_reapplying() {
             .state,
         ConversationModeRequestState::Applied
     );
+    assert_eq!(reopened.head(&org(), &alice()).await.unwrap().revision, 2);
 }
 
 #[tokio::test]
@@ -183,13 +186,40 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 1,
-            expected: 2
+            expected: 3
         })
     ));
     let old_row: String = raw(&path)
         .query_row("SELECT id FROM conversations", [], |row| row.get(0))
         .unwrap();
     assert_eq!(old_row, "old-chat");
+}
+
+#[test]
+fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let path = private.join("metadata.sqlite3");
+    let old = nessa_local_database::Schema::new(
+        "CREATE TABLE conversations (id TEXT PRIMARY KEY NOT NULL) STRICT;\nPRAGMA user_version = 2;",
+    ).unwrap();
+    let connection = nessa_local_database::open(&path, &old).unwrap();
+    connection
+        .execute("INSERT INTO conversations (id) VALUES ('retained')", [])
+        .unwrap();
+    drop(connection);
+    assert!(matches!(
+        LocalConversationStore::open(&path),
+        Err(nessa_local_database::OpenError::Version {
+            found: 2,
+            expected: 3
+        })
+    ));
+    let retained: String = raw(&path)
+        .query_row("SELECT id FROM conversations", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(retained, "retained");
 }
 
 fn deletion(request: &str) -> ConversationDeletion {
@@ -210,6 +240,24 @@ fn org() -> OrganizationId {
 }
 fn alice() -> PrincipalId {
     PrincipalId::new("alice").unwrap()
+}
+fn catalogue_request(
+    owner: PrincipalId,
+    incarnation: &str,
+    completed: u64,
+    boundary: u64,
+    after: Option<CatalogueKey>,
+    limit: usize,
+) -> CataloguePageRequest {
+    CataloguePageRequest {
+        organization: org(),
+        owner,
+        incarnation: incarnation.into(),
+        completed,
+        boundary,
+        after,
+        limit,
+    }
 }
 async fn listed(
     store: &LocalConversationStore,
@@ -938,7 +986,7 @@ fn many(path: &Path, owner: &str, count: usize) {
         let id = new_id().to_string();
         transaction
             .execute(
-                "INSERT INTO conversations VALUES (?1, 'org', ?2, 'panel', 'create', 1, 'claude', 'test-model', 'ask')",
+                "INSERT INTO conversations VALUES (?1, 'org', ?2, 'panel', 'create', 1, 'claude', 'test-model', 'ask', 1, 1)",
                 params![id, owner],
             )
             .unwrap();
@@ -1039,7 +1087,7 @@ async fn unfinished_deletions_are_read_by_their_index_and_an_unnamed_one_is_coun
     let unnamed = "not-a-conversation";
     let raw = raw(&path);
     raw.execute(
-        "INSERT INTO conversations VALUES (?1, 'org', 'alice', 'panel', 'create', 1, 'claude', 'test-model', 'ask')",
+        "INSERT INTO conversations VALUES (?1, 'org', 'alice', 'panel', 'create', 1, 'claude', 'test-model', 'ask', 1, 1)",
         [unnamed],
     )
     .unwrap();
@@ -1053,4 +1101,319 @@ async fn unfinished_deletions_are_read_by_their_index_and_an_unnamed_one_is_coun
         (found.conversations, found.unreadable),
         (vec![unfinished], 1)
     );
+}
+
+#[tokio::test]
+async fn catalogue_revisions_follow_owner_visible_changes_and_survive_restart() {
+    let opened = opened();
+    let id = new_id();
+    let bob = PrincipalId::new("bob").unwrap();
+    let incarnation = opened
+        .store
+        .head(&org(), &alice())
+        .await
+        .unwrap()
+        .incarnation;
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        0
+    );
+    opened.store.create(owned(&id)).await.unwrap();
+    let first = opened
+        .store
+        .resolve(&org(), &alice(), &incarnation, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (first.descriptor.key.creation, first.descriptor.revision),
+        (1, 1)
+    );
+    assert!(first.summary.is_none());
+    assert!(opened
+        .store
+        .resolve(&org(), &bob, &incarnation, &id)
+        .await
+        .unwrap()
+        .is_none());
+    opened.store.record(&id, said("hello", 2)).await.unwrap();
+    let second = opened
+        .store
+        .resolve(&org(), &alice(), &incarnation, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (second.descriptor.key.creation, second.descriptor.revision),
+        (1, 2)
+    );
+    assert!(second.summary.is_some());
+    opened
+        .store
+        .record(&id, second.summary.unwrap().after_archiving(true))
+        .await
+        .unwrap();
+    let archived = opened
+        .store
+        .resolve(&org(), &alice(), &incarnation, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(archived.descriptor.revision, 3);
+    assert!(archived.summary.unwrap().archived());
+    opened
+        .store
+        .record_deletion(&id, deletion("delete"))
+        .await
+        .unwrap();
+    let deleted = opened
+        .store
+        .resolve(&org(), &alice(), &incarnation, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (deleted.descriptor.key.creation, deleted.descriptor.revision),
+        (1, 4)
+    );
+    assert!(deleted.descriptor.deleted);
+    assert!(deleted.summary.is_none());
+    assert!(matches!(
+        opened.store.record(&id, said("late", 3)).await,
+        Err(ConversationError::Deleted)
+    ));
+    opened
+        .store
+        .record_deletion(&id, deletion("again"))
+        .await
+        .unwrap();
+    opened.store.erase(&id).await.unwrap();
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        4
+    );
+    drop(opened.store);
+    let reopened = LocalConversationStore::open(&opened.path).unwrap();
+    assert_eq!(
+        reopened.head(&org(), &alice()).await.unwrap().incarnation,
+        incarnation
+    );
+    assert!(
+        reopened
+            .resolve(&org(), &alice(), &incarnation, &id)
+            .await
+            .unwrap()
+            .unwrap()
+            .descriptor
+            .deleted
+    );
+    assert!(matches!(
+        reopened
+            .page(catalogue_request(alice(), "wrong", 0, 3, None, 2))
+            .await,
+        Err(ConversationError::CatalogueIdentityChanged)
+    ));
+}
+
+#[tokio::test]
+async fn catalogue_pages_use_creation_keys_and_do_not_cut_off_newer_changes() {
+    let opened = opened();
+    let incarnation = opened
+        .store
+        .head(&org(), &alice())
+        .await
+        .unwrap()
+        .incarnation;
+    let ids: Vec<_> = (0..620).map(|_| new_id()).collect();
+    for id in &ids {
+        opened.store.create(owned(id)).await.unwrap();
+    }
+    for _ in 0..20 {
+        let id = new_id();
+        opened
+            .store
+            .create(owned_by(&id, "org", "bob", 1))
+            .await
+            .unwrap();
+    }
+    let bob = PrincipalId::new("bob").unwrap();
+    assert_eq!(opened.store.head(&org(), &bob).await.unwrap().revision, 20);
+    assert_eq!(
+        opened
+            .store
+            .page(catalogue_request(bob, &incarnation, 0, 20, None, 21))
+            .await
+            .unwrap()
+            .entries
+            .len(),
+        20
+    );
+    let boundary = opened.store.head(&org(), &alice()).await.unwrap().revision;
+    let created_midpass = new_id();
+    opened.store.create(owned(&created_midpass)).await.unwrap();
+    let mut after = None;
+    let mut seen = Vec::new();
+    let mut first_page = true;
+    loop {
+        let page = opened
+            .store
+            .page(catalogue_request(
+                alice(),
+                &incarnation,
+                0,
+                boundary,
+                after.clone(),
+                37,
+            ))
+            .await
+            .unwrap();
+        if let Some(last) = page.entries.last() {
+            after = Some(last.key.clone());
+        }
+        seen.extend(page.entries);
+        if first_page {
+            opened
+                .store
+                .record(&ids[0], said("changed behind cursor", 3))
+                .await
+                .unwrap();
+            first_page = false;
+        }
+        if !page.has_more {
+            break;
+        }
+    }
+    assert_eq!(seen.len(), 620);
+    assert!(seen
+        .windows(2)
+        .all(|pair| (pair[0].key.creation, pair[0].key.id.to_string())
+            < (pair[1].key.creation, pair[1].key.id.to_string())));
+    let late = ids.last().unwrap();
+    opened.store.record(late, said("late", 4)).await.unwrap();
+    let page = opened
+        .store
+        .page(catalogue_request(
+            alice(),
+            &incarnation,
+            0,
+            boundary,
+            Some(seen[618].key.clone()),
+            2,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].revision, boundary + 3);
+    assert_eq!(page.entries[0].key.creation, boundary);
+    let next = opened
+        .store
+        .page(catalogue_request(
+            alice(),
+            &incarnation,
+            boundary,
+            boundary + 3,
+            None,
+            3,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next.entries.len(), 3);
+    assert_eq!(next.entries[0].key.id, ids[0]);
+    assert_eq!(next.entries[1].key.id, *late);
+    assert_eq!(next.entries[2].key.id, created_midpass);
+}
+
+#[tokio::test]
+async fn catalogue_refuses_its_owners_damaged_row_without_reading_another_owners() {
+    let opened = opened();
+    let ours = new_id();
+    let theirs = new_id();
+    opened.store.create(owned(&ours)).await.unwrap();
+    opened
+        .store
+        .create(owned_by(&theirs, "org", "bob", 1))
+        .await
+        .unwrap();
+    let incarnation = opened
+        .store
+        .head(&org(), &alice())
+        .await
+        .unwrap()
+        .incarnation;
+    raw(&opened.path)
+        .execute(
+            "UPDATE conversations SET creator_surface = CAST(x'80' AS TEXT) WHERE id = ?1",
+            [theirs.to_string()],
+        )
+        .unwrap();
+    let ours_page = opened
+        .store
+        .page(catalogue_request(alice(), &incarnation, 0, 1, None, 2))
+        .await
+        .unwrap();
+    assert_eq!(ours_page.entries.len(), 1);
+    assert_eq!(ours_page.entries[0].key.id, ours);
+    let bob = PrincipalId::new("bob").unwrap();
+    assert!(matches!(
+        opened
+            .store
+            .page(catalogue_request(bob, &incarnation, 0, 1, None, 2))
+            .await,
+        Err(ConversationError::Metadata)
+    ));
+}
+
+#[tokio::test]
+async fn catalogue_resolves_a_deletion_that_raced_its_manifest_descriptor() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    let incarnation = opened
+        .store
+        .head(&org(), &alice())
+        .await
+        .unwrap()
+        .incarnation;
+    let page = opened
+        .store
+        .page(catalogue_request(alice(), &incarnation, 0, 1, None, 1))
+        .await
+        .unwrap();
+    assert!(!page.entries[0].deleted);
+    assert_eq!(page.entries[0].revision, 1);
+    opened
+        .store
+        .record_deletion(&id, deletion("raced"))
+        .await
+        .unwrap();
+    let current = opened
+        .store
+        .resolve(&org(), &alice(), &incarnation, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.descriptor.key, page.entries[0].key);
+    assert_eq!(current.descriptor.revision, 2);
+    assert!(current.descriptor.deleted);
+    assert!(matches!(
+        opened
+            .store
+            .page(catalogue_request(alice(), &incarnation, 0, 3, None, 1))
+            .await,
+        Err(ConversationError::CatalogueInvalidRequest)
+    ));
+    assert!(matches!(
+        opened
+            .store
+            .page(catalogue_request(alice(), &incarnation, 0, 2, None, 0))
+            .await,
+        Err(ConversationError::CatalogueInvalidRequest)
+    ));
+    let other = PrincipalId::new("bob").unwrap();
+    assert!(opened
+        .store
+        .resolve(&org(), &other, &incarnation, &id)
+        .await
+        .unwrap()
+        .is_none());
 }

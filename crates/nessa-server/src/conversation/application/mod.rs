@@ -5,6 +5,8 @@
 //! Service -> ConversationListing: one caller's conversations with their
 //! summaries, read without opening any of them and without reading anybody
 //! else's; the store that keeps both answers it in one question.
+//! `ConversationCatalogue` reads the same metadata for a linked receiver in
+//! finite creation-key pages. It owns no second copy of metadata or progress.
 //! A bounded read projection consumes SDK observations independently of sockets.
 //! Service -> ConversationAttachments: a message may refer only to images this
 //! conversation uploaded, and closing the conversation lets them go.
@@ -63,6 +65,7 @@
 //! Deletes of one conversation, and summary writes of one conversation, are
 //! serialized per conversation (`ConversationLocks`), and a delete that waits
 //! behind another attempt answers from its tombstone without one of its own.
+mod catalogue;
 mod error;
 mod locks;
 mod ports;
@@ -71,6 +74,10 @@ mod provider_sessions;
 mod retries;
 mod service;
 mod view;
+pub use catalogue::{
+    CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
+    CatalogueValue, ConversationCatalogue, MAX_CATALOGUE_PAGE,
+};
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use ports::{
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreation,
