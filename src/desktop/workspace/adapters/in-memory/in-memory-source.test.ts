@@ -299,6 +299,13 @@ describe("the in-memory source", () => {
     const model = { provider: "anthropic", modelId: "claude-opus-5" }
     const asked = (await source.transcript("retry-budget")).approval
     expect(asked).not.toBeNull()
+    // A subscriber shown the approval gone finds it let go on record already.
+    const onRecord: (string | undefined)[] = []
+    source.subscribe((update) => {
+      if (update.kind === "transcript" && update.transcript.sessionId === "retry-budget")
+        if (update.transcript.approval === null)
+          onRecord.push(source.audit().find((entry) => entry.messageId === "m1")?.action)
+    })
     await source.send({
       initiator: "agent",
       sessionId: "retry-budget",
@@ -317,6 +324,7 @@ describe("the in-memory source", () => {
       before: { waitingOn: { approvalId: asked?.id } },
     })
     expect(letGo.after).toBeGreaterThan(letGo.before!.revision)
+    expect(onRecord[0]).toBe("let-go")
     advance(60_000)
     expect((await source.transcript("retry-budget")).approval).toBeNull()
     await expect(

@@ -309,6 +309,25 @@ export function inMemorySource(
       at,
       parts: [{ kind: "text", text: message.text }],
     }
+    // An approval the message lets go is on record, with who sent it, before
+    // anyone hears of it: a subscriber shown the approval gone finds its
+    // `let-go` in the audit already.
+    if (found?.waitingOn)
+      entries = Object.freeze([
+        ...entries,
+        Object.freeze({
+          sessionId: session.id,
+          action: "let-go",
+          approvalId: found.waitingOn.approvalId,
+          messageId: message.messageId,
+          initiator: message.initiator,
+          at,
+          before: found,
+          outcome: "taken",
+          after: sessions.get(session.id)?.revision,
+          settledAt: schedule.now(),
+        } satisfies AuditEntry),
+      ])
     putTranscript({
       ...transcript,
       messages: [
@@ -326,23 +345,6 @@ export function inMemorySource(
     later(session.id, scriptTiming.answerMs, () =>
       stream(session.id, reply.steps, reply.text),
     )
-    // An approval the message let go is on record, with who sent it.
-    if (found?.waitingOn)
-      entries = Object.freeze([
-        ...entries,
-        Object.freeze({
-          sessionId: session.id,
-          action: "let-go",
-          approvalId: found.waitingOn.approvalId,
-          messageId: message.messageId,
-          initiator: message.initiator,
-          at,
-          before: found,
-          outcome: "taken",
-          after: sessions.get(session.id)?.revision,
-          settledAt: schedule.now(),
-        } satisfies AuditEntry),
-      ])
   }
 
   const waiting = (sessionId: string, approvalId: string) => {
