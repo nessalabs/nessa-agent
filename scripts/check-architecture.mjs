@@ -15,11 +15,15 @@ import { overlayPlacementViolations } from "./architecture/overlay-placement.mjs
 import { setupGatePlacementViolations } from "./architecture/setup-gate-placement.mjs"
 import { standDownPlacementViolations } from "./architecture/stand-down-placement.mjs"
 import { composerBudgetViolations } from "./architecture/composer-budget.mjs"
+import { wholeWorkspaceViolations } from "./architecture/whole-workspace.mjs"
+import { importedPaths } from "./architecture/imported-paths.mjs"
+import { splitPanesBoundaryViolations } from "./architecture/split-panes-boundary.mjs"
 import {
   normalizedPath,
   rustBoundaryViolations,
   workspaceRustSourceRoots,
 } from "./architecture/rust-boundaries.mjs"
+import { withoutComments } from "./architecture/without-comments.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const src = join(root, "src")
@@ -93,10 +97,6 @@ for (const name of readdirSync(src)) {
   }
 }
 
-function importedPaths(text) {
-  return [...text.matchAll(/from\s+["']([^"']+)["']/g)].map((match) => match[1])
-}
-
 for (const file of walk(src)) {
   const text = readFileSync(file, "utf8")
   const path = rel(file)
@@ -137,8 +137,9 @@ for (const file of walk(src)) {
   // and `session`, so a feature that grew a `model/` or `application/` later —
   // `panel/` did — got no rules at all and its first React import passed. The
   // layer a file is in is what decides what it may import, whichever feature it
-  // belongs to.
-  const vertical = /^src\/([^/]+)\/(model|application)\//.exec(path)
+  // belongs to — a vertical nested in another, like `desktop/workspace/`,
+  // included: the feature is everything before the first layer folder.
+  const vertical = /^src\/(.+?)\/(model|application)\//.exec(path)
   const feature = vertical?.[1]
   const layer = vertical?.[2]
   const inLayerRules = Boolean(vertical) && !path.endsWith(".test.ts")
@@ -184,12 +185,24 @@ for (const file of walk(src)) {
     if (/from\s+["']react["']/.test(text) || /from\s+["']react\//.test(text)) {
       fail(file, `${feature} model/use cases must not import React`)
     }
+    // Nor a React component library, even for a type: the model's values are
+    // its own, and the UI maps them to a component's props.
+    if (/from\s+["']@nessa-ui\/react(?:["'/])/.test(text)) {
+      fail(
+        file,
+        `${feature} model/use cases must not import the UI library (@nessa-ui/react)`,
+      )
+    }
     if (/@tauri-apps/.test(text)) {
       fail(file, `${feature} model/use cases must not import the host`)
     }
     if (/redux/i.test(text)) {
       fail(file, `${feature} model/use cases must not import the store`)
     }
+  }
+
+  for (const violation of wholeWorkspaceViolations(path, text)) {
+    fail(file, violation)
   }
 
   if (
@@ -211,6 +224,9 @@ for (const file of walk(src)) {
   if (!path.startsWith("src/conversation/") && !path.endsWith(".test.ts")) {
     for (const item of imports) {
       if (!/conversation/.test(item)) continue
+      // Matched by name, so a stylesheet that happens to be called
+      // `conversation.css` (a workspace pane's) is no import of the vertical.
+      if (/\.css$/.test(item)) continue
       const barrel =
         /(?:^|\/)conversation$/.test(item) || /(?:^|\/)conversation\/index$/.test(item)
       const slice = /conversation\/adapters\/store\/slice$/.test(item)
@@ -221,6 +237,10 @@ for (const file of walk(src)) {
       if (barrel) continue
       fail(file, "other modules import the conversation barrel, not its internals")
     }
+  }
+
+  for (const violation of splitPanesBoundaryViolations(path, imports)) {
+    fail(file, violation)
   }
 
   if (!path.startsWith("src/session/") && !path.endsWith(".test.ts")) {
@@ -343,7 +363,7 @@ for (const file of [
   // also what keeps a comment about imports from reading as one.
   const specifiers = [
     ...importedPaths(text),
-    ...[...text.matchAll(/^\s*import\s*\(?\s*["']([^"']+)["']/gm)].map(
+    ...[...withoutComments(text).matchAll(/^\s*import\s*\(?\s*["']([^"']+)["']/gm)].map(
       (match) => match[1],
     ),
   ]

@@ -36,6 +36,11 @@ pub trait Host: Send + Sync {
     /// window yet.
     fn configure_app(&self, _app: &AppHandle) {}
 
+    /// Whether the app shows in the Dock and the app switcher. Nessa does while
+    /// the desktop window is open and goes back to living in the menu bar when
+    /// it closes; hosts with no such distinction ignore it.
+    fn set_dock_presence(&self, _app: &AppHandle, _shown: bool) {}
+
     /// Shape a window into a screen-covering overlay: its level, its frame, and
     /// which Spaces it joins. Setup uses this — it dims what is behind it, and a
     /// dim that stops at the menu bar is not a dim.

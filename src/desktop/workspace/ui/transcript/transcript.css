@@ -1,0 +1,400 @@
+/*
+ * A conversation: heading, messages, the agent's steps, what it is doing and
+ * what it waits on. The transcript fades out under the pane's header and into
+ * the composer, and keeps its scrollbar's room whether or not it needs one,
+ * so text never shifts sideways as a reply grows past the fold.
+ */
+.workspace-transcript {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  outline: none;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 16%, transparent) transparent;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black 20px,
+    black calc(100% - 20px),
+    transparent
+  );
+}
+
+.workspace-transcript-inner {
+  display: flex;
+  max-width: 700px;
+  flex-direction: column;
+  gap: 24px;
+  margin: 0 auto;
+  padding: 8px 24px 32px;
+  overflow-wrap: anywhere;
+  animation: workspace-fade-in var(--desktop-base) ease both;
+}
+
+.workspace-transcript-inner[data-arriving] {
+  animation: none;
+}
+
+/* Messages that arrive while the conversation is open rise into place. */
+.workspace-transcript-inner > [data-new] {
+  animation: workspace-message-in var(--desktop-slow) var(--desktop-out) both;
+}
+
+@keyframes workspace-message-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* ——— Heading ——— */
+
+.workspace-heading {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 32px 0 8px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.workspace-heading h2 {
+  max-width: 100%;
+  margin: 0;
+  font-size: var(--desktop-text-display);
+  font-weight: 650;
+  letter-spacing: -0.022em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+  background: linear-gradient(
+    100deg,
+    var(--foreground) 0%,
+    color-mix(in oklab, var(--foreground) 64%, transparent) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.workspace-heading h2::selection {
+  color: var(--foreground);
+  -webkit-text-fill-color: var(--foreground);
+}
+
+.workspace-heading p {
+  max-width: 100%;
+  margin: 0;
+  color: var(--desktop-fainter);
+  font-size: var(--desktop-text-footnote);
+  letter-spacing: -0.003em;
+  overflow-wrap: anywhere;
+}
+
+.workspace-heading-channel {
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font-size: inherit;
+  transition: color var(--desktop-fast) ease;
+}
+
+.workspace-heading-channel:hover {
+  color: var(--desktop-ink-2);
+}
+
+.workspace-transcript-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.workspace-transcript-note p {
+  margin: 0;
+}
+
+/* ——— Messages ——— */
+
+.workspace-message {
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-message[data-role="user"] {
+  align-items: flex-end;
+}
+
+.workspace-bubble {
+  max-width: min(84%, 540px);
+  padding: 8px 16px;
+  border-radius: var(--desktop-radius-lg) var(--desktop-radius-lg)
+    var(--desktop-radius-xs) var(--desktop-radius-lg);
+  background: color-mix(in oklab, var(--foreground) 7.5%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 6%, transparent);
+  color: color-mix(in oklab, var(--foreground) 94%, transparent);
+  font-size: var(--desktop-text-read);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.workspace-bubble p {
+  margin: 0;
+}
+
+.workspace-message-failed {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 6px 4px 0 0;
+  color: var(--desktop-needs);
+  font-size: var(--desktop-text-footnote);
+}
+
+.workspace-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--desktop-muted);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.workspace-link-button:hover {
+  color: var(--desktop-ink-2);
+}
+
+.workspace-link-button:focus-visible {
+  outline: 1.5px solid var(--desktop-focus-ring);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.workspace-message-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: color-mix(in oklab, var(--foreground) 86%, transparent);
+  font-size: var(--desktop-text-read);
+  line-height: 1.65;
+  letter-spacing: -0.003em;
+}
+
+.workspace-message-body p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.workspace-message code {
+  padding: 1px 4px;
+  border-radius: var(--desktop-radius-xs);
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+  font-family: var(--nessa-font-mono);
+  font-size: 0.86em;
+}
+
+.workspace-message strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.workspace-list-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  list-style: disc;
+}
+
+.workspace-list-items li::marker {
+  color: var(--desktop-fainter);
+}
+
+.workspace-code {
+  margin: 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+  border-radius: var(--desktop-radius-md);
+  background: color-mix(in oklab, var(--foreground) 4.5%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 9%, transparent);
+  color: color-mix(in oklab, var(--foreground) 86%, transparent);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.6;
+  overflow-wrap: normal;
+  scrollbar-width: thin;
+}
+
+.workspace-code code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+/* ——— Steps: what the agent did, one quiet line each, on a hairline ——— */
+
+.workspace-steps {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0 0 0 12px;
+  list-style: none;
+  border-left: 1px solid color-mix(in oklab, var(--foreground) 9%, transparent);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.workspace-steps li {
+  display: flex;
+  min-width: 0;
+  height: 24px;
+  align-items: center;
+  gap: 8px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+}
+
+.workspace-steps svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  stroke-width: 1.8;
+}
+
+.workspace-step-label {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.workspace-step-detail {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--desktop-muted);
+  font-family: var(--nessa-font-mono);
+  font-size: var(--desktop-text-footnote);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-diff {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 4px;
+  font-family: var(--nessa-font-mono);
+  font-size: var(--desktop-text-caption);
+}
+
+.workspace-diff ins,
+.workspace-diff del {
+  text-decoration: none;
+}
+
+.workspace-diff ins {
+  color: oklch(0.74 0.13 152);
+}
+
+.workspace-diff del {
+  color: oklch(0.7 0.15 25);
+}
+
+html:not(.dark) .workspace-diff ins {
+  color: oklch(0.55 0.14 152);
+}
+
+html:not(.dark) .workspace-diff del {
+  color: oklch(0.56 0.17 25);
+}
+
+/* ——— What the agent is doing now ——— */
+
+.workspace-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--desktop-muted);
+  -webkit-user-select: none;
+  user-select: none;
+  animation: workspace-message-in var(--desktop-slow) var(--desktop-out) 120ms both;
+}
+
+.workspace-shimmer {
+  background: linear-gradient(
+      90deg,
+      var(--desktop-faint) 0%,
+      var(--desktop-faint) 35%,
+      var(--foreground) 50%,
+      var(--desktop-faint) 65%,
+      var(--desktop-faint) 100%
+    )
+    0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: workspace-shimmer 2.4s linear infinite;
+}
+
+@keyframes workspace-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
+/* The time holds together at any width ("50 s", never "50" over "s"); the label gives way. */
+.workspace-live-time {
+  flex-shrink: 0;
+  color: var(--desktop-fainter);
+  font-size: var(--desktop-text-footnote);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.workspace-live .workspace-shimmer {
+  min-width: 0;
+}
+
+/*
+ * A short, stacked pane keeps its room for the conversation: the heading
+ * tightens.
+ */
+@container workspace-pane (max-height: 520px) {
+  .workspace-heading {
+    gap: 4px;
+    padding: 8px 0 4px;
+  }
+
+  .workspace-heading h2 {
+    font-size: var(--desktop-text-title);
+  }
+}
+
+/* A narrow pane reads closer to its edges. */
+@container workspace-pane (max-width: 420px) {
+  .workspace-transcript-inner {
+    padding-inline: 16px;
+  }
+}
+
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .workspace-transcript-inner,
+:root[data-motion="reduced"] .workspace-transcript-inner > [data-new],
+:root[data-motion="reduced"] .workspace-live {
+  animation: none;
+}
+:root[data-motion="reduced"] .workspace-shimmer {
+  animation: none;
+  background: none;
+  color: var(--desktop-muted);
+}

@@ -1,0 +1,891 @@
+/*
+ * The agents overview: one calm column in the content region's place (its
+ * layer is the shell's, `layouts.css`). Requests
+ * are cards, the one warm point is the dot beside "Needs you", and
+ * everything else is a quiet grouped list. Only transform and opacity move;
+ * every duration is a window token, which less motion sets to zero.
+ */
+
+.agents-overview {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.agents-overview-surface {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+  border-radius: var(--desktop-radius);
+  background: var(--desktop-pane-fill);
+  box-shadow:
+    inset 0 0 0 1px var(--desktop-rim),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent),
+    0 12px 40px -18px rgb(0 0 0 / 45%);
+  animation: agents-arrive var(--desktop-slow) var(--desktop-out) both;
+}
+
+/* Wide enough, the peek sits beside the list, on a hairline. */
+.agents-overview[data-split] .agents-overview-surface {
+  grid-template-columns: minmax(340px, 1fr) minmax(0, 1.1fr);
+}
+
+/* They scroll as the sidebar does: by the wheel and the keys, with no bar drawn. */
+.agents-overview-scroll,
+.agents-overview-peek {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.agents-overview-scroll::-webkit-scrollbar,
+.agents-overview-peek::-webkit-scrollbar {
+  display: none;
+}
+
+.agents-overview-peek {
+  display: flex;
+  flex-direction: column;
+  padding: 64px 32px 20px;
+  background: color-mix(in oklab, var(--foreground) 1.5%, transparent);
+  box-shadow: inset 1px 0 0 color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+html:not(.dark) .agents-overview-surface {
+  background: color-mix(in oklab, var(--background) 60%, white);
+  box-shadow:
+    inset 0 0 0 1px var(--desktop-rim),
+    0 12px 32px -18px rgb(0 0 0 / 18%);
+}
+
+@keyframes agents-arrive {
+  from {
+    opacity: 0;
+    transform: scale(0.99);
+  }
+}
+
+.agents-overview-column {
+  /* Positioned: the re-flow measures every item within it (`adapters/dom/overview-reflow.ts`). */
+  position: relative;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 64px 28px 72px;
+  outline: none;
+}
+
+.agents-overview[data-split] .agents-overview-column {
+  max-width: 560px;
+  padding: 64px 20px 72px 28px;
+}
+
+.agents-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ——— Header ——— */
+
+.agents-overview-header h1 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--desktop-text-display);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+
+.agents-overview-header p {
+  margin: 4px 0 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.agents-overview-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* What is listed, at the right end of the title's row: a quiet chip, like the composer's. */
+.agents-filter {
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--desktop-hover);
+  color: var(--desktop-muted) !important;
+  font-size: var(--desktop-text-footnote) !important;
+  font-weight: 500 !important;
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease;
+}
+
+.agents-filter:is(:hover, :focus-visible, [data-state="open"]) {
+  background: var(--desktop-selected);
+  color: var(--foreground) !important;
+}
+
+.agents-filter svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2;
+}
+
+/* ——— Groups ——— */
+
+.agents-overview-group {
+  margin-top: 36px;
+}
+
+.agents-overview-group h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px 2px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* The page's one warm point: what waits on the person. */
+#agents-needs-you::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--desktop-needs);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--desktop-needs) 55%, transparent);
+}
+
+/* ——— Working and finished: one quiet grouped list ——— */
+
+.agents-overview-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agents-row-item {
+  position: relative;
+}
+
+/* A hairline between rows, from where the text starts. */
+.agents-row-item + .agents-row-item::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 50px;
+  right: 14px;
+  height: 1px;
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+  pointer-events: none;
+}
+
+.agents-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 0;
+  background: color-mix(in oklab, var(--foreground) 3%, transparent);
+  color: var(--desktop-ink-2) !important;
+  text-align: left;
+  outline: none;
+  transition: background-color var(--desktop-fast) ease;
+}
+
+html:not(.dark) .agents-row {
+  background: color-mix(in oklab, var(--background) 30%, white);
+}
+
+.agents-row-item:first-child .agents-row {
+  border-top-left-radius: var(--desktop-radius-md);
+  border-top-right-radius: var(--desktop-radius-md);
+}
+
+.agents-row-item:last-child .agents-row {
+  border-bottom-left-radius: var(--desktop-radius-md);
+  border-bottom-right-radius: var(--desktop-radius-md);
+}
+
+.agents-row:hover {
+  background: color-mix(in oklab, var(--foreground) 5.5%, transparent);
+}
+
+.agents-row:active {
+  background: var(--desktop-press);
+}
+
+/*
+ * Chosen, or holding the keyboard: a soft fill, never a ring or a border —
+ * the keyboard's only a shade deeper. `outline: none` is said here, at a
+ * class's weight, so the base stylesheet's outline on focus never shows.
+ */
+.agents-overview
+  :is(.agents-row, .agents-request, .agents-overview-column, .agents-filter),
+.agents-overview
+  :is(.agents-row, .agents-request, .agents-overview-column):is(:focus, :focus-visible) {
+  outline: none;
+}
+
+.agents-row[data-selected],
+.agents-request[data-selected],
+.agents-row:focus,
+.agents-request:focus-within {
+  background: var(--desktop-selected);
+}
+
+.agents-row:focus-visible,
+.agents-request:focus-visible {
+  background: var(--desktop-press);
+}
+
+.agents-row-text {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.agents-row-title {
+  color: var(--foreground);
+  font-size: var(--desktop-text-body);
+  font-weight: 500;
+}
+
+/* Finished and not yet looked at, as unread reads everywhere in the window. */
+.agents-row[data-kind="finished"] .agents-row-title {
+  font-weight: 600;
+}
+
+.agents-row-preview {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.agents-row-time {
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+.agents-row > .workspace-status {
+  margin-right: 3px;
+}
+
+/* ——— A request: a row of the same list, with its answers at its end ——— */
+
+.agents-request {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  background: color-mix(in oklab, var(--foreground) 3%, transparent);
+  outline: none;
+  cursor: default;
+  transition:
+    background-color var(--desktop-fast) ease,
+    opacity var(--desktop-base) var(--desktop-out),
+    transform var(--desktop-base) var(--desktop-out);
+}
+
+html:not(.dark) .agents-request {
+  background: color-mix(in oklab, var(--background) 30%, white);
+}
+
+.agents-row-item:first-child .agents-request {
+  border-top-left-radius: var(--desktop-radius-md);
+  border-top-right-radius: var(--desktop-radius-md);
+}
+
+.agents-row-item:last-child .agents-request {
+  border-bottom-left-radius: var(--desktop-radius-md);
+  border-bottom-right-radius: var(--desktop-radius-md);
+}
+
+.agents-request > .workspace-agent-tile {
+  align-self: start;
+  margin-top: 1px;
+}
+
+.agents-request:hover {
+  background: color-mix(in oklab, var(--foreground) 5.5%, transparent);
+}
+
+.agents-request-why {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.agents-request-failure {
+  color: var(--desktop-needs);
+}
+
+.agents-request-command {
+  margin-top: 3px;
+  color: color-mix(in oklab, var(--foreground) 72%, transparent);
+  font-family: var(--nessa-font-mono);
+  font-size: var(--desktop-text-caption);
+  line-height: 1.5;
+}
+
+.agents-request-command::before {
+  content: "$ ";
+  color: var(--desktop-fainter);
+}
+
+/*
+ * The row's end: its time at rest; Deny and Allow while it is pointed at or
+ * has the keyboard; what became of it once answered. One place, so nothing
+ * beside it moves as they trade.
+ */
+.agents-request-end {
+  display: grid;
+  align-self: stretch;
+  align-items: center;
+  justify-items: end;
+}
+
+.agents-request-end > * {
+  grid-area: 1 / 1;
+  transition:
+    opacity var(--desktop-base) ease,
+    transform var(--desktop-base) var(--desktop-out);
+}
+
+.agents-request-end > .agents-row-time {
+  align-self: start;
+  padding-top: 1px;
+}
+
+.agents-request-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transform: translateX(4px);
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.agents-request:is(:hover, :focus-within) .agents-request-actions {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.agents-request:is(:hover, :focus-within) .agents-row-time {
+  opacity: 0;
+}
+
+.agents-request-button {
+  height: 26px;
+  padding: 0 11px;
+}
+
+.agents-request-button:not([data-primary]) {
+  background: transparent;
+  color: var(--desktop-muted) !important;
+}
+
+.agents-request-button:not([data-primary]):hover {
+  background: var(--desktop-hover);
+  color: var(--foreground) !important;
+}
+
+/* A button holding the keyboard deepens its own fill, as a row does; no ring. */
+.agents-overview
+  :is(
+    .agents-request-button,
+    .workspace-approval-actions .workspace-button,
+    .agents-peek-open
+  ) {
+  outline: none;
+}
+
+.agents-overview
+  :is(
+    .agents-request-button,
+    .workspace-approval-actions .workspace-button,
+    .agents-peek-open
+  ):not([data-primary]):focus-visible {
+  background: var(--desktop-press);
+  color: var(--foreground) !important;
+}
+
+.agents-overview
+  :is(
+    .agents-request-button,
+    .workspace-approval-actions .workspace-button
+  )[data-primary]:focus-visible {
+  background: color-mix(in oklab, var(--foreground) 80%, var(--background));
+}
+
+/* Its peek open beneath it carries the answers in full; the row keeps its time. */
+.agents-request[aria-expanded="true"] .agents-request-actions {
+  display: none;
+}
+
+.agents-request[aria-expanded="true"] .agents-row-time {
+  opacity: 1;
+}
+
+/* ⌥ held: Allow is Always Allow. */
+.agents-request-always,
+.agents-overview[data-alt] .agents-request-once {
+  display: none;
+}
+
+.agents-overview[data-alt] .agents-request-always {
+  display: inline;
+}
+
+/* ——— A request settling: answered, saying so, then leaving ——— */
+
+.agents-request[data-phase] .agents-row-time {
+  opacity: 0;
+}
+
+.agents-request[data-phase="answering"] .agents-request-actions {
+  opacity: 0.5;
+}
+
+.agents-request[data-phase="settled"] .agents-request-actions,
+.agents-request[data-phase="leaving"] .agents-request-actions {
+  opacity: 0;
+  transform: translateX(4px);
+}
+
+.agents-request-settled {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-footnote);
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateX(-4px);
+}
+
+.agents-request[data-phase="settled"] .agents-request-settled,
+.agents-request[data-phase="leaving"] .agents-request-settled {
+  opacity: 1;
+  transform: none;
+}
+
+.agents-request-settled-mark {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--desktop-run) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--desktop-run) 30%, transparent);
+  color: var(--desktop-run);
+  transform: scale(0.6);
+  transition: transform var(--desktop-slow) var(--desktop-settle);
+}
+
+.agents-request[data-answer="deny"] .agents-request-settled-mark {
+  background: var(--desktop-selected);
+  box-shadow: inset 0 0 0 1px var(--desktop-rim);
+  color: var(--desktop-muted);
+}
+
+.agents-request[data-phase="settled"] .agents-request-settled-mark,
+.agents-request[data-phase="leaving"] .agents-request-settled-mark {
+  transform: none;
+}
+
+.agents-request-settled-mark svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 2.4;
+}
+
+.agents-request[data-phase="leaving"] {
+  opacity: 0;
+  transform: scale(0.99);
+}
+
+/* ——— A peek at a session ——— */
+
+.agents-peek {
+  display: flex;
+  max-width: 560px;
+  flex-direction: column;
+  gap: 24px;
+  animation: agents-peek-in var(--desktop-base) ease both;
+}
+
+@keyframes agents-peek-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.agents-peek-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.agents-peek-titles {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.agents-peek-titles h2 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--desktop-text-title);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.agents-peek-titles p {
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.agents-peek-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 0 12px;
+}
+
+.agents-peek-open svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2;
+}
+
+.agents-peek-now .workspace-live {
+  margin: 0;
+}
+
+.agents-peek-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-body);
+}
+
+.agents-peek-state time {
+  margin-left: auto;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The request in full: the one warm thing in the peek, as in a pane. */
+.agents-peek-ask {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--desktop-radius-md);
+  background:
+    radial-gradient(
+      120% 80% at 0% 0%,
+      color-mix(in oklab, var(--desktop-needs) 8%, transparent),
+      transparent 70%
+    ),
+    color-mix(in oklab, var(--foreground) 3%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--desktop-needs) 20%, transparent);
+}
+
+.agents-peek-reason,
+.agents-peek-failure {
+  margin: 0;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-body);
+  line-height: 1.5;
+}
+
+.agents-peek-failure {
+  color: var(--desktop-needs);
+  font-size: var(--desktop-text-footnote);
+}
+
+.agents-peek-answered {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-footnote);
+  font-weight: 500;
+}
+
+.agents-peek-answered svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2.4;
+  color: var(--desktop-run);
+}
+
+.agents-peek-answered[data-answer="deny"] svg {
+  color: var(--desktop-muted);
+}
+
+.agents-peek-section h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  font-weight: 600;
+}
+
+.agents-peek-section h3 > span {
+  color: var(--desktop-faint);
+  font-weight: 400;
+}
+
+.agents-peek-said {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-body);
+  line-height: 1.55;
+}
+
+/* Where there is no room beside the list, a chosen row opens its peek beneath it. */
+.agents-inline-peek {
+  padding: 18px 18px 20px 52px;
+  background: color-mix(in oklab, var(--foreground) 2%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+.agents-row-item:last-child .agents-inline-peek {
+  border-bottom-left-radius: var(--desktop-radius-md);
+  border-bottom-right-radius: var(--desktop-radius-md);
+}
+
+.agents-row-item:last-child:has(.agents-inline-peek) :is(.agents-row, .agents-request) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.agents-inline-peek .agents-peek-head {
+  display: none;
+}
+
+/* ——— Replying from the peek: a pill, the composer pared down ——— */
+
+.agents-reply {
+  display: grid;
+  gap: 6px;
+}
+
+.agents-overview-peek > .agents-peek {
+  flex: 1 0 auto;
+}
+
+/* Beside the list, the pill waits at the foot of the peek, and stays there as it scrolls. */
+.agents-overview-peek .agents-peek > .agents-reply:last-child {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+}
+
+.agents-reply-pill {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 5px 5px 5px 14px;
+  border-radius: 18px;
+  background: color-mix(in oklab, var(--background) 62%, transparent);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow: inset 0 0 0 1px var(--desktop-rim);
+  transition:
+    background-color var(--desktop-base) ease,
+    box-shadow var(--desktop-base) ease;
+}
+
+.agents-reply-pill:focus-within {
+  background: color-mix(in oklab, var(--background) 50%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.agents-reply-pill textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 26px;
+  padding: 4px 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--desktop-text-body);
+  line-height: 18px;
+}
+
+.agents-reply-pill textarea::placeholder {
+  color: var(--desktop-faint);
+}
+
+.agents-reply-send.desktop-send {
+  width: 26px;
+  height: 26px;
+  flex: none;
+}
+
+.agents-reply-send svg {
+  width: 14px;
+  height: 14px;
+}
+
+.agents-reply-pill[data-sending] .agents-reply-send {
+  opacity: 0.5;
+}
+
+.agents-reply-note {
+  margin: 0 14px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+.agents-reply-note[data-tone="failure"] {
+  color: var(--desktop-needs);
+}
+
+/* ——— Nothing needs you ——— */
+
+.agents-clear {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 28px 24px 30px;
+  border-radius: var(--desktop-radius-lg);
+  background: color-mix(in oklab, var(--foreground) 2.5%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 4%, transparent);
+  text-align: center;
+}
+
+.agents-clear-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 10px;
+  place-items: center;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 30%,
+    color-mix(in oklab, var(--desktop-light-edge) 26%, transparent),
+    color-mix(in oklab, var(--desktop-light-edge) 7%, transparent) 72%
+  );
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--desktop-light-edge) 28%, transparent),
+    0 0 28px -6px color-mix(in oklab, var(--desktop-light-edge) 45%, transparent);
+  color: var(--desktop-run);
+  animation: agents-clear-in var(--desktop-slow) var(--desktop-settle) both;
+}
+
+.agents-clear-mark svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.2;
+}
+
+@keyframes agents-clear-in {
+  from {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+}
+
+.agents-clear-title {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--desktop-text-read);
+  font-weight: 600;
+}
+
+.agents-clear-detail {
+  max-width: 320px;
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.5;
+}
+
+/* ——— What is only counted, and what is only said ——— */
+
+.agents-overview-resting {
+  margin: 28px 0 0;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+  text-align: center;
+}
+
+.agents-overview-resting button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--desktop-muted);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--desktop-fainter);
+  text-underline-offset: 3px;
+}
+
+.agents-overview-resting button:hover {
+  color: var(--foreground);
+}
+
+.agents-overview-said {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ——— The sidebar's way in ——— */
+
+.workspace-sidebar[data-variant="tree"] .agents-overview-entry {
+  margin-top: 4px;
+}
+
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"]
+  :is(.agents-overview-surface, .agents-clear-mark, .agents-peek) {
+  animation: none;
+}

@@ -1,0 +1,285 @@
+/*
+ * The session list: the middle column of the three-column layout. It folds
+ * like the sidebar — out of the flow at once, held at its full width where
+ * it stood, sliding a little and fading, so nothing rewraps.
+ */
+.workspace-list {
+  position: relative;
+  display: flex;
+  width: var(--workspace-list-width);
+  flex: none;
+  min-height: 0;
+  overflow: hidden;
+  transition:
+    opacity var(--desktop-base) ease,
+    transform var(--desktop-slow) var(--desktop-out),
+    visibility 0s;
+}
+
+.workspace-list-inner {
+  display: flex;
+  width: var(--workspace-list-width);
+  flex: none;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.workspace[data-list="closed"] .workspace-list {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  opacity: 0;
+  transform: translateX(-16px);
+  visibility: hidden;
+  transition:
+    opacity var(--desktop-base) ease,
+    transform var(--desktop-slow) var(--desktop-out),
+    visibility 0s linear var(--desktop-slow);
+}
+
+.workspace[data-sidebar="open"][data-list="closed"] .workspace-list {
+  left: calc(2 * var(--desktop-gutter) + var(--workspace-sidebar-width));
+}
+
+/*
+ * The list's head (`ui/column-header.tsx`). An inline title starts where the
+ * list's content does; with the sidebar away the list begins at the window's
+ * edge, under the window's controls, so it starts after them.
+ */
+.workspace-list .desktop-column-bar {
+  padding-left: 12px;
+}
+
+.workspace[data-sidebar="closed"] .workspace-list .desktop-column-bar {
+  padding-left: var(--desktop-titlebar-safe-start);
+}
+
+/*
+ * A drop that folds the sidebar slides the list to the window's edge before
+ * it happens (`chrome.css`), under the controls. Its inline title fades out
+ * of that row as the list slides, since the fold puts it on its own row
+ * below (`column-header.tsx`): nothing is drawn under the controls, and
+ * nothing is laid out again, since the drag lays nothing out.
+ */
+.workspace-list .desktop-column-bar .desktop-column-title {
+  transition: opacity var(--desktop-base) ease;
+}
+
+.workspace[data-drag-takes-spare][data-sidebar="open"]
+  .workspace-list
+  .desktop-column-bar
+  .desktop-column-title {
+  opacity: 0;
+}
+
+.workspace-search {
+  display: flex;
+  height: 32px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin: 0 4px 8px;
+  padding: 0 8px 0 12px;
+  border-radius: var(--desktop-radius-md);
+  background: var(--desktop-hover);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 4%, transparent);
+  color: var(--desktop-faint);
+  transition: background-color var(--desktop-fast) ease;
+}
+
+.workspace-search:hover,
+.workspace-search:focus-within {
+  background: var(--desktop-selected);
+}
+
+.workspace-search svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  stroke-width: 1.75;
+}
+
+.workspace-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--desktop-text-body);
+}
+
+.workspace-search input::placeholder {
+  color: var(--desktop-faint);
+}
+
+.workspace-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.workspace-search kbd {
+  flex: none;
+  color: var(--desktop-faint);
+  font-family: inherit;
+  font-size: var(--desktop-text-caption);
+}
+
+.workspace-list-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0 72px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 14%, transparent) transparent;
+  mask-image: linear-gradient(to bottom, transparent, black 8px);
+}
+
+.workspace-group-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 12px 0 4px;
+  padding: 0 12px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.workspace-group-label[data-first] {
+  margin-top: 4px;
+}
+
+.workspace-group-label span {
+  font-weight: 500;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-session {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 12px;
+  margin: 0 4px 2px;
+  padding: 12px 12px 12px 8px;
+  border-radius: var(--desktop-radius-md);
+  -webkit-user-select: none;
+  user-select: none;
+  transition: background-color var(--desktop-fast) ease;
+}
+
+.workspace-session:hover {
+  background: var(--desktop-hover);
+}
+
+.workspace-session:active {
+  background: var(--desktop-press);
+}
+
+.workspace-session[data-selected] {
+  background: var(--desktop-selected);
+}
+
+/* The row stays in place, quieter, while its pill is carried. */
+.workspace-session[data-drag-carrying] {
+  opacity: 0.45;
+  transition: opacity var(--desktop-base) ease;
+}
+
+/* Hairlines between rows, hidden around the selected pill as in Mail. */
+.workspace-session + .workspace-session::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 42px;
+  right: 12px;
+  height: 1px;
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+  transition: opacity var(--desktop-fast) ease;
+}
+
+.workspace-session[data-selected]::before,
+.workspace-session[data-selected] + .workspace-session::before,
+.workspace-session:hover::before,
+.workspace-session:hover + .workspace-session::before,
+.workspace-session:focus-visible::before,
+.workspace-session:focus-visible + .workspace-session::before {
+  opacity: 0;
+}
+
+.workspace-session > .workspace-agent-tile {
+  margin-top: 1px;
+}
+
+.workspace-session-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 4px;
+}
+
+.workspace-session-top {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.workspace-session-title {
+  flex: 1;
+  font-size: var(--desktop-text-body);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.workspace-session[data-unread] .workspace-session-title {
+  font-weight: 650;
+}
+
+.workspace-unread {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--desktop-run);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--desktop-run) 60%, transparent);
+}
+
+.workspace-session time {
+  flex: none;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-session-preview {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.workspace-list-empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  margin: 32px 12px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+  text-align: center;
+}
+
+.workspace-list-empty p {
+  margin: 0;
+}

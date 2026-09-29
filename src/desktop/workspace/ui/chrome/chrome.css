@@ -1,0 +1,387 @@
+/*
+ * The workspace's frame and the small pieces every part of it uses: icon
+ * buttons, agent tiles, status glyphs, resize edges, pill buttons and menus.
+ * Every value comes from the `--desktop-*` scales in `styles.css`.
+ */
+
+.workspace {
+  position: relative;
+  display: flex;
+  height: 100svh;
+  min-width: 480px;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--nessa-font-sans);
+  font-size: var(--desktop-text-body);
+  letter-spacing: -0.006em;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A reset, so it carries no weight: any component's own class outranks it. */
+:where(.workspace) button {
+  font: inherit;
+  color: inherit;
+  cursor: default;
+}
+
+/*
+ * A quiet inset ring for the keyboard; text fields show their caret instead.
+ * Defaults, so they carry no weight: a component's own focus style, one class
+ * and `:focus-visible`, outranks them.
+ */
+:where(.workspace) :focus-visible {
+  outline: none;
+}
+
+:where(.workspace :focus-visible:not(textarea, input, .desktop-resize-edge)),
+:where(.workspace .desktop-chip:focus-visible) {
+  outline: 1.5px solid var(--desktop-focus-ring);
+  outline-offset: -1.5px;
+}
+
+.workspace-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Shared by everything that simply appears. */
+@keyframes workspace-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ——— A side column's head (`ui/column-header.tsx`, shared with Settings) ——— */
+
+/*
+ * The titlebar row, inside the column. Its action hides at once as the
+ * column folds and shows once it has slid in, so it never passes under the
+ * window's controls on the way.
+ */
+.workspace .desktop-column-bar {
+  transition: visibility 0s linear var(--desktop-slow);
+}
+
+/* Revealed from the edge, the sidebar slides in for 360ms (`source-list.css`); its action waits it out. */
+.workspace[data-sidebar="closed"][data-peek] .workspace-sidebar .desktop-column-bar {
+  transition: visibility 0s linear 360ms;
+}
+
+.workspace[data-sidebar="closed"]:not([data-peek]) .workspace-sidebar .desktop-column-bar,
+.workspace[data-list="closed"] .workspace-list .desktop-column-bar {
+  visibility: hidden;
+  transition: none;
+}
+
+/* ——— Titlebar and icon buttons ——— */
+
+/* Above the sidebar even when it is revealed from the edge, so its toggle is always where it was. */
+.workspace-titlebar {
+  position: absolute;
+  z-index: 40;
+  top: 0;
+  left: 0;
+  display: flex;
+  height: var(--desktop-titlebar-height);
+  align-items: center;
+  gap: 2px;
+  padding-left: var(--desktop-window-controls-inset);
+  padding-right: 8px;
+  /* Chrome is read, not selected: a double-click on a label selects nothing. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.workspace-icon-button {
+  display: inline-flex;
+  width: var(--desktop-control-size);
+  height: var(--desktop-control-size);
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--desktop-control-radius);
+  background: transparent;
+  color: var(--desktop-muted) !important;
+  transition:
+    color var(--desktop-fast) ease,
+    background-color var(--desktop-fast) ease,
+    opacity var(--desktop-base) ease;
+}
+
+.workspace-icon-button:hover,
+.workspace-icon-button[data-state="open"] {
+  color: var(--foreground) !important;
+  background: var(--desktop-hover);
+}
+
+.workspace-icon-button:active {
+  background: var(--desktop-press);
+}
+
+.workspace-icon-button svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
+}
+
+/* Holds its place when there is nothing for it to do, so its neighbours never move. */
+.workspace-icon-button[data-reserved] {
+  visibility: hidden;
+}
+
+/* ——— Agent tiles and status glyphs ——— */
+
+.workspace-agent-tile {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 28%;
+  background: linear-gradient(
+    160deg,
+    color-mix(in oklab, var(--foreground) 12%, transparent),
+    color-mix(in oklab, var(--foreground) 4%, transparent)
+  );
+  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 16%, transparent);
+  color: var(--foreground);
+  font-weight: 650;
+  line-height: 1;
+}
+
+.workspace-agent-tile svg {
+  width: 64% !important;
+  height: 64% !important;
+}
+
+/*
+ * A monogram, for an agent with no shipped mark: set small and light, like a
+ * letter embossed on the tile, so it sits beside the drawn marks rather than
+ * shouting over them.
+ */
+.workspace-agent-tile > span {
+  color: color-mix(in oklab, var(--foreground) 62%, transparent) !important;
+  font-size: 0.86em !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  transform: translateY(0.02em);
+}
+
+.workspace-status {
+  position: relative;
+  display: inline-flex;
+  width: 10px;
+  height: 10px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.workspace-status[data-status="idle"]::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--foreground) 24%, transparent);
+}
+
+.workspace-status[data-status="needs-you"]::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--desktop-needs);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--desktop-needs) 55%, transparent);
+}
+
+/*
+ * Running is a small arc turning on a faint track, like a progress spinner:
+ * unmistakably activity, where a lit dot or bare ring could read as a caret.
+ * The arc turns on its own layer, around a whole-pixel centre, so it spins
+ * without wobbling.
+ */
+.workspace-status[data-status="running"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0 12%,
+    color-mix(in oklab, var(--desktop-run) 30%, transparent) 30%,
+    var(--desktop-run) 72%,
+    transparent 72%
+  );
+  -webkit-mask: radial-gradient(circle, transparent 3px, black 3.5px);
+  mask: radial-gradient(circle, transparent 3px, black 3.5px);
+  will-change: transform;
+  animation: workspace-turn 1.1s linear infinite;
+}
+
+.workspace-status[data-status="running"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--desktop-run) 16%, transparent);
+}
+
+@keyframes workspace-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/* ——— Resize edges (`src/desktop/ui/resize-edge.tsx`) ——— */
+
+/*
+ * A folded session list's edge, where it folded: out of the flow, so the
+ * columns beside it keep their places, and dragged out it opens the list.
+ */
+.desktop-resize-edge.workspace-edge-folded {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--workspace-sidebar-width) + var(--desktop-gutter));
+}
+
+/* ——— The sidebar's foot ——— */
+
+.workspace-identity {
+  display: flex;
+  min-width: 200px;
+  height: 48px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 16px;
+  font-size: var(--desktop-text-body);
+  letter-spacing: -0.01em;
+}
+
+/* "nessa Studio" opens Settings, which puts "‹ nessa Agent" in this same place. */
+.workspace-identity-name {
+  flex: 1;
+  height: 28px;
+  overflow: hidden;
+  border-radius: var(--desktop-radius-sm);
+  line-height: 28px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-identity b {
+  font-weight: 600;
+}
+
+.workspace-identity b + span {
+  color: var(--desktop-muted);
+  transition: color var(--desktop-fast) ease;
+}
+
+/* ——— Pill buttons ——— */
+
+.workspace-button {
+  height: 28px;
+  flex: none;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--desktop-selected);
+  color: var(--desktop-ink-2) !important;
+  font-size: var(--desktop-text-footnote) !important;
+  font-weight: 500 !important;
+  white-space: nowrap;
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease,
+    transform var(--desktop-fast) ease;
+}
+
+.workspace-button:hover {
+  background: color-mix(in oklab, var(--foreground) 13%, transparent);
+  color: var(--foreground) !important;
+}
+
+.workspace-button[data-primary] {
+  background: var(--foreground);
+  color: var(--background) !important;
+}
+
+.workspace-button[data-primary]:hover {
+  background: color-mix(in oklab, var(--foreground) 86%, var(--background));
+}
+
+.workspace-button:active {
+  transform: scale(0.97);
+}
+
+.workspace-button:disabled {
+  opacity: 0.5;
+}
+
+/* ——— Keys, as a tooltip or a footer writes them ——— */
+
+.workspace-kbd {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-radius: var(--desktop-radius-xs);
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+  color: var(--desktop-muted);
+  font: 500 var(--desktop-text-caption) / 1 var(--nessa-font-sans);
+  letter-spacing: 0.02em;
+}
+
+.workspace-kbd + .workspace-kbd {
+  margin-left: 4px;
+}
+
+/* ——— Carrying a pane or a session (`split-panes/adapters/dom/drag.ts`) ——— */
+
+/* One screen of the conversation, moved to where it was scrolled by transform (`drag.ts`). */
+.split-panes-ghost .workspace-transcript {
+  overflow: hidden;
+}
+
+/* A session's copy shows its latest words at the foot, as a conversation opens. */
+.split-panes-ghost .workspace-carried-latest {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.split-panes-ghost .workspace-pane-name {
+  opacity: 1;
+  transform: none;
+}
+
+/*
+ * A drop that folds the sidebar for room — taking the spare room it gives
+ * (`data-drag-takes-spare`) — shows it before it happens: the sidebar slides
+ * away and the session list follows, as the fold would move them. Only while the sidebar is still open — the moment the drop folds it,
+ * its own closed look takes over, so the commit measures where things are.
+ */
+.workspace[data-drag-takes-spare][data-sidebar="open"] .workspace-sidebar {
+  transform: translateX(calc(-100% - 2 * var(--desktop-gutter) - 48px));
+}
+
+.workspace[data-drag-takes-spare][data-sidebar="open"] .workspace-list {
+  transform: translateX(
+    calc(-1 * (var(--workspace-sidebar-width) + var(--desktop-gutter)))
+  );
+}
+
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .workspace-status[data-status="running"]::before {
+  animation: none;
+}

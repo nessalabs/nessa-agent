@@ -48,12 +48,15 @@ export default defineConfig({
     },
     server: {
       deps: {
-        // Radix resolves React through the vendored design system's own pnpm
-        // store, so left to Node's resolver a component using `Slot` loads a
-        // second React and every hook in it throws on a null dispatcher.
-        // Transformed here instead, it goes through the dedupe above. Floating UI
-        // is Radix's positioning for popovers and is held to the same rule.
-        inline: [/radix-ui/, /@floating-ui/],
+        // Radix, and the Floating UI it positions popovers with, resolve React
+        // through the vendored design system's own pnpm store, so left to
+        // Node's resolver a component using `Slot` loads a second React and
+        // every hook in it throws on a null dispatcher. Transformed here
+        // instead, they go through the dedupe above. Everything from that
+        // store is inlined, rather than each package as a test meets it; a
+        // CommonJS build (react-remove-scroll's, under a modal menu) is
+        // required by Node regardless and still loads its own.
+        inline: [/radix-ui/, /@floating-ui/, /nessa_ui\/node_modules\//],
       },
     },
   },

@@ -26,6 +26,387 @@ resize, with a frost that can be turned off — and **the conversation surface**
 — a turn list driven by authenticated gateway conversation commands and bounded
 replacement views from the SDK Agent.
 
+## Minimal desktop surface
+
+The desktop window is Nessa's main app window, in the same app and process as
+the menu bar panel (`pnpm app`). `tauri.conf.json` declares it hidden beside the
+panel, and `src-tauri/src/desktop_window.rs` opens and dismisses it. A launch
+after setup opens it; the tray menu's Open Nessa and a click on the Dock icon
+open it again. While it is on screen the app has a Dock icon, an app menu and a
+place in the app switcher; closing it hides the window and returns the app to
+the menu bar alone, the way Alfred's preferences window comes and goes
+(`Host::set_dock_presence`, Regular or Accessory on macOS). The panel behaves as
+it always has, and the tray's Show Panel still toggles it. Without a tray,
+closing the window hides it with its Dock icon kept, so a click on the Dock
+opens it again; where there is no Dock either, closing it quits the app
+(`desktop_window::on_close`) — it is never destroyed while the app runs on,
+since nothing could open it again. On macOS an overlay titlebar retains the native traffic lights;
+a fixed full-width WindowTitlebar places the sidebar toggle beside them, without
+a title label or divider. The desktop window's `trafficLightPosition` (16, 26)
+centres the native buttons 24px below the window's top, and the titlebar's
+controls sit on the same 24px centre. Both were measured in the running macOS
+window through the accessibility frames of the close button and the window;
+recheck native geometry when changing the Tauri/Tao version or macOS version.
+The inset is macOS-only; browser and other hosts use ordinary header padding.
+The surface uses the design system's dark theme. Back/forward controls are
+disabled because the single-view shell has no navigation history.
+Its drag region and double-click maximize have desktop-scoped capabilities.
+
+`desktop.html` mounts `src/desktop/main.tsx`, which builds the window's
+dependencies (`dependencies.ts`) and store (`store.ts`) and renders
+`ui/desktop-window.tsx`: the workspace (below) in the layout chosen in
+Settings, or the classic shell. The classic shell, `ui/desktop-app.tsx`,
+composes the design system's AppShell frame and Sidebar with a Home link, an
+empty Recents group, and `ui/home.tsx` in the main area — the same home a new
+session's pane shows, its composer wired to that session through `Home`'s
+props: a night scene in text heading one stack
+from the top of the workspace with the greeting and composer (`model/night-scene.ts`, a dim and a lit
+layer of one grid, set one over the other by `ui/night-scene.tsx` as
+decoration hidden from assistive technology; its box's height comes from
+the workspace's height alone, so resizing sideways or sliding a sidebar never
+moves the greeting or composer; laid out once at 10px and scaled by a
+transform around its sill to `nightSceneScale`, filling the box's height
+between 5px and 12px, so resizing never re-lays out its text; its sill always
+28px above the greeting, its faded last rows tucked behind it; cropped around
+its centre sideways, and narrowed in page mode to a faint strip across the top, cropped rather than rescaled, and in windows
+too short to have room for it; a Customize control in the header's corner,
+`ui/header-art.tsx`, swaps the scene for a picture the person chooses, GIFs
+included, checked by `model/header-image.ts` (images only, up to 25 MB, a
+typed refusal otherwise), remembered in the webview's IndexedDB by
+`adapters/header-image.ts`, and blended in the same way; the picture is
+framed by a focal point and zoom, placed by `placeHeaderImage` so it always
+covers the header, and adjusted in `ui/header-picture.tsx` by dragging,
+scrolling or pinching, the arrow keys and + and −, or its toolbar's zoom
+slider, Reset and Done, a new picture opening straight into it, and the
+framing remembered in the webview's storage; the picture also lends the
+window its colours: `model/image-palette.ts`, self-contained and free of the
+DOM, clusters its pixels (read by `adapters/image-pixels.ts`) into five main
+colours in OKLab and derives the three theme colours from them, the edge from
+the colour both vivid and plentiful, the light from above in its hue, the
+light from below from a second hue or an analogous one, neutral for a
+colourless picture, all held within the built-in themes' ranges; the palette
+shows in the Customize menu, and the theme tints the window, over the chosen
+light theme and fading in, unless "Tint app from picture" is turned off; the same picture, or the scene, shows as a quiet, still sliver at the top of each conversation pane — `HeaderSliver`, one decoded file shared by every reader in the window, a GIF moving only in the focused pane — unless Settings › Appearance › Header › "Show picture in conversations" is off), the greeting
+"Working late?", the scene's own
+caption whatever the hour,
+and the composer (`ui/composer.tsx`), which takes text but cannot send, and says so on its send button, until conversations
+are wired in. Beneath the text sit the choices a turn will carry, in one
+row: on the left where and with what — a project chip, which will choose the
+folder a conversation works in (this window has no native folder picker yet,
+so its Open folder item is shown disabled), and the model, in the design
+system's ModelPicker, from the SDK's `crates/nessa-sdk/data/models.json`
+grouped by provider (`model/composer-options.ts`, read from that file rather
+than retyped), each provider marked on a glass tile by its agent's `AgentMark`
+from onboarding, and the chip showing the selected model's mark without its
+tile; on the right how — the design system's access mode, as its shield alone,
+redrawn in `styles.css` as Lucide outlines (shield, shield-check, shield-off) masked over
+its own icon so nothing in `nessa_ui` changes, and
+beside send the thinking level, as a brain icon whose slider names the level,
+offered only to a reasoning model, with the control's Fast toggle on models
+`fastModeFor` lists (the catalog does not record Fast yet) and a small bolt
+beside the brain while Fast is on. They rest as quiet
+text chips in one colour, open frosted menus that spring into place, and hold
+no state beyond the page yet. The composer has no rim and does not change when
+focused, and its text area grows with what is typed up to 40% of the window. A draft that outgrows the card dissolves it into
+a page (`model/page-mode.ts`, which holds the thresholds and their table): the
+card's surface, shadow and corners go, the greeting stays as the page's
+heading, the text sits on the window beneath it and scrolls, with a thin
+translucent scrollbar kept for orientation and dragging, and the toolbar rests at the foot. It opens at seven
+lines and closes at three, apart so a draft near one threshold does not flip
+the layout, and the change is immediate, with no animation. In a narrow composer the project shows only its folder, so the model keeps
+its name. The app controls SidebarProvider from its shared layout; the
+provider supplies Cmd/Ctrl+B for the left sidebar and the app adds
+Cmd/Ctrl+Alt+B for the right one.
+The reusable `src/desktop/ui/window-titlebar.tsx` stays in this app. It accepts
+leading/trailing slots, optional labeled history actions, height, and native-control
+inset. It renders design-system Buttons and forwards native header props; it does
+not detect the OS, call Tauri, control Sidebar state, or own navigation history.
+Reuse it with AppShell by placing it before AppShellBody and passing a
+SidebarTrigger in `leading`. Each consuming app must configure its own native
+window and drag permissions. No changes to `nessa_ui` are required.
+
+Every surface, browser and native, uses the same titlebar, laid over the split
+view. The sidebar toggle sits at its leading edge (after the traffic lights on
+macOS) and the right-panel toggle at its trailing edge, and neither moves when a
+sidebar opens or closes. The lowercase nessaStudio wordmark in the sidebar
+footer is the only identity. Both sidebars are inset, rounded panes of
+translucent glass: the middle's colour is the base everywhere, and a pane is
+that base lifted by a faint tint, so it sits on top while the ambient light
+still carries through and the window reads as one surface; their content begins below the
+titlebar row, and closing one fades and
+slides it toward its edge while the split view animates its width.
+Corner controls follow one geometry in `styles.css`: each sits the same
+distance from its pane's top and side edges, and its corner radius is the pane's
+radius minus that distance, so hover shapes are concentric with the pane. The
+titlebar's height derives from it (48px), and the native traffic lights are
+centred on the same row.
+With the left sidebar collapsed, resting the pointer on the window's left
+edge slides it in over the content, Dock-style, until the pointer has been away
+for a moment; Esc dismisses it. It slides fully solid and never fades: opacity
+on its container would switch off the glass's blur mid-transition. Docking the
+sidebar (Cmd/Ctrl+B or the toggle) while it is revealed is a handoff: the
+revealed copy, sized to the sidebar's own width, stays in place while the
+docked sidebar opens beneath it, then goes without animating, so the sidebar
+appears simply to stay while the content slides over. The rules are a pure state machine in
+`model/edge-peek.ts`, with its state table and tests; `adapters/use-edge-peek.ts`
+runs it against the clock. The panel's maximize control sits in the titlebar beside
+the panel toggle, over the pane's corner; the panel's 200px minimum always
+leaves room for both. Controls must live in the titlebar, not in the panes
+beneath it: the titlebar spans the top row and takes every pointer event there.
+Maximizing the right panel makes it the window rather than a floating card: no
+inset, rim, or corners, and the history arrows step aside; Esc restores it
+wherever focus is. The resize glow runs only along the straight part of a
+pane's rim, stopping where its corners curve. The ambient light, resize glow,
+focus halo, and text selection take their colours from a light theme:
+`model/theme.ts` lists the themes (Graphite, the neutral default; Ocean; Ember;
+Dusk), and each is three custom properties under its `[data-desktop-theme]`
+block in `styles.css`. The palette button in the sidebar footer switches them;
+`adapters/theme-preference.ts` remembers the choice in the webview's storage and
+falls back to the default when storage is unavailable or holds an unknown name.
+A fine grain over the light keeps its falloff from banding.
+Inline sidebars explicitly use z-index 0 at all widths so the design system
+mobile sidebar stacking level cannot cover the fixed header controls.
+
+Settings (`settings/`, a prototype) opens over the whole window from "nessa
+Studio" in the sidebar footer or Cmd/Ctrl+,, and Esc does not close it. A short
+glass sidebar lists categories — General, Appearance, Workspace, Models,
+Connections, Privacy & Permissions, Advanced, About — and each category's page
+has a strip of tabs under its title, but for a category whose one tab bears its
+own name, as About's does (`showsTabs`; arrow keys, Home and End move between
+tabs; the tab last shown in each category is remembered while Settings is
+open). Advanced's one tab, Experimental, is the home of previews of features
+not settled yet, and says so while none is on offer. Every category,
+tab and setting, with its name, description and search keywords, is one typed
+table in `settings/model/settings-catalogue.ts`, which also owns search, and
+`settings/ui/` renders it generically: a match jumps
+to its category and tab and briefly lights the row. The sidebar toggle sits
+where the app's does and Cmd/Ctrl+B toggles it; with it hidden, a back chevron
+beside the toggle returns to the app, as "nessa Agent" at the sidebar's foot
+does. Theme, icons, tint and layout are real; the other settings are local
+state that shows their shape, and actions not wired up are shown disabled.
+
+The window's menus are `ui/menu/`: nessa_ui's dropdown and context menus
+behind one set of parts, drawn as macOS draws its own — compact 22px rows on
+the shared glass (`--desktop-material-*` in `styles.css`), a soft rounded
+highlight in the theme's light, a check column only where something can be
+checked, and a chosen item that blinks once as its menu fades. The content
+says which kind of menu it is, so a list of `Menu*` items is written once and
+shown in either. The look selects any Radix menu that wears
+`.desktop-popover`, so menus still built from nessa_ui's parts directly match.
+Menus portal outside every surface, so the window also carries the chosen
+theme on the document root (`useThemeOnDocument`). Right-clicks the window's
+menus do not take open nothing: `adapters/use-webview-menu.ts` keeps the
+webview's own menu to editable and selected text, and a development build
+keeps it on ⌥-right-click for Inspect Element.
+
+The window's icons are semantic roles resolved through a provider
+(`ui/icons/`): `DesktopIconProvider`, `useDesktopIcon` and `<DesktopIcon
+name=… />` mirror the planned `NessaIconProvider` contract in nessa_ui's
+design-system contract, with its resolution order (the component's own icon,
+the nearest provider, its parents, the built-in family) and nested partial
+overrides, and are to be replaced by it once nessa_ui ships it. A family owns
+artwork and stroke; the consumer owns size, colour and accessibility. Two
+families draw every role: Nessa's own 20-unit drawings (the built-in default)
+and Lucide. Settings › Appearance chooses between them;
+`adapters/icon-family-preference.ts` remembers the choice the way the theme
+preference does, and `main.tsx` mounts the root provider. The home header's
+Customize control and picture toolbar draw through it too. The composer's access
+shield is the one icon the window does not resolve: nessa_ui's
+ComposerAccessMode has no icon slot, so `styles.css` still masks Lucide
+outlines over it. Theme, icon family, workspace layout, tint, motion and the
+window's on-or-off preferences are each a `storedPreference`
+(`adapters/stored-preference.ts`): remembered in the webview's storage,
+applied at once to every reader in the window, falling back when storage
+refuses. Brand marks (agents, providers) are not icon roles.
+
+The workspace (`src/desktop/workspace/`,
+[ADR 238](adr/done/238-desktop-workspace-frontend.md)) is the window's chat
+and what it is about: its index — sections hold channels, channels hold
+sessions — and sessions open in chat panes that split, stack, move and close.
+Two layouts, chosen in Settings › Workspace › Layout
+(`adapters/workspace-layout-preference.ts`; `classic` keeps the shell above),
+arrange the same parts. *Three columns* (`ui/layouts/three-columns.tsx`) is a
+sidebar of channels under the Agents overview's entry, the chosen channel's
+session list (grouped Needs you, Running, Earlier; searchable; ⌥⌘S folds it),
+and the panes. *Sessions in sidebar* (`ui/layouts/sessions-in-sidebar.tsx`)
+is one sidebar — search, the Agents overview's entry, then channels — where a
+channel discloses its newest sessions inline, with a quick switcher (⌘K; ⌘\ to open one beside). Both fold their side columns
+for room when the window grows too narrow for the panes, and bring them back
+when it widens (`model/window-fit.ts`, `src/desktop/model/side-column.ts`).
+The two layouts differ only in how the sidebar region is composed; the
+workspace shell (`ui/layouts/workspace-shell.tsx`) owns everything else,
+the quick switcher included. Titlebar content starts at the one safe area,
+`--desktop-titlebar-safe-start` (the host's window controls and our cluster);
+nothing draws under the window's controls. A column's title sits inline in
+the titlebar row, after the controls, where it fits, and on its own row below
+where it does not (`src/desktop/ui/column-header.tsx`, the same head for the
+session list, the sidebar and Settings' page).
+
+The **Agents overview** (`ui/overview/`, ⌘0 or "Agents" at the top of the
+sidebar, in every layout but Classic, with nothing to turn on) takes the
+content region while open, as a layer over the session list and the panes,
+which stay laid out beneath it — so a pane command asked meanwhile measures
+the room they really have, and first goes back to them. It lists what waits
+on the person, what is working and what finished unseen, filtered by
+Ongoing/All and a span of time (`model/overview/`), with a peek at the chosen
+session: its live activity, this turn's steps, the last thing said, and a
+reply pill. Its open state, selection and filter are slice state, so an agent
+can drive it (`showContent`, `selectInOverview`, `filterOverview`); the
+filter is kept between launches by composition (`RememberedFilter`). An
+approval it shows is on screen: answered by the same `approve`/`deny` as a
+pane's card (`onScreen`, one rule), and the conversations it shows are read
+and kept like a pane's, bounded (`retention.overviewConversations`); a peek is
+not reading the session, which stays unread.
+
+- `model/` is pure: the index's types (`workspace-index.ts`); how a
+  window fits the side columns (`window-fit.ts`); why the source refused
+  (`failure.ts`); what is kept of what no pane shows (`retention.ts`); a session's conversation, its messages and steps
+  (`transcript.ts`); the revision rule every replacement follows
+  (`revision.ts`); session grouping, search and time labels; and the new
+  session's lifecycle, a draft never listed and let go once no pane shows it,
+  and a session the source never began going back to it when its last
+  refused message is discarded.
+- `application/` owns the `WorkspaceSource` port (`ports.ts`: index,
+  transcript, one stream of replacement updates, send, approve, deny, pin,
+  archive, mark read, with typed `WorkspaceSourceError` reasons; the stream may
+  lose updates, a read of the index is the resync, and the source asks for one
+  with a `resync` on its stream when it reconnects or finds a gap) and the pure
+  use cases (`usecases/`) over the workspace's state. Every replacement carries
+  the source's revision, and the newer one wins in whatever order the stream
+  and the reads deliver them (`model/revision.ts`). A message the person
+  sends waits in an outbox, shown after the source's conversation, until that
+  conversation includes it, so no replacement can lose it; an answer to an
+  approval and a model chosen for the next turn wait beside the source's data
+  the same way. Pin and archive show when the source's update says so. An
+  answer, a pin, an archive and a message carry who asked — the person or an
+  agent; the source records the first three and what became of each, and a
+  message when it lets a waiting approval go; each command returns its
+  outcome to its caller. Every
+  call to the source settles; an adapter rejects on a timeout of its own.
+- `adapters/store/` is the Redux slice, which only names actions over those use
+  cases; `commands.ts`, the one list of commands a person or an agent
+  dispatches (plain actions, and thunks where an id, the time or the source is
+  needed); `effects.ts`, listener effects that read the conversation of a
+  session on screen — in a pane or the open overview — and mark one a pane
+  shows read, whoever caused the change — a refused read waits for the pane's
+  Try Again rather than being retried on every update, and is forgotten once
+  nothing shows the session, and a read of the index again reads every
+  conversation on screen again, setting aside a read asked before it; `hooks.ts`,
+  the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/in-memory/` is the
+  only home of the sample index and the scripted, streamed replies,
+  on timers it owns and cancels. `adapters/store/split-panes-source.ts` is
+  the workspace as the split panes' source (below). `adapters/dom/` holds what
+  belongs to the page: what the workspace adds to a drag — a session's card,
+  the side columns that are never targets (`split-panes-drag.ts`) — keys,
+  focus following the focused pane (`focus.ts`), the page's measure of the
+  panes' room (`measure.ts`, injected into the commands), the arrival of a
+  first message, and the clock's ticks. `adapters/storage/` keeps the Agents overview's
+  filter between launches (`remembered-filter.ts`).
+- `ui/` holds each component once — source list (two variants of one
+  component), session list, pane grid, pane, pane header, transcript, message,
+  tool steps, approval card, quick switcher, empty states, the Agents
+  overview, the words for each failure (`failure-copy.ts`) — and
+  `layouts/` that only arrange them.
+
+The panes themselves are **split panes** (`src/desktop/split-panes/`,
+[ADR 253](adr/done/253-split-panes-component.md)), a module any desktop
+surface can wrap; the workspace does. Its `model/` is pure: the pane layout
+(`pane-layout.ts`), columns of stacked panes with one focused, each showing an
+item the host gives meaning to (the workspace's, a session), whose operations
+split, move, swap, nudge, close and even out, capped at four panes and three
+columns, an item never shown twice; its pixel rules (`pane-sizing.ts`):
+placements as fractions, the one fit rule every change of layout and every
+resize is held to (each pane at least 300 by 220 pixels, taking the host's
+spare room where that is what fits it), and edge drags held to it; where a
+drag aims and what a drop does (`drop.ts`); what a press becomes, event by
+event (`drag.ts`). A host supplies one `SplitPanesSource`
+(`application/ports.ts`) that reads its layout, says when it changes — at
+once, so a drag ends the moment anything under it moves — and carries out a
+drop, a resize, an equalize or a fit through its own commands, so its rules
+(the workspace folds its sidebar for room) keep one owner. `adapters/dom/`
+holds FLIP motion (`flip.tsx`, which measures in React's commit phase, so any
+dispatch animates), drag and drop carried by the pointer with a live preview
+(`drag.ts`, `useSplitPanesDrag`, with what only the host knows given as
+options), Tab order, and the names a host may see of the page (`marks.ts`:
+`marks`, `classes`, `gridOf`); `ui/` the grid (`SplitPanes`, which hands
+each pane a `frame` to spread on the host's own root, and places the
+desktop's `ResizeEdge` between panes, the same edge the side columns use)
+and its stylesheet. It imports no host.
+
+A pane subscribes to its own session and a row to its own summary, so a
+streamed word renders one transcript (`ui/panes/pane-isolation.test.tsx`).
+Layout changes land at once and play back with FLIP, by transform only; while
+panes fly, their blur and deep shadows pause. A new pane fills in the frame
+after its shell. Less motion — Settings › Appearance › Motion, or the
+system's setting — skips every flight (`data-motion` on the root).
+
+The classic shell, `ui/desktop-app.tsx`, composes two existing Sidebar components inside the design
+system's SplitView panels. SplitView owns pointer capture, accessible separators,
+keyboard resizing, and collapse snapping. The left sidebar opens at 250px,
+with a 200px minimum and 450px maximum (`adapters/sidebar-sizing.ts`). The main workspace has a 350px expanded minimum. The right panel has a 200px
+minimum and takes precedence over the left: `fitSidebarWidths` gives the
+workspace its minimum, then the open right panel its minimum, then the left what
+it asked for (narrowing, then closing below 200px), then grows the right with
+what remains. Opening the right panel in a narrow window therefore narrows or
+closes the left, and the right closes rather than shrinking under 200px. Both
+fit together from a 750px window up. Asking for the left sidebar when there is
+no room beside the right panel closes the right to make room.
+It can use all remaining space, with no percentage cap. It defaults to 400px, leaving the remainder for
+the workspace; at a 1100px window with two 1px borders, that is 250px left,
+448px workspace, and 400px right. A window too narrow for 250px plus the
+workspace narrows the left to 200px before closing it. Its maximum while resizing is usable width minus the current left width
+minus 350px while the workspace is expanded. Dragging the right divider below
+350px of workspace snaps the workspace to zero and gives all its space to the
+right panel. Dragging back to 350px restores the workspace. Right-edge pointer
+and keyboard changes preserve the current left width, preventing propagation
+from collapsing the left sidebar.
+Dragging below half the effective minimum snaps that sidebar closed.
+
+The app's `useSidebarLayout` measures usable width excluding separators, converts
+pixel defaults to the SplitView percentage layout, and preserves sidebar pixel
+widths across window resizes. It uses the design system's layout validator for
+constraints, remembers expanded pixel widths for reopening, and owns width and
+visibility together. Sidebars stay inline, including in browsers.
+Closed panels are inert and hidden from assistive technology.
+
+Borders show a localized glow in the theme's edge colour, centered on the
+pointer during hover and drag, instead of highlighting the entire edge. Keyboard focus shows the same
+glow at the center. The low-opacity gradient fades across a 220px vertical area. Regular drag resizing tracks the pointer immediately; collapse and
+toggle transitions animate for 340ms and respect reduced motion. The center
+uses 350px while expanded and is inert while snapped closed. On window shrink the same order applies: the left gives way first,
+then the right closes once it cannot keep 200px. The shell itself has a 350px
+minimum width. Right-edge resizing never changes the left sidebar. Widths
+animate only after the first measured layout has painted, so a window opens at
+its final layout instead of sliding in from equal thirds.
+
+The expand/restore button in the titlebar, beside the panel toggle, fills the
+app window with that panel. This is an in-app focus mode, not OS fullscreen: the native control
+row stays available. A fixed content layer preserves the measured split layout
+underneath; restore (or Escape) reveals the previous widths and open states.
+Hidden workspace/navigation panels are inert and resize separators are hidden.
+The right toggle exits this mode and closes the panel.
+
+The workspace layouts read the desktop store, a projection of the in-memory
+`WorkspaceSource` described above; the window has no backend connection yet,
+and the pane arrangement is not kept between launches (the chosen layout is,
+as a stored preference).
+Its stylesheet is separate from floating-panel styles. Vite builds both HTML
+entries, and `pnpm app` runs both windows.
+
+Browser-only preview: `pnpm desktop:dev`, then open
+`http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
+it never terminates another worktree's server. `pnpm app:build` packages the
+window with the panel. The native minimum width is 800px. The workspace's content is sample data until the gateway implements its port, and no layout
+persistence are implemented. Restart `pnpm app` after changing the Tauri
+overlay configuration: the CLI watcher can retain the previous merged config.
+
+This follows Tauri's [window customization guide](https://v2.tauri.app/learn/window-customization/)
+and [window configuration reference](https://v2.tauri.app/reference/config/#trafficlightposition).
+Overlay keeps `decorations: true` for real native controls and requires an HTML
+drag region; its geometry is not the same as a normal titlebar. macOS is the
+validated native target. Windows/Linux retain their native decorated titlebars;
+a fully custom titlebar on those platforms is outside this minimal surface.
+
 ## Code map
 
 **Rust host** (`src-tauri/src/`) — everything that is the operating system's
@@ -45,12 +426,13 @@ opinion rather than the product's.
 | `links.rs` | Where a clicked link goes. A pure `decide` allows the app's own origins (`tauri://localhost`, `http://tauri.localhost`, and the dev server in a `tauri dev` build alone), hands `http`, `https` and `mailto` to the OS, and refuses everything else — the panel has no address bar to come back from, and its webview is the one the host's commands are granted to. Applied by a Tauri plugin, because the panel window is declared in `tauri.conf.json`. The module header lists which ways out of a page the navigation policy does not see. |
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
-| `tray.rs` | The menu bar extra (macOS) or StatusNotifierItem (Linux), and the surface-toggle request. Creating it is survivable: a desktop with no tray still launches. |
+| `desktop_window.rs` | The desktop window, Nessa's main app window: opens it (at launch after setup, from the tray, from the Dock) and dismisses it on close, giving and taking the Dock icon through `Host::set_dock_presence`. |
+| `tray.rs` | The menu bar extra (macOS) or StatusNotifierItem (Linux): Open Nessa (the desktop window), Show Panel, and the surface-toggle request. Creating it is survivable: a desktop with no tray still launches. |
 | `shortcut.rs` | Registers / re-registers the global `panel.summon` accelerator from the shortcuts cache. |
 | `shortcuts.rs` | Stage-scoped `shortcuts.json` cache: seed from bundled protocol defaults. |
 | `settings.rs`, `settings/storage.rs` | The on-disk settings shape (panel geometry) and its defaults, over a `Storage` port that `shortcuts.rs` reads through too. Summon is not here — see `shortcuts.rs`. |
 | `platform/` | The OS host. `Host` is the contract — window shaping, and `open_externally` for a link leaving the app; `current()` injects one implementation for the compiled target. Commands `set_frosted` and `panel_size` live here too. |
-| `platform/macos/` | Accessory app, `/usr/bin/open` for links, `NSVisualEffectView` frost, WKWebView pin, AppKit live-resize notifications. The panel stays open when focus moves to another app and joins all desktop Spaces, with fullscreen auxiliary behavior enabled. |
+| `platform/macos/` | Accessory app, Regular while the desktop window is open, `/usr/bin/open` for links, `NSVisualEffectView` frost, WKWebView pin, AppKit live-resize notifications. The panel stays open when focus moves to another app and joins all desktop Spaces, with fullscreen auxiliary behavior enabled. |
 | `platform/linux/` | WebKit DMA-BUF prep, `xdg-open` for links, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
 | `platform/other/` | Webview fills the window; size events only. |
 

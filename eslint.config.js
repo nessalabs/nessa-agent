@@ -48,6 +48,21 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // The browser verification scripts run in Node and hand functions to the
+    // page (`page.evaluate`, init scripts), which run in the browser: both
+    // sets of globals are theirs.
+    files: ["verification/**/*.mjs"],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser },
+    },
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+    },
+  },
+  {
     files: ["src/**/*.{ts,tsx}", "packages/**/*.{ts,tsx}"],
     languageOptions: {
       globals: { ...globals.browser },

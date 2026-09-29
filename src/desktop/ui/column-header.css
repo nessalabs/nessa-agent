@@ -1,0 +1,85 @@
+/*
+ * A column's head (`column-header.tsx`): the titlebar row inside the column,
+ * and the column's title, inline in that row or on its own row below it.
+ * Where an inline title starts is the column's own stylesheet's: the row's
+ * `padding-left`, at or after `--desktop-titlebar-safe-start` wherever the
+ * window's controls stand over the column (`styles.test.ts` holds each).
+ */
+
+.desktop-column-bar {
+  position: relative;
+  display: flex;
+  height: var(--desktop-titlebar-height);
+  flex: none;
+  align-items: center;
+  padding: 0 var(--desktop-control-inset);
+}
+
+.desktop-column-action {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.desktop-column-title {
+  display: flex;
+  min-width: 0;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.desktop-column-title svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--desktop-faint);
+  stroke-width: 2;
+}
+
+.desktop-column-title :is(h1, h2) {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Below: large, on its own row, aligned with the column's content. */
+.desktop-column-title[data-placement="below"] {
+  padding: 2px 12px 10px;
+}
+
+.desktop-column-title[data-placement="below"] :is(h1, h2) {
+  flex: 1;
+  font-size: var(--desktop-text-display);
+  letter-spacing: -0.025em;
+}
+
+/* Inline: the size of a window's title, on the controls' centre line. */
+.desktop-column-title[data-placement="inline"] {
+  flex: 0 1 auto;
+}
+
+.desktop-column-title[data-placement="inline"] :is(h1, h2, span) {
+  font-size: var(--desktop-text-title);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* The title as it would sit inline: laid out to be measured, never seen. */
+.desktop-column-sizer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: max-content;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+}

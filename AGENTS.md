@@ -19,7 +19,7 @@ examples.
 
 ## Before you edit
 
-- [Gates](CODING_STANDARDS.md#gates) — the sixteen conditions a change is merged
+- [Gates](CODING_STANDARDS.md#gates) — the seventeen conditions a change is merged
   on. Read them first; most review findings are one of these.
 - [Organization across the repository](CODING_STANDARDS.md#organization-across-the-repository)
   — where a change belongs, and what else moves with it. Applies to source,
@@ -58,6 +58,10 @@ examples.
   `nessa-sdk` surface, and the lifecycle/concurrency evidence it must carry.
 - [Machine-readable command output](CODING_STANDARDS.md#machine-readable-command-output)
   — data on stdout, tracing diagnostics on stderr.
+- [Browser verification for UI](CODING_STANDARDS.md#browser-verification-for-ui)
+  — any change to what a person sees or does in a UI, and
+  [gate 17](CODING_STANDARDS.md#gates). The `desktop-verification` skill is
+  how to run it.
 - [Adding a check to CI](CODING_STANDARDS.md#adding-a-check-to-ci) — before you
   add a job.
 
