@@ -5,7 +5,7 @@ use super::{snapshot, stream_fact};
 use crate::{
     application::agent_execution::sessions::{
         records::{self, FactKind},
-        SessionChange, SessionSnapshot, StorageError,
+        SessionChange, SessionSaveGeneration, SessionSnapshot, StorageError,
     },
     domain::agent_execution::sessions::SessionId,
 };
@@ -23,6 +23,8 @@ pub(super) struct RecordWriter {
     cursor: Cursor,
     committed: Option<SessionSnapshot>,
     pending: Option<Pending>,
+    batch_generation: Option<SessionSaveGeneration>,
+    batch_complete: bool,
     inflight_base: Option<Option<SessionSnapshot>>,
     committed_prefix: Vec<Vec<u8>>,
     blocked: bool,
@@ -44,6 +46,8 @@ impl RecordWriter {
             cursor: Cursor::new(stream, 0),
             committed: None,
             pending: None,
+            batch_generation: None,
+            batch_complete: false,
             inflight_base: None,
             committed_prefix: Vec::new(),
             blocked: false,
@@ -103,7 +107,7 @@ impl RecordWriter {
         if self.blocked {
             return Err(corrupt("conversation fact conflicts with physical history"));
         }
-        if self.pending.is_some() || !self.committed_prefix.is_empty() {
+        if self.pending.is_some() || (self.batch_generation.is_some() && !self.batch_complete) {
             return Err(StorageError::Unresolved);
         }
         Ok(self.committed.clone())
@@ -118,28 +122,53 @@ impl RecordWriter {
     }
 
     pub(super) fn has_unresolved_fact(&self) -> bool {
-        self.pending.is_some() || !self.committed_prefix.is_empty() || self.blocked
+        self.pending.is_some()
+            || (self.batch_generation.is_some() && !self.batch_complete)
+            || self.blocked
     }
 
     pub(super) async fn save<R: EventRuntime>(
         &mut self,
         runtime: &R,
+        generation: SessionSaveGeneration,
         observed: &SessionSnapshot,
         changes: &[SessionChange],
     ) -> Result<(), StorageError> {
         if self.blocked {
             return Err(corrupt("conversation fact conflicts with physical history"));
         }
-        let base = self.inflight_base.as_ref().unwrap_or(&self.committed);
+        let next_batch = match self.batch_generation {
+            None => true,
+            Some(current) if generation == current => false,
+            Some(current)
+                if self.batch_complete
+                    && self.pending.is_none()
+                    && generation == current.checked_next()? =>
+            {
+                true
+            }
+            Some(_) => return Err(corrupt("session save generation is stale or skipped")),
+        };
+        let base = if next_batch {
+            &self.committed
+        } else {
+            self.inflight_base.as_ref().unwrap_or(&self.committed)
+        };
         records::confirm_candidate(&self.id, base.as_ref(), changes, observed)?;
         let encoded = changes
             .iter()
             .map(snapshot::encode_semantic_change)
             .collect::<Result<Vec<_>, _>>()?;
-        if !encoded.starts_with(&self.committed_prefix) {
+        if !next_batch && !encoded.starts_with(&self.committed_prefix) {
             return Err(corrupt(
                 "committed semantic decision prefix changed before reconciliation",
             ));
+        }
+        if next_batch {
+            self.batch_generation = Some(generation);
+            self.batch_complete = false;
+            self.inflight_base = Some(self.committed.clone());
+            self.committed_prefix.clear();
         }
         let mut remaining = &changes[self.committed_prefix.len()..];
         if let Some(pending) = self.pending.as_ref() {
@@ -172,8 +201,7 @@ impl RecordWriter {
             remaining = &remaining[pending_len..];
         }
         if remaining.is_empty() {
-            self.inflight_base = None;
-            self.committed_prefix.clear();
+            self.batch_complete = true;
             return Ok(());
         }
         let candidate = records::fold_changes(self.committed.as_ref(), remaining)?;
@@ -185,10 +213,8 @@ impl RecordWriter {
             key,
             body: snapshot::encode_semantic_batch(remaining)?,
         };
-        if self.inflight_base.is_none() {
-            self.inflight_base = Some(self.committed.clone());
-        }
         let encoded = encoded[self.committed_prefix.len()..].to_vec();
+        self.batch_complete = false;
         self.pending = Some(Pending {
             fact,
             changes: encoded,
@@ -219,8 +245,8 @@ impl RecordWriter {
         let pending = self.pending.take().expect("pending was just installed");
         self.cursor = cursor;
         self.committed = Some(pending.candidate);
-        self.inflight_base = None;
-        self.committed_prefix.clear();
+        self.committed_prefix.extend(pending.changes);
+        self.batch_complete = true;
         Ok(())
     }
 }
@@ -307,13 +333,29 @@ mod tests {
             context: ProviderContext::Absent,
         };
         let first = records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
-        writer.save(&runtime, &first, &[opened]).await.unwrap();
+        writer
+            .save(
+                &runtime,
+                SessionSaveGeneration::initial(),
+                &first,
+                &[opened],
+            )
+            .await
+            .unwrap();
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
             after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
         };
         let second = records::fold_changes(Some(&first), std::slice::from_ref(&context)).unwrap();
-        writer.save(&runtime, &second, &[context]).await.unwrap();
+        writer
+            .save(
+                &runtime,
+                SessionSaveGeneration::initial().checked_next().unwrap(),
+                &second,
+                &[context],
+            )
+            .await
+            .unwrap();
         assert_eq!(writer.snapshot(), Some(&second));
         drop(writer);
         assert!(
@@ -366,7 +408,15 @@ mod tests {
             context: ProviderContext::Absent,
         };
         let initial = records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
-        writer.save(&runtime, &initial, &[opened]).await.unwrap();
+        writer
+            .save(
+                &runtime,
+                SessionSaveGeneration::initial(),
+                &initial,
+                &[opened],
+            )
+            .await
+            .unwrap();
         let foreign = stream_fact::FramedFact {
             key: records::FactKey::new(records::FactKind::ProviderContext, None, 1).unwrap(),
             body: b"foreign".to_vec(),
@@ -381,7 +431,12 @@ mod tests {
             records::fold_changes(Some(&initial), std::slice::from_ref(&change)).unwrap();
         assert!(matches!(
             writer
-                .save(&runtime, &candidate, std::slice::from_ref(&change))
+                .save(
+                    &runtime,
+                    SessionSaveGeneration::initial().checked_next().unwrap(),
+                    &candidate,
+                    std::slice::from_ref(&change)
+                )
                 .await,
             Err(StorageError::Corrupt(_))
         ));
@@ -390,7 +445,14 @@ mod tests {
             Err(StorageError::Corrupt(_))
         ));
         assert!(matches!(
-            writer.save(&runtime, &candidate, &[change]).await,
+            writer
+                .save(
+                    &runtime,
+                    SessionSaveGeneration::initial().checked_next().unwrap(),
+                    &candidate,
+                    &[change]
+                )
+                .await,
             Err(StorageError::Corrupt(_))
         ));
         assert!(
@@ -430,7 +492,15 @@ mod tests {
         let mut writer = RecordWriter::replay(&runtime, id.clone(), stream.clone())
             .await
             .unwrap();
-        writer.save(&runtime, &first, &[opened]).await.unwrap();
+        writer
+            .save(
+                &runtime,
+                SessionSaveGeneration::initial(),
+                &first,
+                &[opened],
+            )
+            .await
+            .unwrap();
         let execution_id = ExecutionId::new("execution").unwrap();
         let make_input = |text: &str| {
             SessionChange::InputAccepted(Box::new(InvocationRecord {
@@ -501,14 +571,26 @@ mod tests {
         let changed_state =
             records::fold_changes(Some(&first), std::slice::from_ref(&changed)).unwrap();
         recovered
-            .save(&reopened, &changed_state, &[changed])
+            .save(
+                &reopened,
+                SessionSaveGeneration::initial(),
+                &changed_state,
+                &[changed],
+            )
             .await
             .unwrap();
         assert_eq!(recovered.snapshot(), Some(&changed_state));
         let original_state =
             records::fold_changes(Some(&first), std::slice::from_ref(&input)).unwrap();
         assert!(matches!(
-            recovered.save(&reopened, &original_state, &[input]).await,
+            recovered
+                .save(
+                    &reopened,
+                    SessionSaveGeneration::initial(),
+                    &original_state,
+                    &[input]
+                )
+                .await,
             Err(StorageError::Corrupt(_))
         ));
         assert!(reopened.bounds(&same_stream).await.unwrap().tail.offset > frames.len() as u64);

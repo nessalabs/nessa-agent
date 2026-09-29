@@ -21,6 +21,39 @@ use std::{error::Error, fmt, future::Future, pin::Pin};
 /// Asynchronous storage result borrowing its adapter for `'a` and returning `T`.
 pub type StorageFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StorageError>> + Send + 'a>>;
 
+/// Lease-scoped identity of one ordered SDK save decision sequence.
+///
+/// A retry keeps the same generation, including when its decision sequence has
+/// gained a valid suffix. Advance only after the caller has acknowledged the
+/// save and cleared its pending decisions. A newly opened lease starts at
+/// [`Self::initial`]; generations are not persisted across lease lifetimes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionSaveGeneration(u64);
+
+impl Default for SessionSaveGeneration {
+    fn default() -> Self {
+        Self::initial()
+    }
+}
+
+impl SessionSaveGeneration {
+    /// First generation for a newly opened lease.
+    pub const fn initial() -> Self {
+        Self(0)
+    }
+
+    /// Next generation after an acknowledged save.
+    ///
+    /// Returns [`StorageError::Corrupt`] if the lease exhausts its generation
+    /// space rather than wrapping and reusing an earlier identity.
+    pub fn checked_next(self) -> Result<Self, StorageError> {
+        self.0
+            .checked_add(1)
+            .map(Self)
+            .ok_or_else(|| StorageError::Corrupt("session save generation exhausted".into()))
+    }
+}
+
 /// Failure to acquire access, read, validate, or persist a session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StorageError {
@@ -376,12 +409,16 @@ pub trait SessionStorageLease: Send + Sync {
     /// Record adapters persist `changes` as one atomic logical transition and
     /// validate that applying them to the last committed state yields `snapshot`.
     /// Existing snapshot adapters use the complete snapshot as their authority.
-    /// A failed or uncertain write leaves the caller's decision sequence
-    /// pending. A record adapter retains its first encoded bytes for that
-    /// sequence and reconciles the same physical IDs before accepting a later
-    /// sequence.
+    /// A failed, uncertain, or cancelled wait keeps the same `generation` and
+    /// caller decision sequence pending. A record adapter retains its first
+    /// encoded bytes and physically committed prefix for that generation. An
+    /// exact retry finishes or acknowledges it without duplicating the prefix;
+    /// a validated suffix may extend it. Only an acknowledged save advances
+    /// to the next generation. Distinct generations may contain equal bytes.
+    /// Snapshot adapters ignore this lease-scoped identity.
     fn save_changes(
         &self,
+        _generation: SessionSaveGeneration,
         snapshot: SessionSnapshot,
         _changes: Vec<SessionChange>,
     ) -> StorageFuture<'_, ()> {
@@ -413,9 +450,11 @@ pub trait SessionStorageLease: Send + Sync {
     /// # Errors
     /// Returns a backend error when removal cannot be acknowledged. A reset
     /// may already have committed while retired physical rows still await
-    /// cleanup. The adapter fences later loads and saves until a retry
-    /// reconciles the reset and completes physical cleanup. A deletion caller
-    /// keeps its durable deletion intent until that retry succeeds.
+    /// cleanup. The same live lease fences later loads and saves until a retry
+    /// reconciles the reset and completes physical cleanup. After process
+    /// restart, the deletion caller's durable tombstone remains the fence: it
+    /// must retry erase before treating an empty replacement snapshot as an
+    /// erasure acknowledgement.
     fn erase(&self) -> StorageFuture<'_, ()>;
 }
 

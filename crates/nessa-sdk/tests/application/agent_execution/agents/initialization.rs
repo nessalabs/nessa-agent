@@ -464,6 +464,48 @@ async fn prepare_is_durable_without_opening_provider() {
 }
 
 #[tokio::test]
+async fn cancelled_prepare_wait_reopens_without_provider_work() {
+    let storage = MemoryStorage::default();
+    let provider = TestProvider::new();
+    let (saving, release) = storage.pause_next_save();
+    let manager = storage.manager().await;
+    let preparing = tokio::spawn({
+        let provider = provider.clone();
+        async move { Agent::prepare(provider, manager, Arc::new(AcceptingAudit)).await }
+    });
+    saving.await.unwrap();
+    preparing.abort();
+    assert!(matches!(preparing.await, Err(error) if error.is_cancelled()));
+    assert!(provider.calls.opens.lock().unwrap().is_empty());
+    assert!(release.send(()).is_err());
+    let reopened = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            match SessionManager::open(
+                Some(SessionId::new("conversation").unwrap()),
+                Arc::new(storage.clone()),
+            )
+            .await
+            {
+                Ok(manager) => break manager,
+                Err(StorageError::Busy) => tokio::task::yield_now().await,
+                Err(error) => panic!("unexpected reopen error: {error:?}"),
+            }
+        }
+    })
+    .await
+    .expect("cancelled preparation releases its lease");
+    let agent = Agent::prepare(provider.clone(), reopened, Arc::new(AcceptingAudit))
+        .await
+        .unwrap();
+    assert!(provider.calls.opens.lock().unwrap().is_empty());
+    assert!(matches!(
+        storage.snapshot().provider_context,
+        ProviderContext::Absent
+    ));
+    drop(agent);
+}
+
+#[tokio::test]
 async fn queued_work_admitted_before_attachment_binds_to_the_published_provider() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();

@@ -9,8 +9,214 @@ use crate::domain::agent_execution::{
     prompts::{PromptText, UserMessage},
     sessions::ExecutionSessionId,
 };
-use crate::infrastructure::session_storage::InMemoryStorage;
+use crate::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::{Barrier, Semaphore};
+
+struct PauseAfterSave {
+    inner: Arc<dyn SessionStorageLease>,
+    pause_before: AtomicBool,
+    pause_after: AtomicBool,
+    started: Barrier,
+    release: Semaphore,
+}
+
+impl SessionStorageLease for PauseAfterSave {
+    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+        self.inner.load()
+    }
+
+    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+        self.inner.save(snapshot)
+    }
+
+    fn save_changes(
+        &self,
+        generation: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        changes: Vec<SessionChange>,
+    ) -> StorageFuture<'_, ()> {
+        Box::pin(async move {
+            if self.pause_before.swap(false, Ordering::SeqCst) {
+                self.started.wait().await;
+                self.release
+                    .acquire()
+                    .await
+                    .expect("test releases save")
+                    .forget();
+            }
+            self.inner
+                .save_changes(generation, snapshot, changes)
+                .await?;
+            if self.pause_after.swap(false, Ordering::SeqCst) {
+                self.started.wait().await;
+                self.release
+                    .acquire()
+                    .await
+                    .expect("test releases save")
+                    .forget();
+            }
+            Ok(())
+        })
+    }
+
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.inner.erase()
+    }
+}
+
+#[tokio::test]
+async fn cancelled_save_wait_retries_the_same_generation_without_duplicate_records() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+    let id = SessionId::new("cancelled-save").unwrap();
+    let inner = storage.open(id.clone()).await.unwrap();
+    let opened = SessionChange::Opened {
+        id: id.clone(),
+        provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
+        context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+    };
+    let initial = super::super::records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
+    inner
+        .save_changes(
+            SessionSaveGeneration::initial(),
+            initial.clone(),
+            vec![opened],
+        )
+        .await
+        .unwrap();
+    let active = invocation("active", false);
+    let active_id = active.request.execution_id.clone();
+    let input = SessionChange::InputAccepted(Box::new(active));
+    let initial =
+        super::super::records::fold_changes(Some(&initial), std::slice::from_ref(&input)).unwrap();
+    inner
+        .save_changes(
+            SessionSaveGeneration::initial().checked_next().unwrap(),
+            initial.clone(),
+            vec![input],
+        )
+        .await
+        .unwrap();
+    let first = SessionChange::ProviderObservation(text(&active_id));
+    let observed =
+        super::super::records::fold_changes(Some(&initial), std::slice::from_ref(&first)).unwrap();
+    let lease = Arc::new(PauseAfterSave {
+        inner: Arc::from(inner),
+        pause_before: AtomicBool::new(false),
+        pause_after: AtomicBool::new(true),
+        started: Barrier::new(2),
+        release: Semaphore::new(0),
+    });
+    let manager = Arc::new(SessionManager {
+        id,
+        storage_lease: lease.clone(),
+        evidence: Arc::new(Mutex::new(Evidence {
+            save_generation: SessionSaveGeneration::initial()
+                .checked_next()
+                .unwrap()
+                .checked_next()
+                .unwrap(),
+            observed: Some(observed.clone()),
+            committed: Some(initial),
+            pending: vec![first],
+            ..Evidence::default()
+        })),
+        dispatched: RwLock::new(HashMap::new()),
+        attachment: Arc::new(AttachmentLease::empty()),
+    });
+    manager.begin_dispatch(&active_id);
+    let waiting = manager.clone();
+    let caller = tokio::spawn(async move { waiting.flush_observed().await });
+    lease.started.wait().await;
+    caller.abort();
+    assert!(caller.await.unwrap_err().is_cancelled());
+    let evidence = tokio::time::timeout(std::time::Duration::from_secs(3), manager.evidence.lock())
+        .await
+        .expect("cancellation releases manager evidence");
+    assert_eq!(evidence.pending.len(), 1);
+    assert_ne!(evidence.committed.as_ref(), Some(&observed));
+    drop(evidence);
+    manager.flush_observed().await.unwrap();
+    assert_eq!(lease.load().await.unwrap(), Some(observed));
+    manager.event(text(&active_id)).await.unwrap();
+    manager.flush_observed().await.unwrap();
+    let latest = lease.load().await.unwrap().unwrap();
+    assert_eq!(latest.invocations[0].events.len(), 2);
+    assert_eq!(
+        latest.invocations[0].events[0],
+        latest.invocations[0].events[1]
+    );
+    let rows: i64 = rusqlite::Connection::open(directory.path().join("sessions/records.sqlite3"))
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM event_records", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        rows, 4,
+        "the retry acknowledged one decision and the new generation stored equal content"
+    );
+    drop(manager);
+    drop(lease);
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_wait_before_commit_extends_the_same_pending_generation() {
+    let (mut manager, lease, active) = manager(0).await;
+    let paused = Arc::new(PauseAfterSave {
+        inner: lease.clone(),
+        pause_before: AtomicBool::new(true),
+        pause_after: AtomicBool::new(false),
+        started: Barrier::new(2),
+        release: Semaphore::new(0),
+    });
+    manager.storage_lease = paused.clone();
+    let manager = Arc::new(manager);
+    manager.event(text(&active)).await.unwrap();
+    let waiting = manager.clone();
+    let first = tokio::spawn(async move { waiting.flush_observed().await });
+    paused.started.wait().await;
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    assert!(manager.evidence.try_lock().is_ok());
+    let next_manager = manager.clone();
+    let next_event = text(&active);
+    let next = tokio::spawn(async move { next_manager.event(next_event).await });
+    next.await.unwrap().unwrap();
+    manager.flush_observed().await.unwrap();
+    let snapshot = lease.load().await.unwrap().unwrap();
+    assert_eq!(snapshot.invocations[0].events.len(), 2);
+    let saves = lease.changes.lock().unwrap();
+    assert_eq!(saves.len(), 1);
+    assert_eq!(saves[0].len(), 2);
+}
+
+#[tokio::test]
+async fn settlement_failure_retains_the_storage_failure_wrapper() {
+    let (manager, lease, _) = manager(0).await;
+    lease.fail_save.store(true, Ordering::SeqCst);
+    let result = manager
+        .settle_submission(0, Err(AgentError::AuditFailure))
+        .await;
+    assert!(matches!(
+        result,
+        Err(AgentError::StorageAfterExecution { .. })
+    ));
+    let evidence = manager.evidence.lock().await;
+    assert!(matches!(
+        evidence.observed.as_ref().unwrap().invocations[0].result,
+        Some(Err(AgentError::StorageAfterExecution { .. }))
+    ));
+    assert_eq!(evidence.pending.len(), 2);
+    drop(evidence);
+    lease.fail_save.store(false, Ordering::SeqCst);
+    manager.flush_observed().await.unwrap();
+    let saved = lease.load().await.unwrap().unwrap();
+    assert!(matches!(
+        saved.invocations[0].result,
+        Some(Err(AgentError::StorageAfterExecution { .. }))
+    ));
+}
 
 struct FaultLease {
     inner: Box<dyn SessionStorageLease>,
@@ -31,6 +237,7 @@ impl SessionStorageLease for FaultLease {
     }
     fn save_changes(
         &self,
+        _generation: SessionSaveGeneration,
         snapshot: SessionSnapshot,
         changes: Vec<SessionChange>,
     ) -> StorageFuture<'_, ()> {

@@ -1598,6 +1598,7 @@ async fn dispatch_and_buffered_observation_cannot_deadlock_behind_an_admission_s
         async move { agent.enqueue(input("queued-behind-save"), actor()).await }
     });
     saving.await.unwrap();
+    assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
     *backend.early_output.lock().unwrap() = Some(ExecutionUpdate::Message(MessageChunk::text(
         "buffered observation",
     )));

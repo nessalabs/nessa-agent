@@ -1511,13 +1511,14 @@ async fn cleanup_failure_keeps_deletion_unfinished_and_retry_keeps_original_evid
     let fixture = deleting();
     let id = talked_in(&fixture).await;
     fixture.service.shutdown().await.unwrap();
+    let deletion_storage = Arc::new(CleanupReplyFailsOnce {
+        storage: fixture.storage.clone(),
+        fail_first: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    });
     let service = service_with(
         &fixture,
         fixture.repository.clone(),
-        Arc::new(CleanupReplyFailsOnce {
-            storage: fixture.storage.clone(),
-            fail_first: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-        }),
+        deletion_storage.clone(),
     );
     let failures = incomplete(service.delete(id.clone(), caller("delete-1")).await);
     assert!(matches!(
@@ -1530,8 +1531,28 @@ async fn cleanup_failure_keeps_deletion_unfinished_and_retry_keeps_original_evid
     let first_audit = fixture.audit.records.lock().unwrap()[0].clone();
     assert_eq!(first_audit.initiator_principal_id.as_str(), "person");
     assert_eq!(first_audit.correlation_id, "delete-1");
+    deleted(
+        service
+            .create(
+                id.clone(),
+                caller("new-create"),
+                crate::conversation::application::RequestedConversation::default(),
+            )
+            .await,
+    );
+    service.shutdown().await.unwrap();
+    let restarted = service_with(&fixture, fixture.repository.clone(), deletion_storage);
+    deleted(
+        restarted
+            .create(
+                id.clone(),
+                caller("after-restart"),
+                crate::conversation::application::RequestedConversation::default(),
+            )
+            .await,
+    );
 
-    service
+    restarted
         .delete(id.clone(), caller("delete-2"))
         .await
         .unwrap();
@@ -1550,7 +1571,7 @@ async fn cleanup_failure_keeps_deletion_unfinished_and_retry_keeps_original_evid
         assert_eq!(audit.provider_erasure, first_audit.provider_erasure);
         assert_eq!(audit.provider_session_id, first_audit.provider_session_id);
     }
-    service.shutdown().await.unwrap();
+    restarted.shutdown().await.unwrap();
 }
 
 #[tokio::test]

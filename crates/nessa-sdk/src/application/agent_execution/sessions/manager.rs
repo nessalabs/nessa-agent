@@ -1,7 +1,8 @@
 use super::{
     attachment::AttachmentLease, InvocationCancellationEvent, InvocationRecord,
-    InvocationSchedulingEvent, ProviderContext, QueueHistoryRecord, SessionChange, SessionSnapshot,
-    SessionStorage, SessionStorageLease, StorageError, StorageFuture, SubmissionAcknowledgement,
+    InvocationSchedulingEvent, ProviderContext, QueueHistoryRecord, SessionChange,
+    SessionSaveGeneration, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+    StorageFuture, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -128,6 +129,7 @@ impl Drop for InvocationObservations<'_> {
 }
 #[derive(Default)]
 struct Evidence {
+    save_generation: SessionSaveGeneration,
     event_usage: HashMap<ExecutionId, ObservationUsage>,
     // Derived live text validation only. Saves invalidate it before any await;
     // restoration and consequential boundaries still validate complete evidence.
@@ -239,14 +241,23 @@ impl SessionManager {
                     .clone(),
             ));
         }
+        let mut save_generation = SessionSaveGeneration::initial();
         if !changes.is_empty() {
-            catch_storage_operation(|| self.storage_lease.save_changes(snapshot.clone(), changes))
-                .await
-                .map_err(StorageError::bounded)
+            let next_generation = save_generation
+                .checked_next()
                 .map_err(AgentError::Storage)?;
+            catch_storage_operation(|| {
+                self.storage_lease
+                    .save_changes(save_generation, snapshot.clone(), changes)
+            })
+            .await
+            .map_err(StorageError::bounded)
+            .map_err(AgentError::Storage)?;
+            save_generation = next_generation;
         }
         let context = snapshot.provider_context.clone();
         *self.evidence.lock().await = Evidence {
+            save_generation,
             event_usage: HashMap::new(),
             message_histories: HashMap::new(),
             observed: Some(snapshot.clone()),
@@ -421,10 +432,25 @@ impl SessionManager {
                 });
             }
             let changes = evidence.pending.clone();
-            let result =
-                catch_storage_operation(|| self.storage_lease.save_changes(next.clone(), changes))
+            let next_generation = evidence.save_generation.checked_next();
+            let result = match next_generation {
+                Ok(next_generation) => {
+                    let result = catch_storage_operation(|| {
+                        self.storage_lease.save_changes(
+                            evidence.save_generation,
+                            next.clone(),
+                            changes,
+                        )
+                    })
                     .await
                     .map_err(StorageError::bounded);
+                    if result.is_ok() {
+                        evidence.save_generation = next_generation;
+                    }
+                    result
+                }
+                Err(error) => Err(error),
+            };
             if result.is_ok() {
                 evidence.committed = Some(next);
                 evidence.pending.clear();
@@ -530,6 +556,10 @@ impl SessionManager {
             // Reserve identity before polling untrusted storage. Even a task panic
             // after committing the write must not erase admission or permit replay.
             let index = next.invocations.len() - 1;
+            let next_generation = evidence
+                .save_generation
+                .checked_next()
+                .map_err(AgentError::Storage)?;
             let pending_before = evidence.pending.len();
             evidence.pending.push(SessionChange::InputAccepted(Box::new(
                 next.invocations[index].clone(),
@@ -538,6 +568,7 @@ impl SessionManager {
             let previous = evidence.observed.replace(next);
             if let Err(error) = storage_lease
                 .save_changes(
+                    evidence.save_generation,
                     evidence
                         .observed
                         .as_ref()
@@ -580,6 +611,7 @@ impl SessionManager {
             }
             evidence.committed = evidence.observed.clone();
             evidence.pending.clear();
+            evidence.save_generation = next_generation;
             Ok(index)
         })
         .await
@@ -1423,6 +1455,7 @@ impl SessionManager {
         Ok(true)
     }
     async fn save_observed(&self, evidence: &mut Evidence) -> Result<(), StorageError> {
+        let next_generation = evidence.save_generation.checked_next()?;
         evidence.message_histories.clear();
         let snapshot = evidence
             .observed
@@ -1430,11 +1463,16 @@ impl SessionManager {
             .expect("initialized agent session")
             .clone();
         self.storage_lease
-            .save_changes(snapshot.clone(), evidence.pending.clone())
+            .save_changes(
+                evidence.save_generation,
+                snapshot.clone(),
+                evidence.pending.clone(),
+            )
             .await
             .map_err(StorageError::bounded)?;
         evidence.committed = Some(snapshot);
         evidence.pending.clear();
+        evidence.save_generation = next_generation;
         Ok(())
     }
     fn validate_result(

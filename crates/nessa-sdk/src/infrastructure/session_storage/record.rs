@@ -3,8 +3,8 @@
 use super::{paths::SessionPaths, record_writer::RecordWriter};
 use crate::{
     application::agent_execution::sessions::storage::{
-        SessionChange, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-        StorageFuture,
+        SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage, SessionStorageLease,
+        StorageError, StorageFuture,
     },
     domain::agent_execution::sessions::SessionId,
 };
@@ -279,6 +279,7 @@ impl SessionStorageLease for RecordLease {
 
     fn save_changes(
         &self,
+        generation: SessionSaveGeneration,
         snapshot: SessionSnapshot,
         changes: Vec<SessionChange>,
     ) -> StorageFuture<'_, ()> {
@@ -287,7 +288,10 @@ impl SessionStorageLease for RecordLease {
             tokio::spawn(async move {
                 let mut state = inner.state.lock().await;
                 state.reconcile_erasure(&inner).await?;
-                state.writer.save(&inner.runtime, &snapshot, &changes).await
+                state
+                    .writer
+                    .save(&inner.runtime, generation, &snapshot, &changes)
+                    .await
             })
             .await
             .map_err(|error| StorageError::Io(error.to_string()))?
@@ -397,6 +401,12 @@ mod tests {
         (change, snapshot)
     }
 
+    fn generation(acknowledged_saves: usize) -> SessionSaveGeneration {
+        (0..acknowledged_saves).fold(SessionSaveGeneration::initial(), |value, _| {
+            value.checked_next().unwrap()
+        })
+    }
+
     #[tokio::test]
     async fn erase_removes_retired_prompt_rows_and_retries_cleanup_after_restart() {
         let directory = tempfile::tempdir().unwrap();
@@ -407,7 +417,11 @@ mod tests {
         let lease = storage.open(id.clone()).await.unwrap();
         let (opened, mut snapshot) = opening(&id);
         lease
-            .save_changes(snapshot.clone(), vec![opened])
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                snapshot.clone(),
+                vec![opened],
+            )
             .await
             .unwrap();
         let secret = "NESSA_ERASE_PRIVATE_INPUT_275";
@@ -432,7 +446,10 @@ mod tests {
         };
         let change = SessionChange::InputAccepted(Box::new(input));
         snapshot = records::fold_changes(Some(&snapshot), std::slice::from_ref(&change)).unwrap();
-        lease.save_changes(snapshot, vec![change]).await.unwrap();
+        lease
+            .save_changes(generation(1), snapshot, vec![change])
+            .await
+            .unwrap();
         assert!(payload_rows(&root, secret) > 0);
         assert!(matches!(lease.erase().await, Err(StorageError::Io(_))));
         assert!(retired_rows(&root) > 0);
@@ -459,7 +476,11 @@ mod tests {
         let lease = storage.open(id.clone()).await.unwrap();
         let (opened, prior) = opening(&id);
         lease
-            .save_changes(prior.clone(), vec![opened])
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                prior.clone(),
+                vec![opened],
+            )
             .await
             .unwrap();
         let a_context = ProviderContext::Recorded(ExecutionSessionId::new("ctx-A").unwrap());
@@ -476,20 +497,145 @@ mod tests {
         let both = records::fold_changes(Some(&prior), &[a.clone(), b.clone()]).unwrap();
         sql(&root, "CREATE TRIGGER reject_test BEFORE INSERT ON event_records BEGIN SELECT RAISE(ABORT, 'injected failure A'); END");
         assert!(matches!(
-            lease.save_changes(first, vec![a.clone()]).await,
+            lease
+                .save_changes(generation(1), first, vec![a.clone()])
+                .await,
             Err(StorageError::Io(_))
         ));
         sql(&root, "DROP TRIGGER reject_test; CREATE TRIGGER reject_test BEFORE INSERT ON event_records WHEN instr(NEW.payload, CAST('ctx-B' AS BLOB)) > 0 BEGIN SELECT RAISE(ABORT, 'injected failure B'); END");
         assert!(matches!(
             lease
-                .save_changes(both.clone(), vec![a.clone(), b.clone()])
+                .save_changes(generation(1), both.clone(), vec![a.clone(), b.clone()])
                 .await,
             Err(StorageError::Io(_))
         ));
         assert_eq!(lease.load().await, Err(StorageError::Unresolved));
+        assert!(matches!(
+            lease
+                .save_changes(generation(2), both.clone(), vec![a.clone(), b.clone()])
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
         sql(&root, "DROP TRIGGER reject_test");
-        lease.save_changes(both.clone(), vec![a, b]).await.unwrap();
+        lease
+            .save_changes(generation(1), both.clone(), vec![a, b])
+            .await
+            .unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(both.clone()));
+        assert!(matches!(
+            lease
+                .save_changes(generation(3), both.clone(), Vec::new())
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        lease
+            .save_changes(generation(2), both.clone(), Vec::new())
+            .await
+            .unwrap();
+        assert!(matches!(
+            lease.save_changes(generation(1), both, Vec::new()).await,
+            Err(StorageError::Corrupt(_))
+        ));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn completed_generation_retries_and_extends_without_duplicate_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("completed-generation").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, prior) = opening(&id);
+        lease
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                prior.clone(),
+                vec![opened],
+            )
+            .await
+            .unwrap();
+        let a_context = ProviderContext::Recorded(ExecutionSessionId::new("ctx-A").unwrap());
+        let b_context = ProviderContext::Recorded(ExecutionSessionId::new("ctx-B").unwrap());
+        let a = SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: a_context.clone(),
+        };
+        let b = SessionChange::ProviderContext {
+            before: a_context.clone(),
+            after: b_context.clone(),
+        };
+        let first = records::fold_changes(Some(&prior), std::slice::from_ref(&a)).unwrap();
+        let both = records::fold_changes(Some(&prior), &[a.clone(), b.clone()]).unwrap();
+        lease
+            .save_changes(generation(1), first.clone(), vec![a.clone()])
+            .await
+            .unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(first.clone()));
+        let rows = |root: &std::path::Path| -> i64 {
+            Connection::open(root.join("records.sqlite3"))
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM event_records", [], |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!(rows(&root), 2);
+        lease
+            .save_changes(generation(1), first.clone(), vec![a.clone()])
+            .await
+            .unwrap();
+        assert_eq!(rows(&root), 2);
+        let changed = SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: b_context.clone(),
+        };
+        let changed_candidate =
+            records::fold_changes(Some(&prior), std::slice::from_ref(&changed)).unwrap();
+        assert!(matches!(
+            lease
+                .save_changes(generation(1), changed_candidate, vec![changed])
+                .await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(rows(&root), 2);
+        sql(&root, "CREATE TRIGGER reject_test BEFORE INSERT ON event_records WHEN instr(NEW.payload, CAST('ctx-B' AS BLOB)) > 0 BEGIN SELECT RAISE(ABORT, 'injected suffix failure'); END");
+        assert!(matches!(
+            lease
+                .save_changes(generation(1), both.clone(), vec![a.clone(), b.clone()])
+                .await,
+            Err(StorageError::Io(_))
+        ));
+        assert_eq!(lease.load().await, Err(StorageError::Unresolved));
+        assert_eq!(rows(&root), 2);
+        sql(&root, "DROP TRIGGER reject_test");
+        lease
+            .save_changes(generation(1), both.clone(), vec![a.clone(), b.clone()])
+            .await
+            .unwrap();
+        assert_eq!(rows(&root), 3);
+        assert!(matches!(
+            lease.save_changes(generation(1), first, vec![a]).await,
+            Err(StorageError::Corrupt(_))
+        ));
+        lease
+            .save_changes(
+                generation(1),
+                both.clone(),
+                vec![
+                    SessionChange::ProviderContext {
+                        before: ProviderContext::Absent,
+                        after: a_context,
+                    },
+                    b,
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows(&root), 3);
         assert_eq!(lease.load().await.unwrap(), Some(both));
+        lease.erase().await.unwrap();
+        assert_eq!(lease.load().await.unwrap(), None);
+        assert_eq!(rows(&root), 0);
         drop(lease);
         storage.shutdown().await.unwrap();
     }
@@ -504,7 +650,9 @@ mod tests {
         let lease = storage.open(id.clone()).await.unwrap();
         let (opened, snapshot) = opening(&id);
         assert!(matches!(
-            lease.save_changes(snapshot, vec![opened]).await,
+            lease
+                .save_changes(SessionSaveGeneration::initial(), snapshot, vec![opened])
+                .await,
             Err(StorageError::Io(_))
         ));
         assert_eq!(lease.load().await, Err(StorageError::Unresolved));
@@ -524,7 +672,11 @@ mod tests {
         let lease = storage.open(id.clone()).await.unwrap();
         let (opened, mut observed) = opening(&id);
         lease
-            .save_changes(observed.clone(), vec![opened])
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                observed.clone(),
+                vec![opened],
+            )
             .await
             .unwrap();
         let context = SessionChange::ProviderContext {
@@ -533,7 +685,7 @@ mod tests {
         };
         observed = records::fold_changes(Some(&observed), std::slice::from_ref(&context)).unwrap();
         lease
-            .save_changes(observed.clone(), vec![context])
+            .save_changes(generation(1), observed.clone(), vec![context])
             .await
             .unwrap();
         let execution_id = ExecutionId::new("execution").unwrap();
@@ -558,7 +710,7 @@ mod tests {
         }));
         observed = records::fold_changes(Some(&observed), std::slice::from_ref(&input)).unwrap();
         lease
-            .save_changes(observed.clone(), vec![input])
+            .save_changes(generation(2), observed.clone(), vec![input])
             .await
             .unwrap();
         let receipt = SessionChange::ReceiptUpdated {
@@ -568,7 +720,7 @@ mod tests {
         };
         observed = records::fold_changes(Some(&observed), std::slice::from_ref(&receipt)).unwrap();
         lease
-            .save_changes(observed.clone(), vec![receipt])
+            .save_changes(generation(3), observed.clone(), vec![receipt])
             .await
             .unwrap();
         let report = SessionChange::ProviderReport {
@@ -582,7 +734,7 @@ mod tests {
         };
         observed = records::fold_changes(Some(&observed), std::slice::from_ref(&report)).unwrap();
         lease
-            .save_changes(observed.clone(), vec![report])
+            .save_changes(generation(4), observed.clone(), vec![report])
             .await
             .unwrap();
         let settlement = SessionChange::LocalSettlement {
@@ -594,7 +746,7 @@ mod tests {
         observed =
             records::fold_changes(Some(&observed), std::slice::from_ref(&settlement)).unwrap();
         lease
-            .save_changes(observed.clone(), vec![settlement])
+            .save_changes(generation(5), observed.clone(), vec![settlement])
             .await
             .unwrap();
         drop(lease);
@@ -621,7 +773,11 @@ mod tests {
             Err(StorageError::ChangesRequired)
         );
         lease
-            .save_changes(snapshot.clone(), vec![change])
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                snapshot.clone(),
+                vec![change],
+            )
             .await
             .unwrap();
         assert_eq!(lease.load().await.unwrap(), Some(snapshot.clone()));
@@ -633,7 +789,11 @@ mod tests {
         assert_eq!(lease.load().await.unwrap(), None);
         let (reopen_change, reopened_snapshot) = opening(&id);
         lease
-            .save_changes(reopened_snapshot.clone(), vec![reopen_change])
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                reopened_snapshot.clone(),
+                vec![reopen_change],
+            )
             .await
             .unwrap();
         assert_eq!(lease.load().await.unwrap(), Some(reopened_snapshot));
@@ -676,7 +836,11 @@ mod tests {
         let lease = storage.open(id.clone()).await.unwrap();
         let (change, snapshot) = opening(&id);
         lease
-            .save_changes(snapshot.clone(), vec![change])
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                snapshot.clone(),
+                vec![change],
+            )
             .await
             .unwrap();
         storage.lose_reset_reply.store(true, Ordering::SeqCst);
@@ -702,7 +866,11 @@ mod tests {
         let lease = storage.open(id.clone()).await.unwrap();
         let (change, snapshot) = opening(&id);
         let first = lease
-            .save_changes(snapshot.clone(), vec![change.clone()])
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                snapshot.clone(),
+                vec![change.clone()],
+            )
             .await;
         assert!(matches!(first, Err(StorageError::Io(_))), "{first:?}");
         assert_eq!(lease.load().await, Err(StorageError::Unresolved));
@@ -714,7 +882,11 @@ mod tests {
         let lease = reopened.open_existing(id).await.unwrap().unwrap();
         assert_eq!(lease.load().await.unwrap(), None);
         lease
-            .save_changes(snapshot.clone(), vec![change])
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                snapshot.clone(),
+                vec![change],
+            )
             .await
             .unwrap();
         assert_eq!(lease.load().await.unwrap(), Some(snapshot));
@@ -767,7 +939,10 @@ mod tests {
         let id = SessionId::new("child-replay").unwrap();
         let lease = storage.open(id.clone()).await.unwrap();
         let (change, snapshot) = opening(&id);
-        lease.save_changes(snapshot, vec![change]).await.unwrap();
+        lease
+            .save_changes(SessionSaveGeneration::initial(), snapshot, vec![change])
+            .await
+            .unwrap();
         drop(lease);
         storage.shutdown().await.unwrap();
         drop(storage);
@@ -812,7 +987,10 @@ mod tests {
             let id = SessionId::new(format!("partial-child-{index}")).unwrap();
             let lease = storage.open(id.clone()).await.unwrap();
             let (change, snapshot) = opening(&id);
-            lease.save_changes(snapshot, vec![change]).await.unwrap();
+            lease
+                .save_changes(SessionSaveGeneration::initial(), snapshot, vec![change])
+                .await
+                .unwrap();
             drop(lease);
             let runtime = storage.runtime().await.unwrap();
             let stream = runtime
@@ -851,7 +1029,11 @@ mod tests {
         let lease = storage.open(id.clone()).await.unwrap();
         let (change, snapshot) = opening(&id);
         lease
-            .save_changes(snapshot.clone(), vec![change])
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                snapshot.clone(),
+                vec![change],
+            )
             .await
             .unwrap();
         drop(lease);
@@ -909,7 +1091,11 @@ mod tests {
         let lease = storage.open(id.clone()).await.unwrap();
         let (change, snapshot) = opening(&id);
         lease
-            .save_changes(snapshot.clone(), vec![change])
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                snapshot.clone(),
+                vec![change],
+            )
             .await
             .unwrap();
         drop(lease);
@@ -982,7 +1168,11 @@ mod tests {
         let lease = storage.open(id.clone()).await.unwrap();
         let (opened, mut observed) = opening(&id);
         lease
-            .save_changes(observed.clone(), vec![opened])
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                observed.clone(),
+                vec![opened],
+            )
             .await
             .unwrap();
         let context = SessionChange::ProviderContext {
@@ -991,7 +1181,7 @@ mod tests {
         };
         observed = records::fold_changes(Some(&observed), std::slice::from_ref(&context)).unwrap();
         lease
-            .save_changes(observed.clone(), vec![context])
+            .save_changes(generation(1), observed.clone(), vec![context])
             .await
             .unwrap();
         let execution_id = ExecutionId::new("accepted").unwrap();
@@ -1015,7 +1205,10 @@ mod tests {
             result: None,
         }));
         observed = records::fold_changes(Some(&observed), std::slice::from_ref(&input)).unwrap();
-        lease.save_changes(observed, vec![input]).await.unwrap();
+        lease
+            .save_changes(generation(2), observed, vec![input])
+            .await
+            .unwrap();
         drop(lease);
         let runtime = storage.runtime().await.unwrap();
         let stream = runtime
