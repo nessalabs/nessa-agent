@@ -23,10 +23,7 @@ use crate::{
     },
     agents::{domain::AgentId, infrastructure::AgentLaunchFiles},
     attachments::infrastructure::ModelImageNormalizer,
-    conversation::application::{
-        ConversationAgents, ConversationDependencies, ConversationLimits, ConversationRepository,
-        ReceiverAuthority,
-    },
+    conversation::application::{ConversationAgents, ConversationDependencies, ConversationLimits},
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
         DurableConversationFileLinkAudit, DurableConversationModeAudit, LocalConversationStore,
@@ -41,7 +38,7 @@ use crate::{
     app::ports::Clock as ServerClock,
     attachments::application::AttachmentService,
     browser_session::adapters::PersistentSessions,
-    conversation::application::ConversationService,
+    conversation::application::{ConversationRepository, ConversationService, ReceiverAuthority},
     core::RunError,
     env::Environment,
     product::{ProductDependencies, ProductRouteState},
