@@ -25,3 +25,19 @@ test("keeps a `//` or `/*` inside a string, template or regular expression", () 
     'const t = `${"b"        }`',
   )
 })
+
+test("reads a regular expression after a comment or a condition as one, so a `/*` in it hides nothing", () => {
+  for (const code of [
+    'const re = /* explanation */ /[/*]/; import("../../../workspace")',
+    'if (ready) /[/*]/.test(x); import("../../../workspace")',
+    'while (x) /\\/*/.exec(y); import("../../../workspace")',
+  ]) {
+    const blanked = withoutComments(code)
+    assert.match(blanked, /import\("\.\.\/\.\.\/\.\.\/workspace"\)/, code)
+  }
+  // A `)` that ends a value: the `/` after it divides, and a comment after that is one.
+  assert.equal(
+    withoutComments("const n = (a + b) / c /* half */").trimEnd(),
+    "const n = (a + b) / c",
+  )
+})

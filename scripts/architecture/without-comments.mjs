@@ -24,6 +24,10 @@ export function withoutComments(text) {
   }
   /** How deep in `${…}` each open template literal is, innermost last. */
   const templates = []
+  /** For each `(` open, whether it opened a control statement's condition. */
+  const parens = []
+  /** Whether the last `)` closed a control statement's condition. */
+  let closedCondition = false
   let i = 0
   const skipString = (quote) => {
     for (i++; i < text.length && text[i] !== quote; i++) if (text[i] === "\\") i++
@@ -48,15 +52,23 @@ export function withoutComments(text) {
       }
     }
   }
+  /**
+   * Whether a `/` at `i` begins a regular expression: read back through what
+   * is already blanked, so a comment before it reads as the space it became,
+   * and after a `)`, only one that closed an `if`, `while`, `for` or `with`
+   * condition — any other `)` ends a value, and a `/` after it divides.
+   */
   const regexMayStart = () => {
     let j = i - 1
-    while (j >= 0 && /\s/.test(text[j])) j--
+    while (j >= 0 && /\s/.test(out[j])) j--
     if (j < 0) return true
+    if (out[j] === ")") return closedCondition
     return (
-      beforeRegex.has(text[j]) ||
-      regexKeywords.test(text.slice(Math.max(0, j - 12), j + 1))
+      beforeRegex.has(out[j]) ||
+      regexKeywords.test(out.slice(Math.max(0, j - 12), j + 1).join(""))
     )
   }
+
   while (i < text.length) {
     const c = text[i]
     const next = text[i + 1]
@@ -83,6 +95,16 @@ export function withoutComments(text) {
       i++
       // Back from `${…}` into the template's own text.
       if (templates[templates.length - 1] === 0) skipTemplateText()
+    } else if (c === "(") {
+      parens.push(
+        /(?:^|[^\w$])(?:if|while|for|with)\s*$/.test(
+          out.slice(Math.max(0, i - 8), i).join(""),
+        ),
+      )
+      i++
+    } else if (c === ")") {
+      closedCondition = parens.pop() ?? false
+      i++
     } else if (c === "/" && regexMayStart()) {
       let inClass = false
       for (i++; i < text.length && text[i] !== "\n"; i++) {
