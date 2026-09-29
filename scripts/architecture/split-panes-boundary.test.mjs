@@ -68,3 +68,15 @@ test("what is not a path into or out of split panes is not this rule's business"
     [],
   )
 })
+
+test("a forbidden import after a regular expression that holds `/*` is still caught", () => {
+  const path = "src/desktop/split-panes/adapters/dom/probe.ts"
+  for (const source of [
+    'const re = /* explanation */ /[/*]/; import("../../../workspace")',
+    'if (ready) /[/*]/.test(x); import("../../../workspace")',
+  ]) {
+    const imports = importedPaths(source)
+    assert.deepEqual(imports, ["../../../workspace"], source)
+    assert.equal(splitPanesBoundaryViolations(path, imports).length, 1, source)
+  }
+})
