@@ -109,7 +109,7 @@ it("keeps the list's inline title out from under the window's controls while a d
     new URL("./workspace/ui/session-list/session-list.css", import.meta.url),
     "utf8",
   )
-  const selector = '.workspace[data-drag-folds][data-sidebar="open"]'
+  const selector = '.workspace[data-drag-takes-spare][data-sidebar="open"]'
   const body = sheet.slice(sheet.indexOf(selector)).split("}")[0]
   expect(body).toContain(".desktop-column-title")
   expect(body).toMatch(/opacity:\s*0;/)

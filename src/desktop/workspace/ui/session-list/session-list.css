@@ -66,7 +66,7 @@
   transition: opacity var(--desktop-base) ease;
 }
 
-.workspace[data-drag-folds][data-sidebar="open"]
+.workspace[data-drag-takes-spare][data-sidebar="open"]
   .workspace-list
   .desktop-column-bar
   .desktop-column-title {
