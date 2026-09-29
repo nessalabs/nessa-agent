@@ -3,13 +3,14 @@
 //! `LocalConversationStore` keeps ownership records, tombstones and summaries
 //! with approval-mode requests in one private SQLite database (`schema.sql`, opened by
 //! `nessa-local-database`), and is the repository, the summaries and the
-//! listing at once:
+//! listing and the owner-scoped catalogue at once:
 //!
 //! ```text
 //!   ConversationRepository ─┐
 //!   ConversationSummaries  ─┼─▶ LocalConversationStore ─▶ metadata.sqlite3
-//!   ConversationListing    ─┘                              conversations ◀─ deletions
-//!                                                                        ◀─ summaries
+//!   ConversationListing    ─┤                              conversations ◀─ deletions
+//!   ConversationCatalogue  ─┘                                            ◀─ summaries
+//!                                                               catalogue_owners / identity
 //!                                                                        ◀─ mode requests
 //! ```
 //!
@@ -23,6 +24,11 @@
 //! separate immutable files keyed by the conversation, request and phase.
 mod store;
 pub use store::LocalConversationStore;
+
+mod catalogue_source;
+pub use catalogue_source::{
+    conversation_catalogue_schema, conversation_catalogue_stream, NessaCatalogueSource,
+};
 
 mod provider_sessions;
 pub use provider_sessions::BindingSessionEraser;

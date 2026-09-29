@@ -1,10 +1,12 @@
 use crate::agents::domain::AgentId;
 use crate::conversation::{
     application::{
-        ConversationCreation, ConversationCreationDisposition, ConversationError,
-        ConversationFuture, ConversationListing, ConversationModeApplication,
-        ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
-        ConversationSummaries, ListedConversation, ListedConversations, UnfinishedDeletions,
+        CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
+        CatalogueValue, ConversationCatalogue, ConversationCreation,
+        ConversationCreationDisposition, ConversationError, ConversationFuture,
+        ConversationListing, ConversationModeApplication, ConversationModeRequest,
+        ConversationModeRequestState, ConversationRepository, ConversationSummaries,
+        ListedConversation, ListedConversations, UnfinishedDeletions,
     },
     domain::{
         Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
@@ -18,6 +20,7 @@ use nessa_local_database::{
     OpenError, Schema,
 };
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
+use nessa_sync::replication::catalogue::MAX_CATALOGUE_ENTRIES;
 use serde::{Deserialize, Serialize};
 use std::{
     path::Path,
@@ -149,6 +152,86 @@ fn time(value: i64) -> Option<u64> {
 }
 fn stored_time(value: u64) -> Result<i64, ConversationError> {
     i64::try_from(value).map_err(|_| ConversationError::Metadata)
+}
+
+/// The head and the latest retained row are one fact. No row for a new owner
+/// means zero; a missing counter beside existing conversations is damage.
+fn owner_head(
+    connection: &Connection,
+    organization: &OrganizationId,
+    owner: &PrincipalId,
+) -> Result<i64, ConversationError> {
+    let head: Option<i64> = connection
+        .query_row(
+            "SELECT head FROM catalogue_owners WHERE organization = ?1 AND owner = ?2",
+            params![organization.as_str(), owner.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(failed)?;
+    let latest: Option<i64> = connection
+        .query_row(
+            "SELECT MAX(change_revision) FROM conversations WHERE organization = ?1 AND owner = ?2",
+            params![organization.as_str(), owner.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(failed)?;
+    match (head, latest) {
+        (None, None) => Ok(0),
+        (Some(head), Some(latest)) if head > 0 && head == latest => Ok(head),
+        _ => Err(ConversationError::Metadata),
+    }
+}
+
+/// Allocate inside the transaction that changes the owner's visible value.
+/// A missing owner row for an existing conversation is damage, not a new epoch.
+fn next_revision(
+    connection: &Connection,
+    conversation: &Conversation,
+    creating: bool,
+) -> Result<i64, ConversationError> {
+    let head = owner_head(
+        connection,
+        conversation.organization(),
+        conversation.owner(),
+    )?;
+    if creating && head == 0 {
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO catalogue_owners (organization, owner, head)
+             VALUES (?1, ?2, 0)",
+                params![
+                    conversation.organization().as_str(),
+                    conversation.owner().as_str()
+                ],
+            )
+            .map_err(failed)?;
+    } else if head == 0 {
+        return Err(ConversationError::Metadata);
+    }
+    let changed = connection
+        .execute(
+            "UPDATE catalogue_owners SET head = head + 1
+         WHERE organization = ?1 AND owner = ?2 AND head < 9223372036854775807",
+            params![
+                conversation.organization().as_str(),
+                conversation.owner().as_str()
+            ],
+        )
+        .map_err(failed)?;
+    if changed != 1 {
+        return Err(ConversationError::Metadata);
+    }
+    connection
+        .query_row(
+            "SELECT head FROM catalogue_owners WHERE organization = ?1 AND owner = ?2",
+            params![
+                conversation.organization().as_str(),
+                conversation.owner().as_str()
+            ],
+            |row| row.get(0),
+        )
+        .map_err(failed)
 }
 
 /// A conversation row as its columns hold it, in [`Self::COLUMNS`] order.
@@ -370,6 +453,59 @@ fn read(
     }
 }
 
+fn catalogue_incarnation(connection: &Connection, expected: &str) -> Result<(), ConversationError> {
+    let current: String = connection
+        .query_row(
+            "SELECT incarnation FROM catalogue_identity WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(failed)?;
+    if current != expected {
+        return Err(ConversationError::CatalogueIdentityChanged);
+    }
+    Ok(())
+}
+
+fn catalogue_descriptor(row: &Row<'_>) -> rusqlite::Result<(StoredConversation, i64, i64, bool)> {
+    Ok((
+        StoredConversation::from_row(row)?,
+        row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
+    ))
+}
+
+fn checked_descriptor(
+    stored: StoredConversation,
+    creation: i64,
+    change: i64,
+    deleted: bool,
+    organization: &OrganizationId,
+    owner: &PrincipalId,
+) -> Result<CatalogueDescriptor, ConversationError> {
+    let id = stored.id.clone();
+    let conversation = stored
+        .read()
+        .ok_or_else(|| unreadable("conversations", &id))?;
+    if !conversation.allows(organization, owner) {
+        return Err(unreadable("conversations", &id));
+    }
+    let creation = u64::try_from(creation).map_err(|_| unreadable("conversations", &id))?;
+    let revision = u64::try_from(change).map_err(|_| unreadable("conversations", &id))?;
+    if creation == 0 || revision < creation {
+        return Err(unreadable("conversations", &id));
+    }
+    Ok(CatalogueDescriptor {
+        key: CatalogueKey {
+            creation,
+            id: conversation.id().clone(),
+        },
+        revision,
+        deleted,
+    })
+}
+
 fn read_mode_request(
     connection: &Connection,
     id: &ConversationId,
@@ -543,10 +679,12 @@ impl ConversationRepository for LocalConversationStore {
             let agent = conversation
                 .agent()
                 .ok_or(ConversationError::AgentUnsupported)?;
+            let revision = next_revision(&transaction, &conversation, true)?;
             transaction
                 .execute(
                     &format!(
-                        "INSERT INTO conversations ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        "INSERT INTO conversations ({}, creation_revision, change_revision)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
                         StoredConversation::COLUMNS
                     ),
                     params![
@@ -559,6 +697,7 @@ impl ConversationRepository for LocalConversationStore {
                         agent.name(),
                         conversation.model().as_str(),
                         conversation.approval_mode().as_str(),
+                        revision,
                     ],
                 )
                 .map_err(failed)?;
@@ -717,7 +856,10 @@ impl ConversationRepository for LocalConversationStore {
                 || (state == ConversationModeRequestState::Applied
                     && !matches!(
                         request.application,
-                        Some(ConversationModeApplication::Applied | ConversationModeApplication::Deferred)
+                        Some(
+                            ConversationModeApplication::Applied
+                                | ConversationModeApplication::Deferred
+                        )
                     ))
             {
                 return Err(ConversationError::ApprovalModeUncertain);
@@ -737,16 +879,27 @@ impl ConversationRepository for LocalConversationStore {
                 return Err(ConversationError::ApprovalModeUncertain);
             }
             if state == ConversationModeRequestState::Applied {
-                transaction.execute(
-                    "UPDATE conversations SET approval_mode = ?1 WHERE id = ?2 AND approval_mode = ?3",
-                    params![request.requested.as_str(), id.to_string(), request.prior.as_str()],
-                ).map_err(failed)?;
+                let revision = next_revision(&transaction, &current, false)?;
+                transaction
+                    .execute(
+                        "UPDATE conversations SET approval_mode = ?1, change_revision = ?4
+                     WHERE id = ?2 AND approval_mode = ?3",
+                        params![
+                            request.requested.as_str(),
+                            id.to_string(),
+                            request.prior.as_str(),
+                            revision
+                        ],
+                    )
+                    .map_err(failed)?;
             }
-            transaction.execute(
-                "UPDATE mode_requests SET state = ?1
+            transaction
+                .execute(
+                    "UPDATE mode_requests SET state = ?1
                  WHERE conversation_id = ?2 AND request_id = ?3 AND state = 'pending'",
-                params![mode_request_state(state), id.to_string(), request_id],
-            ).map_err(failed)?;
+                    params![mode_request_state(state), id.to_string(), request_id],
+                )
+                .map_err(failed)?;
             transaction.commit().map_err(failed)?;
             Ok(ConversationModeRequest { state, ..request })
         })
@@ -762,11 +915,21 @@ impl ConversationRepository for LocalConversationStore {
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
             let conversation = read(&transaction, &id)?.ok_or(ConversationError::NotFound)?;
+            let first_deletion = conversation.deletion().is_none();
             // Checked before it is written: a tombstone that could not be
             // read back beside its record is never stored.
             let deleted = conversation.deleted(deletion).map_err(contradicted)?;
             let tombstone = deleted.deletion().ok_or(ConversationError::Metadata)?;
             write_deletion(&transaction, &id, tombstone)?;
+            if first_deletion {
+                let revision = next_revision(&transaction, &deleted, false)?;
+                transaction
+                    .execute(
+                        "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
+                        params![revision, id.to_string()],
+                    )
+                    .map_err(failed)?;
+            }
             transaction.commit().map_err(failed)?;
             Ok(deleted)
         })
@@ -827,7 +990,13 @@ impl ConversationSummaries for LocalConversationStore {
     ) -> ConversationFuture<'_, ()> {
         let id = id.clone();
         self.run(move |connection| {
-            connection
+            let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(failed)?;
+            let conversation = read(&transaction, &id)?.ok_or(ConversationError::Metadata)?;
+            if conversation.deletion().is_some() {
+                return Err(ConversationError::Deleted);
+            }
+            let revision = next_revision(&transaction, &conversation, false)?;
+            transaction
                 .execute(
                     "INSERT INTO summaries (conversation_id, title, preview, updated_at_ms, archived)
                      VALUES (?1, ?2, ?3, ?4, ?5)
@@ -844,20 +1013,39 @@ impl ConversationSummaries for LocalConversationStore {
                         summary.archived(),
                     ],
                 )
-                .map(drop)
-                .map_err(failed)
+                .map_err(failed)?;
+            transaction.execute(
+                "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
+                params![revision, id.to_string()],
+            ).map_err(failed)?;
+            transaction.commit().map_err(failed)
         })
     }
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
         let id = id.clone();
         self.run(move |connection| {
-            connection
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            let conversation = read(&transaction, &id)?;
+            let removed = transaction
                 .execute(
                     "DELETE FROM summaries WHERE conversation_id = ?1",
                     [id.to_string()],
                 )
-                .map(drop)
-                .map_err(failed)
+                .map_err(failed)?;
+            if let Some(conversation) =
+                conversation.filter(|conversation| removed > 0 && conversation.deletion().is_none())
+            {
+                let revision = next_revision(&transaction, &conversation, false)?;
+                transaction
+                    .execute(
+                        "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
+                        params![revision, id.to_string()],
+                    )
+                    .map_err(failed)?;
+            }
+            transaction.commit().map_err(failed)
         })
     }
 }
@@ -920,6 +1108,135 @@ impl ConversationListing for LocalConversationStore {
                 }
             }
             Ok(listed)
+        })
+    }
+}
+
+impl ConversationCatalogue for LocalConversationStore {
+    fn head(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+    ) -> ConversationFuture<'_, CatalogueHead> {
+        let (organization, owner) = (organization.clone(), owner.clone());
+        self.run(move |connection| {
+            let transaction = connection.transaction().map_err(failed)?;
+            let incarnation: String = transaction
+                .query_row(
+                    "SELECT incarnation FROM catalogue_identity WHERE id = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(failed)?;
+            let revision = owner_head(&transaction, &organization, &owner)?;
+            Ok(CatalogueHead {
+                incarnation,
+                revision: u64::try_from(revision).map_err(|_| ConversationError::Metadata)?,
+            })
+        })
+    }
+
+    fn page(&self, request: CataloguePageRequest) -> ConversationFuture<'_, CataloguePage> {
+        let CataloguePageRequest {
+            organization,
+            owner,
+            incarnation,
+            completed,
+            boundary,
+            after,
+            limit,
+        } = request;
+        self.run(move |connection| {
+            if limit == 0 || limit > MAX_CATALOGUE_ENTRIES || boundary <= completed {
+                return Err(ConversationError::CatalogueInvalidRequest);
+            }
+            if after.as_ref().is_some_and(|key| key.creation == 0 || key.creation > boundary) {
+                return Err(ConversationError::CatalogueInvalidRequest);
+            }
+            let (completed, boundary, fetch) = (
+                i64::try_from(completed).map_err(|_| ConversationError::CatalogueInvalidRequest)?,
+                i64::try_from(boundary).map_err(|_| ConversationError::CatalogueInvalidRequest)?,
+                i64::try_from(limit + 1).map_err(|_| ConversationError::CatalogueInvalidRequest)?,
+            );
+            let cursor = after.as_ref().map(|key| i64::try_from(key.creation).map_err(|_| ConversationError::CatalogueInvalidRequest)).transpose()?;
+            let cursor_id = after.as_ref().map(|key| key.id.to_string()).unwrap_or_default();
+            let transaction = connection.transaction().map_err(failed)?;
+            catalogue_incarnation(&transaction, &incarnation)?;
+            let head = owner_head(&transaction, &organization, &owner)?;
+            if boundary > head {
+                return Err(ConversationError::CatalogueInvalidRequest);
+            }
+            let mut statement = transaction.prepare(&format!(
+                "SELECT {}, creation_revision, change_revision,
+                        EXISTS (SELECT 1 FROM deletions AS d WHERE d.conversation_id = conversations.id)
+                 FROM conversations WHERE organization = ?1 AND owner = ?2
+                   AND creation_revision <= ?3 AND change_revision > ?4
+                   AND (creation_revision > ?5 OR (creation_revision = ?5 AND id > ?6))
+                 ORDER BY creation_revision, id LIMIT ?7",
+                StoredConversation::COLUMNS
+            )).map_err(failed)?;
+            let mut rows = statement.query(params![
+                organization.as_str(), owner.as_str(), boundary, completed,
+                cursor.unwrap_or(0), cursor_id, fetch,
+            ]).map_err(failed)?;
+            let mut entries = Vec::new();
+            while let Some(row) = rows.next().map_err(failed)? {
+                let id = row.get::<_, String>(0).unwrap_or_default();
+                let (stored, creation, change, deleted) = cells(catalogue_descriptor(row))?
+                    .ok_or_else(|| unreadable("conversations", &id))?;
+                entries.push(checked_descriptor(stored, creation, change, deleted, &organization, &owner)?);
+            }
+            let has_more = entries.len() > limit;
+            entries.truncate(limit);
+            Ok(CataloguePage { entries, has_more })
+        })
+    }
+
+    fn resolve(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        incarnation: &str,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<CatalogueValue>> {
+        let (organization, owner, incarnation, id) = (
+            organization.clone(),
+            owner.clone(),
+            incarnation.to_owned(),
+            id.clone(),
+        );
+        self.run(move |connection| {
+            let transaction = connection.transaction().map_err(failed)?;
+            catalogue_incarnation(&transaction, &incarnation)?;
+            owner_head(&transaction, &organization, &owner)?;
+            let row = transaction.query_row(
+                "SELECT creation_revision, change_revision,
+                        EXISTS (SELECT 1 FROM deletions WHERE conversation_id = ?1)
+                 FROM conversations WHERE id = ?1 AND organization = ?2 AND owner = ?3",
+                params![id.to_string(), organization.as_str(), owner.as_str()],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, bool>(2)?)),
+            ).optional().map_err(failed)?;
+            let Some((creation, revision, deleted)) = row else { return Ok(None) };
+            let conversation = read(&transaction, &id)?.ok_or_else(|| unreadable("conversations", &id.to_string()))?;
+            if !conversation.allows(&organization, &owner) || conversation.deletion().is_some() != deleted {
+                return Err(unreadable("conversations", &id.to_string()));
+            }
+            let descriptor = CatalogueDescriptor {
+                key: CatalogueKey { creation: u64::try_from(creation).map_err(|_| ConversationError::Metadata)?, id: id.clone() },
+                revision: u64::try_from(revision).map_err(|_| ConversationError::Metadata)?, deleted,
+            };
+            if descriptor.key.creation == 0 || descriptor.revision < descriptor.key.creation {
+                return Err(unreadable("conversations", &id.to_string()));
+            }
+            let summary = if deleted { None } else {
+                let stored = transaction.query_row(
+                    "SELECT title, preview, updated_at_ms, archived FROM summaries WHERE conversation_id = ?1",
+                    [id.to_string()],
+                    |row| Ok(StoredSummary { title: row.get(0)?, preview: row.get(1)?, updated_at_ms: row.get(2)?, archived: row.get(3)? }),
+                ).optional().map_err(failed)?;
+                stored.map(|stored| stored.read().ok_or_else(|| unreadable("summaries", &id.to_string()))).transpose()?
+            };
+            Ok(Some(CatalogueValue { descriptor, conversation, summary }))
         })
     }
 }

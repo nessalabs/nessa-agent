@@ -487,10 +487,21 @@ else's: `conversation.list` asks `ConversationListing` for the caller's own
 conversations, newest first and one past the bound. `LocalConversationStore`
 (`infrastructure/store.rs`) answers it, and is the repository and the
 `ConversationSummaries` store too: ownership records, tombstones and summaries are
-three tables of one private SQLite file, `conversations/metadata.sqlite3`, defined
+tables of one private SQLite file, `conversations/metadata.sqlite3`, defined
 once in `infrastructure/schema.sql` and opened by `crates/nessa-local-database`
-([ADR 196](adr/todo/196-conversation-metadata-database.md)). A summary holds each
-conversation's title, last line said and time, derived by `domain/value_objects/conversation_summary.rs` — the one
+([ADR 196](adr/todo/196-conversation-metadata-database.md)).
+The same store implements `ConversationCatalogue` for owner-scoped current
+metadata reads. Its per-owner head and per-conversation creation/change revisions
+are committed with the visible write; a retained tombstone is a catalogue deletion
+marker. The finite pass order is in [conversation catalogue](design/conversation-catalogue.md).
+`infrastructure/catalogue_source.rs` adapts that port to sync-engine's
+`CatalogueSource` through a bounded blocking worker bound to one authenticated
+caller and exact scope. The worker owns a Tokio runtime so metadata reads can
+use a blocking slot independently of the caller. Its stream ID derives from
+that caller's organization and principal; linked transport belongs to #260.
+
+A summary holds each conversation's title, last line said and time, derived by
+`domain/value_objects/conversation_summary.rs` — the one
 owner of those rules — when a message is accepted and when a reply completes. A
 summary is a projection, so a failed write is logged and the command stands; the
 `archived` flag it also carries is a person's decision, so `archive`/`unarchive`

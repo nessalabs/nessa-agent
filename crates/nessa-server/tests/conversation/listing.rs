@@ -174,10 +174,18 @@ fn stored_many(
     let written = (0..count)
         .map(|n| {
             let conversation = id();
+            transaction.execute(
+                "INSERT OR IGNORE INTO catalogue_owners (organization, owner, head) VALUES (?1, ?2, 0)",
+                params![organization, principal],
+            ).unwrap();
+            let revision: i64 = transaction.query_row(
+                "UPDATE catalogue_owners SET head = head + 1 WHERE organization = ?1 AND owner = ?2 RETURNING head",
+                params![organization, principal], |row| row.get(0),
+            ).unwrap();
             transaction
                 .execute(
-                    "INSERT INTO conversations VALUES (?1, ?2, ?3, 'panel', 'create', ?4, 'claude', 'test-model', 'ask')",
-                    params![conversation.to_string(), organization, principal, at(n) as i64],
+                    "INSERT INTO conversations VALUES (?1, ?2, ?3, 'panel', 'create', ?4, 'claude', 'test-model', 'ask', ?5, ?5)",
+                    params![conversation.to_string(), organization, principal, at(n) as i64, revision],
                 )
                 .unwrap();
             transaction

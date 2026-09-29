@@ -7,6 +7,18 @@
 -- length, a time a list can carry — is the domain's, and is checked when a
 -- row is read back, never here.
 
+-- The incarnation changes when a new metadata file replaces an old one.
+CREATE TABLE catalogue_identity (id INTEGER PRIMARY KEY CHECK (id = 1), incarnation TEXT NOT NULL) STRICT;
+INSERT INTO catalogue_identity (id, incarnation) VALUES (1, lower(hex(randomblob(16))));
+
+-- One monotonic head per owner.
+CREATE TABLE catalogue_owners (
+    organization TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    head INTEGER NOT NULL CHECK (head >= 0),
+    PRIMARY KEY (organization, owner)
+) STRICT;
+
 -- Who owns a conversation, and which agent it runs on. Written once.
 CREATE TABLE conversations (
     id TEXT PRIMARY KEY NOT NULL,
@@ -17,9 +29,16 @@ CREATE TABLE conversations (
     creation_requested_at_ms INTEGER NOT NULL,
     agent TEXT NOT NULL,
     model TEXT NOT NULL,
-    approval_mode TEXT NOT NULL CHECK (approval_mode IN ('ask', 'auto', 'full'))
+    approval_mode TEXT NOT NULL CHECK (approval_mode IN ('ask', 'auto', 'full')),
+    creation_revision INTEGER NOT NULL CHECK (creation_revision > 0),
+    change_revision INTEGER NOT NULL CHECK (change_revision >= creation_revision),
+    FOREIGN KEY (organization, owner) REFERENCES catalogue_owners (organization, owner)
 ) STRICT;
 CREATE INDEX conversations_by_owner ON conversations (organization, owner);
+CREATE INDEX conversations_catalogue ON conversations
+    (organization, owner, creation_revision, id);
+CREATE INDEX conversations_change_revision ON conversations
+    (organization, owner, change_revision DESC);
 
 -- One correlated approval-mode decision. The pending row fences turn
 -- admission until recovery has established the authoritative committed mode.
@@ -66,4 +85,4 @@ CREATE TABLE summaries (
     archived INTEGER NOT NULL CHECK (archived IN (0, 1))
 ) STRICT;
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
