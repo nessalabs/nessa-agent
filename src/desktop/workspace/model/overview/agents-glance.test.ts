@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest"
 import type { SessionStatus, SessionSummary } from "../workspace-index"
 import {
   agentsGlance,
-  glanceLine,
+  glanceCounts,
+  groupOf,
   readingOrder,
   sameGlance,
   type GlanceContext,
@@ -55,7 +56,7 @@ describe("agentsGlance", () => {
     expect(glance.finished).toEqual(["done"])
     expect(glance.earlier).toEqual(["seen"])
     expect(glance.hidden).toBe(0)
-    expect(glance.waiting).toBe(2)
+    expect(glance.counts).toEqual({ needsYou: 2, working: 2, finished: 1, earlier: 1 })
     expect(readingOrder(glance)).toEqual([
       "new-ask",
       "old-ask",
@@ -88,7 +89,7 @@ describe("agentsGlance", () => {
     expect(glance.needsYou).toEqual(["a", "b", "c"])
     expect(glance.working).toEqual([])
     // The header counts only what still waits.
-    expect(glance.waiting).toBe(2)
+    expect(glance.counts.needsYou).toBe(2)
   })
 
   it("keeps a held request whatever the filter says, so its settle finishes", () => {
@@ -159,10 +160,15 @@ describe("sameGlance", () => {
   })
 })
 
-describe("glanceLine", () => {
+describe("glanceCounts", () => {
+  const line = (glance: Parameters<typeof glanceCounts>[0]) =>
+    glanceCounts(glance)
+      .map((count) => count.label)
+      .join(" · ")
+
   it("says only what there is, with the person's count agreeing in number", () => {
     expect(
-      glanceLine(
+      line(
         agentsGlance(
           [
             session("a", 1, "needs-you"),
@@ -175,7 +181,7 @@ describe("glanceLine", () => {
       ),
     ).toBe("1 needs you · 2 working")
     expect(
-      glanceLine(
+      line(
         agentsGlance(
           [session("a", 1, "needs-you"), session("b", 2, "needs-you")],
           [],
@@ -184,8 +190,95 @@ describe("glanceLine", () => {
       ),
     ).toBe("2 need you")
     expect(
-      glanceLine(agentsGlance([session("a", 1, "idle", true), session("b", 2)], [], all)),
+      line(agentsGlance([session("a", 1, "idle", true), session("b", 2)], [], all)),
     ).toBe("1 finished · 1 earlier")
-    expect(glanceLine(agentsGlance([session("a", 1)], [], ongoing))).toBe("All quiet")
+    expect(glanceCounts(agentsGlance([session("a", 1)], [], ongoing))).toEqual([])
+  })
+
+  it("keeps every count with a group shown alone, so any other can be chosen from the same line", () => {
+    const sessions = [
+      session("a", 1, "needs-you"),
+      session("b", 2, "running"),
+      session("c", 3, "idle", true),
+    ]
+    expect(line(agentsGlance(sessions, [], { ...all, group: "working" }))).toBe(
+      "1 needs you · 1 working · 1 finished",
+    )
+  })
+
+  it("keeps the group shown alone in the line at nought, so it can be let go where it was chosen", () => {
+    const counts = glanceCounts(
+      agentsGlance([session("a", 1, "running")], [], { ...all, group: "finished" }),
+    )
+    expect(counts.map((count) => [count.group, count.label])).toEqual([
+      ["working", "1 working"],
+      ["finished", "0 finished"],
+    ])
+  })
+})
+
+describe("one group shown alone", () => {
+  const sessions = [
+    session("ask", 30, "needs-you"),
+    session("run", 20, "running"),
+    session("done", 25, "idle", true),
+    session("seen", 50),
+  ]
+
+  it("groups a session by where it stands", () => {
+    expect(sessions.map(groupOf)).toEqual(["needsYou", "working", "finished", "earlier"])
+  })
+
+  it("lists that group only, and counts every group", () => {
+    for (const [group, ids] of [
+      ["needsYou", ["ask"]],
+      ["working", ["run"]],
+      ["finished", ["done"]],
+      ["earlier", ["seen"]],
+    ] as const) {
+      const glance = agentsGlance(sessions, [], { ...all, group })
+      expect(readingOrder(glance)).toEqual(ids)
+      expect(glance.group).toBe(group)
+      expect(glance.counts).toEqual({ needsYou: 1, working: 1, finished: 1, earlier: 1 })
+    }
+  })
+
+  it("says it keeps out only what the filter keeps out of that group", () => {
+    // Ongoing keeps out the two idle sessions: none of them is working.
+    expect(agentsGlance(sessions, [], { ...ongoing, group: "working" }).hidden).toBe(0)
+    expect(agentsGlance(sessions, [], { ...ongoing, group: "finished" }).hidden).toBe(1)
+    expect(agentsGlance(sessions, [], ongoing).hidden).toBe(2)
+  })
+
+  it("keeps listing the session looked at when it moves to another group, until the person moves on", () => {
+    const finished = [session("run", 20, "idle", true), session("other", 10, "running")]
+    const looking = agentsGlance(finished, [], {
+      ...all,
+      group: "working",
+      looking: "run",
+    })
+    expect(looking.working).toEqual(["other"])
+    expect(looking.finished).toEqual(["run"])
+    expect(agentsGlance(finished, [], { ...all, group: "working" }).finished).toEqual([])
+  })
+
+  it("shows a held request only while the waiting are shown", () => {
+    const held = [{ sessionId: "b", updatedAt: 20 }]
+    const moved = [session("b", 99, "running")]
+    expect(agentsGlance(moved, held, { ...all, group: "needsYou" }).needsYou).toEqual([
+      "b",
+    ])
+    expect(readingOrder(agentsGlance(moved, held, { ...all, group: "working" }))).toEqual(
+      [],
+    )
+  })
+
+  it("tells a change of the group shown alone", () => {
+    expect(
+      sameGlance(
+        agentsGlance([], [], all),
+        agentsGlance([], [], { ...all, group: "earlier" }),
+      ),
+    ).toBe(false)
   })
 })

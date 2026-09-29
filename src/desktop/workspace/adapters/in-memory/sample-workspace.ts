@@ -58,6 +58,7 @@ export function sampleWorkspace(now: number): {
     startedAt: ago(sample.started ?? sample.messages[0]?.[1] ?? sample.updated),
     updatedAt: ago(sample.updated),
     preview: sample.preview,
+    ...(sample.now === undefined ? {} : { now: sample.now }),
     pinned: sample.pinned ?? false,
     unread: sample.unread ?? false,
     revision: 1,

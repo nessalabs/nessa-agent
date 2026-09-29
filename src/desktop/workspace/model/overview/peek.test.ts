@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { Message, Part, Transcript } from "../transcript"
-import { peekOf, peekSteps } from "./peek"
+import { peekOf } from "./peek"
 
 const step = (label: string): Part => ({ kind: "step", step: "read", label })
 const text = (words: string): Part => ({ kind: "text", text: words })
@@ -14,53 +14,50 @@ function conversation(...messages: Message[]): Transcript {
 }
 
 describe("peekOf", () => {
-  it("shows this turn's steps — since the person last wrote — and the agent's last words", () => {
+  it("tells the turn from the person's latest message, then everything the agent did since, in order", () => {
+    const first = message("user", 1, text("Fix it."))
+    const earlier = message("agent", 2, step("old"), text("Fixed."))
+    const asked = message("user", 3, text("Now test it."))
+    const steps = message("agent", 4, step("a"), step("b"), text("Running the tests."))
+    const words = message("agent", 5, text("They pass."), step("c"))
+    const peek = peekOf(conversation(first, earlier, asked, steps, words))
+    expect(peek.asked).toBe(asked)
+    expect(peek.since).toEqual([steps, words])
+  })
+
+  it("keeps every step of a long turn, none counted away", () => {
+    const many = Array.from({ length: 40 }, (_, index) => step(`s${index}`))
+    const peek = peekOf(
+      conversation(message("user", 1, text("Go.")), message("agent", 2, ...many)),
+    )
+    expect(peek.since[0].parts).toHaveLength(40)
+  })
+
+  it("tells the whole conversation before the person has written", () => {
+    const opening = message("agent", 1, text("Hello."))
+    const peek = peekOf(conversation(opening))
+    expect(peek.asked).toBeNull()
+    expect(peek.since).toEqual([opening])
+  })
+
+  it("ends on the person's message while the agent has not answered it", () => {
+    const asked = message("user", 3, text("And now?"))
     const peek = peekOf(
       conversation(
-        message("user", 1, text("Fix it.")),
-        message("agent", 2, step("old"), text("Done before.")),
-        message("user", 3, text("Again.")),
-        message("agent", 4, step("a"), step("b"), text("Looking.")),
-        message("agent", 5, step("c")),
+        message("user", 1, text("Hi.")),
+        message("agent", 2, text("Hi.")),
+        asked,
       ),
     )
-    expect(peek.steps.map((each) => each.label)).toEqual(["a", "b", "c"])
-    expect(peek.earlier).toBe(0)
-    expect(peek.said).toEqual({ text: "Looking.", at: 4, by: "agent" })
+    expect(peek.asked).toBe(asked)
+    expect(peek.since).toEqual([])
   })
 
-  it("keeps the last few steps and counts the ones before", () => {
-    const many = Array.from({ length: peekSteps + 3 }, (_, index) => step(`s${index}`))
-    const peek = peekOf(conversation(message("agent", 1, ...many)))
-    expect(peek.steps).toHaveLength(peekSteps)
-    expect(peek.steps[0].label).toBe("s3")
-    expect(peek.earlier).toBe(3)
-  })
-
-  it("shows what the person wrote, and no steps, until the agent answers it", () => {
-    const peek = peekOf(
-      conversation(
-        message("agent", 1, step("a"), text("Ready.")),
-        message("user", 2, text("Go on.")),
-      ),
-    )
-    expect(peek.steps).toEqual([])
-    expect(peek.said).toEqual({ text: "Go on.", at: 2, by: "you" })
-  })
-
-  it("passes over a reply that has not begun to stream", () => {
-    const peek = peekOf(
-      conversation(
-        message("user", 1, text("Go.")),
-        message("agent", 2, step("a"), text("")),
-      ),
-    )
-    expect(peek.said).toEqual({ text: "Go.", at: 1, by: "you" })
-    expect(peekOf(conversation(message("agent", 1, text("")))).said).toBeNull()
-  })
-
-  it("carries what the agent is doing now", () => {
-    const activity = { label: "Editing panes.tsx", since: 10 }
-    expect(peekOf({ ...conversation(), activity }).activity).toBe(activity)
+  it("tells nothing of an empty conversation, and carries what the agent is doing", () => {
+    const activity = { label: "Running the tests", since: 5 }
+    const peek = peekOf({ ...conversation(), activity })
+    expect(peek.asked).toBeNull()
+    expect(peek.since).toEqual([])
+    expect(peek.activity).toBe(activity)
   })
 })

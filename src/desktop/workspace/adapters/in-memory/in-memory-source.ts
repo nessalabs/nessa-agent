@@ -28,7 +28,13 @@ import {
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import { sampleWorkspace } from "./sample-workspace"
-import { approvedReply, deniedReply, replyTo, scriptTiming } from "./scripted-replies"
+import {
+  approvedReply,
+  deniedReply,
+  replyTo,
+  runningNow,
+  scriptTiming,
+} from "./scripted-replies"
 
 export interface Schedule {
   now(): number
@@ -207,19 +213,31 @@ export function inMemorySource(
     parts,
   })
 
-  /** Ends a script: the agent's message in place, and the session at rest. */
+  /** Ends a script: the agent's message in place, and the session at rest, with nothing going on. */
   const settle = (sessionId: string, preview: string) => {
     putSession({
       ...known(sessionId),
       status: "idle",
       preview,
+      now: undefined,
       updatedAt: schedule.now(),
     })
     stopScript(sessionId)
   }
 
+  /** What is going on in a session now, said with its summary's next revision. */
+  const sayNow = (sessionId: string, now: string) => {
+    const session = known(sessionId)
+    if (session.now !== now) putSession({ ...session, now })
+  }
+
   /** Streams `reply` into a new agent message, a couple of words at a time. */
-  const stream = (sessionId: string, steps: readonly Part[], reply: string) => {
+  const stream = (
+    sessionId: string,
+    steps: readonly Part[],
+    reply: string,
+    now: string,
+  ) => {
     const words = reply.split(/(?<=\s)/)
     const message = agentMessage(sessionId, [...steps, { kind: "text", text: "" }])
     const base = transcriptOf(sessionId)
@@ -233,6 +251,7 @@ export function inMemorySource(
       putTranscript({ ...current, activity: null, messages: [...others, written] })
     }
     putTranscript({ ...base, activity: null, messages: [...base.messages, message] })
+    sayNow(sessionId, now)
     const last = [...steps].reverse().find((part) => part.kind === "step")
     if (last?.kind === "step") previewStep(sessionId, last.label)
     const step = (shown: number) => {
@@ -254,17 +273,20 @@ export function inMemorySource(
     if (session.preview !== step) putSession({ ...session, preview: step })
   }
 
-  const setActivity = (sessionId: string, label: string) => {
+  const setActivity = (sessionId: string, label: string, now: string) => {
     putTranscript({
       ...transcriptOf(sessionId),
       activity: { label, since: schedule.now() },
     })
     previewStep(sessionId, label)
+    sayNow(sessionId, now)
   }
 
-  const channelName = (sessionId: string) =>
-    seed.index.channels.find((channel) => channel.id === known(sessionId).channelId)
-      ?.name ?? ""
+  /** The channel a session is in — or, not begun yet, the one it starts in. */
+  const channelName = (sessionId: string, starting?: string) =>
+    seed.index.channels.find(
+      (channel) => channel.id === (sessions.get(sessionId)?.channelId ?? starting),
+    )?.name ?? ""
 
   const accept = (message: OutgoingMessage) => {
     const at = schedule.now()
@@ -279,11 +301,16 @@ export function inMemorySource(
     )
       return
     const found = stateOf(message.sessionId)
+    const reply = replyTo(
+      message.text,
+      channelName(message.sessionId, message.start?.channelId),
+    )
     const session: SessionSummary = existing
       ? {
           ...existing,
           status: "running",
           preview: message.text,
+          now: reply.now.thinking,
           updatedAt: at,
           model: message.model,
         }
@@ -296,6 +323,7 @@ export function inMemorySource(
           startedAt: at,
           updatedAt: at,
           preview: message.text,
+          now: reply.now.thinking,
           pinned: false,
           unread: false,
           revision: 0,
@@ -339,11 +367,10 @@ export function inMemorySource(
       activity: { label: "Thinking", since: at },
     })
     later(session.id, scriptTiming.readingMs, () =>
-      setActivity(session.id, "Reading the workspace"),
+      setActivity(session.id, "Reading the workspace", reply.now.reading),
     )
-    const reply = replyTo(message.text, channelName(session.id))
     later(session.id, scriptTiming.answerMs, () =>
-      stream(session.id, reply.steps, reply.text),
+      stream(session.id, reply.steps, reply.text, reply.now.writing),
     )
   }
 
@@ -391,6 +418,7 @@ export function inMemorySource(
           putSession({
             ...known(sessionId),
             status: "running",
+            now: runningNow(command),
             updatedAt: schedule.now(),
           })
           putTranscript({

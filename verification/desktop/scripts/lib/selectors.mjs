@@ -76,6 +76,12 @@ export const css = {
   overviewFilter: ".agents-filter", // class
   overviewHeader: ".agents-overview-header", // class: the title, its counts and the filter
   overviewScroll: ".agents-overview-scroll", // class: the list's scroller, under the header
+  overviewCount: ".agents-overview-counts button", // class: a header count, a toggle (aria-pressed, data-group)
+  overviewGroup: ".agents-overview-group", // class: a listed group, labelled by its h2
+  overviewPeek: ".agents-overview-peek", // class: the peek beside the list, which scrolls
+  peekSummary: ".agents-peek-summary", // class: what is going on, in the source's line
+  peekStory: ".agents-peek-story", // class: the turn's story, top to bottom
+  peekAsk: ".agents-peek-ask", // class: the request in full, after the story
 
   // The composer's thinking control (src/desktop/ui/thinking-control.tsx): a chip
   // opening a popover holding a slider; the levels are read from
@@ -200,6 +206,11 @@ export const keys = {
   command: "Meta",
   deny: "Meta+Backspace",
   reply: "Meta+KeyR",
+  /**
+   * To the next control, a button included, by engine: WebKit, as Safari and
+   * WKWebView on macOS, moves Tab through fields only unless ⌥ is held.
+   */
+  nextControl: { chromium: "Tab", webkit: "Alt+Tab" },
 }
 
 /**
@@ -223,6 +234,8 @@ export const names = {
   approvalSession: "Release build signing",
   /** Sample sessions (in-memory source) that each wait on one approval. */
   approvalSessions: ["Release build signing", "Notarize the macOS", "Reconnect storm"],
+  /** A sample session (in-memory source) waiting on an approval after a long turn, by its id (data-overview-item). */
+  storySessionId: "retry-budget",
   denyOnce: "Deny",
   /**
    * Models the thinking check switches between (their Ultra is listed in

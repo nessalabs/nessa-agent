@@ -55,6 +55,8 @@ export interface SampleSession {
   readonly updated: number
   readonly started?: number
   readonly preview: string
+  /** What is going on in it now, as the source summarises it (`SessionSummary.now`). */
+  readonly now?: string
   readonly pinned?: boolean
   readonly unread?: boolean
   /** What it is doing, and for how many seconds, while it runs. */

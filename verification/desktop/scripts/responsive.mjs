@@ -42,6 +42,14 @@
  *                   transform alone, and none with less motion; the same
  *                   field, its draft, the model and an open page survive each
  *                   crossing, and the caret's focus and position each resize
+ *   overview-counts the header's counts are toggles reached by Tab: one chosen
+ *                   lists its group alone and reads as pressed, the header not
+ *                   moving; chosen again every group is back; with one chosen,
+ *                   the first Escape shows every group and the next leaves
+ *   overview-story  the peek tells the turn top to bottom — the source's line
+ *                   of what is going on, the person's latest message, the
+ *                   agent's work in order, the request — and a long turn
+ *                   scrolls within the peek while the list's header holds
  *
  * With --shots <dir>, screenshots of each width go there for a person to look at.
  */
@@ -51,7 +59,7 @@ import { join } from "node:path"
 import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { css, keys, names, preferenceEvents, storage } from "./lib/selectors.mjs"
+import { content, css, keys, names, preferenceEvents, storage } from "./lib/selectors.mjs"
 import {
   frames,
   hideColumns,
@@ -1127,6 +1135,179 @@ checks["thinking-control"] = async ({ page, engine, options }) => {
   }
 
   return { opened, moves, drag, following, noUltra, reduced: still, failures }
+}
+
+checks["overview-counts"] = async ({ page, engine, options }) => {
+  await page.keyboard.press(keys.overview)
+  await need(page, css.overview, "the Agents overview")
+  await frames(page, 2)
+  await settled(page)
+  const read = () =>
+    page.evaluate((sel) => {
+      const header = document.querySelector(sel.overviewHeader).getBoundingClientRect()
+      const counts = [...document.querySelectorAll(sel.overviewCount)]
+      return {
+        header: [header.top, header.height],
+        counts: counts.map((b) => ({
+          group: b.dataset.group,
+          text: b.textContent.trim(),
+          pressed: b.getAttribute("aria-pressed"),
+          rect: (({ left, top, width, height }) =>
+            [left, top, width, height].map(Math.round))(b.getBoundingClientRect()),
+        })),
+        groups: [...document.querySelectorAll(sel.overviewGroup)].map((g) =>
+          g.querySelector("h2")?.textContent.trim(),
+        ),
+        open: document.querySelector(sel.workspace)?.dataset.content,
+        focused: document.activeElement?.dataset?.group ?? null,
+      }
+    }, css)
+  const failures = []
+  const before = await read()
+  if (before.counts.length < 2)
+    throw new CannotRun(
+      `fewer than two counts in the header: ${JSON.stringify(before.counts)}`,
+    )
+  // Tab (⌥Tab in WebKit) from the filter reaches the first count; Space chooses it.
+  await page.locator(css.overviewFilter).focus()
+  await page.keyboard.press(keys.nextControl[engine])
+  const reached = await read()
+  if (reached.focused !== before.counts[0].group)
+    failures.push(`Tab from the filter reached ${reached.focused}, not the first count`)
+  const [first, second] = before.counts
+  await page.keyboard.press("Space")
+  await frames(page, 2)
+  await settled(page)
+  const chosen = await read()
+  const titles = {
+    needsYou: "Needs you",
+    working: "Working",
+    finished: "Finished",
+    earlier: "Earlier",
+  }
+  if (JSON.stringify(chosen.groups) !== JSON.stringify([titles[first.group]]))
+    failures.push(`${first.text} chosen lists ${JSON.stringify(chosen.groups)}`)
+  const pressed = chosen.counts.filter((c) => c.pressed === "true").map((c) => c.group)
+  if (JSON.stringify(pressed) !== JSON.stringify([first.group]))
+    failures.push(`pressed after choosing ${first.group}: ${JSON.stringify(pressed)}`)
+  if (
+    JSON.stringify(chosen.counts.map((c) => c.rect)) !==
+    JSON.stringify(before.counts.map((c) => c.rect))
+  )
+    failures.push(
+      `a count moved when one was chosen: ${JSON.stringify(chosen.counts.map((c) => c.rect))}`,
+    )
+  if (JSON.stringify(chosen.header) !== JSON.stringify(before.header))
+    failures.push(`the header moved: ${before.header} → ${chosen.header}`)
+  await shot(options, page, `overview-count-${engine}`)
+  // Chosen again: every group.
+  await page.locator(`${css.overviewCount}[data-group="${first.group}"]`).click()
+  await frames(page, 2)
+  await settled(page)
+  const cleared = await read()
+  if (
+    cleared.counts.some((c) => c.pressed === "true") ||
+    cleared.groups.length !== before.groups.length
+  )
+    failures.push(`chosen again, not every group: ${JSON.stringify(cleared.groups)}`)
+  // Another chosen, then Escape shows every group, and the next Escape leaves.
+  await page.locator(`${css.overviewCount}[data-group="${second.group}"]`).click()
+  await frames(page, 2)
+  await page.keyboard.press(keys.escape)
+  await frames(page, 2)
+  await settled(page)
+  const escaped = await read()
+  if (escaped.open !== content.overview || escaped.groups.length !== before.groups.length)
+    failures.push(
+      `first Escape: content ${escaped.open}, groups ${JSON.stringify(escaped.groups)}`,
+    )
+  await page.keyboard.press(keys.escape)
+  await frames(page, 2)
+  const left = await page.evaluate(
+    (sel) => document.querySelector(sel.workspace)?.dataset.content,
+    css,
+  )
+  if (left !== content.panes) failures.push(`second Escape left the content as ${left}`)
+  return {
+    before: before.counts.map((c) => c.text),
+    groups: before.groups,
+    chosen: chosen.groups,
+    pressed,
+    failures,
+  }
+}
+
+checks["overview-story"] = async ({ page, engine, options }) => {
+  // Short enough that a long turn must scroll within the peek.
+  await page.setViewportSize({ width: 1440, height: 640 })
+  await page.keyboard.press(keys.overview)
+  await need(page, css.overview, "the Agents overview")
+  const item = page.locator(`[data-overview-item="${names.storySessionId}"]`)
+  if (!(await item.count()))
+    throw new CannotRun(`no overview item ${names.storySessionId}`)
+  await item.click()
+  await need(page, `${css.overviewPeek} ${css.peekStory}`, "the peek's story")
+  await frames(page, 2)
+  await settled(page)
+  const read = () =>
+    page.evaluate((sel) => {
+      const peek = document.querySelector(sel.overviewPeek)
+      const top = (e) => (e ? e.getBoundingClientRect().top : null)
+      const story = peek.querySelector(sel.peekStory)
+      const summary = peek.querySelector(sel.peekSummary)
+      return {
+        summary: summary?.textContent ?? null,
+        summaryLines: summary
+          ? Math.round(
+              summary.getBoundingClientRect().height /
+                parseFloat(getComputedStyle(summary).lineHeight),
+            )
+          : 0,
+        order: [
+          ["summary", top(summary)],
+          ...[...story.children].map((c) => [
+            c.dataset.role ?? c.className.split(" ")[0],
+            top(c),
+          ]),
+          ["request", top(peek.querySelector(sel.peekAsk))],
+        ],
+        room: peek.scrollHeight - peek.clientHeight,
+        scrollTop: peek.scrollTop,
+        header: document.querySelector(sel.overviewHeader).getBoundingClientRect().top,
+      }
+    }, css)
+  const before = await read()
+  const failures = []
+  if (!before.summary) failures.push("no line of what is going on")
+  if (before.summaryLines !== 1)
+    failures.push(`the line runs to ${before.summaryLines} lines`)
+  const kinds = before.order.map(([k]) => k)
+  if (kinds[1] !== "user")
+    failures.push(`the story begins with ${kinds[1]}, not the person's message`)
+  if (kinds.at(-1) !== "request") failures.push("the request is not last")
+  for (let i = 1; i < before.order.length; i++)
+    if (!(before.order[i][1] > before.order[i - 1][1]))
+      failures.push(
+        `${kinds[i]} (${before.order[i][1]}) is not below ${kinds[i - 1]} (${before.order[i - 1][1]})`,
+      )
+  if (before.room < 40)
+    failures.push(`the peek scrolls only ${before.room}px at 1440 × 640`)
+  await page.evaluate((sel) => {
+    const peek = document.querySelector(sel.overviewPeek)
+    peek.scrollTop = peek.scrollHeight
+  }, css)
+  await frames(page, 2)
+  const after = await read()
+  if (after.scrollTop < before.room - 1)
+    failures.push(`the peek scrolled to ${after.scrollTop} of ${before.room}px`)
+  if (Math.abs(after.header - before.header) > 0.5)
+    failures.push("the list's header moved as the peek scrolled")
+  await page.evaluate((sel) => {
+    document.querySelector(sel.overviewPeek).scrollTop = 0
+  }, css)
+  await frames(page, 2)
+  await shot(options, page, `overview-story-${engine}`)
+  return { order: kinds, summary: before.summary, room: before.room, failures }
 }
 
 const meta = {

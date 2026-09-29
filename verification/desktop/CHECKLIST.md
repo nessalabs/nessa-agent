@@ -241,6 +241,24 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   waits. _Check:_ `responsive.mjs --only overview-header` (Chromium and
   WebKit, at 1440 × 560 so the list must scroll); unit tests in
   `overview.test.tsx` for the empty section.
+- [ ] **A count shows its group alone** (_ADR 238 › Showing one group
+  alone_): the header's counts are toggle buttons reached from the filter by
+  Tab (⌥Tab in WebKit); one chosen lists only its group and reads as pressed
+  (`aria-pressed`), no count and not the header moving; chosen again, every
+  group is back; with one chosen, the first Escape shows every group and the
+  overview stays, the next leaves. _Check:_ `responsive.mjs --only
+  overview-counts` (Chromium and WebKit, both layouts); unit tests
+  `overview.test.tsx` (the counts show one group alone, the footer's count and
+  Show All under a group), `commands.test.ts` (the group's table),
+  `agents-glance.test.ts`.
+- [ ] **The peek tells the turn's story** (_ADR 238 › The peek tells the
+  turn's story_): the source's line of what is going on (one line), then the
+  person's latest message, the agent's work in order, and the request last,
+  each below the one before; a long turn scrolls within the peek while the
+  list's header holds. _Check:_ `responsive.mjs --only overview-story`
+  (Chromium and WebKit, both layouts, 1440 × 640); unit tests
+  `overview.test.tsx` (the peek tells the turn's story), `peek.test.ts`,
+  `in-memory-source.test.ts` (the source's line at each beat).
 
 
 ## Composer and approval card

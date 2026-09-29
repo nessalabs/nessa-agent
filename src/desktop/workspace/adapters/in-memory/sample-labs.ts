@@ -19,6 +19,7 @@ export const labsSamples: readonly SampleSession[] = [
     updated: 3,
     started: 22,
     preview: "Wants to run the reconnect tests, including the new budget case.",
+    now: "Waiting to run the reconnect tests after adding a token bucket",
     unread: true,
     approval: {
       id: "retry-tests",
@@ -70,6 +71,7 @@ export const labsSamples: readonly SampleSession[] = [
     updated: 12,
     started: 40,
     preview: "Asks to restart the local gateway to test jittered backoff.",
+    now: "Waiting to restart the gateway with 200 clients to prove the jitter",
     approval: {
       id: "storm-restart",
       command: "cargo run -p nessa-gateway -- --simulate-clients 200",
@@ -90,6 +92,7 @@ export const labsSamples: readonly SampleSession[] = [
     updated: 6,
     started: 120,
     preview: "Threading the span context through session/prompt.",
+    now: "Threading the span context through session/prompt as a _meta field",
     pinned: true,
     activity: ["Threading the span context", 212],
     messages: exchange(
@@ -107,6 +110,7 @@ export const labsSamples: readonly SampleSession[] = [
     updated: 8,
     started: 30,
     preview: "Bounding the per-client queue and dropping to snapshots when it fills.",
+    now: "Running clippy on the bounded per-client queue before the stream tests",
     activity: ["Running cargo clippy", 95],
     messages: exchange(
       "A slow panel makes the event stream buffer without bound.",
@@ -150,6 +154,7 @@ export const labsSamples: readonly SampleSession[] = [
     updated: 12,
     started: 20,
     preview: "Adding GPT-6 Astra with its context window and reasoning levels.",
+    now: "Reading the catalog to add GPT-6 Astra with its reasoning levels",
     activity: ["Reading models.json", 212],
     messages: exchange(
       "Add GPT-6 to the model catalog.",

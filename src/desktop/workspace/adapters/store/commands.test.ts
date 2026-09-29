@@ -48,6 +48,7 @@ import {
   equalizePanes,
   filterOverview,
   selectInOverview,
+  showOverviewGroup,
   setComposerText,
   toggleSessionList,
   toggleSidebar,
@@ -1555,6 +1556,102 @@ describe("the overview's filter is the store's, kept between launches", () => {
       filterOverview({ filter: { scope: "ongoing", range: "any", tags: [] } }),
     )
     expect(kept.writes).toEqual([{ scope: "ongoing", range: "any", tags: [] }])
+  })
+})
+
+describe("the overview shows one group alone (ADR 238, the group's table)", () => {
+  const waitingOn = (source = fakeSource()) => {
+    source.transcripts.set("b", {
+      ...emptyTranscript("b"),
+      revision: 1,
+      approval: { id: "ap", command: "cargo test", reason: "Runs tests." },
+    })
+    return source
+  }
+  const overview = (store: ReturnType<typeof testStore>) =>
+    store.getState().workspace.overview
+
+  it("shows a group, choosing the first it lists when the chosen session is outside it", async () => {
+    const { store } = await ready()
+    store.dispatch(showContent({ content: "agents" }))
+    // Opening chose the first listed: "b", which waits on the person.
+    expect(overview(store).selected).toBe("b")
+    store.dispatch(showOverviewGroup({ group: "working" }))
+    expect(overview(store).group).toBe("working")
+    expect(overview(store).selected).toBe("a")
+  })
+
+  it("keeps the chosen session when the group holds it", async () => {
+    const { store } = await ready()
+    store.dispatch(showContent({ content: "agents" }))
+    store.dispatch(showOverviewGroup({ group: "needsYou" }))
+    expect(overview(store).selected).toBe("b")
+  })
+
+  it("shows every group again on null, keeping the chosen session", async () => {
+    const { store } = await ready()
+    store.dispatch(showContent({ content: "agents" }))
+    store.dispatch(showOverviewGroup({ group: "working" }))
+    store.dispatch(showOverviewGroup({ group: null }))
+    expect(overview(store)).toMatchObject({ group: null, selected: "a" })
+  })
+
+  it("changes nothing when the group shown is chosen again", async () => {
+    const { store } = await ready()
+    store.dispatch(showOverviewGroup({ group: "earlier" }))
+    const before = store.getState().workspace
+    store.dispatch(showOverviewGroup({ group: "earlier" }))
+    expect(store.getState().workspace).toBe(before)
+  })
+
+  it("chooses nothing while the group lists nothing", async () => {
+    const { store } = await ready()
+    store.dispatch(showContent({ content: "agents" }))
+    // Ongoing lists no idle session: nothing finished is listed.
+    store.dispatch(showOverviewGroup({ group: "finished" }))
+    expect(overview(store).selected).toBeNull()
+  })
+
+  it("keeps the group through a change of filter, and while the overview is closed and opened again", async () => {
+    const { store } = await ready()
+    store.dispatch(showContent({ content: "agents" }))
+    store.dispatch(showOverviewGroup({ group: "working" }))
+    store.dispatch(filterOverview({ filter: { scope: "all", range: "week", tags: [] } }))
+    store.dispatch(showContent({ content: "panes" }))
+    store.dispatch(showContent({ content: "agents" }))
+    expect(overview(store).group).toBe("working")
+  })
+
+  it("never keeps the group between launches: a window opens on every group, and only the filter is written", async () => {
+    const kept = keptFilter({ scope: "all", range: "any", tags: [] })
+    const store = testStore(fakeSource(), undefined, kept)
+    expect(overview(store).group).toBeNull()
+    store.dispatch(showOverviewGroup({ group: "earlier" }))
+    expect(kept.writes).toEqual([])
+  })
+
+  it("does not answer, nor read, a request its group leaves out, and answers it once the waiting are shown", async () => {
+    const source = waitingOn()
+    const { store } = await ready(source)
+    store.dispatch(showOverviewGroup({ group: "working" }))
+    store.dispatch(showContent({ content: "agents" }))
+    await settle()
+    expect(overview(store).selected).toBe("a")
+    expect(source.calls).not.toContainEqual(["transcript", "b"])
+    expect(
+      await store.dispatch(
+        approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+      ),
+    ).toBe("not-asked")
+    expect(source.calls.some((call) => call[0] === "approve")).toBe(false)
+    store.dispatch(showOverviewGroup({ group: "needsYou" }))
+    await settle()
+    expect(source.calls).toContainEqual(["transcript", "b"])
+    expect(
+      await store.dispatch(
+        approve({ sessionId: "b", approvalId: "ap", initiator: "agent" }),
+      ),
+    ).toBe("sent")
   })
 })
 

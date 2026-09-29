@@ -20,6 +20,7 @@ export const starredSamples: readonly SampleSession[] = [
     updated: 0,
     started: 22,
     preview: "Laying out panes as fractions so a third pane never squeezes the first.",
+    now: "Capping the workspace at four panes, then wiring the drop target",
     pinned: true,
     activity: ["Editing workspace-panes.tsx", 38],
     messages: [
@@ -78,6 +79,7 @@ export const starredSamples: readonly SampleSession[] = [
     updated: 4,
     started: 60,
     preview: "Wants to run the notarisation step with the release keychain.",
+    now: "Waiting to import the new certificate before signing again",
     unread: true,
     approval: {
       id: "signing-import",
@@ -172,6 +174,7 @@ export const starredSamples: readonly SampleSession[] = [
     updated: 2,
     started: 9,
     preview: "Grouping 41 merged PRs into what someone upgrading would notice first.",
+    now: "Grouping 41 merged PRs by what someone upgrading notices first",
     unread: true,
     activity: ["Reading merged PRs", 95],
     messages: exchange(
@@ -190,6 +193,7 @@ export const starredSamples: readonly SampleSession[] = [
     updated: 6,
     started: 14,
     preview: "Wants to upload the signed build to Apple for notarization.",
+    now: "Waiting to upload the signed 0.9.0 build to Apple",
     approval: {
       id: "notarize-submit",
       command:

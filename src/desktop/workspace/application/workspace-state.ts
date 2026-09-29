@@ -18,6 +18,7 @@ import {
 } from "../../split-panes/model/pane-layout"
 import { keptConversations, retention, type Removal } from "../model/retention"
 import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overview/filter"
+import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
 import { drawn, type SideColumn } from "../../model/side-column"
 import type { SessionView } from "../model/session-groups"
 import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
@@ -140,7 +141,7 @@ export interface WorkspaceState {
    * `navigated`).
    */
   readonly content: ContentView
-  /** What the Agents overview shows while open: its filter and the session chosen. */
+  /** What the Agents overview shows while open: its filter, the group shown alone, and the session chosen. */
   readonly overview: OverviewState
   readonly chrome: Chrome
   readonly tree: Tree
@@ -155,6 +156,13 @@ export interface OverviewState {
   readonly selected: string | null
   /** What it lists (`model/overview/filter.ts`), remembered between launches. */
   readonly filter: AgentsFilter
+  /**
+   * The one group it shows alone, chosen by its count in the header; `null`
+   * shows every group. Kept while the window lives, as the chosen session
+   * is, and never between launches: a window opens on every group, so a
+   * request waiting on the person is never hidden behind yesterday's choice.
+   */
+  readonly group: AgentsGroup | null
 }
 
 export const initialWorkspace: WorkspaceState = {
@@ -176,7 +184,7 @@ export const initialWorkspace: WorkspaceState = {
   panes: null,
   view: { channelId: "" },
   content: "panes",
-  overview: { selected: null, filter: defaultFilter },
+  overview: { selected: null, filter: defaultFilter, group: null },
   chrome: {
     sidebar: { open: true, folded: false },
     sessionList: { open: true, folded: false },
@@ -232,7 +240,8 @@ function paneIds(panes: PaneLayout | null): string[] {
 
 /**
  * Whether the open overview shows a session: the one chosen in it, or one
- * its filter lists waiting on the person (`listsWaiting`). The one rule for
+ * its filter lists waiting on the person (`listsWaiting`) while its waiting
+ * are shown — every group, or Needs you alone (`inGroup`). The one rule for
  * what the overview puts on screen — what it answers (`onScreen`), and what
  * the window reads and keeps for it (`shownIds`).
  */
@@ -240,7 +249,11 @@ export function overviewShows(state: WorkspaceState, sessionId: string): boolean
   if (state.content !== "agents") return false
   if (state.overview.selected === sessionId) return true
   const session = sessionOf(state, sessionId)
-  return session !== undefined && listsWaiting(session, state.overview.filter)
+  return (
+    session !== undefined &&
+    listsWaiting(session, state.overview.filter) &&
+    inGroup(session, state.overview.group)
+  )
 }
 
 /**

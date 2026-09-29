@@ -49,6 +49,14 @@ export interface SessionSummary {
   readonly updatedAt: number
   /** The last thing said, as the session list previews it. */
   readonly preview: string
+  /**
+   * What is going on in it now, in one line of the source's own words —
+   * "Running the reconnect tests after adding a token bucket" — as the
+   * source summarises its turn; absent when the source has nothing to say,
+   * and then nothing is shown. The window never writes one: it is the
+   * source's, replaced with the summary it arrives in, at its revision.
+   */
+  readonly now?: string
   readonly pinned: boolean
   readonly unread: boolean
   /** The source's count of changes to this summary; see `revision.ts`. */
