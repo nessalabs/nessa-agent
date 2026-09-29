@@ -511,6 +511,7 @@ impl SessionManager {
             if result.is_ok() {
                 evidence.committed = Some(next);
                 evidence.pending.clear();
+                evidence.message_commit = None;
             }
             result
         };
@@ -668,6 +669,7 @@ impl SessionManager {
             }
             evidence.committed = evidence.observed.clone();
             evidence.pending.clear();
+            evidence.message_commit = None;
             evidence.save_generation = next_generation;
             Ok(index)
         })

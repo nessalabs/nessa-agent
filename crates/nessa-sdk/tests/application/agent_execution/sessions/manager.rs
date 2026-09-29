@@ -2,16 +2,27 @@
 use super::*;
 use crate::application::agent_execution::{
     providers::{ProviderIdentity, ProviderSessionState},
-    sessions::{validation::VALIDATION_CALLS, StorageFuture},
+    sessions::{validation::VALIDATION_CALLS, MessageCommitSleep, StorageFuture},
 };
 use crate::domain::agent_execution::{
-    executions::MessageChunk,
+    executions::{InvocationKind, InvocationStage, MessageChunk},
     prompts::{PromptText, UserMessage},
     sessions::ExecutionSessionId,
 };
 use crate::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Barrier, Semaphore};
+
+struct FixedMessageClock(std::sync::Mutex<std::time::Duration>);
+impl MessageCommitClock for FixedMessageClock {
+    fn now(&self) -> std::time::Duration {
+        *self.0.lock().unwrap()
+    }
+
+    fn sleep_until(&self, _: std::time::Duration) -> MessageCommitSleep {
+        Box::pin(std::future::pending())
+    }
+}
 
 struct PauseAfterSave {
     inner: Arc<dyn SessionStorageLease>,
@@ -623,6 +634,75 @@ async fn many_tiny_messages_flush_on_metadata_count() {
         assert!(saves.iter().all(|changes| changes.len() == 64));
     }
     assert_eq!(manager.evidence.lock().await.pending.len(), 0);
+}
+
+#[tokio::test]
+async fn queued_admission_resets_consumed_message_cadence() {
+    let (mut manager, lease, active) = manager(0).await;
+    let clock = Arc::new(FixedMessageClock(std::sync::Mutex::new(
+        std::time::Duration::ZERO,
+    )));
+    manager.message_commit_clock = clock.clone();
+    manager.event(text(&active)).await.unwrap();
+    let (old_generation, old_deadline) = manager.pending_message_deadline().await.unwrap();
+    assert_eq!(old_deadline, MESSAGE_COMMIT_DELAY);
+
+    *clock.0.lock().unwrap() = std::time::Duration::from_millis(40);
+    let request = invocation("queued", false).request;
+    let actor = ActionContext::new("user", "test", "queue").unwrap();
+    manager
+        .begin_with_scheduling(
+            request,
+            actor.clone(),
+            InvocationSchedulingEvent {
+                kind: InvocationKind::Queued,
+                target: None,
+                before: None,
+                stage: InvocationStage::Queued,
+                cause: SchedulingCause::Submitted,
+                actor: Some(actor),
+            },
+            SubmissionMode::Queued,
+        )
+        .await
+        .unwrap();
+    assert!(manager.pending_message_deadline().await.is_none());
+    assert_eq!(lease.changes.lock().unwrap().len(), 1);
+
+    manager.event(text(&active)).await.unwrap();
+    let (new_generation, new_deadline) = manager.pending_message_deadline().await.unwrap();
+    assert_ne!(new_generation, old_generation);
+    assert_eq!(new_deadline, std::time::Duration::from_millis(140));
+    {
+        let evidence = manager.evidence.lock().await;
+        assert_eq!(evidence.message_commit.unwrap().count, 1);
+        assert_eq!(evidence.pending.len(), 1);
+    }
+    *clock.0.lock().unwrap() = old_deadline;
+    manager.flush_due_messages(old_generation).await.unwrap();
+    manager.flush_due_messages(new_generation).await.unwrap();
+    assert_eq!(lease.changes.lock().unwrap().len(), 1);
+    *clock.0.lock().unwrap() = new_deadline;
+    manager.flush_due_messages(new_generation).await.unwrap();
+    assert_eq!(lease.changes.lock().unwrap().len(), 2);
+    assert_eq!(lease.changes.lock().unwrap()[1].len(), 1);
+}
+
+#[tokio::test]
+async fn failed_admission_retains_pending_message_cadence() {
+    let (manager, lease, active) = manager(0).await;
+    manager.event(text(&active)).await.unwrap();
+    let before = manager.pending_message_deadline().await.unwrap();
+    lease.fail_save.store(true, Ordering::SeqCst);
+    let new_input = invocation("queued", false);
+    assert!(manager
+        .begin(new_input.request, new_input.actor)
+        .await
+        .is_err());
+    assert_eq!(manager.pending_message_deadline().await, Some(before));
+    let evidence = manager.evidence.lock().await;
+    assert_eq!(evidence.pending.len(), 1);
+    assert_eq!(evidence.message_commit.unwrap().count, 1);
 }
 
 #[tokio::test]
