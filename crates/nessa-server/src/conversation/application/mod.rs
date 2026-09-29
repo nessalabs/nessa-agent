@@ -78,14 +78,14 @@ mod provider_sessions;
 mod retries;
 mod service;
 mod view;
+pub use crate::conversation::domain::ReceiverBinding;
 pub use catalogue::{
     CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
     CatalogueValue, ConversationCatalogue,
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use passive_read::{
-    AdmitPassiveRead, CatalogueReadScope, ReadRefusal, ReceiverAuthority, ReceiverBinding,
-    ReceiverReadScope,
+    AdmitPassiveRead, CatalogueReadScope, ReadRefusal, ReceiverAuthority, ReceiverReadScope,
 };
 pub use ports::{
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreation,

@@ -223,6 +223,12 @@ principal must equal the binding owner before either selector is admitted.
 | Any binding | Wrong receiver, owner, target, stale epoch, or unavailable authority | Deny before source |
 | No binding | Pairing initiated by a principal whose ID is `system` | Record an actor-kind initiator with that exact ID; reopen accepts the paired binding |
 | Active or revoked binding | Revocation/regrant initiated by principal `system`, then reopen or policy change | Retain actor-kind attribution through the transition; a policy change records system-kind attribution with no principal ID |
+| No binding | Pair with a valid actor and request ID | One receiver transition owner creates active epoch 1; SQLite commits the binding and matching evidence together |
+| Active binding | Revoke with no replacement credential | That owner creates inactive epoch + 1; any replacement, repeated revoke, malformed request ID, or exhausted epoch refuses before write |
+| Revoked binding | Regrant with a different credential | That owner creates active epoch + 1; same credential or any other state/credential mismatch refuses before write |
+| Active or revoked binding | Embedded policy revision changes | That owner preserves credential and active state and advances epoch; unchanged revision writes no transition |
+| Any binding | History replay or a SQLite write fails | Replay invokes the same transition owner and compares complete before/after evidence; malformed history fails startup. Expected key collisions report conflict, operational write failures report unavailable, and the transaction rolls back all receiver/evidence writes. |
+| Admitted read | Record or catalogue source fails | Report unverifiable source failure; source errors cannot impersonate an admission refusal. |
 
 Receiver transition attribution is a tagged fact: `principal` with a validated
 principal ID, or `system` with no principal ID. The string value `system` is a

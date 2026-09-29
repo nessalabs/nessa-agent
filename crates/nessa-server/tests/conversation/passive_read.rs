@@ -167,7 +167,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     let calls = AtomicUsize::new(0);
     let source = |_: ReceiverReadScope| {
         calls.fetch_add(1, Ordering::SeqCst);
-        async { Ok(()) }
+        async { Ok::<(), ()>(()) }
     };
     assert_eq!(
         admit.read_with(&session, &id, "receiver", 7, source).await,
@@ -176,12 +176,28 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         admit
+            .read_with(&session, &id, "receiver", 7, |_| async {
+                Err::<(), _>(ReadRefusal::Forbidden)
+            })
+            .await,
+        Err(ReadRefusal::Unverifiable)
+    );
+    assert_eq!(
+        admit
+            .catalogue_with(&session, "receiver", 7, |_| async {
+                Err::<(), _>(ReadRefusal::WrongOwner)
+            })
+            .await,
+        Err(ReadRefusal::Unverifiable)
+    );
+    assert_eq!(
+        admit
             .read_with(&session, &id, "receiver", 7, |_| {
                 *bindings.0.lock().unwrap() = Ok(Some(ReceiverBinding {
                     active: false,
                     ..binding()
                 }));
-                async { Ok(()) }
+                async { Ok::<(), ()>(()) }
             })
             .await,
         Ok(())
@@ -190,7 +206,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         admit
             .read_with(&session, &id, "receiver", 7, |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok(()) }
+                async { Ok::<(), ()>(()) }
             })
             .await,
         Err(ReadRefusal::Unauthorized)
@@ -206,7 +222,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
             admit
                 .read_with(&session, &id, receiver, epoch, |_| {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    async { Ok(()) }
+                    async { Ok::<(), ()>(()) }
                 })
                 .await,
             Err(expected)
@@ -234,7 +250,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         admit
             .read_with(&session, &other, "receiver", 7, |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok(()) }
+                async { Ok::<(), ()>(()) }
             })
             .await,
         Err(ReadRefusal::WrongOwner)
@@ -249,7 +265,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         admit
             .catalogue_with(&session, "wrong", 7, |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok(()) }
+                async { Ok::<(), ()>(()) }
             })
             .await,
         Err(ReadRefusal::WrongReceiver)
@@ -262,7 +278,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         admit
             .read_with(&session, &id, "receiver", 7, |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok(()) }
+                async { Ok::<(), ()>(()) }
             })
             .await,
         Err(ReadRefusal::WrongOwner)
@@ -271,7 +287,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         admit
             .catalogue_with(&session, "receiver", 7, |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok(()) }
+                async { Ok::<(), ()>(()) }
             })
             .await,
         Err(ReadRefusal::WrongOwner)
@@ -281,7 +297,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         admit
             .read_with(&session, &id, "receiver", 7, |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok(()) }
+                async { Ok::<(), ()>(()) }
             })
             .await,
         Err(ReadRefusal::Unverifiable)
@@ -294,7 +310,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         admit
             .read_with(&session, &id, "receiver", 7, |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok(()) }
+                async { Ok::<(), ()>(()) }
             })
             .await,
         Err(ReadRefusal::Unauthorized)
@@ -310,7 +326,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
                     .credential
                     .revoke(151, nessa_auth::domain::Initiator::LocalOperator)
                     .unwrap();
-                async { Ok(()) }
+                async { Ok::<(), ()>(()) }
             })
             .await,
         Ok(())
@@ -319,7 +335,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
         admit
             .read_with(&session, &id, "receiver", 7, |_| {
                 calls.fetch_add(1, Ordering::SeqCst);
-                async { Ok(()) }
+                async { Ok::<(), ()>(()) }
             })
             .await,
         Err(ReadRefusal::Unauthorized)

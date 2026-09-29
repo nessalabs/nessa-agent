@@ -24,11 +24,12 @@ CREATE TABLE receiver_transitions (
     initiator_id TEXT,
     request_id TEXT NOT NULL,
     observed_at_ms INTEGER NOT NULL CHECK (observed_at_ms >= 0),
-    UNIQUE (initiator_kind, initiator_id, request_id),
     CHECK ((initiator_kind = 'principal' AND initiator_id IS NOT NULL) OR (initiator_kind = 'system' AND initiator_id IS NULL)),
     CHECK (after_epoch > 0),
     CHECK (after_active IN (0, 1))
 ) STRICT;
+CREATE UNIQUE INDEX receiver_transition_receipt ON receiver_transitions
+    (initiator_kind, ifnull(initiator_id, ''), request_id);
 CREATE TABLE receiver_policy (
     id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
     revision TEXT NOT NULL

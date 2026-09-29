@@ -1,7 +1,7 @@
 //! Admission for bounded passive reads, before a record or catalogue source is touched.
 
 use super::ConversationRepository;
-use crate::conversation::domain::ConversationId;
+use crate::conversation::domain::{ConversationId, ReceiverBinding};
 use nessa_auth::{
     application::{
         authorization::AuthorizeAction,
@@ -11,17 +11,6 @@ use nessa_auth::{
     domain::{Action, CredentialId, OrganizationId, PrincipalId, Resource},
 };
 use std::{future::Future, pin::Pin};
-
-/// Durable server-owned binding of one credential to a paired receiver.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReceiverBinding {
-    pub receiver_id: String,
-    pub credential_id: CredentialId,
-    pub organization_id: OrganizationId,
-    pub owner_id: PrincipalId,
-    pub access_epoch: u64,
-    pub active: bool,
-}
 
 /// A binding authority reads committed state. A missing or unavailable binding
 /// never becomes a caller-chosen receiver identity.
@@ -87,7 +76,7 @@ impl AdmitPassiveRead<'_> {
         })
     }
 
-    pub async fn catalogue_with<T, F, Fut>(
+    pub async fn catalogue_with<T, E, F, Fut>(
         &self,
         session: &AuthenticatedSession,
         receiver_id: &str,
@@ -96,15 +85,15 @@ impl AdmitPassiveRead<'_> {
     ) -> Result<T, ReadRefusal>
     where
         F: FnOnce(CatalogueReadScope) -> Fut,
-        Fut: Future<Output = Result<T, ReadRefusal>>,
+        Fut: Future<Output = Result<T, E>>,
     {
         let scope = self.catalogue(session, receiver_id, access_epoch).await?;
-        source(scope).await
+        source(scope).await.map_err(|_| ReadRefusal::Unverifiable)
     }
 
     /// Invoke a source only after exact admission. A source error is an
     /// unverifiable read, never an authorization decision.
-    pub async fn read_with<T, F, Fut>(
+    pub async fn read_with<T, E, F, Fut>(
         &self,
         session: &AuthenticatedSession,
         conversation_id: &ConversationId,
@@ -114,12 +103,12 @@ impl AdmitPassiveRead<'_> {
     ) -> Result<T, ReadRefusal>
     where
         F: FnOnce(ReceiverReadScope) -> Fut,
-        Fut: Future<Output = Result<T, ReadRefusal>>,
+        Fut: Future<Output = Result<T, E>>,
     {
         let scope = self
             .execute(session, conversation_id, receiver_id, access_epoch)
             .await?;
-        source(scope).await
+        source(scope).await.map_err(|_| ReadRefusal::Unverifiable)
     }
 
     pub async fn execute(

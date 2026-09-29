@@ -6,8 +6,12 @@
 //! by from then on. The tombstone also carries how far the deletion got, and
 //! the domain decides which progress is possible and which request decided it.
 mod entities;
+mod receiver;
 mod value_objects;
 pub use entities::{Conversation, ConversationRefusal};
+pub use receiver::{
+    ReceiverBinding, ReceiverInitiator, ReceiverIntent, ReceiverTransition, ReceiverTransitionError,
+};
 pub use value_objects::{
     ConversationApprovalMode, ConversationDeletion, ConversationId, ConversationModelId,
     ConversationPreview, ConversationSummary, ConversationTitle, DeletionContradiction,
