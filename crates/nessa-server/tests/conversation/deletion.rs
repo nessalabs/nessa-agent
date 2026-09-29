@@ -20,7 +20,7 @@ use crate::conversation_test_support::{
 };
 use nessa_sdk::{
     application::agent_execution::sessions::StorageFuture,
-    infrastructure::session_storage::{InMemoryStorage, LocalFileStorage},
+    infrastructure::session_storage::{InMemoryStorage, RecordStorage},
 };
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -1905,10 +1905,11 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
     nessa_local_storage::create_directory(&root.join("conversations")).unwrap();
     let database = root.join("conversations").join("metadata.sqlite3");
     let metadata = Arc::new(LocalConversationStore::open(&database).unwrap());
+    let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
             agents,
-            storage: Arc::new(LocalFileStorage::new(root.join("sessions")).unwrap()),
+            storage: storage.clone(),
             metadata: metadata.clone(),
             mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
 
@@ -2008,9 +2009,7 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
             .join("deletion")
             .join(format!("conversation-deleted-{id}.json"))]
     );
-    // The summary and the history are gone — the summary's words from the
-    // database file too, not only from its rows — and the history's lock
-    // stays, empty.
+    // The summary and record history are gone while shared SQLite ownership remains.
     assert_eq!(
         ConversationSummaries::load(metadata.as_ref(), &id)
             .await
@@ -2022,10 +2021,13 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
         .windows("read this".len())
         .any(|window| window == b"read this"));
     let sessions = files(&root.join("sessions"));
-    assert_eq!(sessions.len(), 1, "{:?}", sessions.keys());
-    let (lock, bytes) = sessions.iter().next().unwrap();
-    assert_eq!(lock.extension().unwrap(), "lock");
-    assert!(bytes.is_empty());
+    assert_eq!(sessions.len(), 2, "{:?}", sessions.keys());
+    let lease = storage
+        .open_existing(SessionId::new(id.to_string()).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(lease.load().await.unwrap(), None);
     // Ownership stays, and so does the tombstone that refuses it.
     let kept = ConversationRepository::load(metadata.as_ref(), &id)
         .await
@@ -2719,12 +2721,13 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
         LocalConversationStore::open(&root.join("conversations").join("metadata.sqlite3")).unwrap(),
     );
     let clock: Arc<dyn Clock> = Arc::new(TestClock);
+    let storage = Arc::new(RecordStorage::new(root.join("sessions")).unwrap());
     let service = ConversationService::new(
         ConversationDependencies {
             agents: only(Arc::new(Provider::new(
                 Arc::new(ProviderFactory::default()),
             ))),
-            storage: Arc::new(LocalFileStorage::new(root.join("sessions")).unwrap()),
+            storage: storage.clone(),
             metadata: repository.clone(),
             mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
 
@@ -2767,8 +2770,12 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
         .delete(id.clone(), caller("delete-1"))
         .await
         .unwrap());
-    // Nothing to erase, and nothing made to erase it under.
-    assert!(files(&root.join("sessions")).is_empty());
+    // Nothing to erase, and no conversation stream was created by the lookup.
+    assert!(storage
+        .open_existing(SessionId::new(id.to_string()).unwrap())
+        .await
+        .unwrap()
+        .is_none());
     assert!(root
         .join("deletion")
         .join(format!("conversation-deleted-{id}.json"))

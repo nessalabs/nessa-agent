@@ -249,7 +249,7 @@ own current lifecycle and API contracts.
 | `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, retained attachment resources, and snapshot evidence mapped through domain history rules. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, attributed decisions, and observation/review projections. |
 | `infrastructure/acp/`, `claude_acp/`, `codex_acp/`, `opencode_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. Verification shared by more than one provider moves up into `acp/`, as ordered session configuration did once Codex and Opencode both needed it. |
-| `infrastructure/session_storage/` | Memory snapshots, incremental JSONL file persistence, and explicit evidence serialization. |
+| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, and explicit evidence serialization. |
 | `infrastructure/json_rpc/`, `process.rs`, `model_metadata_json.rs` | Framing, process supervision, and model catalog parsing. |
 | `infrastructure/clock.rs` | The clock every ACP protocol deadline is measured on: `RuntimeClock` from composition, and `tests/infrastructure/manual_clock.rs` in tests, which moves only when the test moves it. |
 | `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
@@ -436,7 +436,7 @@ summary is a projection, so a failed write is logged and the command stands; the
 fail visibly instead. `delete` is a consequential transition: a tombstone the
 repository owns (a `deletions` row) fences the identity before the agent
 is stopped, a `ConversationDeletionAudit` record (`infrastructure/deletion_audit.rs`,
-`audit/deletion/`) is committed before history is erased, and the SDK journal is
+`audit/deletion/`) is committed before history is erased, and the SDK record history is
 erased under a lease the delete holds. Before that, the agent is asked to delete
 its own session: `ProviderSessionErasers` (`application/provider_sessions.rs`) is
 the one authority, a registry keyed by agent and filled at one site in

@@ -1,14 +1,11 @@
-//! Bounded, non-retaining preflight before allocating an owned journal record.
+//! Bounded, non-retaining preflight before allocating an owned semantic fact.
 //!
 //! Serde handles JSON grammar and Unicode. A token reader bounds its scratch
 //! allocation before visitor callbacks; seeds bound decoded fields, collections,
-//! and diagnostic trees. Each changed invocation has its own allocation budget,
-//! so a journal checkpoint can still contain arbitrarily many valid prior turns.
-mod indices;
+//! and diagnostic trees.
 mod reader;
 mod shape;
 use crate::application::agent_execution::sessions::StorageError;
-use indices::Indices;
 use reader::TokenReader;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use shape::{Shape, ERROR_BYTES, KEY_BYTES};
@@ -46,16 +43,14 @@ impl Budget {
 struct Seed {
     shape: Shape,
     limit: Rc<Cell<usize>>,
-    indices: Rc<Indices>,
     change: Option<Rc<Budget>>,
-    metadata_present: Option<Rc<Cell<bool>>>,
     error: Option<Rc<Budget>>,
     recipe: Option<Rc<Budget>>,
     error_depth: usize,
 }
 impl Seed {
     fn child(&self, shape: Shape) -> Self {
-        let new_change = matches!(shape, Shape::Change | Shape::Reorder);
+        let new_change = matches!(shape, Shape::Reorder);
         let error = if matches!(shape, Shape::Error) {
             Some(self.error.clone().unwrap_or_default())
         } else {
@@ -69,16 +64,10 @@ impl Seed {
         Self {
             shape,
             limit: self.limit.clone(),
-            indices: self.indices.clone(),
             change: if new_change {
                 Some(Rc::default())
             } else {
                 self.change.clone()
-            },
-            metadata_present: if new_change {
-                Some(Rc::new(Cell::new(false)))
-            } else {
-                self.metadata_present.clone()
             },
             error,
             recipe,
@@ -145,19 +134,7 @@ impl<'de> Visitor<'de> for Seed {
     fn visit_i64<E: de::Error>(self, _: i64) -> Result<(), E> {
         self.charge(0)
     }
-    fn visit_u64<E: de::Error>(self, value: u64) -> Result<(), E> {
-        match self.shape {
-            Shape::Index | Shape::Count => {
-                let value = usize::try_from(value)
-                    .map_err(|_| E::custom("journal integer exceeds platform size"))?;
-                if matches!(self.shape, Shape::Index) {
-                    self.indices.index(value)?;
-                } else {
-                    self.indices.count(value);
-                }
-            }
-            _ => {}
-        }
+    fn visit_u64<E: de::Error>(self, _: u64) -> Result<(), E> {
         self.charge(0)
     }
     fn visit_f64<E: de::Error>(self, _: f64) -> Result<(), E> {
@@ -174,31 +151,10 @@ impl<'de> Visitor<'de> for Seed {
         self.error_node()?;
         self.charge(0)?;
         let mut fields = 0;
-        let mut has_index = false;
         let mut has_provider_diagnostic = false;
-        if matches!(self.shape, Shape::Metadata) {
-            if let Some(present) = &self.metadata_present {
-                present.set(true);
-            }
-        }
         loop {
             self.limit.set(KEY_BYTES);
             let Some(key) = map.next_key_seed(Key)? else {
-                if matches!(self.shape, Shape::Change)
-                    && (!has_index
-                        || (self.indices.needs_metadata()
-                            && !self
-                                .metadata_present
-                                .as_ref()
-                                .is_some_and(|present| present.get())))
-                {
-                    return Err(de::Error::custom(
-                        "journal change has no index or new metadata",
-                    ));
-                }
-                if matches!(self.shape, Shape::Record) {
-                    self.indices.finish()?;
-                }
                 if matches!(self.shape, Shape::ProviderError) && !has_provider_diagnostic {
                     return Err(de::Error::custom(
                         "saved provider error has no diagnostic field",
@@ -211,7 +167,6 @@ impl<'de> Visitor<'de> for Seed {
                     "journal value has an unknown field for its schema",
                 ));
             }
-            has_index |= key == "index";
             has_provider_diagnostic |= key == "diagnostic";
             fields += 1;
             if fields > 32 {
@@ -234,9 +189,6 @@ impl<'de> Visitor<'de> for Seed {
                 })?
                 .is_none()
             {
-                if matches!(self.shape, Shape::Reorders) {
-                    self.indices.queue_events(count);
-                }
                 return Ok(());
             }
             count = count
@@ -279,19 +231,22 @@ impl Visitor<'_> for Key {
         Ok(text.into())
     }
 }
-pub(super) fn preflight(
-    reader: impl Read,
-    previous_invocations: usize,
-) -> Result<(), StorageError> {
+pub(super) fn preflight_semantic(reader: impl Read) -> Result<(), StorageError> {
+    preflight_shape(reader, Shape::Semantic)
+}
+
+pub(super) fn preflight_semantic_batch(reader: impl Read) -> Result<(), StorageError> {
+    preflight_shape(reader, Shape::SemanticBatch)
+}
+
+fn preflight_shape(reader: impl Read, shape: Shape) -> Result<(), StorageError> {
     let limit = Rc::new(Cell::new(KEY_BYTES));
     let reader = TokenReader::new(reader, limit.clone());
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
     Seed {
-        shape: Shape::Record,
+        shape,
         limit,
-        indices: Rc::new(Indices::new(previous_invocations)),
-        change: None,
-        metadata_present: None,
+        change: matches!(shape, Shape::Semantic | Shape::SemanticBatch).then(Rc::default),
         error: None,
         recipe: None,
         error_depth: 0,

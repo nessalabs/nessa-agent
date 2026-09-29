@@ -185,8 +185,8 @@ automatic session storage, hooks, invocation, and UI integration.
   and so does verification more than one provider needs — ordered session
   configuration moved up from `codex_acp/` to `acp/sessions/configuration.rs` when
   Opencode turned out to need the same two options.
-- `infrastructure/session_storage/`: in-memory snapshots and private JSONL session storage,
-  exclusive leases, and explicit JSON evidence mapping.
+- `infrastructure/session_storage/`: in-memory test snapshots and private SQLite semantic records,
+  exclusive leases, bounded physical framing, and explicit JSON evidence mapping.
 - `infrastructure/`: JSON parsing into application input DTOs, including required
   fields, unknown fields, and read errors. The host owns filesystem selection and
   injects the loaded catalog at composition.

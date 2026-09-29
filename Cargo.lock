@@ -1001,7 +1001,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1260,7 +1260,7 @@ dependencies = [
 [[package]]
 name = "event-stream"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/event-stream?rev=b39790230c21ae797b05f54e29a7b8dc51d89766#b39790230c21ae797b05f54e29a7b8dc51d89766"
+source = "git+https://github.com/nessalabs/event-stream?rev=59624a2#59624a2d00dbb3bbc4be51732d5019ca3ca847a1"
 dependencies = [
  "async-trait",
  "fs2",
@@ -3094,7 +3094,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5293,7 +5293,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8c27177b12a6399ffc08b98f76f7c9a1f4fe9fc967c784c5a071fa8d93cf7e1"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

@@ -1,0 +1,931 @@
+//! SQLite-backed semantic conversation records with one writer per identity.
+
+use super::{paths::SessionPaths, record_writer::RecordWriter};
+use crate::{
+    application::agent_execution::sessions::storage::{
+        SessionChange, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+        StorageFuture,
+    },
+    domain::agent_execution::sessions::SessionId,
+};
+use event_stream::{
+    infrastructure::{SqliteOptions, SqliteStore},
+    EventConfig, EventReader, EventRuntime, LifecycleAction, LifecycleOperationId,
+    LifecycleRequest, PersistenceProfile, Runtime, RuntimeConfig, StreamId,
+};
+use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    collections::HashSet,
+    io,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::sync::{Mutex as AsyncMutex, OnceCell};
+
+/// Shared SQLite record storage for all conversations in one server process.
+/// An `Arc` of this adapter shares one runtime and excludes concurrent managers for the same ID.
+pub struct RecordStorage {
+    root: PathBuf,
+    options: SqliteOptions,
+    runtime: OnceCell<Runtime<SqliteStore>>,
+    leases: Arc<Mutex<HashSet<String>>>,
+    #[cfg(test)]
+    lose_reset_reply: Arc<AtomicBool>,
+}
+
+impl RecordStorage {
+    /// Verifies the private records directory. Composition calls
+    /// [`Self::initialize`] before accepting conversations.
+    pub fn new(root: impl Into<PathBuf>) -> Result<Self, StorageError> {
+        let root = root.into();
+        nessa_local_storage::create_directory(&root)
+            .map_err(|error| StorageError::Io(error.to_string()))?;
+        let options = SqliteOptions::new(root.join("records.sqlite3"));
+        Ok(Self {
+            root,
+            options,
+            runtime: OnceCell::new(),
+            leases: Arc::new(Mutex::new(HashSet::new())),
+            #[cfg(test)]
+            lose_reset_reply: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    /// Opens and verifies the one SQLite runtime before the server listens.
+    pub async fn initialize(&self) -> Result<(), StorageError> {
+        self.runtime().await.map(|_| ())
+    }
+
+    async fn runtime(&self) -> Result<&Runtime<SqliteStore>, StorageError> {
+        self.runtime
+            .get_or_try_init(|| async {
+                let options = self.options.clone();
+                let config = RuntimeConfig {
+                    events: EventConfig {
+                        max_bytes: 1024 * 1024,
+                        minimum_persistence: PersistenceProfile::ProcessRestart,
+                    },
+                    ..RuntimeConfig::default()
+                };
+                Runtime::<SqliteStore>::open(options, config)
+                    .await
+                    .map_err(store_error)
+            })
+            .await
+    }
+
+    async fn open_inner(
+        &self,
+        id: SessionId,
+        existing: bool,
+    ) -> Result<Option<Box<dyn SessionStorageLease>>, StorageError> {
+        let reservation = Reservation::acquire(self.leases.clone(), id.as_str())?;
+        let legacy = SessionPaths::new(&self.root, &id).journal;
+        let has_legacy_history =
+            tokio::task::spawn_blocking(move || match std::fs::symlink_metadata(legacy) {
+                Ok(_) => Ok(true),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+                Err(error) => Err(StorageError::Io(error.to_string())),
+            })
+            .await
+            .map_err(|error| StorageError::Io(error.to_string()))??;
+        if has_legacy_history {
+            return Err(StorageError::Corrupt(
+                "legacy conversation history requires explicit removal".into(),
+            ));
+        }
+        let runtime = self.runtime().await?.clone();
+        let stream_id =
+            StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
+        let stream = if existing {
+            match runtime.find_stream(&stream_id).await.map_err(store_error)? {
+                Some(stream) => stream,
+                None => return Ok(None),
+            }
+        } else {
+            runtime
+                .create_stream(&stream_id)
+                .await
+                .map_err(store_error)?
+        };
+        #[cfg(test)]
+        let lose_reset_reply = self.lose_reset_reply.clone();
+        tokio::spawn(async move {
+            let writer = RecordWriter::replay(&runtime, id, stream).await?;
+            Ok(Some(Box::new(RecordLease {
+                inner: Arc::new(LeaseInner {
+                    _reservation: reservation,
+                    runtime,
+                    state: AsyncMutex::new(LeaseState {
+                        writer,
+                        reset_pending: None,
+                    }),
+                    #[cfg(test)]
+                    lose_reset_reply,
+                }),
+            }) as Box<dyn SessionStorageLease>))
+        })
+        .await
+        .map_err(|error| StorageError::Io(error.to_string()))?
+    }
+}
+
+impl SessionStorage for RecordStorage {
+    fn shutdown(&self) -> StorageFuture<'_, ()> {
+        Box::pin(async move {
+            let Some(runtime) = self.runtime.get() else {
+                return Ok(());
+            };
+            let report = runtime
+                .shutdown(Duration::from_secs(10))
+                .await
+                .map_err(store_error)?;
+            if report.closed {
+                Ok(())
+            } else {
+                Err(StorageError::Io(
+                    "record runtime retained unresolved operations".into(),
+                ))
+            }
+        })
+    }
+
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        Box::pin(async move {
+            self.open_inner(id, false)
+                .await?
+                .ok_or_else(|| StorageError::Corrupt("created stream was absent".into()))
+        })
+    }
+
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        Box::pin(async move { self.open_inner(id, true).await })
+    }
+}
+
+struct Reservation {
+    id: String,
+    leases: Arc<Mutex<HashSet<String>>>,
+}
+
+impl Reservation {
+    fn acquire(leases: Arc<Mutex<HashSet<String>>>, id: &str) -> Result<Self, StorageError> {
+        let mut held = leases
+            .lock()
+            .map_err(|_| StorageError::Io("record lease lock poisoned".into()))?;
+        if !held.insert(id.to_owned()) {
+            return Err(StorageError::Busy);
+        }
+        Ok(Self {
+            id: id.to_owned(),
+            leases: leases.clone(),
+        })
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.leases
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.id);
+    }
+}
+
+struct LeaseInner {
+    // Kept by every detached operation until its read, write or reset finishes.
+    _reservation: Reservation,
+    runtime: Runtime<SqliteStore>,
+    state: AsyncMutex<LeaseState>,
+    #[cfg(test)]
+    lose_reset_reply: Arc<AtomicBool>,
+}
+
+struct LeaseState {
+    writer: RecordWriter,
+    reset_pending: Option<LifecycleRequest>,
+}
+
+impl LeaseState {
+    async fn reconcile_reset(&mut self, inner: &LeaseInner) -> Result<(), StorageError> {
+        let Some(request) = self.reset_pending.clone() else {
+            return Ok(());
+        };
+        let receipt = inner
+            .runtime
+            .change_lifecycle(request)
+            .await
+            .map_err(store_error)?;
+        #[cfg(test)]
+        if inner.lose_reset_reply.swap(false, Ordering::SeqCst) {
+            return Err(StorageError::Io("injected lost reset reply".into()));
+        }
+        let replacement = receipt
+            .replacement
+            .ok_or_else(|| StorageError::Corrupt("reset returned no replacement stream".into()))?;
+        self.writer =
+            RecordWriter::replay(&inner.runtime, self.writer.id().clone(), replacement).await?;
+        self.reset_pending = None;
+        Ok(())
+    }
+}
+
+struct RecordLease {
+    inner: Arc<LeaseInner>,
+}
+
+impl SessionStorageLease for RecordLease {
+    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            tokio::spawn(async move {
+                let mut state = inner.state.lock().await;
+                state.reconcile_reset(&inner).await?;
+                state.writer.readable_snapshot()
+            })
+            .await
+            .map_err(|error| StorageError::Io(error.to_string()))?
+        })
+    }
+
+    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+        snapshot.discard_rejected_errors();
+        Box::pin(async { Err(StorageError::ChangesRequired) })
+    }
+
+    fn save_changes(
+        &self,
+        snapshot: SessionSnapshot,
+        changes: Vec<SessionChange>,
+    ) -> StorageFuture<'_, ()> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            tokio::spawn(async move {
+                let mut state = inner.state.lock().await;
+                state.reconcile_reset(&inner).await?;
+                state.writer.save(&inner.runtime, &snapshot, &changes).await
+            })
+            .await
+            .map_err(|error| StorageError::Io(error.to_string()))?
+        })
+    }
+
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            tokio::spawn(async move {
+                let mut state = inner.state.lock().await;
+                if state.reset_pending.is_some() {
+                    return state.reconcile_reset(&inner).await;
+                }
+                let key = state.writer.stream().clone();
+                let mut digest = Sha256::new();
+                digest.update(key.id.as_str().as_bytes());
+                digest.update(key.incarnation.0);
+                let operation = format!("nessa-erase-{:x}", digest.finalize());
+                state.reset_pending = Some(LifecycleRequest {
+                    operation_id: LifecycleOperationId::new(operation)
+                        .map_err(|error| StorageError::Corrupt(error.to_string()))?,
+                    expected: key,
+                    action: LifecycleAction::Reset,
+                });
+                state.reconcile_reset(&inner).await
+            })
+            .await
+            .map_err(|error| StorageError::Io(error.to_string()))?
+        })
+    }
+}
+
+fn store_error(error: event_stream::Error) -> StorageError {
+    match error {
+        event_stream::Error::StoreCorrupt(detail) => StorageError::Corrupt(detail),
+        event_stream::Error::StoreInUse => StorageError::Busy,
+        event_stream::Error::StreamUnavailable { .. }
+        | event_stream::Error::StaleIncarnation { .. }
+        | event_stream::Error::StreamNotFound => StorageError::Corrupt(error.to_string()),
+        other => StorageError::Io(other.to_string()),
+    }
+    .bounded()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        application::agent_execution::{
+            executions::{ExecutionRequest, SubmissionMode},
+            permissions::ActionContext,
+            providers::{ExecutionReport, ProviderIdentity, ProviderSessionState},
+            sessions::{records, InvocationRecord, ProviderContext, SubmissionAcknowledgement},
+        },
+        domain::agent_execution::{
+            executions::{ExecutionId, ExecutionOutcome},
+            prompts::{PromptText, UserMessage},
+            sessions::{ExecutionSessionId, SessionId},
+        },
+    };
+    use event_stream::{infrastructure::SqliteFailureInjection, EventSink, StreamId};
+
+    fn opening(id: &SessionId) -> (SessionChange, SessionSnapshot) {
+        let change = SessionChange::Opened {
+            id: id.clone(),
+            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            context: ProviderContext::Absent,
+        };
+        let snapshot = records::fold_changes(None, std::slice::from_ref(&change)).unwrap();
+        (change, snapshot)
+    }
+
+    #[tokio::test]
+    async fn input_receipt_report_and_settlement_round_trip_as_semantic_facts() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("conversation").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, mut observed) = opening(&id);
+        lease
+            .save_changes(observed.clone(), vec![opened])
+            .await
+            .unwrap();
+        let context = SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        };
+        observed = records::fold_changes(Some(&observed), std::slice::from_ref(&context)).unwrap();
+        lease
+            .save_changes(observed.clone(), vec![context])
+            .await
+            .unwrap();
+        let execution_id = ExecutionId::new("execution").unwrap();
+        let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+            target_event_offset: None,
+            submission: SubmissionMode::Immediate,
+            request: ExecutionRequest {
+                execution_id: execution_id.clone(),
+                user_message: UserMessage::text_only(PromptText::new("hello").unwrap()),
+                estimated_input_tokens: 1,
+                reserved_output_tokens: 1,
+            },
+            actor: ActionContext::new("user", "phone", "send").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Pending,
+            events: Vec::new(),
+            scheduling: Vec::new(),
+            cancellation: None,
+            provider_report: None,
+            local_cancellation: None,
+            local_outcome: None,
+            result: None,
+        }));
+        observed = records::fold_changes(Some(&observed), std::slice::from_ref(&input)).unwrap();
+        lease
+            .save_changes(observed.clone(), vec![input])
+            .await
+            .unwrap();
+        let receipt = SessionChange::ReceiptUpdated {
+            execution_id: execution_id.clone(),
+            before: SubmissionAcknowledgement::Pending,
+            after: SubmissionAcknowledgement::Acknowledged,
+        };
+        observed = records::fold_changes(Some(&observed), std::slice::from_ref(&receipt)).unwrap();
+        lease
+            .save_changes(observed.clone(), vec![receipt])
+            .await
+            .unwrap();
+        let report = SessionChange::ProviderReport {
+            execution_id: execution_id.clone(),
+            report: ExecutionReport::new(
+                Some(Ok(ExecutionOutcome::Completed)),
+                None,
+                ProviderSessionState::Usable,
+            ),
+            local_stop: None,
+        };
+        observed = records::fold_changes(Some(&observed), std::slice::from_ref(&report)).unwrap();
+        lease
+            .save_changes(observed.clone(), vec![report])
+            .await
+            .unwrap();
+        let settlement = SessionChange::LocalSettlement {
+            execution_id,
+            before: None,
+            after: Ok(ExecutionOutcome::Completed),
+            local_outcome: None,
+        };
+        observed =
+            records::fold_changes(Some(&observed), std::slice::from_ref(&settlement)).unwrap();
+        lease
+            .save_changes(observed.clone(), vec![settlement])
+            .await
+            .unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let reopened = RecordStorage::new(&root).unwrap();
+        let lease = reopened.open_existing(id).await.unwrap().unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(observed));
+        drop(lease);
+        reopened.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn existing_lookup_and_reset_use_one_record_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+        let id = SessionId::new("conversation").unwrap();
+        assert!(storage.open_existing(id.clone()).await.unwrap().is_none());
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        assert_eq!(
+            lease.save(snapshot.clone()).await,
+            Err(StorageError::ChangesRequired)
+        );
+        lease
+            .save_changes(snapshot.clone(), vec![change])
+            .await
+            .unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(snapshot.clone()));
+        assert!(matches!(
+            storage.open(id.clone()).await,
+            Err(StorageError::Busy)
+        ));
+        lease.erase().await.unwrap();
+        assert_eq!(lease.load().await.unwrap(), None);
+        let (reopen_change, reopened_snapshot) = opening(&id);
+        lease
+            .save_changes(reopened_snapshot.clone(), vec![reopen_change])
+            .await
+            .unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(reopened_snapshot));
+        lease.erase().await.unwrap();
+        drop(lease);
+        let reopened = storage.open_existing(id).await.unwrap().unwrap();
+        assert_eq!(reopened.load().await.unwrap(), None);
+        drop(reopened);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_jsonl_refuses_without_creating_a_stream() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("conversation").unwrap();
+        let journal = SessionPaths::new(&root, &id).journal;
+        std::fs::write(&journal, b"not parsed").unwrap();
+        assert!(matches!(
+            storage.open(id.clone()).await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert!(matches!(
+            storage.open_existing(id).await,
+            Err(StorageError::Corrupt(_))
+        ));
+        assert_eq!(std::fs::read(&journal).unwrap(), b"not parsed");
+        assert!(!root.join("records.sqlite3").exists());
+    }
+
+    #[tokio::test]
+    async fn unknown_reset_is_reconciled_before_load() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let mut storage = RecordStorage::new(&root).unwrap();
+        storage.options.failure_injection =
+            Some(SqliteFailureInjection::AfterLifecycleCommitAcknowledgementLost);
+        let id = SessionId::new("conversation").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        lease
+            .save_changes(snapshot.clone(), vec![change])
+            .await
+            .unwrap();
+        storage.lose_reset_reply.store(true, Ordering::SeqCst);
+        let first_erase = lease.erase().await;
+        assert!(
+            matches!(first_erase, Err(StorageError::Io(_))),
+            "{first_erase:?}"
+        );
+        assert_eq!(lease.load().await.unwrap(), None);
+        drop(lease);
+        let reopened = storage.open_existing(id).await.unwrap().unwrap();
+        assert_eq!(reopened.load().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn rejected_write_keeps_prior_state_until_retry_after_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let mut storage = RecordStorage::new(&root).unwrap();
+        storage.options.failure_injection = Some(SqliteFailureInjection::BeforeCommit);
+        let id = SessionId::new("conversation").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        let first = lease
+            .save_changes(snapshot.clone(), vec![change.clone()])
+            .await;
+        assert!(matches!(first, Err(StorageError::Io(_))), "{first:?}");
+        assert_eq!(lease.load().await, Err(StorageError::Unresolved));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let reopened = RecordStorage::new(&root).unwrap();
+        let lease = reopened.open_existing(id).await.unwrap().unwrap();
+        assert_eq!(lease.load().await.unwrap(), None);
+        lease
+            .save_changes(snapshot.clone(), vec![change])
+            .await
+            .unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(snapshot));
+        drop(lease);
+        reopened.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn initialize_exposes_single_sqlite_owner_and_shutdown_is_repeatable() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let first = RecordStorage::new(&root).unwrap();
+        first.initialize().await.unwrap();
+        let second = RecordStorage::new(&root).unwrap();
+        assert_eq!(second.initialize().await, Err(StorageError::Busy));
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "infrastructure::session_storage::record::tests::child_owner_refusal_probe",
+                "--ignored",
+            ])
+            .env("NESSA_RECORD_CHILD_ROOT", &root)
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "{}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+        let (left, right) = tokio::join!(first.shutdown(), first.shutdown());
+        left.unwrap();
+        right.unwrap();
+        first.shutdown().await.unwrap();
+    }
+
+    #[ignore = "child process probe"]
+    #[tokio::test]
+    async fn child_owner_refusal_probe() {
+        let root = std::env::var_os("NESSA_RECORD_CHILD_ROOT").expect("parent supplies path");
+        let storage = RecordStorage::new(PathBuf::from(root)).unwrap();
+        assert_eq!(storage.initialize().await, Err(StorageError::Busy));
+    }
+
+    #[tokio::test]
+    async fn child_process_replays_saved_record_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        storage.initialize().await.unwrap();
+        let id = SessionId::new("child-replay").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        lease.save_changes(snapshot, vec![change]).await.unwrap();
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "infrastructure::session_storage::record::tests::child_record_replay_probe",
+                "--ignored",
+            ])
+            .env("NESSA_RECORD_CHILD_ROOT", &root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn child_process_aborts_an_unsealed_fact_before_exposing_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        storage.initialize().await.unwrap();
+        let fact = crate::infrastructure::session_storage::stream_fact::FramedFact {
+            key: records::FactKey::new(
+                records::FactKind::InputAccepted,
+                Some(
+                    crate::domain::agent_execution::executions::ExecutionId::new("partial")
+                        .unwrap(),
+                ),
+                0,
+            )
+            .unwrap(),
+            body: vec![b'x'; 4 * 1024 * 1024],
+        };
+        let frames =
+            crate::infrastructure::session_storage::stream_fact::frame_fact(&fact, 2).unwrap();
+        let counts = [1, 2, frames.len() - 1];
+        for (index, count) in counts.into_iter().enumerate() {
+            let id = SessionId::new(format!("partial-child-{index}")).unwrap();
+            let lease = storage.open(id.clone()).await.unwrap();
+            let (change, snapshot) = opening(&id);
+            lease.save_changes(snapshot, vec![change]).await.unwrap();
+            drop(lease);
+            let runtime = storage.runtime().await.unwrap();
+            let stream = runtime
+                .find_stream(&StreamId::new(id.as_str()).unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            for frame in frames.iter().take(count) {
+                runtime.append(&stream, frame.clone()).await.unwrap();
+            }
+        }
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "infrastructure::session_storage::record::tests::child_partial_tail_probe",
+                "--ignored",
+            ])
+            .env("NESSA_RECORD_CHILD_ROOT", &root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_open_does_not_release_the_lease_during_abort() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("cancelled-open").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        lease
+            .save_changes(snapshot.clone(), vec![change])
+            .await
+            .unwrap();
+        drop(lease);
+        let runtime = storage.runtime().await.unwrap();
+        let stream = runtime
+            .find_stream(&StreamId::new(id.as_str()).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let fact = crate::infrastructure::session_storage::stream_fact::FramedFact {
+            key: records::FactKey::new(
+                records::FactKind::InputAccepted,
+                Some(ExecutionId::new("partial").unwrap()),
+                0,
+            )
+            .unwrap(),
+            body: vec![b'x'; 70 * 1024],
+        };
+        let start = crate::infrastructure::session_storage::stream_fact::frame_fact(&fact, 2)
+            .unwrap()
+            .remove(0);
+        runtime.append(&stream, start).await.unwrap();
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let mut recovered = RecordStorage::new(&root).unwrap();
+        recovered.options.failure_injection = Some(SqliteFailureInjection::PauseBeforeCommit(
+            Duration::from_millis(300),
+        ));
+        let recovered = Arc::new(recovered);
+        let opening = tokio::spawn({
+            let storage = recovered.clone();
+            let id = id.clone();
+            async move { storage.open_existing(id).await }
+        });
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        opening.abort();
+        assert!(matches!(
+            recovered.open_existing(id.clone()).await,
+            Err(StorageError::Busy)
+        ));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let lease = recovered.open_existing(id).await.unwrap().unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(snapshot));
+        drop(lease);
+        recovered.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn lost_abort_acknowledgement_reopens_with_one_terminal_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("lost-abort-reply").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        lease
+            .save_changes(snapshot.clone(), vec![change])
+            .await
+            .unwrap();
+        drop(lease);
+        let runtime = storage.runtime().await.unwrap();
+        let stream = runtime
+            .find_stream(&StreamId::new(id.as_str()).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let fact = crate::infrastructure::session_storage::stream_fact::FramedFact {
+            key: records::FactKey::new(
+                records::FactKind::InputAccepted,
+                Some(ExecutionId::new("partial").unwrap()),
+                0,
+            )
+            .unwrap(),
+            body: vec![b'x'; 70 * 1024],
+        };
+        let start = crate::infrastructure::session_storage::stream_fact::frame_fact(&fact, 2)
+            .unwrap()
+            .remove(0);
+        runtime.append(&stream, start).await.unwrap();
+        storage.shutdown().await.unwrap();
+        drop(storage);
+
+        let mut recovered = RecordStorage::new(&root).unwrap();
+        recovered.options.failure_injection =
+            Some(SqliteFailureInjection::AfterCommitAcknowledgementLost);
+        let first = recovered.open_existing(id.clone()).await;
+        if let Ok(Some(lease)) = first {
+            assert_eq!(lease.load().await.unwrap(), Some(snapshot.clone()));
+            drop(lease);
+        }
+        recovered.shutdown().await.unwrap();
+        drop(recovered);
+
+        let reopened = RecordStorage::new(&root).unwrap();
+        let lease = reopened.open_existing(id.clone()).await.unwrap().unwrap();
+        assert_eq!(lease.load().await.unwrap(), Some(snapshot));
+        drop(lease);
+        let stream = reopened
+            .runtime()
+            .await
+            .unwrap()
+            .find_stream(&StreamId::new(id.as_str()).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reopened
+                .runtime()
+                .await
+                .unwrap()
+                .bounds(&stream)
+                .await
+                .unwrap()
+                .tail
+                .offset,
+            3
+        );
+        reopened.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn child_process_preserves_accepted_input_when_output_fact_is_aborted() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("aborted-output").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (opened, mut observed) = opening(&id);
+        lease
+            .save_changes(observed.clone(), vec![opened])
+            .await
+            .unwrap();
+        let context = SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        };
+        observed = records::fold_changes(Some(&observed), std::slice::from_ref(&context)).unwrap();
+        lease
+            .save_changes(observed.clone(), vec![context])
+            .await
+            .unwrap();
+        let execution_id = ExecutionId::new("accepted").unwrap();
+        let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+            target_event_offset: None,
+            submission: SubmissionMode::Immediate,
+            request: ExecutionRequest {
+                execution_id: execution_id.clone(),
+                user_message: UserMessage::text_only(PromptText::new("hello").unwrap()),
+                estimated_input_tokens: 1,
+                reserved_output_tokens: 1,
+            },
+            actor: ActionContext::new("user", "phone", "send").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Pending,
+            events: Vec::new(),
+            scheduling: Vec::new(),
+            cancellation: None,
+            provider_report: None,
+            local_cancellation: None,
+            local_outcome: None,
+            result: None,
+        }));
+        observed = records::fold_changes(Some(&observed), std::slice::from_ref(&input)).unwrap();
+        lease.save_changes(observed, vec![input]).await.unwrap();
+        drop(lease);
+        let runtime = storage.runtime().await.unwrap();
+        let stream = runtime
+            .find_stream(&StreamId::new(id.as_str()).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let output = crate::infrastructure::session_storage::stream_fact::FramedFact {
+            key: records::FactKey::new(
+                records::FactKind::ProviderObservation,
+                Some(execution_id),
+                0,
+            )
+            .unwrap(),
+            body: vec![b'x'; 70 * 1024],
+        };
+        let start = crate::infrastructure::session_storage::stream_fact::frame_fact(&output, 4)
+            .unwrap()
+            .remove(0);
+        runtime.append(&stream, start).await.unwrap();
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "infrastructure::session_storage::record::tests::child_aborted_output_probe",
+                "--ignored",
+            ])
+            .env("NESSA_RECORD_CHILD_ROOT", &root)
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "{}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+    }
+
+    #[ignore = "child process probe"]
+    #[tokio::test]
+    async fn child_aborted_output_probe() {
+        let root = std::env::var_os("NESSA_RECORD_CHILD_ROOT").expect("parent supplies path");
+        let storage = RecordStorage::new(PathBuf::from(root)).unwrap();
+        let id = SessionId::new("aborted-output").unwrap();
+        let lease = storage.open_existing(id).await.unwrap().unwrap();
+        let snapshot = lease.load().await.unwrap().unwrap();
+        assert_eq!(snapshot.invocations.len(), 1);
+        assert_eq!(
+            snapshot.invocations[0].request.execution_id.as_str(),
+            "accepted"
+        );
+        assert!(snapshot.invocations[0].events.is_empty());
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[ignore = "child process probe"]
+    #[tokio::test]
+    async fn child_partial_tail_probe() {
+        let root = std::env::var_os("NESSA_RECORD_CHILD_ROOT").expect("parent supplies path");
+        let storage = RecordStorage::new(PathBuf::from(root)).unwrap();
+        storage.initialize().await.unwrap();
+        for index in 0..3 {
+            let id = SessionId::new(format!("partial-child-{index}")).unwrap();
+            let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
+            let (_, expected) = opening(&id);
+            assert_eq!(lease.load().await.unwrap(), Some(expected));
+            drop(lease);
+        }
+        storage.shutdown().await.unwrap();
+    }
+
+    #[ignore = "child process probe"]
+    #[tokio::test]
+    async fn child_record_replay_probe() {
+        let root = std::env::var_os("NESSA_RECORD_CHILD_ROOT").expect("parent supplies path");
+        let storage = RecordStorage::new(PathBuf::from(root)).unwrap();
+        storage.initialize().await.unwrap();
+        let id = SessionId::new("child-replay").unwrap();
+        let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
+        let (_, expected) = opening(&id);
+        assert_eq!(lease.load().await.unwrap(), Some(expected));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+}

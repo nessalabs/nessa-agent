@@ -4,7 +4,7 @@ use crate::{
     application::{agent_execution::sessions::SessionManager, dto::ModelMetadataDto},
     domain::agent_execution::sessions::SessionId,
     infrastructure::acp::sessions::AcpConfig,
-    infrastructure::session_storage::LocalFileStorage,
+    infrastructure::session_storage::RecordStorage,
 };
 
 pub(super) fn live_config(
@@ -74,7 +74,7 @@ async fn selected_claude_preset_survives_a_real_agent_close_and_restore() {
         .unwrap(),
     );
     let storage_root = tempfile::tempdir().unwrap();
-    let storage = Arc::new(LocalFileStorage::new(storage_root.path().join("sessions")).unwrap());
+    let storage = Arc::new(RecordStorage::new(storage_root.path().join("sessions")).unwrap());
     let local_id = SessionId::new("live-approval-restore").unwrap();
     let agent = attached_agent(
         provider.clone(),
@@ -160,7 +160,7 @@ async fn selected_codex_preset_survives_a_real_agent_close_and_restore() {
         .unwrap(),
     );
     let storage_root = tempfile::tempdir().unwrap();
-    let storage = Arc::new(LocalFileStorage::new(storage_root.path().join("sessions")).unwrap());
+    let storage = Arc::new(RecordStorage::new(storage_root.path().join("sessions")).unwrap());
     let local_id = SessionId::new("live-codex-restore").unwrap();
     let agent = attached_agent(
         provider.clone(),

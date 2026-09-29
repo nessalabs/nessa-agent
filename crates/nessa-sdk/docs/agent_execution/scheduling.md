@@ -314,5 +314,5 @@ command can reorder the remaining queue; it does not claim provider dispatch.
 Restoration replays these facts for validation, checks every complete before-state,
 and rejects contradictory priorities, omitted members or repeated selection.
 The new owner records clearing retained pending membership instead of replaying
-old input. JSONL saves append changed queue-history tails atomically with related
-lifecycle evidence; file and memory storage reject rewriting earlier queue facts.
+old input. Record storage commits changed queue-history facts with their related
+lifecycle decisions; the fold rejects rewriting earlier queue facts.

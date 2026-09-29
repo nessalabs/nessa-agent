@@ -18,7 +18,7 @@ use std::{
 };
 use uuid::Uuid;
 
-/// Private host audit storage, separate from the SDK session journal and UI views.
+/// Private host audit storage, separate from SDK conversation records and UI views.
 /// Successful acknowledgement means the record file and directory were synced.
 pub struct DurableExecutionAudit {
     directory: PathBuf,

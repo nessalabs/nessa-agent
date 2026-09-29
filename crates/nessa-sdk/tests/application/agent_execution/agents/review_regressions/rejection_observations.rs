@@ -2,7 +2,7 @@
 mod control_fence;
 mod ready_stream;
 use super::*;
-use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
+use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 
 fn observations() -> [ExecutionUpdate; 3] {
     [
@@ -99,11 +99,10 @@ async fn observations_before_rejection_preserve_evidence_and_require_protocol_cl
                 "rejection must not fabricate a provider outcome"
             );
             assert!(record.local_outcome.is_none());
-            // Both checked file storage and an unchecked custom adapter preserve
-            // the observations together with their local protocol failure.
-            let directory = tempfile::tempdir().unwrap();
-            let file = LocalFileStorage::new(directory.path().join("private")).unwrap();
-            let lease = file.open(saved.id.clone()).await.unwrap();
+            // A checked storage adapter preserves the observations together
+            // with their local protocol failure.
+            let storage = InMemoryStorage::new();
+            let lease = storage.open(saved.id.clone()).await.unwrap();
             lease.save(saved.clone()).await.unwrap();
             let loaded = lease.load().await.unwrap().unwrap();
             assert_eq!(loaded.invocations[0].events, record.events);

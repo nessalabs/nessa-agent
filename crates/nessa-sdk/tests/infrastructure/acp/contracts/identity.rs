@@ -4,7 +4,7 @@ use crate::application::agent_execution::providers::ExecutableUseSnapshot;
 use crate::application::agent_execution::sessions::{SessionManager, StorageError};
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::infrastructure::acp::sessions::StdioMcpServer;
-use crate::infrastructure::session_storage::LocalFileStorage;
+use crate::infrastructure::session_storage::RecordStorage;
 
 fn provider(config: AcpConfig, model: &ModelMetadata) -> ClaudeAcpProvider {
     ClaudeAcpProvider::new(
@@ -37,7 +37,7 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
     assert_eq!(identity.context().len(), 71);
     let storage_root = tempfile::tempdir().unwrap();
     let storage_path = storage_root.path().join("sessions");
-    let storage = Arc::new(LocalFileStorage::new(&storage_path).unwrap());
+    let storage = Arc::new(RecordStorage::new(&storage_path).unwrap());
     let session_id = SessionId::new("fingerprint").unwrap();
     let manager = || SessionManager::open(Some(session_id.clone()), storage.clone());
     let agent = attached_agent(Arc::new(original), manager().await.unwrap())
@@ -96,16 +96,10 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
         .unwrap();
     restored.close(close_action()).await.unwrap();
     drop(restored);
-    let journals = std::fs::read_dir(storage_path)
+    let records = std::fs::read_dir(storage_path)
         .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "jsonl")
-        })
+        .map(|entry| std::fs::read(entry.unwrap().path()).unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(journals.len(), 1);
-    let saved = std::fs::read_to_string(&journals[0]).unwrap();
     for secret in [
         "synthetic-secret-one",
         "synthetic-secret-two",
@@ -113,7 +107,9 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
         "/fixture/config-a",
         "https://fixture.invalid/a",
     ] {
-        assert!(!saved.contains(secret));
+        assert!(!records.iter().any(|file| file
+            .windows(secret.len())
+            .any(|bytes| bytes == secret.as_bytes())));
     }
     assert_eq!(
         std::fs::read_to_string(root.path().join("credential-received")).unwrap(),

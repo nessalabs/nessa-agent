@@ -42,6 +42,7 @@
 
 pub(crate) mod attachment;
 mod manager;
+pub(crate) mod records;
 mod retention;
 // Queue membership is replayed separately from provider/lifecycle scheduling.
 mod queue_validation;

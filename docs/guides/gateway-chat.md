@@ -476,7 +476,7 @@ submission can be retried with the same immutable input and identities; the SDK
 recovers its saved receipt instead of running it twice. Changed input is a new
 submission, not an edit to a running operation. Pending input can be removed.
 
-The gateway stores conversation ownership separately from SDK JSONL sessions, in
+The gateway stores conversation ownership separately from SDK SQLite records, in
 `conversations/metadata.sqlite3`: a private SQLite file whose three tables hold
 each conversation's owner record, its summary (title, last line said, time,
 archived) for `conversation.list`, and a deleted conversation's tombstone

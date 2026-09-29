@@ -32,6 +32,10 @@ pub enum StorageError {
     Corrupt(String),
     /// The session or provider identity differs from the requested context.
     IdentityMismatch,
+    /// This adapter requires the semantic SDK decisions with the candidate snapshot.
+    ChangesRequired,
+    /// A prior write may still commit and must be reconciled before reading old state.
+    Unresolved,
 }
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -41,7 +45,7 @@ impl fmt::Display for StorageError {
 impl Error for StorageError {}
 
 /// Retained application evidence, not the authoritative live execution aggregate.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSnapshot {
     /// Local conversation key under which this snapshot is stored.
     pub id: SessionId,
@@ -154,7 +158,7 @@ impl QueueHistoryRecord {
 
 /// Saved input and observations. Never replay an input solely because its result
 /// is missing: pending, cancelled, or injected input may have no execution result.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InvocationRecord {
     /// Target observation count at steering admission; not a provider consumption acknowledgement.
     pub target_event_offset: Option<usize>,
@@ -297,6 +301,12 @@ impl InvocationSchedulingEvent {
 /// Implementations may serve many sessions. Each returned lease owns the resources
 /// needed to read and write one session independently of this backend's lifetime.
 pub trait SessionStorage: Send + Sync {
+    /// Drains this backend after all session owners have stopped. Snapshot
+    /// backends have no shared runtime to close.
+    fn shutdown(&self) -> StorageFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Acquires a writer lease for `id`, the local conversation key.
     ///
     /// Returns [`StorageError::Busy`] when already leased, or a backend error.
@@ -310,20 +320,20 @@ pub trait SessionStorage: Send + Sync {
     ///
     /// For a caller that means to read or erase what a session saved and has
     /// no reason to begin one: opening a session that never existed would
-    /// leave behind the exclusion resource an opening creates (the file
-    /// adapter's `.lock`), for an identity nothing will use again.
+    /// leave behind a stream or exclusion resource for an identity nothing
+    /// will use again.
     ///
     /// The default cannot tell whether a session exists without acquiring it,
     /// so it acquires it exactly as [`Self::open`] does and returns `Some`,
-    /// creating whatever that creates. [`LocalFileStorage`] and
-    /// [`InMemoryStorage`] override it and create nothing
+    /// creating whatever that creates. [`RecordStorage`] and
+    /// [`InMemoryStorage`] override it and create no session stream
     /// (`opening_an_existing_session_creates_nothing_for_one_that_never_was`).
     ///
     /// # Errors
     /// The same as [`Self::open`]: [`StorageError::Busy`] while another owner
     /// holds the session, or a backend error.
     ///
-    /// [`LocalFileStorage`]: crate::infrastructure::session_storage::LocalFileStorage
+    /// [`RecordStorage`]: crate::infrastructure::session_storage::RecordStorage
     /// [`InMemoryStorage`]: crate::infrastructure::session_storage::InMemoryStorage
     fn open_existing(
         &self,
@@ -343,8 +353,8 @@ pub trait SessionStorage: Send + Sync {
 /// Access lasts until drop. Outstanding I/O must retain the lock until it finishes,
 /// even if its caller stops waiting. Dropping a lease does not delete the session
 /// or close its provider context. Implementations must document their exclusion
-/// scope and durability; the supplied file adapter excludes other local processes,
-/// while memory storage excludes owners sharing the same storage instance.
+/// scope and durability; the supplied record adapter's SQLite runtime excludes
+/// other local processes, while memory storage excludes owners sharing one instance.
 pub trait SessionStorageLease: Send + Sync {
     /// Loads the saved snapshot, returning `None` for a session with no snapshot.
     ///
@@ -352,8 +362,9 @@ pub trait SessionStorageLease: Send + Sync {
     /// invalid data must never be treated as an empty conversation.
     fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>>;
 
-    /// Atomically saves this session's complete logical state from `snapshot`.
-    /// Adapters may persist only changes; the file adapter appends JSONL records.
+    /// Saves this session's complete logical state for snapshot adapters.
+    /// Record adapters return [`StorageError::ChangesRequired`]; callers using
+    /// them supply the exact decisions through [`Self::save_changes`].
     ///
     /// Returns [`StorageError::IdentityMismatch`] for a different session and a
     /// validation or backend error if the write cannot be acknowledged. An error
@@ -389,8 +400,8 @@ pub trait SessionStorageLease: Send + Sync {
     /// opener acquire a fresh one beside this lease, which is two writers.
     ///
     /// Afterwards [`Self::load`] returns `None`. The identity is not retired:
-    /// a later [`Self::save`], through this lease or a later one, starts a new
-    /// history under it. A caller erasing a session permanently must therefore
+    /// a later save through this lease or a later one starts a new history
+    /// under it, using the adapter's supported save method. A caller erasing a session permanently must therefore
     /// stop using that identity itself. Erasing a session that has no saved
     /// history succeeds. Nothing outside this storage is touched: a provider's
     /// own record of the context named by [`SessionSnapshot::provider_context`]
@@ -471,7 +482,7 @@ impl StorageError {
     pub(crate) fn validate_retained_size(&self) -> Result<(), StorageError> {
         let capacity = match self {
             Self::Io(value) | Self::Corrupt(value) => value.capacity(),
-            Self::Busy | Self::IdentityMismatch => 0,
+            Self::Busy | Self::IdentityMismatch | Self::ChangesRequired | Self::Unresolved => 0,
         };
         (capacity <= 4096)
             .then_some(())

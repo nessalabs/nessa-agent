@@ -1,11 +1,10 @@
-//! One canonical spelling for every local session's journal and stable lease file.
+//! Exact legacy JSONL name calculation for refusal before record-stream creation.
 use crate::domain::agent_execution::sessions::SessionId;
 use data_encoding::BASE32HEX_NOPAD;
 use std::path::{Path, PathBuf};
 
 pub(super) struct SessionPaths {
     pub(super) journal: PathBuf,
-    pub(super) lock: PathBuf,
 }
 impl SessionPaths {
     pub(super) fn new(root: &Path, id: &SessionId) -> Self {
@@ -22,7 +21,6 @@ impl SessionPaths {
         );
         Self {
             journal: root.join(format!("{stem}.jsonl")),
-            lock: root.join(format!("{stem}.lock")),
         }
     }
 }

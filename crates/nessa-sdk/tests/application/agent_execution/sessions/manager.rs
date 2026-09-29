@@ -34,8 +34,17 @@ impl SessionStorageLease for FaultLease {
         snapshot: SessionSnapshot,
         changes: Vec<SessionChange>,
     ) -> StorageFuture<'_, ()> {
-        self.changes.lock().unwrap().push(changes);
-        self.save(snapshot)
+        self.changes.lock().unwrap().push(changes.clone());
+        Box::pin(async move {
+            let previous = self.inner.load().await?;
+            super::super::records::confirm_candidate(
+                &snapshot.id,
+                previous.as_ref(),
+                &changes,
+                &snapshot,
+            )?;
+            self.save(snapshot).await
+        })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.inner.erase()
@@ -244,15 +253,17 @@ async fn local_failure_preserves_inferred_prior_success_before_save_and_after_re
     for retain_receipt in [false, true] {
         let (manager, lease, active) = manager(0).await;
         // The public snapshot contract also accepts success without duplicating its outcome.
-        manager
-            .evidence
-            .lock()
-            .await
-            .observed
-            .as_mut()
-            .unwrap()
-            .invocations[0]
-            .result = Some(Ok(ExecutionOutcome::Completed));
+        {
+            let mut evidence = manager.evidence.lock().await;
+            evidence.observed.as_mut().unwrap().invocations[0].result =
+                Some(Ok(ExecutionOutcome::Completed));
+            evidence.pending.push(SessionChange::LocalSettlement {
+                execution_id: active.clone(),
+                before: None,
+                after: Ok(ExecutionOutcome::Completed),
+                local_outcome: Some(ExecutionOutcome::Completed),
+            });
+        }
         if retain_receipt {
             assert_eq!(
                 manager

@@ -3207,7 +3207,12 @@ impl ConversationService {
     /// Stop admission and join every initialized or initializing owner before process exit.
     pub async fn shutdown(&self) -> Result<(), ConversationError> {
         self.retire("server_shutdown", &Uuid::new_v4().to_string())
+            .await?;
+        self.inner
+            .storage
+            .shutdown()
             .await
+            .map_err(ConversationError::Storage)
     }
 
     /// Local desktop policy: stop work without stopping admission or the gateway.

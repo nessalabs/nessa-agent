@@ -6,7 +6,8 @@ the TypeScript gateway client does not yet expose agent chat RPCs.
 
 ```rust,ignore
 let provider = Arc::new(ClaudeAcpProvider::new(config, &model, limits, audit)?);
-let storage = Arc::new(LocalFileStorage::new("./sessions")?);
+let storage = Arc::new(RecordStorage::new("./sessions")?);
+storage.initialize().await?;
 let manager = SessionManager::open(None, storage).await?; // Fresh local UUID v4.
 let session_id = manager.id().clone(); // Retain this key to reopen the conversation.
 let agent = Agent::prepare(provider, manager, audit.clone()).await?;
@@ -175,9 +176,10 @@ requires one temporary full-history copy, without imposing a total-history cap.
 - `InMemoryStorage` holds session snapshots for the lifetime of that storage
   instance. It can be injected into an actual application without model calls
   being simulated. Reconstructing an Agent with that instance retains its data.
-- `LocalFileStorage` appends changes to a private JSONL file, synchronizes writes,
-  and holds an OS writer lease. Separate agents/processes cannot write the same local
-  session simultaneously. Create independent session IDs for separate chats.
+- `RecordStorage` stores typed decisions in a shared SQLite event runtime and
+  holds an exclusive writer lease per conversation. Initialize it before
+  accepting conversations and drain it after the agents stop. Create independent
+  session IDs for separate chats.
 - `SessionManager::snapshot()` returns the last acknowledged snapshot, or `None`
   before initialization. An unsuccessful save never appears there as committed.
 - A failed input save prevents provider dispatch. Observation/save failures remain
@@ -219,26 +221,20 @@ recovery never reruns the provider to recover it. Exact chunks and their order a
 preserved when saved. Admissions and consequential lifecycle changes still save
 before successful acknowledgement. Mandatory permission audit remains separate.
 
-The file adapter appends only changed records and new event/scheduling tails to
-`s-<encoded-id>.jsonl`, paired with the stable `s-<encoded-id>.lock` lease file.
-`encoded-id` is lowercase unpadded base32hex of the exact session ID bytes, so
-`Chat` and `chat` remain independent even on case-insensitive filesystems. The
-prefix avoids reserved device names; maximum-length IDs use at most 213 ASCII
-bytes per filename. Each complete line represents one saved update. Restoration
-rebuilds the snapshot without invoking the provider. An interrupted final line is
-removed under the writer lease before another append; malformed complete records
-are reported as corruption. Retries reconcile the last write before appending.
+The record adapter saves typed SDK decisions in one SQLite stream per session.
+Each complete fact folds into the restored snapshot without invoking the provider.
+An incomplete fact fences normal restoration until its exact bytes are reconciled;
+changed-byte reuse is corruption. A pre-existing per-session JSONL history is
+refused unchanged before a stream is created.
 
-`SessionStorageLease::erase` removes a session's saved history under the lease
-that calls it, so no other owner can be writing it meanwhile. The file adapter
-removes the `.jsonl` journal and keeps the `.lock` file: that file is what the
-held lease has locked, and unlinking it would let the next opener lock a new one
-beside it. Erasing does not retire the identity — a later save begins a new
-history — and does not touch the provider's own record of its context.
+`SessionStorageLease::erase` resets the session stream under its exclusive lease.
+An uncertain reset is reconciled before another load or save. Erasure does not
+retire the identity; a later semantic save begins a new history. It does not touch
+the provider's own record of its context.
 
 A caller that only means to read or erase what a session saved takes its lease
-with `SessionStorage::open_existing`, which answers `None` — and creates
-nothing, not even the `.lock` — for a session that was never opened. What it
+with `SessionStorage::open_existing`, which answers `None` without creating a
+session stream for an identity that was never opened. What it
 reads it reads through `SessionSnapshot::load_saved`, which applies the checks
 restoration applies (every relationship in the snapshot, and that it was saved
 under the session asked for) so a custom adapter cannot hand it another
@@ -300,31 +296,14 @@ The allowance is not a total-history or process-memory cap. Loading reconstructs
 the whole conversation and validates each saved checkpoint;
 its work grows with both history size and checkpoint count. Retained history stays in
 memory; the pending-input count limit does not bound total session history.
-These adapters serve one local conversation, not the proposed gateway event stream. Permission answers and cancellations use the
+The record adapter is the server's durable session path. Permission answers and cancellations use the
 required independent audit sink. It retains answer selection, response-write
 observations, cancellation causes, and once-only live session closure (including idle closure). Snapshots do not replace that audit or
 claim to capture every permission decision and its authorization evidence.
 
-Run the ignored persistence workload when measuring save and restoration changes:
-
-```sh
-cargo test -p nessa-sdk --test infrastructure persistence_scale_with_repeated_checkpoints -- --ignored --nocapture
-cargo test -p nessa-sdk --test infrastructure concurrent_session_persistence_and_scheduler_delay -- --ignored --nocapture
-```
-
-The first workload builds deterministic histories of 100, 1,000, and 10,000
-invocations with ten checkpoints each, a 1,000-invocation history with 100 small
-checkpoints, and one 10,000-chunk streamed turn with 100 checkpoints. It reports
-cumulative save time, one full restoration time, and journal bytes. The second
-workload runs eight 100-invocation sessions concurrently and reports total wall
-time plus median and maximum task-start scheduling delay.
-
-The harness does not infer CPU time or peak memory from wall time. On macOS, wrap
-either command in `/usr/bin/time -lp`; on systems with GNU time, use
-`/usr/bin/time -v`. Those tools record process CPU and maximum resident memory for
-the complete test command. The harness has no timing, CPU, or memory assertion
-because results depend on the host and build profile. Record the command, host,
-profile, and tool output with any budget or result derived from it.
+No record-writer performance workload has been qualified yet. Report measured
+save, replay, CPU, and memory costs only with the workload and environment that
+produced them.
 
 ## UI and tests
 

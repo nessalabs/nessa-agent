@@ -1,7 +1,7 @@
 # 0009. Integrate the standalone event-stream library
 
 > Current implementation: [gateway chat](../../guides/gateway-chat.md) uses the existing SDK Agent,
-> leased JSONL sessions, independent durable audit, and bounded replacement views.
+> leased SDK sessions, independent durable audit, and bounded replacement views.
 > NessaClient and the panel use authenticated conversation commands; retired spike
 > methods are absent. The exact durable cursor/event-store and broader collaboration design
 > below remains a proposal, not a prerequisite or description of the current chat API.
@@ -29,12 +29,14 @@ cursor tokens, and replay/live subscriptions. Its
 [manifest](https://github.com/nessalabs/event-stream/blob/main/Cargo.toml) identifies
 unpublished package `event-stream` 0.1.0. Release and performance checks are still
 incomplete. The SDK now pins revision
-`b39790230c21ae797b05f54e29a7b8dc51d89766` with `codec`, `sqlite`, and
-`retention` enabled. It still only uses `NewlineFramer` for bounded ACP JSON-RPC
-input: no event runtime or durable store is constructed yet.
-The commit, replay, and lifecycle requirements below still need to be tested in Nessa.
+`59624a2` with `codec`, `sqlite`, and `retention` enabled. It also uses
+`NewlineFramer` for bounded ACP JSON-RPC input. Server composition opens one
+SQLite record runtime before listening. SDK replay and lifecycle verification
+for issue #275 is in progress.
 
-The first integration targets newly created conversations. Existing JSONL histories remain on their current path; importing them is deferred and is not part of issue #275. The [semantic record writer design](../../design/semantic-record-writer.md) gives the current commit boundaries and ordering table.
+The first integration replaces the session history path for every conversation.
+An old per-session JSONL file is refused without import or version routing. An
+old lock file alone is not history. The [semantic record writer design](../../design/semantic-record-writer.md) gives the current commit boundaries and ordering table.
 
 ## One instance, one record source
 

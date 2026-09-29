@@ -103,7 +103,7 @@ impl CompositionRoot {
         let super::local_auth::LocalProduct {
             routes: product,
             warm_ups,
-        } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle)?;
+        } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle).await?;
         let conversations = product.conversations.clone();
         // Shared with the retirement below, which asks whether any of them may
         // still hold an agent process (ADR 221).
