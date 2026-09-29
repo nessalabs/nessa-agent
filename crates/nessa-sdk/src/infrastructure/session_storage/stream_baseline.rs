@@ -1,6 +1,8 @@
 //! Nessa's sealed legacy baseline on the generic event-stream record ports.
 //! The caller holds the legacy writer lease and checks the gateway deletion cut.
 //! A successful return confirms the seal; only composition may switch authority.
+//! Before exposing a loaded snapshot, composition compares its session ID with
+//! the requested conversation and checks the gateway's ownership/deletion cut.
 
 use super::snapshot::MAX_BASELINE_PIECE_BYTES;
 use super::{decode_baseline, BaselineExport, BaselinePiece, BaselineSeal, BaselineSection};
