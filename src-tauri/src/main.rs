@@ -4,6 +4,7 @@
 mod agent_credentials;
 mod attachments;
 mod composition;
+mod desktop_window;
 mod diagnostics;
 mod gateway;
 mod gateway_endpoint;
@@ -168,6 +169,10 @@ fn main() {
             if !settings.onboarding.completed {
                 panel::open_setup_window(app.handle());
             } else {
+                // A launch after setup opens the desktop window, as an app
+                // launch should; the panel stays one click away in the menu bar.
+                desktop_window::open(app.handle());
+
                 // A debug executable is also a supported way to exercise the
                 // real embedded desktop without `tauri dev`. Reveal it after
                 // setup has sized and bound the configured panel. The static
@@ -227,6 +232,32 @@ fn main() {
                     }
                 }
             }
+            // Closing the desktop window never destroys it while the app runs
+            // on: `desktop_window::on_close` says whether it is dismissed (a
+            // menu bar item opens it again), hidden with its Dock icon kept
+            // (the Dock reopens it), or the app quits (nothing could).
+            if window.label() == desktop_window::DESKTOP_WINDOW {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    let tray = window
+                        .app_handle()
+                        .try_state::<tray::Present>()
+                        .map(|state| state.0)
+                        .unwrap_or(false);
+                    match desktop_window::on_close(tray, cfg!(target_os = "macos")) {
+                        desktop_window::OnClose::Dismiss => {
+                            api.prevent_close();
+                            desktop_window::dismiss(window);
+                        }
+                        desktop_window::OnClose::Hide => {
+                            api.prevent_close();
+                            if let Err(error) = window.hide() {
+                                eprintln!("[nessa] could not hide the desktop window: {error}");
+                            }
+                        }
+                        desktop_window::OnClose::Quit => window.app_handle().exit(0),
+                    }
+                }
+            }
             // The panel is lifted over setup while setup is on screen. If it is
             // still showing when setup goes, it would be left floating above
             // the menu bar for the rest of the session.
@@ -245,6 +276,12 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Nessa")
         .run(|app, event| {
+            // Clicking the Dock icon, or opening the app again from Finder or
+            // Spotlight, brings the desktop window back.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                desktop_window::open(app);
+            }
             if matches!(event, tauri::RunEvent::Exit) {
                 // One resolution, at the entry point. The decision itself takes
                 // what it needs as parameters and lives below.

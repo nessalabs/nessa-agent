@@ -9,19 +9,16 @@ describe("takesExpansion", () => {
    * `useComposer` closes it on the draft having actually gone.
    */
   it("never closes the pane on a submit alone", () => {
-    expect(takesExpansion(false, "submit")).toBe(false)
+    expect(takesExpansion(false, true)).toBe(false)
   })
 
   /** The ways out of the pane, which must keep working. */
   it("closes the pane for every reason a person or the composer gives", () => {
-    for (const reason of ["control", "escape", "withdrawal"] as const) {
-      expect(takesExpansion(false, reason)).toBe(true)
-    }
+    expect(takesExpansion(false, false)).toBe(true)
   })
 
   it("opens the pane whatever the reason", () => {
-    for (const reason of ["control", "escape", "submit", "withdrawal"] as const) {
-      expect(takesExpansion(true, reason)).toBe(true)
-    }
+    expect(takesExpansion(true, true)).toBe(true)
+    expect(takesExpansion(true, false)).toBe(true)
   })
 })

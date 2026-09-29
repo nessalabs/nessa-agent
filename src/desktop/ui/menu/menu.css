@@ -1,0 +1,243 @@
+/*
+ * The window's menus, drawn the way macOS draws its own. The glass is the
+ * shared material from `styles.css` (`.desktop-popover`); this is the menu's
+ * geometry on it.
+ *
+ * It selects every Radix menu — root or submenu, dropdown or context — that
+ * wears `.desktop-popover`, by its `role`, so menus still built from
+ * nessa_ui's parts directly (the composer's access mode) look the same as the
+ * ones built from `menu-parts.tsx`. Rules here are unlayered, so they win over
+ * the design system's utility classes on the same elements.
+ *
+ * Geometry, measured against macOS 15:
+ *
+ *   ┌─ 10px radius ───────────────────────────────┐
+ *   │ 5px                                          │
+ *   │   ╭─ 5px radius highlight ────────────────╮  │
+ *   │   │ 10px  Item words          ⌘K     10px │  │  22px row, 13px text
+ *   │   ╰───────────────────────────────────────╯  │
+ *   │   ───────────── hairline, 5px above/below ─  │
+ *   └──────────────────────────────────────────────┘
+ *
+ * A menu with a checkbox or radio item gains a leading 22px column where the
+ * check sits; a menu without one has none.
+ */
+.desktop-popover[role="menu"] {
+  --desktop-menu-pad: 5px;
+  --desktop-menu-row: 22px;
+  --desktop-menu-inset: 10px;
+  --desktop-menu-check-column: 22px;
+  --desktop-menu-muted: color-mix(in oklab, var(--foreground) 50%, transparent);
+  --desktop-menu-disabled: color-mix(in oklab, var(--foreground) 30%, transparent);
+
+  min-width: 180px;
+  padding: var(--desktop-menu-pad);
+  border-radius: 10px;
+  color: var(--foreground);
+  font: 400 13px / 16px var(--nessa-font-sans);
+  letter-spacing: 0;
+  box-shadow:
+    var(--desktop-material-rim),
+    0 0 0 0.5px rgb(0 0 0 / 22%),
+    0 12px 32px -8px rgb(0 0 0 / 38%),
+    0 3px 10px -4px rgb(0 0 0 / 24%);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/*
+ * Rows: the highlight is a rounded rect inset within the menu's padding, a
+ * soft fill in the theme's light — no ring, whether the pointer or a key put
+ * it there. It is instant, as macOS's is: a menu is read while it moves.
+ */
+.desktop-popover[role="menu"] [role^="menuitem"] {
+  position: relative;
+  display: flex;
+  min-height: var(--desktop-menu-row);
+  align-items: center;
+  gap: 6px;
+  padding: 3px var(--desktop-menu-inset);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  outline: none;
+  box-shadow: none;
+  transition: none;
+  cursor: default;
+}
+
+.desktop-popover[role="menu"]
+  [role^="menuitem"]:is([data-highlighted], [data-state="open"]) {
+  background: var(--desktop-material-highlight);
+  color: var(--foreground);
+}
+
+.desktop-popover[role="menu"] [role^="menuitem"][data-variant="destructive"] {
+  color: var(--destructive);
+}
+
+.desktop-popover[role="menu"] [role^="menuitem"][data-disabled] {
+  opacity: 1;
+  color: var(--desktop-menu-disabled);
+}
+
+/* Leading icons, where every item in the menu has one: text-sized, in the text's ink. */
+.desktop-popover[role="menu"] [role^="menuitem"] > svg:first-child {
+  width: 16px;
+  height: 16px;
+  margin-left: -1px;
+  color: inherit;
+  opacity: 0.85;
+}
+
+/* ——— The check column ——— */
+
+.desktop-popover[role="menu"]:has([role="menuitemcheckbox"], [role="menuitemradio"])
+  :is(
+    [role^="menuitem"],
+    [data-slot$="menu-label"],
+    [data-slot="composer-access-mode-content"] > div:not([role])
+  ) {
+  padding-left: var(--desktop-menu-check-column);
+}
+
+/*
+ * One check for both kinds, as macOS draws a chosen option and a ticked
+ * setting alike. The design system's own indicator (its leading absolute
+ * span) steps aside for it; a checkable item without one — the access mode
+ * picker's — is marked the same way.
+ */
+.desktop-popover[role="menu"]
+  :is([role="menuitemcheckbox"], [role="menuitemradio"])
+  > span.absolute:first-child {
+  display: none;
+}
+
+.desktop-popover[role="menu"]
+  :is([role="menuitemcheckbox"], [role="menuitemradio"])[data-state="checked"]::before {
+  position: absolute;
+  top: 50%;
+  left: 6px;
+  width: 12px;
+  height: 12px;
+  margin-top: -6px;
+  background: currentColor;
+  content: "";
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.4 4.9 8.8 9.6 3.4'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+/* ——— Section headings, separators, shortcuts, submenus ——— */
+
+/*
+ * Section headings. The access mode picker's is nessa_ui's own and carries no
+ * slot, so it is named by where it sits.
+ */
+.desktop-popover[role="menu"]
+  :is(
+    [data-slot$="menu-label"],
+    [data-slot="composer-access-mode-content"] > div:not([role])
+  ) {
+  padding: 4px var(--desktop-menu-inset) 2px;
+  color: var(--desktop-menu-muted);
+  font: 600 11px / 16px var(--nessa-font-sans);
+  letter-spacing: 0.01em;
+}
+
+.desktop-popover[role="menu"] [role="separator"] {
+  height: 1px;
+  margin: 5px var(--desktop-menu-pad);
+  background: color-mix(in oklab, var(--foreground) 11%, transparent);
+}
+
+.desktop-popover[role="menu"] [data-slot$="menu-shortcut"] {
+  margin-left: auto;
+  padding-left: 24px;
+  color: var(--desktop-menu-muted);
+  font: inherit;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.desktop-popover[role="menu"] [data-slot$="menu-sub-trigger"] > svg:last-child {
+  width: 12px;
+  height: 12px;
+  margin-right: -4px;
+  margin-left: auto;
+  padding-left: 0;
+  color: var(--desktop-menu-muted);
+}
+
+.desktop-popover[role="menu"] [data-slot$="menu-sub-trigger"] > :nth-last-child(2) {
+  margin-right: 20px;
+}
+
+/* ——— Motion ——— */
+
+/*
+ * A menu is there at once: a fade too short to wait on. Closing, it fades a
+ * little slower; when an item was chosen, the item blinks once first — its
+ * highlight off, then on — and the menu fades after it.
+ */
+.desktop-popover[role="menu"][data-state="open"] {
+  animation: desktop-menu-in 70ms linear;
+}
+
+.desktop-popover[role="menu"][data-state="closed"] {
+  animation: desktop-menu-out 120ms ease-out forwards;
+  pointer-events: none;
+}
+
+.desktop-popover[role="menu"][data-state="closed"]:has([data-chosen]) {
+  animation: desktop-menu-out-chosen 230ms linear forwards;
+}
+
+.desktop-popover[role="menu"] [role^="menuitem"][data-chosen] {
+  background: var(--desktop-material-highlight);
+  animation: desktop-menu-chosen 110ms linear;
+}
+
+@keyframes desktop-menu-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes desktop-menu-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* Held while the chosen item blinks (110ms), then faded (120ms). */
+@keyframes desktop-menu-out-chosen {
+  0%,
+  48% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes desktop-menu-chosen {
+  0%,
+  55% {
+    background: transparent;
+  }
+  56%,
+  100% {
+    background: var(--desktop-material-highlight);
+  }
+}
+
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .desktop-popover[role="menu"][data-state],
+:root[data-motion="reduced"]
+  .desktop-popover[role="menu"][data-state="closed"]:has([data-chosen]),
+:root[data-motion="reduced"]
+  .desktop-popover[role="menu"]
+  [role^="menuitem"][data-chosen] {
+  animation: none;
+}

@@ -49,6 +49,7 @@ the Interactive macOS policy, local timing logs, and deferred follow-up work.
 | [0007 — Authentication API readiness](done/0007-authentication-delivery.md) | Existing APIs verified, durable lost-response retry tested, registry/gateway bounds measured, retention recorded |
 | [0010 — Local authentication](done/0010-local-authentication.md) | Owner bootstrap/recovery, scoped tokens, SDK/CLI, and mandatory gateway authorization |
 | [0013 — Files by path](done/0013-files-by-path-not-by-payload.md) | Host file picker, a path attachment on the wire, a `resource_link` in the prompt, and its audit record |
+| [238 — Desktop workspace frontend](done/238-desktop-workspace-frontend.md) | Frontend only: a `workspace` vertical for the desktop window — pure pane layouts, a `WorkspaceSource` port with an in-memory adapter, a desktop store, shared components behind both layouts (plus Classic), a Settings catalogue, the Agents overview, and an icon provider mirroring nessa_ui's contract. Remaining (the record's own list): the gateway's `WorkspaceSource` ([#248](https://github.com/nessalabs/nessa-agent/issues/248)); nessa_ui's icon contract and an access-mode icon slot ([nessa_ui#101](https://github.com/nessalabs/nessa_ui/issues/101)); the in-memory audit's same-tick ordering ([#249](https://github.com/nessalabs/nessa-agent/issues/249)); a watch on the drop's commit frame under load ([#250](https://github.com/nessalabs/nessa-agent/issues/250)) |
 
 ## Todo — implementation priority
 

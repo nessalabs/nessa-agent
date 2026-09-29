@@ -1,0 +1,198 @@
+/*
+ * The quick switcher: a frosted field and its results over a dimmed window.
+ * The overlay fades its colour, not its opacity: an opacity below 1 would make
+ * it the switcher's backdrop root and switch the switcher's blur off.
+ */
+.workspace-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  padding: 14vh 16px 16px;
+  background: rgb(0 0 0 / 22%);
+  animation: workspace-dim var(--desktop-base) ease both;
+}
+
+html:not(.dark) .workspace-overlay {
+  background: rgb(0 0 0 / 7%);
+}
+
+@keyframes workspace-dim {
+  from {
+    background-color: transparent;
+  }
+}
+
+.workspace-switcher {
+  display: flex;
+  width: min(620px, 100%);
+  max-height: min(500px, 100%);
+  align-self: flex-start;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--desktop-radius-xl);
+  background: color-mix(in oklab, var(--popover) 80%, transparent);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 15%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 7%, transparent),
+    0 40px 100px -30px rgb(0 0 0 / 75%),
+    0 8px 24px -10px rgb(0 0 0 / 45%);
+  animation: workspace-switcher-in var(--desktop-slow) var(--desktop-settle) both;
+}
+
+@keyframes workspace-switcher-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-4px);
+  }
+}
+
+html:not(.dark) .workspace-switcher {
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 12%, transparent),
+    0 40px 100px -30px rgb(0 0 0 / 30%),
+    0 8px 24px -10px rgb(0 0 0 / 14%);
+}
+
+.workspace-switcher-field {
+  display: flex;
+  height: 56px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px 0 20px;
+  border-bottom: 0.5px solid color-mix(in oklab, var(--foreground) 9%, transparent);
+}
+
+.workspace-switcher-field > svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  stroke-width: 1.6;
+  color: var(--desktop-faint);
+}
+
+.workspace-switcher-field input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--desktop-text-title);
+  letter-spacing: -0.012em;
+}
+
+.workspace-switcher-field input::placeholder {
+  color: var(--desktop-fainter);
+}
+
+.workspace-results {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  /* A row scrolled into view clears the field above it, never tucks under it. */
+  scroll-padding-block: 6px;
+  scrollbar-width: thin;
+}
+
+/* Rows in the menus' own type: 13px words, quiet trailing detail, a soft rounded highlight. */
+.workspace-results-group {
+  padding: 8px 10px 3px;
+  color: color-mix(in oklab, var(--foreground) 50%, transparent);
+  font: 600 11px / 16px var(--nessa-font-sans);
+  letter-spacing: 0.01em;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.workspace-result {
+  position: relative;
+  display: grid;
+  min-height: 30px;
+  grid-template-columns: 16px minmax(0, max-content) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font: 400 13px / 16px var(--nessa-font-sans);
+  cursor: default;
+}
+
+.workspace-result > .workspace-status {
+  justify-self: center;
+}
+
+.workspace-result[aria-selected="true"] {
+  background: var(--desktop-selected);
+}
+
+.workspace-result-icon {
+  display: grid;
+  place-items: center;
+  color: var(--desktop-muted);
+}
+
+.workspace-result-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.8;
+}
+
+.workspace-result-title {
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-result-meta {
+  overflow: hidden;
+  color: color-mix(in oklab, var(--foreground) 50%, transparent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-result-trail {
+  color: color-mix(in oklab, var(--foreground) 50%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* What ↩ does, on the chosen row only, in place of its trailing detail. */
+.workspace-result[aria-selected="true"] .workspace-result-trail {
+  visibility: hidden;
+}
+
+.workspace-result-keys {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in oklab, var(--foreground) 50%, transparent);
+  translate: 0 -50%;
+}
+
+.workspace-result-keys kbd {
+  font: inherit;
+  letter-spacing: 0.02em;
+}
+
+.workspace-hit {
+  background: none;
+  color: var(--foreground);
+  font-weight: 650;
+}
+
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .workspace-overlay,
+:root[data-motion="reduced"] .workspace-switcher {
+  animation: none;
+}

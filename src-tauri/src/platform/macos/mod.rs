@@ -19,9 +19,21 @@ pub struct Macos;
 impl Host for Macos {
     fn configure_app(&self, app: &AppHandle) {
         // No Dock icon and no app menu: Nessa lives in the menu bar and is
-        // summoned from there.
-        if let Err(error) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
-            eprintln!("[nessa] could not set accessory activation policy: {error}");
+        // summoned from there, until the desktop window opens.
+        self.set_dock_presence(app, false);
+    }
+
+    fn set_dock_presence(&self, app: &AppHandle, shown: bool) {
+        // Regular while the desktop window is open, so it has a Dock icon, an
+        // app menu, and a place in the app switcher, as Alfred's preferences
+        // window does; Accessory otherwise.
+        let policy = if shown {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        };
+        if let Err(error) = app.set_activation_policy(policy) {
+            eprintln!("[nessa] could not set the activation policy: {error}");
         }
     }
 

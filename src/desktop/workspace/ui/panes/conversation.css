@@ -1,0 +1,210 @@
+/*
+ * What a pane shows: a new session's home, and a conversation with its
+ * composer docked at the foot.
+ */
+.workspace-pane-home {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.workspace-pane-home > .desktop-home {
+  flex: 1;
+  min-height: 0;
+  padding-top: 0;
+}
+
+/*
+ * Sending the first message: the home lifts away over the conversation that
+ * replaces it. Its composer is already travelling as the conversation's own.
+ */
+.workspace-pane-home[data-leaving] {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  pointer-events: none;
+}
+
+.workspace-pane-home[data-leaving] .desktop-composer {
+  visibility: hidden;
+}
+
+.workspace-pane-home[data-leaving] .desktop-header,
+.workspace-pane-home[data-leaving] .desktop-greeting {
+  animation: workspace-lift-away var(--desktop-slow) var(--desktop-out) both;
+}
+
+.workspace-pane-home[data-leaving] .desktop-greeting {
+  animation-delay: 30ms;
+}
+
+@keyframes workspace-lift-away {
+  to {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.985);
+  }
+}
+
+.workspace-conversation {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/* The composer sits at the foot of the pane, a little tighter than on home. */
+.workspace-dock {
+  width: 100%;
+  max-width: 752px;
+  flex: none;
+  margin: 0 auto;
+  padding: 0 16px 16px;
+}
+
+.workspace-dock .desktop-composer {
+  padding: 16px 12px 8px 16px;
+  border-radius: var(--desktop-radius-xl);
+}
+
+.workspace-dock .desktop-composer textarea {
+  min-height: 44px;
+  font-size: var(--desktop-text-read);
+}
+
+.workspace-dock .desktop-composer-row {
+  margin-left: -8px;
+  transition: opacity var(--desktop-base) ease;
+}
+
+/* A pane you are not in keeps its composer's choices, dimmed until you return. */
+.workspace-panes[data-multi] .workspace-pane:not([data-focused]) .desktop-composer-row {
+  opacity: 0.55;
+}
+
+/* A short, stacked pane keeps its room for the conversation: the composer starts a line shorter. */
+@container workspace-pane (max-height: 520px) {
+  .workspace-dock {
+    padding-bottom: 8px;
+  }
+
+  .workspace-dock .desktop-composer {
+    padding-top: 12px;
+  }
+
+  .workspace-dock .desktop-composer textarea {
+    min-height: 24px;
+  }
+}
+
+/*
+ * Shorter than the readable minimum (`paneLimits.minHeight`), which happens
+ * only when the window itself is too small for its panes: the composer keeps
+ * one line, its choices step aside and Send sits beside the field, so it
+ * stays whole and usable rather than clipped. The conversation gives up the
+ * room, not the composer.
+ */
+@container workspace-pane (max-height: 219px) {
+  .workspace-dock {
+    padding: 0 6px 6px;
+  }
+
+  .workspace-dock .desktop-composer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 4px 4px 12px;
+    border-radius: var(--desktop-radius-md);
+  }
+
+  .workspace-dock .desktop-composer-body {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .workspace-dock .desktop-composer textarea {
+    min-height: 20px;
+    max-height: 40px;
+    font-size: var(--desktop-text-body);
+  }
+
+  .workspace-dock .desktop-composer-row {
+    flex: none;
+    margin: 0;
+  }
+
+  .workspace-dock .desktop-composer-controls:not(:last-child),
+  .workspace-dock .desktop-composer-controls:last-child > :not(.desktop-send) {
+    display: none;
+  }
+
+  .workspace-conversation .workspace-transcript {
+    min-height: 0;
+  }
+}
+
+/* A narrow pane reads closer to its edges. */
+@container workspace-pane (max-width: 420px) {
+  .workspace-dock {
+    padding-inline: 8px;
+  }
+}
+
+/*
+ * In a narrow composer the choices step down, the least telling first: the
+ * chevrons go and the project shows as its icon; the model keeps its mark and
+ * a short name ("Opus 5", `shortModelName`), so two models still read apart,
+ * ending in an ellipsis where even that does not fit — and, narrowest, its
+ * mark alone. Each keeps its accessible name, and its menu still says
+ * everything.
+ */
+@container (max-width: 420px) {
+  .workspace-pane .desktop-chip > .desktop-chip-chevron,
+  .workspace-pane .desktop-chip-model > svg:last-child,
+  .workspace-pane .desktop-chip-project > span {
+    display: none;
+  }
+
+  .workspace-pane .desktop-chip-model > span:not([aria-hidden]):not(:first-child) {
+    display: none;
+  }
+
+  .workspace-pane .desktop-chip-model::after {
+    content: var(--desktop-model-short);
+  }
+
+  .workspace-pane .desktop-chip {
+    padding: 0 8px;
+  }
+}
+
+/*
+ * Narrower still, the model is its mark alone — its name is in its tooltip and
+ * menu — then the project goes; and where even the trailing controls fill the
+ * row, the model takes a line of its own above them rather than lie under
+ * them.
+ */
+@container (max-width: 200px) {
+  .workspace-pane .desktop-chip-model::after {
+    content: none;
+  }
+}
+
+@container (max-width: 180px) {
+  .workspace-pane .desktop-chip-project {
+    display: none;
+  }
+}
+
+@container (max-width: 150px) {
+  .workspace-pane .desktop-composer-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+}
+
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .workspace-pane-home[data-leaving] .desktop-header,
+:root[data-motion="reduced"] .workspace-pane-home[data-leaving] .desktop-greeting {
+  animation: none;
+}

@@ -42,7 +42,16 @@ src-tauri/src/
     application/          use cases + ports (traits) the use case needs
     adapters/             storage, OS, IPC command handlers, clock
     contracts/            what other contexts and the frontend may see
+verification/             scripts that drive real browsers against the running app
+  desktop/                the desktop window: CHECKLIST.md, scripts/, scripts/lib/
 ```
+
+`verification/` is not product code and not a CI gate: its scripts measure
+what a person sees in Chromium and WebKit (frames, rects, focus, what is
+painted under the window's controls), and hold the contracts listed in
+`verification/desktop/CHECKLIST.md`. The rule for when a UI change needs them
+is [browser verification for UI](../CODING_STANDARDS.md#browser-verification-for-ui);
+how the folder is laid out and run is [`verification/README.md`](../verification/README.md).
 
 The Tauri command layer is an **adapter**, not a home for logic. A
 `#[tauri::command]` function should read like: deserialise, call one use case,
@@ -202,6 +211,31 @@ writing the full defaults on first launch is buying.
   the exception, so tests do not pull the design system. Host subscriptions
   stay in adapters. See
   [adr/0002-conversation-vertical-and-gateway.md](adr/done/0002-conversation-vertical-and-gateway.md).
+- The desktop window's workspace is its own vertical, nested in the window:
+  `src/desktop/workspace/` with `model/` (index, conversations,
+  revisions, pane layout and sizing, drops, failures, retention, session
+  groups, the new-session lifecycle), `application/` (the `WorkspaceSource`
+  port and pure use cases over the workspace's state), `adapters/` (the Redux
+  slice, commands, effects, typed hooks and selectors in `store/`; the
+  in-memory source in `in-memory/`; motion, drag and drop, focus, the panes'
+  room, resizing, keys and the clock in `dom/`) and `ui/` (each component
+  once, and `layouts/` that only arrange them; `ui/overview/` the Agents
+  overview, with its rules in `model/overview/`), with
+  `testing.ts` the fake source and store its tests share. The
+  window has its own store (`src/desktop/store.ts`) and composition
+  (`src/desktop/dependencies.ts`). How the window's keys are matched and
+  written on this platform is the window's, not the workspace's:
+  `src/desktop/model/keyboard.ts`, with the platform read once in
+  `src/desktop/adapters/platform.ts`. Views select what they show — a pane its own
+  session, a row its own summary — and the architecture check refuses a view
+  that selects the whole workspace. Settings is `src/desktop/settings/`
+  (its map is `index.ts`), a typed catalogue (`model/`) rendered generically
+  (`ui/`). See
+  [adr/done/238-desktop-workspace-frontend.md](adr/done/238-desktop-workspace-frontend.md).
+- A preview offered under Settings › Advanced › Experimental is a window
+  preference that decides only whether the window offers a way in; the
+  feature itself lives in the vertical that owns it, as the Agents overview —
+  a preview once, always offered now — lives in the workspace.
 - Design-system components are consumed, not wrapped "just in case". A wrapper
   with no behaviour is a layer that only forwards.
 - Decisions live in `model/` and `application/` and are tested as plain
@@ -228,7 +262,9 @@ writing the full defaults on first launch is buying.
 
 Use the [typed DI foundation](design/dependency-injection.md). TypeScript constructs
 one dependency scope in `main.tsx`, injects effects into Redux thunks, and shares
-its session handle with the lifecycle. Rust composes `RuntimeDependencies` into
+its session handle with the lifecycle. The desktop window does the same in
+`src/desktop/main.tsx`, from `src/desktop/dependencies.ts`, for its own store.
+Rust composes `RuntimeDependencies` into
 `AppState`; application-owned traits define replaceable effects. Extend these
 patterns for actual backend integrations without adding a service locator.
 

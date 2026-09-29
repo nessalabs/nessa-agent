@@ -14,6 +14,7 @@ use tauri::{
 use std::io;
 
 use crate::composition::HostDependencies;
+use crate::desktop_window;
 use crate::host;
 use crate::panel;
 use crate::settings::SettingsStore;
@@ -70,7 +71,8 @@ fn toggle_quit_policy(settings: &dyn SettingsStore) -> io::Result<bool> {
 /// handed on: the menu's initial tick comes from it, and the menu-event handler
 /// captures it rather than reaching back through the app for what it needs.
 pub fn create(app: &AppHandle, deps: &HostDependencies) -> tauri::Result<()> {
-    let toggle = MenuItemBuilder::with_id("toggle", "Show Nessa").build(app)?;
+    let open_window = MenuItemBuilder::with_id("open-window", "Open Nessa").build(app)?;
+    let toggle = MenuItemBuilder::with_id("toggle", "Show Panel").build(app)?;
     let transparent = CheckMenuItemBuilder::with_id("surface", "Transparent")
         .checked(false)
         .build(app)?;
@@ -79,7 +81,7 @@ pub fn create(app: &AppHandle, deps: &HostDependencies) -> tauri::Result<()> {
             .checked(deps.settings.load().stop_agents_on_quit)
             .build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit Nessa").build(app)?;
-    let menu = MenuBuilder::new(app).items(&[&toggle, &transparent]);
+    let menu = MenuBuilder::new(app).items(&[&open_window, &toggle, &transparent]);
     #[cfg(debug_assertions)]
     let menu = menu.separator().text(SHOW_SETUP_ITEM, "Show setup again");
     let menu = menu.separator().items(&[&stop_agents, &quit]).build()?;
@@ -98,6 +100,7 @@ pub fn create(app: &AppHandle, deps: &HostDependencies) -> tauri::Result<()> {
         .on_menu_event(move |app, event| match event.id().as_ref() {
             // The tray is not teaching the shortcut, so it has no use for
             // which way the panel went.
+            "open-window" => desktop_window::open(app),
             "toggle" => {
                 panel::toggle(app);
             }

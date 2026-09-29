@@ -101,7 +101,7 @@ export function useComposer(
 
   /** Every expansion change the composer proposes, minus the ones we decline. */
   function changeExpanded(next: boolean, reason: PillComposerExpansionReason) {
-    if (takesExpansion(next, reason)) setExpanded(next)
+    if (takesExpansion(next, reason === "submit")) setExpanded(next)
   }
   function changeContent(content: ChatComposerContent) {
     chat.setDraft([
