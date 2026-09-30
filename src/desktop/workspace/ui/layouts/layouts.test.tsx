@@ -20,6 +20,7 @@ import {
 } from "../../adapters/store/commands"
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
 import { settle, shownBy, testStore } from "../../testing"
+import { paneItemOf } from "../../model/pane-item"
 import { SessionsInSidebar } from "./sessions-in-sidebar"
 import { workspaceShortcuts } from "./shortcuts"
 import { ThreeColumns } from "./three-columns"
@@ -315,6 +316,24 @@ describe("a widget over the panes keeps the sidebar's choice, and ⌘W closes it
       await act(async () => store.dispatch(openWidget({ widget: run, place: "window" })))
       await act(async () => press("showOverview"))
       expect(store.getState().workspace.content).toBe("agents")
+      await act(async () => root.unmount())
+    })
+})
+
+describe("a session's row carries its session to the panes by its pane item", () => {
+  for (const [name, Layout] of [
+    ["three columns", ThreeColumns],
+    ["sessions in the sidebar", SessionsInSidebar],
+  ] as const)
+    it(`in ${name}`, async () => {
+      const { root } = await render(Layout)
+      const carried = [...host.querySelectorAll("[data-drag-item]")].map((row) => ({
+        row: row.getAttribute("data-session-row"),
+        item: paneItemOf(row.getAttribute("data-drag-item") ?? ""),
+      }))
+      expect(carried.length).toBeGreaterThan(0)
+      for (const { row, item } of carried)
+        expect(item).toEqual({ kind: "session", sessionId: row })
       await act(async () => root.unmount())
     })
 })
