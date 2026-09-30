@@ -217,10 +217,12 @@ person's editor, or with no path the run's whole change; it answers `opened`, or
 `useOpenFile`, owns the table below — the latest request per target (a file's
 row, or the whole-change control) and the four seconds — and `ChangeView` takes
 its state and callbacks as props. Both it and the adapter's bound run on an
-injected timer, `after(ms, run) → cancel`, which composition provides beside the
-clock's `now` (#334 adds it; the clock port today can only read the time).
-Nothing is retried, and every call settles (the adapter answers `refused`,
-`unavailable`, when no answer comes in its bound):
+injected timer, `after(ms, run) → cancel`, the `Schedule` shape composition
+already builds for the in-memory workspace source (`dependencies.ts`), which
+#334 lifts into `WorkspaceDependencies` and `ClockProvider` beside `now`,
+overridable as `now` is — not a second timer. Nothing is retried, and every call
+settles (the adapter answers `refused`, `unavailable`, when no answer comes in
+its bound):
 
 | At a target | Event | Next | Shown |
 | --- | --- | --- | --- |
