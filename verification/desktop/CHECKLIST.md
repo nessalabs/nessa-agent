@@ -232,6 +232,26 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   sending, which moves the row from Needs you to Working and draws its pill
   anew, leaves the caret in that session's pill. _Check:_ `focus.mjs`
   (`focus-reply`, 1440 × 900 and 1000 × 700); unit test `overview.test.tsx`.
+- [ ] **Focus the overview loses, it gives back**: whatever takes the focused
+  element off the page, if only to put it back — its session changing group
+  (`focus-regroup-row`), the peek beneath its row going (`-peek`), its row
+  moved within its list (`focus-gives-back-moved`, which also holds the list
+  where the person scrolled it: focus is given back on the next frame,
+  without scrolling, and not over focus that landed elsewhere first; a moved
+  element that is still on the page gets focus itself, so a reply being
+  typed in a pill beneath a moved row keeps its caret: `-moved-pill`), the peek beside the list
+  going as the window narrows (`-beside`), Show All once nothing is left out
+  (`-show-all`), a count leaving the line (`responsive.mjs`,
+  `overview-counts`) — the keyboard goes to that session's row, or else the
+  current row, or the list, and the arrows walk it. Focus the person moved
+  with a press elsewhere stays where they put it, even when the element goes
+  in the same task (`focus-regroup-away`); a press that leaves focus where it
+  is (the titlebar's drag strip) changes nothing (`focus-regroup-held`). _Check:_ `focus.mjs`, as named;
+  unit test `overview.test.tsx`. Focus lost while the window is away
+  (another app, or tabbed out of the page) is given back when it returns,
+  unless the press that brings the window back puts it somewhere itself:
+  _check:_ manual, in the app (a headless page never loses the window), and
+  the unit test.
 - [ ] **The sidebar marks what is shown**: Agents while the overview is, a
   channel or session only while the panes are. _Check:_ manual.
 - [ ] **The header holds its place; only the list scrolls.** The title, its

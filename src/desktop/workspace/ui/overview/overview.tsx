@@ -2,7 +2,6 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -428,9 +427,127 @@ export function AgentsOverview({
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [dispatch])
-  // Escape in a pill, or a count the keyboard was on gone from the line: to
-  // the list, on the current row, or at its top where it lists none.
+  // Escape in a pill: to the list, on the current row, or at its top where
+  // it lists none.
   const leaveReply = useCallback(() => focusItem(currentNow.current), [focusItem])
+
+  // Focus the overview loses, it gives back — one rule, whatever lost it: a
+  // session changing group (its row drawn anew under another heading) or
+  // moving within one (a row reordered as its session streams), the peek
+  // beneath a row or beside the list going, a count leaving the line, Show
+  // All once nothing is left out. Each takes the focused element off the
+  // page, if only to put it back, and focus falls to the page's body, where
+  // no key is heard. It goes instead to that element's session's row (a row,
+  // or the peek beneath it) — or, the session gone from the list or the
+  // element no row's (a count, the peek beside the list, which shows the
+  // current session), to the current row, or the list where it lists none —
+  // on the frame after the change: a mutation is answered at the microtask
+  // after it, whoever made it, and focus lands once the page is laid out.
+  //
+  // Focus the person moves is theirs. A press anywhere but on the focused
+  // element that takes focus from it (a click on text) lets it go as focus
+  // leaves, so what follows in the same task does not take it back. Focus
+  // lost while the window is away (another app, or tabbed out of the page)
+  // is given back when the window has it again. Focus that has landed
+  // elsewhere (a reply pill drawn anew takes its caret itself) is left there.
+  const lastFocus = useRef<{ element: HTMLElement; sessionId: string | null } | null>(
+    null,
+  )
+  const orderNow = useRef(order)
+  orderNow.current = order
+  // Every press on the page, counted: one after focus is due back (the click
+  // that brings the window back, say) is the person choosing, and wins.
+  const presses = useRef(0)
+  const giveBack = useRef(() => {})
+  giveBack.current = () => {
+    const last = lastFocus.current
+    const focus = document.activeElement
+    if (last === null || (focus !== null && focus !== document.body)) return
+    // Away from the window (another app, or tabbed out of the page): due
+    // when it comes back, not now.
+    if (!document.hasFocus()) return
+    lastFocus.current = null
+    const { element, sessionId } = last
+    const pressed = presses.current
+    // On the next frame, once the page is laid out: WebKit scrolls an element
+    // focused while its layout is pending into view, `preventScroll` or not.
+    // Focus only — the list stays where the person has scrolled it, even as
+    // rows reorder under them; walking the list is what brings a row into
+    // view. Given only if nothing has taken focus meanwhile, and to the row
+    // the list holds then, after every change before the frame.
+    requestAnimationFrame(() => {
+      const focus = document.activeElement
+      if (presses.current !== pressed || (focus !== null && focus !== document.body))
+        return
+      const listed = sessionId !== null && orderNow.current.includes(sessionId)
+      // Moved, not taken away (a row, or a reply pill beneath it, reordered
+      // as sessions stream): focus goes back to the element itself, caret
+      // and all, so the key typed next lands where the one before did — if
+      // it can still take it; a button disabled as it acted cannot.
+      if (listed && element.isConnected) {
+        element.focus({ preventScroll: true })
+        if (document.activeElement === element) return
+      }
+      const id = listed ? sessionId : currentNow.current
+      const column = list.current
+      const item =
+        id === null
+          ? null
+          : column?.querySelector<HTMLElement>(`[data-overview-item="${CSS.escape(id)}"]`)
+      ;(item ?? column)?.focus({ preventScroll: true })
+    })
+  }
+  useEffect(() => {
+    const root = section.current
+    if (!root) return
+    const sessionOf = (element: HTMLElement) =>
+      element
+        .closest<HTMLElement>(".agents-row-item")
+        ?.querySelector<HTMLElement>("[data-overview-item]")?.dataset.overviewItem ?? null
+    const onFocusIn = (event: FocusEvent) => {
+      const element = event.target
+      lastFocus.current =
+        element instanceof HTMLElement && root.contains(element)
+          ? { element, sessionId: sessionOf(element) }
+          : null
+    }
+    // A press elsewhere is the person moving focus only if focus moves as
+    // part of that press. Focus moves as the default action of `mousedown` —
+    // for a mouse, and for the mouse events a touch or a pen sends as it
+    // lifts — so the press is taken at `mousedown`, and counts for that task
+    // only. A press that leaves focus where it is (the titlebar's drag strip,
+    // the edge strip, a scrollbar, a `mousedown` cancelled) changes nothing,
+    // and a row taken away while a press is held — Chromium tells it it is
+    // losing focus then too — arrives in a later task and is given back.
+    // Nothing waits on the release, which a native window drag may swallow.
+    let pressing = false
+    const onPress = (event: MouseEvent) => {
+      presses.current += 1
+      const last = lastFocus.current
+      pressing =
+        last !== null &&
+        !(event.target instanceof Node && last.element.contains(event.target))
+      if (pressing) window.setTimeout(() => (pressing = false), 0)
+    }
+    const onFocusOut = (event: FocusEvent) => {
+      if (pressing && lastFocus.current?.element === event.target)
+        lastFocus.current = null
+    }
+    const removals = new MutationObserver(() => giveBack.current())
+    removals.observe(root, { childList: true, subtree: true })
+    const onReturn = () => giveBack.current()
+    document.addEventListener("focusin", onFocusIn)
+    document.addEventListener("focusout", onFocusOut)
+    document.addEventListener("mousedown", onPress, true)
+    window.addEventListener("focus", onReturn)
+    return () => {
+      removals.disconnect()
+      document.removeEventListener("focusin", onFocusIn)
+      document.removeEventListener("focusout", onFocusOut)
+      document.removeEventListener("mousedown", onPress, true)
+      window.removeEventListener("focus", onReturn)
+    }
+  }, [])
 
   return (
     <ReplyCaret.Provider value={caret}>
@@ -449,12 +566,7 @@ export function AgentsOverview({
                 <h1>Agents</h1>
                 <FilterMenu filter={filter} onChange={setFilter} />
               </div>
-              <Counts
-                ready={ready}
-                glance={glance}
-                onToggle={toggleGroup}
-                onFocusGone={leaveReply}
-              />
+              <Counts ready={ready} glance={glance} onToggle={toggleGroup} />
             </header>
             <div className="agents-overview-scroll">
               <div
@@ -519,43 +631,19 @@ const everySession: AgentsFilter = { scope: "all", range: "any", tags: [] }
  *
  * A count goes from the line when its group has none the filter lets
  * through and is not shown alone — let go at nought, or emptied by the
- * source. When the keyboard was on it, it goes to the list (`onFocusGone`)
- * in the same frame, never left on the page's body, where no key is heard.
+ * source. When the keyboard was on it, the overview gives it back to the
+ * list on the next frame, as it does any focus it loses.
  */
 function Counts({
   ready,
   glance,
   onToggle,
-  onFocusGone,
 }: {
   ready: boolean
   glance: AgentsGlance
   onToggle: (group: AgentsGroup) => void
-  onFocusGone: () => void
 }) {
   const counts = glanceCounts(glance)
-  // The count the keyboard is on, followed by where focus arrives: a count
-  // taken from the page moves focus nowhere, so it is still named here.
-  const holding = useRef<string | null>(null)
-  useEffect(() => {
-    const onFocusIn = (event: FocusEvent) => {
-      holding.current =
-        event.target instanceof HTMLElement
-          ? (event.target.closest<HTMLElement>(".agents-overview-counts [data-group]")
-              ?.dataset.group ?? null)
-          : null
-    }
-    document.addEventListener("focusin", onFocusIn)
-    return () => document.removeEventListener("focusin", onFocusIn)
-  }, [])
-  // After every change to the line, before it is painted.
-  useLayoutEffect(() => {
-    const was = holding.current
-    if (was === null || (ready && counts.some((count) => count.group === was))) return
-    holding.current = null
-    const focus = document.activeElement
-    if (focus === null || focus === document.body) onFocusGone()
-  })
   if (!ready) return <p className="agents-overview-counts">{"\u00a0"}</p>
   if (counts.length === 0) return <p className="agents-overview-counts">{quietLine}</p>
   return (

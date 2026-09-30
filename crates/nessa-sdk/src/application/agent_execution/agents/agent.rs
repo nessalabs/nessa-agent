@@ -2,8 +2,8 @@
 
 use super::{
     attachment::{
-        AttachmentAuthorization, AttachmentFailureCode, AttachmentRequest, AttachmentStatus,
-        AttachmentWait,
+        AttachmentAuthorization, AttachmentFailureCode, AttachmentPhase, AttachmentRequest,
+        AttachmentStatus, AttachmentWait,
     },
     attachment_evidence::{
         AttachmentAttemptFailure, AttachmentEvidenceTransition, AttachmentFailureSource,
@@ -16,8 +16,8 @@ use crate::application::agent_execution::agents::{
 };
 use crate::application::agent_execution::executions::{
     limits::MAX_RETAINED_OUTPUT_EVENTS, AttachmentAuditCause, AttachmentAuditRecord,
-    AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord, ExecutionEvent, ExecutionRequest,
-    ExecutionUpdate,
+    AttachmentAuditStage, EffortChangeOutcome, EffortLevelChange, EffortLevelChangeRecord,
+    ExecutionAudit, ExecutionAuditRecord, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
 };
 use crate::application::agent_execution::hooks::{
     HookRegistration, InvocationContext, InvocationHook, InvocationHooks,
@@ -37,6 +37,7 @@ use crate::application::agent_execution::sessions::{
     AttachmentOpenFailureSource, InvocationCancellationEvent, ProviderContext, SessionManager,
     StorageError,
 };
+use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
 use crate::domain::{
     agent_execution::executions::ExecutionOutcome,
     effective_capabilities::value_objects::EffectiveCapabilities,
@@ -89,6 +90,10 @@ pub struct Agent {
 pub(super) struct Inner {
     pub(super) instance_id: String,
     pub(super) approval_mode: RwLock<Option<ApprovalMode>>,
+    /// A level verified by a live change, and the provider generation of the
+    /// attachment it was applied to. It is in force only while that
+    /// attachment is: any other opens at the provider's own level.
+    pub(super) live_effort_level: RwLock<Option<(u64, EffortLevel)>>,
     pub(super) provider: Arc<dyn AgentProvider>,
     capabilities: EffectiveCapabilities,
     pub(super) audit: Arc<dyn ExecutionAudit>,
@@ -144,6 +149,230 @@ impl Agent {
                 .write()
                 .expect("approval mode lock") = Some(mode);
         }
+        drop(permit);
+        drop(scheduler);
+        result
+    }
+    /// The reasoning effort level in force: the one last verified by a live
+    /// change on the current attachment, or else the provider's own
+    /// ([`AgentProvider::effort_level`]), which every new attachment opens
+    /// at — including while none is attached, so work admitted then names
+    /// the level the next attachment will run at. `None` means no level is
+    /// sent and the agent keeps its own default.
+    pub fn effort_level(&self) -> Option<EffortLevel> {
+        let live = self
+            .inner
+            .live_effort_level
+            .read()
+            .expect("effort level lock")
+            .clone();
+        match live {
+            Some((generation, level))
+                if self.inner.lifecycle.attached_generation() == Some(generation) =>
+            {
+                Some(level)
+            }
+            _ => self.inner.provider.effort_level(),
+        }
+    }
+    /// The reasoning effort levels a person can choose now, least effort
+    /// first: the model's catalogue levels
+    /// ([`EffectiveCapabilities::effort_levels`]) that the connected agent
+    /// also offers ([`OperationCapabilities::effort_levels`]), in catalogue
+    /// order. `None` before the connection is negotiated, while it is being
+    /// restored, and wherever the model, the binding or the agent offers no
+    /// level. Never a level the catalogue does not list.
+    pub fn effort_levels(&self) -> Option<EffortLevels> {
+        self.capabilities()
+            .effort_levels()?
+            .restricted_to(self.operation_capabilities().effort_levels())
+    }
+    /// Apply and verify a reasoning effort level on an attached, idle provider
+    /// generation, as [`Self::set_approval_mode`] does for a preset: the
+    /// scheduler lock excludes queued admission and dispatch until the agent's
+    /// answer is checked, and the level it reports back must be `level`.
+    ///
+    /// `actor` is the host-verified caller. A change that reaches the agent is
+    /// audited twice through this Agent's audit sink
+    /// ([`EffortLevelChange`](crate::application::agent_execution::executions::EffortLevelChange)):
+    /// as requested before anything is sent, and as applied, refused or failed
+    /// after. Success is reported only once both are recorded. The change runs
+    /// to its settlement on a task of its own: dropping this future does not
+    /// leave a request without its outcome. Every later
+    /// admission records the level in force
+    /// ([`QueueAdmissionRecord::effort_level`](crate::application::agent_execution::executions::QueueAdmissionRecord::effort_level)).
+    ///
+    /// # Errors
+    ///
+    /// Nothing is sent, and nothing is recorded, on the first three:
+    /// - [`AgentError::Busy`] with [`ProviderSessionState::Usable`] while an
+    ///   invocation is queued or running.
+    /// - [`AgentError::AttachmentUnavailable`] while no attachment is usable,
+    ///   or one is being restored and its offered levels are not known yet
+    ///   ([`AttachmentPhase::Starting`], [`ProviderSessionState::Usable`]).
+    /// - [`AgentError::InvalidInput`] with [`ProviderSessionState::Usable`]
+    ///   when `level` is not one of [`Self::effort_levels`].
+    ///
+    /// And once the change is under way:
+    /// - The audit sink's error with [`ProviderSessionState::Usable`] when the
+    ///   request cannot be recorded; nothing is sent.
+    /// - The connection's refusal ([`AgentError::Busy`] with a permission still
+    ///   open, say) with [`ProviderSessionState::Usable`], recorded as refused;
+    ///   nothing was sent.
+    /// - The agent's failure with explicit session status when the change
+    ///   fails or cannot be verified; the previous level stays in force, and
+    ///   the uncertain generation must be retired before another turn. If the
+    ///   settlement cannot be recorded either, both are returned, in that
+    ///   order, as [`AgentError::MultipleOperationFailures`].
+    /// - [`AgentError::Closed`] with [`ProviderSessionState::CleanupRequired`]
+    ///   when the Agent is closing, or its attachment is replaced, before or
+    ///   while the change is under way.
+    /// - [`AgentError::SubmissionUnresolved`] with
+    ///   [`ProviderSessionState::CleanupRequired`] if the task that owns the
+    ///   change panics or is cancelled (the runtime shutting down): whether it
+    ///   reached the agent is not known. A sink that panics has not recorded,
+    ///   and is reported as [`AgentError::AuditFailure`]; a backend that
+    ///   panics is a failed change.
+    /// - The audit sink's error with [`ProviderSessionState::CleanupRequired`]
+    ///   when the agent verified the change but it cannot be recorded: the
+    ///   level is in force, and no turn may run under it unrecorded.
+    pub async fn set_effort_level(
+        &self,
+        level: EffortLevel,
+        actor: ActionContext,
+    ) -> ProviderOperationResult<()> {
+        // Owned by a task of its own, not by the caller: once the request is
+        // recorded, its settlement is recorded and applied to this Agent and
+        // its connection whether or not the caller still waits.
+        let agent = self.clone();
+        tokio::spawn(async move { agent.change_effort_level(level, actor).await })
+            .await
+            .unwrap_or_else(|_| {
+                // Panicked or cancelled: whether it reached the agent is not known.
+                Err(ProviderOperationFailure::new(
+                    AgentError::SubmissionUnresolved,
+                    ProviderSessionState::CleanupRequired,
+                ))
+            })
+    }
+    async fn change_effort_level(
+        &self,
+        level: EffortLevel,
+        actor: ActionContext,
+    ) -> ProviderOperationResult<()> {
+        let scheduler = self.inner.scheduler.lock().await;
+        if !scheduler.is_idle() || self.inner.lifecycle.active().is_some() {
+            return Err(ProviderOperationFailure::new(
+                AgentError::Busy,
+                ProviderSessionState::Usable,
+            ));
+        }
+        // Nothing attached is nothing to clean up: this attempt revoked no
+        // admission. Any other refusal here is the agent closing.
+        let unavailable = |error: AgentError| {
+            let state = if matches!(error, AgentError::AttachmentUnavailable(_)) {
+                ProviderSessionState::Usable
+            } else {
+                ProviderSessionState::CleanupRequired
+            };
+            ProviderOperationFailure::new(error, state)
+        };
+        let permit = self.inner.lifecycle.accept_control().map_err(unavailable)?;
+        let attached = self
+            .inner
+            .lifecycle
+            .attached_provider(&permit)
+            .map_err(unavailable)?;
+        // Attached, but what the agent offers is not known until the
+        // connection is negotiated again (a restore in progress): not yet.
+        if !self.operation_capabilities().negotiated() {
+            return Err(ProviderOperationFailure::new(
+                AgentError::AttachmentUnavailable(AttachmentPhase::Starting),
+                ProviderSessionState::Usable,
+            ));
+        }
+        if !self
+            .effort_levels()
+            .is_some_and(|offered| offered.contains(&level))
+        {
+            return Err(ProviderOperationFailure::new(
+                AgentError::InvalidInput(format!(
+                    "effort level {} is not offered by this agent",
+                    level.as_str()
+                )),
+                ProviderSessionState::Usable,
+            ));
+        }
+        let change = EffortLevelChange::new(
+            self.inner.manager.id().clone(),
+            format!(
+                "{}:{}",
+                self.inner.instance_id,
+                permit.provider_generation()
+            ),
+            actor,
+            self.effort_level(),
+            level.clone(),
+        );
+        let record = |change: EffortLevelChangeRecord| {
+            self.inner
+                .lifecycle
+                .record_attachment_audit(ExecutionAuditRecord::EffortLevelChanged(change))
+        };
+        record(change.requested())
+            .await
+            .map_err(|error| ProviderOperationFailure::new(error, ProviderSessionState::Usable))?;
+        // Interruptible by close, and a failure that leaves the connection
+        // uncertain retires this generation, as for any provider control.
+        let sent = self
+            .inner
+            .lifecycle
+            .run_control_observed(&permit, attached.session.set_effort_level(level.clone()))
+            .await;
+        let result = match sent {
+            Ok(()) => {
+                *self
+                    .inner
+                    .live_effort_level
+                    .write()
+                    .expect("effort level lock") = Some((permit.provider_generation(), level));
+                record(change.settled(EffortChangeOutcome::Applied))
+                    .await
+                    .map_err(|error| {
+                        // In force and unrecorded: no turn may run under it.
+                        self.inner
+                            .lifecycle
+                            .record_control_state(&permit, &ProviderSessionState::CleanupRequired);
+                        ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+                    })
+            }
+            Err(failure) => {
+                // The backend's contract: Busy and Unsupported are refusals
+                // made before anything is sent. Anything else may have been.
+                let unsent = matches!(
+                    failure.error(),
+                    AgentError::Busy | AgentError::Unsupported(_)
+                ) && failure.session_state() == &ProviderSessionState::Usable;
+                let outcome = if unsent {
+                    EffortChangeOutcome::Refused
+                } else {
+                    EffortChangeOutcome::Failed
+                };
+                Err(match record(change.settled(outcome)).await {
+                    Ok(()) => failure,
+                    Err(audit) => {
+                        let (error, state) = failure.into_parts();
+                        ProviderOperationFailure::new(
+                            AgentError::MultipleOperationFailures {
+                                first_error: Box::new(error),
+                                subsequent_error: Box::new(audit),
+                            },
+                            state,
+                        )
+                    }
+                })
+            }
+        };
         drop(permit);
         drop(scheduler);
         result
@@ -222,6 +451,7 @@ impl Agent {
             inner: Arc::new(Inner {
                 instance_id: uuid::Uuid::new_v4().to_string(),
                 approval_mode: RwLock::new(provider.approval_mode()),
+                live_effort_level: RwLock::new(None),
                 provider,
                 capabilities,
                 audit,

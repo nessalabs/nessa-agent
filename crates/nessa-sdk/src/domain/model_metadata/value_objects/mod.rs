@@ -5,7 +5,8 @@
 //! ```text
 //! identity.rs      ModelProvider + ModelKey (provider + model ID)
 //! capabilities.rs  Modalities + ModelFeatures
-//! reasoning.rs     EffortLevel + EffortLevels (a provider's own names, in its order)
+//! reasoning.rs     EffortLevel + EffortLevels (a provider's own names, in its order),
+//!                  OfferedEffortLevels (those a connected agent also offers)
 //! description.rs   ModelDescription (uses common Date)
 //! image_input.rs   ImageInputLimits, ImageInputViolation (uses common ImageMediaType)
 //!                         |
@@ -24,4 +25,4 @@ pub use capabilities::{Modalities, ModelFeatures};
 pub use description::ModelDescription;
 pub use identity::{ModelKey, ModelProvider};
 pub use image_input::{ImageInputLimits, ImageInputViolation};
-pub use reasoning::{EffortLevel, EffortLevels};
+pub use reasoning::{EffortLevel, EffortLevels, OfferedEffortLevels};

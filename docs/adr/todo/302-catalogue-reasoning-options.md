@@ -28,9 +28,10 @@ kept until the catalogue carried them.
   real model today.
 - Fast mode is speed, not effort (ADR 238), and a binding may be unable to turn
   it on even where the model has it.
-- Every binding declares reasoning unsupported today: none sends an effort level
-  to its agent. An ACP agent can advertise its own level option at runtime
-  (Codex's `reasoning_effort` session config option).
+- When this record was accepted, every binding declared reasoning unsupported:
+  none sent an effort level to its agent. An ACP agent advertises its own level
+  option at runtime, a session config option of category `thought_level`
+  (Claude's `effort`, Codex's `reasoning_effort`).
 
 ## Decision
 
@@ -63,12 +64,12 @@ desktop's ranking of names is used only to carry a choice to another model.
 | `null` | either | none; `Reasoning` unsupported | chip disabled |
 | `{ "effortLevels": [] }` | yes | none; `Reasoning` supported | chip disabled |
 | `{ "effortLevels": [a, b, …] }` | yes | `[a, b, …]`, in order | those levels |
-| any | no (every binding today) | none; `Reasoning` unsupported | still reads the catalogue |
+| any | no (OpenCode) | none; `Reasoning` unsupported | still reads the catalogue |
 
 | Model `fastMode` | Binding fast mode | Effective `FastMode` | Desktop |
 | --- | --- | --- | --- |
 | false | either | unsupported | no Fast toggle |
-| true | no (every binding today) | unsupported | Fast toggle |
+| true | no (every binding) | unsupported | Fast toggle |
 | true | yes | supported | Fast toggle |
 
 The desktop's last column reads the catalogue, not the effective snapshot,
@@ -77,14 +78,71 @@ because nothing yet sends its choice to an agent. Each row has a test:
 `restrictions_only_remove_features_for_every_boolean_combination`, and the
 catalogue-driven `thinkingLevelsFor` and `responsive.mjs` checks.
 
-**Runtime narrowing.** The catalogue is the published ceiling, as with the
-context window. When a binding reads a level option its agent advertises, that
-option narrows the effective levels and never widens them. The effective levels
-are the catalogue's levels the agent also offers, matched by exact name and
-kept in catalogue order. An agent's level the catalogue does not list is not
-offered, and no match leaves no levels. This change builds none of it: it needs
-a binding that sends an effort level, which none does yet, so it is follow-up
-work, tracked in [#310](https://github.com/nessalabs/nessa-agent/issues/310).
+**Runtime narrowing** ([#310](https://github.com/nessalabs/nessa-agent/issues/310)).
+The catalogue is the published ceiling, as with the context window. The level
+option an agent advertises — its `thought_level` config option, found by that
+category whatever the agent calls it — narrows the levels and never widens
+them: the offered levels are the catalogue's levels the agent also lists,
+matched by exact name and kept in catalogue order. A level the catalogue does
+not list is not offered (Claude's own `default`, Codex's `ultra`), and no match,
+or no option (Claude on Haiku 4.5), leaves none.
+
+The offered levels are a negotiated fact of the connection, not part of
+`EffectiveCapabilities`. The snapshot is immutable and fixed before a session
+opens, and Codex lists its option only once its model is selected, so the
+levels are read from the final configuration response and published with the
+other negotiated facts, as `ProviderOperationCapabilities::effort_levels`. They
+are held as positions in the model's catalogue list (`OfferedEffortLevels`),
+which keeps that type `Copy` and makes widening unrepresentable.
+`Agent::effort_levels` reads them back as levels.
+
+The Claude and Codex bindings run reasoning and send a level: selected on open
+(`with_effort_level`, a catalogue level) or while idle
+(`Agent::set_effort_level`, an offered level), with `session/set_config_option`
+after the model and before the mode, and verified against the level the agent
+reports back. With none selected nothing is sent and the agent keeps its own
+default. Only an option under the id the binding sends to counts as offering
+levels. The OpenCode binding does not send one, and no binding sends fast mode:
+no agent advertises it through ACP.
+
+Which level is in force (`Agent::effort_level`) has one owner and three states:
+
+| Attachment | A live change verified on it | Level in force |
+| --- | --- | --- |
+| none, or one starting | — | the binding's (every new attachment opens at it) |
+| usable | none | the binding's |
+| usable | yes | the last one verified |
+
+A connection the same attachment restores selects its last verified level
+again (the session factory keeps it), so it stays the same attachment here. A
+change is refused, with nothing sent, while a turn is queued or running
+(`Busy`), while nothing is attached or what the agent offers is not negotiated
+yet (`AttachmentUnavailable`), and for a level not offered (`InvalidInput`).
+A change that gets past those checks is caller-attributed
+(`set_effort_level(level, actor)`) and audited twice from one
+`EffortLevelChange`: as requested before anything is sent, then as how it
+settled. Success is reported only once both are recorded. The change runs to
+its settlement on a task of its own, so a caller that stops waiting cannot
+leave a request without its outcome. It goes through the same control path and
+audit delivery as the Agent's other provider controls: close interrupts it, a
+failure that leaves the connection uncertain retires the generation, and a sink
+or backend that panics is a failure, not a crash:
+
+| Step | Outcome | Returned | Level in force |
+| --- | --- | --- | --- |
+| request recorded | sink fails or panics | the audit error, session usable, nothing sent | unchanged |
+| agent verifies | applied recorded | success | new |
+| agent verifies | applied cannot be recorded | the audit error; the generation is retired | new |
+| connection refuses unsent (`Busy` with a permission open, or `Unsupported`) | refused recorded | its error, session usable | unchanged |
+| agent fails or is unverified | failed recorded | the agent's error, cleanup required | unchanged |
+| refused or failed | settlement cannot be recorded | both errors, in order | unchanged |
+| its task panics or is cancelled | — | unresolved, cleanup required | not known |
+
+Each queued admission records the level in force when it was admitted. A turn
+still queued when its attachment is replaced starts on the new one, at that
+attachment's level, which its admission record does not name; approval mode
+has the same gap, and one answer for both is
+[#313](https://github.com/nessalabs/nessa-agent/issues/313).
 
 ## Alternatives considered
 
@@ -99,8 +157,11 @@ work, tracked in [#310](https://github.com/nessalabs/nessa-agent/issues/310).
 - **An optional `reasoning` key, where a missing key means `null`.** It lost
   because a forgotten key would silently turn a reasoning model into one that
   does not reason.
-- **Narrow by the agent's advertised options now.** Deferred, because no binding
-  applies a level to narrow.
+- **Narrow by the agent's advertised options when the catalogue landed.**
+  Deferred then, because no binding applied a level to narrow; built in #310.
+- **Offered levels inside `EffectiveCapabilities`.** It lost because that
+  snapshot is fixed before the agent answers, and a second snapshot after
+  negotiation would be two sources of the same fact.
 
 ## Consequences
 
@@ -115,6 +176,10 @@ work, tracked in [#310](https://github.com/nessalabs/nessa-agent/issues/310).
 - Ultra appears on no model until a provider publishes a level past `max`. The
   control's Ultra look is held by unit tests with a stand-in model, not by
   real data.
-- Watch for: a provider renaming levels, publishing a level past `max`, or a
-  binding starting to send effort. The last one is when runtime narrowing
-  above gets built.
+- Watch for: a provider renaming levels or publishing a level past `max`.
+  Codex 1.12 already offers `ultra` on gpt-6-astra and gpt-5.6-sol and no
+  `none` on the gpt-5.6 models, against what the catalogue records from the
+  provider pages; narrowing hides both differences until the catalogue is
+  checked again ([#312](https://github.com/nessalabs/nessa-agent/issues/312)).
+- Remaining: the server protocol and the desktop do not carry a chosen level
+  to an agent yet, and fast mode is sent by no binding.

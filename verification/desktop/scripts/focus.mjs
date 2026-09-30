@@ -13,7 +13,10 @@
  * straight after ↓ puts the caret in the reply pill of the row ↓ went to,
  * and what is typed at once lands there; sending, which moves that row from
  * Needs you to Working and draws its pill anew, leaves the caret in the
- * session's pill (focus-reply, at 1440 × 900 and 1000 × 700). Focus on the
+ * session's pill (focus-reply, at 1440 × 900 and 1000 × 700). The keyboard
+ * on a row whose session changes group follows it to its new row, and the
+ * arrows walk the list from there — from the peek beneath the row too — while
+ * focus the person took to the page stays there (focus-regroup-*). Focus on the
  * scene's Customize control in a new session's home stays there as the window
  * shortens and the home takes a small pane's shape, its header kept as a
  * band (focus-home-scene).
@@ -400,6 +403,282 @@ async function replyKeepsCaret(page) {
   return { trail, failures }
 }
 
+/** The heading of the group a session's row is listed under, or null where it is not listed. */
+const groupOf = (page, sessionId) =>
+  page.evaluate(
+    ([sel, id]) =>
+      document
+        .querySelector(
+          `${sel.overviewColumn} ${sel.overviewItem}[data-overview-item="${id}"]`,
+        )
+        ?.closest(sel.overviewGroup)
+        ?.querySelector("h2")
+        ?.textContent.trim() ?? null,
+    [css, sessionId],
+  )
+
+/**
+ * The keyboard on a row whose session changes group: a reply moves a request
+ * to Working, Escape puts the keyboard back on its row, and the scripted turn
+ * ending moves it on again, its row drawn anew under another heading (#308).
+ * `from` is where the keyboard waits for that: on the row (`row`), where it
+ * must follow the session to its new row and the arrows walk the list from
+ * there; in the peek opened beneath the row (`peek`, where there is no room
+ * beside the list), where it must follow the session to its new row too; or
+ * nowhere, the person having clicked the page's title (`away`), where it must
+ * stay.
+ */
+async function regroupKeepsKeyboard(page, from) {
+  const failures = []
+  const trail = []
+  await page.keyboard.press(keys.overview)
+  await contentIs(page, content.overview)
+  await settled(page)
+  await frames(page, 4)
+  const on = (await state(page)).activeOverviewItem
+  if (!on) throw new CannotRun("the keyboard did not land on an overview row")
+  await page.keyboard.press(keys.reply)
+  await page.keyboard.type("status?")
+  await page.keyboard.press(keys.enter)
+  const working = await until(
+    page,
+    ([sel, id]) =>
+      document
+        .querySelector(
+          `${sel.overviewColumn} ${sel.overviewItem}[data-overview-item="${id}"]`,
+        )
+        ?.closest(sel.overviewGroup)
+        ?.querySelector("h2")
+        ?.textContent.trim() === "Working",
+    [css, on],
+    4000,
+  )
+  if (!working) throw new CannotRun(`${on} did not move to Working after the reply`)
+  await page.keyboard.press(keys.escape)
+  await settled(page)
+  await frames(page, 3)
+  const before = await state(page)
+  trail.push({ step: "replied, Escape", under: "Working", ...before })
+  if (before.content !== content.overview)
+    throw new CannotRun("Escape in the reply pill left the overview")
+  if (before.activeOverviewItem !== on)
+    throw new CannotRun(
+      `after Escape the keyboard is on ${before.active}, not ${on}'s row`,
+    )
+  if (from === "peek") {
+    // The reply opened this session's peek beneath its row; its story takes the keyboard.
+    const story = page.locator(
+      `${css.overviewItem}[data-overview-item="${on}"] ~ ${css.inlinePeek} ${css.peekStory}`,
+    )
+    if ((await story.count()) !== 1)
+      throw new CannotRun(`no peek is open beneath ${on}'s row`)
+    await story.focus()
+  } else if (from === "away") {
+    // A click on text: the keyboard goes to the page's body.
+    await page.locator(`${css.overviewTitle} h1`).click()
+  } else if (from === "held") {
+    // A press that leaves focus where it is, as the titlebar's drag strip
+    // does: a strip that cancels its mousedown, pressed.
+    await page.evaluate(() => {
+      const strip = document.createElement("div")
+      strip.id = "press-keeps-focus"
+      strip.style.cssText =
+        "position:fixed;left:0;right:0;bottom:0;height:24px;z-index:99999"
+      strip.addEventListener("mousedown", (event) => event.preventDefault())
+      document.body.append(strip)
+    })
+    // Pressed, and held until the row has moved on.
+    const strip = await page.locator("#press-keeps-focus").boundingBox()
+    await page.mouse.move(strip.x + strip.width / 2, strip.y + strip.height / 2)
+    await page.mouse.down()
+  }
+  await frames(page, 2)
+  const waiting = await page.evaluate(
+    ([story]) => {
+      const a = document.activeElement
+      return a === document.body ? "body" : a?.matches(story) ? "story" : "row"
+    },
+    [css.peekStory],
+  )
+  trail.push({ step: `waiting (${from})`, on: waiting })
+  if (waiting !== { row: "row", peek: "story", away: "body", held: "row" }[from])
+    throw new CannotRun(`the keyboard waits on ${waiting}, not where ${from} puts it`)
+  const moved = await until(
+    page,
+    ([sel, id]) =>
+      document
+        .querySelector(
+          `${sel.overviewColumn} ${sel.overviewItem}[data-overview-item="${id}"]`,
+        )
+        ?.closest(sel.overviewGroup)
+        ?.querySelector("h2")
+        ?.textContent.trim() !== "Working",
+    [css, on],
+    8000,
+  )
+  if (!moved) throw new CannotRun(`${on} never left Working: its turn did not end`)
+  await frames(page, 3)
+  if (from === "held") await page.mouse.up()
+  const after = await state(page)
+  const under = await groupOf(page, on)
+  trail.push({ step: "turn ended", under, ...after })
+  if (from === "away") {
+    const still = await page.evaluate(() => document.activeElement === document.body)
+    if (!still)
+      failures.push(
+        `${on} moved to ${under ?? "nowhere"} and took the keyboard back to ${after.active}; the person had left it`,
+      )
+    return { trail, failures }
+  }
+  if (after.activeOverviewItem !== on)
+    failures.push(
+      `${on} moved from Working to ${under ?? "nowhere"}; the keyboard is on ${after.active}, not its row`,
+    )
+  // And the arrows still walk the list: down, or up from the last row.
+  await page.keyboard.press(keys.down)
+  await frames(page, 3)
+  let walked = await state(page)
+  if (walked.activeOverviewItem === after.activeOverviewItem) {
+    await page.keyboard.press(keys.up)
+    await frames(page, 3)
+    walked = await state(page)
+  }
+  trail.push({ step: "↓ (or ↑)", ...walked })
+  if (walked.activeOverviewItem === null || walked.activeOverviewItem === on)
+    failures.push(`the arrows do not walk the list: the keyboard is on ${walked.active}`)
+  return { trail, failures }
+}
+
+/** What has focus: an overview row (its session), the page's body, or something else. */
+const focused = (page) =>
+  page.evaluate((item) => {
+    const a = document.activeElement
+    if (a === null || a === document.body) return { on: "body" }
+    const row = a.matches(item) ? a.dataset.overviewItem : null
+    return row ? { on: "row", row } : { on: `${a.tagName}.${a.className}` }
+  }, css.overviewItem)
+
+/**
+ * Focus the overview loses, it gives back, in cases the regroup checks do
+ * not reach (#311 review round 3): `moved`, the focused row's item moved
+ * elsewhere in its list in the page, as a list reorders its rows when a
+ * session streams past another (the engine's own handling of focus on a
+ * move, not a simulation of it); `beside`, focus in the peek beside the list
+ * when the window narrows and it goes; `show-all`, Show All from the
+ * keyboard, once nothing is left out and it goes. The keyboard must land on
+ * a row, and the arrows walk the list from there.
+ */
+async function givesBackLostFocus(page, cause) {
+  const failures = []
+  const trail = []
+  await page.keyboard.press(keys.overview)
+  await contentIs(page, content.overview)
+  await settled(page)
+  await frames(page, 4)
+  let scrolledTo = null
+  if (cause === "moved") {
+    // Scrolled away from the focused row, as when reading further down.
+    await page.setViewportSize({ width: 1440, height: 520 })
+    await frames(page, 3)
+    scrolledTo = await page.evaluate(() => {
+      const scroll = document.querySelector(".agents-overview-scroll")
+      if (!scroll || scroll.scrollHeight <= scroll.clientHeight) return null
+      scroll.scrollTop = scroll.scrollHeight
+      return scroll.scrollTop
+    })
+    const moved = await page.evaluate((item) => {
+      const rows = [...document.querySelectorAll(item)].filter(
+        (row) => row.closest("li")?.parentElement?.children.length > 1,
+      )
+      const row = rows.at(-1)
+      if (!row) return null
+      row.focus()
+      const li = row.closest("li")
+      li.parentElement.insertBefore(li, li.parentElement.firstElementChild)
+      return row.dataset.overviewItem
+    }, css.overviewItem)
+    if (!moved) throw new CannotRun("no list holds two rows to move one within")
+    trail.push({ step: "moved its row", row: moved })
+  } else if (cause === "moved-pill") {
+    // Typing a reply beneath a row (no room beside the list), and its row moved.
+    await page.setViewportSize({ width: 1000, height: 700 })
+    await frames(page, 3)
+    await page.keyboard.press(keys.reply)
+    await page.keyboard.type("half")
+    const moved = await page.evaluate((field) => {
+      const typing = document.activeElement
+      if (!typing?.matches(field)) return null
+      const li = typing.closest("li")
+      if (!li || li.parentElement.children.length < 2) return "alone"
+      const other = [...li.parentElement.children].find((child) => child !== li)
+      li.parentElement.insertBefore(
+        li,
+        li === li.parentElement.firstElementChild ? null : other,
+      )
+      return typing.closest("[data-reply-for]")?.dataset.replyFor ?? null
+    }, css.overviewReplyField)
+    if (moved === null) throw new CannotRun("⌘R did not put the caret in a reply pill")
+    if (moved === "alone") throw new CannotRun("the replied-to row is alone in its list")
+    await settled(page)
+    await frames(page, 3)
+    await page.keyboard.type("-way")
+    const caret = await replyCaret(page)
+    trail.push({ step: "moved the row being replied to", ...caret })
+    if (caret.session !== moved || caret.value !== "half-way")
+      failures.push(
+        `after its row moved, the caret is on ${caret.active ?? caret.session} holding "${caret.value ?? ""}", not ${moved}'s pill holding "half-way"`,
+      )
+    await page.keyboard.press(keys.escape)
+    return { trail, failures }
+  } else if (cause === "beside") {
+    const peek = page.locator(`${css.overviewPeek} button`).first()
+    if ((await peek.count()) === 0)
+      throw new CannotRun("no peek beside the list with a control")
+    await peek.focus()
+    await page.setViewportSize({ width: 700, height: 900 })
+    trail.push({ step: "narrowed to 700" })
+  } else {
+    // The overview's own, not the sidebar's.
+    const showAll = page
+      .locator(css.overviewColumn)
+      .getByRole("button", { name: "Show All" })
+    if ((await showAll.count()) === 0)
+      throw new CannotRun("the overview leaves nothing out")
+    await showAll.focus()
+    await page.keyboard.press(keys.enter)
+    trail.push({ step: "Show All" })
+  }
+  await settled(page)
+  await frames(page, 3)
+  const after = await focused(page)
+  trail.push({ step: "after", ...after })
+  if (cause === "moved") {
+    if (scrolledTo === null) throw new CannotRun("the list does not scroll at 1440 × 520")
+    const now = await page.evaluate(
+      () => document.querySelector(".agents-overview-scroll")?.scrollTop ?? null,
+    )
+    trail.push({ step: "scroll", was: scrolledTo, now })
+    if (now !== scrolledTo)
+      failures.push(`giving focus back scrolled the list from ${scrolledTo} to ${now}`)
+  }
+  if (after.on !== "row")
+    failures.push(`after ${cause}, the keyboard is on ${after.on}, not a row`)
+  else {
+    await page.keyboard.press(keys.down)
+    await frames(page, 3)
+    let walked = await focused(page)
+    if (walked.row === after.row) {
+      await page.keyboard.press(keys.up)
+      await frames(page, 3)
+      walked = await focused(page)
+    }
+    trail.push({ step: "↓ (or ↑)", ...walked })
+    if (walked.on !== "row" || walked.row === after.row)
+      failures.push(`the arrows do not walk the list after ${cause}: ${walked.on}`)
+  }
+  return { trail, failures }
+}
+
 const meta = {
   name: "focus",
   summary:
@@ -427,6 +706,19 @@ Steps (each asserts where the caret is afterwards):
   focus-answers-overview, -card: a held ⌘↩, and ⌘↩ twice 80ms apart, each answer one request;
   a held ↩ on a pane card's Allow Once, and a double click on Deny and on
   Always Allow, each answer one, and the held ↩ sends nothing typed
+  focus-regroup-row, -peek, -away: a reply moves a request to Working, Escape
+  puts the keyboard on its row, its turn ends and the row moves on → from the
+  row (1440 × 900) or from the peek beneath it (1000 × 700), the keyboard is
+  on that session's row, and ↓ walks the list from the row; after a click on
+  the title (away), it stays on the page's body; with a press held across
+  the move that leaves focus on the row (held, a strip that cancels its
+  mousedown), it follows the row
+  focus-gives-back-moved, -moved-pill, -beside, -show-all: the focused row's
+  item moved within its list, the list scrolled away (1440 × 520) and left
+  there; a reply being typed beneath a row (1000 × 700) whose row is moved,
+  the caret kept in the pill and the next keys in it; focus in the peek beside the list as the window narrows
+  to 700; Show All pressed once nothing is left out → the keyboard is on a
+  row, and ↓ walks the list
   focus-home-scene: Customize focused in a new session's home, the window
   shortened so the home takes a small pane's shape → focus stays on Customize`,
 }
@@ -549,6 +841,48 @@ await main(meta, async ({ options, rep, url }) => {
             await fresh.close()
           }
         })
+      for (const [from, width, height] of [
+        ["row", 1440, 900],
+        ["peek", 1000, 700],
+        ["away", 1440, 900],
+        ["held", 1440, 900],
+      ])
+        await attempt(
+          rep,
+          { name: `focus-regroup-${from}`, engine, layout, size: `${width}x${height}` },
+          async () => {
+            const fresh = await openPage(browser, { url, layout, width, height })
+            try {
+              await need(fresh.page, css.composer, "a composer")
+              await focusComposer(fresh.page)
+              const result = await regroupKeepsKeyboard(fresh.page, from)
+              return { ...result, failures: [...result.failures, ...fresh.errors] }
+            } finally {
+              await fresh.close()
+            }
+          },
+        )
+      for (const cause of ["moved", "moved-pill", "beside", "show-all"])
+        await attempt(
+          rep,
+          { name: `focus-gives-back-${cause}`, engine, layout },
+          async () => {
+            const fresh = await openPage(browser, {
+              url,
+              layout,
+              width: 1440,
+              height: 900,
+            })
+            try {
+              await need(fresh.page, css.composer, "a composer")
+              await focusComposer(fresh.page)
+              const result = await givesBackLostFocus(fresh.page, cause)
+              return { ...result, failures: [...result.failures, ...fresh.errors] }
+            } finally {
+              await fresh.close()
+            }
+          },
+        )
       await attempt(rep, { name: "focus-home-scene", engine, layout }, async () => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {

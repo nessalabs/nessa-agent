@@ -86,6 +86,7 @@ export const css = {
   overviewColumn: ".agents-overview-column", // class: the list the arrow keys walk
   overviewResting: ".agents-overview-resting", // class: a quiet line in the list ("Nothing needs you")
   inlinePeek: ".agents-inline-peek", // class: the peek opened beneath its row
+  overviewTitle: ".agents-overview-title", // class: the overview's heading and filter
   peekAsk: ".agents-peek-ask", // class: the request in full, after the story
 
   // The composer's thinking control (src/desktop/ui/thinking-control.tsx): a chip

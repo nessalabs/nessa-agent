@@ -190,6 +190,23 @@ async function press(
   })
 }
 
+/** The source moves a session on, as after an answer given elsewhere; a frame on. */
+const moveOn = async (
+  source: Awaited<ReturnType<typeof mount>>["source"],
+  sessionId: string,
+  title: string,
+  status: "running" | "idle",
+) => {
+  await act(async () => {
+    source.emit({
+      kind: "session",
+      session: summary(sessionId, "desktop", 600, status, { title, revision: 2 }),
+    })
+    await settle(10)
+  })
+  await act(async () => new Promise<void>((done) => requestAnimationFrame(() => done())))
+}
+
 describe("the agents overview", () => {
   it("leaves Needs you out while nothing waits, and says all is clear only when nothing is listed at all", async () => {
     const quiet = sampleIndex()
@@ -651,20 +668,6 @@ describe("the counts show one group alone", () => {
     expect(resting()).toEqual([])
   })
 
-  /** The source moves a session on, as after an answer given elsewhere. */
-  const moveOn = (
-    source: Awaited<ReturnType<typeof mount>>["source"],
-    sessionId: string,
-    title: string,
-    status: "running" | "idle",
-  ) =>
-    act(async () => {
-      source.emit({
-        kind: "session",
-        session: summary(sessionId, "desktop", 600, status, { title, revision: 2 }),
-      })
-      await settle(10)
-    })
   const headings = () =>
     [
       ...host.querySelectorAll(".agents-overview-column h2, .agents-overview-resting"),
@@ -713,6 +716,7 @@ describe("the counts show one group alone", () => {
     const nought = count("0 working") as HTMLButtonElement
     nought.focus()
     await act(async () => nought.click())
+    await nextFrame()
     expect(count("0 working")).toBeUndefined()
     expect(inList()).toBe(true)
     // And the arrows walk the list from there.
@@ -874,6 +878,457 @@ describe("the peek's story is bounded, and scrolls from the keyboard beneath its
     for (const key of ["ArrowDown", "ArrowUp", "End", "Home"]) {
       await press(story as HTMLElement, key)
       expect(document.activeElement).toBe(story)
+    }
+  })
+})
+
+describe("a row keeps the keyboard as its session changes group", () => {
+  // The window has focus, as the person's does; jsdom says it has only while
+  // an element does. A test that sends it away says so.
+  let windowFocused = true
+  beforeEach(() => {
+    windowFocused = true
+    vi.spyOn(document, "hasFocus").mockImplementation(() => windowFocused)
+  })
+  afterEach(() => vi.restoreAllMocks())
+  /** A click on plain text: a press, then focus to the page's body. */
+  const clickAway = (from: HTMLElement) => {
+    document.body.dispatchEvent(new Event("mousedown", { bubbles: true }))
+    from.blur()
+  }
+  const heading = (sessionId: string) =>
+    row(sessionId)?.closest(".agents-overview-group")?.querySelector("h2")?.textContent
+  it("follows its session to its new row, and the arrows walk the list from there", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const before = row("run") as HTMLElement
+    await act(async () => before.focus())
+    expect(heading("run")).toBe("Working")
+    // Its turn over, looked at: the session rests under Earlier, its row drawn anew.
+    await moveOn(source, "run", "Split panes", "idle")
+    const after = row("run")
+    expect(heading("run")).toBe("Earlier")
+    expect(after).not.toBe(before)
+    expect(document.activeElement).toBe(after)
+    await press(after as HTMLElement, "ArrowUp")
+    expect(document.activeElement).toBe(card("second"))
+  })
+
+  it("leaves the keyboard where it is when a row it is not on changes group", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const first = card("first") as HTMLElement
+    await act(async () => first.focus())
+    // Not looked at, it leaves Working (the filter may keep it out altogether).
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).not.toBe("Working")
+    expect(document.activeElement).toBe(first)
+  })
+
+  it("goes to the row the list then chooses when its session is removed, never to the page", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    await act(async () => {
+      source.emit({ kind: "session-removed", sessionId: "run", revision: 9 })
+      await settle(10)
+    })
+    await nextFrame()
+    expect(row("run")).toBeNull()
+    // The list keeps the first it lists chosen (`keepOverviewChoice`): its row, not the bare list.
+    expect(document.activeElement).toBe(card("first"))
+    await press(card("first") as HTMLElement, "ArrowDown")
+    expect(document.activeElement).toBe(card("second"))
+  })
+
+  it("follows its session from the peek beneath its row", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    const story = host.querySelector<HTMLElement>(
+      ".agents-inline-peek .agents-peek-story",
+    )
+    await act(async () => story?.focus())
+    expect(document.activeElement).toBe(story)
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).toBe("Earlier")
+    expect(document.activeElement).toBe(row("run"))
+  })
+
+  it("leaves the keyboard where the person put it: nowhere, after a click on text", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    await act(async () => {
+      clickAway(document.activeElement as HTMLElement)
+      await settle(1)
+    })
+    expect(document.activeElement).toBe(document.body)
+    // Another session moves on, and the row's own session changes group: neither takes it back.
+    await moveOn(source, "second", "Notarize", "running")
+    expect(document.activeElement).toBe(document.body)
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).toBe("Earlier")
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it("keeps it through a press elsewhere that leaves focus where it is", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    // The titlebar's drag strip, a scrollbar: pressed, and focus stays put.
+    await act(async () => {
+      document.body.dispatchEvent(new Event("mousedown", { bubbles: true }))
+      await settle(1)
+    })
+    expect(document.activeElement).toBe(row("run"))
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).toBe("Earlier")
+    expect(document.activeElement).toBe(row("run"))
+  })
+
+  it("gives it back when its row goes while a press elsewhere is still held", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    // Pressed and held on the drag strip; the press's own task ends.
+    await act(async () => {
+      document.body.dispatchEvent(new Event("mousedown", { bubbles: true }))
+      await new Promise((done) => setTimeout(done, 1))
+    })
+    // Taken away as Chromium does: told it loses focus, then removed.
+    await act(async () => {
+      row("run")?.dispatchEvent(new FocusEvent("focusout", { bubbles: true }))
+    })
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).toBe("Earlier")
+    expect(document.activeElement).toBe(row("run"))
+  })
+
+  it("lets it go on a tap on text, whose focus moves as the finger lifts", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const before = row("run") as HTMLElement
+    await act(async () => before.focus())
+    // Contact: a pointer press, in its own task, and nothing moves yet.
+    await act(async () => {
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }))
+      await new Promise((done) => setTimeout(done, 1))
+    })
+    // Lift: the mouse events a touch sends, and focus moves with them.
+    await act(async () => clickAway(before))
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).toBe("Earlier")
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it("leaves it there when a click away and the row's removal land in the same task", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const before = row("run") as HTMLElement
+    await act(async () => before.focus())
+    act(() => {
+      clickAway(before)
+      source.emit({
+        kind: "session",
+        session: summary("run", "desktop", 600, "idle", {
+          title: "Split panes",
+          revision: 2,
+        }),
+      })
+    })
+    await act(async () => settle(1))
+    expect(heading("run")).toBe("Earlier")
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it("chooses where focus goes on the frame it lands, after every change before it", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    // Its row drawn anew, then its session removed, within one frame.
+    await act(async () => {
+      source.emit({
+        kind: "session",
+        session: summary("run", "desktop", 600, "idle", {
+          title: "Split panes",
+          revision: 2,
+        }),
+      })
+      await settle(1)
+      source.emit({ kind: "session-removed", sessionId: "run", revision: 9 })
+      await settle(1)
+    })
+    await nextFrame()
+    expect(row("run")).toBeNull()
+    expect(document.activeElement).toBe(card("first"))
+  })
+
+  it("gives focus back to the reply pill itself when its row is moved, not to the row", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await moveOn(source, "second", "Notarize", "running")
+    await open()
+    // Beneath its row (no room beside the list): ⌘R, and a reply being typed.
+    await press(row("run") as HTMLElement, "KeyR", { command: true })
+    const field = host.querySelector<HTMLTextAreaElement>(
+      '[data-reply-for="run"] textarea',
+    )
+    expect(document.activeElement).toBe(field)
+    // The row is moved within its list — the element kept — and, as an engine
+    // does, focus falls to the page as it goes.
+    await act(async () => {
+      const item = row("run")?.closest("li") as HTMLElement
+      item.parentElement?.insertBefore(item, item.parentElement.firstElementChild)
+      field?.blur()
+      await settle(1)
+    })
+    await nextFrame()
+    expect(document.activeElement).toBe(field)
+  })
+
+  it("falls back to the row when the element it would focus can no longer take focus", async () => {
+    await mount()
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    const story = host.querySelector<HTMLElement>(
+      ".agents-inline-peek .agents-peek-story",
+    )
+    await act(async () => story?.focus())
+    expect(document.activeElement).toBe(story)
+    // No longer focusable as it acts — a button disabled, which a browser
+    // will not focus (jsdom would) — and focus falls to the page; the list
+    // changes.
+    await act(async () => {
+      if (!story) return
+      story.focus = () => {}
+      story.blur()
+      story.append(document.createElement("span"))
+      await settle(1)
+    })
+    await nextFrame()
+    expect(document.activeElement).toBe(row("run"))
+  })
+
+  it("leaves focus alone when the window comes back by a click", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    windowFocused = false
+    await moveOn(source, "run", "Split panes", "idle")
+    windowFocused = true
+    // The window returns, and the press that brought it back lands on text.
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"))
+      document.body.dispatchEvent(new Event("mousedown", { bubbles: true }))
+      await settle(1)
+    })
+    await nextFrame()
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it("does not take focus back from what took it before the frame", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    await act(async () => {
+      source.emit({
+        kind: "session",
+        session: summary("run", "desktop", 600, "idle", {
+          title: "Split panes",
+          revision: 2,
+        }),
+      })
+      await settle(10)
+      // Before the frame the give-back waits for, the keyboard goes elsewhere.
+      card("first")?.focus()
+    })
+    await nextFrame()
+    expect(document.activeElement).toBe(card("first"))
+  })
+
+  it("gives it back without scrolling the list the person is reading", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    for (let frame = 0; frame < 3; frame++) await nextFrame()
+    const scrolled = vi.spyOn(HTMLElement.prototype, "scrollIntoView")
+    const scrolledTo = vi.spyOn(HTMLElement.prototype, "scrollTo")
+    await moveOn(source, "run", "Split panes", "idle")
+    for (let frame = 0; frame < 3; frame++) await nextFrame()
+    expect(document.activeElement).toBe(row("run"))
+    expect(scrolled).not.toHaveBeenCalled()
+    expect(scrolledTo).not.toHaveBeenCalled()
+  })
+
+  it("keeps it on a row moved within its group", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    // Two working sessions: "second", the later, listed above "run".
+    await moveOn(source, "second", "Notarize", "running")
+    await open()
+    const orderIn = () =>
+      [...host.querySelectorAll<HTMLElement>(".agents-row")].map(
+        (each) => each.dataset.overviewItem,
+      )
+    expect(orderIn()).toEqual(["second", "run"])
+    const focused = row("second") as HTMLElement
+    await act(async () => focused.focus())
+    // "run" streams on and is now the latest: the rows swap, and the page
+    // moves "second" — the focused row, the same element — below it.
+    await act(async () => {
+      source.emit({
+        kind: "session",
+        session: summary("run", "desktop", 5000, "running", {
+          title: "Split panes",
+          revision: 3,
+        }),
+      })
+      await settle(10)
+    })
+    expect(orderIn()).toEqual(["run", "second"])
+    expect(row("second")).toBe(focused)
+    expect(document.activeElement).toBe(focused)
+  })
+
+  it("gives it back when the window returns, if it was lost while away", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    windowFocused = false
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(document.activeElement).toBe(document.body)
+    windowFocused = true
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"))
+      await settle(1)
+    })
+    await nextFrame()
+    expect(document.activeElement).toBe(row("run"))
+  })
+
+  it("follows the peek's own session from beneath its row, when the keyboard chose another", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    // Every session listed, so "run" stays listed once it rests.
+    store.dispatch(filterOverview({ filter: { scope: "all", range: "any", tags: [] } }))
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    // The keyboard moves on to another row; the peek stays open beneath "run".
+    await press(row("run") as HTMLElement, "ArrowUp")
+    expect(document.activeElement).toBe(card("second"))
+    const story = host.querySelector<HTMLElement>(
+      ".agents-inline-peek .agents-peek-story",
+    )
+    await act(async () => story?.focus())
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).not.toBe("Working")
+    expect(heading("run")).toBeDefined()
+    expect(document.activeElement).toBe(row("run"))
+  })
+
+  it("gives back focus whatever took the element away, without a render of its own", async () => {
+    await mount()
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    const story = host.querySelector<HTMLElement>(
+      ".agents-inline-peek .agents-peek-story",
+    )
+    await act(async () => story?.focus())
+    // Taken off the page by something other than the overview rendering.
+    await act(async () => {
+      story?.remove()
+      await settle(1)
+    })
+    await nextFrame()
+    expect(document.activeElement).toBe(row("run"))
+  })
+
+  it("gives back focus Show All had when it goes, once nothing is left out (#317)", async () => {
+    const { store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const showAll = button(host, "Show All")
+    if (!showAll) return expect(showAll).toBeDefined()
+    await act(async () => showAll.focus())
+    await act(async () => showAll.click())
+    await nextFrame()
+    expect(button(host, "Show All")).toBeUndefined()
+    expect(document.activeElement).toBe(card("first"))
+  })
+
+  it("leaves focus outside the overview where it is when a row goes", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const outside = document.createElement("button")
+    document.body.append(outside)
+    try {
+      await act(async () => row("run")?.focus())
+      await act(async () => outside.focus())
+      await moveOn(source, "run", "Split panes", "idle")
+      expect(document.activeElement).toBe(outside)
+    } finally {
+      outside.remove()
+    }
+  })
+
+  it("follows its session from the peek beside the list when the window narrows", async () => {
+    const observed: ((width: number) => void)[] = []
+    class Observer {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        if (target.classList.contains("workspace-overview-layer"))
+          observed.push((width) =>
+            this.callback(
+              [{ contentRect: { width } } as ResizeObserverEntry],
+              this as unknown as ResizeObserver,
+            ),
+          )
+      }
+      disconnect() {}
+    }
+    const was = globalThis.ResizeObserver
+    Object.assign(globalThis, { ResizeObserver: Observer })
+    try {
+      await mount()
+      await act(async () => observed.forEach((report) => report(1200)))
+      await open()
+      await act(async () => row("run")?.click())
+      for (
+        let wait = 0;
+        wait < 5 && !host.querySelector(".agents-overview-peek .agents-peek");
+        wait++
+      )
+        await nextFrame()
+      const inPeek = host.querySelector<HTMLElement>(".agents-overview-peek button")
+      await act(async () => inPeek?.focus())
+      expect(document.activeElement).toBe(inPeek)
+      // Narrowed: the peek beside the list goes.
+      await act(async () => observed.forEach((report) => report(600)))
+      await nextFrame()
+      expect(host.querySelector(".agents-overview-peek")).toBeNull()
+      expect(document.activeElement).toBe(row("run"))
+    } finally {
+      Object.assign(globalThis, { ResizeObserver: was })
     }
   })
 })

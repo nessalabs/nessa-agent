@@ -320,6 +320,17 @@ impl SessionLifecycle {
             AttachmentState::Failed { failure, .. } => AttachmentPhase::Failed(failure.code()),
         }
     }
+    /// The provider generation of the usable attachment, if there is one. A
+    /// replacement attachment always has a later one.
+    pub(super) fn attached_generation(&self) -> Option<u64> {
+        let state = self.state.lock().expect("session lifecycle");
+        match &state.attachment {
+            AttachmentState::Attached { .. } if state.provider_ready => {
+                Some(state.provider_generation.0)
+            }
+            _ => None,
+        }
+    }
     pub(super) fn operation_capabilities(&self) -> OperationCapabilities {
         let state = self.state.lock().expect("session lifecycle");
         match &state.attachment {

@@ -55,6 +55,12 @@ impl ProviderSession {
     ) -> super::ProviderOperationFuture<'_, ()> {
         self.backend.set_approval_mode(mode)
     }
+    pub(crate) fn set_effort_level(
+        &self,
+        level: crate::domain::model_metadata::value_objects::EffortLevel,
+    ) -> super::ProviderOperationFuture<'_, ()> {
+        self.backend.set_effort_level(level)
+    }
     /// Wrap `backend` with its provider context `id` and immutable model admission
     /// `capabilities`. Construction performs no I/O and opens no provider context.
     /// The provider backend retains the audit sink used for provider effects; the

@@ -765,6 +765,7 @@ impl Agent {
         let admission_generation =
             format!("{}:{}", self.inner.instance_id, work.provider_generation());
         let approval_mode = *self.inner.approval_mode.read().expect("approval mode lock");
+        let effort_level = self.effort_level();
         let receipt = Self::accept_pending(&mut scheduler, input, actor, index, kind, None, work);
         let audit_record = ExecutionAuditRecord::QueueAdmitted(
             QueueAdmissionRecord::submitted(
@@ -773,7 +774,8 @@ impl Agent {
                 mode,
                 audit_actor.clone(),
             )
-            .with_approval_context(approval_mode, admission_generation),
+            .with_approval_context(approval_mode, admission_generation)
+            .with_effort_level(effort_level),
         );
         let audit = match self
             .catch_scheduling_panic(async { self.inner.audit.record(audit_record).await })
@@ -1441,6 +1443,7 @@ impl Agent {
                         .provider_generation()
                 );
                 let approval_mode = *self.inner.approval_mode.read().expect("approval mode lock");
+                let effort_level = self.effort_level();
                 let receipt = Self::accept_pending(
                     &mut scheduler,
                     input,
@@ -1457,7 +1460,8 @@ impl Agent {
                         SubmissionMode::Steering,
                         audit_actor.clone(),
                     )
-                    .with_approval_context(approval_mode, admission_generation),
+                    .with_approval_context(approval_mode, admission_generation)
+                    .with_effort_level(effort_level),
                 );
                 let audit = match self
                     .catch_scheduling_panic(async { self.inner.audit.record(audit_record).await })

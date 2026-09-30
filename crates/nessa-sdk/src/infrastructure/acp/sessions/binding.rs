@@ -668,6 +668,51 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             outcome
         })
     }
+    fn set_effort_level(
+        &self,
+        level: crate::domain::model_metadata::value_objects::EffortLevel,
+    ) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async move {
+            let (sender, receiver) = oneshot::channel();
+            let commands = {
+                let generation = self.live_generation().await.map_err(|error| {
+                    ProviderOperationFailure::new(
+                        error.cause,
+                        ProviderSessionState::CleanupRequired,
+                    )
+                })?;
+                generation.commands.clone()
+            };
+            enqueue(&commands, Command::SetEffortLevel(level.clone(), sender)).map_err(
+                |error| ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired),
+            )?;
+            let outcome = receiver
+                .await
+                .unwrap_or(Err(AgentError::Closed))
+                .map_err(|error| {
+                    // Refused while a turn or a permission is open: nothing
+                    // was sent, and the session is as it was.
+                    let state = if matches!(error, AgentError::Busy) {
+                        ProviderSessionState::Usable
+                    } else {
+                        ProviderSessionState::CleanupRequired
+                    };
+                    ProviderOperationFailure::new(error, state)
+                });
+            // Verified: a restored connection selects the same level again.
+            if outcome.is_ok() {
+                self.factory
+                    .profile
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .change_effort_level(self.id.as_str(), level)
+                    .map_err(|error| {
+                        ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+                    })?;
+            }
+            outcome
+        })
+    }
     fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         *self.factory.operation_capabilities.borrow()
     }
@@ -1045,6 +1090,11 @@ pub(crate) struct DispatchedPrompt {
 pub(crate) enum Command {
     SetApprovalMode(
         crate::application::agent_execution::providers::ApprovalMode,
+        oneshot::Sender<Result<(), AgentError>>,
+    ),
+    /// A reasoning effort level the application has already checked is offered.
+    SetEffortLevel(
+        crate::domain::model_metadata::value_objects::EffortLevel,
         oneshot::Sender<Result<(), AgentError>>,
     ),
     /// Native steering for the identified execution.

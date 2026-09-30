@@ -46,6 +46,16 @@ impl ExecutionAudit for TracingExecutionAudit {
                         "queue reorder selected before local application"
                     );
                 }
+                ExecutionAuditRecord::EffortLevelChanged(record) => {
+                    tracing::info!(
+                        session_id = %record.session_id().as_str(),
+                        before = ?record.before().map(|level| level.as_str()),
+                        after = %record.after().as_str(),
+                        stage = ?record.stage(),
+                        actor = ?record.actor(),
+                        "reasoning effort change"
+                    );
+                }
                 ExecutionAuditRecord::Finished(record) => {
                     tracing::info!(session_id = %record.session_id().as_str(), execution_id = %record.execution_id().as_str(), result = ?record.result(), "execution released locally by runtime");
                 }

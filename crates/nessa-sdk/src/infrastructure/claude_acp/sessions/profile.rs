@@ -7,9 +7,10 @@ use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::prompts::SystemPrompt;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
+use crate::domain::model_metadata::value_objects::EffortLevel;
 use crate::infrastructure::acp::fields::{identifier, string};
 use crate::infrastructure::acp::profile::AcpProfile;
-use crate::infrastructure::acp::sessions::AcpConfig;
+use crate::infrastructure::acp::sessions::{thought_level, AcpConfig};
 use crate::infrastructure::json_rpc::protocol;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -51,18 +52,28 @@ pub(super) fn native_mode(mode: ApprovalMode) -> &'static str {
     }
 }
 
+/// The id Claude's adapter gives its `thought_level` option.
+const EFFORT: &str = "effort";
+
 /// The pinned Claude harness's configuration contract and built-in tool schemas.
 #[derive(Clone)]
 pub(super) struct ClaudeProfile {
     approval_mode: ApprovalMode,
+    /// `None` leaves the agent on its own default, and nothing is sent.
+    effort_level: Option<EffortLevel>,
     tool_names: HashMap<String, wire::ObservedTool>,
     system_prompt: Option<SystemPrompt>,
     mcp_prefixes: Vec<String>,
 }
 impl ClaudeProfile {
-    pub(super) fn new(system_prompt: Option<SystemPrompt>, approval_mode: ApprovalMode) -> Self {
+    pub(super) fn new(
+        system_prompt: Option<SystemPrompt>,
+        approval_mode: ApprovalMode,
+        effort_level: Option<EffortLevel>,
+    ) -> Self {
         Self {
             approval_mode,
+            effort_level,
             tool_names: HashMap::new(),
             system_prompt,
             mcp_prefixes: Vec::new(),
@@ -129,10 +140,15 @@ impl AcpProfile for ClaudeProfile {
     }
     fn session_configuration(&self, session_id: &str) -> Vec<Value> {
         // The model is pinned in the session parameters and verified with the
-        // session itself, so permission mode is the only selection left.
-        vec![
-            json!({"sessionId":session_id,"configId":"mode","value":native_mode(self.approval_mode)}),
-        ]
+        // session itself, so the effort level, where one is selected, and the
+        // permission mode are the selections left.
+        self.effort_level
+            .iter()
+            .map(|level| thought_level::selection(session_id, EFFORT, level))
+            .chain([
+                json!({"sessionId":session_id,"configId":"mode","value":native_mode(self.approval_mode)}),
+            ])
+            .collect()
     }
     fn change_approval_mode(
         &mut self,
@@ -141,6 +157,18 @@ impl AcpProfile for ClaudeProfile {
     ) -> Result<Value, AgentError> {
         self.approval_mode = mode;
         Ok(json!({"sessionId":session_id,"configId":"mode","value":native_mode(mode)}))
+    }
+    fn effort_option(&self) -> Option<&'static str> {
+        Some(EFFORT)
+    }
+    fn change_effort_level(
+        &mut self,
+        session_id: &str,
+        level: EffortLevel,
+    ) -> Result<Value, AgentError> {
+        let request = thought_level::selection(session_id, EFFORT, &level);
+        self.effort_level = Some(level);
+        Ok(request)
     }
     fn verify_session(
         &self,
@@ -152,7 +180,8 @@ impl AcpProfile for ClaudeProfile {
             result,
             capabilities.model().model_id(),
             configured.then_some(native_mode(self.approval_mode)),
-        )
+        )?;
+        thought_level::verify_selected(result, EFFORT, self.effort_level.as_ref(), configured)
     }
     fn verify_update(
         &self,
@@ -166,11 +195,19 @@ impl AcpProfile for ClaudeProfile {
             // provider is entitled to report its options before the selection
             // this binding asked for has been answered, and failing the session
             // over that would be failing it for being early.
-            "config_option_update" => configuration::verify_config(
-                update,
-                capabilities.model().model_id(),
-                configured.then_some(native_mode(self.approval_mode)),
-            ),
+            "config_option_update" => {
+                configuration::verify_config(
+                    update,
+                    capabilities.model().model_id(),
+                    configured.then_some(native_mode(self.approval_mode)),
+                )?;
+                thought_level::verify_selected(
+                    update,
+                    EFFORT,
+                    self.effort_level.as_ref(),
+                    configured,
+                )
+            }
             "current_mode_update" => {
                 let reported = string(update, "currentModeId")?;
                 let selected = native_mode(self.approval_mode);

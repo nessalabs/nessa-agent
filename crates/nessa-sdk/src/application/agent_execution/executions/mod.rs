@@ -25,7 +25,8 @@ mod question;
 mod request;
 pub use audit::{
     AdmissionAuditCause, AdmissionAuditStage, AttachmentAuditCause, AttachmentAuditRecord,
-    AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord, QueueAdmissionRecord,
+    AttachmentAuditStage, EffortChangeOutcome, EffortChangeStage, EffortLevelChange,
+    EffortLevelChangeRecord, ExecutionAudit, ExecutionAuditRecord, QueueAdmissionRecord,
     QueueOrderCause, QueueOrderRecord, QueueSettlementRecord, SessionClosureRecord,
     SteeringAcknowledgementRecord, SteeringAuditCause, SteeringAuditStage,
 };
