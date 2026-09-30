@@ -27,7 +27,7 @@ use crate::{
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
         DurableConversationFileLinkAudit, DurableConversationModeAudit, LocalConversationStore,
-        LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
+        LocalReceiverAuthority,
     },
 };
 use crate::{
@@ -39,6 +39,7 @@ use crate::{
     attachments::application::AttachmentService,
     browser_session::adapters::PersistentSessions,
     conversation::application::{ConversationRepository, ConversationService, ReceiverAuthority},
+    conversation::infrastructure::{NessaCatalogueReadSource, NessaRecordReadSource},
     core::RunError,
     env::Environment,
     product::{ProductDependencies, ProductRouteState},
