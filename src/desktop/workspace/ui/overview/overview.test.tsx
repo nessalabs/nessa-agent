@@ -892,6 +892,7 @@ describe("a row keeps the keyboard as its session changes group", () => {
   const clickAway = (from: HTMLElement) => {
     document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }))
     from.blur()
+    document.body.dispatchEvent(new Event("pointerup", { bubbles: true }))
   }
   const heading = (sessionId: string) =>
     row(sessionId)?.closest(".agents-overview-group")?.querySelector("h2")?.textContent
@@ -972,6 +973,23 @@ describe("a row keeps the keyboard as its session changes group", () => {
     await moveOn(source, "run", "Split panes", "idle")
     expect(heading("run")).toBe("Earlier")
     expect(document.activeElement).toBe(document.body)
+  })
+
+  it("keeps it through a press elsewhere that leaves focus where it is", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    // The titlebar's drag strip, a scrollbar: pressed, and focus stays put.
+    await act(async () => {
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }))
+      document.body.dispatchEvent(new Event("pointerup", { bubbles: true }))
+      await settle(1)
+    })
+    expect(document.activeElement).toBe(row("run"))
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).toBe("Earlier")
+    expect(document.activeElement).toBe(row("run"))
   })
 
   it("leaves it there when a click away and the row's removal land in the same tick", async () => {

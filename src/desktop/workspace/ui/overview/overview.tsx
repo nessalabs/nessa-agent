@@ -445,9 +445,8 @@ export function AgentsOverview({
   // after the change, whoever made it.
   //
   // Focus the person moves is theirs. A press anywhere but on the focused
-  // element (a click on text, the page, another app's window is not one)
-  // lets it go before focus moves, so what follows in the same tick does not
-  // take it back. Focus lost while the window is away (another app, or
+  // element that takes focus from it (a click on text) lets it go as focus
+  // leaves, so what follows in the same tick does not take it back. Focus lost while the window is away (another app, or
   // tabbed out of the page) is given back when the window has it again. Focus that has landed elsewhere (a reply pill drawn
   // anew takes its caret itself) is left there.
   const lastFocus = useRef<{ element: HTMLElement; sessionId: string | null } | null>(
@@ -484,21 +483,39 @@ export function AgentsOverview({
           ? { element, sessionId: sessionOf(element) }
           : null
     }
+    // A press elsewhere is the person moving focus only if focus does move
+    // while it is held: a press that leaves it where it is (the titlebar's
+    // drag strip, the edge strip, a scrollbar) changes nothing.
+    let pressing = false
     const onPress = (event: PointerEvent) => {
       const last = lastFocus.current
-      if (last && !(event.target instanceof Node && last.element.contains(event.target)))
+      pressing =
+        last !== null &&
+        !(event.target instanceof Node && last.element.contains(event.target))
+    }
+    const onRelease = () => {
+      pressing = false
+    }
+    const onFocusOut = (event: FocusEvent) => {
+      if (pressing && lastFocus.current?.element === event.target)
         lastFocus.current = null
     }
     const removals = new MutationObserver(() => giveBack.current())
     removals.observe(root, { childList: true, subtree: true })
     const onReturn = () => giveBack.current()
     document.addEventListener("focusin", onFocusIn)
+    document.addEventListener("focusout", onFocusOut)
     document.addEventListener("pointerdown", onPress, true)
+    document.addEventListener("pointerup", onRelease, true)
+    document.addEventListener("pointercancel", onRelease, true)
     window.addEventListener("focus", onReturn)
     return () => {
       removals.disconnect()
       document.removeEventListener("focusin", onFocusIn)
+      document.removeEventListener("focusout", onFocusOut)
       document.removeEventListener("pointerdown", onPress, true)
+      document.removeEventListener("pointerup", onRelease, true)
+      document.removeEventListener("pointercancel", onRelease, true)
       window.removeEventListener("focus", onReturn)
     }
   }, [])

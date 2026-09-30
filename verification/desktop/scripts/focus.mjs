@@ -476,6 +476,18 @@ async function regroupKeepsKeyboard(page, from) {
   } else if (from === "away") {
     // A click on text: the keyboard goes to the page's body.
     await page.locator(`${css.overviewTitle} h1`).click()
+  } else if (from === "held") {
+    // A press that leaves focus where it is, as the titlebar's drag strip
+    // does: a strip that cancels its mousedown, pressed.
+    await page.evaluate(() => {
+      const strip = document.createElement("div")
+      strip.id = "press-keeps-focus"
+      strip.style.cssText =
+        "position:fixed;left:0;right:0;bottom:0;height:24px;z-index:99999"
+      strip.addEventListener("mousedown", (event) => event.preventDefault())
+      document.body.append(strip)
+    })
+    await page.locator("#press-keeps-focus").click()
   }
   await frames(page, 2)
   const waiting = await page.evaluate(
@@ -486,7 +498,7 @@ async function regroupKeepsKeyboard(page, from) {
     [css.peekStory],
   )
   trail.push({ step: `waiting (${from})`, on: waiting })
-  if (waiting !== { row: "row", peek: "story", away: "body" }[from])
+  if (waiting !== { row: "row", peek: "story", away: "body", held: "row" }[from])
     throw new CannotRun(`the keyboard waits on ${waiting}, not where ${from} puts it`)
   const moved = await until(
     page,
@@ -644,7 +656,9 @@ Steps (each asserts where the caret is afterwards):
   puts the keyboard on its row, its turn ends and the row moves on → from the
   row (1440 × 900) or from the peek beneath it (1000 × 700), the keyboard is
   on that session's row, and ↓ walks the list from the row; after a click on
-  the title (away), it stays on the page's body
+  the title (away), it stays on the page's body; after a press that leaves
+  focus on the row (held, a strip that cancels its mousedown), it follows
+  the row
   focus-gives-back-moved, -beside, -show-all: the focused row's item moved
   within its list; focus in the peek beside the list as the window narrows
   to 700; Show All pressed once nothing is left out → the keyboard is on a
@@ -769,6 +783,7 @@ await main(meta, async ({ options, rep, url }) => {
         ["row", 1440, 900],
         ["peek", 1000, 700],
         ["away", 1440, 900],
+        ["held", 1440, 900],
       ])
         await attempt(
           rep,
