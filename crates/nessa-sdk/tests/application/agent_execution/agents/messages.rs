@@ -3,6 +3,7 @@
 use super::*;
 use nessa_sdk::application::dto::ImageInputLimitsDto;
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
+use nessa_sdk::domain::model_metadata::value_objects::OfferedEffortLevels;
 use std::sync::OnceLock;
 
 async fn submit(
@@ -327,6 +328,7 @@ const AGENT_TAKES_IMAGES: ProviderOperationCapabilities = ProviderOperationCapab
     permission_deferral: ProviderPermissionDeferralCapability::Unknown,
     elicitation_forwarding: ElicitationForwardingCapability::Unknown,
     supports_questions: false,
+    effort_levels: OfferedEffortLevels::NONE,
 };
 const AGENT_TAKES_NO_IMAGES: ProviderOperationCapabilities = ProviderOperationCapabilities {
     image_input: false,

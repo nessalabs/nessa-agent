@@ -168,13 +168,19 @@ the provider offers a faster output mode for the model. The SDK never maps one
 provider's levels onto another's. A surface that shows them on one control, such
 as the desktop's thinking slider, does that mapping itself. The snapshot keeps
 the levels only where the binding can run reasoning. Fast mode is a flag the
-binding intersects like tool use. No binding sends either to its agent today,
-so the effective snapshot offers neither. When a binding reads a level option
-its agent advertises in its session configuration, that option narrows the
-catalog's levels and never widens them. The result is the catalog's levels the
-agent also offers, matched by exact name and kept in catalog order. That
-narrowing, and a binding that sends a level or fast mode, are not implemented
-yet ([#310](https://github.com/nessalabs/nessa-agent/issues/310)).
+binding intersects like tool use; no binding sends it to its agent, so the
+effective snapshot never offers it.
+
+The Claude and Codex bindings send an effort level
+([#310](https://github.com/nessalabs/nessa-agent/issues/310)). The level
+option their agent advertises, found by the ACP config option category
+`thought_level`, narrows the catalog's levels and never widens them: the
+result is the catalog's levels the agent also offers, matched by exact name
+and kept in catalog order. It is a negotiated fact of the connection
+(`OperationCapabilities::effort_levels`), not part of the immutable snapshot,
+because it is only known once the session is configured. `Agent::effort_levels`
+reads it as levels. A level is selected on open (`with_effort_level`) or while
+idle (`Agent::set_effort_level`), and the agent's reported level must match it.
 
 | Feature family | Nessa representation to grow toward | What must stay honest |
 | --- | --- | --- |

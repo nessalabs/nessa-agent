@@ -13,9 +13,11 @@ use crate::domain::effective_capabilities::value_objects::{
     BindingRestrictions, EffectiveCapabilities,
 };
 use crate::domain::model_metadata::entities::ModelMetadata;
-use crate::domain::model_metadata::value_objects::{Modalities, ModelFeatures, ModelProvider};
+use crate::domain::model_metadata::value_objects::{
+    EffortLevel, Modalities, ModelFeatures, ModelProvider,
+};
 use crate::infrastructure::acp::sessions::{
-    binding as acp_binding, deletion::DeletionCleanups, identity, AcpConfig,
+    binding as acp_binding, deletion::DeletionCleanups, identity, thought_level, AcpConfig,
 };
 use crate::infrastructure::process::ProcessScope;
 use serde_json::json;
@@ -29,6 +31,7 @@ pub struct CodexAcpProvider {
     capabilities: EffectiveCapabilities,
     system_prompt: Option<SystemPrompt>,
     approval_mode: ApprovalMode,
+    effort_level: Option<EffortLevel>,
     audit: Arc<dyn ExecutionAudit>,
     /// Deletions this binding started that are still stopping their process.
     deletions: DeletionCleanups,
@@ -94,8 +97,8 @@ impl CodexAcpProvider {
         }
         let text = Modalities::new(true, false, false).expect("text modality is nonempty");
         let restrictions = BindingRestrictions::new(
-            // No effort level or fast mode is sent to the agent, so neither is offered.
-            ModelFeatures::new(text, text, true, false, false),
+            // An effort level is sent (`with_effort_level`); fast mode is not.
+            ModelFeatures::new(text, text, true, true, false),
             // Binding ceilings for this first profile, not model or Codex facts.
             // Codex owns its own context window and compacts it without telling
             // Nessa, and takes no per-turn output limit through ACP, so these
@@ -115,6 +118,7 @@ impl CodexAcpProvider {
             capabilities,
             system_prompt: None,
             approval_mode: ApprovalMode::Ask,
+            effort_level: None,
             audit,
             deletions: DeletionCleanups::default(),
         })
@@ -140,6 +144,25 @@ impl CodexAcpProvider {
             ));
         }
         self.approval_mode = mode;
+        Ok(self)
+    }
+    /// Select one reasoning effort level for every session this factory opens.
+    /// Without one, no level is sent and the agent keeps its own default.
+    ///
+    /// The level is sent once the session exists and read back from the
+    /// agent's answer; an agent that does not offer it refuses it, and the
+    /// session fails to open rather than run at another level. What the
+    /// connected agent offers is known only then
+    /// ([`OperationCapabilities::effort_levels`](crate::application::agent_execution::providers::OperationCapabilities::effort_levels)).
+    ///
+    /// # Errors
+    /// Returns [`AgentError::Unsupported`] when `level` is not one of the
+    /// model's catalogue levels this binding offers
+    /// ([`EffectiveCapabilities::effort_levels`]). The factory is unchanged on
+    /// failure.
+    pub fn with_effort_level(mut self, level: EffortLevel) -> Result<Self, AgentError> {
+        thought_level::selectable(&self.capabilities, &level)?;
+        self.effort_level = Some(level);
         Ok(self)
     }
     /// Borrow the configured override and its contribution provenance, or None
@@ -184,6 +207,9 @@ impl AgentProvider for CodexAcpProvider {
     fn approval_mode(&self) -> Option<ApprovalMode> {
         Some(self.approval_mode)
     }
+    fn effort_level(&self) -> Option<EffortLevel> {
+        self.effort_level.clone()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
             "codex-acp",
@@ -226,7 +252,11 @@ impl CodexAcpProvider {
     }
     /// The profile every connection this provider opens speaks.
     pub(super) fn profile(&self) -> CodexProfile {
-        CodexProfile::new(self.capabilities.model().model_id(), self.approval_mode)
+        CodexProfile::new(
+            self.capabilities.model().model_id(),
+            self.approval_mode,
+            self.effort_level.clone(),
+        )
     }
     /// How every connection this provider opens is launched.
     pub(super) fn process_factory(&self) -> acp_binding::ProcessFactory {

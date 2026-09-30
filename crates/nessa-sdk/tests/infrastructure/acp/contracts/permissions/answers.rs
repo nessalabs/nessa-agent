@@ -95,6 +95,9 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
                 panic!("resolved answer must not be relabelled on cleanup")
             }
             ExecutionAuditRecord::QueueReordered(_) => None,
+            ExecutionAuditRecord::EffortLevelChanged(_) => {
+                panic!("provider answer audit emitted an effort change")
+            }
             ExecutionAuditRecord::Attachment(_)
             | ExecutionAuditRecord::QueueAdmitted(_)
             | ExecutionAuditRecord::QueueSettled(_)

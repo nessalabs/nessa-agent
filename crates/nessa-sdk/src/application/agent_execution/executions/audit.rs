@@ -14,6 +14,7 @@ use crate::domain::agent_execution::executions::{
 use crate::domain::agent_execution::sessions::{
     AttachmentCause, ExecutionFinish, SessionClosure, SessionId,
 };
+use crate::domain::model_metadata::value_objects::EffortLevel;
 
 /// Audited lifecycle stage of one provider attachment attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -331,6 +332,7 @@ pub struct QueueAdmissionRecord {
     after: AdmissionAuditStage,
     cause: AdmissionAuditCause,
     approval_mode: Option<ApprovalMode>,
+    effort_level: Option<EffortLevel>,
     admission_generation: Option<String>,
 }
 impl QueueAdmissionRecord {
@@ -350,6 +352,7 @@ impl QueueAdmissionRecord {
             after: AdmissionAuditStage::Owned,
             cause: AdmissionAuditCause::Submitted,
             approval_mode: None,
+            effort_level: None,
             admission_generation: None,
         }
     }
@@ -364,9 +367,22 @@ impl QueueAdmissionRecord {
         self.admission_generation = Some(admission_generation);
         self
     }
+    /// Attach the reasoning effort level in force at admission.
+    pub(crate) fn with_effort_level(mut self, effort_level: Option<EffortLevel>) -> Self {
+        self.effort_level = effort_level;
+        self
+    }
     /// Provider approval preset at admission, when the binding publishes one.
     pub fn approval_mode(&self) -> Option<ApprovalMode> {
         self.approval_mode
+    }
+    /// Reasoning effort level in force when this input was admitted
+    /// ([`Agent::effort_level`](crate::application::agent_execution::agents::Agent::effort_level)).
+    /// `None` means no level is sent and the agent keeps its own default. A
+    /// turn still queued when its attachment is replaced starts at the new
+    /// attachment's level, which this record does not name.
+    pub fn effort_level(&self) -> Option<&EffortLevel> {
+        self.effort_level.as_ref()
     }
     /// Agent-instance and provider-generation correlation at admission.
     pub fn admission_generation(&self) -> Option<&str> {
@@ -452,6 +468,121 @@ impl QueueOrderRecord {
     }
 }
 
+/// Where a caller's live reasoning effort change stands: asked for before
+/// anything is sent, then settled once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffortChangeStage {
+    /// Recorded before the request is sent. Nothing has reached the agent.
+    Requested,
+    /// The agent reported the requested level back: it is the level in force.
+    Applied,
+    /// The connection refused the change without sending it (a turn or a
+    /// permission still open, or a backend that cannot change it live): the
+    /// level is unchanged and the attachment usable.
+    Refused,
+    /// The request failed or its answer could not be verified: the level in
+    /// force is not known to have changed, and the attachment must be retired.
+    Failed,
+}
+
+/// How a requested effort change settled; one of the non-requested stages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffortChangeOutcome {
+    /// See [`EffortChangeStage::Applied`].
+    Applied,
+    /// See [`EffortChangeStage::Refused`].
+    Refused,
+    /// See [`EffortChangeStage::Failed`].
+    Failed,
+}
+
+/// One caller's live change of the reasoning effort level on one attachment
+/// ([`Agent::set_effort_level`](crate::application::agent_execution::agents::Agent::set_effort_level)):
+/// the source of both records that describe it, so the two always agree on
+/// identity, caller and levels, and a record can only be the request or one
+/// settlement of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffortLevelChange {
+    session_id: SessionId,
+    attachment_generation: String,
+    actor: ActionContext,
+    before: Option<EffortLevel>,
+    after: EffortLevel,
+}
+impl EffortLevelChange {
+    /// A change of the local session `session_id`'s attachment
+    /// `attachment_generation` (Agent instance and provider generation, as on
+    /// [`QueueAdmissionRecord::admission_generation`]) from `before` — `None`
+    /// is the agent's own default — to `after`, asked for by `actor`.
+    pub fn new(
+        session_id: SessionId,
+        attachment_generation: String,
+        actor: ActionContext,
+        before: Option<EffortLevel>,
+        after: EffortLevel,
+    ) -> Self {
+        Self {
+            session_id,
+            attachment_generation,
+            actor,
+            before,
+            after,
+        }
+    }
+    /// The record made before the request is sent.
+    pub fn requested(&self) -> EffortLevelChangeRecord {
+        self.record(EffortChangeStage::Requested)
+    }
+    /// The record of how the request settled.
+    pub fn settled(&self, outcome: EffortChangeOutcome) -> EffortLevelChangeRecord {
+        self.record(match outcome {
+            EffortChangeOutcome::Applied => EffortChangeStage::Applied,
+            EffortChangeOutcome::Refused => EffortChangeStage::Refused,
+            EffortChangeOutcome::Failed => EffortChangeStage::Failed,
+        })
+    }
+    fn record(&self, stage: EffortChangeStage) -> EffortLevelChangeRecord {
+        EffortLevelChangeRecord {
+            change: self.clone(),
+            stage,
+        }
+    }
+}
+
+/// One of the two records of an [`EffortLevelChange`]: the request, or how it
+/// settled. Made only from the change, never assembled field by field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffortLevelChangeRecord {
+    change: EffortLevelChange,
+    stage: EffortChangeStage,
+}
+impl EffortLevelChangeRecord {
+    /// Local session whose attachment the change is for.
+    pub fn session_id(&self) -> &SessionId {
+        &self.change.session_id
+    }
+    /// Agent instance and provider generation of that attachment.
+    pub fn attachment_generation(&self) -> &str {
+        &self.change.attachment_generation
+    }
+    /// Host-verified caller attribution.
+    pub fn actor(&self) -> &ActionContext {
+        &self.change.actor
+    }
+    /// The level in force before the change; `None` is the agent's own default.
+    pub fn before(&self) -> Option<&EffortLevel> {
+        self.change.before.as_ref()
+    }
+    /// The level asked for.
+    pub fn after(&self) -> &EffortLevel {
+        &self.change.after
+    }
+    /// Where the change stands.
+    pub fn stage(&self) -> EffortChangeStage {
+        self.stage
+    }
+}
+
 /// The local live aggregate's closure, paired with its known initiator.
 /// This evidence does not claim provider deletion or completed process cleanup.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -492,6 +623,8 @@ pub enum ExecutionAuditRecord {
     SteeringAcknowledged(SteeringAcknowledgementRecord),
     /// Caller-attributed order selected and acknowledged before local application.
     QueueReordered(QueueOrderRecord),
+    /// A caller's live reasoning effort change, asked for and then settled.
+    EffortLevelChanged(EffortLevelChangeRecord),
     /// Once-only release of an active execution, including runs with no permissions.
     /// The runtime initiates this release after observing a terminal result; explicit
     /// shutdown attribution remains on the preceding SessionClosed record.

@@ -133,6 +133,38 @@ unavailable. Read the snapshot again after reconnection. SDK-owned queueing,
 next-invocation steering, and invocation hooks remain available independently of
 native provider support. No provider model/tool-step hooks are implied.
 
+### Reasoning effort
+
+The model's catalog effort levels (`agent.capabilities().effort_levels()`) are a
+ceiling. Once a connection is negotiated, `operation_capabilities().effort_levels()`
+says which of them the connected agent also offers: the levels its ACP
+`thought_level` config option lists, matched by exact name, in catalog order. It
+never names a level the catalog lacks, such as Claude's own `default` or a level
+Codex offers past `max`. `agent.effort_levels()` reads the two together as
+levels, and is `None` before negotiation, while restoring, and wherever the
+model, binding, or agent offers none (Claude on Haiku 4.5 lists no effort option).
+
+The Claude and Codex bindings select a level for every session they open with
+`with_effort_level`; without one nothing is sent and the agent keeps its own
+default. `agent.set_effort_level(level, actor)` changes it on an idle attachment,
+under the same scheduler lock as `set_approval_mode`. A change that reaches the
+agent is audited as requested, then applied, refused or failed
+(`ExecutionAuditRecord::EffortLevelChanged`, both records made from one
+`EffortLevelChange` with the caller and both levels), and succeeds only once
+both records are accepted. It runs to its settlement on a task of its own:
+dropping the caller's future does not leave a request without its outcome. Nothing is sent when a turn is
+queued or running (`Busy`), when nothing is attached or the connection is not
+negotiated yet (`AttachmentUnavailable`), or when the level is not offered
+(`InvalidInput`). The agent's reported level must match the one selected, at
+open and after a change; a mismatch is a protocol failure. A connection the same
+attachment restores selects the last verified level again; a new attachment
+starts at the binding's level. `agent.effort_level()` is the level in force: the
+last one verified on the current attachment, or else the binding's, including
+while detached. Every queued admission records it as of admission
+(`QueueAdmissionRecord::effort_level`); a turn still queued when its attachment
+is replaced runs at the new attachment's level
+([#313](https://github.com/nessalabs/nessa-agent/issues/313)).
+
 ## Session manager and storage
 
 `SessionId` is the local conversation key. `ExecutionSessionId` is the provider's

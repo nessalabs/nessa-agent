@@ -16,11 +16,13 @@
 //! Losing the final recovery handle transfers the resource to a physical cleanup
 //! supervisor, including when an opening caller disappears. `deletion` opens a
 //! connection of its own, never resuming the session it asks the agent to
-//! delete.
+//! delete. `thought_level` reads the reasoning effort option an agent
+//! advertises, whatever it calls it.
 pub(crate) mod binding;
 pub(crate) mod cleanup;
 mod config;
 pub(crate) mod configuration;
 pub(crate) mod deletion;
 pub(crate) mod identity;
+pub(crate) mod thought_level;
 pub use config::{AcpConfig, StdioMcpServer};

@@ -2,7 +2,8 @@
 use nessa_sdk::application::agent_execution::{
     executions::{
         AdmissionAuditCause, AdmissionAuditStage, AttachmentAuditCause, AttachmentAuditStage,
-        ExecutionAuditRecord, QueueOrderCause, SteeringAuditCause, SteeringAuditStage,
+        EffortChangeStage, ExecutionAuditRecord, QueueOrderCause, SteeringAuditCause,
+        SteeringAuditStage,
     },
     permissions::{
         ActionContext, ApprovalBasis, CancellationOrigin, PermissionAnswerDelivery,
@@ -46,6 +47,7 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                 "executionId":record.execution_id().as_str(),
                 "mode":submission_mode(record.mode()),
                 "approvalMode":record.approval_mode().map(|mode| mode.as_str()),
+                "effortLevel":record.effort_level().map(|level| level.as_str()),
                 "admissionGeneration":record.admission_generation(),
                 "before":admission_stage(record.before()),
                 "after":admission_stage(record.after()),
@@ -93,6 +95,23 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                 })).collect::<Vec<_>>(),
                 "after":change.after().iter().map(|id|id.as_str()).collect::<Vec<_>>(),
                 "cause":match record.cause() { QueueOrderCause::CallerRequested => "caller_requested" },
+                "actor":actor(record.actor()),
+            })
+        }
+        ExecutionAuditRecord::EffortLevelChanged(record) => {
+            json!({
+                "kind":"effort_level_change",
+                "sessionId":record.session_id().as_str(),
+                "attachmentGeneration":record.attachment_generation(),
+                "before":record.before().map(|level| level.as_str()),
+                "after":record.after().as_str(),
+                "stage":match record.stage() {
+                    EffortChangeStage::Requested => "requested",
+                    EffortChangeStage::Applied => "applied",
+                    EffortChangeStage::Refused => "refused",
+                    EffortChangeStage::Failed => "failed",
+                },
+                "cause":"caller_requested",
                 "actor":actor(record.actor()),
             })
         }

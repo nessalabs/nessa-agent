@@ -94,4 +94,67 @@ impl EffortLevels {
     pub fn levels(&self) -> &[EffortLevel] {
         &self.0
     }
+    /// Whether `level` is one of these.
+    pub fn contains(&self, level: &EffortLevel) -> bool {
+        self.0.contains(level)
+    }
+    /// Which of these levels an agent also offers, given the names it
+    /// `advertised` at runtime.
+    ///
+    /// The catalogue is the ceiling: a level is offered only when it is listed
+    /// here and advertised under exactly the same name. An advertised name
+    /// these levels do not list (a harness's own `default`, a level no provider
+    /// publishes) is ignored, so the result never widens what the catalogue
+    /// records. Order is not read from `advertised`: see
+    /// [`Self::restricted_to`].
+    pub fn offered_by<'a>(
+        &self,
+        advertised: impl IntoIterator<Item = &'a str>,
+    ) -> OfferedEffortLevels {
+        let advertised: HashSet<&str> = advertised.into_iter().collect();
+        let positions = self
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(_, level)| advertised.contains(level.as_str()))
+            .fold(0_u16, |positions, (index, _)| positions | 1 << index);
+        OfferedEffortLevels(positions)
+    }
+    /// The levels `offered` names, least effort first in this list's own
+    /// order; `None` when it names none of them.
+    ///
+    /// `offered` must come from [`Self::offered_by`] on these same levels. A
+    /// position past the end of this list names nothing and is ignored.
+    pub fn restricted_to(&self, offered: OfferedEffortLevels) -> Option<EffortLevels> {
+        let levels: Vec<EffortLevel> = self
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| offered.0 & (1 << index) != 0)
+            .map(|(_, level)| level.clone())
+            .collect();
+        (!levels.is_empty()).then_some(Self(levels))
+    }
+}
+
+// Offered levels are positions in one list, held as the bits of a u16.
+const _: () = assert!(EffortLevels::MAX_LEVELS <= u16::BITS as usize);
+
+/// Which of one model's catalogue effort levels its connected agent also
+/// offers: positions in that model's [`EffortLevels`], never names of its own.
+///
+/// A set of positions cannot hold a level the catalogue does not list, so what
+/// an agent advertises can narrow the catalogue's levels and never widen them.
+/// It is `Copy` so it can travel in the provider's negotiated operation facts;
+/// [`EffortLevels::restricted_to`] reads it back as levels. The default offers
+/// none, which is also what an agent with no effort option negotiates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OfferedEffortLevels(u16);
+impl OfferedEffortLevels {
+    /// No level offered, usable where [`Default`] is not (a `const`).
+    pub const NONE: Self = Self(0);
+    /// Whether no level is offered.
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
 }

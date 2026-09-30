@@ -7,6 +7,7 @@
 //!              speaking its own shapes
 //!           -> images (advertised prompt capability, byte source, content blocks)
 //!           -> deletion (a connection of its own: initialize, session/delete)
+//!           -> effort (a selected level sent and read back; offered levels narrowed)
 //! ```
 //! Arrows show which test layer exercises each feature.
 //! `live` is opt-in: it runs this Agent/session-storage path against an installed
@@ -18,6 +19,7 @@ mod audit;
 mod codex;
 mod configuration;
 mod deletion;
+mod effort;
 mod executions;
 mod identity;
 mod images;

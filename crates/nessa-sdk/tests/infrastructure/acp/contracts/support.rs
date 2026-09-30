@@ -112,7 +112,8 @@ impl ExecutionAudit for RecordingAudit {
                 ExecutionAuditRecord::Attachment(_)
                 | ExecutionAuditRecord::QueueAdmitted(_)
                 | ExecutionAuditRecord::QueueSettled(_)
-                | ExecutionAuditRecord::SteeringAcknowledged(_) => {}
+                | ExecutionAuditRecord::SteeringAcknowledged(_)
+                | ExecutionAuditRecord::EffortLevelChanged(_) => {}
                 ExecutionAuditRecord::ReviewDeclined(record) => {
                     self.declines.lock().unwrap().push(record)
                 }
