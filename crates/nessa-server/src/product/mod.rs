@@ -1,6 +1,7 @@
 //! Mandatory authenticated product WebSocket profile served at `/session`.
 //!
 //! `socket` owns authenticated receive admission and a separate bounded writer.
+//! Its queue/deadline ordering tests live in `tests/product/socket/writer.rs`.
 //! `record_read` owns the physical page's product JSON/base64 conversion and
 //! response mapping; `passive_read` owns the shared encoded byte ceiling. Conversation application and infrastructure own read
 //! authority and SDK source work; this module does not infer that authority.

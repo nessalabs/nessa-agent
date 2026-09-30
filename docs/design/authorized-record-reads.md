@@ -224,8 +224,16 @@ responses per socket, plus one small refusal slot; a record uses its own slot.
 The four global record permits cover source work and pending delivery together:
 transfer the permit to the encoded response, releasing only after both physical
 work and delivery/drop have ended. Thus at most 512 KiB of encoded record
-responses can be retained globally, apart from bounded codec scratch buffers. Priority is control, then ordinary,
-then record; a frame already in flight cannot be preempted on one WebSocket.
+responses can be retained globally, apart from bounded codec scratch buffers. Physical response priority is control, refusal, ordinary,
+then record. The writer observes the record lane independently of that priority,
+retaining at most its existing one-slot response locally. Its original absolute
+30-second encoded-response deadline governs queued delivery as well as physical
+record sending. The writer polls that deadline during selection and during a
+higher-priority send or close, including a record arriving after that write began.
+Expiry abandons the sink and drops delivery ownership; it does not interleave a
+second frame with an unfinished frame or extend the deadline by an ordinary write
+timeout. R46–R48 enforce these orderings. Physical source completion and joins
+retain their existing owner and are not inferred from delivery teardown.
 Bound total queued bytes by per-class slot count times its published response
 ceiling; reserve slots before admission and retain them until write/drop. Refusal
 traffic must not form another unbounded queue: when no refusal slot is available,
@@ -376,6 +384,9 @@ refusals. Amend this table before adding a newly discovered ordering.
 | R43 | Authority refresh or browser check stalls before source admission | Whole record phase deadline returns read_timeout; no source work is admitted afterward. `record_phase_deadline_includes_current_authority_before_source_admission` |
 | R44 | Encoder receives large base64 chunk followed by small JSON suffix | Retained writer allocation stays within the response cap; output is compacted before enqueue. No Vec growth beyond the advertised byte capacity. |
 | R45 | Authenticated separate receiver process submits a wrong receiver or stale epoch before discovery | Product replies with the corresponding typed refusal and no scope/head; the receiver creates no durable cache. A subsequent valid cold discovery still completes. `authenticated_product_processes_resume_download_after_lost_page_and_both_restarts` exercises the wire boundary; R39 application spies own the no-source-work assertion. |
+| R46 | Encoded record queued; control, refusal or ordinary responses remain continuously ready until its original absolute deadline | Writer observes expiry independently of physical response priority, abandons transport and drops the record slot/read lease; no late record frame. Global read capacity returns when no other work owns it. |
+| R47 | Record arrives while a higher-priority physical send or close is stalled beyond the record's remaining deadline | Writer observes arrival and expiry during that write, abandons the sink at the original record deadline without appending another frame; delivery teardown does not recreate or release unjoined source ownership. |
+| R48 | Pending record is not expired; higher-priority responses drain; Stop arrives during physical record send | Physical control/refusal/ordinary priority is preserved; valid record sends once and releases its slot/read lease. Existing actual Stop dispatch/effect remains independent of physical acknowledgement. |
 
 
 

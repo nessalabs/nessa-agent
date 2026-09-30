@@ -302,43 +302,78 @@ async fn write_authenticated<S>(
 ) where
     S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin,
 {
+    // Moving the record out of its lane observes its original deadline, not a
+    // physical-send priority change. Its slot still bounds queue + local state.
+    let mut pending_record: Option<QueuedResponse> = None;
     loop {
+        let deadline = queued_record_deadline(&pending_record);
         let next = tokio::select! {
             biased;
+            () = wait_for_record_deadline(deadline), if deadline.is_some() => break,
+            Some(response) = records.recv(), if pending_record.is_none() => {
+                pending_record = Some(response);
+                continue;
+            },
             Some(control) = controls.recv() => match control {
                 ControlOutput::Response(response) => Some(Ok(WriterResponse::Queued(response))),
                 ControlOutput::Close(reason) => Some(Err(reason)),
             },
             Some(response) = refusals.recv() => Some(Ok(WriterResponse::Refusal(Box::new(response)))),
             Some(response) = ordinary.recv() => Some(Ok(WriterResponse::Queued(Box::new(response)))),
-            Some(response) = records.recv() => Some(Ok(WriterResponse::Queued(Box::new(response)))),
+            () = std::future::ready(()), if pending_record.is_some() =>
+                Some(Ok(WriterResponse::Queued(Box::new(pending_record.take().expect("pending record selected"))))),
             else => None,
         };
-        match next {
-            Some(Ok(WriterResponse::Queued(response))) => {
-                let QueuedResponse {
-                    message,
-                    _slot,
-                    _record_work,
-                } = *response;
-                if send_queued(write_timeout, &mut sink, message)
-                    .await
-                    .is_err()
-                {
-                    break;
+        let writing = async {
+            match next {
+                Some(Ok(WriterResponse::Queued(response))) => {
+                    let QueuedResponse {
+                        message,
+                        _slot,
+                        _record_work,
+                    } = *response;
+                    send_queued(write_timeout, &mut sink, message).await.is_ok()
                 }
-            }
-            Some(Ok(WriterResponse::Refusal(message))) => {
-                if send(write_timeout, &mut sink, *message).await.is_err() {
-                    break;
+                Some(Ok(WriterResponse::Refusal(message))) => {
+                    send(write_timeout, &mut sink, *message).await.is_ok()
                 }
+                Some(Err(reason)) => {
+                    close_session(write_timeout, &mut sink, reason).await;
+                    false
+                }
+                None => false,
             }
-            Some(Err(reason)) => {
-                close_session(write_timeout, &mut sink, reason).await;
-                break;
+        };
+        tokio::pin!(writing);
+        loop {
+            let deadline = queued_record_deadline(&pending_record);
+            tokio::select! {
+                biased;
+                // Abandon this sink; a second frame must not follow a cancelled
+                // physical write. Also observe a record arriving during it.
+                () = wait_for_record_deadline(deadline), if deadline.is_some() => return,
+                Some(response) = records.recv(), if pending_record.is_none() =>
+                    pending_record = Some(response),
+                succeeded = &mut writing => {
+                    if !succeeded { return; }
+                    break;
+                },
             }
-            None => break,
         }
+    }
+}
+
+fn queued_record_deadline(response: &Option<QueuedResponse>) -> Option<Instant> {
+    match response.as_ref().map(|response| &response.message) {
+        Some(WireResponse::Record { deadline, .. }) => Some(*deadline),
+        Some(WireResponse::Ordinary(_)) | None => None,
+    }
+}
+
+async fn wait_for_record_deadline(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -1100,6 +1135,9 @@ mod tests {
         ReceiverReadScope, RecordReadFuture, RecordReadOperation, RecordReadResponse,
         RecordReadSource,
     };
+    mod writer {
+        include!("../../tests/product/socket/writer.rs");
+    }
     mod browser_sessions {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
