@@ -190,20 +190,22 @@ async function press(
   })
 }
 
-/** The source moves a session on, as after an answer given elsewhere. */
-const moveOn = (
+/** The source moves a session on, as after an answer given elsewhere; a frame on. */
+const moveOn = async (
   source: Awaited<ReturnType<typeof mount>>["source"],
   sessionId: string,
   title: string,
   status: "running" | "idle",
-) =>
-  act(async () => {
+) => {
+  await act(async () => {
     source.emit({
       kind: "session",
       session: summary(sessionId, "desktop", 600, status, { title, revision: 2 }),
     })
     await settle(10)
   })
+  await act(async () => new Promise<void>((done) => requestAnimationFrame(() => done())))
+}
 
 describe("the agents overview", () => {
   it("leaves Needs you out while nothing waits, and says all is clear only when nothing is listed at all", async () => {
@@ -714,6 +716,7 @@ describe("the counts show one group alone", () => {
     const nought = count("0 working") as HTMLButtonElement
     nought.focus()
     await act(async () => nought.click())
+    await nextFrame()
     expect(count("0 working")).toBeUndefined()
     expect(inList()).toBe(true)
     // And the arrows walk the list from there.
@@ -934,6 +937,7 @@ describe("a row keeps the keyboard as its session changes group", () => {
       source.emit({ kind: "session-removed", sessionId: "run", revision: 9 })
       await settle(10)
     })
+    await nextFrame()
     expect(row("run")).toBeNull()
     // The list keeps the first it lists chosen (`keepOverviewChoice`): its row, not the bare list.
     expect(document.activeElement).toBe(card("first"))
@@ -1032,6 +1036,27 @@ describe("a row keeps the keyboard as its session changes group", () => {
     expect(document.activeElement).toBe(document.body)
   })
 
+  it("does not take focus back from what took it before the frame", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    await act(async () => {
+      source.emit({
+        kind: "session",
+        session: summary("run", "desktop", 600, "idle", {
+          title: "Split panes",
+          revision: 2,
+        }),
+      })
+      await settle(10)
+      // Before the frame the give-back waits for, the keyboard goes elsewhere.
+      card("first")?.focus()
+    })
+    await nextFrame()
+    expect(document.activeElement).toBe(card("first"))
+  })
+
   it("gives it back without scrolling the list the person is reading", async () => {
     const { source, store } = await mount()
     store.dispatch(followWorkspace())
@@ -1090,6 +1115,7 @@ describe("a row keeps the keyboard as its session changes group", () => {
       window.dispatchEvent(new Event("focus"))
       await settle(1)
     })
+    await nextFrame()
     expect(document.activeElement).toBe(row("run"))
   })
 
@@ -1128,6 +1154,7 @@ describe("a row keeps the keyboard as its session changes group", () => {
       story?.remove()
       await settle(1)
     })
+    await nextFrame()
     expect(document.activeElement).toBe(row("run"))
   })
 
@@ -1139,6 +1166,7 @@ describe("a row keeps the keyboard as its session changes group", () => {
     if (!showAll) return expect(showAll).toBeDefined()
     await act(async () => showAll.focus())
     await act(async () => showAll.click())
+    await nextFrame()
     expect(button(host, "Show All")).toBeUndefined()
     expect(document.activeElement).toBe(card("first"))
   })
@@ -1192,6 +1220,7 @@ describe("a row keeps the keyboard as its session changes group", () => {
       expect(document.activeElement).toBe(inPeek)
       // Narrowed: the peek beside the list goes.
       await act(async () => observed.forEach((report) => report(600)))
+      await nextFrame()
       expect(host.querySelector(".agents-overview-peek")).toBeNull()
       expect(document.activeElement).toBe(row("run"))
     } finally {

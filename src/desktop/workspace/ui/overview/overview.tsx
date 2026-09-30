@@ -441,8 +441,8 @@ export function AgentsOverview({
   // or the peek beneath it) — or, the session gone from the list or the
   // element no row's (a count, the peek beside the list, which shows the
   // current session), to the current row, or the list where it lists none —
-  // before the frame is painted: a mutation is answered at the microtask
-  // after the change, whoever made it.
+  // on the frame after the change: a mutation is answered at the microtask
+  // after it, whoever made it, and focus lands once the page is laid out.
   //
   // Focus the person moves is theirs. A press anywhere but on the focused
   // element that takes focus from it (a click on text) lets it go as focus
@@ -467,22 +467,21 @@ export function AgentsOverview({
       last.sessionId !== null && orderNow.current.includes(last.sessionId)
         ? last.sessionId
         : currentNow.current
-    const column = list.current
-    // Focus only: the list stays where the person has scrolled it, even as
-    // rows reorder under them. Walking the list is what brings a row into view.
-    const item =
-      id === null
-        ? null
-        : column?.querySelector<HTMLElement>(`[data-overview-item="${CSS.escape(id)}"]`)
-    const scroll = column?.closest<HTMLElement>(".agents-overview-scroll")
-    const top = scroll?.scrollTop
-    ;(item ?? column)?.focus({ preventScroll: true })
-    // WebKit scrolls an element it has just re-laid out into view once
-    // focused, `preventScroll` or not; put the list back where it was.
-    if (scroll && top !== undefined)
-      requestAnimationFrame(() => {
-        if (scroll.scrollTop !== top) scroll.scrollTop = top
-      })
+    // On the next frame, once the page is laid out: WebKit scrolls an element
+    // focused while its layout is pending into view, `preventScroll` or not.
+    // Focus only — the list stays where the person has scrolled it, even as
+    // rows reorder under them; walking the list is what brings a row into
+    // view. Given only if nothing has taken focus meanwhile.
+    requestAnimationFrame(() => {
+      const focus = document.activeElement
+      if (focus !== null && focus !== document.body) return
+      const column = list.current
+      const item =
+        id === null
+          ? null
+          : column?.querySelector<HTMLElement>(`[data-overview-item="${CSS.escape(id)}"]`)
+      ;(item ?? column)?.focus({ preventScroll: true })
+    })
   }
   useEffect(() => {
     const root = section.current

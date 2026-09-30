@@ -236,7 +236,8 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   element off the page, if only to put it back — its session changing group
   (`focus-regroup-row`), the peek beneath its row going (`-peek`), its row
   moved within its list (`focus-gives-back-moved`, which also holds the list
-  where the person scrolled it: focus is given back without scrolling), the peek beside the list
+  where the person scrolled it: focus is given back on the next frame,
+  without scrolling, and not over focus that landed elsewhere first), the peek beside the list
   going as the window narrows (`-beside`), Show All once nothing is left out
   (`-show-all`), a count leaving the line (`responsive.mjs`,
   `overview-counts`) — the keyboard goes to that session's row, or else the
