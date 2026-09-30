@@ -14,6 +14,7 @@ use crate::application::agent_execution::{
         QuestionAnswer,
     },
 };
+use crate::domain::agent_execution::permissions::{PermissionAuthority, PermissionAuthorityError};
 use crate::domain::{
     agent_execution::{
         executions::ExecutionId, permissions::PermissionStateView, sessions::ExecutionSessionId,
@@ -49,6 +50,18 @@ pub struct ProviderSession {
     capabilities: EffectiveCapabilities,
 }
 impl ProviderSession {
+    pub(crate) fn permission_authority(
+        &self,
+    ) -> Result<Option<PermissionAuthority>, PermissionAuthorityError> {
+        let authority = self.backend.permission_authority()?;
+        if authority
+            .as_ref()
+            .is_some_and(|value| value.session_id() != self.id())
+        {
+            return Err(PermissionAuthorityError::IdentityMismatch);
+        }
+        Ok(authority)
+    }
     pub(crate) fn set_approval_mode(
         &self,
         mode: super::ApprovalMode,

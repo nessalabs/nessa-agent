@@ -27,7 +27,7 @@ use crate::application::agent_execution::agents::{
 };
 use crate::application::agent_execution::executions::{
     AdmittedQuestion, ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent,
-    ExecutionRequest, ExecutionUpdate,
+    ExecutionRequest, ExecutionUpdate, PermissionAuthoritySource,
 };
 
 use crate::application::agent_execution::permissions::{
@@ -307,6 +307,7 @@ struct Worker<P> {
     /// the published capability is this and `config.images` together.
     agent_accepts_images: bool,
     operation_capabilities: watch::Sender<ProviderOperationCapabilities>,
+    permission_authority: PermissionAuthoritySource,
     permissions: HashMap<PermissionId, RpcId>,
     /// One session identity claimed by advisory updates racing session startup.
     /// Advisory payloads are not retained and conflicting identities fail startup.
@@ -364,6 +365,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
     permission_sequence: Arc<AtomicU64>,
     question_sequence: Arc<AtomicU64>,
     operation_capabilities: watch::Sender<ProviderOperationCapabilities>,
+    permission_authority: PermissionAuthoritySource,
     recovery: Arc<ProcessCleanup>,
 ) {
     let reader = Reader::new(
@@ -389,6 +391,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         steering_supported: false,
         agent_accepts_images: false,
         operation_capabilities,
+        permission_authority,
         permissions: HashMap::new(),
         startup_advisory_session: None,
         questions: HashMap::new(),
@@ -953,7 +956,10 @@ impl<P: AcpProfile> Worker<P> {
         };
         // Retain the known context before later configuration can fail. Teardown
         // must audit its closure even when startup never publishes ready.
-        let execution = execution.insert(ExecutionController::new(id));
+        let execution = execution.insert(ExecutionController::with_authority_source(
+            id,
+            self.permission_authority.clone(),
+        ));
         if self
             .startup_advisory_session
             .take()

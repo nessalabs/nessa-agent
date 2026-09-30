@@ -127,7 +127,6 @@ pub(crate) fn frame_tag(event: &NewEvent) -> Result<u8, FactFrameError> {
     }
 }
 
-#[cfg(test)]
 pub(crate) fn schema_for_tag(tag: u8) -> Result<SchemaRef, FactFrameError> {
     match tag {
         1 => Ok(schema(START_SCHEMA)),
@@ -136,14 +135,6 @@ pub(crate) fn schema_for_tag(tag: u8) -> Result<SchemaRef, FactFrameError> {
         4 => Ok(schema(ABORT_SCHEMA)),
         _ => Err(FactFrameError::Invalid),
     }
-}
-
-#[cfg(test)]
-pub(crate) fn validate_start_offset(start: &NewEvent, position: u64) -> Result<(), FactFrameError> {
-    if parse_start(start)?.attempt_start != position {
-        return Err(FactFrameError::Invalid);
-    }
-    Ok(())
 }
 
 fn event(
@@ -361,6 +352,14 @@ impl FrameValidator {
         }
     }
 
+    /// Dynamic key storage; the enclosing receiver counts the inline validator.
+    pub(crate) fn allocation_bytes(&self) -> usize {
+        self.pending
+            .as_ref()
+            .and_then(|pending| pending.key.execution_id())
+            .map_or(0, |id| id.as_str().len())
+    }
+
     pub(crate) fn offset(&self) -> u64 {
         self.offset
     }
@@ -544,6 +543,11 @@ fn abort_event(start: &NewEvent, prefix_end: u64) -> Result<NewEvent, FactFrameE
         ABORT_SCHEMA,
         &payload,
     ))
+}
+
+#[cfg(test)]
+pub(crate) fn test_abort_event(start: &NewEvent, prefix_end: u64) -> NewEvent {
+    abort_event(start, prefix_end).expect("test uses a chunked start")
 }
 
 pub(crate) fn validate_abort_prefix(

@@ -10,6 +10,30 @@ Closure evidence describes local state; confirmed process cleanup remains a
 separate result. Sink failure is reported while cleanup and remaining permission
 audit attempts still run.
 
+## Current review actionability
+
+`Agent::pending_permission(execution, permission)` synchronously checks a review
+against the existing domain collection for the exact attached provider and live
+work generation. This is a read snapshot; it reserves no answer. A later command
+still validates its target and offered choice. Acquisition never waits behind the
+ACP command queue or audit delivery. A custom backend without the optional
+`ProviderSessionBackend::permission_authority` seam returns no authority.
+
+Successful `ExecutionController::begin_execution` publishes a session/execution
+scoped weak `PermissionAuthority` through `PermissionAuthoritySource`. The carrier
+holds no pending decisions. Answer removes the review in its domain owner before
+awaiting answer audit: a blocked or failed audit cannot make a consumed review
+actionable again. A read before actual consumption may still report pending with
+the same audit diagnostic. Cancellation empties the owning collection;
+settlement, replacement and owner drop invalidate its old handle. Agent checks
+its existing lifecycle before and after membership so stale generations cannot
+confer authority. Foreign identity and unexpected poison are typed faults; absent
+or dropped ownership grants no actionability.
+
+This live evidence does not change saved review facts, execution outcomes, receipts
+or transcript freshness. A receiver restored without an attached live owner can
+retain unresolved reviews without offering controls.
+
 ## Cancellation audit evidence
 
 Every admitted review cancelled by provider withdrawal, explicit session close,

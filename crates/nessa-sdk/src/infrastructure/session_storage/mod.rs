@@ -8,12 +8,16 @@
 //! product reads reuse terminal-discovery metadata/hash in a sixteen-entry cache
 //! and return [`RecordReadStatus::Preparing`] until a captured tail is validated.
 //! That cache retains no worker or semantic body.
+//! TranscriptFold validates complete facts through the one SDK session fold. A
+//! committed read cache advances from a fixed head and remains separate from
+//! the writer's observed state.
 //!
 //! ```text
 //! SessionStorage::open -> SessionStorageLease <- SessionManager
 //!                                      |-> memory snapshot
 //!                                      |-> semantic facts -> SQLite runtime
 //! RecordStorage -> identity metadata -> expected bounded read source -> sync engine
+//! RecordStorage -> transcript fold -> committed gateway view
 //! MessageCommitClock <--------------------- Tokio monotonic clock adapter
 //! ```
 //! Arrows show calls and representation mapping. A complete framed fact is
@@ -25,6 +29,7 @@ mod memory;
 mod message_commit_clock;
 mod paths;
 mod record;
+mod record_lifecycle;
 mod record_source;
 mod record_writer;
 mod snapshot;
@@ -38,3 +43,8 @@ pub use record_source::{
     MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
 };
 pub use terminal_discovery::RecordReadStatus;
+mod transcript;
+pub use transcript::{
+    TranscriptCheckpoint, TranscriptError, TranscriptFold, TranscriptTransaction,
+    MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES,
+};

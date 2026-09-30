@@ -1,5 +1,6 @@
 //! What an agent asked, and what it will accept as an answer.
 use crate::domain::agent_execution::ExecutionError;
+use std::{collections::HashSet, mem};
 
 /// The most questions one ask may carry.
 ///
@@ -114,7 +115,7 @@ pub struct Question {
     prompt: Box<str>,
     header: Option<Box<str>>,
     shape: AnswerShape,
-    options: Vec<AnswerOption>,
+    options: Box<[AnswerOption]>,
     free_text_key: Option<Box<str>>,
     required: bool,
 }
@@ -161,7 +162,7 @@ impl Question {
                 max: MAX_OPTIONS,
             });
         }
-        let mut values = std::collections::HashSet::with_capacity(options.len());
+        let mut values = HashSet::with_capacity(options.len());
         for option in &options {
             if !values.insert(option.value()) {
                 return Err(ExecutionError::DuplicateAnswerOption);
@@ -172,7 +173,7 @@ impl Question {
             prompt,
             header,
             shape,
-            options,
+            options: options.into_boxed_slice(),
             free_text_key,
             required,
         })
@@ -239,7 +240,7 @@ impl Question {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentQuestion {
     message: Box<str>,
-    questions: Vec<Question>,
+    questions: Box<[Question]>,
 }
 
 impl AgentQuestion {
@@ -262,13 +263,16 @@ impl AgentQuestion {
                 max: MAX_QUESTIONS,
             });
         }
-        let mut keys = std::collections::HashSet::with_capacity(questions.len());
+        let mut keys = HashSet::with_capacity(questions.len());
         for question in &questions {
             if !keys.insert(question.key()) {
                 return Err(ExecutionError::DuplicateQuestionKey);
             }
         }
-        Ok(Self { message, questions })
+        Ok(Self {
+            message,
+            questions: questions.into_boxed_slice(),
+        })
     }
 
     /// The agent's own framing of why it is asking.
@@ -279,6 +283,19 @@ impl AgentQuestion {
     /// What is being asked, in the order the agent asked it.
     pub fn questions(&self) -> &[Question] {
         &self.questions
+    }
+
+    /// Actual owned allocations, excluding the inline AgentQuestion layout.
+    /// Both collection constructors compact their immutable slots before retention.
+    pub(crate) fn allocation_bytes(&self) -> usize {
+        self.payload_bytes()
+            .saturating_add(mem::size_of_val(self.questions()))
+            .saturating_add(
+                self.questions()
+                    .iter()
+                    .map(|question| mem::size_of_val(question.options()))
+                    .fold(0usize, usize::saturating_add),
+            )
     }
 
     /// What this ask costs a surface to carry, in bytes.

@@ -2,7 +2,7 @@
 
 use crate::domain::agent_execution::{
     executions::ExecutionId,
-    tools::{ToolCallId, ToolCallUpdate, ToolObservation},
+    tools::{ToolCallId, ToolCallUpdate, ToolObservation, ToolObservationUndo},
     ExecutionError,
 };
 
@@ -94,19 +94,26 @@ impl ToolCall {
             .saturating_add(update.payload_bytes())
     }
     /// Apply the sparse update only when execution and tool identities match. Returns DifferentExecution or DifferentTool without mutation on mismatch.
-    pub(in crate::domain::agent_execution) fn apply(
+    pub(in crate::domain::agent_execution) fn apply_reversible(
         &mut self,
         execution_id: &ExecutionId,
         update: ToolCallUpdate,
-    ) -> Result<(), ExecutionError> {
+    ) -> Result<ToolObservationUndo, ExecutionError> {
         if execution_id != &self.execution_id {
             return Err(ExecutionError::DifferentExecution);
         }
         if update.id() != &self.id {
             return Err(ExecutionError::DifferentTool);
         }
-        self.observation = std::mem::take(&mut self.observation).with_update(update);
-        Ok(())
+        let (next, undo) = std::mem::take(&mut self.observation).with_reversible_update(update);
+        self.observation = next;
+        Ok(undo)
+    }
+    pub(in crate::domain::agent_execution) fn restore_observation(
+        &mut self,
+        undo: ToolObservationUndo,
+    ) {
+        self.observation = std::mem::take(&mut self.observation).restored(undo);
     }
 }
 

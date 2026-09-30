@@ -6,14 +6,15 @@ use super::{
     record::RecordStorage,
     stream_fact,
     terminal_discovery::{RecordReadStatus, TerminalCache},
+    transcript::TranscriptFold,
 };
 use crate::{
-    application::agent_execution::sessions::StorageError,
+    application::agent_execution::sessions::{CommittedSession, StorageError},
     domain::agent_execution::sessions::SessionId,
 };
 use event_stream::{
-    infrastructure::SqliteStore, Cursor, EventReader, PageLimits, Record as StreamRecord, Runtime,
-    StreamId, StreamKey,
+    infrastructure::SqliteStore, Cursor, Error as StreamError, EventReader, PageLimits,
+    Record as StreamRecord, Runtime, StreamId, StreamKey,
 };
 use nessa_sync::replication::{
     application::{RecordSource, SourceError},
@@ -21,8 +22,11 @@ use nessa_sync::replication::{
     infrastructure::{MAX_PAGE_PAYLOAD, MAX_PAGE_RECORDS},
 };
 use std::{
-    collections::VecDeque,
-    sync::{mpsc, Arc, Mutex},
+    collections::{HashMap, VecDeque},
+    sync::{
+        atomic::{AtomicU8, AtomicUsize, Ordering},
+        mpsc, Arc, Mutex, PoisonError,
+    },
     thread,
 };
 use tokio::runtime::Handle;
@@ -30,6 +34,237 @@ use tokio::runtime::Handle;
 const SCHEMA: &str = "nessa.physical-frame.v1";
 const REMEMBERED_HEADS: usize = 64;
 const SOURCE_QUEUE_CAPACITY: usize = 64;
+const COMMITTED_VIEW_CACHE_ENTRIES: usize = 64;
+const COMMITTED_VIEW_CACHE_BYTES: usize = 256 * 1024 * 1024;
+const COMMITTED_READ_FRAMES: usize = 256;
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CommittedReadPoint {
+    Lookup,
+    Joined,
+}
+
+#[cfg(test)]
+pub(super) struct CommittedReadGate {
+    pub(super) point: CommittedReadPoint,
+    pub(super) entered: mpsc::Sender<()>,
+    pub(super) release: mpsc::Receiver<()>,
+}
+
+pub(super) struct CachedCommittedRead {
+    scope: Scope,
+    stream: StreamKey,
+    receiver: Mutex<CommittedReceiver>,
+    retained_bytes: AtomicUsize,
+    lifetime: CacheLifetime,
+}
+impl CachedCommittedRead {
+    fn publish_retained_bytes(&self, receiver: &CommittedReceiver) {
+        self.retained_bytes.store(
+            receiver_retained_bytes(&receiver.fold, &self.scope),
+            Ordering::Release,
+        );
+    }
+}
+struct CommittedReceiver {
+    fold: TranscriptFold,
+    through: Option<u64>,
+}
+
+// One resource lifetime owner: retirement cannot be undone by a later pin.
+#[derive(Default)]
+struct CacheLifetime(AtomicU8);
+impl CacheLifetime {
+    fn pin(&self, pinned: bool) -> Result<(), StorageError> {
+        self.0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current != 2).then_some(u8::from(pinned))
+            })
+            .map(|_| ())
+            .map_err(|_| StorageError::IdentityMismatch)
+    }
+    fn retire(&self) {
+        self.0.store(2, Ordering::Release);
+    }
+    fn is_pinned(&self) -> bool {
+        self.0.load(Ordering::Acquire) == 1
+    }
+    fn is_obsolete(&self) -> bool {
+        self.0.load(Ordering::Acquire) == 2
+    }
+}
+type CommittedCache = HashMap<Scope, Arc<CachedCommittedRead>>;
+fn scope_text_bytes(scope: &Scope) -> usize {
+    [
+        scope.receiver(),
+        scope.origin(),
+        scope.stream(),
+        scope.incarnation(),
+        scope.schema(),
+        scope.access_epoch(),
+    ]
+    .iter()
+    .map(|id| id.as_str().len())
+    .sum()
+}
+fn cache_retained_bytes(cache: &CommittedCache) -> usize {
+    cache
+        .capacity()
+        .saturating_mul(std::mem::size_of::<(Scope, Arc<CachedCommittedRead>)>() + 16)
+        .saturating_add(
+            cache
+                .iter()
+                .map(|(key, entry)| {
+                    scope_text_bytes(key)
+                        .saturating_add(entry.retained_bytes.load(Ordering::Acquire))
+                })
+                .fold(0usize, usize::saturating_add),
+        )
+}
+fn invalid_stream(error: &StreamError) -> bool {
+    matches!(
+        error,
+        StreamError::StaleIncarnation { .. }
+            | StreamError::StreamUnavailable { .. }
+            | StreamError::StreamNotFound
+    )
+}
+fn retire_receiver(
+    cache: &Mutex<CommittedCache>,
+    entry: &CachedCommittedRead,
+) -> Result<(), StorageError> {
+    let _cache = cache
+        .lock()
+        .map_err(|_| StorageError::Io("committed view lock poisoned".into()))?;
+    entry.lifetime.retire();
+    Ok(())
+}
+fn retire_invalid_receivers(
+    cache: &Mutex<CommittedCache>,
+    runtime: &Runtime<SqliteStore>,
+    handle: &Handle,
+) -> Result<(), StorageError> {
+    // At most 64 Arc slots; no semantic/history clone or lock held during metadata I/O.
+    let entries: Vec<_> = cache
+        .lock()
+        .map_err(|_| StorageError::Io("committed view lock poisoned".into()))?
+        .values()
+        .cloned()
+        .collect();
+    for entry in entries {
+        if handle
+            .block_on(runtime.bounds(&entry.stream))
+            .as_ref()
+            .is_err_and(invalid_stream)
+        {
+            retire_receiver(cache, &entry)?;
+        }
+    }
+    Ok(())
+}
+fn cached_receiver(
+    cache: &Mutex<CommittedCache>,
+    scope: Scope,
+    stream: StreamKey,
+) -> Result<Arc<CachedCommittedRead>, StorageError> {
+    let mut cache = cache
+        .lock()
+        .map_err(|_| StorageError::Io("committed view lock poisoned".into()))?;
+    if let Some(entry) = cache.get(&scope) {
+        return if entry.lifetime.is_obsolete() {
+            Err(StorageError::IdentityMismatch)
+        } else {
+            Ok(entry.clone())
+        };
+    }
+    while cache.len() >= COMMITTED_VIEW_CACHE_ENTRIES
+        || cache_retained_bytes(&cache) >= COMMITTED_VIEW_CACHE_BYTES
+    {
+        let Some(evict) = cache
+            .iter()
+            .find(|(_, entry)| !entry.lifetime.is_pinned() && Arc::strong_count(entry) == 1)
+            .map(|(key, _)| key.clone())
+        else {
+            return Err(StorageError::ReadCapacity);
+        };
+        cache.remove(&evict);
+    }
+    let fold = TranscriptFold::new(scope.clone()).map_err(committed_fold_error)?;
+    let bytes = receiver_retained_bytes(&fold, &scope);
+    let entry = Arc::new(CachedCommittedRead {
+        scope: scope.clone(),
+        stream,
+        receiver: Mutex::new(CommittedReceiver {
+            fold,
+            through: None,
+        }),
+        retained_bytes: AtomicUsize::new(bytes),
+        lifetime: CacheLifetime::default(),
+    });
+    cache.insert(scope, entry.clone());
+    Ok(entry)
+}
+fn publish_owned_read(
+    cache: &Mutex<CommittedCache>,
+    receiver: &mut CommittedReceiver,
+    entry: &CachedCommittedRead,
+    result: Result<Option<CommittedSession>, StorageError>,
+) -> Result<Option<CommittedSession>, StorageError> {
+    // Linearize publication against retirement; this lock never acquires receiver/I/O.
+    let _cache = cache
+        .lock()
+        .map_err(|_| StorageError::Io("committed view lock poisoned".into()))?;
+    if entry.lifetime.is_obsolete() {
+        abandon_pass(receiver, entry);
+        Err(StorageError::IdentityMismatch)
+    } else {
+        result
+    }
+}
+
+fn finish_owned_read(
+    receiver: &mut CommittedReceiver,
+    entry: &CachedCommittedRead,
+    result: Result<(), StorageError>,
+    joined: Result<(), StorageError>,
+) -> Result<(), StorageError> {
+    if result.is_err() || joined.is_err() {
+        abandon_pass(receiver, entry);
+    }
+    match (result, joined) {
+        (result, Ok(())) => result,
+        (_, Err(error)) => Err(error),
+    }
+}
+
+fn abandon_pass(receiver: &mut CommittedReceiver, entry: &CachedCommittedRead) {
+    receiver.through = None;
+    receiver.fold.mark_unknown();
+    let _ = entry.lifetime.pin(false);
+}
+
+fn receiver_retained_bytes(fold: &TranscriptFold, scope: &Scope) -> usize {
+    fold.retained_bytes()
+        .saturating_add(
+            std::mem::size_of::<CachedCommittedRead>() + 2 * std::mem::size_of::<usize>(),
+        )
+        .saturating_add(
+            [
+                scope.receiver(),
+                scope.origin(),
+                scope.stream(),
+                scope.incarnation(),
+                scope.schema(),
+                scope.access_epoch(),
+            ]
+            .iter()
+            .map(|id| id.as_str().len())
+            .sum::<usize>(),
+        )
+        // The cached actual StreamKey owns one additional copy of this ID.
+        .saturating_add(scope.stream().as_str().len())
+}
 
 /// Largest tagged physical frame returned by this source: one tag, the piece
 /// framing header, and a full body piece. The real maximum is exercised by
@@ -71,6 +306,12 @@ pub fn physical_record_schema() -> Id {
     Id::new(SCHEMA).expect("the fixed schema ID is valid")
 }
 
+struct CommittedPhysicalPage {
+    target: u64,
+    observed_head: u64,
+    records: Vec<Record>,
+}
+
 enum Command {
     Head(Scope, mpsc::Sender<Result<u64, SourceError>>),
     Page(PageRequest, mpsc::Sender<Result<Page, SourceError>>),
@@ -81,6 +322,12 @@ enum Command {
     BoundedPage(
         PageRequest,
         mpsc::Sender<Result<RecordReadStatus<Page>, SourceError>>,
+    ),
+    CommittedPage(
+        Scope,
+        u64,
+        Option<u64>,
+        mpsc::Sender<Result<CommittedPhysicalPage, SourceError>>,
     ),
     Shutdown,
 }
@@ -168,6 +415,11 @@ impl NessaRecordSource {
                         }
                         Command::BoundedPage(request, reply) => {
                             let _ = reply.send(handle.block_on(state.bounded_page(&request)));
+                        }
+                        Command::CommittedPage(scope, after, through, reply) => {
+                            let _ = reply.send(
+                                handle.block_on(state.committed_page(&scope, after, through)),
+                            );
                         }
                         Command::Shutdown => break,
                     }
@@ -265,12 +517,44 @@ impl NessaRecordSource {
         result.recv().map_err(|_| SourceError::Unavailable)?
     }
 
+    fn finish(self) -> Result<(), StorageError> {
+        let mut worker = Arc::try_unwrap(self.worker)
+            .map_err(|_| StorageError::Corrupt("owned committed source was cloned".into()))?;
+        if let Some(sender) = worker.sender.take() {
+            let _ = sender.try_send(Command::Shutdown);
+            drop(sender);
+        }
+        if let Some(thread) = worker
+            .thread
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            thread
+                .join()
+                .map_err(|_| StorageError::ReadWorkerPanicked)?;
+        }
+        Ok(())
+    }
+
     /// Builds the exact scope for `receiver` and the current `access_epoch`.
     /// The host chooses and verifies those two identities before authorizing
     /// each read. A reset requires a newly constructed source and explicit
     /// receiver checkpoint handling.
     pub fn scope(&self, receiver: Id, access_epoch: Id) -> Scope {
         self.identity.scope(receiver, access_epoch)
+    }
+
+    fn committed_page(
+        &self,
+        scope: &Scope,
+        after: u64,
+        through: Option<u64>,
+    ) -> Result<CommittedPhysicalPage, SourceError> {
+        let (reply, result) = mpsc::channel();
+        self.worker
+            .enqueue(Command::CommittedPage(scope.clone(), after, through, reply))?;
+        result.recv().map_err(|_| SourceError::Unavailable)?
     }
 }
 
@@ -298,6 +582,63 @@ struct ReaderState {
 }
 
 impl ReaderState {
+    async fn committed_page(
+        &self,
+        scope: &Scope,
+        after: u64,
+        through: Option<u64>,
+    ) -> Result<CommittedPhysicalPage, SourceError> {
+        self.check_scope(scope)?;
+        let tail = self.check_stream().await?;
+        let target = through.unwrap_or(tail.offset);
+        if target > tail.offset {
+            return Err(SourceError::Unavailable);
+        }
+        if after >= target {
+            return Ok(CommittedPhysicalPage {
+                target,
+                observed_head: tail.offset,
+                records: Vec::new(),
+            });
+        }
+        let through = Cursor::new(
+            self.stream.clone(),
+            target.min(after.saturating_add(MAX_PAGE_RECORDS as u64)),
+        );
+        let page = self
+            .runtime
+            .read_after(
+                &Cursor::new(self.stream.clone(), after),
+                PageLimits {
+                    max_records: MAX_PAGE_RECORDS,
+                    max_bytes: 1024 * 1024,
+                },
+                Some(&through),
+            )
+            .await
+            .map_err(source_error)?;
+        let mut records = Vec::with_capacity(page.records.len());
+        for physical in page.records {
+            let position = after + records.len() as u64 + 1;
+            if physical.cursor.stream != self.stream || physical.cursor.offset != position {
+                return Err(SourceError::Unavailable);
+            }
+            records.push(Record {
+                position,
+                id: Id::new(physical.event.id.as_str()).map_err(|_| SourceError::Unavailable)?,
+                scope: scope.clone(),
+                payload: frame_payload(&physical)?,
+            });
+        }
+        if records.is_empty() {
+            return Err(SourceError::Unavailable);
+        }
+        Ok(CommittedPhysicalPage {
+            target,
+            observed_head: tail.offset,
+            records,
+        })
+    }
     fn check_scope(&self, scope: &Scope) -> Result<(), SourceError> {
         let incarnation = incarnation_id(&self.stream);
         if scope.origin() != &self.origin
@@ -628,6 +969,137 @@ impl RecordStorage {
         )
     }
 
+    pub(super) async fn read_committed_source(
+        &self,
+        id: &SessionId,
+    ) -> Result<Option<CommittedSession>, StorageError> {
+        let runtime = self.runtime().await?.clone();
+        let stream_id =
+            StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
+        let handle = Handle::try_current().map_err(|error| StorageError::Io(error.to_string()))?;
+        let cache = self.committed_views.clone();
+        let terminal_cache = self.terminal_cache.clone();
+        #[cfg(test)]
+        let mut gate = self.committed_read_gate.lock().unwrap().take();
+        let receipt = self.owner.read(move || {
+            let discovered = handle.block_on(runtime.find_stream(&stream_id));
+            #[cfg(test)]
+            if gate
+                .as_ref()
+                .is_some_and(|gate| gate.point == CommittedReadPoint::Lookup)
+            {
+                let gate = gate.take().unwrap();
+                gate.entered.send(()).unwrap();
+                gate.release.recv().unwrap();
+            }
+            let stream = match discovered {
+                Ok(Some(stream)) => stream,
+                Ok(None)
+                | Err(StreamError::StreamUnavailable { .. } | StreamError::StreamNotFound) => {
+                    retire_invalid_receivers(&cache, &runtime, &handle)?;
+                    return Ok(None);
+                }
+                Err(error) => return Err(super::record::store_error(error)),
+            };
+            let source = NessaRecordSource::start(
+                runtime.clone(),
+                stream.clone(),
+                Id::new("gateway-local").expect("fixed origin ID is valid"),
+                handle.clone(),
+                terminal_cache,
+            )?;
+            let scope = source.scope(
+                Id::new("gateway-view").expect("fixed receiver ID is valid"),
+                Id::new("local-access").expect("fixed access epoch is valid"),
+            );
+            let entry = match cached_receiver(&cache, scope.clone(), stream.clone()) {
+                Err(StorageError::ReadCapacity) => {
+                    retire_invalid_receivers(&cache, &runtime, &handle)?;
+                    cached_receiver(&cache, scope.clone(), stream)?
+                }
+                result => result?,
+            };
+            let mut receiver = entry
+                .receiver
+                .lock()
+                .map_err(|_| StorageError::Io("committed receiver lock poisoned".into()))?;
+            let result = (|| {
+                if entry.lifetime.is_obsolete() {
+                    return Err(StorageError::IdentityMismatch);
+                }
+                let mut observed = receiver.fold.downloaded();
+                for _ in 0..COMMITTED_READ_FRAMES.div_ceil(MAX_PAGE_RECORDS) {
+                    let CommittedPhysicalPage {
+                        target: head,
+                        observed_head: tail,
+                        records,
+                    } = source
+                        .committed_page(&scope, receiver.fold.downloaded(), receiver.through)
+                        .map_err(committed_source_error)?;
+                    observed = observed.max(tail);
+                    receiver.through.get_or_insert(head);
+                    entry.lifetime.pin(receiver.fold.downloaded() < head)?;
+                    if records.is_empty() {
+                        break;
+                    }
+                    let applied = receiver.fold.apply(&records).map_err(committed_fold_error);
+                    entry.publish_retained_bytes(&receiver);
+                    applied?;
+                    if receiver.fold.downloaded() >= head {
+                        break;
+                    }
+                }
+                let target = receiver.through.unwrap_or(receiver.fold.downloaded());
+                receiver
+                    .fold
+                    .observe_source_head(&scope, observed)
+                    .map_err(committed_fold_error)?;
+                if receiver.fold.downloaded() >= target {
+                    receiver.through = None;
+                    let _ = entry.lifetime.pin(false);
+                }
+                Ok(())
+            })();
+            // Hold only this receiver through source join, so a failed join
+            // cannot clear a newer read's fixed target or freshness.
+            let result = finish_owned_read(&mut receiver, &entry, result, source.finish());
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                assert!(gate.point == CommittedReadPoint::Joined);
+                gate.entered.send(()).unwrap();
+                gate.release.recv().unwrap();
+            }
+            let result = match handle.block_on(runtime.bounds(&entry.stream)) {
+                Ok(bounds) => result.and_then(|_| {
+                    receiver
+                        .fold
+                        .observe_source_head(&scope, bounds.tail.offset)
+                        .map_err(committed_fold_error)?;
+                    receiver
+                        .fold
+                        .committed_session(bounds.tail.offset)
+                        .map(Some)
+                }),
+                Err(error) => {
+                    if invalid_stream(&error) {
+                        retire_receiver(&cache, &entry)?;
+                    }
+                    abandon_pass(&mut receiver, &entry);
+                    Err(super::record::store_error(error))
+                }
+            };
+            if result.is_err() {
+                abandon_pass(&mut receiver, &entry);
+            }
+            let result = publish_owned_read(&cache, &mut receiver, &entry, result);
+            drop(receiver);
+            result
+        })?;
+        receipt
+            .await
+            .map_err(|error| StorageError::Io(error.to_string()))?
+    }
+
     /// Opens a read source for an existing conversation without acquiring its
     /// writer lease. `origin` is the host's authoritative origin ID. The source
     /// stays bound to the current incarnation; deletion or reset makes later
@@ -661,20 +1133,37 @@ impl RecordStorage {
     }
 }
 
+fn committed_source_error(error: SourceError) -> StorageError {
+    StorageError::Io(format!("committed record source: {error:?}"))
+}
+
+fn committed_fold_error(error: super::transcript::TranscriptError) -> StorageError {
+    StorageError::Corrupt(format!("committed transcript: {error:?}"))
+}
+
 #[cfg(test)]
 mod tests {
+    use super::Command as SourceCommand;
     use super::*;
     use crate::application::agent_execution::{
+        executions::{ExecutionRequest, SubmissionMode},
+        permissions::ActionContext,
         providers::ProviderIdentity,
         sessions::{
             records::{self, FactKey, FactKind},
+            CommittedCompleteness, CommittedFreshness, CommittedViewState, InvocationRecord,
             ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+            SubmissionAcknowledgement,
         },
     };
-    use crate::domain::agent_execution::sessions::ExecutionSessionId;
+    use crate::domain::agent_execution::{
+        executions::ExecutionId,
+        prompts::{PromptText, UserMessage},
+        sessions::ExecutionSessionId,
+    };
     use event_stream::{
-        EventId, EventReader, EventSink, LifecycleAction, LifecycleOperationId, LifecycleRequest,
-        NewEvent, Payload, SchemaId, SchemaRef,
+        EventReader, EventRuntime, EventSink, IncarnationId, LifecycleAction, LifecycleOperationId,
+        LifecycleRequest, NewEvent, SchemaId, SchemaRef,
     };
     use nessa_sync::replication::{
         application::{
@@ -692,7 +1181,903 @@ mod tests {
         path::Path,
         process::{Child, Command, Stdio},
         sync::Arc,
+        time::Duration,
     };
+
+    fn cached_receiver(
+        cache: &Mutex<CommittedCache>,
+        scope: Scope,
+    ) -> Result<Arc<CachedCommittedRead>, StorageError> {
+        let incarnation = uuid::Uuid::parse_str(scope.incarnation().as_str())
+            .map_or([0; 16], |id| *id.as_bytes());
+        let stream = StreamKey {
+            id: StreamId::new(scope.stream().as_str()).unwrap(),
+            incarnation: IncarnationId(incarnation),
+        };
+        super::cached_receiver(cache, scope, stream)
+    }
+
+    async fn append_opening(
+        runtime: &Runtime<SqliteStore>,
+        stream: &StreamKey,
+        session: &SessionId,
+    ) {
+        let change = SessionChange::Opened {
+            id: session.clone(),
+            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            context: ProviderContext::Absent,
+        };
+        let key = records::key_for_changes(None, std::slice::from_ref(&change), 0).unwrap();
+        let body = super::super::snapshot::encode_semantic_change(&change).unwrap();
+        let frames = stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 1).unwrap();
+        assert_eq!(frames.len(), 1);
+        runtime.append(stream, frames[0].clone()).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn public_warm_reads_materialize_once_after_join_and_failed_bounds_do_not() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
+        let session = SessionId::new("conversation").unwrap();
+        let lease = storage.open(session.clone()).await.unwrap();
+        let provider = ProviderIdentity::new("provider", "model", "workspace").unwrap();
+        let mut snapshot = SessionSnapshot {
+            id: session.clone(),
+            provider: provider.clone(),
+            provider_context: ProviderContext::Absent,
+            invocations: Vec::new(),
+            queue_history: Vec::new(),
+        };
+        let mut changes = vec![SessionChange::Opened {
+            id: session.clone(),
+            provider,
+            context: ProviderContext::Absent,
+        }];
+        for index in 0..8 {
+            let record = InvocationRecord {
+                target_event_offset: None,
+                submission: SubmissionMode::Immediate,
+                request: ExecutionRequest {
+                    execution_id: ExecutionId::new(format!("e{index}")).unwrap(),
+                    user_message: UserMessage::text_only(
+                        PromptText::new("x".repeat(32761)).unwrap(),
+                    ),
+                    estimated_input_tokens: 1,
+                    reserved_output_tokens: 1,
+                },
+                actor: ActionContext::new("user", "surface", "request").unwrap(),
+                acknowledgement: SubmissionAcknowledgement::Pending,
+                events: Vec::new(),
+                scheduling: Vec::new(),
+                cancellation: None,
+                provider_report: None,
+                local_cancellation: None,
+                local_outcome: None,
+                result: None,
+            };
+            snapshot.invocations.push(record.clone());
+            changes.push(SessionChange::InputAccepted(Box::new(record)));
+        }
+        lease
+            .save_changes(SessionSaveGeneration::initial(), snapshot, changes)
+            .await
+            .unwrap();
+        let prior = storage
+            .read_committed(session.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        let entry = storage
+            .committed_views
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            entry
+                .receiver
+                .lock()
+                .unwrap()
+                .fold
+                .snapshot_materializations(),
+            1
+        );
+        for count in 2..=4 {
+            let view = storage
+                .read_committed(session.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(view.snapshot(), prior.snapshot());
+            assert_eq!(
+                entry
+                    .receiver
+                    .lock()
+                    .unwrap()
+                    .fold
+                    .snapshot_materializations(),
+                count
+            );
+        }
+        drop(lease);
+        let (entered, waiting) = mpsc::channel();
+        let (release, gate) = mpsc::channel();
+        *storage.committed_read_gate.lock().unwrap() = Some(CommittedReadGate {
+            point: CommittedReadPoint::Joined,
+            entered,
+            release: gate,
+        });
+        let reading = tokio::spawn({
+            let storage = storage.clone();
+            let session = session.clone();
+            async move { storage.read_committed(session).await }
+        });
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::task::spawn_blocking(move || waiting.recv()),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        let runtime = storage.runtime().await.unwrap();
+        runtime
+            .change_lifecycle(LifecycleRequest {
+                expected: entry.stream.clone(),
+                operation_id: LifecycleOperationId::new("delete-after-join").unwrap(),
+                action: LifecycleAction::Delete,
+            })
+            .await
+            .unwrap();
+        release.send(()).unwrap();
+        assert!(reading.await.unwrap().is_err());
+        {
+            let receiver = entry.receiver.lock().unwrap();
+            assert_eq!(receiver.fold.snapshot_materializations(), 4);
+            assert_eq!(receiver.fold.snapshot(), prior.snapshot());
+            assert_eq!(receiver.fold.downloaded(), prior.downloaded());
+            assert_eq!(receiver.fold.applied(), prior.position());
+            assert_eq!(
+                receiver.fold.status().freshness(),
+                CommittedFreshness::Unknown
+            );
+            assert!(!entry.lifetime.is_pinned());
+        }
+        assert_eq!(prior.snapshot().unwrap().invocations.len(), 8);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn cache_accounts_actual_stream_key_copy_and_all_scope_copies() {
+        let retained = |stream: &str| {
+            let cache = Mutex::new(HashMap::new());
+            let scope = Scope::new(
+                id("receiver"),
+                id("origin"),
+                id(stream),
+                id("incarnation"),
+                physical_record_schema(),
+                id("epoch"),
+            );
+            let entry = cached_receiver(&cache, scope).unwrap();
+            assert_eq!(entry.stream.id.as_str(), stream);
+            drop(entry);
+            let bytes = cache_retained_bytes(&cache.lock().unwrap());
+            bytes
+        };
+        let stream = "é".repeat(64);
+        // Map scope, entry scope, fold scope and exact source StreamKey each own
+        // the compact stream text; UTF-8 bytes, not characters, are charged.
+        assert_eq!(retained(&stream) - retained("s"), 4 * (stream.len() - 1));
+    }
+    #[tokio::test]
+    async fn transient_metadata_failure_cannot_retire_exact_receiver() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+        let session = SessionId::new("conversation").unwrap();
+        let runtime = storage.runtime().await.unwrap().clone();
+        let stream = runtime
+            .create_stream(&StreamId::new(session.as_str()).unwrap())
+            .await
+            .unwrap();
+        append_opening(&runtime, &stream, &session).await;
+        storage
+            .read_committed(session.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        let entry = storage
+            .committed_views
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        entry.lifetime.pin(true).unwrap();
+        runtime.shutdown(Duration::from_secs(1)).await.unwrap();
+        assert!(matches!(
+            runtime.bounds(&stream).await,
+            Err(StreamError::Closed)
+        ));
+        let cache = storage.committed_views.clone();
+        let handle = Handle::current();
+        tokio::task::spawn_blocking(move || retire_invalid_receivers(&cache, &runtime, &handle))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!entry.lifetime.is_obsolete());
+        assert!(entry.lifetime.is_pinned());
+        for error in [
+            StreamError::Closed,
+            StreamError::AdmissionTimeout,
+            StreamError::RuntimeFaulted("temporary".into()),
+            StreamError::StoreCorrupt("unavailable proof".into()),
+        ] {
+            assert!(!invalid_stream(&error));
+        }
+        entry.lifetime.pin(false).unwrap();
+        storage.shutdown().await.unwrap();
+    }
+    #[tokio::test]
+    async fn joined_source_observes_new_physical_tail_without_retargeting() {
+        for partial in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
+            let session = SessionId::new("conversation").unwrap();
+            let runtime = storage.runtime().await.unwrap().clone();
+            let stream = runtime
+                .create_stream(&StreamId::new(session.as_str()).unwrap())
+                .await
+                .unwrap();
+            append_opening(&runtime, &stream, &session).await;
+            let initial = storage
+                .read_committed(session.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            let entry = storage
+                .committed_views
+                .lock()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
+                .clone();
+            assert_eq!(
+                entry
+                    .receiver
+                    .lock()
+                    .unwrap()
+                    .fold
+                    .snapshot_materializations(),
+                1
+            );
+            let (entered, waiting) = mpsc::channel();
+            let (release, gate) = mpsc::channel();
+            *storage.committed_read_gate.lock().unwrap() = Some(CommittedReadGate {
+                point: CommittedReadPoint::Joined,
+                entered,
+                release: gate,
+            });
+            let reading = tokio::spawn({
+                let storage = storage.clone();
+                let session = session.clone();
+                async move { storage.read_committed(session).await }
+            });
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                tokio::task::spawn_blocking(move || waiting.recv()),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+            let change = SessionChange::ProviderContext {
+                before: ProviderContext::Absent,
+                after: ProviderContext::Recorded(ExecutionSessionId::new("context").unwrap()),
+            };
+            let key =
+                records::key_for_changes(initial.snapshot(), std::slice::from_ref(&change), 1)
+                    .unwrap();
+            let mut body = super::super::snapshot::encode_semantic_change(&change).unwrap();
+            if partial {
+                body.splice(0..0, std::iter::repeat_n(b' ', 100_000));
+            }
+            let frames =
+                stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 2).unwrap();
+            let appended = if partial { 2 } else { frames.len() };
+            for event in &frames[..appended] {
+                runtime.append(&stream, event.clone()).await.unwrap();
+            }
+            release.send(()).unwrap();
+            let stale = tokio::time::timeout(Duration::from_secs(3), reading)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                entry
+                    .receiver
+                    .lock()
+                    .unwrap()
+                    .fold
+                    .snapshot_materializations(),
+                2
+            );
+            assert_eq!(
+                initial.snapshot().unwrap().provider_context,
+                ProviderContext::Absent
+            );
+            assert_eq!(stale.position(), 1);
+            assert_eq!(stale.downloaded(), 1);
+            assert_eq!(stale.observed_head(), 1 + appended as u64);
+            assert_eq!(stale.status().freshness(), CommittedFreshness::Stale);
+            assert_eq!(
+                stale.status().completeness(),
+                CommittedCompleteness::Complete
+            );
+            let caught = storage
+                .read_committed(session.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(caught.downloaded(), 1 + appended as u64);
+            assert_eq!(caught.status().freshness(), CommittedFreshness::Current);
+            if partial {
+                assert_eq!(caught.position(), 1);
+                assert_eq!(
+                    caught.status().completeness(),
+                    CommittedCompleteness::Partial
+                );
+                for event in &frames[appended..] {
+                    runtime.append(&stream, event.clone()).await.unwrap();
+                }
+                let sealed = storage
+                    .read_committed(session.clone())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(sealed.position(), 1 + frames.len() as u64);
+                assert_eq!(sealed.status().freshness(), CommittedFreshness::Current);
+                assert_eq!(
+                    sealed.status().completeness(),
+                    CommittedCompleteness::Complete
+                );
+            } else {
+                assert_eq!(caught.position(), 2);
+                assert_eq!(
+                    caught.status().completeness(),
+                    CommittedCompleteness::Complete
+                );
+            }
+            storage.shutdown().await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn late_discovery_cannot_retire_current_receiver() {
+        for order in [
+            "late-old",
+            "late-missing",
+            "old-completion",
+            "old-first",
+            "missing-first",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
+            let session = SessionId::new("conversation").unwrap();
+            let stream_id = StreamId::new(session.as_str()).unwrap();
+            let runtime = storage.runtime().await.unwrap().clone();
+            let missing = order.contains("missing");
+            let old = if missing {
+                None
+            } else {
+                let old = runtime.create_stream(&stream_id).await.unwrap();
+                append_opening(&runtime, &old, &session).await;
+                Some(old)
+            };
+            let delayed = if order.starts_with("late") || order == "old-completion" {
+                let (entered, waiting) = mpsc::channel();
+                let (release, gate) = mpsc::channel();
+                *storage.committed_read_gate.lock().unwrap() = Some(CommittedReadGate {
+                    point: if order == "old-completion" {
+                        CommittedReadPoint::Joined
+                    } else {
+                        CommittedReadPoint::Lookup
+                    },
+                    entered,
+                    release: gate,
+                });
+                let reading = tokio::spawn({
+                    let storage = storage.clone();
+                    let session = session.clone();
+                    async move { storage.read_committed(session).await }
+                });
+                tokio::time::timeout(
+                    Duration::from_secs(3),
+                    tokio::task::spawn_blocking(move || waiting.recv()),
+                )
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+                Some((reading, release))
+            } else {
+                let before = storage.read_committed(session.clone()).await.unwrap();
+                assert_eq!(before.is_none(), missing);
+                if let Some(view) = before {
+                    assert_eq!(view.position(), 1);
+                }
+                None
+            };
+            if let Some(old) = &old {
+                runtime
+                    .change_lifecycle(LifecycleRequest {
+                        operation_id: LifecycleOperationId::new("replace").unwrap(),
+                        expected: old.clone(),
+                        action: LifecycleAction::Reset,
+                    })
+                    .await
+                    .unwrap();
+            } else {
+                runtime.create_stream(&stream_id).await.unwrap();
+            }
+            let current = runtime.find_stream(&stream_id).await.unwrap().unwrap();
+            if let Some(old) = &old {
+                assert_ne!(old, &current);
+            }
+            append_opening(&runtime, &current, &session).await;
+            let view = storage
+                .read_committed(session.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(view.position(), 1);
+            assert_eq!(view.incarnation(), incarnation_id(&current).as_str());
+            let current_entry = storage
+                .committed_views
+                .lock()
+                .unwrap()
+                .values()
+                .find(|entry| entry.stream == current)
+                .unwrap()
+                .clone();
+            let before_release = cache_retained_bytes(&storage.committed_views.lock().unwrap());
+            assert!(before_release >= current_entry.retained_bytes.load(Ordering::Acquire));
+            if order == "old-completion" {
+                let cache = storage.committed_views.lock().unwrap();
+                assert_eq!(cache.len(), 2);
+                assert!(cache
+                    .values()
+                    .any(|entry| entry.stream != current && Arc::strong_count(entry) > 1));
+            }
+            if let Some((reading, release)) = delayed {
+                release.send(()).unwrap();
+                let result = tokio::time::timeout(Duration::from_secs(3), reading)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if missing {
+                    assert!(result.unwrap().is_none());
+                } else {
+                    assert!(result.is_err(), "{order} must refuse old publication");
+                }
+            }
+            assert!(
+                !current_entry.lifetime.is_obsolete(),
+                "{order} retired current receiver"
+            );
+            let repeated = storage
+                .read_committed(session.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(view.snapshot(), repeated.snapshot());
+            let change = SessionChange::ProviderContext {
+                before: ProviderContext::Absent,
+                after: ProviderContext::Recorded(ExecutionSessionId::new("new-context").unwrap()),
+            };
+            let key = records::key_for_changes(view.snapshot(), std::slice::from_ref(&change), 1)
+                .unwrap();
+            let body = super::super::snapshot::encode_semantic_change(&change).unwrap();
+            let frame = stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 2)
+                .unwrap()
+                .remove(0);
+            runtime.append(&current, frame).await.unwrap();
+            let progressed = storage.read_committed(session).await.unwrap().unwrap();
+            assert_eq!(progressed.position(), 2);
+            assert_eq!(progressed.incarnation(), view.incarnation());
+            assert!(!current_entry.lifetime.is_obsolete());
+            assert_eq!(
+                view.snapshot().unwrap().provider_context,
+                ProviderContext::Absent
+            );
+            assert_eq!(repeated.snapshot(), view.snapshot());
+            storage.shutdown().await.unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_source_join_releases_the_partial_pass() {
+        let cache = Mutex::new(HashMap::new());
+        let scope = Scope::new(
+            id("receiver"),
+            id("origin"),
+            id("conversation"),
+            id("incarnation"),
+            physical_record_schema(),
+            id("epoch"),
+        );
+        let entry = cached_receiver(&cache, scope.clone()).unwrap();
+        let mut receiver = entry.receiver.lock().unwrap();
+        receiver.through = Some(10);
+        entry.lifetime.pin(true).unwrap();
+        let fact = stream_fact::FramedFact {
+            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
+            body: vec![b'x'; 100_000],
+        };
+        let frame = stream_fact::frame_fact(&fact, 1).unwrap().remove(0);
+        let mut payload = vec![stream_fact::frame_tag(&frame).unwrap()];
+        payload.extend_from_slice(frame.payload.as_bytes());
+        receiver
+            .fold
+            .apply(&[Record {
+                position: 1,
+                id: id(frame.id.as_str()),
+                scope: scope.clone(),
+                payload,
+            }])
+            .unwrap();
+        let (sender, _commands) = mpsc::sync_channel(1);
+        let source = NessaRecordSource {
+            worker: Arc::new(SourceWorker {
+                sender: Some(sender),
+                thread: Mutex::new(Some(thread::spawn(|| panic!("source failure")))),
+            }),
+            identity: RecordStreamIdentity {
+                origin: id("origin"),
+                stream: StreamKey {
+                    id: StreamId::new("stream").unwrap(),
+                    incarnation: IncarnationId([0; 16]),
+                },
+            },
+        };
+        receiver.fold.mark_stale();
+        assert!(matches!(
+            finish_owned_read(&mut receiver, &entry, Ok(()), source.finish()),
+            Err(StorageError::ReadWorkerPanicked)
+        ));
+        assert_eq!(receiver.fold.snapshot_materializations(), 0);
+        assert_eq!(receiver.fold.downloaded(), 1);
+        assert_eq!(receiver.fold.applied(), 0);
+        assert_eq!(
+            receiver.fold.status().completeness(),
+            CommittedCompleteness::Partial
+        );
+        assert_eq!(
+            receiver.fold.status().freshness(),
+            CommittedFreshness::Unknown
+        );
+        assert!(receiver.through.is_none());
+        assert!(!entry.lifetime.is_pinned());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn replaced_and_missing_stream_keep_owned_entries_accounted() {
+        for deleted in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+            let session = SessionId::new("conversation").unwrap();
+            let runtime = storage.runtime().await.unwrap().clone();
+            let stream = runtime
+                .create_stream(&StreamId::new(session.as_str()).unwrap())
+                .await
+                .unwrap();
+            storage
+                .read_committed(session.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            let scope = storage
+                .committed_views
+                .lock()
+                .unwrap()
+                .keys()
+                .next()
+                .unwrap()
+                .clone();
+            let entry = cached_receiver(&storage.committed_views, scope.clone()).unwrap();
+            entry
+                .retained_bytes
+                .store(COMMITTED_VIEW_CACHE_BYTES, Ordering::Release);
+            entry.lifetime.pin(true).unwrap();
+            let retained = cache_retained_bytes(&storage.committed_views.lock().unwrap());
+            let (release, gate) = mpsc::channel();
+            let (entered, started) = mpsc::channel();
+            let cache = storage.committed_views.clone();
+            let owned = entry.clone();
+            let old = thread::spawn(move || {
+                let (sender, commands) = mpsc::sync_channel(1);
+                let source = NessaRecordSource {
+                    worker: Arc::new(SourceWorker {
+                        sender: Some(sender),
+                        thread: Mutex::new(Some(thread::spawn(move || {
+                            gate.recv().unwrap();
+                            assert!(matches!(commands.recv().unwrap(), SourceCommand::Shutdown));
+                        }))),
+                    }),
+                    identity: RecordStreamIdentity {
+                        origin: id("origin"),
+                        stream: StreamKey {
+                            id: StreamId::new("stream").unwrap(),
+                            incarnation: IncarnationId([0; 16]),
+                        },
+                    },
+                };
+                let mut receiver = owned.receiver.lock().unwrap();
+                entered.send(()).unwrap();
+                let result = finish_owned_read(&mut receiver, &owned, Ok(()), source.finish())
+                    .and_then(|()| receiver.fold.committed_session(0).map(Some));
+                publish_owned_read(&cache, &mut receiver, &owned, result)
+            });
+            started.recv().unwrap();
+            runtime
+                .change_lifecycle(LifecycleRequest {
+                    operation_id: LifecycleOperationId::new(if deleted {
+                        "delete-owned"
+                    } else {
+                        "reset-owned"
+                    })
+                    .unwrap(),
+                    expected: stream,
+                    action: if deleted {
+                        LifecycleAction::Delete
+                    } else {
+                        LifecycleAction::Reset
+                    },
+                })
+                .await
+                .unwrap();
+            let current = storage.read_committed(session.clone()).await;
+            if deleted {
+                assert!(current.unwrap().is_none());
+            } else {
+                assert!(matches!(current, Err(StorageError::ReadCapacity)));
+            }
+            assert!(entry.lifetime.is_obsolete());
+            assert_eq!(
+                entry.lifetime.pin(true),
+                Err(StorageError::IdentityMismatch)
+            );
+            assert!(storage.committed_views.lock().unwrap().contains_key(&scope));
+            assert_eq!(
+                cache_retained_bytes(&storage.committed_views.lock().unwrap()),
+                retained
+            );
+            release.send(()).unwrap();
+            assert!(matches!(
+                old.join().unwrap(),
+                Err(StorageError::IdentityMismatch)
+            ));
+            assert!(!entry.lifetime.is_pinned());
+            drop(entry);
+            if !deleted {
+                assert!(storage.read_committed(session).await.unwrap().is_some());
+            }
+            storage.shutdown().await.unwrap();
+        }
+    }
+
+    #[test]
+    fn oversized_pinned_receiver_finishes_its_captured_pass() {
+        let cache = Mutex::new(HashMap::new());
+        let scope = Scope::new(
+            id("receiver"),
+            id("origin"),
+            id("conversation"),
+            id("incarnation"),
+            physical_record_schema(),
+            id("epoch"),
+        );
+        let entry = cached_receiver(&cache, scope.clone()).unwrap();
+        {
+            let mut receiver = entry.receiver.lock().unwrap();
+            receiver.fold = TranscriptFold::from_test_snapshot(
+                scope.clone(),
+                super::super::snapshot::checkpoint::history_fixture(65),
+                66,
+            );
+            // The snapshot allocation is real valid history beyond the eviction target.
+            receiver.through = Some(100);
+            entry.retained_bytes.store(
+                receiver_retained_bytes(&receiver.fold, &entry.scope),
+                Ordering::Release,
+            );
+            entry.lifetime.pin(true).unwrap();
+        }
+        assert!(entry.retained_bytes.load(Ordering::Acquire) > COMMITTED_VIEW_CACHE_BYTES);
+        let same = cached_receiver(&cache, scope.clone()).unwrap();
+        assert!(Arc::ptr_eq(&entry, &same));
+        assert_eq!(same.receiver.lock().unwrap().through, Some(100));
+        let other = Scope::new(
+            id("receiver"),
+            id("origin"),
+            id("other"),
+            id("incarnation"),
+            physical_record_schema(),
+            id("epoch"),
+        );
+        assert!(matches!(
+            cached_receiver(&cache, other.clone()),
+            Err(StorageError::ReadCapacity)
+        ));
+        drop(same);
+        // Reaching the fixed raw target, even with a partial semantic tail, makes
+        // the now inactive entry evictable. No receipt observer owns a continuation.
+        entry.receiver.lock().unwrap().through = None;
+        let _ = entry.lifetime.pin(false);
+        drop(entry);
+        let admitted = cached_receiver(&cache, other.clone()).unwrap();
+        assert_eq!(admitted.scope, other);
+        assert!(!cache.lock().unwrap().contains_key(&scope));
+    }
+    #[test]
+    fn pending_fact_crosses_cache_target_and_resumes_without_replay() {
+        let cache = Mutex::new(HashMap::new());
+        let scope = Scope::new(
+            id("receiver"),
+            id("origin"),
+            id("conversation"),
+            id("incarnation"),
+            physical_record_schema(),
+            id("epoch"),
+        );
+        let entry = cached_receiver(&cache, scope.clone()).unwrap();
+        let frames = stream_fact::frame_fact(
+            &stream_fact::FramedFact {
+                key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
+                body: vec![b'x'; 16 * 1024 * 1024],
+            },
+            65,
+        )
+        .unwrap();
+        let physical = |position, event: &NewEvent| {
+            let mut payload = vec![stream_fact::frame_tag(event).unwrap()];
+            payload.extend_from_slice(event.payload.as_bytes());
+            Record {
+                position,
+                id: id(event.id.as_str()),
+                scope: scope.clone(),
+                payload,
+            }
+        };
+        {
+            let mut receiver = entry.receiver.lock().unwrap();
+            receiver.fold = TranscriptFold::from_test_snapshot(
+                scope.clone(),
+                super::super::snapshot::checkpoint::history_fixture(63),
+                64,
+            );
+            assert!(receiver_retained_bytes(&receiver.fold, &scope) < COMMITTED_VIEW_CACHE_BYTES);
+            receiver.through = Some(193);
+            entry.lifetime.pin(true).unwrap();
+            let prefix = frames[..128]
+                .iter()
+                .enumerate()
+                .map(|(index, frame)| physical(65 + index as u64, frame))
+                .collect::<Vec<_>>();
+            receiver.fold.apply(&prefix).unwrap();
+            entry.retained_bytes.store(
+                receiver_retained_bytes(&receiver.fold, &scope),
+                Ordering::Release,
+            );
+            assert_eq!(receiver.fold.downloaded(), 192);
+            assert_eq!(receiver.fold.applied(), 64);
+        }
+        assert!(entry.retained_bytes.load(Ordering::Acquire) > COMMITTED_VIEW_CACHE_BYTES);
+        drop(entry);
+        let other = Scope::new(
+            id("receiver"),
+            id("origin"),
+            id("other"),
+            id("incarnation"),
+            physical_record_schema(),
+            id("epoch"),
+        );
+        assert!(matches!(
+            cached_receiver(&cache, other),
+            Err(StorageError::ReadCapacity)
+        ));
+        let resumed = cached_receiver(&cache, scope.clone()).unwrap();
+        {
+            let mut receiver = resumed.receiver.lock().unwrap();
+            assert_eq!(receiver.through, Some(193));
+            assert_eq!(receiver.fold.downloaded(), 192);
+            let before = receiver.fold.snapshot().unwrap() as *const SessionSnapshot;
+            let abort = stream_fact::test_abort_event(&frames[0], 192);
+            receiver.fold.apply(&[physical(193, &abort)]).unwrap();
+            assert_eq!(receiver.fold.downloaded(), 193);
+            assert_eq!(receiver.fold.applied(), 193);
+            assert_eq!(
+                receiver.fold.snapshot().unwrap() as *const SessionSnapshot,
+                before
+            );
+            receiver.fold.observe_source_head(&scope, 193).unwrap();
+            receiver.through = None;
+            resumed.lifetime.pin(false).unwrap();
+            resumed.retained_bytes.store(
+                receiver_retained_bytes(&receiver.fold, &scope),
+                Ordering::Release,
+            );
+        }
+        assert!(resumed.retained_bytes.load(Ordering::Acquire) < COMMITTED_VIEW_CACHE_BYTES);
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn storage_shutdown_waits_for_source_join_after_caller_cancellation() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RecordStorage::new(root.path().join("sessions")).unwrap());
+        storage.initialize().await.unwrap();
+        let (release, gate) = mpsc::channel();
+        let (entered, started) = mpsc::channel();
+        let receipt = storage
+            .owner
+            .read(move || {
+                assert!(Handle::try_current().is_err());
+                let (sender, receiver) = mpsc::sync_channel(1);
+                let source = NessaRecordSource {
+                    worker: Arc::new(SourceWorker {
+                        sender: Some(sender),
+                        thread: Mutex::new(Some(thread::spawn(move || {
+                            gate.recv().unwrap();
+                            assert!(matches!(receiver.recv().unwrap(), SourceCommand::Shutdown));
+                        }))),
+                    }),
+                    identity: RecordStreamIdentity {
+                        origin: id("origin"),
+                        stream: StreamKey {
+                            id: StreamId::new("stream").unwrap(),
+                            incarnation: IncarnationId([0; 16]),
+                        },
+                    },
+                };
+                entered.send(()).unwrap();
+                source.finish()
+            })
+            .unwrap();
+        started.recv().unwrap();
+        drop(receipt);
+        let first_storage = storage.clone();
+        let first = tokio::spawn(async move { first_storage.shutdown().await });
+        // Poll the same owner rather than racing a scheduler delay.
+        loop {
+            if matches!(storage.owner.initialize(), Err(StorageError::Closed)) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        first.abort();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), storage.shutdown())
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            storage.open(SessionId::new("closed-writer").unwrap()).await,
+            Err(StorageError::Closed)
+        ));
+        assert!(matches!(
+            storage
+                .read_committed(SessionId::new("closed-reader").unwrap())
+                .await,
+            Err(StorageError::Closed)
+        ));
+        release.send(()).unwrap();
+        storage.shutdown().await.unwrap();
+        storage.shutdown().await.unwrap();
+    }
 
     fn id(value: &str) -> Id {
         Id::new(value).unwrap()
@@ -707,6 +2092,137 @@ mod tests {
             max_payload_bytes: 128 * 1024,
             max_record_bytes: 128 * 1024,
         }
+    }
+
+    #[tokio::test]
+    async fn independent_committed_read_uses_physical_facts_while_a_writer_exists() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+        let session = SessionId::new("conversation").unwrap();
+        assert!(storage
+            .read_committed(session.clone())
+            .await
+            .unwrap()
+            .is_none());
+        let runtime = storage.runtime().await.unwrap().clone();
+        let stream = runtime
+            .create_stream(&StreamId::new(session.as_str()).unwrap())
+            .await
+            .unwrap();
+        let change = SessionChange::Opened {
+            id: session.clone(),
+            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            context: ProviderContext::Absent,
+        };
+        let key = records::key_for_changes(None, std::slice::from_ref(&change), 0).unwrap();
+        let body = super::super::snapshot::encode_semantic_change(&change).unwrap();
+        let frames = stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 1).unwrap();
+        runtime.append(&stream, frames[0].clone()).await.unwrap();
+        let (first, second, third, fourth) = tokio::join!(
+            storage.read_committed(session.clone()),
+            storage.read_committed(session.clone()),
+            storage.read_committed(session.clone()),
+            storage.read_committed(session.clone()),
+        );
+        let view = first.unwrap().unwrap();
+        for result in [second, third, fourth] {
+            let concurrent = result.unwrap().unwrap();
+            assert_eq!(concurrent.position(), 1);
+            assert_eq!(view.snapshot(), concurrent.snapshot());
+        }
+        assert_eq!(view.position(), 1);
+        assert_eq!(view.snapshot().unwrap().id, session);
+        let unchanged = storage
+            .read_committed(session.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.position(), view.position());
+        assert_eq!(unchanged.snapshot(), view.snapshot());
+        let context = SessionChange::ProviderContext {
+            before: ProviderContext::Absent,
+            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+        };
+        let key =
+            records::key_for_changes(view.snapshot(), std::slice::from_ref(&context), 1).unwrap();
+        let body = super::super::snapshot::encode_semantic_change(&context).unwrap();
+        let frames = stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 2).unwrap();
+        runtime.append(&stream, frames[0].clone()).await.unwrap();
+        let newer = storage
+            .read_committed(session.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(newer.position(), 2);
+        assert_eq!(
+            newer.snapshot().unwrap().provider_context,
+            ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap())
+        );
+        assert_eq!(
+            view.snapshot().unwrap().provider_context,
+            ProviderContext::Absent
+        );
+        assert_eq!(unchanged.snapshot(), view.snapshot());
+        let mut snapshot = newer.snapshot().unwrap().clone();
+        for position in 3..=514u64 {
+            let before = snapshot.provider_context.clone();
+            let after = if position % 2 == 0 {
+                ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap())
+            } else {
+                ProviderContext::Absent
+            };
+            let change = SessionChange::ProviderContext { before, after };
+            let key = records::key_for_changes(
+                Some(&snapshot),
+                std::slice::from_ref(&change),
+                position - 1,
+            )
+            .unwrap();
+            let body = super::super::snapshot::encode_semantic_change(&change).unwrap();
+            let frame =
+                stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, position).unwrap();
+            runtime.append(&stream, frame[0].clone()).await.unwrap();
+            snapshot = records::fold_changes(Some(&snapshot), &[change]).unwrap();
+        }
+        let partial = storage
+            .read_committed(session.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(partial.position(), 258);
+        assert_eq!(partial.state(), CommittedViewState::Stale);
+        // This suffix is newer than the retained pass target514. The next read
+        // must finish that target even though the writer has advanced to515.
+        let later = SessionChange::ProviderContext {
+            before: snapshot.provider_context.clone(),
+            after: ProviderContext::Absent,
+        };
+        let key =
+            records::key_for_changes(Some(&snapshot), std::slice::from_ref(&later), 514).unwrap();
+        let body = super::super::snapshot::encode_semantic_change(&later).unwrap();
+        runtime
+            .append(
+                &stream,
+                stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 515).unwrap()[0]
+                    .clone(),
+            )
+            .await
+            .unwrap();
+        let caught_up = storage
+            .read_committed(session.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(caught_up.position(), 514);
+        assert_eq!(caught_up.state(), CommittedViewState::Stale);
+        assert_eq!(caught_up.snapshot(), Some(&snapshot));
+        let hot = storage.read_committed(session).await.unwrap().unwrap();
+        assert_eq!(hot.position(), 515);
+        assert_eq!(
+            hot.snapshot(),
+            Some(&records::fold_changes(Some(&snapshot), &[later]).unwrap())
+        );
+        storage.shutdown().await.unwrap();
     }
 
     #[test]
@@ -1175,12 +2691,22 @@ mod tests {
         storage.shutdown().await.unwrap();
     }
 
-    fn project_saved_records(db: &Connection) -> Result<(u64, u64), StoreError> {
+    fn project_saved_records(db: &Connection, scope: &Scope) -> Result<TranscriptFold, StoreError> {
+        let mut fold = TranscriptFold::new(scope.clone()).map_err(|_| StoreError::Failed)?;
+        drain_saved_records(db, scope, &mut fold)?;
+        Ok(fold)
+    }
+
+    fn drain_saved_records(
+        db: &Connection,
+        scope: &Scope,
+        fold: &mut TranscriptFold,
+    ) -> Result<(), StoreError> {
         let mut statement = db
-            .prepare("SELECT position, event_id, payload FROM records ORDER BY position")
+            .prepare("SELECT position, event_id, payload FROM records WHERE position > ?1 ORDER BY position")
             .map_err(|_| StoreError::Failed)?;
         let rows = statement
-            .query_map([], |row| {
+            .query_map([fold.downloaded() as i64], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
@@ -1188,68 +2714,28 @@ mod tests {
                 ))
             })
             .map_err(|_| StoreError::Failed)?;
-        let mut downloaded = 0u64;
-        let mut applied = 0u64;
-        let mut facts = 0u64;
-        let mut pending = Vec::new();
-        let mut snapshot: Option<SessionSnapshot> = None;
         for row in rows {
             let (position, event_id, payload) = row.map_err(|_| StoreError::Failed)?;
             let position = u64::try_from(position).map_err(|_| StoreError::Failed)?;
-            if position != downloaded + 1 || payload.is_empty() {
-                return Err(StoreError::Failed);
-            }
-            downloaded = position;
-            let event = NewEvent {
-                id: EventId::new(event_id).map_err(|_| StoreError::Failed)?,
-                schema: stream_fact::schema_for_tag(payload[0]).map_err(|_| StoreError::Failed)?,
-                payload: Payload::copy_from_slice(&payload[1..]),
+            let record = Record {
+                position,
+                id: Id::new(event_id).map_err(|_| StoreError::Failed)?,
+                scope: scope.clone(),
+                payload,
             };
-            if pending.is_empty() {
-                stream_fact::validate_start_offset(&event, position)
-                    .map_err(|_| StoreError::Failed)?;
-            }
-            if payload[0] == 4 {
-                stream_fact::validate_abort_prefix(&pending, &event, applied + 1, position - 1)
-                    .map_err(|_| StoreError::Failed)?;
-                pending.clear();
-                applied = position;
-                continue;
-            }
-            pending.push(event);
-            match stream_fact::decode_first(&pending).map_err(|_| StoreError::Failed)? {
-                stream_fact::FactDecode::Partial => {}
-                stream_fact::FactDecode::Complete {
-                    fact,
-                    records: count,
-                } => {
-                    if count != pending.len() {
-                        return Err(StoreError::Failed);
-                    }
-                    let changes = super::super::snapshot::decode_semantic_batch(
-                        &fact.body,
-                        fact.key.kind() == FactKind::AtomicTransition,
-                        &snapshot.as_ref().map_or(ProviderContext::Absent, |state| {
-                            state.provider_context.clone()
-                        }),
-                    )
-                    .map_err(|_| StoreError::Failed)?;
-                    let expected = records::key_for_changes(snapshot.as_ref(), &changes, applied)
-                        .map_err(|_| StoreError::Failed)?;
-                    if fact.key != expected {
-                        return Err(StoreError::Failed);
-                    }
-                    snapshot = Some(
-                        records::fold_changes(snapshot.as_ref(), &changes)
-                            .map_err(|_| StoreError::Failed)?,
-                    );
-                    pending.clear();
-                    applied = position;
-                    facts += 1;
-                }
-            }
+            fold.apply(std::slice::from_ref(&record))
+                .map_err(|_| StoreError::Failed)?;
         }
-        Ok((applied, facts))
+        Ok(())
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct DurableProgress {
+        scope: Scope,
+        downloaded: u64,
+        applied: u64,
+        facts: u64,
+        checkpoint: Vec<Vec<u8>>,
     }
 
     struct DurableReceiver {
@@ -1267,6 +2753,7 @@ mod tests {
                     incarnation TEXT NOT NULL, schema_id TEXT NOT NULL, epoch TEXT NOT NULL,
                     downloaded INTEGER NOT NULL, applied INTEGER NOT NULL, facts INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS checkpoint_chunks (position INTEGER PRIMARY KEY, payload BLOB NOT NULL);
                 CREATE TABLE IF NOT EXISTS records (
                     position INTEGER PRIMARY KEY, event_id TEXT NOT NULL UNIQUE,
                     payload BLOB NOT NULL
@@ -1280,7 +2767,7 @@ mod tests {
             }
         }
 
-        fn progress(&self) -> Result<Option<(Scope, u64, u64, u64)>, StoreError> {
+        fn progress(&self) -> Result<Option<DurableProgress>, StoreError> {
             self.db
                 .query_row(
                     "SELECT receiver, origin, stream, incarnation, schema_id, epoch,
@@ -1309,12 +2796,32 @@ mod tests {
                 .optional()
                 .map_err(|_| StoreError::Failed)?
                 .map(|(scope, downloaded, applied, facts)| {
-                    Ok((
+                    let mut query = self
+                        .db
+                        .prepare("SELECT position,payload FROM checkpoint_chunks ORDER BY position")
+                        .map_err(|_| StoreError::Failed)?;
+                    let rows = query
+                        .query_map([], |row| {
+                            Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+                        })
+                        .map_err(|_| StoreError::Failed)?;
+                    let mut checkpoint = Vec::new();
+                    for row in rows {
+                        let (position, bytes) = row.map_err(|_| StoreError::Failed)?;
+                        if usize::try_from(position).map_err(|_| StoreError::Failed)?
+                            != checkpoint.len()
+                        {
+                            return Err(StoreError::Failed);
+                        }
+                        checkpoint.push(bytes);
+                    }
+                    Ok(DurableProgress {
                         scope,
-                        u64::try_from(downloaded).map_err(|_| StoreError::Failed)?,
-                        u64::try_from(applied).map_err(|_| StoreError::Failed)?,
-                        u64::try_from(facts).map_err(|_| StoreError::Failed)?,
-                    ))
+                        downloaded: u64::try_from(downloaded).map_err(|_| StoreError::Failed)?,
+                        applied: u64::try_from(applied).map_err(|_| StoreError::Failed)?,
+                        facts: u64::try_from(facts).map_err(|_| StoreError::Failed)?,
+                        checkpoint,
+                    })
                 })
                 .transpose()
         }
@@ -1322,7 +2829,14 @@ mod tests {
 
     impl ReplicaStore for DurableReceiver {
         fn load(&mut self, scope: &Scope) -> Result<Option<Checkpoint>, StoreError> {
-            let Some((saved, downloaded, applied, facts)) = self.progress()? else {
+            let Some(DurableProgress {
+                scope: saved,
+                downloaded,
+                applied,
+                facts,
+                checkpoint,
+            }) = self.progress()?
+            else {
                 return Ok(None);
             };
             if &saved != scope || saved != self.scope {
@@ -1331,7 +2845,22 @@ mod tests {
                     requested: Box::new(scope.clone()),
                 });
             }
-            if project_saved_records(&self.db)? != (applied, facts) {
+            let mut restored = TranscriptFold::restore(
+                scope.clone(),
+                applied,
+                &super::super::transcript::TranscriptCheckpoint::from_chunks(checkpoint)
+                    .map_err(|_| StoreError::Failed)?,
+            )
+            .map_err(|_| StoreError::Failed)?;
+            drain_saved_records(&self.db, scope, &mut restored)?;
+            let replayed = project_saved_records(&self.db, scope)?;
+            if restored.downloaded() != downloaded
+                || restored.applied() != applied
+                || restored.fact_count() != facts
+                || restored.snapshot() != replayed.snapshot()
+                || replayed.applied() != applied
+                || replayed.downloaded() != downloaded
+            {
                 return Err(StoreError::Failed);
             }
             Ok(Some(Checkpoint::new(saved, downloaded)))
@@ -1346,13 +2875,23 @@ mod tests {
                 });
             }
             let saved = self.progress()?;
-            if saved
-                .as_ref()
-                .map_or(0, |(_, downloaded, _, _)| *downloaded)
-                != expected.position()
-            {
+            if saved.as_ref().map_or(0, |saved| saved.downloaded) != expected.position() {
                 return Err(StoreError::Stale);
             }
+            let mut fold = match saved {
+                Some(DurableProgress {
+                    applied,
+                    checkpoint,
+                    ..
+                }) => TranscriptFold::restore(
+                    self.scope.clone(),
+                    applied,
+                    &super::super::transcript::TranscriptCheckpoint::from_chunks(checkpoint)
+                        .map_err(|_| StoreError::Failed)?,
+                )
+                .map_err(|_| StoreError::Failed)?,
+                None => TranscriptFold::new(self.scope.clone()).map_err(|_| StoreError::Failed)?,
+            };
             let transaction = self.db.transaction().map_err(|_| StoreError::Failed)?;
             for record in records {
                 transaction
@@ -1362,7 +2901,21 @@ mod tests {
                     )
                     .map_err(|_| StoreError::ConflictingRecord)?;
             }
-            let (applied, facts) = project_saved_records(&transaction)?;
+            drain_saved_records(&transaction, &self.scope, &mut fold)?;
+            let applied = fold.applied();
+            let facts = fold.fact_count();
+            let checkpoint = fold.checkpoint().map_err(|_| StoreError::Failed)?;
+            transaction
+                .execute("DELETE FROM checkpoint_chunks", [])
+                .map_err(|_| StoreError::Failed)?;
+            for (position, chunk) in checkpoint.chunks().enumerate() {
+                transaction
+                    .execute(
+                        "INSERT INTO checkpoint_chunks VALUES (?1, ?2)",
+                        params![position as i64, chunk],
+                    )
+                    .map_err(|_| StoreError::Failed)?;
+            }
             transaction
                 .execute("DELETE FROM progress", [])
                 .map_err(|_| StoreError::Failed)?;
@@ -1475,7 +3028,10 @@ mod tests {
         assert!(first.contains("NESSA_DURABLE_TRAFFIC"));
         let mut receiver = DurableReceiver::open(&db_path, authority.scope.clone(), false);
         let initial = receiver.progress().unwrap().unwrap();
-        assert_eq!((initial.1, initial.2, initial.3), (2, 1, 1));
+        assert_eq!(
+            (initial.downloaded, initial.applied, initial.facts),
+            (2, 1, 1)
+        );
         assert_eq!(
             receiver.load(&authority.scope).unwrap().unwrap().position(),
             2
@@ -1547,12 +3103,12 @@ mod tests {
         assert!(second.contains("NESSA_DURABLE_TRAFFIC"));
         let mut receiver = DurableReceiver::open(&db_path, authority.scope.clone(), false);
         let completed = receiver.progress().unwrap().unwrap();
-        assert!(completed.1 > 2);
-        assert_eq!(completed.2, completed.1);
-        assert_eq!(completed.3, 2);
+        assert!(completed.downloaded > 2);
+        assert_eq!(completed.applied, completed.downloaded);
+        assert_eq!(completed.facts, 2);
         assert_eq!(
             receiver.load(&authority.scope).unwrap().unwrap().position(),
-            completed.1
+            completed.downloaded
         );
         drop(receiver);
 
@@ -1562,8 +3118,27 @@ mod tests {
         assert_eq!(receiver.progress().unwrap().unwrap(), completed);
         assert_eq!(
             receiver.load(&authority.scope).unwrap().unwrap().position(),
-            completed.1
+            completed.downloaded
         );
+        // The durable ordered chunk set is part of the same A publication.
+        // A missing first index cannot be accepted as a shorter valid chain.
+        receiver
+            .db
+            .execute_batch("BEGIN; UPDATE checkpoint_chunks SET position = position + 1000;")
+            .unwrap();
+        assert_eq!(receiver.load(&authority.scope), Err(StoreError::Failed));
+        receiver.db.execute_batch("ROLLBACK;").unwrap();
+        assert_eq!(
+            receiver.load(&authority.scope).unwrap().unwrap().position(),
+            completed.downloaded
+        );
+        receiver
+            .db
+            .execute_batch("BEGIN; DELETE FROM checkpoint_chunks;")
+            .unwrap();
+        assert_eq!(receiver.load(&authority.scope), Err(StoreError::Failed));
+        receiver.db.execute_batch("ROLLBACK;").unwrap();
+        assert_eq!(receiver.progress().unwrap().unwrap(), completed);
         println!("{first}{second}{third}");
     }
 
@@ -1687,5 +3262,170 @@ mod tests {
             "NESSA_DURABLE_TRAFFIC {mode} payload={} protocol={} duplicate={}",
             counters.payload_bytes, counters.protocol_bytes, counters.duplicate_bytes
         );
+    }
+    #[tokio::test]
+    async fn committed_cache_charge_tracks_refused_and_accepted_page_allocations() {
+        for reject in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
+            let session = SessionId::new("conversation").unwrap();
+            let runtime = storage.runtime().await.unwrap().clone();
+            let stream = runtime
+                .create_stream(&StreamId::new(session.as_str()).unwrap())
+                .await
+                .unwrap();
+            append_opening(&runtime, &stream, &session).await;
+            let initial = storage
+                .read_committed(session.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            let entry = storage
+                .committed_views
+                .lock()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
+                .clone();
+            let initial_charge = entry.retained_bytes.load(Ordering::Acquire);
+            let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+                target_event_offset: None,
+                submission: SubmissionMode::Immediate,
+                request: ExecutionRequest {
+                    execution_id: ExecutionId::new("new").unwrap(),
+                    user_message: UserMessage::text_only(PromptText::new("message").unwrap()),
+                    estimated_input_tokens: 1,
+                    reserved_output_tokens: 1,
+                },
+                actor: ActionContext::new("user", "surface", "request").unwrap(),
+                acknowledgement: SubmissionAcknowledgement::Pending,
+                events: Vec::new(),
+                scheduling: Vec::new(),
+                cancellation: None,
+                provider_report: None,
+                local_cancellation: None,
+                local_outcome: None,
+                result: None,
+            }));
+            let key = records::key_for_changes(initial.snapshot(), std::slice::from_ref(&input), 1)
+                .unwrap();
+            let body = super::super::snapshot::encode_semantic_change(&input).unwrap();
+            for frame in stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 2).unwrap()
+            {
+                runtime.append(&stream, frame).await.unwrap();
+            }
+            if reject {
+                let invalid = SessionChange::Opened {
+                    id: session.clone(),
+                    provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+                    context: ProviderContext::Absent,
+                };
+                let key =
+                    records::key_for_changes(initial.snapshot(), std::slice::from_ref(&invalid), 2)
+                        .unwrap();
+                let body = super::super::snapshot::encode_semantic_change(&invalid).unwrap();
+                for frame in
+                    stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 3).unwrap()
+                {
+                    runtime.append(&stream, frame).await.unwrap();
+                }
+            }
+            let (entered, waiting) = mpsc::channel();
+            let (release, gate) = mpsc::channel();
+            *storage.committed_read_gate.lock().unwrap() = Some(CommittedReadGate {
+                point: CommittedReadPoint::Joined,
+                entered,
+                release: gate,
+            });
+            let reading = tokio::spawn({
+                let storage = storage.clone();
+                let session = session.clone();
+                async move { storage.read_committed(session).await }
+            });
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                tokio::task::spawn_blocking(move || waiting.recv()),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+            // Observe charge before final result publication, while the receiver is
+            // still exclusively owned. A final-only refresh cannot satisfy this.
+            let page_charge = entry.retained_bytes.load(Ordering::Acquire);
+            release.send(()).unwrap();
+            let result = reading.await.unwrap();
+            assert!(page_charge > initial_charge);
+            if reject {
+                assert!(matches!(result, Err(StorageError::Corrupt(_))));
+            } else {
+                assert_eq!(
+                    result
+                        .unwrap()
+                        .unwrap()
+                        .snapshot()
+                        .unwrap()
+                        .invocations
+                        .len(),
+                    1
+                );
+            }
+            {
+                let receiver = entry.receiver.lock().unwrap();
+                assert_eq!(receiver.fold.applied(), if reject { 1 } else { 2 });
+                assert_eq!(receiver.fold.downloaded(), if reject { 1 } else { 2 });
+                // Check cached semantic totals against current allocation owners first.
+                receiver.fold.assert_retained_accounting();
+                // Sum the entry's actual layouts and separate scope/StreamKey copies,
+                // independently of the production receiver_retained_bytes projection.
+                let expected = receiver.fold.retained_bytes()
+                    + std::mem::size_of::<CachedCommittedRead>()
+                    + 2 * std::mem::size_of::<usize>()
+                    + [
+                        entry.scope.receiver(),
+                        entry.scope.origin(),
+                        entry.scope.stream(),
+                        entry.scope.incarnation(),
+                        entry.scope.schema(),
+                        entry.scope.access_epoch(),
+                    ]
+                    .iter()
+                    .map(|id| id.as_str().len())
+                    .sum::<usize>()
+                    + entry.stream.id.as_str().len();
+                assert_eq!(entry.retained_bytes.load(Ordering::Acquire), expected);
+                assert!(expected > initial_charge); // surviving actual slot owners grew.
+                if reject {
+                    assert!(receiver.fold.snapshot().unwrap().invocations.is_empty());
+                    assert!(!entry.lifetime.is_pinned());
+                }
+            }
+            // A repeated failed read reuses warm spare; the valid path remains publishable.
+            let retry = storage.read_committed(session).await;
+            if reject {
+                assert!(matches!(retry, Err(StorageError::Corrupt(_))));
+            } else {
+                assert_eq!(
+                    retry
+                        .unwrap()
+                        .unwrap()
+                        .snapshot()
+                        .unwrap()
+                        .invocations
+                        .len(),
+                    1
+                );
+            }
+            {
+                let receiver = entry.receiver.lock().unwrap();
+                receiver.fold.assert_retained_accounting();
+                assert_eq!(
+                    entry.retained_bytes.load(Ordering::Acquire),
+                    receiver_retained_bytes(&receiver.fold, &entry.scope)
+                );
+            }
+            storage.shutdown().await.unwrap();
+        }
     }
 }

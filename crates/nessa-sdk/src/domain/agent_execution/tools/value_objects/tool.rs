@@ -155,6 +155,11 @@ pub struct ToolObservation {
     locations: Option<Vec<FileLocation>>,
     content: Option<Vec<ToolContent>>,
 }
+/// Moved prior fields for a reversible entity-owned observation replacement.
+pub(crate) struct ToolObservationUndo {
+    previous: ToolObservation,
+    changed: [bool; 5],
+}
 impl ToolObservation {
     /// Last observed display title; None means no title has been observed.
     pub fn title(&self) -> &Option<String> {
@@ -232,12 +237,52 @@ impl ToolObservation {
     /// Session-owned tool updates validate identities before constructing a replacement.
     /// Providers can use this to build a review snapshot from a sparse tool report.
     pub fn with_update(self, update: ToolCallUpdate) -> Self {
+        self.with_reversible_update(update).0
+    }
+    pub(crate) fn with_reversible_update(
+        self,
+        update: ToolCallUpdate,
+    ) -> (Self, ToolObservationUndo) {
+        let changed = [
+            update.title.is_some(),
+            update.kind.is_some(),
+            update.status.is_some(),
+            update.locations.is_some(),
+            update.content.is_some(),
+        ];
+        let mut previous = self;
+        let next = Self {
+            title: update.title.or_else(|| previous.title.take()),
+            kind: update.kind.or_else(|| previous.kind.take()),
+            status: update.status.or_else(|| previous.status.take()),
+            locations: update.locations.or_else(|| previous.locations.take()),
+            content: update.content.or_else(|| previous.content.take()),
+        };
+        (next, ToolObservationUndo { previous, changed })
+    }
+    pub(crate) fn restored(self, undo: ToolObservationUndo) -> Self {
+        let Self {
+            title,
+            kind,
+            status,
+            locations,
+            content,
+        } = self;
+        let ToolObservationUndo { previous, changed } = undo;
         Self {
-            title: update.title.or(self.title),
-            kind: update.kind.or(self.kind),
-            status: update.status.or(self.status),
-            locations: update.locations.or(self.locations),
-            content: update.content.or(self.content),
+            title: if changed[0] { previous.title } else { title },
+            kind: if changed[1] { previous.kind } else { kind },
+            status: if changed[2] { previous.status } else { status },
+            locations: if changed[3] {
+                previous.locations
+            } else {
+                locations
+            },
+            content: if changed[4] {
+                previous.content
+            } else {
+                content
+            },
         }
     }
 }
@@ -324,5 +369,57 @@ impl ToolContent {
                 .saturating_add(old.as_ref().map_or(0, |text| text.len()))
                 .saturating_add(new.len()),
         }
+    }
+}
+
+#[cfg(test)]
+mod reversible_tests {
+    use super::*;
+
+    fn content_pointer(observation: &ToolObservation) -> *const ToolContent {
+        observation.content().as_ref().unwrap().as_ptr()
+    }
+
+    #[test]
+    fn sparse_replacement_and_rollback_move_existing_large_payloads() {
+        let id = ToolCallId::new("tool").unwrap();
+        let original = ToolObservation::default().with_update(ToolCallUpdate::new(
+            id.clone(),
+            Some("t".repeat(1024 * 1024)),
+            None,
+            None,
+            None,
+            Some(vec![ToolContent::text("c".repeat(1024 * 1024))]),
+        ));
+        let title = original.title().as_ref().unwrap().as_ptr();
+        let content = content_pointer(&original);
+        let (replacement, undo) = original.with_reversible_update(ToolCallUpdate::new(
+            id.clone(),
+            Some("new title".into()),
+            None,
+            Some(ToolStatus::Running),
+            None,
+            None,
+        ));
+        assert_eq!(content_pointer(&replacement), content);
+        assert_eq!(undo.previous.title().as_ref().unwrap().as_ptr(), title);
+        assert!(undo.previous.content().is_none());
+        let restored = replacement.restored(undo);
+        assert_eq!(restored.title().as_ref().unwrap().as_ptr(), title);
+        assert_eq!(content_pointer(&restored), content);
+        assert_eq!(restored.status(), &None);
+        let (cleared, undo) = restored.with_reversible_update(ToolCallUpdate::new(
+            id,
+            None,
+            None,
+            None,
+            None,
+            Some(Vec::new()),
+        ));
+        assert!(cleared.content().as_ref().unwrap().is_empty());
+        assert_eq!(content_pointer(&undo.previous), content);
+        let restored = cleared.restored(undo);
+        assert_eq!(restored.title().as_ref().unwrap().as_ptr(), title);
+        assert_eq!(content_pointer(&restored), content);
     }
 }

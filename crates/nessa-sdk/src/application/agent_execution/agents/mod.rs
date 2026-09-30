@@ -32,6 +32,7 @@ mod attachment_evidence;
 mod coordination;
 mod error;
 mod error_limits;
+pub(crate) use error_limits::DiagnosticTreeLimits;
 mod initialization;
 mod lifecycle;
 mod scheduling;

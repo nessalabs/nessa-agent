@@ -3,14 +3,19 @@
 use crate::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome},
     permissions::{
-        PermissionCancellationReason, PermissionCancellationReasonView, PermissionId,
-        PermissionOptionId, PermissionRequest, PermissionStateView,
+        PendingPermissions, PermissionAuthority, PermissionCancellationReason,
+        PermissionCancellationReasonView, PermissionId, PermissionOptionId, PermissionRequest,
+        PermissionStateView,
     },
     sessions::{ExecutionFinish, ExecutionSessionId, SessionClosure},
-    tools::{ToolCall, ToolCallId, ToolCallUpdate},
+    tools::{ToolCall, ToolCallId, ToolCallUpdate, ToolObservationUndo},
     ExecutionError,
 };
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    mem::size_of,
+    sync::{Arc, Mutex},
+};
 
 /// State for one live attachment to an agent context, with sequential executions.
 /// Restoring a closed provider context creates a fresh aggregate; it never revives this one.
@@ -36,32 +41,45 @@ struct ActiveExecution {
     id: ExecutionId,
     tools: HashMap<ToolCallId, ToolCall>,
     // Resolved reviews leave this map and become application evidence.
-    pending_permissions: HashMap<PermissionId, PermissionRequest>,
+    pending_permissions: PendingPermissions,
     // Reserves every admitted review ID until finish, preventing replay after resolution.
     seen_permission_ids: HashSet<PermissionId>,
+    seen_permission_bytes: usize,
+}
+/// Entity-issued touched-tool replacement token for a disposable retention witness.
+pub(crate) struct HistoricalToolUndo {
+    execution: ExecutionId,
+    tool: ToolCallId,
+    previous: Option<ToolObservationUndo>,
 }
 impl ActiveExecution {
     fn new(id: ExecutionId) -> Self {
         Self {
             id,
             tools: HashMap::new(),
-            pending_permissions: HashMap::new(),
+            pending_permissions: Arc::new(Mutex::new(HashMap::new())),
             seen_permission_ids: HashSet::new(),
+            seen_permission_bytes: 0,
         }
     }
     fn cancel_permissions(
         &mut self,
         reason: PermissionCancellationReason,
     ) -> Vec<PermissionRequest> {
-        std::mem::take(&mut self.pending_permissions)
-            .into_values()
-            .map(|mut request| {
-                request
-                    .cancel(reason.clone())
-                    .expect("session retains only pending permissions");
-                request
-            })
-            .collect()
+        std::mem::take(
+            &mut *self
+                .pending_permissions
+                .lock()
+                .expect("pending permissions"),
+        )
+        .into_values()
+        .map(|mut request| {
+            request
+                .cancel(reason.clone())
+                .expect("session retains only pending permissions");
+            request
+        })
+        .collect()
     }
 }
 impl ExecutionSession {
@@ -235,6 +253,13 @@ impl ExecutionSession {
         execution: &ExecutionId,
         update: ToolCallUpdate,
     ) -> Result<(), ExecutionError> {
+        self.observe_tool_reversible(execution, update).map(drop)
+    }
+    pub(crate) fn observe_tool_reversible(
+        &mut self,
+        execution: &ExecutionId,
+        update: ToolCallUpdate,
+    ) -> Result<HistoricalToolUndo, ExecutionError> {
         if self.is_closed() {
             return Err(ExecutionError::SessionClosed);
         }
@@ -243,16 +268,58 @@ impl ExecutionSession {
             .active_execution
             .as_mut()
             .expect("checked active execution");
-        if let Some(tool) = active.tools.get_mut(update.id()) {
-            tool.apply(execution, update)
-                .expect("session selects the tool by identity within its execution");
+        let id = update.id().clone();
+        let previous = if let Some(tool) = active.tools.get_mut(&id) {
+            Some(
+                tool.apply_reversible(execution, update)
+                    .expect("session selects the tool by identity within its execution"),
+            )
         } else {
             active.tools.insert(
                 update.id().clone(),
                 ToolCall::new(execution.clone(), update),
             );
+            None
+        };
+        Ok(HistoricalToolUndo {
+            execution: execution.clone(),
+            tool: id,
+            previous,
+        })
+    }
+    pub(crate) fn restore_historical_tool(&mut self, undo: HistoricalToolUndo) {
+        assert_eq!(self.active_execution(), Some(&undo.execution));
+        let active = self
+            .active_execution
+            .as_mut()
+            .expect("retention witness execution");
+        if let Some(previous) = undo.previous {
+            active
+                .tools
+                .get_mut(&undo.tool)
+                .expect("retained tool")
+                .restore_observation(previous);
+        } else {
+            active.tools.remove(&undo.tool);
         }
-        Ok(())
+    }
+    pub(crate) fn restore_historical_permission_identity(
+        &mut self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+    ) {
+        assert_eq!(self.active_execution(), Some(execution));
+        let active = self
+            .active_execution
+            .as_mut()
+            .expect("retention witness execution");
+        assert!(!active
+            .pending_permissions
+            .lock()
+            .expect("pending permissions")
+            .contains_key(id));
+        assert!(active.seen_permission_ids.remove(id));
+        active.seen_permission_bytes -= id.as_str().len();
     }
     /// Find the observed tool by id in the active execution; returns None outside that lifetime.
     pub fn tool(&self, id: &ToolCallId) -> Option<&ToolCall> {
@@ -291,6 +358,58 @@ impl ExecutionSession {
             .as_ref()
             .map_or(0, |active| active.tools.len())
     }
+    pub(crate) fn historical_retained_bytes(&self) -> usize {
+        let Some(active) = &self.active_execution else {
+            return self.id.as_str().len();
+        };
+        self.id
+            .as_str()
+            .len()
+            .saturating_add(active.id.as_str().len())
+            .saturating_add(
+                self.seen_execution_ids
+                    .capacity()
+                    .saturating_mul(size_of::<ExecutionId>() + size_of::<usize>()),
+            )
+            .saturating_add(active.id.as_str().len())
+            .saturating_add(
+                active
+                    .tools
+                    .capacity()
+                    .saturating_mul(size_of::<(ToolCallId, ToolCall)>() + size_of::<usize>()),
+            )
+            .saturating_add(
+                active
+                    .seen_permission_ids
+                    .capacity()
+                    .saturating_mul(size_of::<PermissionId>() + size_of::<usize>()),
+            )
+            .saturating_add(active.seen_permission_bytes)
+            .saturating_add(
+                std::mem::size_of_val(active.pending_permissions.as_ref()) + 2 * size_of::<usize>(),
+            )
+            .saturating_add(
+                active
+                    .pending_permissions
+                    .lock()
+                    .map_or(usize::MAX, |pending| {
+                        pending.capacity().saturating_mul(
+                            size_of::<(PermissionId, PermissionRequest)>() + size_of::<usize>(),
+                        )
+                    }),
+            )
+    }
+    /// Issue a weak read handle to the existing exact active review collection.
+    /// Settlement/drop invalidates its owner; this creates no new review state.
+    pub fn permission_authority(&self) -> Option<PermissionAuthority> {
+        self.active_execution.as_ref().map(|active| {
+            PermissionAuthority::new(
+                self.id.clone(),
+                active.id.clone(),
+                &active.pending_permissions,
+            )
+        })
+    }
     /// All requests admitted in the active execution, including resolved requests.
     pub fn permission_count(&self) -> usize {
         self.active_execution
@@ -310,6 +429,8 @@ impl ExecutionSession {
                 .fold(0usize, |total, id| total.saturating_add(id.as_str().len()));
             active
                 .pending_permissions
+                .lock()
+                .expect("pending permissions")
                 .iter()
                 .fold(seen, |total, (id, request)| {
                     total
@@ -365,8 +486,13 @@ impl ExecutionSession {
             return Err(ExecutionError::UnknownTool);
         }
         active.seen_permission_ids.insert(request.id().clone());
+        active.seen_permission_bytes = active
+            .seen_permission_bytes
+            .saturating_add(request.id().as_str().len());
         active
             .pending_permissions
+            .lock()
+            .expect("pending permissions")
             .insert(request.id().clone(), request);
         Ok(())
     }
@@ -385,15 +511,15 @@ impl ExecutionSession {
             .active_execution
             .as_mut()
             .expect("checked active execution");
-        let request = active
+        let mut pending = active
             .pending_permissions
+            .lock()
+            .expect("pending permissions");
+        let request = pending
             .get_mut(id)
             .ok_or(ExecutionError::UnknownPermission)?;
         request.answer(execution, option)?;
-        Ok(active
-            .pending_permissions
-            .remove(id)
-            .expect("answered permission"))
+        Ok(pending.remove(id).expect("answered permission"))
     }
     /// Cancel one pending review in `execution` without affecting other requests or reopening its identity.
     /// Execution-terminal causes require `finish_execution`, or correlated `close`
@@ -415,6 +541,8 @@ impl ExecutionSession {
             .as_mut()
             .expect("checked active execution")
             .pending_permissions
+            .lock()
+            .expect("pending permissions")
             .remove(id)
         else {
             return Ok(None);
@@ -491,3 +619,7 @@ impl SessionClosureResult {
         (self.closure, self.permissions)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/domain/agent_execution/historical_session.rs"]
+mod historical_tests;

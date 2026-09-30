@@ -12,6 +12,9 @@
 //! will not put to a host, a frame it could not describe, or no choice left to
 //! offer. That is a decision too, so its immutable selection and response-write
 //! stages are modelled under one checked identity rather than lost.
+mod authority;
+pub(crate) use authority::PendingPermissions;
+pub use authority::{PermissionAuthority, PermissionAuthorityError};
 pub mod entities;
 pub mod value_objects;
 pub use entities::{PermissionRequest, PermissionStateView};

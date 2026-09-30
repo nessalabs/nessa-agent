@@ -1,9 +1,12 @@
 //! Select allocation budgets from storage field roles, without replacing schema validation.
-use crate::application::agent_execution::agents::ProviderDiagnostic;
+use crate::application::agent_execution::agents::{DiagnosticTreeLimits, ProviderDiagnostic};
 use crate::application::agent_execution::executions::{
-    limits::MAX_MESSAGE_CHUNK_BYTES, ExecutionRequest,
+    limits::{MAX_MESSAGE_CHUNK_BYTES, MAX_RETAINED_OUTPUT_EVENTS},
+    ExecutionRequest,
 };
+use crate::application::agent_execution::sessions::{QueueHistoryRecord, SessionSnapshot};
 use crate::domain::agent_execution::{
+    executions::QueueOrderChange,
     permissions::PermissionOption,
     prompts::{LinkedFile, UserMessage},
     questions::{
@@ -16,8 +19,7 @@ use std::mem::size_of;
 use Shape::*;
 
 pub(super) const LARGE_STRING: usize = 32 * 1024 * 1024;
-pub(super) const ERROR_BYTES: usize = 1024 * 1024;
-const STORAGE_ERROR_BYTES: usize = 4096;
+pub(super) const ERROR_BYTES: usize = DiagnosticTreeLimits::BYTES;
 pub(super) const KEY_BYTES: usize = 128;
 /// `sha256:` and 64 hexadecimal digits: the one text form of a digest.
 const DIGEST_BYTES: usize = 71;
@@ -26,6 +28,12 @@ const MEDIA_TYPE_BYTES: usize = 16;
 
 #[derive(Clone, Copy)]
 pub(super) enum Shape {
+    Checkpoint,
+    Snapshot,
+    Invocations,
+    Invocation,
+    Events,
+    QueueHistory,
     Semantic,
     SemanticBatch,
     SemanticChanges,
@@ -52,6 +60,8 @@ pub(super) enum Shape {
     Acknowledgement,
     FailedAcknowledgement,
     StorageError,
+    StorageChildren,
+    StorageDiagnostic,
     Reorder,
     QueueEntries,
     QueueEntry,
@@ -80,12 +90,25 @@ impl Shape {
     pub(super) fn string_limit(self) -> usize {
         match self {
             Self::Text(limit) => limit,
+            Self::StorageDiagnostic => ERROR_BYTES,
             Self::Acknowledgement | Self::StorageError | Self::Error => KEY_BYTES,
             _ => LARGE_STRING,
         }
     }
     pub(super) fn field(self, key: &str) -> Self {
         match (self, key) {
+            (Checkpoint, "snapshot") => Snapshot,
+            (
+                Checkpoint,
+                "receiver" | "origin" | "stream" | "incarnation" | "schema" | "access_epoch",
+            ) => Text(256),
+            (Snapshot, "id" | "context") => Text(256),
+            (Snapshot, "provider") => Provider,
+            (Snapshot, "invocations") => Invocations,
+            (Snapshot, "queue_history") => QueueHistory,
+            (Invocation, "metadata") => Metadata,
+            (Invocation, "scheduling") => Scheduling,
+            (Invocation, "events") => Events,
             (SemanticBatch, "changes") => SemanticChanges,
             (Semantic, "Opened") => SemanticOpened,
             (Semantic, "InputAccepted") => SemanticInput,
@@ -125,7 +148,10 @@ impl Shape {
             (Acknowledgement, "Failed") => FailedAcknowledgement,
             (FailedAcknowledgement, "audit") => Error,
             (FailedAcknowledgement, "storage") => StorageError,
-            (StorageError, "Io" | "Corrupt") => Text(STORAGE_ERROR_BYTES),
+            (StorageError, "Io" | "Corrupt") => StorageDiagnostic,
+            (StorageError, "ShutdownFailures") => StorageChildren,
+            (StorageChildren, "read" | "runtime") => StorageError,
+            (Error, "Storage") | (ErrorBody(true), "error") => StorageError,
             (Metadata, "execution_id") | (Event, "execution_id" | "message_id") => Text(256),
             (Metadata, "user_message") => Text(ExecutionRequest::MAX_MESSAGE_BYTES),
             (Metadata, "user_images") => Images,
@@ -164,13 +190,9 @@ impl Shape {
                 Error,
                 "Configuration" | "Unsupported" | "InvalidInput" | "Protocol" | "Transport",
             ) => Text(ERROR_BYTES),
-            (
-                Error,
-                "Storage"
-                | "StorageDuringClose"
-                | "StorageInitialization"
-                | "StorageAfterExecution",
-            ) => ErrorBody(true),
+            (Error, "StorageDuringClose" | "StorageInitialization" | "StorageAfterExecution") => {
+                ErrorBody(true)
+            }
             (Error, _) => ErrorBody(false),
             (Result, "Err") => Error,
             (ErrorBody(false), "error") => Error,
@@ -195,12 +217,18 @@ impl Shape {
             FileLink => key == "path",
             ProviderError => matches!(key, "code" | "diagnostic"),
             FailedAcknowledgement => matches!(key, "audit" | "storage"),
-            StorageError => matches!(key, "Io" | "Corrupt" | "ChangesRequired" | "Unresolved"),
+            StorageError => matches!(
+                key,
+                "Io" | "Corrupt" | "ChangesRequired" | "Unresolved" | "ShutdownFailures"
+            ),
+            StorageChildren => matches!(key, "read" | "runtime"),
             _ => true,
         }
     }
     pub(super) fn element(self) -> Self {
         match self {
+            Self::Invocations => Self::Invocation,
+            Self::Events => Self::Event,
             Self::Images => Self::Image,
             Self::Files => Self::FileLink,
             Self::SemanticChanges => Self::Semantic,
@@ -215,9 +243,14 @@ impl Shape {
     }
     pub(super) fn array_limit(self) -> usize {
         match self {
+            Self::Invocations => SessionSnapshot::MAX_INVOCATIONS,
+            Self::Events => MAX_RETAINED_OUTPUT_EVENTS,
+            Self::QueueHistory => {
+                QueueHistoryRecord::maximum_entries(SessionSnapshot::MAX_INVOCATIONS)
+            }
             Self::SemanticChanges => 262_144 + 16 * 1024,
             Self::Hooks => 128,
-            Self::QueueEntries | Self::QueueIds => 64,
+            Self::QueueEntries | Self::QueueIds => QueueOrderChange::MAX_PENDING,
             // The message's own constructor refuses more; refuse them here
             // before the excess references are built.
             Self::Images => UserMessage::MAX_IMAGES,

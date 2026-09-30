@@ -22,6 +22,11 @@
 //! ```
 //! Arrows show coordination and retained evidence. Provider-private execution
 //! state stays with the provider; snapshots never replay prompts automatically.
+//! CommittedTranscript -> records::continuation -> reversible records transitions
+//!                     -> validation::observations + retention::intervals
+//!                     -> existing domain history/queue and live controller limits
+//! The continuation retains derived indices/accounting; read publication creates
+//! one immutable full snapshot. Receiver guard Drop reverses only staged changes.
 //! Validation checks cross-record evidence at the application boundary, including
 //! custom storage adapters, before opening a provider or accepting observations.
 //! Per-invocation output accounting bounds saved observations independently from
@@ -47,16 +52,30 @@ pub(crate) mod attachment;
 mod manager;
 mod message_commit_clock;
 pub(crate) mod records;
+mod retained;
 mod retention;
 // Queue membership is replayed separately from provider/lifecycle scheduling.
 mod queue_validation;
 pub mod storage;
+mod transcript;
+pub use transcript::{
+    CommittedCompleteness, CommittedFreshness, CommittedStatus, CommittedTranscript,
+    CommittedViewState,
+};
 pub(crate) mod validation;
 pub use manager::SessionManager;
 pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource};
 pub use message_commit_clock::{MessageCommitClock, MessageCommitSleep};
 pub use storage::{
-    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
-    QueueHistoryRecord, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
-    SessionStorageLease, StorageError, StorageFuture, SubmissionAcknowledgement,
+    CommittedSession, InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent,
+    ProviderContext, QueueHistoryRecord, SessionChange, SessionSaveGeneration, SessionSnapshot,
+    SessionStorage, SessionStorageLease, StorageError, StorageFuture, StorageShutdownFailure,
+    SubmissionAcknowledgement,
 };
+
+pub(crate) use transcript::CommittedTransactionState;
+
+#[cfg(test)]
+pub(crate) use retained::SNAPSHOT_ACCOUNTING_CALLS;
+#[cfg(test)]
+pub(crate) use validation::VALIDATION_CALLS;

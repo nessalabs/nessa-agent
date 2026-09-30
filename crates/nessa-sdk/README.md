@@ -223,6 +223,10 @@ automatic session storage, hooks, invocation, and UI integration.
   sync-engine before stream metadata I/O, while the SDK owns physical identity,
   retention and terminal relationships. Sync identifiers are constructed from
   borrowed text by their core owner, including its compact retained storage.
+  the public physical transcript receiver and chunked checkpoints, shared
+  read/write admission and full shutdown, and the Tokio streaming commit clock adapter.
+  Semantic committed state and lifecycle validation live inward in
+  `application/agent_execution/sessions/`.
 - `infrastructure/`: JSON parsing into application input DTOs, including required
   fields, unknown fields, and read errors. The host owns filesystem selection and
   injects the loaded catalog at composition.

@@ -1,5 +1,6 @@
-use crate::application::agent_execution::sessions::storage::{
-    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+use crate::application::agent_execution::sessions::{
+    CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus, SessionSnapshot,
+    SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };
 use crate::domain::agent_execution::sessions::SessionId;
 use std::{
@@ -11,6 +12,7 @@ use std::{
 struct Entry {
     leased: bool,
     snapshot: Option<SessionSnapshot>,
+    revision: u64,
 }
 
 /// Clones share snapshots and writer leases. Independent instances are isolated.
@@ -29,6 +31,35 @@ impl InMemoryStorage {
     }
 }
 impl SessionStorage for InMemoryStorage {
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        Box::pin(async move {
+            let entries = self
+                .entries
+                .lock()
+                .map_err(|_| StorageError::Io("memory storage lock poisoned".into()))?;
+            entries
+                .get(id.as_str())
+                .map(|entry| {
+                    CommittedSession::new(
+                        id.clone(),
+                        id.as_str().into(),
+                        entry.revision,
+                        entry.revision,
+                        entry.revision,
+                        entry.snapshot.clone(),
+                        CommittedStatus::new(
+                            if entry.snapshot.is_some() {
+                                CommittedCompleteness::Complete
+                            } else {
+                                CommittedCompleteness::CompleteEmpty
+                            },
+                            CommittedFreshness::Current,
+                        ),
+                    )
+                })
+                .transpose()
+        })
+    }
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
         Box::pin(async move {
             let mut entries = self
@@ -104,7 +135,12 @@ impl SessionStorageLease for MemoryStore {
                     "saved queue history cannot be replaced or truncated".into(),
                 ));
             }
+            let next_revision = entry
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| StorageError::Corrupt("memory revision exhausted".into()))?;
             entry.snapshot = Some(snapshot);
+            entry.revision = next_revision;
             Ok(())
         })
     }
@@ -116,7 +152,12 @@ impl SessionStorageLease for MemoryStore {
                 .map_err(|_| StorageError::Io("memory storage lock poisoned".into()))?;
             // The entry stays: it carries this lease's exclusion.
             if let Some(entry) = entries.get_mut(self.id.as_str()) {
+                let next_revision = entry
+                    .revision
+                    .checked_add(1)
+                    .ok_or_else(|| StorageError::Corrupt("memory revision exhausted".into()))?;
                 entry.snapshot = None;
+                entry.revision = next_revision;
             }
             Ok(())
         })

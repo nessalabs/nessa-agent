@@ -6,7 +6,7 @@ use crate::application::agent_execution::hooks::{HookError, HookFailure};
 use crate::application::agent_execution::providers::{
     CloseOutcome, ImageInputRefusal, UserImageError,
 };
-use crate::application::agent_execution::sessions::storage::StorageError;
+use crate::application::agent_execution::sessions::{StorageError, StorageShutdownFailure};
 use crate::domain::agent_execution::executions::{ExecutionOutcome, SchedulingError};
 use crate::domain::common::value_objects::ImageMediaType;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -86,6 +86,10 @@ impl From<ExecutionOutcome> for Outcome {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) enum StorageFailure {
+    Closed,
+    ReadCapacity,
+    ReadWorkerPanicked,
+    ShutdownFailures(Box<ShutdownDiagnostics>),
     Busy,
     Io(String),
     Corrupt(String),
@@ -93,30 +97,60 @@ pub(super) enum StorageFailure {
     ChangesRequired,
     Unresolved,
     TooLarge,
+    CommittedReadUnavailable,
+    DiagnosticLimit,
 }
-impl From<StorageFailure> for StorageError {
-    fn from(value: StorageFailure) -> Self {
-        match value {
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ShutdownDiagnostics {
+    read: StorageFailure,
+    runtime: StorageFailure,
+}
+impl TryFrom<StorageFailure> for StorageError {
+    type Error = StorageError;
+
+    fn try_from(value: StorageFailure) -> Result<Self, Self::Error> {
+        Ok(match value {
             StorageFailure::Busy => Self::Busy,
+            StorageFailure::Closed => Self::Closed,
+            StorageFailure::ReadCapacity => Self::ReadCapacity,
+            StorageFailure::ReadWorkerPanicked => Self::ReadWorkerPanicked,
+            StorageFailure::ShutdownFailures(failure) => Self::ShutdownFailures(Box::new(
+                StorageShutdownFailure::new(failure.read.try_into()?, failure.runtime.try_into()?)?,
+            )),
             StorageFailure::IdentityMismatch => Self::IdentityMismatch,
             StorageFailure::Io(value) => Self::Io(value),
             StorageFailure::Corrupt(value) => Self::Corrupt(value),
             StorageFailure::ChangesRequired => Self::ChangesRequired,
             StorageFailure::Unresolved => Self::Unresolved,
             StorageFailure::TooLarge => Self::TooLarge,
-        }
+            StorageFailure::CommittedReadUnavailable => Self::CommittedReadUnavailable,
+            StorageFailure::DiagnosticLimit => Self::DiagnosticLimit,
+        })
     }
 }
 impl From<StorageError> for StorageFailure {
     fn from(value: StorageError) -> Self {
         match value {
             StorageError::Busy => Self::Busy,
+            StorageError::Closed => Self::Closed,
+            StorageError::ReadCapacity => Self::ReadCapacity,
+            StorageError::ReadWorkerPanicked => Self::ReadWorkerPanicked,
+            StorageError::ShutdownFailures(failure) => {
+                let (read, runtime) = failure.into_parts();
+                Self::ShutdownFailures(Box::new(ShutdownDiagnostics {
+                    read: read.into(),
+                    runtime: runtime.into(),
+                }))
+            }
             StorageError::IdentityMismatch => Self::IdentityMismatch,
             StorageError::Io(value) => Self::Io(value),
             StorageError::Corrupt(value) => Self::Corrupt(value),
             StorageError::ChangesRequired => Self::ChangesRequired,
             StorageError::Unresolved => Self::Unresolved,
             StorageError::TooLarge => Self::TooLarge,
+            StorageError::CommittedReadUnavailable => Self::CommittedReadUnavailable,
+            StorageError::DiagnosticLimit => Self::DiagnosticLimit,
         }
     }
 }
@@ -348,9 +382,19 @@ impl From<Cleanup> for CloseOutcome {
         }
     }
 }
-impl From<SavedError> for AgentError {
-    fn from(value: SavedError) -> Self {
-        match value {
+pub(super) fn decode_result<T, U: From<T>>(
+    value: Result<T, SavedError>,
+) -> Result<Result<U, AgentError>, StorageError> {
+    Ok(match value {
+        Ok(value) => Ok(value.into()),
+        Err(error) => Err(error.try_into()?),
+    })
+}
+impl TryFrom<SavedError> for AgentError {
+    type Error = StorageError;
+
+    fn try_from(value: SavedError) -> Result<Self, Self::Error> {
+        Ok(match value {
             SavedError::AttachmentUnavailable(phase) => Self::AttachmentUnavailable(phase.into()),
             SavedError::AttachmentAuthorizationStale => Self::AttachmentAuthorizationStale,
             SavedError::DiagnosticLimit => Self::DiagnosticLimit,
@@ -362,31 +406,32 @@ impl From<SavedError> for AgentError {
                 error,
                 execution_result,
             } => Self::ExecutionObservation {
-                error: Box::new((*error).into()),
+                error: Box::new((*error).try_into()?),
                 execution_result: execution_result
-                    .map(|value| Box::new((*value).map(Into::into).map_err(Into::into))),
+                    .map(|value| decode_result(*value).map(Box::new))
+                    .transpose()?,
             },
             SavedError::MultipleOperationFailures {
                 first_error,
                 subsequent_error,
             } => Self::MultipleOperationFailures {
-                first_error: Box::new((*first_error).into()),
-                subsequent_error: Box::new((*subsequent_error).into()),
+                first_error: Box::new((*first_error).try_into()?),
+                subsequent_error: Box::new((*subsequent_error).try_into()?),
             },
             SavedError::OperationAndCleanupFailure {
                 operation_error,
                 cleanup_error,
             } => Self::OperationAndCleanupFailure {
-                operation_error: Box::new((*operation_error).into()),
-                cleanup_error: Box::new((*cleanup_error).into()),
+                operation_error: Box::new((*operation_error).try_into()?),
+                cleanup_error: Box::new((*cleanup_error).try_into()?),
             },
             SavedError::Scheduling(value) => Self::Scheduling(value.into()),
             SavedError::StorageDuringClose {
                 error,
                 cleanup_result,
             } => Self::StorageDuringClose {
-                error: error.into(),
-                cleanup_result: Box::new((*cleanup_result).map(Into::into).map_err(Into::into)),
+                error: error.try_into()?,
+                cleanup_result: Box::new(decode_result(*cleanup_result)?),
             },
             SavedError::Unsupported(value) => Self::Unsupported(value),
             SavedError::UserImageMissing => Self::UserImage(UserImageError::Missing),
@@ -427,8 +472,10 @@ impl From<SavedError> for AgentError {
                 delivery_error,
                 cleanup_error,
             } => Self::PermissionAnswerDeliveryAndAuditFailure {
-                delivery_error: Box::new((*delivery_error).into()),
-                cleanup_error: cleanup_error.map(|error| Box::new((*error).into())),
+                delivery_error: Box::new((*delivery_error).try_into()?),
+                cleanup_error: cleanup_error
+                    .map(|error| AgentError::try_from(*error).map(Box::new))
+                    .transpose()?,
             },
             SavedError::Provider { code, diagnostic } => Self::Provider {
                 code,
@@ -440,24 +487,24 @@ impl From<SavedError> for AgentError {
                 execution_result,
             } => Self::AfterInvocationHooks {
                 failures: failures.into_iter().map(Into::into).collect(),
-                execution_result: Box::new((*execution_result).map(Into::into).map_err(Into::into)),
+                execution_result: Box::new(decode_result(*execution_result)?),
             },
-            SavedError::Storage(value) => Self::Storage(value.into()),
+            SavedError::Storage(value) => Self::Storage(value.try_into()?),
             SavedError::StorageInitialization {
                 error,
                 cleanup_result,
             } => Self::StorageInitialization {
-                error: error.into(),
-                cleanup_result: Box::new((*cleanup_result).map(Into::into).map_err(Into::into)),
+                error: error.try_into()?,
+                cleanup_result: Box::new(decode_result(*cleanup_result)?),
             },
             SavedError::StorageAfterExecution {
                 error,
                 execution_result,
             } => Self::StorageAfterExecution {
-                error: error.into(),
-                execution_result: Box::new((*execution_result).map(Into::into).map_err(Into::into)),
+                error: error.try_into()?,
+                execution_result: Box::new(decode_result(*execution_result)?),
             },
-        }
+        })
     }
 }
 impl From<AgentError> for SavedError {
@@ -595,5 +642,36 @@ impl From<ScheduleError> for SchedulingError {
             ScheduleError::Full => Self::Full,
             ScheduleError::InvalidCapacity => Self::InvalidCapacity,
         }
+    }
+}
+
+#[cfg(test)]
+mod storage_failure_tests {
+    use super::*;
+    use crate::application::agent_execution::sessions::StorageShutdownFailure;
+
+    #[test]
+    fn shutdown_diagnostics_keep_both_causes_in_the_existing_codec() {
+        let failure = StorageError::ShutdownFailures(Box::new(
+            StorageShutdownFailure::new(StorageError::ReadWorkerPanicked, StorageError::Unresolved)
+                .unwrap(),
+        ));
+        let encoded = serde_json::to_value(StorageFailure::from(failure.clone())).unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::json!({"ShutdownFailures": {
+                "read": "ReadWorkerPanicked", "runtime": "Unresolved"
+            }})
+        );
+        let restored: StorageFailure = serde_json::from_value(encoded).unwrap();
+        assert_eq!(StorageError::try_from(restored).unwrap(), failure);
+        assert!(serde_json::from_value::<StorageFailure>(serde_json::json!({
+            "ShutdownFailures": {"read": "only one cause"}
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<StorageFailure>(serde_json::json!({
+            "ShutdownFailures": {"read": "r", "runtime": "c", "success": true}
+        }))
+        .is_err());
     }
 }

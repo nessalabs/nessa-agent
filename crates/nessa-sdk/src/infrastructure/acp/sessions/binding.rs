@@ -12,8 +12,9 @@ use super::super::{
 use super::{cleanup::ProcessCleanup, AcpConfig};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::{
-    ExecutionAudit, ExecutionEvent, ExecutionRequest,
+    ExecutionAudit, ExecutionEvent, ExecutionRequest, PermissionAuthoritySource,
 };
+use crate::domain::agent_execution::permissions::{PermissionAuthority, PermissionAuthorityError};
 
 use crate::application::agent_execution::permissions::{
     PermissionAnswer, PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
@@ -68,6 +69,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     let factory = WorkerFactory {
         event_budget: EventQueueBudget::new(),
         operation_capabilities,
+        permission_authority: PermissionAuthoritySource::default(),
         process,
         config,
         capabilities: capabilities.clone(),
@@ -138,6 +140,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
 struct WorkerFactory<P> {
     event_budget: EventQueueBudget,
     operation_capabilities: watch::Sender<ProviderOperationCapabilities>,
+    permission_authority: PermissionAuthoritySource,
     process: ProcessFactory,
     config: AcpConfig,
     capabilities: EffectiveCapabilities,
@@ -241,6 +244,7 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
                 self.permission_sequence.clone(),
                 self.question_sequence.clone(),
                 self.operation_capabilities.clone(),
+                self.permission_authority.clone(),
                 recovery.clone(),
             )
             .in_current_span(),
@@ -712,6 +716,11 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             }
             outcome
         })
+    }
+    fn permission_authority(
+        &self,
+    ) -> Result<Option<PermissionAuthority>, PermissionAuthorityError> {
+        self.factory.permission_authority.read()
     }
     fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         *self.factory.operation_capabilities.borrow()

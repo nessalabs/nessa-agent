@@ -8,6 +8,7 @@
 //! The arrow means the aggregate owns and coordinates that execution state.
 pub mod aggregates;
 pub mod value_objects;
+pub(crate) use aggregates::HistoricalToolUndo;
 pub use aggregates::{ExecutionSession, SessionClosureResult};
 pub use value_objects::{
     AttachmentCause, ExecutionFinish, ExecutionSessionId, ProviderContext,

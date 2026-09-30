@@ -14,11 +14,13 @@ fn rejected_internal_updates_preserve_tool_identity_and_observation() {
     let mut tool = ToolCall::new(execution.clone(), update(id.clone()));
     let before = tool.observation().clone();
     assert_eq!(
-        tool.apply(&ExecutionId::new("other").unwrap(), update(id.clone())),
+        tool.apply_reversible(&ExecutionId::new("other").unwrap(), update(id.clone()))
+            .map(drop),
         Err(ExecutionError::DifferentExecution)
     );
     assert_eq!(
-        tool.apply(&execution, update(ToolCallId::new("other").unwrap())),
+        tool.apply_reversible(&execution, update(ToolCallId::new("other").unwrap()))
+            .map(drop),
         Err(ExecutionError::DifferentTool)
     );
     assert_eq!(tool.id(), &id);
@@ -26,7 +28,7 @@ fn rejected_internal_updates_preserve_tool_identity_and_observation() {
     assert_eq!(tool.observation(), &before);
     let replacement = ToolCallUpdate::new(id, Some("replacement".into()), None, None, None, None);
     let predicted = tool.payload_bytes_after(&replacement);
-    tool.apply(&execution, replacement).unwrap();
+    tool.apply_reversible(&execution, replacement).unwrap();
     assert_eq!(tool.observation().title().as_deref(), Some("replacement"));
     assert_eq!(tool.payload_bytes(), predicted);
     assert_eq!(

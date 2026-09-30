@@ -36,3 +36,6 @@ pub use queue_order::{QueueOrderChange, QueueOrderError};
 
 mod queue_history;
 pub use queue_history::{QueueMutation, QueueRemovalCause};
+
+#[cfg(test)]
+pub(crate) use message::MESSAGE_CLONES;

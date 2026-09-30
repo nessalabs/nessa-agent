@@ -14,3 +14,4 @@
 
 mod invocation_queue;
 pub use invocation_queue::InvocationQueue;
+pub(crate) use invocation_queue::InvocationQueueUndo;

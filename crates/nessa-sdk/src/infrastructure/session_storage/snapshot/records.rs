@@ -1,6 +1,6 @@
 use super::{
     cancellation::Cancellation as InvocationCancellation,
-    errors::{Outcome, SavedError, StorageFailure},
+    errors::{decode_result, Outcome, SavedError, StorageFailure},
     permissions::{self, Actor, Cancellation, Choice, Input},
     settlement::Settlement,
     tools::{corrupt, Tool},
@@ -128,31 +128,33 @@ impl From<&SubmissionAcknowledgement> for Acknowledgement {
         }
     }
 }
-impl From<Acknowledgement> for SubmissionAcknowledgement {
-    fn from(value: Acknowledgement) -> Self {
-        match value {
+impl TryFrom<Acknowledgement> for SubmissionAcknowledgement {
+    type Error = StorageError;
+
+    fn try_from(value: Acknowledgement) -> Result<Self, Self::Error> {
+        Ok(match value {
             Acknowledgement::Pending => Self::Pending,
             Acknowledgement::Acknowledged => Self::Acknowledged,
             Acknowledgement::Failed { audit, storage } => Self::Failed {
-                audit: audit.map(Into::into),
-                storage: storage.map(Into::into),
+                audit: audit.map(TryInto::try_into).transpose()?,
+                storage: storage.map(TryInto::try_into).transpose()?,
             },
-        }
+        })
     }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Event {
+pub(super) struct Event<T = String> {
     pub(super) message_id: Option<String>,
     pub(super) execution_id: String,
-    pub(super) update: Update,
+    pub(super) update: Update<T>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) enum Update {
+pub(super) enum Update<T = String> {
     Finished(Outcome),
-    Text(String),
-    Thought(String),
+    Text(T),
+    Thought(T),
     Tool(Tool),
     PermissionCancelled(Cancellation),
     ReviewDeclined {
@@ -249,23 +251,23 @@ impl From<&InvocationRecord> for Metadata {
         }
     }
 }
-impl From<ExecutionEvent> for Event {
-    fn from(event: ExecutionEvent) -> Self {
+impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
+    fn from(event: &'a ExecutionEvent) -> Self {
         Self {
             message_id: match event.update() {
                 ExecutionUpdate::Message(chunk) => chunk.message_id().map(str::to_owned),
                 _ => None,
             },
             execution_id: event.execution_id().as_str().into(),
-            update: match event.into_update() {
-                ExecutionUpdate::Finished(outcome) => Update::Finished(outcome.into()),
+            update: match event.update() {
+                ExecutionUpdate::Finished(outcome) => Update::Finished((*outcome).into()),
                 ExecutionUpdate::Message(chunk) => match chunk.kind() {
-                    MessageKind::Text => Update::Text(chunk.into_text()),
-                    MessageKind::Thought => Update::Thought(chunk.into_text()),
+                    MessageKind::Text => Update::Text(chunk.as_str()),
+                    MessageKind::Thought => Update::Thought(chunk.as_str()),
                 },
-                ExecutionUpdate::Tool(tool) => Update::Tool((&tool).into()),
+                ExecutionUpdate::Tool(tool) => Update::Tool(tool.into()),
                 ExecutionUpdate::PermissionCancelled(cancellation) => {
-                    Update::PermissionCancelled((&cancellation).into())
+                    Update::PermissionCancelled(cancellation.into())
                 }
                 ExecutionUpdate::ReviewDeclined(observation) => Update::ReviewDeclined {
                     id: observation.id().as_str().into(),
@@ -290,9 +292,9 @@ impl From<ExecutionEvent> for Event {
                     options,
                 } => Update::PermissionRequested {
                     id: id.as_str().into(),
-                    tool: Tool::observation(&tool_id, &observation),
-                    input: (&input).into(),
-                    options: permissions::choices(&options),
+                    tool: Tool::observation(tool_id, observation),
+                    input: input.into(),
+                    options: permissions::choices(options),
                 },
                 ExecutionUpdate::QuestionClosed { id } => Update::QuestionClosed {
                     id: id.as_str().into(),
@@ -360,7 +362,7 @@ impl Metadata {
                 reserved_output_tokens: self.reserved_output_tokens,
             },
             actor: self.actor.decode()?,
-            acknowledgement: self.acknowledgement.into(),
+            acknowledgement: self.acknowledgement.try_into()?,
             events: Vec::new(),
             scheduling: Vec::new(),
             provider_report: self
@@ -376,9 +378,7 @@ impl Metadata {
                 .cancellation
                 .map(InvocationCancellation::decode)
                 .transpose()?,
-            result: self
-                .result
-                .map(|result| result.map(Into::into).map_err(Into::into)),
+            result: self.result.map(decode_result).transpose()?,
         })
     }
 }
@@ -527,6 +527,44 @@ impl From<Submission> for SubmissionMode {
             Submission::Queued => Self::Queued,
             Submission::BoundarySteering => Self::BoundarySteering,
             Submission::Steering => Self::Steering,
+        }
+    }
+}
+
+#[cfg(test)]
+mod borrowed_event_tests {
+    use super::*;
+    #[test]
+    fn borrowed_text_and_thought_use_the_same_owned_codec_bytes_and_roundtrip() {
+        for (name, chunk) in [
+            ("Text", MessageChunk::text("π \"line\\\n")),
+            ("Thought", MessageChunk::thought("🙂\t")),
+            ("Text", MessageChunk::text("")),
+        ] {
+            let event = ExecutionEvent::new(
+                ExecutionId::new("output").unwrap(),
+                ExecutionUpdate::Message(chunk),
+            );
+            let borrowed = Event::from(&event);
+            let bytes = serde_json::to_vec(&borrowed).unwrap();
+            let owned: Event = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(serde_json::to_vec(&owned).unwrap(), bytes);
+            let ExecutionUpdate::Message(chunk) = event.update() else {
+                unreachable!()
+            };
+            let expected = format!(
+                r#"{{"message_id":null,"execution_id":"output","update":{{"{name}":{}}}}}"#,
+                serde_json::to_string(chunk.as_str()).unwrap()
+            );
+            assert_eq!(bytes, expected.as_bytes());
+            let decoded = owned
+                .decode(
+                    &crate::domain::agent_execution::sessions::ExecutionSessionId::new("remote")
+                        .unwrap(),
+                    event.execution_id(),
+                )
+                .unwrap();
+            assert_eq!(decoded, event);
         }
     }
 }

@@ -19,8 +19,12 @@
 
 mod audit;
 mod controller;
+pub(crate) use controller::{
+    HistoricalReviewCost, RetentionControllerUndo, MAX_EXECUTION_PERMISSIONS,
+};
 mod events;
 pub(crate) mod limits;
+mod permission_authority;
 mod question;
 mod request;
 pub use audit::{
@@ -32,6 +36,7 @@ pub use audit::{
 };
 pub use controller::ExecutionController;
 pub use events::{ExecutionEvent, ExecutionUpdate};
+pub use permission_authority::PermissionAuthoritySource;
 pub use question::AdmittedQuestion;
 pub use request::ExecutionRequest;
 

@@ -13,6 +13,7 @@ pub mod entities;
 mod error;
 pub mod value_objects;
 pub use aggregates::InvocationQueue;
+pub(crate) use aggregates::InvocationQueueUndo;
 pub use entities::{InvocationHistory, InvocationHistoryError, InvocationObservation};
 pub use error::SchedulingError;
 pub use value_objects::{
@@ -21,3 +22,6 @@ pub use value_objects::{
     QueueOrderChange, QueueOrderError, QueueRemovalCause, SchedulingCause, SchedulingInitiator,
     SchedulingTransition, SchedulingTransitionError, SubmissionMode,
 };
+
+#[cfg(test)]
+pub(crate) use value_objects::MESSAGE_CLONES;

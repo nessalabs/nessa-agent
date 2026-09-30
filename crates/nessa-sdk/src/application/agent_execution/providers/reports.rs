@@ -336,6 +336,57 @@ pub struct ExecutionReport {
     state: Box<ExecutionReportState>,
 }
 impl ExecutionReport {
+    pub(crate) fn retained_bytes(&self) -> usize {
+        fn error(value: Option<&AgentError>) -> usize {
+            value.map_or(0, |error| error.retained_size().unwrap_or(usize::MAX))
+        }
+        fn physical(value: &ResourceCleanup) -> usize {
+            error(match value {
+                ResourceCleanup::Confirmed(_) => None,
+                ResourceCleanup::ReleasePending { failure, .. }
+                | ResourceCleanup::Unconfirmed(failure) => Some(failure),
+            })
+        }
+        fn session(value: &ProviderSessionState) -> usize {
+            match value {
+                ProviderSessionState::Usable | ProviderSessionState::CleanupRequired => 0,
+                ProviderSessionState::CleanupReported(report) => physical(&report.resources)
+                    .saturating_add(error(report.audit.as_ref().err()))
+                    .saturating_add(error(report.operation_failure.as_deref()))
+                    .saturating_add(error(report.completion_failure.as_deref())),
+            }
+        }
+        let owned = match self.state.as_ref() {
+            ExecutionReportState::Independent {
+                provider_result,
+                failure,
+                session_state,
+                ..
+            } => error(
+                provider_result
+                    .as_ref()
+                    .and_then(|result| result.as_ref().err()),
+            )
+            .saturating_add(error(failure.as_ref()))
+            .saturating_add(session(session_state)),
+            ExecutionReportState::Finalized(report) => {
+                let source = match &report.source {
+                    FinalizedExecutionSource::Provider(result) => {
+                        error(result.as_ref().and_then(|result| result.as_ref().err()))
+                    }
+                    FinalizedExecutionSource::LocalCancellation => 0,
+                };
+                source
+                    .saturating_add(physical(&report.physical))
+                    .saturating_add(error(report.completion_failure.as_ref()))
+                    .saturating_add(report.projection.retained_bytes())
+                    .saturating_add(error(report.failure.as_ref()))
+                    .saturating_add(session(&report.session_state))
+            }
+        };
+        std::mem::size_of::<ExecutionReportState>().saturating_add(owned)
+    }
+
     /// Retain the actual provider result (None if unknown), independent failure,
     /// and provider session status. No constructor infers status from an error.
     pub fn new(

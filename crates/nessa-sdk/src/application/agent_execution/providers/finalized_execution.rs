@@ -92,6 +92,28 @@ impl FinalizedExecutionProjection {
         Ok(Self { components })
     }
 
+    /// Conservative retained bytes for cache accounting, using saturating arithmetic.
+    /// Counts collection capacity and owned error-tree sizes, including their inline
+    /// slots even where component capacity already covers them. An invalid error tree
+    /// contributes `usize::MAX` so accounting cannot understate its retained size.
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.components
+            .capacity()
+            .saturating_mul(std::mem::size_of::<FinalizedFailureComponent>())
+            .saturating_add(
+                self.components
+                    .iter()
+                    .map(|component| match component {
+                        FinalizedFailureComponent::Operation(error)
+                        | FinalizedFailureComponent::PermissionDeliveryAndAudit {
+                            delivery_error: error,
+                        } => error.retained_size().unwrap_or(usize::MAX),
+                        _ => 0,
+                    })
+                    .fold(0usize, usize::saturating_add),
+            )
+    }
+
     /// Ordered authoritative components for storage at the current contract.
     pub(crate) fn components(&self) -> &[FinalizedFailureComponent] {
         &self.components

@@ -4,13 +4,24 @@ use crate::application::agent_execution::hooks::{HookError, HookFailure};
 use crate::application::agent_execution::sessions::StorageError;
 use std::mem;
 
-const MAX_BYTES: usize = 1024 * 1024;
-const MAX_NODES: usize = 128;
-const MAX_DEPTH: usize = 32;
+/// Published retained diagnostic-tree limits shared with storage and its codec.
+pub(crate) struct DiagnosticTreeLimits;
+impl DiagnosticTreeLimits {
+    pub(crate) const BYTES: usize = 1024 * 1024;
+    pub(crate) const NODES: usize = 128;
+    pub(crate) const DEPTH: usize = 32;
+}
+const MAX_BYTES: usize = DiagnosticTreeLimits::BYTES;
+const MAX_NODES: usize = DiagnosticTreeLimits::NODES;
+const MAX_DEPTH: usize = DiagnosticTreeLimits::DEPTH;
 
 impl AgentError {
     /// Borrowed preflight includes spare allocations, nested errors and hook failures.
     pub(crate) fn validate_retained_size(&self) -> Result<(), StorageError> {
+        self.retained_size().map(|_| ())
+    }
+
+    pub(crate) fn retained_size(&self) -> Result<usize, StorageError> {
         let mut pending = vec![(self, 1usize)];
         let mut bytes = 0usize;
         let mut nodes = 0usize;
@@ -34,7 +45,12 @@ impl AgentError {
                 | Self::StorageDuringClose { error, .. }
                 | Self::StorageInitialization { error, .. }
                 | Self::StorageAfterExecution { error, .. } => {
-                    bytes = bytes.saturating_add(storage_bytes(error));
+                    let usage = error.retained_usage()?;
+                    bytes = bytes.saturating_add(usage.allocations);
+                    nodes = nodes.saturating_add(usage.nodes.saturating_sub(1));
+                    if depth.saturating_add(usage.depth.saturating_sub(1)) > MAX_DEPTH {
+                        return Err(limit_error());
+                    }
                 }
                 Self::BeforeInvocationHook(failure) => {
                     bytes = bytes.saturating_add(hook_bytes(failure))
@@ -85,7 +101,7 @@ impl AgentError {
             }
             children(error, |child| pending.push((child, depth + 1)));
         }
-        Ok(())
+        Ok(bytes)
     }
 
     /// Normalize at the adapter boundary, before any SDK clone or persistence.
@@ -171,12 +187,7 @@ impl AgentError {
 fn limit_error() -> StorageError {
     StorageError::Corrupt("retained error exceeds 1 MiB, 128 nodes, or depth 32".into())
 }
-fn storage_bytes(error: &StorageError) -> usize {
-    match error {
-        StorageError::Io(text) | StorageError::Corrupt(text) => text.capacity(),
-        _ => 0,
-    }
-}
+
 fn hook_bytes(failure: &HookFailure) -> usize {
     match &failure.error {
         HookError::Failed(text) => text.capacity(),

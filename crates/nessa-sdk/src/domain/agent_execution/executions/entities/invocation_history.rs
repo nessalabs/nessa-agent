@@ -61,6 +61,24 @@ pub struct InvocationHistory {
     local_outcome: Option<ExecutionOutcome>,
 }
 impl InvocationHistory {
+    pub(crate) fn allocation_bytes(&self) -> usize {
+        self.id
+            .as_str()
+            .len()
+            .saturating_add(
+                self.first
+                    .as_ref()
+                    .and_then(SchedulingTransition::target)
+                    .map_or(0, |id| id.as_str().len()),
+            )
+            .saturating_add(
+                self.last
+                    .as_ref()
+                    .and_then(SchedulingTransition::target)
+                    .map_or(0, |id| id.as_str().len()),
+            )
+    }
+
     /// Begin the history of `id` with its original delivery `submission`.
     /// Admission ownership and caller attribution remain with the application.
     pub fn new(id: ExecutionId, submission: SubmissionMode) -> Self {

@@ -1,7 +1,8 @@
 //! Typed session snapshot persistence and exclusive access contracts.
 #![deny(missing_docs)]
 
-use crate::application::agent_execution::agents::AgentError;
+use super::{CommittedStatus, CommittedTranscript, CommittedViewState};
+use crate::application::agent_execution::agents::{AgentError, DiagnosticTreeLimits};
 use crate::application::agent_execution::executions::{
     ExecutionEvent, ExecutionRequest, SubmissionMode,
 };
@@ -16,7 +17,8 @@ use crate::domain::agent_execution::{
     },
     sessions::SessionId,
 };
-use std::{error::Error, fmt, future::Future, pin::Pin};
+use nessa_sync::replication::domain::Id;
+use std::{error::Error, fmt, future::Future, mem, pin::Pin, sync::Arc};
 
 /// Asynchronous storage result borrowing its adapter for `'a` and returning `T`.
 pub type StorageFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StorageError>> + Send + 'a>>;
@@ -58,6 +60,16 @@ impl SessionSaveGeneration {
 /// Failure to acquire access, read, validate, or persist a session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StorageError {
+    /// Storage shutdown has closed admission.
+    Closed,
+    /// Bounded read or continuation admission is currently full.
+    ReadCapacity,
+    /// An owned committed read or source thread panicked before joining.
+    ReadWorkerPanicked,
+    /// Retained diagnostic text or error-tree structure exceeds its resource budget.
+    DiagnosticLimit,
+    /// Both read draining and runtime cleanup failed.
+    ShutdownFailures(Box<StorageShutdownFailure>),
     /// Another owner already holds this session’s writer lease.
     Busy,
     /// Backend operation failed; the string carries diagnostic context.
@@ -72,6 +84,213 @@ pub enum StorageError {
     Unresolved,
     /// An atomic encoded decision group exceeds the record writer's 160 MiB body limit.
     TooLarge,
+    /// This backend cannot supply an independent committed read.
+    CommittedReadUnavailable,
+}
+
+/// Independent typed failures from read draining and record runtime shutdown.
+/// The immutable boxed payload owns failure evidence, never cleanup resources.
+/// Construction validates the shared diagnostic tree before retaining it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StorageShutdownFailure {
+    read: StorageError,
+    runtime: StorageError,
+}
+impl StorageShutdownFailure {
+    /// Preserve both typed causes and compact diagnostic spare allocations.
+    /// This performs no cleanup and does not establish a shutdown outcome.
+    ///
+    /// # Errors
+    /// Returns [`StorageError::DiagnosticLimit`] for over-budget text, nodes,
+    /// depth or allocation before any clone or retention. The existing diagnostic
+    /// tree limits are shared with AgentError and the snapshot codec.
+    pub fn new(read: StorageError, runtime: StorageError) -> Result<Self, StorageError> {
+        let mut candidate = Self { read, runtime };
+        let usage = candidate.usage()?;
+        if usage.text > StorageError::DIAGNOSTIC_BYTES {
+            return Err(StorageError::DiagnosticLimit);
+        }
+        candidate.read.compact_diagnostics();
+        candidate.runtime.compact_diagnostics();
+        let usage = candidate.usage()?;
+        if usage.allocations > DiagnosticTreeLimits::BYTES
+            || usage.diagnostics > StorageError::DIAGNOSTIC_BYTES
+        {
+            return Err(StorageError::DiagnosticLimit);
+        }
+        Ok(candidate)
+    }
+    /// Failure from joining admitted read owners; this is an observation, not a reservation.
+    pub fn read(&self) -> &StorageError {
+        &self.read
+    }
+    /// Failure from the record runtime's cleanup attempt.
+    pub fn runtime(&self) -> &StorageError {
+        &self.runtime
+    }
+    pub(crate) fn into_parts(mut self) -> (StorageError, StorageError) {
+        (
+            mem::replace(&mut self.read, StorageError::Closed),
+            mem::replace(&mut self.runtime, StorageError::Closed),
+        )
+    }
+    fn usage(&self) -> Result<StorageErrorUsage, StorageError> {
+        StorageError::measure(
+            vec![(&self.read, 2), (&self.runtime, 2)],
+            StorageErrorUsage {
+                nodes: 1,
+                depth: 1,
+                allocations: mem::size_of::<Self>(),
+                ..StorageErrorUsage::default()
+            },
+        )
+    }
+}
+impl Drop for StorageShutdownFailure {
+    fn drop(&mut self) {
+        // Public construction bounds the tree; this also safely drains rejected
+        // private/decoded trees without recursive Box destruction.
+        let mut pending = vec![
+            mem::replace(&mut self.read, StorageError::Closed),
+            mem::replace(&mut self.runtime, StorageError::Closed),
+        ];
+        while let Some(error) = pending.pop() {
+            if let StorageError::ShutdownFailures(failure) = error {
+                let (read, runtime) = failure.into_parts();
+                pending.push(read);
+                pending.push(runtime);
+            }
+        }
+    }
+}
+#[derive(Default)]
+pub(crate) struct StorageErrorUsage {
+    pub(crate) nodes: usize,
+    pub(crate) depth: usize,
+    pub(crate) allocations: usize,
+    diagnostics: usize,
+    text: usize,
+}
+
+/// A read of committed storage, independent of an agent's live observations.
+/// `position` is monotone only within `incarnation`; it may count physical
+/// records or snapshot revisions according to the storage adapter.
+#[derive(Clone, Debug)]
+pub struct CommittedSession {
+    id: SessionId,
+    incarnation: Id,
+    position: u64,
+    downloaded: u64,
+    observed_head: u64,
+    snapshot: Option<Arc<SessionSnapshot>>,
+    status: CommittedStatus,
+}
+impl CommittedSession {
+    /// Validate a replacement read from a storage adapter. Full snapshot validation
+    /// uses the same application owner as session restoration.
+    ///
+    /// # Errors
+    /// Refuses invalid incarnation, positions, completeness, or semantic history.
+    pub fn new(
+        id: SessionId,
+        incarnation: String,
+        position: u64,
+        downloaded: u64,
+        observed_head: u64,
+        snapshot: Option<SessionSnapshot>,
+        status: CommittedStatus,
+    ) -> Result<Self, StorageError> {
+        let incarnation = Id::new(&incarnation)
+            .map_err(|_| StorageError::Corrupt("committed read incarnation is invalid".into()))?;
+        if !status.validates(position, downloaded, observed_head, snapshot.is_some()) {
+            return Err(StorageError::Corrupt(
+                "committed read metadata disagrees with state".into(),
+            ));
+        }
+        if let Some(snapshot) = &snapshot {
+            if snapshot.id != id {
+                return Err(StorageError::IdentityMismatch);
+            }
+            super::validation::validate(snapshot)?;
+        }
+        Ok(Self {
+            id,
+            incarnation,
+            position,
+            downloaded,
+            observed_head,
+            snapshot: snapshot.map(Arc::new),
+            status,
+        })
+    }
+    pub(crate) fn from_transcript(
+        id: SessionId,
+        incarnation: Id,
+        downloaded: u64,
+        observed_head: u64,
+        transcript: &CommittedTranscript,
+        status: CommittedStatus,
+    ) -> Result<Self, StorageError> {
+        if transcript
+            .snapshot()
+            .is_some_and(|snapshot| snapshot.id != id)
+        {
+            return Err(StorageError::IdentityMismatch);
+        }
+        if !status.validates(
+            transcript.applied(),
+            downloaded,
+            observed_head,
+            transcript.snapshot().is_some(),
+        ) {
+            return Err(StorageError::Corrupt(
+                "committed read status disagrees with positions".into(),
+            ));
+        }
+        Ok(Self {
+            id,
+            incarnation,
+            position: transcript.applied(),
+            downloaded,
+            observed_head,
+            snapshot: transcript.snapshot_handle(),
+            status,
+        })
+    }
+    /// Exact session identity requested from storage.
+    pub fn id(&self) -> &SessionId {
+        &self.id
+    }
+    /// Storage incarnation that scopes positions.
+    pub fn incarnation(&self) -> &str {
+        self.incarnation.as_str()
+    }
+    /// Last complete committed position.
+    pub fn position(&self) -> u64 {
+        self.position
+    }
+    /// Last downloaded physical frame, including unfinished attempts.
+    pub fn downloaded(&self) -> u64 {
+        self.downloaded
+    }
+    /// Greatest physical or adapter revision head observed by this read.
+    /// Latest observed physical source position; this may include an incomplete
+    /// fact. The semantic terminal position is [`Self::position`].
+    pub fn observed_head(&self) -> u64 {
+        self.observed_head
+    }
+    /// Full validated semantic history.
+    pub fn snapshot(&self) -> Option<&SessionSnapshot> {
+        self.snapshot.as_deref()
+    }
+    /// Orthogonal read completeness and freshness.
+    pub fn status(&self) -> CommittedStatus {
+        self.status
+    }
+    /// Coarse display completeness and freshness.
+    pub fn state(&self) -> CommittedViewState {
+        self.status.view_state()
+    }
 }
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -170,6 +389,20 @@ pub enum SessionChange {
     },
 }
 impl SessionSnapshot {
+    /// Pending input identities in committed dispatch order, reconstructed by
+    /// the same queue authority used during restoration and semantic folding.
+    /// This is a read of saved evidence and grants no dispatch authority.
+    ///
+    /// # Errors
+    /// Returns corruption when queue facts contradict the saved invocations.
+    pub fn pending_order(&self) -> Result<Vec<ExecutionId>, StorageError> {
+        Ok(super::queue_validation::replay(self)?
+            .pending()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect())
+    }
+
     /// Maximum durable invocation records retained by one conversation.
     pub const MAX_INVOCATIONS: usize = 1024;
 }
@@ -190,6 +423,15 @@ impl QueueHistoryRecord {
     /// Maximum actual reorder decisions retained; membership events have a
     /// separate bound proportional to admitted invocation history.
     pub const MAX_REORDERS: usize = 1024;
+
+    /// Structural upper bound for retained queue evidence at an invocation count.
+    /// Membership may retain admission, selection and removal evidence; reorder
+    /// evidence has its separately owned limit. Uses saturating arithmetic.
+    pub const fn maximum_entries(invocations: usize) -> usize {
+        invocations
+            .saturating_mul(3)
+            .saturating_add(Self::MAX_REORDERS)
+    }
 }
 
 /// Saved input and observations. Never replay an input solely because its result
@@ -337,6 +579,16 @@ impl InvocationSchedulingEvent {
 /// Implementations may serve many sessions. Each returned lease owns the resources
 /// needed to read and write one session independently of this backend's lifetime.
 pub trait SessionStorage: Send + Sync {
+    /// Read a committed session without acquiring its exclusive writer lease.
+    /// A gateway uses this for replacement views. Missing session returns
+    /// `None`; a valid empty stream returns a session with no snapshot.
+    ///
+    /// # Errors
+    /// Returns `CommittedReadUnavailable` for adapters without a reader, or
+    /// the backend's typed storage failure. This read never runs a provider.
+    fn read_committed(&self, _id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        Box::pin(async { Err(StorageError::CommittedReadUnavailable) })
+    }
     /// Drains this backend after all session owners have stopped. Snapshot
     /// backends have no shared runtime to close.
     fn shutdown(&self) -> StorageFuture<'_, ()> {
@@ -524,26 +776,84 @@ impl SessionSnapshot {
 }
 
 impl StorageError {
+    /// Aggregate retained diagnostic text budget; structural slots are accounted separately.
+    pub(crate) const DIAGNOSTIC_BYTES: usize = 4096;
+    fn measure(
+        mut pending: Vec<(&StorageError, usize)>,
+        mut usage: StorageErrorUsage,
+    ) -> Result<StorageErrorUsage, StorageError> {
+        while let Some((error, depth)) = pending.pop() {
+            usage.nodes = usage.nodes.saturating_add(1);
+            usage.depth = usage.depth.max(depth);
+            if usage.nodes > DiagnosticTreeLimits::NODES || depth > DiagnosticTreeLimits::DEPTH {
+                return Err(Self::DiagnosticLimit);
+            }
+            match error {
+                Self::Io(text) | Self::Corrupt(text) => {
+                    usage.allocations = usage.allocations.saturating_add(text.capacity());
+                    usage.diagnostics = usage.diagnostics.saturating_add(text.capacity());
+                    usage.text = usage.text.saturating_add(text.len());
+                }
+                Self::ShutdownFailures(failure) => {
+                    usage.allocations = usage
+                        .allocations
+                        .saturating_add(mem::size_of_val(failure.as_ref()));
+                    pending.push((failure.read(), depth + 1));
+                    pending.push((failure.runtime(), depth + 1));
+                }
+                _ => {}
+            }
+        }
+        Ok(usage)
+    }
+    pub(crate) fn retained_usage(&self) -> Result<StorageErrorUsage, StorageError> {
+        let usage = Self::measure(vec![(self, 1)], StorageErrorUsage::default())?;
+        if usage.allocations > DiagnosticTreeLimits::BYTES {
+            return Err(Self::DiagnosticLimit);
+        }
+        Ok(usage)
+    }
+    /// Actual owned allocations, excluding the caller-accounted inline enum.
+    pub(crate) fn allocation_bytes(&self) -> usize {
+        self.retained_usage()
+            .map_or(usize::MAX, |usage| usage.allocations)
+    }
     pub(crate) fn validate_retained_size(&self) -> Result<(), StorageError> {
-        let capacity = match self {
-            Self::Io(value) | Self::Corrupt(value) => value.capacity(),
-            Self::Busy
-            | Self::IdentityMismatch
-            | Self::ChangesRequired
-            | Self::Unresolved
-            | Self::TooLarge => 0,
-        };
-        (capacity <= 4096)
+        if matches!(self, Self::Io(text) | Self::Corrupt(text) if text.capacity() > Self::DIAGNOSTIC_BYTES)
+        {
+            return Err(Self::Corrupt(
+                "stored acknowledgement diagnostic exceeds limit".into(),
+            ));
+        }
+        let usage = self.retained_usage()?;
+        (usage.diagnostics <= Self::DIAGNOSTIC_BYTES)
             .then_some(())
-            .ok_or_else(|| Self::Corrupt("stored acknowledgement diagnostic exceeds limit".into()))
+            .ok_or(Self::DiagnosticLimit)
+    }
+    fn compact_diagnostics(&mut self) {
+        let mut pending = vec![self];
+        while let Some(error) = pending.pop() {
+            match error {
+                Self::Io(text) | Self::Corrupt(text) => {
+                    *text = mem::take(text).into_boxed_str().into_string()
+                }
+                Self::ShutdownFailures(failure) => {
+                    pending.push(&mut failure.read);
+                    pending.push(&mut failure.runtime);
+                }
+                _ => {}
+            }
+        }
     }
     /// Compact external diagnostics before an SDK error wrapper or clone retains them.
     pub(crate) fn bounded(self) -> Self {
-        fn text(mut value: String) -> String {
-            const LIMIT: usize = 4096;
+        self.bounded_diagnostic(Self::DIAGNOSTIC_BYTES)
+    }
+    pub(crate) fn bounded_diagnostic(self, limit: usize) -> Self {
+        fn text(mut value: String, limit: usize) -> String {
             const SUFFIX: &str = " [diagnostic truncated]";
-            if value.len() > LIMIT {
-                let mut end = LIMIT - SUFFIX.len();
+            if value.len() > limit {
+                let mut end = limit.saturating_sub(SUFFIX.len());
                 while !value.is_char_boundary(end) {
                     end -= 1;
                 }
@@ -553,9 +863,191 @@ impl StorageError {
             value.into_boxed_str().into_string()
         }
         match self {
-            Self::Io(value) => Self::Io(text(value)),
-            Self::Corrupt(value) => Self::Corrupt(text(value)),
+            Self::Io(value) => Self::Io(text(value, limit)),
+            Self::Corrupt(value) => Self::Corrupt(text(value, limit)),
+            // Private construction already validated aggregate text and tree shape.
+            Self::ShutdownFailures(failure) => Self::ShutdownFailures(failure),
             other => other,
         }
+    }
+}
+
+#[cfg(test)]
+mod committed_tests {
+    use super::*;
+    use crate::application::agent_execution::executions::ExecutionRequest;
+    use crate::application::agent_execution::sessions::{
+        CommittedCompleteness, CommittedFreshness,
+    };
+    use crate::domain::agent_execution::prompts::{PromptText, UserMessage};
+    #[test]
+    fn typed_shutdown_tree_limits_and_iterative_rejection() {
+        let aggregate = |read, runtime| {
+            StorageShutdownFailure::new(read, runtime)
+                .map(|failure| StorageError::ShutdownFailures(Box::new(failure)))
+        };
+        let mut exact_depth = StorageError::ReadWorkerPanicked;
+        for _ in 1..DiagnosticTreeLimits::DEPTH {
+            exact_depth = aggregate(exact_depth, StorageError::Unresolved).unwrap();
+        }
+        assert_eq!(
+            exact_depth.retained_usage().unwrap().depth,
+            DiagnosticTreeLimits::DEPTH
+        );
+        assert_eq!(
+            aggregate(exact_depth, StorageError::Closed),
+            Err(StorageError::DiagnosticLimit)
+        );
+        fn tree(level: usize) -> StorageError {
+            if level == 0 {
+                StorageError::Closed
+            } else {
+                StorageError::ShutdownFailures(Box::new(
+                    StorageShutdownFailure::new(tree(level - 1), tree(level - 1)).unwrap(),
+                ))
+            }
+        }
+        let exact_nodes = tree(6);
+        let exact_agent_nodes = AgentError::ExecutionObservation {
+            error: Box::new(AgentError::Storage(exact_nodes.clone())),
+            execution_result: None,
+        };
+        assert!(exact_agent_nodes.validate_retained_size().is_ok());
+        let over_agent_nodes = AgentError::ExecutionObservation {
+            error: Box::new(exact_agent_nodes),
+            execution_result: None,
+        };
+        assert!(over_agent_nodes.validate_retained_size().is_err());
+        assert_eq!(
+            exact_nodes.retained_usage().unwrap().nodes,
+            DiagnosticTreeLimits::NODES - 1
+        );
+        assert_eq!(
+            aggregate(exact_nodes, StorageError::Closed),
+            Err(StorageError::DiagnosticLimit)
+        );
+        let exact_text = aggregate(
+            StorageError::Io("x".repeat(StorageError::DIAGNOSTIC_BYTES)),
+            StorageError::Unresolved,
+        )
+        .unwrap();
+        assert!(exact_text.validate_retained_size().is_ok());
+        assert_eq!(
+            aggregate(
+                StorageError::Io("x".repeat(StorageError::DIAGNOSTIC_BYTES + 1)),
+                StorageError::Unresolved
+            ),
+            Err(StorageError::DiagnosticLimit)
+        );
+        let mut hostile = StorageError::Closed;
+        for _ in 0..100_000 {
+            hostile = StorageError::ShutdownFailures(Box::new(StorageShutdownFailure {
+                read: hostile,
+                runtime: StorageError::Unresolved,
+            }));
+        }
+        assert_eq!(
+            aggregate(hostile, StorageError::Closed),
+            Err(StorageError::DiagnosticLimit)
+        );
+    }
+    #[test]
+    fn shutdown_failure_allocation_accounting_agrees_across_wrappers() {
+        let mut read = String::with_capacity(1024 * 1024);
+        read.push_str(&"r".repeat(2048));
+        let mut runtime = String::with_capacity(1024 * 1024);
+        runtime.push_str(&"c".repeat(2048));
+        let failure = StorageError::ShutdownFailures(Box::new(
+            StorageShutdownFailure::new(StorageError::Io(read), StorageError::Corrupt(runtime))
+                .unwrap(),
+        ));
+        let allocated = mem::size_of::<StorageShutdownFailure>() + 4096;
+        assert_eq!(failure.allocation_bytes(), allocated);
+        assert!(failure.validate_retained_size().is_ok());
+        let wrapped = AgentError::Storage(failure.clone());
+        assert_eq!(
+            wrapped.retained_size().unwrap(),
+            mem::size_of::<AgentError>() + allocated
+        );
+        let mut snapshot = SessionSnapshot {
+            id: SessionId::new("session").unwrap(),
+            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            provider_context: ProviderContext::Absent,
+            invocations: vec![InvocationRecord {
+                request: ExecutionRequest {
+                    execution_id: ExecutionId::new("execution").unwrap(),
+                    user_message: UserMessage::text_only(PromptText::new("message").unwrap()),
+                    estimated_input_tokens: 1,
+                    reserved_output_tokens: 1,
+                },
+                submission: SubmissionMode::Immediate,
+                target_event_offset: None,
+                actor: ActionContext::new("user", "surface", "request").unwrap(),
+                acknowledgement: SubmissionAcknowledgement::Pending,
+                events: Vec::new(),
+                scheduling: Vec::new(),
+                cancellation: None,
+                local_cancellation: None,
+                provider_report: None,
+                result: None,
+                local_outcome: None,
+            }],
+            queue_history: Vec::new(),
+        };
+        let before = super::super::retained::snapshot(&snapshot);
+        snapshot.invocations[0].acknowledgement = SubmissionAcknowledgement::Failed {
+            audit: None,
+            storage: Some(failure),
+        };
+        assert_eq!(
+            super::super::retained::snapshot(&snapshot) - before,
+            allocated
+        );
+        let mut diagnostic = String::with_capacity(8192);
+        diagnostic.push('x');
+        let capacity = diagnostic.capacity();
+        assert_eq!(StorageError::Io(diagnostic).allocation_bytes(), capacity);
+    }
+    fn empty() -> CommittedStatus {
+        CommittedStatus::new(
+            CommittedCompleteness::CompleteEmpty,
+            CommittedFreshness::Current,
+        )
+    }
+    #[test]
+    fn committed_constructor_validates_positions_head_status_and_incarnation_bytes() {
+        let id = SessionId::new("session").unwrap();
+        for incarnation in ["x".repeat(128), "é".repeat(64)] {
+            let mut external = String::with_capacity(8 * 1024 * 1024);
+            external.push_str(&incarnation);
+            let view = CommittedSession::new(id.clone(), external, 0, 0, 0, None, empty()).unwrap();
+            assert_eq!(view.incarnation(), incarnation);
+            assert_eq!(view.clone().incarnation(), incarnation);
+        }
+        for incarnation in ["x".repeat(129), "é".repeat(65), " ".repeat(128)] {
+            assert!(matches!(
+                CommittedSession::new(id.clone(), incarnation, 0, 0, 0, None, empty()),
+                Err(StorageError::Corrupt(_))
+            ));
+        }
+        for (a, d, head) in [(2, 1, 1), (1, 1, 0), (1, 1, 2)] {
+            assert!(matches!(
+                CommittedSession::new(id.clone(), "incarnation".into(), a, d, head, None, empty()),
+                Err(StorageError::Corrupt(_))
+            ));
+        }
+        let stale = CommittedStatus::new(
+            CommittedCompleteness::CompleteEmpty,
+            CommittedFreshness::Stale,
+        );
+        assert!(
+            CommittedSession::new(id.clone(), "incarnation".into(), 1, 1, 2, None, stale).is_ok()
+        );
+        let contradictory =
+            CommittedStatus::new(CommittedCompleteness::Complete, CommittedFreshness::Current);
+        assert!(matches!(
+            CommittedSession::new(id, "incarnation".into(), 0, 0, 0, None, contradictory),
+            Err(StorageError::Corrupt(_))
+        ));
     }
 }

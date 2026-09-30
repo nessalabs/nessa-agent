@@ -229,6 +229,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             steering: None,
             steering_supported: false,
             agent_accepts_images: false,
+            permission_authority: PermissionAuthoritySource::default(),
             operation_capabilities,
             permissions: HashMap::new(),
             startup_advisory_session: None,

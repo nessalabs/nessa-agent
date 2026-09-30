@@ -1,4 +1,6 @@
 //! Validate snapshot relationships at every storage port, including custom adapters.
+mod observations;
+use super::retention::{Witness, WitnessUndo};
 use super::{
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
     SessionSnapshot, StorageError, SubmissionAcknowledgement,
@@ -9,39 +11,151 @@ use crate::application::agent_execution::executions::{
     ExecutionEvent, ExecutionUpdate,
 };
 use crate::application::agent_execution::providers::{ExecutionReport, ExecutionReportSource};
-use crate::domain::agent_execution::{
-    executions::{
-        ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage, QueueMutation,
-    },
-    permissions::{PermissionRequest, PermissionStateView, ReviewDeclineStage},
+use crate::domain::agent_execution::executions::{
+    ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage, QueueMutation,
 };
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Display,
-};
+use observations::{ObservationUndo, Observations};
+use std::{collections::HashMap, fmt::Display};
 
 #[cfg(test)]
 use std::cell::Cell;
 
 #[cfg(test)]
 std::thread_local! {
-    pub(super) static VALIDATION_CALLS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+    pub(crate) static VALIDATION_CALLS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
 }
 
 fn corrupt(error: impl Display) -> StorageError {
     StorageError::Corrupt(error.to_string())
 }
 
+pub(super) struct InvocationContinuation {
+    pub(super) history: Option<InvocationHistory>,
+    usage: ObservationUsage,
+    observations: Observations,
+    witness: Option<Witness>,
+}
+pub(super) struct InvocationObservationUndo {
+    usage: ObservationUsage,
+    observation: ObservationUndo,
+    witness: WitnessUndo,
+    created_witness: bool,
+}
+impl InvocationContinuation {
+    pub(super) fn rebuild(
+        snapshot: &SessionSnapshot,
+        invocation: &InvocationRecord,
+    ) -> Result<Self, StorageError> {
+        let mut state = Self::empty(invocation)?;
+        for (index, event) in invocation.events.iter().enumerate() {
+            state.observe(&snapshot.provider_context, invocation, index, event)?;
+        }
+        Ok(state)
+    }
+    pub(super) fn empty(invocation: &InvocationRecord) -> Result<Self, StorageError> {
+        invocation
+            .request
+            .validate_message_size()
+            .map_err(corrupt)?;
+        if invocation.events.capacity() > MAX_RETAINED_OUTPUT_EVENTS {
+            return Err(corrupt(
+                "retained observation capacity exceeds per-invocation limit",
+            ));
+        }
+        if let Some(first) = invocation.scheduling.first() {
+            validate_admission_actor(invocation, first)?;
+        }
+        Ok(Self {
+            history: Some(invocation_history(invocation)?),
+            usage: ObservationUsage::default(),
+            observations: Observations::default(),
+            witness: None,
+        })
+    }
+    pub(super) fn observe(
+        &mut self,
+        context: &ProviderContext,
+        record: &InvocationRecord,
+        index: usize,
+        event: &ExecutionEvent,
+    ) -> Result<InvocationObservationUndo, StorageError> {
+        event.validate_payload_size().map_err(corrupt)?;
+        let usage = self.usage.with_event(event).map_err(corrupt)?;
+        let observation = self.observations.observe(context, record, index, event)?;
+        let created_witness = self.witness.is_none();
+        if created_witness {
+            let witness = context
+                .recorded()
+                .ok_or_else(|| corrupt("provider observations require context"))
+                .and_then(|context| {
+                    Witness::new(context.clone(), record.request.execution_id.clone())
+                        .map_err(corrupt)
+                });
+            match witness {
+                Ok(witness) => self.witness = Some(witness),
+                Err(error) => {
+                    self.observations.restore(observation);
+                    return Err(error);
+                }
+            }
+        }
+        let witness = match self
+            .witness
+            .as_mut()
+            .expect("initialized witness")
+            .observe(event)
+        {
+            Ok(undo) => undo,
+            Err(error) => {
+                self.observations.restore(observation);
+                if created_witness {
+                    self.witness = None;
+                }
+                return Err(corrupt(error));
+            }
+        };
+        let old_usage = std::mem::replace(&mut self.usage, usage);
+        Ok(InvocationObservationUndo {
+            usage: old_usage,
+            observation,
+            witness,
+            created_witness,
+        })
+    }
+    pub(super) fn restore_observation(&mut self, undo: InvocationObservationUndo) {
+        self.witness
+            .as_mut()
+            .expect("retained witness")
+            .restore(undo.witness);
+        if undo.created_witness {
+            self.witness = None;
+        }
+        self.observations.restore(undo.observation);
+        self.usage = undo.usage;
+    }
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.observations
+            .retained_bytes()
+            .saturating_add(self.witness.as_ref().map_or(0, Witness::retained_bytes))
+    }
+}
+
 pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
+    continuation(snapshot).map(drop)
+}
+
+pub(super) fn continuation(
+    snapshot: &SessionSnapshot,
+) -> Result<Vec<InvocationContinuation>, StorageError> {
     #[cfg(test)]
     VALIDATION_CALLS.with(|calls| {
         let (full, history) = calls.get();
         calls.set((full + 1, history));
     });
-    let _ = super::queue_validation::replay(snapshot)?;
     if snapshot.invocations.len() > SessionSnapshot::MAX_INVOCATIONS {
         return Err(corrupt("retained invocation history exceeds session limit"));
     }
+    let _ = super::queue_validation::replay(snapshot)?;
     snapshot
         .provider_context
         .validate_evidence(
@@ -74,6 +188,7 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
                 .any(|record| matches!(&record.mutation, QueueMutation::Selected { .. })),
         )
         .map_err(corrupt)?;
+    let mut states = Vec::with_capacity(snapshot.invocations.len());
     let mut identities = HashMap::with_capacity(snapshot.invocations.len());
     let mut event_counts = HashMap::new();
     for invocation in &snapshot.invocations {
@@ -97,20 +212,8 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
             invocation.request.execution_id.clone(),
             invocation.events.len(),
         );
-        if invocation.events.capacity() > MAX_RETAINED_OUTPUT_EVENTS {
-            return Err(corrupt(
-                "retained observation capacity exceeds per-invocation limit",
-            ));
-        }
-        ObservationUsage::from_events(&invocation.events).map_err(corrupt)?;
-        if let Some(Err(error)) = &invocation.result {
-            error.validate_retained_size()?;
-        }
-        invocation
-            .request
-            .validate_message_size()
-            .map_err(corrupt)?;
-        let history = invocation_history(invocation)?;
+        let state = InvocationContinuation::rebuild(snapshot, invocation)?;
+        let history = state.history.as_ref().expect("rebuilt history");
         // Derive target eligibility once per record, without rescanning a long
         // prior execution for every subsequent steering input.
         if identities
@@ -123,11 +226,7 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
             return Err(corrupt("execution identity occurs in multiple invocations"));
         }
         if let Some(first) = invocation.scheduling.first() {
-            if first.actor.as_ref() != Some(&invocation.actor) {
-                return Err(corrupt(
-                    "submission actor disagrees with scheduling admission",
-                ));
-            }
+            validate_admission_actor(invocation, first)?;
             if let Some(target) = &first.target {
                 if target == &invocation.request.execution_id || !identities.contains_key(target) {
                     return Err(corrupt("steering target is not a prior invocation"));
@@ -137,107 +236,19 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
                 }
             }
         }
-        for event in &invocation.events {
-            event.validate_payload_size().map_err(corrupt)?;
-        }
-        super::retention::validate(snapshot, invocation).map_err(corrupt)?;
-        let mut reviews = HashMap::new();
-        let mut review_ids = HashSet::new();
-        let mut declines = HashMap::new();
-        let mut asked_ids = HashSet::new();
-        let mut open_questions = HashSet::new();
-        for event in &invocation.events {
-            validate_observation_context(&snapshot.provider_context, event)?;
-            match event.update() {
-                ExecutionUpdate::Tool(tool) => {
-                    validate_observation_id(tool.id().as_str()).map_err(corrupt)?
-                }
-                ExecutionUpdate::PermissionRequested {
-                    id,
-                    tool_id,
-                    options,
-                    input,
-                    ..
-                } => {
-                    validate_observation_id(id.as_str()).map_err(corrupt)?;
-                    validate_observation_id(tool_id.as_str()).map_err(corrupt)?;
-                    if !review_ids.insert(id) {
-                        return Err(corrupt(
-                            "permission identity is repeated within an invocation",
-                        ));
-                    }
-                    reviews.insert(
-                        id,
-                        (
-                            PermissionRequest::new(
-                                id.clone(),
-                                event.execution_id().clone(),
-                                tool_id.clone(),
-                                options.clone(),
-                            ),
-                            input,
-                        ),
-                    );
-                }
-                ExecutionUpdate::PermissionCancelled(record) => {
-                    let (mut pending, input) = reviews
-                        .remove(record.request().id())
-                        .ok_or_else(|| corrupt("cancellation has no preceding pending request"))?;
-                    let PermissionStateView::Cancelled { reason } = record.request().state() else {
-                        return Err(corrupt("cancellation request is not cancelled"));
-                    };
-                    pending.cancel(reason.clone()).map_err(corrupt)?;
-                    if &pending != record.request() || input != record.input() {
-                        return Err(corrupt(
-                            "cancellation differs from the original permission request",
-                        ));
-                    }
-                }
-                ExecutionUpdate::ReviewDeclined(observation) => {
-                    match declines.get(observation.id()) {
-                        None if observation.stage() == ReviewDeclineStage::Selected => {
-                            declines.insert(observation.id(), observation);
-                        }
-                        Some(selected)
-                            if selected.advance(observation.stage()).as_ref()
-                                == Ok(observation) =>
-                        {
-                            declines.insert(observation.id(), observation);
-                        }
-                        None => {
-                            return Err(corrupt(
-                                "declined review delivery has no preceding local selection",
-                            ))
-                        }
-                        Some(_) => {
-                            return Err(corrupt(
-                                "declined review identity is repeated or changes its decision",
-                            ))
-                        }
-                    }
-                }
-                // An ask's history is checked here rather than trusted: every
-                // ask has its own identity, a close follows the ask it closes,
-                // and nothing closes twice. Fields that each look valid do not
-                // make a sequence that could have happened.
-                ExecutionUpdate::QuestionAsked { id, .. } => {
-                    validate_observation_id(id.as_str()).map_err(corrupt)?;
-                    if !asked_ids.insert(id) {
-                        return Err(corrupt(
-                            "question identity is repeated within an invocation",
-                        ));
-                    }
-                    open_questions.insert(id);
-                }
-                ExecutionUpdate::QuestionClosed { id } => {
-                    validate_observation_id(id.as_str()).map_err(corrupt)?;
-                    if !open_questions.remove(id) {
-                        return Err(corrupt("question closure has no preceding open question"));
-                    }
-                }
-                _ => {}
-            }
-        }
+        states.push(state);
+    }
+    Ok(states)
+}
+
+pub(super) fn validate_admission_actor(
+    record: &InvocationRecord,
+    event: &InvocationSchedulingEvent,
+) -> Result<(), StorageError> {
+    if event.actor.as_ref() != Some(&record.actor) {
+        return Err(corrupt(
+            "submission actor disagrees with scheduling admission",
+        ));
     }
     Ok(())
 }

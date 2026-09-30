@@ -2,8 +2,8 @@
 use super::{QueueHistoryRecord, SessionSnapshot, StorageError};
 use crate::application::agent_execution::executions::limits::validate_observation_id;
 use crate::domain::agent_execution::executions::{
-    ExecutionId, InvocationQueue, InvocationStage, QueueMutation, QueueOrderChange,
-    QueueRemovalCause, SchedulingCause,
+    ExecutionId, InvocationQueue, InvocationQueueUndo, InvocationStage, QueueMutation,
+    QueueOrderChange, QueueRemovalCause, SchedulingCause,
 };
 use std::collections::{HashMap, HashSet};
 fn corrupt(message: &str) -> StorageError {
@@ -19,6 +19,13 @@ pub(super) struct QueueReplay {
     queue: InvocationQueue,
     selected: HashSet<ExecutionId>,
     reorders: usize,
+    selected_bytes: usize,
+}
+
+pub(super) struct QueueReplayUndo {
+    queue: InvocationQueueUndo,
+    selected: Option<ExecutionId>,
+    reorders: usize,
 }
 
 impl QueueReplay {
@@ -28,15 +35,12 @@ impl QueueReplay {
                 .expect("positive queue capacity"),
             selected: HashSet::new(),
             reorders: 0,
+            selected_bytes: 0,
         }
     }
 
     pub(super) fn from_snapshot(snapshot: &SessionSnapshot) -> Result<Self, StorageError> {
-        let maximum = snapshot
-            .invocations
-            .len()
-            .saturating_mul(3)
-            .saturating_add(QueueHistoryRecord::MAX_REORDERS);
+        let maximum = QueueHistoryRecord::maximum_entries(snapshot.invocations.len());
         if snapshot.queue_history.len() > maximum
             || snapshot.queue_history.capacity() > maximum.saturating_mul(2)
         {
@@ -52,7 +56,17 @@ impl QueueReplay {
         for entry in &snapshot.queue_history {
             state.apply(snapshot, &positions, entry, false)?;
         }
-        state.validate_checkpoint(snapshot)?;
+        state.validate_current_checkpoint(snapshot, &positions)?;
+        for record in &snapshot.invocations {
+            if record
+                .scheduling
+                .iter()
+                .any(|edge| edge.stage == InvocationStage::Running)
+                && !state.selected.contains(&record.request.execution_id)
+            {
+                return Err(corrupt("queued dispatch has no prior queue selection"));
+            }
+        }
         Ok(state)
     }
 
@@ -63,7 +77,7 @@ impl QueueReplay {
         snapshot: &SessionSnapshot,
         positions: &HashMap<ExecutionId, usize>,
         entry: &QueueHistoryRecord,
-    ) -> Result<(), StorageError> {
+    ) -> Result<QueueReplayUndo, StorageError> {
         self.apply(snapshot, positions, entry, true)
     }
 
@@ -73,7 +87,7 @@ impl QueueReplay {
         positions: &HashMap<ExecutionId, usize>,
         entry: &QueueHistoryRecord,
         require_current_checkpoint: bool,
-    ) -> Result<(), StorageError> {
+    ) -> Result<QueueReplayUndo, StorageError> {
         let checkpoint = if let Some(id) = entry.mutation.id() {
             validate_observation_id(id.as_str())
                 .map_err(|_| corrupt("queue identity exceeds its bound"))?;
@@ -167,16 +181,44 @@ impl QueueReplay {
                 }
             }
         }
-        self.queue
-            .apply_mutation(&entry.mutation)
+        let queue = self
+            .queue
+            .apply_reversible_mutation(&entry.mutation)
             .map_err(corrupt)?;
+        let mut selected = None;
         if let QueueMutation::Selected { id } = &entry.mutation {
-            self.selected.insert(id.clone());
+            if self.selected.insert(id.clone()) {
+                self.selected_bytes = self.selected_bytes.saturating_add(id.as_str().len());
+                selected = Some(id.clone());
+            }
         }
+        let reorders = self.reorders;
         if matches!(&entry.mutation, QueueMutation::Reordered(_)) {
             self.reorders += 1;
         }
-        Ok(())
+        Ok(QueueReplayUndo {
+            queue,
+            selected,
+            reorders,
+        })
+    }
+    pub(super) fn restore(&mut self, undo: QueueReplayUndo) {
+        self.queue.restore_mutation(undo.queue);
+        if let Some(id) = undo.selected {
+            self.selected.remove(&id);
+            self.selected_bytes -= id.as_str().len();
+        }
+        self.reorders = undo.reorders;
+    }
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.queue
+            .retained_bytes()
+            .saturating_add(
+                self.selected
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<ExecutionId>() + 16),
+            )
+            .saturating_add(self.selected_bytes)
     }
 
     /// A running queued invocation must have been selected before its dispatch
@@ -185,13 +227,11 @@ impl QueueReplay {
         self.selected.contains(id)
     }
 
-    fn validate_checkpoint(&self, snapshot: &SessionSnapshot) -> Result<(), StorageError> {
-        let positions: HashMap<_, _> = snapshot
-            .invocations
-            .iter()
-            .enumerate()
-            .map(|(index, record)| (record.request.execution_id.clone(), index))
-            .collect();
+    pub(super) fn validate_current_checkpoint(
+        &self,
+        snapshot: &SessionSnapshot,
+        positions: &HashMap<ExecutionId, usize>,
+    ) -> Result<(), StorageError> {
         for (id, _) in self.queue.pending() {
             let record = positions
                 .get(&id)
@@ -201,16 +241,6 @@ impl QueueReplay {
                 return Err(corrupt(
                     "pending queue member has no matching pending scheduling state",
                 ));
-            }
-        }
-        for record in &snapshot.invocations {
-            if record
-                .scheduling
-                .iter()
-                .any(|edge| edge.stage == InvocationStage::Running)
-                && !self.selected.contains(&record.request.execution_id)
-            {
-                return Err(corrupt("queued dispatch has no prior queue selection"));
             }
         }
         Ok(())
