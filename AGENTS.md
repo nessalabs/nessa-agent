@@ -45,6 +45,8 @@ examples.
 
 ## While you work
 
+- [GitHub updates](CODING_STANDARDS.md#github-updates) — issue and pull request
+  explanations, ordering diagrams, and the evidence an update refers to.
 - [Audit evidence is part of the behavior](CODING_STANDARDS.md#audit-evidence-is-part-of-the-behavior)
   — consequential transitions keep their target, before/after meaning, cause, and
   initiator, on cleanup and failure paths too. The required regression evidence
