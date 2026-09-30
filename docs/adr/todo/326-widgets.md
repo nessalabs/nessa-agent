@@ -1,4 +1,4 @@
-# 326. A plugin's view is a widget the window hosts, in a message, beside it, in a pane or over the panes
+# 326. A plugin's view is a widget the window hosts, in a message, in a pane, or over the panes
 
 ## Purpose
 
@@ -16,9 +16,9 @@ any plugin reaching into the workspace.
 ## Context
 
 A prototype (`exp-prototype` @ `5bfaa225`, `src/desktop/widgets/`) showed the
-flow people liked: a card in the assistant's message, a button that opens it in
-a column attached to the conversation, an expand that gives it a pane, a
-full-window view with a breadcrumb, and Escape back. Its structure is what
+flow people liked: a card in the assistant's message, a button that opens it
+beside the conversation, a pane of its own like a chat's, a full-window view
+with a breadcrumb, and Escape back. Its structure is what
 cannot ship:
 
 - **The host imports its plugins.** `widgets/ui/registry.tsx` imports the
@@ -49,6 +49,10 @@ What binds:
   as one of its parts, like text and steps.
 - **Escape already has owners** in 238: menus and dialogs, the drag (it
   cancels and goes no further), the overview, the edge peek.
+- **The content region already has a second view.** The Agents overview
+  replaces the panes, and 238 says how it is left: Escape, or going anywhere
+  else — a session chosen, ⌘0, any change of the panes — is going back to
+  them (`ContentView`, `usecases/navigation.ts`).
 
 ## Decision
 
@@ -61,12 +65,14 @@ What binds:
   pane item, in a transcript part, in a command.
 - A **plugin** is `{ id, useWidget(id), views, SessionAccessory? }`.
   `useWidget` is the plugin's hook answering, reactively, `{ kind: "ready",
-  title, origin? } | { kind: "unread" } | { kind: "missing" }` — `origin` is
-  the session the widget belongs to, when it has one. `views` offers any of
-  `inline`, `attached`, `pane`, `window` (`pane` at least). A
-  `SessionAccessory` is something the plugin draws in a session pane's header
-  for that session (the subagents' avatar stack), so the workspace draws it
-  without importing the plugin.
+  title, origin? } | { kind: "unread" } | { kind: "missing" } | { kind: "off" }`
+  — `origin` is the session the widget belongs to, when it has one; `off`
+  says the plugin's preview is turned off. `views` offers `pane`, and any of
+  `inline` and `window`. A `SessionAccessory` is something the plugin draws in
+  a session pane's header, given the session's id and the host's callbacks
+  (the subagents' avatar stack, which opens their panel), so the workspace
+  draws it without importing the plugin. Each plugin's hook is its own, so a
+  host keys the view it draws by plugin.
 - Views are given only the widget's id and the **host's callbacks**:
   `open(place)`, `close()`, `openWidget(ref, place)` (a plugin opening another
   plugin's widget — an experiment's agent opening the subagents panel), and
@@ -78,39 +84,32 @@ What binds:
 
 ### Places
 
-| Place | What it is | Opened by | Closed by |
+| Place | What it is | Opened by | Left by |
 | --- | --- | --- | --- |
 | `inline` | a card in the message the widget part is in | the transcript | — |
-| `attached` | a column inside a session's pane, beside its conversation | `open("attached")` | its close, or Escape |
-| `pane` | a pane of its own in the split grid | `open("pane")`, a drop | the pane's close (as any pane) |
-| `window` | the widget fills the content region over the panes, as the Agents overview does | `open("window")` | its close, or Escape: the panes as they were |
+| `pane` | a pane of its own in the split grid, as a chat has | `open("pane")`: beside the pane showing its `origin`, by the workspace's `openBeside` and its rules, or in the focused pane's place when there is none | the pane's close, as any pane |
+| `window` | the widget fills the content region instead of the panes, as the Agents overview does | `open("window")` | as the overview is left: Escape, its close, or going anywhere else — a session chosen, ⌘0, any change of the panes — which is going back to the panes as they were |
 
-A widget is in **at most one** of `attached`, `pane` and `window` at once;
-opening it in another moves it there (its inline card stays in its message).
-The attached column is held in the workspace's state **keyed by the session**
-it is attached to, not by the pane: a pane that comes to show another session
-shows that session's column, if any, and the first session's comes back with
-it. It is offered only where the pane fits it — the fit rule stays 238's
-window fit, extended with the column's minimum — and where it does not fit,
-Open goes to a pane. A session that is removed takes its attached widget with
-it; a widget in a pane or the window whose `origin` is removed stays, without
-a way back to a conversation.
+A widget is in **at most one** of `pane` and `window` at once; opening it in
+the other moves it (its inline card stays in its message). `openWidget` from
+a widget in the window replaces it there; Escape then goes back to the panes.
+A widget pane moves, resizes and closes as any pane does in the grid; nothing
+carries a widget in from outside the grid. A widget whose `origin` session is
+removed stays where it is, without a way back to a conversation.
 
 **Focus** follows 238: opening a widget in a pane focuses that pane, as
 opening a session does, and the pane's body takes focus for the view to place
-further; opening it attached or in the window moves focus into it; closing
-returns focus to the conversation it came from, or to the focused pane.
+further; opening it in the window moves focus into it; leaving the window
+returns focus to the focused pane.
 
-**Escape**, outside a menu or dialog and when no drag is carrying: the view
-first — a view that has somewhere to step back to (a run it opened, a
-subagent it is showing) registers `onEscape` and handles it — then the host,
-which closes `attached` or leaves `window`. A widget in a pane is not closed
-by Escape, as a session pane is not. The window's content view is the panes,
-the overview, or a widget; the overview's own Escape is unchanged.
+**Escape**, after 238's owners — a menu or dialog, a carrying drag, the edge
+peek — goes to the widget in front: the one in the window when the window
+shows one, else the focused pane's. Its view has the first refusal (a view
+with somewhere to step back to — a run it opened, a subagent it shows —
+registers `onEscape` and handles it); then the host, which leaves the window.
+A widget in a pane is not closed by Escape, as a session pane is not.
 
-The window's **layout is not persisted** (238), and widgets do not change that:
-a widget pane, an attached column and the window view live as long as the
-window does.
+The window's **layout is not persisted** (238), and widgets do not change that.
 
 ### In the workspace
 
@@ -118,9 +117,11 @@ A pane's item is a **tagged union** — `{ kind: "session", sessionId } | { kind
 "widget", widget: WidgetRef }` — with **one codec** (`workspace/model/pane-item.ts`)
 between it and split panes' key: `s:` then the session id; `w:` then the
 plugin and the id, each percent-encoded, joined by `:`. The encoding is
-one-to-one and canonical, so two items are the same pane exactly when they are
-equal (a property test holds it). Every reader decodes through the codec; none
-parses a key. The panes' use cases take the union; what is showable, on
+one-to-one and canonical over any string (it encodes UTF-16 code units, so a
+lone surrogate encodes too, where `encodeURIComponent` would throw), and two
+items are the same pane exactly when they are equal; a property test holds
+both. The key is a branded type only the codec makes, so a reader cannot
+build or parse one by hand. The panes' use cases take the union; what is showable, on
 screen, or kept as a draft is decided per kind.
 
 A transcript part `{ kind: "widget", widget: WidgetRef }` is drawn by
@@ -130,11 +131,12 @@ widget parts over the wire is the gateway's, and remaining.
 
 ### What a host draws
 
-| `useWidget` answers | Plugin registered | `inline` | `attached`, `pane`, `window` |
+| `useWidget` answers | Plugin registered | `inline` | `pane`, `window` |
 | --- | --- | --- | --- |
 | ready | yes | the plugin's inline view, or a row with its title and Open if it has none | the plugin's view for that place; a place it does not offer is not offered |
 | unread | yes | a quiet placeholder with its plugin's name | the same, in the place's chrome |
 | missing | yes | "This is no longer available" | the same line, with close |
+| off | yes | "Turned off in Settings › Advanced › Experimental" | the same line, with close |
 | — | no | "Can't show this here" | the same line, with close |
 
 Nothing is retried by the host and nothing pretends to be live (gate 7, gate
@@ -161,8 +163,11 @@ refuses an import against that direction, in the forms of import
 - **Keep the string key and parse it where needed.** The prototype's shape,
   and the reason every reader had to know about widgets and two items could
   collide.
-- **The attached column keyed by pane.** Simpler state, but a pane that shows
-  another session would show the first session's widget beside it.
+- **A column attached inside a conversation's pane.** The prototype had one.
+  It needed its own rules for which session it belongs to, for fitting when a
+  split or resize narrows the pane, and for following its session between
+  panes — state a pane beside the conversation already has. Dropped after two
+  review rounds kept finding cases in it.
 - **Plugins registering themselves on import.** Load order becomes behaviour,
   and tests register whatever happened to be imported.
 
@@ -176,7 +181,7 @@ refuses an import against that direction, in the forms of import
 - Watch for plugins that want state shared between their places (a tab, a
   scroll position): today each view holds its own; if that stops being right,
   the plugin keeps it, not the host.
-- Work: #327 (the pane-item union and codec, the panes' and content view's use
-  cases, the attached column's state, the fit rule) and #328 (the registry,
-  the hosts, the widget pane's chrome, the transcript part, Escape and focus,
-  the boundary rule, `widgets.mjs`). Part of #325.
+- Work: #327 (the pane-item union and codec, the panes' and the content
+  view's use cases) and #328 (the registry, the hosts, the widget pane's
+  chrome, the transcript part, Escape and focus, the boundary rule, the
+  module map in `docs/codebase-structure.md`, `widgets.mjs`). Part of #325.

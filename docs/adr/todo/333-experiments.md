@@ -101,7 +101,7 @@ interface Limit {
 }
 ```
 
-**Runs** carry `number` (the baseline is run 0), `parentId` (what it was built
+**Runs** carry `number` (the baseline, its own field, is run 0), `parentId` (what it was built
 on, for lineage), `scores` by split id, each `{ mean, interval? }` (the
 half-width of its confidence interval), `measures` by guardrail metric id,
 their `verdict` id, the harness's `reason` for it as text, and optionally
@@ -114,11 +114,13 @@ The window draws the climb from `bestSoFar` and the best version from
 **Validation** is at the source's adapter, where external data is parsed: every
 run's verdict is in the vocabulary, every score's split and every measure's
 metric is defined, `primarySplit` names a split, `championRunId` and
-`bestSoFar` name runs that exist. An experiment that fails is not drawn in
+`bestSoFar` name runs that exist and have a score on the primary split, and
+the baseline has a measure for every guardrail limited relative to it. An experiment that fails is not drawn in
 part: the widget answers `missing` (326's table says what is shown), and the
 adapter logs what was wrong as a fault, as the workspace's `failureReason`
-does. Inside the window the types can hold only
-what validation let through.
+does. What validation returns is a branded `Experiment` that
+only `validateExperiment` makes, so a view cannot be handed one it did not
+check.
 
 **Sections follow the data.** No areas, no exploration map or area cards; no
 agents, no swarm; no `cases` or `change` on a run, no such block in its
@@ -127,9 +129,11 @@ detail; guardrails, a column and a tile each; no `noise`, no band; no
 
 **Numbers are formatted in one place**, `experiments/model/metric.ts`, from a
 `Metric`: a value with its unit and decimals, a change with its sign and
-`deltaUnit`, whether a change is good by `better` and `noise`. An architecture
-rule refuses `toFixed`, `toPrecision` and `Intl.NumberFormat` under
-`experiments/ui/`, which is what holds it.
+`deltaUnit`, and whether a change is good, bad or flat by `better` and
+`noise`. What it returns is a branded `Formatted` text, and every number a
+component draws is typed `Formatted`, so a component cannot draw a number it
+formatted itself. nessa_ui's `Delta` is given its tone; it does not judge the
+change.
 
 **Words are props.** Every heading, subtitle and label a composite draws is a
 prop, its default derived from the definition (the climb is titled by the
@@ -147,8 +151,8 @@ geometry pure functions.
 hue `1 | 2 | 3 | 4 | 5`; nothing is keyed on a known area id. **Agents** are
 the swarm, each with an activity; their conversations are subagents through an
 adapter (`experiments/adapters/subagents/`) registered with 329's join under
-the key `experiments`, each subagent's id minted from the experiment's and the
-agent's (`<experimentId>/<agentId>`), so two experiments in one conversation
+the key `experiments`, each subagent's id the experiment's id and the agent's,
+each percent-encoded, joined by `/`, so two experiments in one conversation
 cannot collide. Clicking an agent opens its subagent (329's
 `useOpenSubagent`), offered only while subagents' preview is on. A run has no
 session of its own yet, so an agent opens its conversation, where the run is
@@ -168,8 +172,8 @@ where it was clicked. Nothing is retried.
 
 **`ExperimentSource`**: `get(id)`, `forSession(sessionId)` (a conversation may
 run several), `subscribe`, and `openFile`. An experiment appears as a widget
-(326), plugin `experiments`, in all four places — its card inline, attached,
-in a pane, over the panes. Navigation — the view, the trail of runs followed,
+(326), plugin `experiments`, in all three places — its card inline, a pane
+beside the conversation, over the panes. Navigation — the view, the trail of runs followed,
 scroll and focus on opening one — is one hook, `useExperimentNavigation`,
 which registers 326's `onEscape` while the trail is not empty; the views only
 render. Experiments are offered only when their own preview is on under
@@ -183,10 +187,11 @@ no swarm. The second exists to test this record: if a view needs a change to
 show it, the definition is missing something. A scale sample moves a million
 cases and touches ten thousand files in one run.
 
-**Scale contract**, measured in `experiments.mjs` on the scale sample: opening
-the run and scrolling its files and cases keeps every frame within the
-window's 50 ms budget (`perf-budget.mjs`), and the page draws at most the
-visible files plus overscan.
+**Scale contract**, measured on the scale sample under the conditions
+`perf-budget.mjs` states (a production build, Chromium at 4× CPU throttling,
+through `lib/perf.mjs`): opening the run and scrolling its files and cases
+keeps every frame within 50 ms, and the page draws at most the visible files
+plus overscan. WebKit runs the same steps for behaviour, not frames.
 
 ## Alternatives considered
 
@@ -216,6 +221,6 @@ visible files plus overscan.
   once runs have one; an editor inside the window, which would change
   `openFile` from handing off to showing.
 - Work: #334 (the definition and validation, `model/metric.ts`, the model, the
-  port, the samples, the preview), #335 (the components and the formatting
-  rule), #336 (the composites, the surface, the inline card, navigation,
+  port, the samples, the preview, the module map in
+  `docs/codebase-structure.md`), #335 (the components), #336 (the composites, the surface, the inline card, navigation,
   `experiments.mjs`), #337 (the swarm as subagents). Part of #325.
