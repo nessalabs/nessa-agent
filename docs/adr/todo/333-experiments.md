@@ -213,9 +213,11 @@ count before and after; plus one page of moved cases from the source (at most
 status, lines added and removed), drawn as a virtualised tree with search.
 **`openFile({ experimentId, runId, path? })`** hands a file's diff to the
 person's editor, or with no path the run's whole change; it answers `opened`, or
-`refused` with a typed reason shown where it was clicked. Nothing is retried,
-and every call settles (the adapter answers `refused`, `unavailable`, when no
-answer comes in its bound):
+`refused` with a typed reason shown where it was clicked. One hook,
+`useOpenFile`, owns the table below — the latest request per place and the four
+seconds, on the injected clock — and `ChangeView` takes its state and callbacks
+as props. Nothing is retried, and every call settles (the adapter answers
+`refused`, `unavailable`, when no answer comes in its bound):
 
 | At a place | Event | Next | Shown |
 | --- | --- | --- | --- |
