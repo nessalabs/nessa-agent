@@ -49,11 +49,12 @@ What binds:
   as one of its parts, like text and steps.
 - **Escape already has owners** in 238: menus and dialogs, the drag (it
   cancels and goes no further), the overview, the edge peek.
-- **The content region already has a second view.** The Agents overview
-  (⌘0) is drawn instead of the panes, which stay as they were beneath it; 238
-  says how it is left: Escape, or going anywhere else — a session chosen, any
-  change of the panes — is going back to them (`ContentView`,
-  `usecases/navigation.ts`, `goesSomewhere` and `changesPanes` in the slice).
+- **The content region already has a second view.** The Agents overview (⌘0) is
+  drawn in a layer over the session list and the panes, which stay as they were
+  beneath it; 238 says how it is left: Escape, or going anywhere else — a
+  session chosen, any change of the panes — is going back to them
+  (`ContentView`, `usecases/navigation.ts`, `goesSomewhere` and `changesPanes`
+  in the slice).
 
 ## Decision
 
@@ -96,7 +97,7 @@ What binds:
 | --- | --- | --- | --- |
 | `inline` | a card in the message the widget part is in | the transcript | — |
 | `pane` | a pane of its own in the split grid, as a chat has | `open("pane")`: beside the pane showing its `origin`, by the workspace's `openBeside` and its rules, or in the focused pane's place when there is none | the pane's close or ⌘W, as any pane; the last pane, as 238 has it, goes back to a new session's home, where a new session goes (`createDraft`: the channel being looked at, else the first) — `closePane` gains that case, which today leaves a last pane not showing a session as it is |
-| `window` | the content region's third view, beside the panes and the overview: the widget drawn instead of the panes, which stay beneath it as they were | `open("window")` | as the overview is — Escape or its close, a session chosen, or any change of the panes goes back to the panes; ⌘0 goes to the overview — with one difference: ⌘W closes the window, never a pane beneath it (over the overview, ⌘W closes the focused pane, 238) |
+| `window` | the content region's third view, beside the panes and the overview: the widget drawn instead of the panes, which stay beneath it as they were | `open("window")` | as the overview is — Escape or its close, a session chosen, or any change of the panes goes back to the panes; ⌘0 goes to the overview — with two differences: it covers the content region only, so the session list stays in reach beside it; and ⌘W closes the window, never a pane beneath it (over the overview, ⌘W closes the focused pane, 238) |
 
 The content view is `panes | agents | { widget }`, one at a time, and the window
 place is its third value: nothing is moved into or out of the grid to show a
@@ -118,9 +119,10 @@ pane's composer when it shows a session, and in its body when it shows a widget,
 for the view to place further; and while the content view is a widget, focus
 that falls away lands in the window's widget body, not a pane beneath it — so a
 run's detail closing, or a subagent list giving way to one subagent, leaves
-focus in the widget's pane, where the next Escape still reaches it. Opening a
-widget in a pane is a pane taking focus; opening one in the window moves focus
-into it; going back to the panes is the focused pane taking focus.
+focus in the widget's pane, or in the window's widget, where the next Escape
+still reaches it. Opening a widget in a pane is a pane taking focus; opening one
+in the window moves focus into it; going back to the panes is the focused pane
+taking focus.
 
 **Escape**, after 238's owners — a menu or dialog, a carrying drag, the edge
 peek, the open overview — goes to the widget in front. While the content view is
