@@ -75,9 +75,12 @@ composition joins sources (the in-memory sample and the experiments adapter
 today, the gateway's later) into one `SubagentSource`, given as a `Record` from
 each source's key to the source, so a key cannot repeat, and the join makes
 every id its source's key, `:`, and the source's own id through the desktop's
-one id encoder (326). Two sources cannot produce one id. The join answers
-`unread` for a conversation while any of its sources has not read it, then
-`ready` with every source's subagents, so a list is never shown short.
+one id encoder (326). Two sources cannot produce one id, and each source keeps
+its own ids unique for a conversation — the experiments adapter through 333's
+validation of agent ids; the join drops a repeated id from one source and logs
+it as a fault. The join answers `unread` for a conversation while any of its
+sources has not read it, then `ready` with every source's subagents, so a list
+is never shown short.
 
 **`SubagentSource`** is the port: `forSession(sessionId)`, answering from what
 the source holds now (a view may read it on every render) `{ kind: "unread" }`

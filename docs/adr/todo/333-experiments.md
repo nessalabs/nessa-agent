@@ -152,6 +152,10 @@ that measure.
 - **Settling**: a run's `settledAt` present exactly when its verdict's outcome
   is not `pending`; a run's `startedAt` at or after the experiment's, and its
   `settledAt` at or after its own `startedAt`.
+- **Cases and changes**: a slice's passing counts before and after at most its
+  total; a run's fixed and broken counts at most its cases' total; the page of
+  moved cases at most 200 and at most the total that moved; file paths unique
+  within a change.
 - **The best**: `bestSoFar` names runs, none twice, each kept and scored on the
   primary split, their `settledAt` never decreasing along it, with every kept
   run in it.
