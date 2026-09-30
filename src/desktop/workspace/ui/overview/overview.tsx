@@ -2,7 +2,6 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -432,54 +431,77 @@ export function AgentsOverview({
   // the list, on the current row, or at its top where it lists none.
   const leaveReply = useCallback(() => focusItem(currentNow.current), [focusItem])
 
-  // Where the keyboard is in the list, followed by where focus arrives: the
-  // element, and the session whose row holds it — on the row, or in the peek
-  // opened beneath it. A session that changes group is drawn anew under its
-  // new heading, and the element leaves the page with focus still on it, to
-  // the page's body, where no key is heard: the keyboard follows the session
-  // to its new row — or, the session gone from the list, to the current row —
-  // before the frame is painted. Focus the person takes to the body (a click
-  // on text) leaves with the element still on the page, and is let go.
-  const holding = useRef<{ element: HTMLElement; sessionId: string } | null>(null)
+  // Focus the overview loses, it gives back — one rule, whatever took the
+  // element away: a session changing group (its row drawn anew under another
+  // heading), the peek beneath a row or beside the list going, a count
+  // leaving the line, Show All once nothing is left out. The element leaves
+  // the page with focus on it, and focus falls to the page's body, where no
+  // key is heard. It goes instead to that element's session's row (a row, or
+  // the peek beneath it) — or, the session gone from the list or the element
+  // no row's (a count, the peek beside the list, which shows the current
+  // session), to the current row, or the list where it lists none — before
+  // the frame is painted: a mutation is answered at the microtask after the
+  // change, whoever made it. Focus that has already landed elsewhere (a reply
+  // pill drawn anew takes its caret itself) is held there, and nothing is due.
+  //
+  // What the person does is left alone. Focus they move (a click on text)
+  // lets the element go; focus the window takes with it (another app) leaves
+  // the element focused, and it is kept.
+  const lastFocus = useRef<{ element: HTMLElement; sessionId: string | null } | null>(
+    null,
+  )
+  const orderNow = useRef(order)
+  orderNow.current = order
+  const giveBack = useRef(() => {})
+  giveBack.current = () => {
+    const last = lastFocus.current
+    if (last === null || last.element.isConnected) return
+    lastFocus.current = null
+    focusItem(
+      last.sessionId !== null && orderNow.current.includes(last.sessionId)
+        ? last.sessionId
+        : currentNow.current,
+    )
+  }
   useEffect(() => {
+    const root = section.current
+    if (!root) return
+    const sessionOf = (element: HTMLElement) =>
+      element
+        .closest<HTMLElement>(".agents-row-item")
+        ?.querySelector<HTMLElement>("[data-overview-item]")?.dataset.overviewItem ?? null
     const onFocusIn = (event: FocusEvent) => {
       const element = event.target
-      const sessionId =
-        element instanceof HTMLElement && list.current?.contains(element)
-          ? element
-              .closest<HTMLElement>(".agents-row-item")
-              ?.querySelector<HTMLElement>("[data-overview-item]")?.dataset.overviewItem
-          : undefined
-      holding.current =
-        element instanceof HTMLElement && sessionId !== undefined
-          ? { element, sessionId }
+      lastFocus.current =
+        element instanceof HTMLElement && root.contains(element)
+          ? { element, sessionId: sessionOf(element) }
           : null
     }
     const onFocusOut = (event: FocusEvent) => {
       const element = event.target
-      // Settled once the change that moved focus has: an element taken off
-      // the page is still held, one the person left is not.
+      if (!(element instanceof HTMLElement)) return
+      // Decided once the change that moved focus has settled: Chromium tells
+      // an element it is losing focus as it is taken off the page, before it
+      // has gone, so only afterwards can a removal be told from a person
+      // leaving. Still on the page and no longer focused, it was left; the
+      // window going to another app leaves it the focused element, and it is
+      // kept. A click away in the same tick as the element's removal looks
+      // like the removal, and focus is given back.
       queueMicrotask(() => {
-        if (holding.current?.element === element && holding.current.element.isConnected)
-          holding.current = null
+        if (lastFocus.current?.element !== element || !element.isConnected) return
+        if (document.activeElement !== element) lastFocus.current = null
       })
     }
+    const removals = new MutationObserver(() => giveBack.current())
+    removals.observe(root, { childList: true, subtree: true })
     document.addEventListener("focusin", onFocusIn)
     document.addEventListener("focusout", onFocusOut)
     return () => {
+      removals.disconnect()
       document.removeEventListener("focusin", onFocusIn)
       document.removeEventListener("focusout", onFocusOut)
     }
   }, [])
-  // After every change to the list, before it is painted.
-  useLayoutEffect(() => {
-    const was = holding.current
-    if (was === null || was.element.isConnected) return
-    const focus = document.activeElement
-    if (focus !== null && focus !== document.body) return
-    holding.current = null
-    focusItem(order.includes(was.sessionId) ? was.sessionId : current)
-  })
 
   return (
     <ReplyCaret.Provider value={caret}>
@@ -498,12 +520,7 @@ export function AgentsOverview({
                 <h1>Agents</h1>
                 <FilterMenu filter={filter} onChange={setFilter} />
               </div>
-              <Counts
-                ready={ready}
-                glance={glance}
-                onToggle={toggleGroup}
-                onFocusGone={leaveReply}
-              />
+              <Counts ready={ready} glance={glance} onToggle={toggleGroup} />
             </header>
             <div className="agents-overview-scroll">
               <div
@@ -568,43 +585,19 @@ const everySession: AgentsFilter = { scope: "all", range: "any", tags: [] }
  *
  * A count goes from the line when its group has none the filter lets
  * through and is not shown alone — let go at nought, or emptied by the
- * source. When the keyboard was on it, it goes to the list (`onFocusGone`)
- * in the same frame, never left on the page's body, where no key is heard.
+ * source. When the keyboard was on it, the overview gives it back to the
+ * list in the same frame, as it does any focus it loses.
  */
 function Counts({
   ready,
   glance,
   onToggle,
-  onFocusGone,
 }: {
   ready: boolean
   glance: AgentsGlance
   onToggle: (group: AgentsGroup) => void
-  onFocusGone: () => void
 }) {
   const counts = glanceCounts(glance)
-  // The count the keyboard is on, followed by where focus arrives: a count
-  // taken from the page moves focus nowhere, so it is still named here.
-  const holding = useRef<string | null>(null)
-  useEffect(() => {
-    const onFocusIn = (event: FocusEvent) => {
-      holding.current =
-        event.target instanceof HTMLElement
-          ? (event.target.closest<HTMLElement>(".agents-overview-counts [data-group]")
-              ?.dataset.group ?? null)
-          : null
-    }
-    document.addEventListener("focusin", onFocusIn)
-    return () => document.removeEventListener("focusin", onFocusIn)
-  }, [])
-  // After every change to the line, before it is painted.
-  useLayoutEffect(() => {
-    const was = holding.current
-    if (was === null || (ready && counts.some((count) => count.group === was))) return
-    holding.current = null
-    const focus = document.activeElement
-    if (focus === null || focus === document.body) onFocusGone()
-  })
   if (!ready) return <p className="agents-overview-counts">{"\u00a0"}</p>
   if (counts.length === 0) return <p className="agents-overview-counts">{quietLine}</p>
   return (

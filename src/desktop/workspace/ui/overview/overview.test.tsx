@@ -962,24 +962,152 @@ describe("a row keeps the keyboard as its session changes group", () => {
     expect(document.activeElement).toBe(document.body)
   })
 
-  it("leaves it there when the click that took it away also changes the list, in the same tick", async () => {
+  it("gives focus back when a click away and the row's removal land in the same tick", async () => {
     const { source, store } = await mount()
     store.dispatch(followWorkspace())
     await open()
-    await act(async () => row("run")?.focus())
-    // Rendered before the leaving focus is settled (a microtask on).
+    const before = row("run") as HTMLElement
+    await act(async () => before.focus())
+    // Chromium tells a removed element it is losing focus just as a click away
+    // does, so within one tick the two cannot be told apart: the removal wins.
     act(() => {
-      ;(document.activeElement as HTMLElement).blur()
+      before.blur()
       source.emit({
         kind: "session",
-        session: summary("second", "desktop", 600, "running", {
-          title: "Notarize",
+        session: summary("run", "desktop", 600, "idle", {
+          title: "Split panes",
           revision: 2,
         }),
       })
     })
-    expect(card("second")).toBeNull()
-    expect(document.activeElement).toBe(document.body)
+    await act(async () => settle(1))
+    expect(heading("run")).toBe("Earlier")
+    expect(document.activeElement).toBe(row("run"))
+  })
+
+  it("follows the peek's own session from beneath its row, when the keyboard chose another", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    // Every session listed, so "run" stays listed once it rests.
+    store.dispatch(filterOverview({ filter: { scope: "all", range: "any", tags: [] } }))
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    // The keyboard moves on to another row; the peek stays open beneath "run".
+    await press(row("run") as HTMLElement, "ArrowUp")
+    expect(document.activeElement).toBe(card("second"))
+    const story = host.querySelector<HTMLElement>(
+      ".agents-inline-peek .agents-peek-story",
+    )
+    await act(async () => story?.focus())
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).not.toBe("Working")
+    expect(heading("run")).toBeDefined()
+    expect(document.activeElement).toBe(row("run"))
+  })
+
+  it("gives back focus whatever took the element away, without a render of its own", async () => {
+    await mount()
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    const story = host.querySelector<HTMLElement>(
+      ".agents-inline-peek .agents-peek-story",
+    )
+    await act(async () => story?.focus())
+    // Taken off the page by something other than the overview rendering.
+    await act(async () => {
+      story?.remove()
+      await settle(1)
+    })
+    expect(document.activeElement).toBe(row("run"))
+  })
+
+  it("keeps the element through another app taking the window, and gives focus back after", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const before = row("run") as HTMLElement
+    await act(async () => before.focus())
+    // The window loses focus: the element is told, and stays the focused one.
+    await act(async () => {
+      before.dispatchEvent(
+        new FocusEvent("focusout", { bubbles: true, relatedTarget: null }),
+      )
+      await settle(1)
+    })
+    expect(document.activeElement).toBe(before)
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).toBe("Earlier")
+    expect(document.activeElement).toBe(row("run"))
+  })
+
+  it("gives back focus Show All had when it goes, once nothing is left out (#317)", async () => {
+    const { store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const showAll = button(host, "Show All")
+    if (!showAll) return expect(showAll).toBeDefined()
+    await act(async () => showAll.focus())
+    await act(async () => showAll.click())
+    expect(button(host, "Show All")).toBeUndefined()
+    expect(document.activeElement).toBe(card("first"))
+  })
+
+  it("leaves focus outside the overview where it is when a row goes", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const outside = document.createElement("button")
+    document.body.append(outside)
+    try {
+      await act(async () => row("run")?.focus())
+      await act(async () => outside.focus())
+      await moveOn(source, "run", "Split panes", "idle")
+      expect(document.activeElement).toBe(outside)
+    } finally {
+      outside.remove()
+    }
+  })
+
+  it("follows its session from the peek beside the list when the window narrows", async () => {
+    const observed: ((width: number) => void)[] = []
+    class Observer {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        if (target.classList.contains("workspace-overview-layer"))
+          observed.push((width) =>
+            this.callback(
+              [{ contentRect: { width } } as ResizeObserverEntry],
+              this as unknown as ResizeObserver,
+            ),
+          )
+      }
+      disconnect() {}
+    }
+    const was = globalThis.ResizeObserver
+    Object.assign(globalThis, { ResizeObserver: Observer })
+    try {
+      await mount()
+      await act(async () => observed.forEach((report) => report(1200)))
+      await open()
+      await act(async () => row("run")?.click())
+      for (
+        let wait = 0;
+        wait < 5 && !host.querySelector(".agents-overview-peek .agents-peek");
+        wait++
+      )
+        await nextFrame()
+      const inPeek = host.querySelector<HTMLElement>(".agents-overview-peek button")
+      await act(async () => inPeek?.focus())
+      expect(document.activeElement).toBe(inPeek)
+      // Narrowed: the peek beside the list goes.
+      await act(async () => observed.forEach((report) => report(600)))
+      expect(host.querySelector(".agents-overview-peek")).toBeNull()
+      expect(document.activeElement).toBe(row("run"))
+    } finally {
+      Object.assign(globalThis, { ResizeObserver: was })
+    }
   })
 })
 

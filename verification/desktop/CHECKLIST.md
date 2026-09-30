@@ -232,14 +232,16 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   sending, which moves the row from Needs you to Working and draws its pill
   anew, leaves the caret in that session's pill. _Check:_ `focus.mjs`
   (`focus-reply`, 1440 × 900 and 1000 × 700); unit test `overview.test.tsx`.
-- [ ] **A row keeps the keyboard as its session changes group**: the row is
-  drawn anew under its new heading (Working to Finished, say) and the
-  keyboard follows it there — from the row, or from the peek beneath it — so
-  the arrows still walk the list; a session removed from the list leaves the
-  keyboard on the row the list then chooses (the first it lists). Focus the
-  person took to the page (a click on text) stays there.
-  _Check:_ `focus.mjs` (`focus-regroup-row`, `-peek`, `-away`); unit test
-  `overview.test.tsx`.
+- [ ] **Focus the overview loses, it gives back**: whatever takes the focused
+  element off the page — its session changing group (the row drawn anew under
+  its new heading), the peek beneath a row or beside the list going, a count
+  leaving the line, Show All once nothing is left out — the keyboard goes to
+  that session's row, or else the current row, or the list, so the arrows
+  still walk it. Focus the person took elsewhere (a click on text) stays
+  there; another app taking the window keeps it. A click away in the same
+  tick as the element's removal is given back like the removal.
+  _Check:_ `focus.mjs` (`focus-regroup-row`, `-peek`, `-away`),
+  `responsive.mjs` (`overview-counts`); unit test `overview.test.tsx`.
 - [ ] **The sidebar marks what is shown**: Agents while the overview is, a
   channel or session only while the panes are. _Check:_ manual.
 - [ ] **The header holds its place; only the list scrolls.** The title, its
