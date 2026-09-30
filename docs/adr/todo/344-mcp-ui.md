@@ -123,3 +123,42 @@ app widgets alike.
   directory; the `openai/*` extensions Nessa chooses to support.
 - Work: #346, #347, #348, #349 in nessa-agent; nessa-extensions #1–#7. Part of
   #345.
+
+## What each harness passes through ACP
+
+A spike for #347, read from the pinned harnesses installed with the app —
+`@agentclientprotocol/claude-agent-acp` 0.76.0 (and the Claude Code CLI it
+drives, 0.3.257), `@agentclientprotocol/codex-acp` 1.12.0 (over codex
+0.154.0), and Opencode 1.18.31 — not from a recorded turn: the repository's
+MCP frames are hand-written, and none was run against a live server with UI.
+Claude's adapter and codex-acp are readable JavaScript and are cited by line;
+the Claude CLI, codex and Opencode are compiled, and what is said of them comes
+from their embedded strings and bundles.
+
+| | Claude ACP 0.76.0 | Codex ACP 1.12.0 | Opencode 1.18.31 |
+| --- | --- | --- | --- |
+| Server and tool | `_meta.claudeCode.toolName` (and `title`) is `mcp__<server>__<tool>`, each name with `[^A-Za-z0-9_-]` replaced by `_`; kind `other` (`tools.js:335-340`). A server name may hold `__`, so only a configured prefix says where it ends | `rawInput.{server, tool}` exactly; title `mcp.<server>.<tool>`, kind `execute`, `_meta.is_mcp_tool_call` (`index.js:23035-23045`) | title `<server>_<tool>` after the same replacement, kind `other`, no `_meta`: cannot be split |
+| The tool's `_meta` (`ui.resourceUri`) | not passed on; neither the adapter nor the CLI mentions `resourceUri` | codex has `mcpAppResourceUri` on the call; codex-acp does not copy it | not passed on |
+| The result's `_meta` | only in an opt-in `_claude/sdkMessage` notification, not a `session/update` | `rawOutput.result._meta` | dropped |
+| `structuredContent` | replaces the result's text blocks as JSON text: indistinguishable from text | `rawOutput.result.structuredContent` | JSON text only when there is no other content |
+| resource, resource_link | turned into text by the CLI; never an ACP `resource` or `resource_link` block | only inside `rawOutput.result.content`; no ACP content at all for an MCP call | resource text becomes text; links dropped |
+| `rawOutput` | the Anthropic `tool_result` content | `{result: {content, structuredContent, _meta} \| null, error: {message} \| null}` (`index.js:23151-23159`) | `{output, metadata?, attachments?}` |
+
+Unverified: whether codex keeps an MCP result's blocks verbatim in
+`rawOutput.result.content` (codex's source was not available, only its strings);
+what a Claude PostToolUse hook's `tool_response` holds for an MCP tool;
+Opencode's readable source.
+
+What #347 builds on it: the SDK carries an MCP call's server and tool
+(`McpTool`) from Claude, split at the one configured prefix that fits, and from
+Codex's `rawInput`, and names none for Opencode; it carries a Codex MCP result
+— its text blocks, and its `structuredContent` bounded as a structured result —
+where before a finished Codex MCP call showed nothing. Both reach the window on
+`ConversationTool` (`mcp`, `structuredContent`).
+
+What it does not: **no harness passes the tool's UI resource through ACP**, so a
+tool's `_meta.ui.resourceUri` comes from the server itself, over the gateway's
+own connection (#346) — the connection this record already decides the gateway
+owns. Until then no call is known to have UI, and the desktop's widget part
+(`toolWidget` in `workspace/model/transcript.ts`) is never produced; a call's
+text result is shown as before.
