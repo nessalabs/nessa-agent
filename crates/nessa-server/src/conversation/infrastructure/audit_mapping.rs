@@ -2,7 +2,8 @@
 use nessa_sdk::application::agent_execution::{
     executions::{
         AdmissionAuditCause, AdmissionAuditStage, AttachmentAuditCause, AttachmentAuditStage,
-        ExecutionAuditRecord, QueueOrderCause, SteeringAuditCause, SteeringAuditStage,
+        EffortChangeStage, ExecutionAuditRecord, QueueOrderCause, SteeringAuditCause,
+        SteeringAuditStage,
     },
     permissions::{
         ActionContext, ApprovalBasis, CancellationOrigin, PermissionAnswerDelivery,
@@ -93,6 +94,22 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                 })).collect::<Vec<_>>(),
                 "after":change.after().iter().map(|id|id.as_str()).collect::<Vec<_>>(),
                 "cause":match record.cause() { QueueOrderCause::CallerRequested => "caller_requested" },
+                "actor":actor(record.actor()),
+            })
+        }
+        ExecutionAuditRecord::EffortLevelChanged(record) => {
+            json!({
+                "kind":"effort_level_change",
+                "sessionId":record.session_id().as_str(),
+                "attachmentGeneration":record.attachment_generation(),
+                "before":record.before().map(|level| level.as_str()),
+                "after":record.after().as_str(),
+                "stage":match record.stage() {
+                    EffortChangeStage::Requested => "requested",
+                    EffortChangeStage::Applied => "applied",
+                    EffortChangeStage::Failed => "failed",
+                },
+                "cause":"caller_requested",
                 "actor":actor(record.actor()),
             })
         }

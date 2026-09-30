@@ -16,8 +16,8 @@ use crate::application::agent_execution::agents::{
 };
 use crate::application::agent_execution::executions::{
     limits::MAX_RETAINED_OUTPUT_EVENTS, AttachmentAuditCause, AttachmentAuditRecord,
-    AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord, ExecutionEvent, ExecutionRequest,
-    ExecutionUpdate,
+    AttachmentAuditStage, EffortLevelChangeRecord, ExecutionAudit, ExecutionAuditRecord,
+    ExecutionEvent, ExecutionRequest, ExecutionUpdate,
 };
 use crate::application::agent_execution::hooks::{
     HookRegistration, InvocationContext, InvocationHook, InvocationHooks,
@@ -190,13 +190,19 @@ impl Agent {
     /// Apply and verify a reasoning effort level on an attached, idle provider
     /// generation, as [`Self::set_approval_mode`] does for a preset: the
     /// scheduler lock excludes queued admission and dispatch until the agent's
-    /// answer is checked, and the level it reports back must be `level`. Every
-    /// later admission records the verified level
+    /// answer is checked, and the level it reports back must be `level`.
+    ///
+    /// `actor` is the host-verified caller. A change that reaches the agent is
+    /// audited twice through this Agent's audit sink
+    /// ([`EffortLevelChangeRecord`](crate::application::agent_execution::executions::EffortLevelChangeRecord)):
+    /// as requested before anything is sent, and as applied or failed after.
+    /// Success is reported only once both are recorded. Every later
+    /// admission records the level in force
     /// ([`QueueAdmissionRecord::effort_level`](crate::application::agent_execution::executions::QueueAdmissionRecord::effort_level)).
     ///
     /// # Errors
     ///
-    /// Nothing is sent on any of these:
+    /// Nothing is sent, and nothing is recorded, on the first three:
     /// - [`AgentError::Busy`] with [`ProviderSessionState::Usable`] while an
     ///   invocation is queued or running.
     /// - [`AgentError::AttachmentUnavailable`] while no attachment is usable,
@@ -204,10 +210,23 @@ impl Agent {
     ///   ([`AttachmentPhase::Starting`], [`ProviderSessionState::Usable`]).
     /// - [`AgentError::InvalidInput`] with [`ProviderSessionState::Usable`]
     ///   when `level` is not one of [`Self::effort_levels`].
-    /// - Any other failure carries explicit session status, and the previous
-    ///   level stays recorded; callers must retire an uncertain generation
-    ///   before admitting another turn.
-    pub async fn set_effort_level(&self, level: EffortLevel) -> ProviderOperationResult<()> {
+    ///
+    /// And once the change is under way:
+    /// - The audit sink's error with [`ProviderSessionState::Usable`] when the
+    ///   request cannot be recorded; nothing is sent.
+    /// - The agent's failure with explicit session status when the change
+    ///   fails or cannot be verified; the previous level stays in force, and
+    ///   the uncertain generation must be retired before another turn. If the
+    ///   failure cannot be recorded either, both are returned, in that order,
+    ///   as [`AgentError::MultipleOperationFailures`].
+    /// - The audit sink's error with [`ProviderSessionState::CleanupRequired`]
+    ///   when the agent verified the change but it cannot be recorded: the
+    ///   level is in force, and no turn may run under it unrecorded.
+    pub async fn set_effort_level(
+        &self,
+        level: EffortLevel,
+        actor: ActionContext,
+    ) -> ProviderOperationResult<()> {
         let scheduler = self.inner.scheduler.lock().await;
         if !scheduler.is_idle() || self.inner.lifecycle.active().is_some() {
             return Err(ProviderOperationFailure::new(
@@ -251,14 +270,61 @@ impl Agent {
                 ProviderSessionState::Usable,
             ));
         }
+        let requested = EffortLevelChangeRecord::requested(
+            self.inner.manager.id().clone(),
+            format!(
+                "{}:{}",
+                self.inner.instance_id,
+                permit.provider_generation()
+            ),
+            actor,
+            self.effort_level(),
+            level.clone(),
+        );
+        self.inner
+            .audit
+            .record(ExecutionAuditRecord::EffortLevelChanged(requested.clone()))
+            .await
+            .map_err(|error| ProviderOperationFailure::new(error, ProviderSessionState::Usable))?;
         let result = attached.session.set_effort_level(level.clone()).await;
-        if result.is_ok() {
-            *self
-                .inner
-                .live_effort_level
-                .write()
-                .expect("effort level lock") = Some((permit.provider_generation(), level));
-        }
+        let result = match result {
+            Ok(()) => {
+                *self
+                    .inner
+                    .live_effort_level
+                    .write()
+                    .expect("effort level lock") = Some((permit.provider_generation(), level));
+                self.inner
+                    .audit
+                    .record(ExecutionAuditRecord::EffortLevelChanged(
+                        requested.applied(),
+                    ))
+                    .await
+                    .map_err(|error| {
+                        ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+                    })
+            }
+            Err(failure) => {
+                let recorded = self
+                    .inner
+                    .audit
+                    .record(ExecutionAuditRecord::EffortLevelChanged(requested.failed()))
+                    .await;
+                Err(match recorded {
+                    Ok(()) => failure,
+                    Err(audit) => {
+                        let (error, state) = failure.into_parts();
+                        ProviderOperationFailure::new(
+                            AgentError::MultipleOperationFailures {
+                                first_error: Box::new(error),
+                                subsequent_error: Box::new(audit),
+                            },
+                            state,
+                        )
+                    }
+                })
+            }
+        };
         drop(permit);
         drop(scheduler);
         result

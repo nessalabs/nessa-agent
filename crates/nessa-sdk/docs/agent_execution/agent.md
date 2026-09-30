@@ -146,8 +146,11 @@ model, binding, or agent offers none (Claude on Haiku 4.5 lists no effort option
 
 The Claude and Codex bindings select a level for every session they open with
 `with_effort_level`; without one nothing is sent and the agent keeps its own
-default. `agent.set_effort_level(level)` changes it on an idle attachment, under
-the same scheduler lock as `set_approval_mode`. Nothing is sent when a turn is
+default. `agent.set_effort_level(level, actor)` changes it on an idle attachment,
+under the same scheduler lock as `set_approval_mode`. A change that reaches the
+agent is audited as requested, then applied or failed
+(`ExecutionAuditRecord::EffortLevelChanged`, with the caller and both levels),
+and succeeds only once both records are accepted. Nothing is sent when a turn is
 queued or running (`Busy`), when nothing is attached or the connection is not
 negotiated yet (`AttachmentUnavailable`), or when the level is not offered
 (`InvalidInput`). The agent's reported level must match the one selected, at

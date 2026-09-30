@@ -263,6 +263,9 @@ async fn audit_panics_attempt_all_cleanup_records_and_retain_process_for_retry()
                         ExecutionAuditRecord::QueueReordered(_) => {
                             panic!("explicit close did not reorder pending work")
                         }
+                        ExecutionAuditRecord::EffortLevelChanged(_) => {
+                            panic!("explicit close did not change the effort level")
+                        }
                         ExecutionAuditRecord::Attachment(_)
                         | ExecutionAuditRecord::QueueAdmitted(_)
                         | ExecutionAuditRecord::QueueSettled(_)

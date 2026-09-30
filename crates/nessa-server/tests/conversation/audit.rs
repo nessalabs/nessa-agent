@@ -202,6 +202,33 @@ fn audit_maps_complete_queue_transition_with_priority_and_actor() {
     assert_eq!(value["cause"], "caller_requested");
     assert_eq!(value["actor"]["requestId"], "action");
 }
+#[test]
+fn effort_level_change_keeps_target_levels_stage_and_actor() {
+    use nessa_sdk::application::agent_execution::executions::EffortLevelChangeRecord;
+    use nessa_sdk::domain::model_metadata::value_objects::EffortLevel;
+    let requested = EffortLevelChangeRecord::requested(
+        SessionId::new("session").unwrap(),
+        "instance:2".into(),
+        actor(),
+        None,
+        EffortLevel::new("xhigh".into()).unwrap(),
+    );
+    for (record, stage) in [
+        (requested.clone(), "requested"),
+        (requested.applied(), "applied"),
+        (requested.failed(), "failed"),
+    ] {
+        let value = record_value(&ExecutionAuditRecord::EffortLevelChanged(record));
+        assert_eq!(value["kind"], "effort_level_change");
+        assert_eq!(value["sessionId"], "session");
+        assert_eq!(value["attachmentGeneration"], "instance:2");
+        assert_eq!(value["before"], serde_json::Value::Null);
+        assert_eq!(value["after"], "xhigh");
+        assert_eq!(value["stage"], stage);
+        assert_eq!(value["cause"], "caller_requested");
+        assert_eq!(value["actor"]["requestId"], "action");
+    }
+}
 #[tokio::test]
 async fn audit_commits_distinct_terminal_results_with_correlation_and_time() {
     let root = tempfile::tempdir().unwrap();

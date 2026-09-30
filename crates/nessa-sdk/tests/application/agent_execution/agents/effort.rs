@@ -141,7 +141,10 @@ async fn nothing_is_sent_until_negotiated_nor_a_level_not_offered() {
     .await
     .unwrap();
     // Attached, but not negotiated (a restore in progress): not yet, not "not offered".
-    let failure = agent.set_effort_level(level("low")).await.unwrap_err();
+    let failure = agent
+        .set_effort_level(level("low"), close_action())
+        .await
+        .unwrap_err();
     assert_eq!(
         failure.error(),
         &AgentError::AttachmentUnavailable(AttachmentPhase::Starting)
@@ -151,11 +154,17 @@ async fn nothing_is_sent_until_negotiated_nor_a_level_not_offered() {
 
     backend.negotiated.store(true, Ordering::SeqCst);
     // A catalogue level the agent does not offer.
-    let failure = agent.set_effort_level(level("high")).await.unwrap_err();
+    let failure = agent
+        .set_effort_level(level("high"), close_action())
+        .await
+        .unwrap_err();
     assert!(matches!(failure.error(), AgentError::InvalidInput(_)));
     assert!(backend.sent.lock().unwrap().is_empty());
 
-    agent.set_effort_level(level("low")).await.unwrap();
+    agent
+        .set_effort_level(level("low"), close_action())
+        .await
+        .unwrap();
     assert_eq!(*backend.sent.lock().unwrap(), ["low"]);
     assert_eq!(agent.effort_level(), Some(level("low")));
     agent.close(close_action()).await.unwrap();

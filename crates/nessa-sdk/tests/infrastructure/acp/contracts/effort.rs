@@ -126,10 +126,16 @@ async fn a_live_change_is_verified_and_a_level_not_offered_is_refused_unsent() {
     let _slot = process_test_slot().await;
     let (root, binding) = claude("echo", CLAUDE_LEVELS);
     let agent = agent(Arc::new(binding)).await;
-    agent.set_effort_level(level("high")).await.unwrap();
+    agent
+        .set_effort_level(level("high"), close_action())
+        .await
+        .unwrap();
     assert_eq!(agent.effort_level(), Some(level("high")));
     for refused in ["none", "ultra", "default"] {
-        let failure = agent.set_effort_level(level(refused)).await.unwrap_err();
+        let failure = agent
+            .set_effort_level(level(refused), close_action())
+            .await
+            .unwrap_err();
         assert!(
             matches!(failure.error(), AgentError::InvalidInput(_)),
             "{refused}"
@@ -158,7 +164,10 @@ async fn a_change_while_a_turn_is_queued_or_running_is_busy() {
     let agent = agent(Arc::new(binding)).await;
     // The turn waits on a permission nobody answers.
     let _receipt = agent.enqueue(prompt("held"), close_action()).await.unwrap();
-    let failure = agent.set_effort_level(level("high")).await.unwrap_err();
+    let failure = agent
+        .set_effort_level(level("high"), close_action())
+        .await
+        .unwrap_err();
     assert!(matches!(failure.error(), AgentError::Busy));
     assert_eq!(failure.session_state(), &ProviderSessionState::Usable);
     assert_eq!(agent.effort_level(), None);
@@ -187,7 +196,10 @@ async fn an_agent_with_no_effort_option_offers_none_and_refuses_a_selected_level
     let agent = agent(Arc::new(binding)).await;
     assert_eq!(agent.effort_levels(), None);
     assert!(agent.operation_capabilities().effort_levels().is_empty());
-    let failure = agent.set_effort_level(level("low")).await.unwrap_err();
+    let failure = agent
+        .set_effort_level(level("low"), close_action())
+        .await
+        .unwrap_err();
     assert!(matches!(failure.error(), AgentError::InvalidInput(_)));
     agent.close(close_action()).await.unwrap();
 
@@ -215,11 +227,14 @@ async fn codex_sends_the_level_after_the_model_and_narrows_to_what_it_lists() {
         names(agent.effort_levels()).unwrap(),
         ["low", "medium", "high", "xhigh", "max"]
     );
-    agent.set_effort_level(level("max")).await.unwrap();
+    agent
+        .set_effort_level(level("max"), close_action())
+        .await
+        .unwrap();
     assert_eq!(agent.effort_level(), Some(level("max")));
     assert!(matches!(
         agent
-            .set_effort_level(level("none"))
+            .set_effort_level(level("none"), close_action())
             .await
             .unwrap_err()
             .error(),
@@ -285,7 +300,10 @@ async fn a_live_level_is_kept_by_a_restored_connection_and_reset_by_a_new_attach
     let (root, binding) = claude("echo", CLAUDE_LEVELS);
     let binding = binding.with_effort_level(level("low")).unwrap();
     let agent = agent(Arc::new(binding)).await;
-    agent.set_effort_level(level("max")).await.unwrap();
+    agent
+        .set_effort_level(level("max"), close_action())
+        .await
+        .unwrap();
     // Closed and attached again: a new context, opened at the binding's level.
     agent.close(close_action()).await.unwrap();
     attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
@@ -396,7 +414,10 @@ async fn each_admission_records_the_level_in_force() {
             .await,
         Ok(ExecutionOutcome::Completed)
     );
-    agent.set_effort_level(level("xhigh")).await.unwrap();
+    agent
+        .set_effort_level(level("xhigh"), close_action())
+        .await
+        .unwrap();
     assert_eq!(
         agent
             .enqueue(prompt("second"), close_action())
@@ -433,7 +454,10 @@ async fn a_failed_change_keeps_the_previous_level_on_record() {
     // The agent answers the change without applying it.
     let (_root, binding) = claude("effort-misreported", CLAUDE_LEVELS);
     let agent = agent(Arc::new(binding)).await;
-    let failure = agent.set_effort_level(level("high")).await.unwrap_err();
+    let failure = agent
+        .set_effort_level(level("high"), close_action())
+        .await
+        .unwrap_err();
     assert!(matches!(failure.error(), AgentError::Protocol(_)));
     assert_eq!(
         failure.session_state(),
@@ -450,13 +474,19 @@ async fn detached_the_level_is_the_bindings_and_work_admitted_then_says_so() {
     let (_root, binding) = claude("echo", CLAUDE_LEVELS);
     let binding = binding.with_effort_level(level("low")).unwrap();
     let agent = audited_agent(Arc::new(binding), audit.clone()).await;
-    agent.set_effort_level(level("max")).await.unwrap();
+    agent
+        .set_effort_level(level("max"), close_action())
+        .await
+        .unwrap();
     assert_eq!(agent.effort_level(), Some(level("max")));
     agent.close(close_action()).await.unwrap();
     // No attachment: the next one opens at the binding's level, and says so now.
     assert_eq!(agent.effort_level(), Some(level("low")));
     // A change needs an attachment, whatever the level: not a refusal of the level.
-    let failure = agent.set_effort_level(level("high")).await.unwrap_err();
+    let failure = agent
+        .set_effort_level(level("high"), close_action())
+        .await
+        .unwrap_err();
     assert!(matches!(
         failure.error(),
         AgentError::AttachmentUnavailable(_)
@@ -517,4 +547,187 @@ async fn the_connection_refuses_a_change_during_a_turn_and_stays_usable() {
         .into_result()
         .unwrap();
     let _ = turn.await;
+}
+
+/// Keeps each effort change record, in order, and refuses the ones at `fail`.
+#[derive(Default)]
+struct ChangeAudit {
+    records: Mutex<Vec<crate::application::agent_execution::executions::EffortLevelChangeRecord>>,
+    fail: Vec<crate::application::agent_execution::executions::EffortChangeStage>,
+}
+impl crate::application::agent_execution::executions::ExecutionAudit for ChangeAudit {
+    fn record(
+        &self,
+        record: crate::application::agent_execution::executions::ExecutionAuditRecord,
+    ) -> crate::application::agent_execution::agents::AgentFuture<'_, ()> {
+        let refused = match record {
+            crate::application::agent_execution::executions::ExecutionAuditRecord::EffortLevelChanged(
+                change,
+            ) => {
+                let refused = self.fail.contains(&change.stage());
+                self.records.lock().unwrap().push(change);
+                refused
+            }
+            _ => false,
+        };
+        Box::pin(async move {
+            if refused {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+async fn change_audited_agent(mode: &str, audit: Arc<ChangeAudit>) -> (TempDir, Agent) {
+    let (root, binding) = claude(mode, CLAUDE_LEVELS);
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(crate::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(Arc::new(binding), manager, audit)
+        .await
+        .map_err(|error| error.cause().clone())
+        .unwrap();
+    attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
+        .await
+        .unwrap();
+    (root, agent)
+}
+
+fn stages(
+    audit: &ChangeAudit,
+) -> Vec<crate::application::agent_execution::executions::EffortChangeStage> {
+    audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|record| record.stage())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_live_change_is_audited_as_requested_then_applied_with_its_caller_and_levels() {
+    use crate::application::agent_execution::executions::EffortChangeStage::*;
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(ChangeAudit::default());
+    let (_root, agent) = change_audited_agent("echo", audit.clone()).await;
+    agent
+        .set_effort_level(level("high"), close_action())
+        .await
+        .unwrap();
+    agent
+        .set_effort_level(level("max"), close_action())
+        .await
+        .unwrap();
+    assert_eq!(stages(&audit), [Requested, Applied, Requested, Applied]);
+    let records = audit.records.lock().unwrap().clone();
+    assert_eq!(records[0].before(), None);
+    assert_eq!(records[0].after(), &level("high"));
+    assert_eq!(records[2].before(), Some(&level("high")));
+    assert_eq!(records[2].after(), &level("max"));
+    assert_eq!(records[1].actor(), &close_action());
+    assert_eq!(
+        records[0].attachment_generation(),
+        records[3].attachment_generation()
+    );
+    // A change refused before anything is sent records nothing.
+    let refused = agent.set_effort_level(level("none"), close_action()).await;
+    assert!(refused.is_err());
+    assert_eq!(audit.records.lock().unwrap().len(), 4);
+    agent.close(close_action()).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_unrecorded_request_sends_nothing() {
+    use crate::application::agent_execution::executions::EffortChangeStage::*;
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(ChangeAudit {
+        fail: vec![Requested],
+        ..ChangeAudit::default()
+    });
+    let (root, agent) = change_audited_agent("echo", audit.clone()).await;
+    let failure = agent
+        .set_effort_level(level("high"), close_action())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error(), &AgentError::AuditFailure);
+    assert_eq!(failure.session_state(), &ProviderSessionState::Usable);
+    assert_eq!(stages(&audit), [Requested]);
+    assert!(lines(&root, "effort-steps")
+        .iter()
+        .all(|step| step[0] != "effort"));
+    assert_eq!(agent.effort_level(), None);
+    agent.close(close_action()).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_verified_change_that_cannot_be_recorded_is_in_force_and_retires_the_attachment() {
+    use crate::application::agent_execution::executions::EffortChangeStage::*;
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(ChangeAudit {
+        fail: vec![Applied],
+        ..ChangeAudit::default()
+    });
+    let (_root, agent) = change_audited_agent("echo", audit.clone()).await;
+    let failure = agent
+        .set_effort_level(level("high"), close_action())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error(), &AgentError::AuditFailure);
+    assert_eq!(
+        failure.session_state(),
+        &ProviderSessionState::CleanupRequired
+    );
+    assert_eq!(stages(&audit), [Requested, Applied]);
+    assert_eq!(agent.effort_level(), Some(level("high")));
+    let _ = agent.close(close_action()).await;
+}
+
+#[tokio::test]
+async fn a_failed_change_is_audited_as_failed_and_keeps_both_failures_when_that_fails_too() {
+    use crate::application::agent_execution::executions::EffortChangeStage::*;
+    let _slot = process_test_slot().await;
+    // The agent answers without applying the level.
+    let audit = Arc::new(ChangeAudit::default());
+    let (_root, agent) = change_audited_agent("effort-misreported", audit.clone()).await;
+    let failure = agent
+        .set_effort_level(level("high"), close_action())
+        .await
+        .unwrap_err();
+    assert!(matches!(failure.error(), AgentError::Protocol(_)));
+    assert_eq!(
+        failure.session_state(),
+        &ProviderSessionState::CleanupRequired
+    );
+    assert_eq!(stages(&audit), [Requested, Failed]);
+    assert_eq!(agent.effort_level(), None);
+    let _ = agent.close(close_action()).await;
+
+    let audit = Arc::new(ChangeAudit {
+        fail: vec![Failed],
+        ..ChangeAudit::default()
+    });
+    let (_root, agent) = change_audited_agent("effort-misreported", audit.clone()).await;
+    let failure = agent
+        .set_effort_level(level("high"), close_action())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        failure.error(),
+        AgentError::MultipleOperationFailures { first_error, subsequent_error }
+            if matches!(**first_error, AgentError::Protocol(_))
+                && **subsequent_error == AgentError::AuditFailure
+    ));
+    assert_eq!(
+        failure.session_state(),
+        &ProviderSessionState::CleanupRequired
+    );
+    assert_eq!(stages(&audit), [Requested, Failed]);
+    let _ = agent.close(close_action()).await;
 }

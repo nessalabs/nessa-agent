@@ -118,6 +118,19 @@ again (the session factory keeps it), so it stays the same attachment here. A
 change is refused, with nothing sent, while a turn is queued or running
 (`Busy`), while nothing is attached or what the agent offers is not negotiated
 yet (`AttachmentUnavailable`), and for a level not offered (`InvalidInput`).
+A change that reaches the agent is caller-attributed
+(`set_effort_level(level, actor)`) and audited twice, as requested before
+anything is sent and as applied or failed after, and success is reported only
+once both are recorded:
+
+| Step | Outcome | Returned | Level in force |
+| --- | --- | --- | --- |
+| request recorded | sink fails | the audit error, session usable, nothing sent | unchanged |
+| agent verifies | applied recorded | success | new |
+| agent verifies | applied cannot be recorded | the audit error, cleanup required | new |
+| agent fails or is unverified | failed recorded | the agent's error, cleanup required | unchanged |
+| agent fails | failed cannot be recorded | both errors, in order | unchanged |
+
 Each queued admission records the level in force when it was admitted. A turn
 still queued when its attachment is replaced starts on the new one, at that
 attachment's level, which its admission record does not name; approval mode

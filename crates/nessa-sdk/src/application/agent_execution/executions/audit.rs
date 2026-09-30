@@ -468,6 +468,95 @@ impl QueueOrderRecord {
     }
 }
 
+/// Where a caller's live reasoning effort change stands: asked for before
+/// anything is sent, then either verified by the agent or not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffortChangeStage {
+    /// Recorded before the request is sent. Nothing has reached the agent.
+    Requested,
+    /// The agent reported the requested level back: it is the level in force.
+    Applied,
+    /// The request failed or its answer could not be verified; the attachment
+    /// must be retired, and the level in force is not known to have changed.
+    Failed,
+}
+
+/// A caller's live change of the reasoning effort level on one attachment
+/// ([`Agent::set_effort_level`](crate::application::agent_execution::agents::Agent::set_effort_level)).
+/// Two records describe one change: [`EffortChangeStage::Requested`] before
+/// the request is sent, and [`EffortChangeStage::Applied`] or
+/// [`EffortChangeStage::Failed`] after, with the same identity, caller and
+/// levels. A change refused before anything is sent records nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffortLevelChangeRecord {
+    session_id: SessionId,
+    attachment_generation: String,
+    actor: ActionContext,
+    before: Option<EffortLevel>,
+    after: EffortLevel,
+    stage: EffortChangeStage,
+}
+impl EffortLevelChangeRecord {
+    /// A change of the local session `session_id`'s attachment
+    /// `attachment_generation` (Agent instance and provider generation, as on
+    /// [`QueueAdmissionRecord::admission_generation`]) from `before` — `None`
+    /// is the agent's own default — to `after`, asked for by `actor`.
+    pub fn requested(
+        session_id: SessionId,
+        attachment_generation: String,
+        actor: ActionContext,
+        before: Option<EffortLevel>,
+        after: EffortLevel,
+    ) -> Self {
+        Self {
+            session_id,
+            attachment_generation,
+            actor,
+            before,
+            after,
+            stage: EffortChangeStage::Requested,
+        }
+    }
+    /// The same change, verified by the agent.
+    pub fn applied(&self) -> Self {
+        Self {
+            stage: EffortChangeStage::Applied,
+            ..self.clone()
+        }
+    }
+    /// The same change, failed or unverified.
+    pub fn failed(&self) -> Self {
+        Self {
+            stage: EffortChangeStage::Failed,
+            ..self.clone()
+        }
+    }
+    /// Local session whose attachment the change is for.
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+    /// Agent instance and provider generation of that attachment.
+    pub fn attachment_generation(&self) -> &str {
+        &self.attachment_generation
+    }
+    /// Host-verified caller attribution.
+    pub fn actor(&self) -> &ActionContext {
+        &self.actor
+    }
+    /// The level in force before the change; `None` is the agent's own default.
+    pub fn before(&self) -> Option<&EffortLevel> {
+        self.before.as_ref()
+    }
+    /// The level asked for.
+    pub fn after(&self) -> &EffortLevel {
+        &self.after
+    }
+    /// Where the change stands.
+    pub fn stage(&self) -> EffortChangeStage {
+        self.stage
+    }
+}
+
 /// The local live aggregate's closure, paired with its known initiator.
 /// This evidence does not claim provider deletion or completed process cleanup.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -508,6 +597,8 @@ pub enum ExecutionAuditRecord {
     SteeringAcknowledged(SteeringAcknowledgementRecord),
     /// Caller-attributed order selected and acknowledged before local application.
     QueueReordered(QueueOrderRecord),
+    /// A caller's live reasoning effort change, asked for and then settled.
+    EffortLevelChanged(EffortLevelChangeRecord),
     /// Once-only release of an active execution, including runs with no permissions.
     /// The runtime initiates this release after observing a terminal result; explicit
     /// shutdown attribution remains on the preceding SessionClosed record.
