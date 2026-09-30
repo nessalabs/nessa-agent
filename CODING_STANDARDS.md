@@ -179,8 +179,7 @@ A reviewer is the second pair of eyes, not the first.
   write down what is mostly producing them (an ownership in the wrong place, a
   missing type, one rule in two places, a design that fights the codebase),
   make that structural change, and review again — at most two more rounds.
-  Still open after those, the work stops: push what is done to the branch, and
-  hand it off in a draft pull request and on its issue — what is done, what is
+  Still open after those, the work stops: push what is done to its branch — never `main` — and hand it off in a draft pull request and on its issue — what is done, what is
   not, the open findings with their evidence, the diagnosis, and the suggested
   next step — for a person to take up. Review loops are for code; a design
   record gets one round, and detail it cannot settle goes to its slices' tests.
