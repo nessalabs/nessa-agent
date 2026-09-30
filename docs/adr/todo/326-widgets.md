@@ -130,13 +130,15 @@ A pane's item is a **tagged union** — `{ kind: "session", sessionId } | { kind
 "widget", widget: WidgetRef }` — with **one codec**
 (`workspace/model/pane-item.ts`) between it and split panes' key: `s:` then the
 session id; `w:` then the plugin and the id, each percent-encoded, joined by
-`:`. The encoding is one-to-one and canonical over any string (it encodes UTF-16
-code units, so a lone surrogate encodes too, where `encodeURIComponent` would
-throw), and two items are the same pane exactly when they are equal; a property
-test holds both. The key is a branded type only the codec makes, so no reader
-can build one by hand; reading one back goes through the codec's `decode`, which
-is the only thing the module exports that takes a key. The panes' use cases take
-the union; what is showable, on screen, or kept as a draft is decided per kind.
+`:`. The encoding is one-to-one and canonical over any string through the
+desktop's one id encoder (`src/desktop/model/id-encoding.ts`, which the
+subagents join and the swarm's ids use too: it encodes UTF-16 code units, so a
+lone surrogate encodes too, where `encodeURIComponent` would throw), and two
+items are the same pane exactly when they are equal; a property test holds both.
+The key is a branded type only the codec makes, so no reader can build one by
+hand; reading one back goes through the codec's `decode`, which is the only
+thing the module exports that takes a key. The panes' use cases take the union;
+what is showable, on screen, or kept as a draft is decided per kind.
 
 A transcript part `{ kind: "widget", widget: WidgetRef }` is drawn by
 `InlineWidget`. The overview's peek (`peek.ts`) drops it before it counts a
