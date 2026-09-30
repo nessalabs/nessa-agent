@@ -106,9 +106,7 @@ impl CommittedTranscript {
         }
     }
     pub(crate) fn restore_transaction(&mut self, state: CommittedTransactionState) {
-        for undo in state.undo.into_iter().rev() {
-            self.continuation.rollback(undo);
-        }
+        self.continuation.rollback(state.undo);
         self.continuation.evidence = state.evidence;
         self.continuation.context_witness = state.context_witness;
         self.applied = state.applied;

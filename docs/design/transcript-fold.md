@@ -268,7 +268,7 @@ mirrored live pending ledger or invented persisted answer is permitted.
 | State | Ordering | Required decision / evidence |
 | --- | --- | --- |
 | Valid restored continuation | Repeated growing pages or 1 versus 64 complete facts | Actual semantic indices/history/queue/provider state is reused; no prefix cloning, replay or accounting scan per fact/chunk. Work/allocation counters measure suffix separately from full publication. |
-| Valid terminals followed by malformed final frame or decision | Transaction has staged appends and changed small fields | Roll back the whole batch, including A/D/fact count/status, correlations and resource accounting; prior checkpoint and held published snapshot remain unchanged. |
+| Valid terminals followed by malformed final frame or decision | Transaction has staged appends and changed small fields, including several global or touched-owner capacity growth steps | Roll back the whole batch, including A/D/fact count/status and correlations; prior checkpoint and held published snapshot remain unchanged. Replace the actual global allocation charge once for the whole rollback and each touched owner's actual charge before/after its undo group; count surviving spare slots once. Four-input public Drop and late Position refusal regressions, 1/2/32-input counterparts, warm repeats, commit/restore/retry, a retained prefix with suffix-work counters, repeated inner-owner growth and queue rollback compare both cached snapshot and derived bytes against their independent current-allocation oracle. |
 | Active guard replaces a failed acknowledgement | External commit succeeds; moved old typed diagnostic is released | Commit adds no validation or typed refusal. Existing value destructors can allocate bounded teardown work for retained diagnostic trees; this is separate from semantic staging and full publication. Actual replaced-ack commit and checkpoint restore retain typed read/runtime causes; guard Drop restores the prior failure. |
 | Receiver transaction accepted by SDK | SQL checkpoint/A/effects commit fails or waiter drops | Borrowed guard rolls back unless commit is confirmed; no cloned receiver candidate or second semantic fold. |
 | Canonical state advances | Prior immutable published snapshot is still retained | Publish a separately owned complete snapshot only at the read boundary; old snapshot remains immutable and both allocations are measured. |
@@ -309,7 +309,14 @@ growth in the existing `Vec`/`HashMap` owners. MessageChunk's test-only clone
 counter measures actual copied text bytes; full validation counters measure cold
 prefix replay. Growing-page tests must copy only new message payloads and perform
 no cold prefix validation. Collection capacity can grow or remain after rollback;
-the retained owner charges those actual slots. The standalone allocator fixture
+the retained owner charges those actual slots. Rollback removes its current global
+charge once, then reverses each existing flat undo group while replacing that
+owner's actual before/after charge, and finally adds the surviving global charge
+once. The allocation marker precedes every group's mutation tokens, including a
+partially refused change. Empty undo has no effects. Historical per-step after
+sizes are not rollback witnesses: later changes can leave larger global or inner
+owner capacities. Group boundaries consume only the staged suffix; no full-history
+accounting traversal or new capacity ledger is introduced. The standalone allocator fixture
 measures all requested allocations separately from full read-publication copies.
 
 Derived allocation helpers charge separately allocated map/vector slots, compact

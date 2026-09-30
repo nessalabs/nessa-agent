@@ -371,7 +371,6 @@ pub(super) struct AllocationUndo {
     before_snapshot: usize,
     after_snapshot: usize,
     spare_growth: usize,
-    after_derived: usize,
     id: Option<ExecutionId>,
 }
 pub(super) enum ChangeUndo {
@@ -411,7 +410,6 @@ impl continuation::Continuation {
                 before_snapshot,
                 after_snapshot: before_snapshot,
                 spare_growth: 0,
-                after_derived: before_derived,
                 id,
             }));
             let result = self.stage_change(change, undo);
@@ -442,7 +440,6 @@ impl continuation::Continuation {
             };
             accounting.after_snapshot = after_snapshot;
             accounting.spare_growth = after_spare.saturating_sub(before_spare);
-            accounting.after_derived = after_derived;
             result?;
         }
         let Self {
@@ -798,7 +795,41 @@ impl continuation::Continuation {
         Ok(())
     }
 
-    pub(super) fn rollback(&mut self, undo: ChangeUndo) {
+    pub(super) fn rollback(&mut self, mut undo: Vec<ChangeUndo>) {
+        if undo.is_empty() {
+            return;
+        }
+        let global = self.derived_global();
+        self.derived_bytes = self.derived_bytes.saturating_sub(global);
+        // stage places an allocation marker before its mutation tokens. Reverse
+        // search visits only this last group; popping it consumes that suffix.
+        while let Some(index) = undo
+            .iter()
+            .rposition(|change| matches!(change, ChangeUndo::Allocation(_)))
+        {
+            let ChangeUndo::Allocation(accounting) = &undo[index] else {
+                unreachable!("located allocation marker")
+            };
+            let before_owner = self.derived_owner(accounting.id.as_ref());
+            while undo.len() > index + 1 {
+                self.rollback_change(undo.pop().expect("group mutation"));
+            }
+            let ChangeUndo::Allocation(accounting) = undo.last().expect("group allocation") else {
+                unreachable!("allocation marker precedes group mutations")
+            };
+            let after_owner = self.derived_owner(accounting.id.as_ref());
+            self.rollback_change(undo.pop().expect("group allocation"));
+            self.derived_bytes = self
+                .derived_bytes
+                .saturating_sub(before_owner)
+                .saturating_add(after_owner);
+        }
+        assert!(undo.is_empty(), "stage records allocation before mutation");
+        // Surviving global spare capacity is reconciled once for the whole batch.
+        self.derived_bytes = self.derived_bytes.saturating_add(self.derived_global());
+    }
+
+    fn rollback_change(&mut self, undo: ChangeUndo) {
         match undo {
             ChangeUndo::Allocation(accounting) => {
                 self.snapshot_bytes = self
@@ -806,10 +837,6 @@ impl continuation::Continuation {
                     .saturating_sub(accounting.after_snapshot)
                     .saturating_add(accounting.before_snapshot)
                     .saturating_add(accounting.spare_growth);
-                self.derived_bytes = self
-                    .derived_bytes
-                    .saturating_sub(accounting.after_derived)
-                    .saturating_add(self.derived_touched(accounting.id.as_ref()));
             }
             ChangeUndo::History(id, history) => {
                 self.histories.insert(id, history);

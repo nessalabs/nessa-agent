@@ -153,7 +153,10 @@ impl Continuation {
             .saturating_add(self.queue.retained_bytes())
     }
     pub(super) fn derived_touched(&self, id: Option<&ExecutionId>) -> usize {
-        self.derived_global()
+        self.derived_global().saturating_add(self.derived_owner(id))
+    }
+    pub(super) fn derived_owner(&self, id: Option<&ExecutionId>) -> usize {
+        0usize
             .saturating_add(
                 id.and_then(|id| self.positions.get(id))
                     .and_then(|index| self.invocations.get(*index))

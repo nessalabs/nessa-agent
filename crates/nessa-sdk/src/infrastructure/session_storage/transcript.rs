@@ -631,14 +631,17 @@ mod tests {
             permissions::{ActionContext, CancellationOrigin, PermissionCancellation},
             providers::ProviderIdentity,
             sessions::{
-                CommittedCompleteness, InvocationRecord, QueueHistoryRecord, SessionChange,
-                StorageShutdownFailure, SubmissionAcknowledgement, SNAPSHOT_ACCOUNTING_CALLS,
-                VALIDATION_CALLS,
+                CommittedCompleteness, InvocationRecord, InvocationSchedulingEvent,
+                QueueHistoryRecord, SessionChange, StorageShutdownFailure,
+                SubmissionAcknowledgement, SNAPSHOT_ACCOUNTING_CALLS, VALIDATION_CALLS,
             },
             tools::ToolReviewInput,
         },
         domain::agent_execution::{
-            executions::{ExecutionId, MessageChunk, QueueMutation, MESSAGE_CLONES},
+            executions::{
+                ExecutionId, InvocationKind, InvocationStage, MessageChunk, QueueMutation,
+                SchedulingCause, MESSAGE_CLONES,
+            },
             permissions::{
                 PermissionCancellationReason, PermissionDecision, PermissionEffect, PermissionId,
                 PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
@@ -1782,5 +1785,369 @@ mod tests {
             TranscriptCheckpoint::from_chunks(vec![reversed]),
             Err(TranscriptError::Checkpoint)
         );
+    }
+    fn accepted_suffix(fold: &TranscriptFold, count: u64) -> Vec<Record> {
+        (0..count)
+            .flat_map(|index| {
+                let position = fold.downloaded() + index + 1;
+                records(
+                    &fold.scope,
+                    position,
+                    &fact(
+                        fold.snapshot(),
+                        accepted_input(&format!("input-{index}")),
+                        position,
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn borrowed_rollback_counts_multiple_input_growth_once_on_drop_and_position_refusal() {
+        for count in [1, 2, 4, 32] {
+            let scope = scope();
+            let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+            fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+                .unwrap();
+            fold.observe_source_head(&scope, 1).unwrap();
+            let checkpoint = fold.checkpoint().unwrap();
+            let status = fold.status();
+            let published = fold.committed.snapshot_handle().unwrap();
+            let suffix = accepted_suffix(&fold, count);
+            let mut warm_bytes = None;
+            for _ in 0..3 {
+                {
+                    let mut guard = fold.transaction();
+                    guard.apply(&suffix).unwrap();
+                    guard.committed.assert_retained_accounting();
+                    assert_eq!(guard.snapshot().unwrap().invocations.len(), count as usize);
+                }
+                assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+                assert_eq!(
+                    (fold.applied(), fold.downloaded(), fold.fact_count()),
+                    (1, 1, 1)
+                );
+                assert_eq!(fold.status(), status);
+                assert!(published.invocations.is_empty());
+                fold.committed.assert_retained_accounting();
+                let retained = fold.retained_bytes();
+                assert_eq!(*warm_bytes.get_or_insert(retained), retained);
+                let mut invalid = suffix.clone();
+                invalid.push(suffix.last().unwrap().clone());
+                assert_eq!(fold.apply(&invalid), Err(TranscriptError::Position));
+                assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+                assert_eq!(
+                    (fold.applied(), fold.downloaded(), fold.fact_count()),
+                    (1, 1, 1)
+                );
+                assert_eq!(fold.status(), status);
+                fold.committed.assert_retained_accounting();
+                assert_eq!(fold.retained_bytes(), retained);
+            }
+            let mut restored = TranscriptFold::restore(scope.clone(), 1, &checkpoint).unwrap();
+            let mut invalid = suffix.clone();
+            invalid.push(suffix.last().unwrap().clone());
+            assert_eq!(restored.apply(&invalid), Err(TranscriptError::Position));
+            assert_eq!(restored.checkpoint().unwrap(), checkpoint);
+            restored.committed.assert_retained_accounting();
+            {
+                let mut guard = fold.transaction();
+                guard.apply(&suffix).unwrap();
+                guard.commit().unwrap();
+            }
+            restored.apply(&suffix).unwrap();
+            assert_eq!(fold.checkpoint().unwrap(), restored.checkpoint().unwrap());
+            assert_eq!(
+                (fold.applied(), fold.downloaded(), fold.fact_count()),
+                (count + 1, count + 1, count + 1)
+            );
+            assert_eq!(fold.snapshot().unwrap().invocations.len(), count as usize);
+            fold.committed.assert_retained_accounting();
+            restored.committed.assert_retained_accounting();
+            let final_checkpoint = fold.checkpoint().unwrap();
+            let resumed =
+                TranscriptFold::restore(scope, fold.applied(), &final_checkpoint).unwrap();
+            assert_eq!(resumed.checkpoint().unwrap(), final_checkpoint);
+            resumed.committed.assert_retained_accounting();
+            assert!(published.invocations.is_empty());
+        }
+    }
+
+    #[test]
+    fn borrowed_rollback_four_inputs_then_position_refusal_preserves_accounting() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+            .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let mut invalid = accepted_suffix(&fold, 4);
+        invalid.push(invalid.last().unwrap().clone());
+        assert_eq!(fold.apply(&invalid), Err(TranscriptError::Position));
+        assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+        assert_eq!(
+            (fold.applied(), fold.downloaded(), fold.fact_count()),
+            (1, 1, 1)
+        );
+        fold.committed.assert_retained_accounting();
+    }
+
+    #[test]
+    fn borrowed_rollback_handles_empty_and_partially_refused_change_groups() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let empty = fold.retained_bytes();
+        {
+            let _guard = fold.transaction();
+        }
+        assert_eq!(fold.retained_bytes(), empty);
+        fold.committed.assert_retained_accounting();
+        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+            .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let suffix = accepted_suffix(&fold, 4);
+        let mut invalid = suffix.clone();
+        invalid.extend(records(
+            &scope,
+            6,
+            &fact(fold.snapshot(), accepted_input("input-0"), 6),
+        ));
+        assert!(matches!(
+            fold.apply(&invalid),
+            Err(TranscriptError::Decision(StorageError::Corrupt(_)))
+        ));
+        assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+        assert_eq!(
+            (fold.applied(), fold.downloaded(), fold.fact_count()),
+            (1, 1, 1)
+        );
+        fold.committed.assert_retained_accounting();
+        fold.apply(&suffix).unwrap();
+        fold.committed.assert_retained_accounting();
+    }
+
+    #[test]
+    fn borrowed_rollback_of_input_growth_does_not_scan_or_clone_a_retained_prefix() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let mut open = opened();
+        let SessionChange::Opened { context, .. } = &mut open else {
+            unreachable!()
+        };
+        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        fold.apply(&records(&scope, 1, &fact(None, open, 1)))
+            .unwrap();
+        fold.apply(&records(
+            &scope,
+            2,
+            &fact(fold.snapshot(), accepted_input("output"), 2),
+        ))
+        .unwrap();
+        let prefix: Vec<_> = (0..256)
+            .map(|ordinal| message_record(&scope, ordinal, ordinal as u64 + 3, 32 * 1024))
+            .collect();
+        fold.apply(&prefix).unwrap();
+        for index in 0..127 {
+            let position = fold.downloaded() + 1;
+            fold.apply(&records(
+                &scope,
+                position,
+                &fact(
+                    fold.snapshot(),
+                    accepted_input(&format!("prefix-{index}")),
+                    position,
+                ),
+            ))
+            .unwrap();
+        }
+        let checkpoint = fold.checkpoint().unwrap();
+        let progress = (fold.applied(), fold.downloaded(), fold.fact_count());
+        let published = fold.committed.snapshot_handle().unwrap();
+        let mut suffix = accepted_suffix(&fold, 32);
+        let start = suffix.last().unwrap().position + 1;
+        suffix
+            .extend((256..272).map(|ordinal| {
+                message_record(&scope, ordinal, start + ordinal as u64 - 256, 4096)
+            }));
+        MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
+        VALIDATION_CALLS.with(|counter| counter.set((0, 0)));
+        SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(0));
+        {
+            let mut guard = fold.transaction();
+            guard.apply(&suffix).unwrap();
+            assert_eq!(
+                MESSAGE_CLONES.with(|counter| counter.get()),
+                (16, 16 * 4096)
+            );
+            assert_eq!(VALIDATION_CALLS.with(|counter| counter.get()), (0, 32));
+            assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
+            MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
+            VALIDATION_CALLS.with(|counter| counter.set((0, 0)));
+        }
+        assert_eq!(MESSAGE_CLONES.with(|counter| counter.get()), (0, 0));
+        assert_eq!(VALIDATION_CALLS.with(|counter| counter.get()), (0, 0));
+        assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
+        assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+        assert_eq!(
+            (fold.applied(), fold.downloaded(), fold.fact_count()),
+            progress
+        );
+        assert_eq!(published.invocations.len(), 128);
+        assert_eq!(published.invocations[0].events.len(), 256);
+        fold.committed.assert_retained_accounting();
+        fold.apply(&suffix).unwrap();
+        fold.committed.assert_retained_accounting();
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 160);
+        assert_eq!(published.invocations.len(), 128);
+    }
+
+    fn tool_record(scope: &Scope, name: &str, ordinal: u64, position: u64) -> Vec<Record> {
+        let event = ExecutionEvent::new(
+            ExecutionId::new("output").unwrap(),
+            ExecutionUpdate::Tool(ToolCallUpdate::new(
+                ToolCallId::new(name).unwrap(),
+                Some(name.into()),
+                None,
+                None,
+                None,
+                None,
+            )),
+        );
+        let key = records::FactKey::new(
+            records::FactKind::ProviderObservation,
+            Some(event.execution_id().clone()),
+            ordinal,
+        )
+        .unwrap();
+        let body =
+            snapshot::encode_semantic_change(&SessionChange::ProviderObservation(event)).unwrap();
+        records(
+            scope,
+            position,
+            &stream_fact::frame_fact(&FramedFact { key, body }, position).unwrap(),
+        )
+    }
+
+    #[test]
+    fn borrowed_rollback_reconciles_current_inner_owner_growth_before_reuse() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let mut open = opened();
+        let SessionChange::Opened { context, .. } = &mut open else {
+            unreachable!()
+        };
+        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        fold.apply(&records(&scope, 1, &fact(None, open, 1)))
+            .unwrap();
+        fold.apply(&records(
+            &scope,
+            2,
+            &fact(fold.snapshot(), accepted_input("output"), 2),
+        ))
+        .unwrap();
+        fold.apply(&tool_record(&scope, "existing", 0, 3)).unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let suffix: Vec<_> = (0..32)
+            .flat_map(|index| tool_record(&scope, &format!("tool-{index}"), index + 1, index + 4))
+            .collect();
+        for _ in 0..3 {
+            {
+                let mut guard = fold.transaction();
+                guard.apply(&suffix).unwrap();
+            }
+            assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+            assert_eq!(
+                (fold.applied(), fold.downloaded(), fold.fact_count()),
+                (3, 3, 3)
+            );
+            fold.committed.assert_retained_accounting();
+            let mut invalid = suffix.clone();
+            invalid.push(suffix.last().unwrap().clone());
+            assert_eq!(fold.apply(&invalid), Err(TranscriptError::Position));
+            assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+            fold.committed.assert_retained_accounting();
+        }
+        fold.apply(&suffix).unwrap();
+        fold.committed.assert_retained_accounting();
+        assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 33);
+        let restored =
+            TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap()).unwrap();
+        restored.committed.assert_retained_accounting();
+    }
+
+    #[test]
+    fn borrowed_rollback_reconciles_queue_capacity_with_restored_membership() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+            .unwrap();
+        for index in 0..32 {
+            let name = format!("queued-{index}");
+            let mut change = accepted_input(&name);
+            let SessionChange::InputAccepted(record) = &mut change else {
+                unreachable!()
+            };
+            record.submission = SubmissionMode::Queued;
+            record.scheduling.push(InvocationSchedulingEvent {
+                stage: InvocationStage::Queued,
+                kind: InvocationKind::Queued,
+                cause: SchedulingCause::Submitted,
+                before: None,
+                target: None,
+                actor: Some(record.actor.clone()),
+            });
+            let position = fold.downloaded() + 1;
+            fold.apply(&records(
+                &scope,
+                position,
+                &fact(fold.snapshot(), change, position),
+            ))
+            .unwrap();
+        }
+        let checkpoint = fold.checkpoint().unwrap();
+        let progress = (fold.applied(), fold.downloaded(), fold.fact_count());
+        let actor = fold.snapshot().unwrap().invocations[0].actor.clone();
+        let mut suffix = Vec::new();
+        for index in 0..32 {
+            let position = fold.downloaded() + suffix.len() as u64 + 1;
+            let change = SessionChange::QueueDecision(QueueHistoryRecord {
+                mutation: QueueMutation::Admitted {
+                    id: ExecutionId::new(format!("queued-{index}")).unwrap(),
+                    kind: InvocationKind::Queued,
+                },
+                actor: Some(actor.clone()),
+                scheduling_length: Some(1),
+            });
+            // Queue ordinals advance with the staged suffix, independently of the retained prefix.
+            let key = records::FactKey::new(records::FactKind::QueueDecision, None, index).unwrap();
+            let body = snapshot::encode_semantic_change(&change).unwrap();
+            suffix.extend(records(
+                &scope,
+                position,
+                &stream_fact::frame_fact(&FramedFact { key, body }, position).unwrap(),
+            ));
+        }
+        for _ in 0..3 {
+            {
+                let mut guard = fold.transaction();
+                guard.apply(&suffix).unwrap();
+            }
+            assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+            assert_eq!(
+                (fold.applied(), fold.downloaded(), fold.fact_count()),
+                progress
+            );
+            fold.committed.assert_retained_accounting();
+            let mut invalid = suffix.clone();
+            invalid.push(suffix.last().unwrap().clone());
+            assert_eq!(fold.apply(&invalid), Err(TranscriptError::Position));
+            fold.committed.assert_retained_accounting();
+        }
+        fold.apply(&suffix).unwrap();
+        assert_eq!(fold.snapshot().unwrap().queue_history.len(), 32);
+        fold.committed.assert_retained_accounting();
+        let restored =
+            TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap()).unwrap();
+        restored.committed.assert_retained_accounting();
     }
 }
