@@ -319,6 +319,11 @@ impl TranscriptFold {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(super) fn snapshot_materializations(&self) -> usize {
+        self.committed.materializations()
+    }
+
     pub(super) fn committed_session(
         &self,
         observed_head: u64,

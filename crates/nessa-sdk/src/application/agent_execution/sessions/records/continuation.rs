@@ -8,7 +8,7 @@ use crate::application::agent_execution::sessions::{
     SessionChange, SessionSnapshot, StorageError,
 };
 use crate::domain::agent_execution::executions::{ExecutionId, InvocationHistory};
-use std::collections::HashMap;
+use std::{collections::HashMap, mem::size_of};
 
 pub(crate) struct Continuation {
     pub(crate) snapshot: Option<SessionSnapshot>,
@@ -133,7 +133,6 @@ impl Default for Continuation {
 
 impl Continuation {
     pub(crate) fn derived_global(&self) -> usize {
-        use std::mem::size_of;
         0usize
             .saturating_add(
                 self.positions

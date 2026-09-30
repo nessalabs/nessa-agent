@@ -357,3 +357,20 @@ acknowledgement commit teardown for 3/31/127-node trees: 64/1344/4416 requested
 bytes and 1/17/65 allocation calls. This disproves a no-allocation comment but
 does not show a resource/lifecycle bound violation. The existing destructor and
 typed error codec are preserved; no intrusive representation is introduced.
+
+## Single materialization after source completion
+
+| Receiver state | Actual ordering | Owned result and cost |
+|---|---|---|
+| Valid bounded page/catchup | Before source.finish joins the physical worker | Keep only typed Result<()> success, canonical continuation and physical/head evidence. Do not construct a full public CommittedSession. |
+| Successful source join | Final exact-key bounds/head observation succeeds | Observe physical tail through the existing fold owner, then construct one immutable full CommittedSession for the existing map-owned publication fence. Repeated warm unchanged public reads each materialize once; prior published snapshots remain immutable. |
+| Valid suffix, source join fails | Join refusal after semantic/physical catchup | Existing finish_owned_read marks unknown and releases the captured pass pin while retaining A/D and semantic state. No full snapshot is constructed before this failure. |
+| Source joins, postjoin source reset/deletion or metadata failure | Actual bounds fails before final publication | Existing typed error, exact-key retirement where proven, abandoned pass and prior evidence remain; no discarded full snapshot. Generic failure cannot authorize retirement. |
+| Source joins, physical tail changes | Sealed fact or unfinished suffix arrives before bounds | Preserve captured pass and A; observe newer physical head through the existing freshness owner, publish once with stale evidence, then eventual reads advance to current independently of semantic completeness. |
+
+Full result publication remains intentional O(history) work. The prejoin typed
+completion is not a new source authority or projection. Tests instrument the
+actual semantic snapshot_handle materialization per retained transcript and
+exercise RecordStorage::read_committed, including repeated warm reads and
+postjoin interleavings. The source join and final metadata/publication fences
+remain unchanged.

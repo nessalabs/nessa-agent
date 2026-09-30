@@ -5,6 +5,8 @@ use super::validation::InvocationContinuation;
 use super::{records, SessionChange, SessionSnapshot, StorageError};
 #[cfg(test)]
 use crate::domain::agent_execution::executions::InvocationHistory;
+#[cfg(test)]
+use std::cell::Cell;
 use std::sync::Arc;
 
 /// Full validated semantic continuation, separate from bounded transcript display.
@@ -16,6 +18,8 @@ pub struct CommittedTranscript {
     continuation: records::continuation::Continuation,
     applied: u64,
     facts: u64,
+    #[cfg(test)]
+    materializations: Cell<usize>,
 }
 impl Clone for CommittedTranscript {
     fn clone(&self) -> Self {
@@ -45,7 +49,15 @@ impl CommittedTranscript {
     }
     // This is the explicit full-history read-publication materialization.
     pub(crate) fn snapshot_handle(&self) -> Option<Arc<SessionSnapshot>> {
-        self.snapshot().map(|snapshot| Arc::new(snapshot.clone()))
+        self.snapshot().map(|snapshot| {
+            #[cfg(test)]
+            self.materializations.set(self.materializations.get() + 1);
+            Arc::new(snapshot.clone())
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn materializations(&self) -> usize {
+        self.materializations.get()
     }
     pub(crate) fn retained_bytes(&self) -> usize {
         self.continuation
@@ -142,6 +154,8 @@ impl CommittedTranscript {
             continuation: records::continuation::Continuation::restore(snapshot)?,
             applied,
             facts,
+            #[cfg(test)]
+            materializations: Cell::new(0),
         })
     }
 }

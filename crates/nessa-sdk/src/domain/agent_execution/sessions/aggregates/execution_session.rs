@@ -13,6 +13,7 @@ use crate::domain::agent_execution::{
 };
 use std::{
     collections::{HashMap, HashSet},
+    mem::size_of,
     sync::{Arc, Mutex},
 };
 
@@ -358,7 +359,6 @@ impl ExecutionSession {
             .map_or(0, |active| active.tools.len())
     }
     pub(crate) fn historical_retained_bytes(&self) -> usize {
-        use std::mem::size_of;
         let Some(active) = &self.active_execution else {
             return self.id.as_str().len();
         };

@@ -218,14 +218,14 @@ fn publish_owned_read(
 fn finish_owned_read(
     receiver: &mut CommittedReceiver,
     entry: &CachedCommittedRead,
-    result: Result<CommittedSession, StorageError>,
+    result: Result<(), StorageError>,
     joined: Result<(), StorageError>,
-) -> Result<Option<CommittedSession>, StorageError> {
+) -> Result<(), StorageError> {
     if result.is_err() || joined.is_err() {
         abandon_pass(receiver, entry);
     }
     match (result, joined) {
-        (result, Ok(())) => result.map(Some),
+        (result, Ok(())) => result,
         (_, Err(error)) => Err(error),
     }
 }
@@ -1055,7 +1055,7 @@ impl RecordStorage {
                     receiver.through = None;
                     let _ = entry.lifetime.pin(false);
                 }
-                receiver.fold.committed_session(observed)
+                Ok(())
             })();
             // Hold only this receiver through source join, so a failed join
             // cannot clear a newer read's fixed target or freshness.
@@ -1143,14 +1143,21 @@ mod tests {
     use super::Command as SourceCommand;
     use super::*;
     use crate::application::agent_execution::{
+        executions::{ExecutionRequest, SubmissionMode},
+        permissions::ActionContext,
         providers::ProviderIdentity,
         sessions::{
             records::{self, FactKey, FactKind},
-            CommittedCompleteness, CommittedFreshness, CommittedViewState, ProviderContext,
-            SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+            CommittedCompleteness, CommittedFreshness, CommittedViewState, InvocationRecord,
+            ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+            SubmissionAcknowledgement,
         },
     };
-    use crate::domain::agent_execution::sessions::ExecutionSessionId;
+    use crate::domain::agent_execution::{
+        executions::ExecutionId,
+        prompts::{PromptText, UserMessage},
+        sessions::ExecutionSessionId,
+    };
     use event_stream::{
         EventReader, EventRuntime, EventSink, IncarnationId, LifecycleAction, LifecycleOperationId,
         LifecycleRequest, NewEvent, SchemaId, SchemaRef,
@@ -1202,6 +1209,141 @@ mod tests {
         let frames = stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 1).unwrap();
         assert_eq!(frames.len(), 1);
         runtime.append(stream, frames[0].clone()).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn public_warm_reads_materialize_once_after_join_and_failed_bounds_do_not() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
+        let session = SessionId::new("conversation").unwrap();
+        let lease = storage.open(session.clone()).await.unwrap();
+        let provider = ProviderIdentity::new("provider", "model", "workspace").unwrap();
+        let mut snapshot = SessionSnapshot {
+            id: session.clone(),
+            provider: provider.clone(),
+            provider_context: ProviderContext::Absent,
+            invocations: Vec::new(),
+            queue_history: Vec::new(),
+        };
+        let mut changes = vec![SessionChange::Opened {
+            id: session.clone(),
+            provider,
+            context: ProviderContext::Absent,
+        }];
+        for index in 0..8 {
+            let record = InvocationRecord {
+                target_event_offset: None,
+                submission: SubmissionMode::Immediate,
+                request: ExecutionRequest {
+                    execution_id: ExecutionId::new(format!("e{index}")).unwrap(),
+                    user_message: UserMessage::text_only(
+                        PromptText::new("x".repeat(32761)).unwrap(),
+                    ),
+                    estimated_input_tokens: 1,
+                    reserved_output_tokens: 1,
+                },
+                actor: ActionContext::new("user", "surface", "request").unwrap(),
+                acknowledgement: SubmissionAcknowledgement::Pending,
+                events: Vec::new(),
+                scheduling: Vec::new(),
+                cancellation: None,
+                provider_report: None,
+                local_cancellation: None,
+                local_outcome: None,
+                result: None,
+            };
+            snapshot.invocations.push(record.clone());
+            changes.push(SessionChange::InputAccepted(Box::new(record)));
+        }
+        lease
+            .save_changes(SessionSaveGeneration::initial(), snapshot, changes)
+            .await
+            .unwrap();
+        let prior = storage
+            .read_committed(session.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        let entry = storage
+            .committed_views
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            entry
+                .receiver
+                .lock()
+                .unwrap()
+                .fold
+                .snapshot_materializations(),
+            1
+        );
+        for count in 2..=4 {
+            let view = storage
+                .read_committed(session.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(view.snapshot(), prior.snapshot());
+            assert_eq!(
+                entry
+                    .receiver
+                    .lock()
+                    .unwrap()
+                    .fold
+                    .snapshot_materializations(),
+                count
+            );
+        }
+        drop(lease);
+        let (entered, waiting) = mpsc::channel();
+        let (release, gate) = mpsc::channel();
+        *storage.committed_read_gate.lock().unwrap() = Some(CommittedReadGate {
+            point: CommittedReadPoint::Joined,
+            entered,
+            release: gate,
+        });
+        let reading = tokio::spawn({
+            let storage = storage.clone();
+            let session = session.clone();
+            async move { storage.read_committed(session).await }
+        });
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::task::spawn_blocking(move || waiting.recv()),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        let runtime = storage.runtime().await.unwrap();
+        runtime
+            .change_lifecycle(LifecycleRequest {
+                expected: entry.stream.clone(),
+                operation_id: LifecycleOperationId::new("delete-after-join").unwrap(),
+                action: LifecycleAction::Delete,
+            })
+            .await
+            .unwrap();
+        release.send(()).unwrap();
+        assert!(reading.await.unwrap().is_err());
+        {
+            let receiver = entry.receiver.lock().unwrap();
+            assert_eq!(receiver.fold.snapshot_materializations(), 4);
+            assert_eq!(receiver.fold.snapshot(), prior.snapshot());
+            assert_eq!(receiver.fold.downloaded(), prior.downloaded());
+            assert_eq!(receiver.fold.applied(), prior.position());
+            assert_eq!(
+                receiver.fold.status().freshness(),
+                CommittedFreshness::Unknown
+            );
+            assert!(!entry.lifetime.is_pinned());
+        }
+        assert_eq!(prior.snapshot().unwrap().invocations.len(), 8);
+        storage.shutdown().await.unwrap();
     }
 
     #[test]
@@ -1293,6 +1435,23 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
+            let entry = storage
+                .committed_views
+                .lock()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
+                .clone();
+            assert_eq!(
+                entry
+                    .receiver
+                    .lock()
+                    .unwrap()
+                    .fold
+                    .snapshot_materializations(),
+                1
+            );
             let (entered, waiting) = mpsc::channel();
             let (release, gate) = mpsc::channel();
             *storage.committed_read_gate.lock().unwrap() = Some(CommittedReadGate {
@@ -1337,6 +1496,19 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .unwrap();
+            assert_eq!(
+                entry
+                    .receiver
+                    .lock()
+                    .unwrap()
+                    .fold
+                    .snapshot_materializations(),
+                2
+            );
+            assert_eq!(
+                initial.snapshot().unwrap().provider_context,
+                ProviderContext::Absent
+            );
             assert_eq!(stale.position(), 1);
             assert_eq!(stale.downloaded(), 1);
             assert_eq!(stale.observed_head(), 1 + appended as u64);
@@ -1571,11 +1743,11 @@ mod tests {
             },
         };
         receiver.fold.mark_stale();
-        let view = receiver.fold.committed_session(10).unwrap();
         assert!(matches!(
-            finish_owned_read(&mut receiver, &entry, Ok(view), source.finish()),
+            finish_owned_read(&mut receiver, &entry, Ok(()), source.finish()),
             Err(StorageError::ReadWorkerPanicked)
         ));
+        assert_eq!(receiver.fold.snapshot_materializations(), 0);
         assert_eq!(receiver.fold.downloaded(), 1);
         assert_eq!(receiver.fold.applied(), 0);
         assert_eq!(
@@ -1643,9 +1815,9 @@ mod tests {
                     },
                 };
                 let mut receiver = owned.receiver.lock().unwrap();
-                let result = receiver.fold.committed_session(0);
                 entered.send(()).unwrap();
-                let result = finish_owned_read(&mut receiver, &owned, result, source.finish());
+                let result = finish_owned_read(&mut receiver, &owned, Ok(()), source.finish())
+                    .and_then(|()| receiver.fold.committed_session(0).map(Some));
                 publish_owned_read(&cache, &mut receiver, &owned, result)
             });
             started.recv().unwrap();
