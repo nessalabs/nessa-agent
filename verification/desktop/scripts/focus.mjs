@@ -575,7 +575,17 @@ async function givesBackLostFocus(page, cause) {
   await contentIs(page, content.overview)
   await settled(page)
   await frames(page, 4)
+  let scrolledTo = null
   if (cause === "moved") {
+    // Scrolled away from the focused row, as when reading further down.
+    await page.setViewportSize({ width: 1440, height: 520 })
+    await frames(page, 3)
+    scrolledTo = await page.evaluate(() => {
+      const scroll = document.querySelector(".agents-overview-scroll")
+      if (!scroll || scroll.scrollHeight <= scroll.clientHeight) return null
+      scroll.scrollTop = scroll.scrollHeight
+      return scroll.scrollTop
+    })
     const moved = await page.evaluate((item) => {
       const rows = [...document.querySelectorAll(item)].filter(
         (row) => row.closest("li")?.parentElement?.children.length > 1,
@@ -611,6 +621,15 @@ async function givesBackLostFocus(page, cause) {
   await frames(page, 3)
   const after = await focused(page)
   trail.push({ step: "after", ...after })
+  if (cause === "moved") {
+    if (scrolledTo === null) throw new CannotRun("the list does not scroll at 1440 × 520")
+    const now = await page.evaluate(
+      () => document.querySelector(".agents-overview-scroll")?.scrollTop ?? null,
+    )
+    trail.push({ step: "scroll", was: scrolledTo, now })
+    if (now !== scrolledTo)
+      failures.push(`giving focus back scrolled the list from ${scrolledTo} to ${now}`)
+  }
   if (after.on !== "row")
     failures.push(`after ${cause}, the keyboard is on ${after.on}, not a row`)
   else {
@@ -664,7 +683,7 @@ Steps (each asserts where the caret is afterwards):
   the move that leaves focus on the row (held, a strip that cancels its
   mousedown), it follows the row
   focus-gives-back-moved, -beside, -show-all: the focused row's item moved
-  within its list; focus in the peek beside the list as the window narrows
+  within its list, the list scrolled away (1440 × 520) and left there; focus in the peek beside the list as the window narrows
   to 700; Show All pressed once nothing is left out → the keyboard is on a
   row, and ↓ walks the list
   focus-home-scene: Customize focused in a new session's home, the window

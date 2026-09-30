@@ -463,11 +463,26 @@ export function AgentsOverview({
     // when it comes back, not now.
     if (!document.hasFocus()) return
     lastFocus.current = null
-    focusItem(
+    const id =
       last.sessionId !== null && orderNow.current.includes(last.sessionId)
         ? last.sessionId
-        : currentNow.current,
-    )
+        : currentNow.current
+    const column = list.current
+    // Focus only: the list stays where the person has scrolled it, even as
+    // rows reorder under them. Walking the list is what brings a row into view.
+    const item =
+      id === null
+        ? null
+        : column?.querySelector<HTMLElement>(`[data-overview-item="${CSS.escape(id)}"]`)
+    const scroll = column?.closest<HTMLElement>(".agents-overview-scroll")
+    const top = scroll?.scrollTop
+    ;(item ?? column)?.focus({ preventScroll: true })
+    // WebKit scrolls an element it has just re-laid out into view once
+    // focused, `preventScroll` or not; put the list back where it was.
+    if (scroll && top !== undefined)
+      requestAnimationFrame(() => {
+        if (scroll.scrollTop !== top) scroll.scrollTop = top
+      })
   }
   useEffect(() => {
     const root = section.current

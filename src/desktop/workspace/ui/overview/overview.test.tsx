@@ -1032,6 +1032,21 @@ describe("a row keeps the keyboard as its session changes group", () => {
     expect(document.activeElement).toBe(document.body)
   })
 
+  it("gives it back without scrolling the list the person is reading", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    for (let frame = 0; frame < 3; frame++) await nextFrame()
+    const scrolled = vi.spyOn(HTMLElement.prototype, "scrollIntoView")
+    const scrolledTo = vi.spyOn(HTMLElement.prototype, "scrollTo")
+    await moveOn(source, "run", "Split panes", "idle")
+    for (let frame = 0; frame < 3; frame++) await nextFrame()
+    expect(document.activeElement).toBe(row("run"))
+    expect(scrolled).not.toHaveBeenCalled()
+    expect(scrolledTo).not.toHaveBeenCalled()
+  })
+
   it("keeps it on a row moved within its group", async () => {
     const { source, store } = await mount()
     store.dispatch(followWorkspace())
