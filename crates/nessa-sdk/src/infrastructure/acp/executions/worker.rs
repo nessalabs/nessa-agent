@@ -980,8 +980,9 @@ impl<P: AcpProfile> Worker<P> {
         // session parameters and return no requests at all; for such a profile
         // the loop below never runs, so checking this leniently would mean
         // publishing ready having never held anything to the settled state —
-        // with every test green, because the two profiles that exist today
-        // return one request and two.
+        // with every test green, because every profile that exists today
+        // returns at least one request (the mode, after a model and an effort
+        // level where it selects them).
         self.profile
             .verify_session(&result, &self.capabilities, configuration.is_empty())?;
         let last = configuration.len().saturating_sub(1);
