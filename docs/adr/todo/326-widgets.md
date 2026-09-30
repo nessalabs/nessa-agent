@@ -16,10 +16,9 @@ any plugin reaching into the workspace.
 ## Context
 
 A prototype (`exp-prototype` @ `5bfaa225`, `src/desktop/widgets/`) showed the
-flow people liked: a card in the assistant's message, a button that opens it
-beside the conversation, a pane of its own like a chat's, a full-window view
-with a breadcrumb, and Escape back. Its structure is what
-cannot ship:
+flow people liked: a card in the assistant's message, a column beside the
+conversation, the widget over its whole pane with a breadcrumb, a pane of its
+own like a chat's, and Escape back. Its structure is what cannot ship:
 
 - **The host imports its plugins.** `widgets/ui/registry.tsx` imports the
   experiments and subagents views to build a static table, so the generic host
@@ -92,7 +91,7 @@ What binds:
 | Place | What it is | Opened by | Left by |
 | --- | --- | --- | --- |
 | `inline` | a card in the message the widget part is in | the transcript | — |
-| `pane` | a pane of its own in the split grid, as a chat has | `open("pane")`: beside the pane showing its `origin`, by the workspace's `openBeside` and its rules, or in the focused pane's place when there is none | the pane's close or ⌘W, as any pane; the last pane, as 238 has it, goes back to a new session's home, where a new session goes (`createDraft`: the channel being looked at, else the first) |
+| `pane` | a pane of its own in the split grid, as a chat has | `open("pane")`: beside the pane showing its `origin`, by the workspace's `openBeside` and its rules, or in the focused pane's place when there is none | the pane's close or ⌘W, as any pane; the last pane, as 238 has it, goes back to a new session's home, where a new session goes (`createDraft`: the channel being looked at, else the first) — `closePane` gains that case, which today leaves a last pane not showing a session as it is |
 | `window` | the content region's third view, beside the panes and the overview: the widget drawn instead of the panes, which stay beneath it as they were | `open("window")` | as the overview is — Escape or its close, a session chosen, or any change of the panes goes back to the panes; ⌘0 goes to the overview — with one difference: ⌘W closes the window, never a pane beneath it (over the overview, ⌘W closes the focused pane, 238) |
 
 The content view is `panes | agents | { widget }`, one at a time, and the window

@@ -78,7 +78,9 @@ source's key, `:`, and the source's own id percent-encoded. Two sources cannot
 produce one id.
 
 **`SubagentSource`** is the port: `forSession(sessionId)`, answering from what
-the source holds now (a view may read it on every render), and `subscribe`.
+the source holds now (a view may read it on every render) `{ kind: "unread" }`
+until the source has read that conversation's subagents, then `{ kind: "ready",
+subagents }`, and `subscribe`. The panel answers 326's `unread` for the first.
 It has no `send`: a subagent's conversation is read, not written to, until a
 source can deliver.
 

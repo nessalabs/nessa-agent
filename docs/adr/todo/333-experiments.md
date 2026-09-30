@@ -100,42 +100,47 @@ interface Limit {
 }
 ```
 
-**Runs** carry `number` (the order they started in; the baseline is run 0),
-`startedAt`, `settledAt` once settled, `parentId` (what it was built on, for
-lineage), `scores` by split id, each `{ mean, interval? }` (the half-width of
-its confidence interval), `measures` by guardrail metric id, their `verdict` id,
-the harness's `reason` for it as text, and optionally `areaId`, `agentId`,
-`cases` and `change`. The **baseline** is the same shape, its own field and not
-one of `runs`, with no verdict: it is what runs are judged against, not a run
-judged. The **experiment** carries its `id`, `title`, `goal`, the `sessionId` of
-the conversation that runs it (a widget's `origin`), `startedAt`, the harness's
-`notes` (each a tone, a text, a time, and the run it is about, if any), the
-definition, its baseline and runs, and — from the harness — `bestSoFar`: the ids
-of the runs that became the best, in the order they did, empty until one does.
-The best version is its last entry, or the baseline while it is empty; there is
-no second field naming it, so the two cannot disagree. A keep the harness
-withdraws leaves `bestSoFar` in the harness's next word. The window draws the
-climb and the best version from these and never finds either itself. The climb
-is drawn over time: each settled run a point at its `settledAt`, the best-so-far
-line stepping at each `bestSoFar` run's `settledAt` — which validation holds to
-be in order — so runs that finish out of order never step it backwards. The path
-to the best version is `bestSoFar` in order; a run's lineage (`parentId`) is
-drawn only in its own detail. A baseline is *scored* once it has a score on the
-primary split; until then the views say it is being scored, and a guardrail
-limited relative to it reads "not measured yet" until the baseline has that
-measure.
+**Runs** carry an `id` unique in the experiment, `number` (the order they
+started in; the baseline is run 0), `startedAt`, `settledAt` — when the harness
+last decided its verdict, so a keep decided after reruns moves it; present
+exactly when the verdict's outcome is not `pending` — `parentId` (what it was
+built on, for lineage), `scores` by split id, each `{ mean, interval? }` (the
+half-width of its confidence interval), `measures` by guardrail metric id, their
+`verdict` id, the harness's `reason` for it as text, and optionally `areaId`,
+`agentId`, `cases` and `change`. The **baseline** is the same shape, its own
+field and not one of `runs`, with no verdict: it is what runs are judged
+against, not a run judged. The **experiment** carries its `id`, `title`, `goal`,
+the `sessionId` of the conversation that runs it (a widget's `origin`),
+`startedAt`, the harness's `notes` (each a tone, a text, a time, and the run it
+is about, if any), the definition, its `areas` and `agents` (each with an `id`),
+its baseline and runs, and — from the harness — `bestSoFar`: the runs that
+became the best, each `{ runId, at }` with the time it did, in that order, empty
+until one does. The best version is its last entry, or the baseline while it is
+empty; there is no second field naming it, so the two cannot disagree. A keep
+the harness withdraws leaves `bestSoFar` in the harness's next word. The window
+draws the climb and the best version from these and never finds either itself.
+The climb is drawn over time: each settled run a point at its `settledAt`, the
+best-so-far line stepping at each `bestSoFar` entry's `at`, so runs that finish
+out of order, or are kept after reruns, never step it backwards. The path to the
+best version, and the exploration map's thread, are `bestSoFar` in order; a
+run's lineage (`parentId`) is drawn only in its own detail. A baseline is
+*scored* once it has a score on the primary split; until then the views say it
+is being scored, and a guardrail limited relative to it reads "not measured yet"
+until the baseline has that measure.
 
 **Validation** is at the source's adapter, where external data is parsed: every
 run's verdict is in the vocabulary, every score's split and every measure's
-metric is defined, `primarySplit` names a split, and `bestSoFar` names runs —
-none twice — that exist, are settled, have a score on the primary split and a
-verdict whose outcome is `kept`, in order of `settledAt`; every kept run is in
-it. These rules are over `runs`; the baseline is not one. An experiment that
-fails is not drawn in part: the widget answers `unshowable` — "Can't show this
-here", 326's table — and the adapter logs what was wrong as a fault, as the
-workspace's `failureReason` does. What validation returns is a branded
-`Experiment` that only `validateExperiment` makes, so a view cannot be handed
-one it did not check.
+metric is defined, `primarySplit` names a split, run and area and agent ids are
+unique; every reference resolves — a run's `parentId` (to a run or the
+baseline), `areaId`, `agentId`, a note's run; and `bestSoFar` names runs — none
+twice, its `at` never decreasing — that have a score on the primary split and a
+verdict whose outcome is `kept`, with every kept run in it. These rules are over
+`runs`; the baseline, with its own `id`, is not one. An experiment that fails is
+not drawn in part: the widget answers `unshowable` — "Can't show this here",
+326's table — and the adapter logs what was wrong as a fault, as the workspace's
+`failureReason` does. What validation returns is a branded `Experiment` that
+only `validateExperiment` makes, so a view cannot be handed one it did not
+check.
 
 **Sections follow the data.** No areas, no exploration map or area cards; no
 agents, no swarm; no `cases` or `change` on a run, no such block in its
@@ -176,15 +181,17 @@ cannot collide. Clicking an agent opens its subagent (329's
 session of its own yet, so an agent opens its conversation, where the run is
 one of its turns.
 
-**Cases** are counts: a total, how many a run fixed and broke, and a
-**slice** — a named group of cases, such as a category — each with its total
-and its passing count before and after; plus one page of moved cases from the
-source (at most 200) with the total that moved. **A change** is a summary and
-its files (path, status, lines added and removed), drawn as a virtualised
-tree with search. **`openFile({ experimentId, runId, path? })`** hands a file's
-diff to the person's editor, or with no path the run's whole change; it
-answers `opened`, or `refused` with a typed reason shown for four seconds
-where it was clicked. Nothing is retried.
+**Cases** are counts: a total, how many a run fixed and broke, and a **slice** —
+a named group of cases, such as a category — each with its total and its passing
+count before and after; plus one page of moved cases from the source (at most
+200) with the total that moved. **A change** is a summary and its files (path,
+status, lines added and removed), drawn as a virtualised tree with search.
+**`openFile({ experimentId, runId, path? })`** hands a file's diff to the
+person's editor, or with no path the run's whole change; it answers `opened`, or
+`refused` with a typed reason shown for four seconds where it was clicked. Each
+click is its own request and nothing is retried; where two answers arrive for
+one place, the later-asked request's is shown and an earlier one's arriving
+after it is let go.
 
 ### The port, the places, the preview
 
@@ -199,9 +206,11 @@ runs followed, scroll and focus on opening one — is one hook,
 `useExperimentNavigation`, which registers 326's `onEscape` while the trail is
 not empty; the views only render. Experiments are offered only when their own
 preview is on under Settings › Advanced › Experimental — a window preference
-with its entry in the settings catalogue, read through its hook as 329's is;
-off, the swarm's adapter reports no subagents either, so nothing of an
-experiment shows through subagents behind a switch that is off.
+with its entry in the settings catalogue, read through its hook as 329's is. A
+preview decides only whether the window offers a way in
+(`docs/codebase-structure.md`): off, no experiment's card, pane or window view
+is offered, and a widget already open answers `off`; the swarm's subagents are
+subagents, offered or not by subagents' own preview.
 
 **Samples**, under the preview: the checkout-support hill-climb (percent, up,
 train and test, a cost guardrail relative to the baseline, five areas, a
