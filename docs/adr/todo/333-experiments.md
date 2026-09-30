@@ -14,6 +14,15 @@ experiment appears and on subagents ([329](329-subagents.md)) for its agents.
 - **Date:** 2026-09-30
 - **Status:** proposed
 
+> **Amended by [344](344-mcp-ui.md):** the decisions here about the experiment —
+> its definition, validation, the one formatter, `bestSoFar` — stand, but the view
+> is built as an MCP App in
+> [nessalabs/nessa-extensions](https://github.com/nessalabs/nessa-extensions)
+> (#4–#7 there), not as `src/desktop/experiments/`. Where this record says
+> `ExperimentSource`, the widget host or the swarm adapter, read the extension's
+> own server and the MCP Apps bridge; #334–#336 moved there, and #337 waits on a
+> seam 344 will decide.
+
 ## Context
 
 The prototype (`exp-prototype` @ `5bfaa225`, `src/desktop/experiments/`) is

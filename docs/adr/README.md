@@ -79,6 +79,7 @@ this table. None of it changes implementation or approval status.
 | 14 | [326 — Widgets](todo/326-widgets.md) | Proposed: a plugin's view hosted as a widget — inline in a message, in a pane, or over the panes; pane items as a session-or-widget union with one codec; plugins registered in composition; one import direction for the desktop's verticals. Slices #327, #328 |
 | 15 | [329 — Subagents](todo/329-subagents.md) | Proposed: a conversation's subagents as their own vertical — the model, `SubagentSource` joined across sources, the panel (read-only for now) and the header's avatar stack — behind their Experimental preview until the gateway reports them. Slices #330–#332 |
 | 16 | [333 — Experiments](todo/333-experiments.md) | Proposed: an experiment drawn from its definition (metric, splits, guardrails, verdicts), validated at its adapter, with the best run named by the harness, so any kind reads the same way; `ExperimentSource`; its swarm as subagents. Slices #334–#337 |
+| 17 | [344 — MCP UI](todo/344-mcp-ui.md) | Proposed: Nessa hosts MCP Apps (`io.modelcontextprotocol/ui`) — a gateway MCP client, tool identity and `_meta` end to end, app tool/resource methods with policy and audit, a sandboxed iframe host — and ships its own views such as experiments as extensions in nessalabs/nessa-extensions. Amends 326 (plugin kinds) and 333 (where experiments is built). Slices #346–#349 |
 
 Auth API readiness and operating-bound work is complete. The
 [current Rust SDK](../../crates/nessa-sdk/docs/agent_execution/README.md) provides
