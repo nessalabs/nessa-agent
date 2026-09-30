@@ -521,7 +521,9 @@ fn a_call_is_left_without_an_mcp_identity_where_none_can_be_named_exactly() {
     let mut names = HashMap::new();
     // Built-in tools, a frame naming nothing, an unconfigured server, and a
     // name two configured servers both fit.
-    let ambiguous = vec!["mcp__a__".to_owned(), "mcp__a__b__".to_owned()];
+    // Configured names cannot hold `__` (`AcpConfig::validate`), but one may
+    // end in `_`: `a` and `a_` both fit `mcp__a___c`.
+    let ambiguous = vec!["mcp__a__".to_owned(), "mcp__a___".to_owned()];
     for (frame, prefixes) in [
         (mcp_frame("read", "Read"), vec!["mcp__nessa__".to_owned()]),
         (
@@ -532,11 +534,11 @@ fn a_call_is_left_without_an_mcp_identity_where_none_can_be_named_exactly() {
             mcp_frame("other", "mcp__other__shell"),
             vec!["mcp__nessa__".to_owned()],
         ),
-        (mcp_frame("both", "mcp__a__b__c"), ambiguous),
+        (mcp_frame("both", "mcp__a___c"), ambiguous),
     ] {
         let update = super::tool_call(&frame, &mut names, &prefixes).unwrap();
         assert_eq!(update.mcp_tool(), None, "{frame}");
     }
     // The ambiguous call is still reviewable; only its identity is withheld.
-    assert_eq!(reviewable(&names, "both").as_deref(), Some("mcp__a__b__c"));
+    assert_eq!(reviewable(&names, "both").as_deref(), Some("mcp__a___c"));
 }

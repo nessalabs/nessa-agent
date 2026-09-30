@@ -27,6 +27,8 @@ pub(super) const MAX_TEXT: usize = 8192;
 const MAX_TOOLS: usize = 16;
 const MAX_PERMISSIONS: usize = 16;
 const MAX_VIEW_BYTES: usize = 60_000;
+/// What a tool's details say when its structured result is not in the view.
+pub(super) const STRUCTURED_OMITTED: &str = "[Structured result omitted: too large for this view]";
 /// The largest single review the view offers, encoded. One review may not take
 /// most of the view's budget from everything else.
 const MAX_REVIEW_BYTES: usize = 16_000;
@@ -819,23 +821,20 @@ impl Projection {
                     });
                 }
                 if let Some(content) = update.content() {
+                    // The structured result is read apart from the text, so a
+                    // long text cannot push it out; the last one reported is
+                    // the result's. Replaced with the content, as details are.
+                    let structured = content.iter().rev().find_map(|item| match item.view() {
+                        ToolContentView::Structured(json) => Some(json),
+                        _ => None,
+                    });
+                    tool.structured_content = structured
+                        .filter(|json| json.len() <= MAX_STRUCTURED_CONTENT_BYTES)
+                        .map(str::to_owned);
                     let mut details = String::new();
-                    // Replaced with the content, as details are: a result
-                    // reported again without one no longer has one.
-                    tool.structured_content = None;
                     for item in content {
                         let text = match item.view() {
-                            ToolContentView::Structured(json)
-                                if json.len() <= MAX_STRUCTURED_CONTENT_BYTES =>
-                            {
-                                tool.structured_content = Some(json.into());
-                                continue;
-                            }
-                            // Said in the details rather than cut: JSON cut short
-                            // is not JSON.
-                            ToolContentView::Structured(_) => {
-                                "[Structured result omitted: too large for this view]".into()
-                            }
+                            ToolContentView::Structured(_) => continue,
                             ToolContentView::Text(text) => clipped(text, 16384),
                             ToolContentView::Diff { path, old, new } => format!(
                                 "File: {}\nBefore:\n{}\nAfter:\n{}",
@@ -853,6 +852,13 @@ impl Projection {
                             details.push_str("\n[Output truncated]");
                             break;
                         }
+                    }
+                    // Said rather than cut: JSON cut short is not JSON.
+                    if structured.is_some() && tool.structured_content.is_none() {
+                        if !details.is_empty() {
+                            details.push('\n');
+                        }
+                        details.push_str(STRUCTURED_OMITTED);
                     }
                     tool.details = details;
                 }
@@ -1065,7 +1071,19 @@ impl Projection {
         // else gives way first.
         while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
             view.truncated = true;
-            if view.messages.len() > 1 {
+            // A structured result repeats what its tool's details say, so it is
+            // the first thing given up, oldest first, and the details say so.
+            if let Some(tool) = view
+                .tools
+                .iter_mut()
+                .find(|tool| tool.structured_content.is_some())
+            {
+                tool.structured_content = None;
+                if !tool.details.is_empty() {
+                    tool.details.push('\n');
+                }
+                tool.details.push_str(STRUCTURED_OMITTED);
+            } else if view.messages.len() > 1 {
                 view.messages.remove(0);
             } else if view
                 .messages

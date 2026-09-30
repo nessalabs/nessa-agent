@@ -515,7 +515,7 @@ export interface ConversationTool {
   details: string
   /** Exact tool arguments observed through a permission request, or empty when unavailable. */
   input: string
-  /** The MCP server and tool the call went to, when the agent's harness named them exactly; absent for a harness's own tools and where the harness does not say. */
+  /** The MCP server and tool the call went to, as the agent's harness named them (Claude's harness replaces characters outside [A-Za-z0-9_-] in a tool name with _); absent for a harness's own tools and where the harness does not say which server. */
   mcp?: ConversationMcpTool
   /** The call's structured result (MCP structuredContent) as JSON text, when the harness passed it on and it fits; absent otherwise. The result's text stays in details either way. */
   structuredContent?: string

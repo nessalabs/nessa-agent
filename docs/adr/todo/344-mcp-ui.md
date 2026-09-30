@@ -150,10 +150,13 @@ what a Claude PostToolUse hook's `tool_response` holds for an MCP tool;
 Opencode's readable source.
 
 What #347 builds on it: the SDK carries an MCP call's server and tool
-(`McpTool`) from Claude, split at the one configured prefix that fits, and from
-Codex's `rawInput`, and names none for Opencode; it carries a Codex MCP result
+(`McpTool`) from Claude, split at the one configured prefix that fits (its tool
+name in the harness's replaced spelling), and from Codex's `rawInput` exactly,
+and names none for Opencode; it carries a Codex MCP result
 — its text blocks, and its `structuredContent` bounded as a structured result —
-where before a finished Codex MCP call showed nothing. Both reach the window on
+where before a finished Codex MCP call showed nothing. Only Codex's announcement
+carries the MCP marker; its completion, which carries the result, does not
+(`index.js:25123-25130`), so the adapter remembers the marking per call. Both reach the window on
 `ConversationTool` (`mcp`, `structuredContent`).
 
 What it does not: **no harness passes the tool's UI resource through ACP**, so a

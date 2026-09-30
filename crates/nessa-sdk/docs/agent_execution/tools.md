@@ -39,7 +39,10 @@ output and do not apply changes or authorize filesystem access.
 `MAX_STRUCTURED_RESULT_BYTES`; it sits beside the result's text, never instead of
 it. `McpTool` names the MCP server and tool a call went to, bounded by
 `MAX_MCP_NAME_BYTES`; `ToolCallUpdate::with_mcp_tool` attaches it, and a later
-update that names none keeps the observed one. It is identity for display and
+update that names none keeps the observed one. `ToolCallUpdate::with_content`
+replaces an update's content collection, as an adapter does when a harness
+reports a result outside ACP content. The names are the harness's spelling:
+Claude's replaces characters outside `[A-Za-z0-9_-]` in a tool name with `_`. It is identity for display and
 correlation, not access to the server. Which harness can say what is recorded in
 [ADR 344](../../../../docs/adr/todo/344-mcp-ui.md#what-each-harness-passes-through-acp):
 Claude's name is split at the one configured server prefix it starts with, Codex's

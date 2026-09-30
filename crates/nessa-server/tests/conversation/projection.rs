@@ -1,6 +1,6 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 use super::{
-    projection::{clipped, Projection, MAX_TEXT},
+    projection::{clipped, Projection, MAX_TEXT, STRUCTURED_OMITTED},
     ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
     ConversationAttachmentEvidenceFailureCode, ConversationCaller, ConversationCapabilities,
     ConversationDependencies, ConversationLifecycle, ConversationLifecyclePhase,
@@ -1042,10 +1042,7 @@ fn an_mcp_tool_carries_its_identity_and_structured_result_beside_its_text() {
     )));
     let view = projection.read();
     assert_eq!(view.tools[0].structured_content, None);
-    assert_eq!(
-        view.tools[0].details,
-        "[Structured result omitted: too large for this view]"
-    );
+    assert_eq!(view.tools[0].details, STRUCTURED_OMITTED);
     projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
         tool,
         None,
@@ -1063,6 +1060,67 @@ fn an_mcp_tool_carries_its_identity_and_structured_result_beside_its_text() {
         Some(vec![ToolContent::text("plain")]),
     ))));
     assert_eq!(projection.read().tools[0].structured_content, None);
+}
+
+#[test]
+fn a_structured_result_after_long_text_is_kept_and_the_last_one_reported_wins() {
+    let mut projection = projection();
+    let json = r#"{"rows":2}"#;
+    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+        ToolCallId::new("chart").unwrap(),
+        None,
+        None,
+        None,
+        None,
+        Some(vec![
+            ToolContent::text("a".repeat(12_000)),
+            ToolContent::text("b".repeat(12_000)),
+            ToolContent::structured(format!("\"{}\"", "c".repeat(MAX_STRUCTURED_CONTENT_BYTES)))
+                .unwrap(),
+            ToolContent::structured(json).unwrap(),
+        ]),
+    ))));
+    let tool = &projection.read().tools[0];
+    assert_eq!(tool.structured_content.as_deref(), Some(json));
+    assert!(tool.details.ends_with("[Output truncated]"));
+    assert!(!tool.details.contains(STRUCTURED_OMITTED));
+}
+
+#[test]
+fn a_view_past_its_budget_gives_up_structured_results_before_any_message() {
+    let mut projection = projection();
+    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text(
+        "Charted.",
+    ))));
+    let json = format!("\"{}\"", "s".repeat(MAX_STRUCTURED_CONTENT_BYTES - 2));
+    for index in 0..3 {
+        projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+            ToolCallId::new(format!("chart-{index}")).unwrap(),
+            None,
+            None,
+            None,
+            None,
+            Some(vec![
+                ToolContent::text("d".repeat(12_000)),
+                ToolContent::structured(json.clone()).unwrap(),
+            ]),
+        ))));
+    }
+    let view = projection.read();
+    assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
+    assert!(view.truncated);
+    assert_eq!(view.messages.len(), 1);
+    assert_eq!(view.messages[0].parts.len(), 4);
+    assert_eq!(view.tools.len(), 3);
+    // Oldest first: the earliest tools say theirs was left out; what still
+    // fits is kept.
+    assert_eq!(view.tools[0].structured_content, None);
+    assert!(view.tools[0].details.ends_with(STRUCTURED_OMITTED));
+    assert_eq!(
+        view.tools[2].structured_content.as_deref(),
+        Some(json.as_str())
+    );
+    assert!(!view.tools[2].details.contains(STRUCTURED_OMITTED));
 }
 
 #[test]

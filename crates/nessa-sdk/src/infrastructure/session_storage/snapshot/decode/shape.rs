@@ -13,7 +13,7 @@ use crate::domain::agent_execution::{
         MAX_KEY_BYTES as MAX_QUESTION_KEY_BYTES, MAX_OPTIONS as MAX_QUESTION_OPTIONS,
         MAX_QUESTIONS, MAX_TEXT_BYTES as MAX_QUESTION_TEXT_BYTES,
     },
-    tools::{FileLocation, ToolContent, MAX_MCP_NAME_BYTES},
+    tools::{FileLocation, ToolContent, MAX_MCP_NAME_BYTES, MAX_STRUCTURED_RESULT_BYTES},
 };
 use std::mem::size_of;
 use Shape::*;
@@ -76,6 +76,7 @@ pub(super) enum Shape {
     AskedOptions,
     AskedOption,
     Content,
+    ContentItem,
     Locations,
     Options,
     Generic,
@@ -180,6 +181,7 @@ impl Shape {
             (Tool, "locations") => Locations,
             (Tool, "mcp_tool") => McpTool,
             (McpTool, "server" | "tool") => Text(MAX_MCP_NAME_BYTES),
+            (ContentItem, "Structured") => Text(MAX_STRUCTURED_RESULT_BYTES),
             (Tool, "id") | (Review, "id" | "execution_id" | "tool_id" | "session_id") => Text(256),
             (Review, "options") => Options,
             (Decline, "id") => Text(20),
@@ -242,6 +244,7 @@ impl Shape {
             Self::QueueIds => Self::Text(256),
             Self::AskedQuestions => Self::Asked,
             Self::AskedOptions => Self::AskedOption,
+            Self::Content => Self::ContentItem,
             _ => Self::Generic,
         }
     }

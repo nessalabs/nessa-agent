@@ -493,12 +493,22 @@ fn mcp_call(id: &str) -> Value {
         "_meta":{"is_mcp_tool_call":true}})
 }
 
-/// Its completion (`index.js:25123-25130`): `rawInput` again, and the MCP
-/// result only in `rawOutput`, with no ACP content.
+/// Its completion (`index.js:25123-25130`), exactly: `rawInput` again, and
+/// the MCP result only in `rawOutput` — with no ACP content and no MCP marker,
+/// which only the announcement carries.
 fn mcp_done(id: &str, output: Value) -> Value {
-    json!({"toolCallId":id,"status":"completed",
+    json!({"sessionUpdate":"tool_call_update","toolCallId":id,"status":"completed",
         "rawInput":{"server":"charts.app","tool":"show","arguments":{"n":2}},
-        "rawOutput":output,"_meta":{"is_mcp_tool_call":true}})
+        "rawOutput":output})
+}
+
+/// A session replay (`index.js:33968`): one announcement carrying the marker,
+/// the input and the result together.
+fn mcp_replayed(id: &str, output: Value) -> Value {
+    let mut frame = mcp_call(id);
+    frame["status"] = json!("completed");
+    frame["rawOutput"] = output;
+    frame
 }
 
 #[test]
@@ -556,6 +566,27 @@ fn an_mcp_result_keeps_its_text_blocks_structured_result_and_error() {
     )
     .unwrap();
     assert_eq!(failed.content(), &Some(vec![text("server went away")]));
+    let replayed = tool_call(
+        &mcp_replayed(
+            "mcp-9",
+            json!({"result":{"content":[{"type":"text","text":"again"}]}}),
+        ),
+        &mut tools,
+    )
+    .unwrap();
+    assert_eq!(replayed.mcp_tool().unwrap().server(), "charts.app");
+    assert_eq!(replayed.content(), &Some(vec![text("again")]));
+    // The same output on a call never marked as MCP is not read as an MCP result.
+    let unmarked = tool_call(
+        &mcp_done(
+            "shell-1",
+            json!({"result":{"content":[{"type":"text","text":"no"}]}}),
+        ),
+        &mut tools,
+    )
+    .unwrap();
+    assert_eq!(unmarked.content(), &None);
+    assert_eq!(unmarked.mcp_tool(), None);
     // No output yet leaves the observed content as it was.
     let pending = tool_call(&mcp_done("mcp-1", Value::Null), &mut tools).unwrap();
     assert_eq!(pending.content(), &None);
@@ -564,6 +595,9 @@ fn an_mcp_result_keeps_its_text_blocks_structured_result_and_error() {
 #[test]
 fn an_oversize_structured_result_is_said_rather_than_kept_or_refused() {
     let mut tools = ObservedTools::default();
+    for id in ["mcp-1", "mcp-2"] {
+        tool_call(&mcp_call(id), &mut tools).unwrap();
+    }
     let exact = "a".repeat(MAX_STRUCTURED_RESULT_BYTES - 2);
     let kept = tool_call(
         &mcp_done(
@@ -609,7 +643,7 @@ fn a_malformed_mcp_result_refuses_the_frame_before_anything_is_retained() {
     ] {
         assert!(
             matches!(
-                tool_call(&mcp_done("bad", output.clone()), &mut tools),
+                tool_call(&mcp_replayed("bad", output.clone()), &mut tools),
                 Err(AgentError::Protocol(_))
             ),
             "{output}"

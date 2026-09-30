@@ -91,9 +91,11 @@ fn enabled_name(name: &str, mcp_prefixes: &[String]) -> bool {
 /// The harness names an MCP tool `mcp__<server>__<tool>`, and a server name may
 /// itself hold `__`, so the name alone does not say where the server ends. The
 /// configured servers do: a name is split at the one configured prefix it
-/// starts with. Where two configured prefixes both fit (`a` and `a__b` for
-/// `mcp__a__b__c`), the call is left without an identity rather than given a
-/// guessed one — its tool row and text result are unchanged.
+/// starts with. Where two configured prefixes both fit (`a` and `a_` for
+/// `mcp__a___c`), the call is left without an identity rather than given a
+/// guessed one — its tool row and text result are unchanged. The tool part is
+/// the harness's spelling, in which every character outside `[A-Za-z0-9_-]`
+/// has become `_`.
 fn mcp_tool(name: &str, mcp_prefixes: &[String]) -> Option<McpTool> {
     let mut fitting = mcp_prefixes
         .iter()

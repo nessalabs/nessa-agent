@@ -8,7 +8,10 @@ use crate::domain::agent_execution::ExecutionError;
 pub const MAX_MCP_NAME_BYTES: usize = 128;
 
 /// The MCP server and tool an observed call was made to, as the agent harness
-/// named them.
+/// named them — which is not always as the server named them: Claude's harness
+/// replaces every character of a tool name outside `[A-Za-z0-9_-]` with `_`,
+/// so `rows.get` arrives as `rows_get`. Compare it with the server's own list
+/// knowing that.
 ///
 /// Identity for display and correlation only: it grants nothing, reaches no
 /// server, and does not say the server is still configured. Names are

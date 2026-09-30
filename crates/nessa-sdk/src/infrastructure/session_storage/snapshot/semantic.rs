@@ -451,10 +451,16 @@ mod tests {
             1,
         );
         assert_ne!(oversize, text);
-        assert!(matches!(
-            decode_change(oversize.as_bytes(), &context),
-            Err(StorageError::Corrupt(_))
-        ));
+        // Refused at its bound before it is decoded, not after.
+        match decode_change(oversize.as_bytes(), &context) {
+            Err(StorageError::Corrupt(message)) => {
+                assert!(
+                    message.contains("exceeds decoded string limit"),
+                    "{message}"
+                )
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

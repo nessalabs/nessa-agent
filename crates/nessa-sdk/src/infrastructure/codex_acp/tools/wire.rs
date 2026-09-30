@@ -61,6 +61,10 @@ pub(in crate::infrastructure::codex_acp) struct ObservedTool {
     output: String,
     /// Original action input, needed by sparse MCP approval requests.
     input: Option<Box<str>>,
+    /// Whether a frame for this call carried Codex's MCP marker. Only the
+    /// announcement does; the completion that carries the result does not
+    /// (codex-acp 1.12.0 `index.js:25123-25130`), so it is remembered here.
+    mcp: bool,
 }
 
 /// Execution-scoped provider observations and their retained input accounting.
@@ -314,6 +318,7 @@ fn normalize<'a>(
 }
 
 /// Whether Codex marked this frame as an MCP tool call (`_meta.is_mcp_tool_call`).
+/// A call is an MCP call when any of its frames was: see [`ObservedTool::mcp`].
 fn is_mcp_call(value: &Value) -> bool {
     value.pointer("/_meta/is_mcp_tool_call") == Some(&Value::Bool(true))
 }
@@ -325,8 +330,8 @@ fn is_mcp_call(value: &Value) -> bool {
 /// never split. A frame without them, or with names the domain will not keep,
 /// leaves the call without an identity rather than refusing it: the call and
 /// its result are still shown.
-fn mcp_tool(value: &Value) -> Option<McpTool> {
-    if !is_mcp_call(value) {
+fn mcp_tool(value: &Value, mcp: bool) -> Option<McpTool> {
+    if !mcp {
         return None;
     }
     let input = value.get("rawInput")?;
@@ -378,8 +383,8 @@ fn mcp_block(block: &Value) -> Result<ToolContent, AgentError> {
 /// showed nothing. `None` for a frame that is not an MCP call or carries no
 /// output yet, which leaves the observed content as it was. The result's
 /// `_meta` is not kept: nothing reads it yet.
-fn mcp_result(value: &Value) -> Result<Option<Vec<ToolContent>>, AgentError> {
-    if !is_mcp_call(value) {
+fn mcp_result(value: &Value, mcp: bool) -> Result<Option<Vec<ToolContent>>, AgentError> {
+    if !mcp {
         return Ok(None);
     }
     let output = match value.get("rawOutput") {
@@ -446,14 +451,15 @@ pub(in crate::infrastructure::codex_acp) fn tool_call(
     let (frame, accumulated) = normalize(value, streamed)?;
     // Validate the complete representation before retaining provider identity.
     let mut update = acp_tool_call(frame.as_ref())?;
-    if let Some(result) = mcp_result(value)? {
+    let mcp = is_mcp_call(value) || tools.entries.get(&id).is_some_and(|tool| tool.mcp);
+    if let Some(result) = mcp_result(value, mcp)? {
         // After whatever ACP content the frame carried, which Codex leaves empty
         // for an MCP call today.
         let mut content = update.content().clone().unwrap_or_default();
         content.extend(result);
         update = update.with_content(content);
     }
-    if let Some(tool) = mcp_tool(value) {
+    if let Some(tool) = mcp_tool(value, mcp) {
         update = update.with_mcp_tool(tool);
     }
     let name = declared_name(value)?;
@@ -470,6 +476,7 @@ pub(in crate::infrastructure::codex_acp) fn tool_call(
             if tool.kind.is_none() {
                 tool.kind = kind.map(str::to_owned);
             }
+            tool.mcp = mcp;
             if let Some(input) = input {
                 tool.input = Some(input);
             }
@@ -485,6 +492,7 @@ pub(in crate::infrastructure::codex_acp) fn tool_call(
                     kind: kind.map(str::to_owned),
                     output: accumulated.unwrap_or_default(),
                     input,
+                    mcp,
                 },
             );
         }
