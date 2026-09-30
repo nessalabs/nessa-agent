@@ -1,0 +1,3008 @@
+/*
+ * Experiments: the card inside a conversation and the surface opened beside
+ * it. Every value comes from the window's scales (`src/desktop/styles.css`);
+ * the only new tokens are the chart's: five area hues, validated as a set
+ * for CVD separation on both grounds, and three status inks that always
+ * travel with a glyph and a word.
+ */
+:is(.xp-surface, .xp-inline, .xp-menu) {
+  --xp-ink: color-mix(in oklab, var(--foreground) 92%, transparent);
+  --xp-line: color-mix(in oklab, var(--foreground) 7%, transparent);
+  --xp-line-strong: color-mix(in oklab, var(--foreground) 12%, transparent);
+  --xp-raise: color-mix(in oklab, var(--foreground) 3%, transparent);
+  --xp-raise-2: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --xp-ring: color-mix(in oklab, var(--background) 88%, var(--foreground));
+  --xp-good: var(--desktop-good);
+  --xp-bad: var(--desktop-bad);
+  --xp-warn: var(--desktop-warn);
+  --xp-area-1: var(--desktop-series-1);
+  --xp-area-2: var(--desktop-series-2);
+  --xp-area-3: var(--desktop-series-3);
+  --xp-area-4: var(--desktop-series-4);
+  --xp-area-5: var(--desktop-series-5);
+  --xp-dot: var(--xp-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+html:not(.dark) :is(.xp-surface, .xp-inline, .xp-menu) {
+}
+
+/* ——— Shared bits ——— */
+
+.xp-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+.xp-muted {
+  color: var(--desktop-muted);
+}
+
+.xp-faint {
+  color: var(--desktop-faint);
+}
+
+.xp-sep {
+  color: var(--desktop-fainter);
+  margin: 0 6px;
+}
+
+.xp-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.xp-label {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-caption);
+  letter-spacing: 0.01em;
+}
+
+.xp-kind {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-area-mark {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.45;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  overflow: visible;
+}
+
+.xp-avatar {
+  flex: none;
+  border-radius: 999px;
+}
+
+.xp-facepile {
+  display: inline-flex;
+  align-items: center;
+}
+
+.xp-facepile > * + * {
+  margin-left: -7px;
+}
+
+.xp-facepile > * {
+  box-shadow: 0 0 0 2px var(--xp-ring);
+  border-radius: 999px;
+}
+
+.xp-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-live-pulse {
+  position: relative;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--xp-good);
+}
+
+.xp-live-pulse::after {
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  border: 1px solid var(--xp-good);
+  content: "";
+  animation: xp-ping 2s var(--desktop-out) infinite;
+}
+
+@keyframes xp-ping {
+  from {
+    opacity: 0.8;
+    transform: scale(0.4);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.4);
+  }
+}
+
+.xp-meter {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+  min-width: 40px;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--xp-line-strong);
+}
+
+.xp-meter > span {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--xp-ink);
+  transform-origin: left;
+  transition: transform 420ms var(--desktop-out);
+}
+
+.xp-delta {
+  color: var(--desktop-muted);
+}
+
+.xp-delta[data-tone="up"] {
+  color: var(--xp-good);
+}
+
+.xp-delta[data-tone="down"] {
+  color: var(--xp-bad);
+}
+
+.xp-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  white-space: nowrap;
+}
+
+.xp-verdict-mark {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.xp-verdict[data-verdict="kept"] {
+  color: var(--foreground);
+}
+
+.xp-verdict[data-verdict="kept"] .xp-verdict-mark {
+  color: var(--xp-good);
+}
+
+.xp-verdict:is([data-verdict="overfit"], [data-verdict="costly"]) .xp-verdict-mark {
+  color: var(--xp-warn);
+}
+
+.xp-verdict[data-verdict="regressed"] .xp-verdict-mark {
+  color: var(--xp-bad);
+}
+
+.xp-verdict[data-verdict="running"] {
+  color: var(--desktop-ink-2);
+}
+
+.xp-verdict[data-verdict="running"] .xp-verdict-mark {
+  animation: xp-spin 1s linear infinite;
+}
+
+@keyframes xp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.xp-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-state[data-state="climbing"] .xp-verdict-mark {
+  color: var(--xp-good);
+}
+
+.xp-state:is([data-state="stalling"], [data-state="exhausted"]) .xp-verdict-mark {
+  color: var(--xp-warn);
+}
+
+.xp-icon-button {
+  display: inline-grid;
+  width: var(--desktop-control-size, 28px);
+  height: var(--desktop-control-size, 28px);
+  place-items: center;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: transparent;
+  color: var(--desktop-muted);
+  font-size: 18px;
+  line-height: 1;
+  transition:
+    background var(--desktop-fast) ease,
+    color var(--desktop-fast) ease;
+}
+
+.xp-icon-button:hover {
+  background: var(--desktop-hover);
+  color: var(--foreground);
+}
+
+.xp-icon-button[aria-pressed="true"] {
+  color: var(--foreground);
+}
+
+.xp-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-footnote);
+  text-decoration: underline;
+  text-decoration-color: var(--desktop-fainter);
+  text-underline-offset: 3px;
+}
+
+.xp-link:hover {
+  color: var(--foreground);
+  text-decoration-color: currentColor;
+}
+
+:is(.xp-surface, .xp-inline) button:focus-visible,
+.xp-table tr:focus-visible {
+  outline: 2px solid var(--desktop-focus-ring);
+  outline-offset: 1px;
+}
+
+/* ——— In the conversation ——— */
+
+.xp-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 16px 14px;
+  border-radius: var(--desktop-radius-lg);
+  background:
+    radial-gradient(
+      120% 90% at 100% 0%,
+      color-mix(in oklab, var(--desktop-light-edge, white) 7%, transparent),
+      transparent 60%
+    ),
+    var(--xp-raise);
+  box-shadow:
+    inset 0 0 0 1px var(--xp-line),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent);
+  transition: box-shadow var(--desktop-base) ease;
+}
+
+.xp-inline[data-opened] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--desktop-light-edge, white) 30%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+.xp-inline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.xp-inline-title {
+  margin: -8px 0 0;
+  color: var(--foreground);
+  font-size: var(--desktop-text-read);
+  font-weight: 550;
+  letter-spacing: -0.01em;
+}
+
+.xp-inline-figure {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: end;
+  gap: 20px;
+}
+
+.xp-inline-value {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  color: var(--foreground);
+  font-size: 34px;
+  font-weight: 560;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.xp-inline-value .xp-hero-delta {
+  margin-left: 10px;
+}
+
+.xp-sparkline {
+  height: 56px;
+  min-width: 0;
+}
+
+.xp-sparkline svg {
+  display: block;
+  overflow: visible;
+}
+
+.xp-sparkline-line {
+  fill: none;
+  stroke: var(--xp-ink);
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+}
+
+.xp-sparkline-wash {
+  fill: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+.xp-sparkline circle {
+  fill: var(--desktop-fainter);
+}
+
+.xp-sparkline circle[data-kept] {
+  fill: var(--xp-ink);
+}
+
+.xp-sparkline .xp-sparkline-end {
+  fill: var(--xp-good);
+  stroke: var(--xp-ring);
+  stroke-width: 2;
+}
+
+.xp-gains {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.xp-gains-bar {
+  display: flex;
+  height: 6px;
+  gap: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+}
+
+.xp-gains-bar > span {
+  flex-basis: 0;
+  min-width: 4px;
+}
+
+.xp-gains-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-caption);
+}
+
+.xp-gains-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.xp-gains-legend .xp-mono {
+  color: var(--desktop-muted);
+}
+
+.xp-inline-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--xp-line);
+}
+
+.xp-inline-lead {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-inline-lead-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--desktop-ink-2);
+}
+
+.xp-open {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: var(--desktop-text-footnote);
+  font-weight: 550;
+  transition:
+    transform var(--desktop-fast) ease,
+    opacity var(--desktop-fast) ease;
+}
+
+.xp-open:hover {
+  opacity: 0.9;
+}
+
+.xp-open:active {
+  transform: scale(0.97);
+}
+
+.xp-open[aria-pressed="true"] {
+  background: var(--desktop-selected);
+  color: var(--foreground);
+}
+
+/* ——— The surface ——— */
+
+.xp-surface {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--desktop-radius-md);
+  background: color-mix(in oklab, var(--background) 42%, transparent);
+  box-shadow:
+    inset 0 0 0 1px var(--xp-line),
+    0 20px 60px -30px rgb(0 0 0 / 60%);
+  color: var(--foreground);
+  font-size: var(--desktop-text-body);
+  animation: xp-surface-in var(--desktop-slow) var(--desktop-out) both;
+}
+
+html:not(.dark) .xp-surface {
+  background: color-mix(in oklab, var(--background) 72%, transparent);
+}
+
+@keyframes xp-surface-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+.xp-surface-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 12px 12px 20px;
+}
+
+.xp-surface-title {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.xp-surface-title h2 {
+  margin: 2px 0 0;
+  font-size: var(--desktop-text-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.xp-surface-title p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-surface-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.xp-surface-actions .xp-swarmpile {
+  margin-right: 10px;
+}
+
+.xp-swarmpile {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.xp-swarmpile-more {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+.xp-tabs {
+  display: flex;
+  align-items: center;
+  padding: 0 20px 12px 17px;
+  border-bottom: 1px solid var(--xp-line);
+}
+
+.xp-goal {
+  max-width: 64ch;
+  margin: 2px 0 0;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-body);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.xp-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 16%, transparent) transparent;
+  container: xp-surface / inline-size;
+}
+
+.xp-view {
+  padding: 16px 20px 32px;
+  animation: workspace-fade-in var(--desktop-base) ease both;
+}
+
+.xp-overview,
+.xp-areas,
+.xp-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.xp-card {
+  position: relative;
+  padding: 16px;
+  border-radius: var(--desktop-radius-md);
+  background: var(--xp-raise);
+  box-shadow: inset 0 0 0 1px var(--xp-line);
+}
+
+.xp-card-flush {
+  padding: 16px 0 8px;
+}
+
+.xp-card-flush > .xp-card-head {
+  padding: 0 16px;
+}
+
+.xp-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+
+.xp-card-head h3 {
+  margin: 0;
+  font-size: var(--desktop-text-body);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.xp-card-head p {
+  margin: 2px 0 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+@container xp-surface (width >= 820px) {
+  .xp-columns {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+/* ——— Headline ——— */
+
+.xp-headline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+@container xp-surface (width >= 720px) {
+  .xp-headline {
+    grid-template-columns: minmax(260px, 1fr) minmax(0, 1.4fr);
+  }
+}
+
+.xp-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+  border-radius: var(--desktop-radius-md);
+  background:
+    radial-gradient(
+      140% 120% at 0% 0%,
+      color-mix(in oklab, var(--xp-good) 10%, transparent),
+      transparent 55%
+    ),
+    var(--xp-raise);
+  box-shadow: inset 0 0 0 1px var(--xp-line);
+}
+
+.xp-hero-figure {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.xp-hero-value {
+  font-size: 52px;
+  font-weight: 560;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.xp-hero-unit {
+  color: var(--desktop-muted);
+  font-size: 0.5em;
+  font-weight: 500;
+}
+
+.xp-hero-figure .xp-hero-unit {
+  font-size: 22px;
+}
+
+.xp-hero-delta {
+  margin-left: 12px;
+  color: var(--xp-good);
+  font-size: var(--desktop-text-read);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  align-self: center;
+}
+
+.xp-hero-caption {
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-hero-caption strong {
+  color: var(--desktop-ink-2);
+  font-weight: 550;
+}
+
+.xp-gap {
+  position: relative;
+  height: 4px;
+  margin-top: 4px;
+}
+
+.xp-gap-track,
+.xp-gap-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+}
+
+.xp-gap-track {
+  background: var(--xp-line-strong);
+}
+
+.xp-gap-fill {
+  right: auto;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--xp-good) 40%, transparent),
+    var(--xp-good)
+  );
+  transition: width 600ms var(--desktop-out);
+}
+
+.xp-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border-radius: var(--desktop-radius-md);
+  background: var(--xp-line);
+  box-shadow: inset 0 0 0 1px var(--xp-line);
+}
+
+.xp-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: color-mix(in oklab, var(--background) 60%, transparent);
+}
+
+html:not(.dark) .xp-tile {
+  background: color-mix(in oklab, var(--background) 88%, transparent);
+}
+
+.xp-tile dt {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-caption);
+}
+
+.xp-tile dd {
+  margin: 0;
+  font-size: var(--desktop-text-display);
+  font-weight: 560;
+  letter-spacing: -0.02em;
+}
+
+.xp-tile-of {
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-body);
+  font-weight: 450;
+}
+
+.xp-tile-note {
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+.xp-tile .xp-meter {
+  margin-top: 4px;
+}
+
+/* ——— Selector ——— */
+
+.xp-selector {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  flex: none;
+  padding: 3px;
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--foreground) 6%, transparent),
+    color-mix(in oklab, var(--foreground) 2.5%, transparent)
+  );
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 13%, transparent),
+    inset 0 1px 0 color-mix(in oklab, white 10%, transparent),
+    inset 0 -1px 1px rgb(0 0 0 / 20%),
+    0 10px 28px -14px rgb(0 0 0 / 50%);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  backdrop-filter: blur(24px) saturate(1.8);
+}
+
+html:not(.dark) .xp-selector {
+  background: linear-gradient(180deg, rgb(255 255 255 / 55%), rgb(255 255 255 / 30%));
+  box-shadow:
+    inset 0 0 0 0.5px rgb(0 0 0 / 10%),
+    inset 0 1px 0 rgb(255 255 255 / 90%),
+    0 8px 24px -14px rgb(0 0 0 / 25%);
+}
+
+.xp-selector-lens {
+  position: absolute;
+  z-index: -1;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  border-radius: 999px;
+  background: var(--desktop-selected);
+  transition:
+    transform 220ms var(--desktop-out),
+    width 220ms var(--desktop-out);
+}
+
+.xp-selector-option {
+  height: 28px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-body);
+  font-weight: 500;
+  transition: color var(--desktop-fast) ease;
+}
+
+.xp-selector[data-size="sm"] .xp-selector-option {
+  height: 24px;
+  padding: 0 11px;
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-selector-option:hover {
+  color: var(--desktop-ink-2);
+}
+
+.xp-selector-option[aria-pressed="true"] {
+  color: var(--foreground);
+}
+
+/* ——— Area menu ——— */
+
+.xp-menu-chip {
+  -webkit-user-select: none;
+  user-select: none;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: transparent;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  font-weight: 500;
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease;
+}
+
+.xp-menu-chip:is(:hover, [data-state="open"]) {
+  background: var(--desktop-hover);
+  color: var(--foreground);
+}
+
+.xp-menu-chip[data-chosen] {
+  color: var(--foreground);
+}
+
+.xp-menu-chip > svg:last-child {
+  width: 12px;
+  height: 12px;
+  opacity: 0.7;
+}
+
+.xp-menu {
+  min-width: 248px;
+}
+
+.desktop-popover.xp-menu[role="menu"]:has([role="menuitemradio"])
+  :is([role^="menuitem"], [data-slot$="menu-label"]) {
+  min-height: 30px;
+  gap: 10px;
+  padding-left: 6px;
+}
+
+.desktop-popover.xp-menu[role="menu"] [data-slot$="menu-label"] {
+  padding-left: 8px;
+}
+
+.desktop-popover.xp-menu[role="menu"]
+  [role="menuitemradio"][data-state="checked"]::before {
+  display: none;
+}
+
+.desktop-popover.xp-menu[role="menu"] [role="menuitemradio"][data-state="checked"] {
+  font-weight: 600;
+}
+
+.desktop-popover.xp-menu[role="menu"]
+  [role="menuitemradio"][data-state="checked"]
+  .xp-menu-tile {
+  box-shadow:
+    inset 0 0 0 1.5px
+      color-mix(in oklab, var(--xp-area, var(--foreground)) 70%, transparent),
+    0 0 12px -2px color-mix(in oklab, var(--xp-area, var(--foreground)) 45%, transparent);
+}
+
+.xp-menu-tile {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--xp-area, var(--foreground)) 16%, transparent);
+  box-shadow: inset 0 0 0 0.5px
+    color-mix(in oklab, var(--xp-area, var(--foreground)) 30%, transparent);
+}
+
+.xp-menu-tile[data-all] {
+  --xp-area: var(--foreground);
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+
+.xp-menu-tile[data-all] svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  opacity: 0.8;
+}
+
+/* ——— The climb ——— */
+
+.xp-climb,
+.xp-map {
+  position: relative;
+  width: 100%;
+}
+
+.xp-climb svg,
+.xp-map svg {
+  display: block;
+  overflow: visible;
+  cursor: crosshair;
+}
+
+.xp-axis line {
+  stroke: var(--xp-line);
+  stroke-width: 1;
+}
+
+.xp-axis text,
+.xp-axis-x {
+  fill: var(--desktop-faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.xp-reference {
+  stroke: var(--xp-line-strong);
+  stroke-width: 1;
+}
+
+.xp-reference-label {
+  fill: var(--desktop-faint);
+  font-size: 10.5px;
+}
+
+.xp-climb-band {
+  fill: color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+
+.xp-climb-line {
+  fill: none;
+  stroke: var(--xp-ink);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.xp-crosshair {
+  stroke: var(--xp-line-strong);
+  stroke-width: 1;
+}
+
+.xp-dot {
+  fill: color-mix(in oklab, var(--foreground) 30%, transparent);
+  stroke: var(--xp-ring);
+  stroke-width: 2;
+  transition:
+    opacity var(--desktop-base) ease,
+    r var(--desktop-base) var(--desktop-out),
+    fill var(--desktop-base) ease;
+}
+
+.xp-dot[data-verdict="kept"] {
+  fill: var(--xp-dot);
+}
+
+.xp-dot:is([data-verdict="overfit"], [data-verdict="costly"]) {
+  fill: var(--xp-ring);
+  stroke: var(--xp-warn);
+  stroke-width: 1.5;
+}
+
+.xp-dot[data-lit] {
+  fill: var(--xp-dot);
+}
+
+.xp-dot[data-lit]:is([data-verdict="flat"], [data-verdict="regressed"]) {
+  fill: color-mix(in oklab, var(--xp-dot) 55%, transparent);
+}
+
+.xp-dot[data-dimmed] {
+  opacity: 0.18;
+}
+
+.xp-dot[data-hovered] {
+  r: 7px;
+}
+
+.xp-live-dot .xp-live-ring {
+  fill: var(--xp-ring);
+  stroke: var(--xp-dot);
+  stroke-width: 1.5;
+  stroke-dasharray: 2.4 2;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: xp-spin 6s linear infinite;
+}
+
+.xp-live-dot .xp-live-halo {
+  fill: none;
+  stroke: var(--xp-dot);
+  stroke-width: 1;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: xp-halo 2.2s var(--desktop-out) infinite;
+}
+
+.xp-live-dot[data-dimmed] {
+  opacity: 0.18;
+}
+
+@keyframes xp-halo {
+  from {
+    opacity: 0.9;
+    transform: scale(0.3);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.2);
+  }
+}
+
+.xp-end circle {
+  fill: var(--xp-good);
+}
+
+.xp-end text {
+  fill: var(--foreground);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.xp-end .xp-end-caption {
+  fill: var(--desktop-faint);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.xp-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 4px 16px 6px;
+  padding: 0;
+  list-style: none;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-caption);
+}
+
+.xp-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.xp-legend-line {
+  fill: none;
+  stroke: var(--xp-ink);
+  stroke-width: 2;
+}
+
+.xp-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 30%, transparent);
+}
+
+.xp-legend-dot[data-verdict="kept"] {
+  background: var(--xp-ink);
+}
+
+.xp-legend-dot[data-verdict="overfit"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--xp-warn);
+}
+
+.xp-legend-dot[data-verdict="running"] {
+  background: transparent;
+  border: 1.5px dashed var(--xp-ink);
+}
+
+.xp-legend-band {
+  width: 14px;
+  height: 8px;
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+/* ——— Tooltip ——— */
+
+.xp-tooltip {
+  position: absolute;
+  z-index: 3;
+  width: 264px;
+  padding: 10px 12px;
+  border-radius: var(--desktop-radius-md);
+  background: color-mix(in oklab, var(--background) 94%, transparent);
+  box-shadow:
+    inset 0 0 0 1px var(--xp-line-strong),
+    0 16px 40px -12px rgb(0 0 0 / 55%);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  backdrop-filter: blur(24px) saturate(1.4);
+  pointer-events: none;
+  animation: workspace-fade-in var(--desktop-fast) ease both;
+}
+
+.xp-tooltip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+.xp-tooltip-title {
+  margin: 6px 0 4px;
+  font-size: var(--desktop-text-body);
+  font-weight: 550;
+  line-height: 1.35;
+}
+
+.xp-tooltip-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-caption);
+}
+
+.xp-tooltip-meta .xp-sep {
+  margin: 0;
+}
+
+.xp-tooltip-scores {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--xp-line);
+}
+
+.xp-tooltip-scores dt {
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+.xp-tooltip-scores dd {
+  margin: 2px 0 0;
+  font-size: var(--desktop-text-read);
+  font-weight: 550;
+}
+
+.xp-tooltip-progress {
+  margin: 8px 0 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-caption);
+}
+
+/* ——— Path to best ——— */
+
+.xp-path {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.xp-path-end {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 6px 8px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-path-end[data-best] {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--xp-line);
+  color: var(--foreground);
+  font-weight: 550;
+}
+
+.xp-path-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.xp-path-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) 72px 44px;
+  grid-template-areas:
+    "title track gain"
+    "meta track gain";
+  align-items: center;
+  gap: 1px 12px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  transition: background var(--desktop-fast) ease;
+}
+
+.xp-path-row:hover {
+  background: var(--desktop-hover);
+}
+
+.xp-path-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  grid-area: title;
+  font-size: var(--desktop-text-body);
+}
+
+.xp-path-meta {
+  grid-area: meta;
+  padding-left: 16px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+.xp-path-track {
+  position: relative;
+  height: 8px;
+  grid-area: track;
+  border-radius: 2px;
+  background: var(--xp-line);
+}
+
+.xp-path-track > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+}
+
+.xp-path-gain {
+  grid-area: gain;
+  color: var(--xp-good);
+  font-size: var(--desktop-text-footnote);
+  text-align: right;
+}
+
+/* ——— The swarm ——— */
+
+.xp-swarm {
+  display: flex;
+  flex-direction: column;
+  margin: 0 -8px;
+  padding: 0;
+  list-style: none;
+}
+
+.xp-swarm-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-areas:
+    "avatar top"
+    "avatar bottom";
+  column-gap: 12px;
+  row-gap: 5px;
+  align-items: center;
+  padding: 9px 8px;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.xp-swarm-row:hover {
+  background: var(--desktop-hover);
+}
+
+.xp-swarm-row > .xp-avatar {
+  grid-area: avatar;
+  align-self: start;
+}
+
+.xp-swarm-top {
+  display: flex;
+  min-width: 0;
+  grid-area: top;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.xp-swarm-name {
+  flex: none;
+  font-size: var(--desktop-text-body);
+  font-weight: 550;
+}
+
+.xp-swarm-area {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+.xp-swarm-area .xp-area-mark {
+  display: inline-block;
+}
+
+.xp-swarm-time {
+  flex: none;
+  margin-left: auto;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+.xp-swarm-bottom {
+  display: flex;
+  min-width: 0;
+  grid-area: bottom;
+  align-items: center;
+  gap: 8px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-swarm-task {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--desktop-ink-2);
+}
+
+.xp-swarm-progress {
+  display: flex;
+  flex: 0 1 140px;
+  align-items: center;
+  gap: 8px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+  white-space: nowrap;
+}
+
+.xp-swarm-flag {
+  flex: none;
+  color: var(--desktop-ink-2);
+  font-weight: 500;
+}
+
+.xp-swarm-bottom[data-kind="diagnosing"] .xp-swarm-flag {
+  color: var(--xp-warn);
+}
+
+.xp-swarm-bottom[data-kind="resting"] .xp-swarm-flag {
+  color: var(--desktop-faint);
+}
+
+@container xp-surface (width < 420px) {
+  .xp-swarm-progress {
+    flex-basis: 90px;
+  }
+}
+
+/* ——— Notes ——— */
+
+.xp-notes {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.xp-notes li {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.xp-notes li + li {
+  border-top: 1px solid var(--xp-line);
+}
+
+.xp-notes p {
+  margin: 1px 0 0;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-body);
+  line-height: 1.45;
+}
+
+.xp-note-mark {
+  margin: 4px 0 0 4px;
+  fill: none;
+  stroke: var(--desktop-faint);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.xp-note-mark[data-tone="good"] {
+  stroke: var(--xp-good);
+}
+
+.xp-note-mark[data-tone="warning"] {
+  stroke: var(--xp-warn);
+}
+
+.xp-note-side {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+  white-space: nowrap;
+}
+
+/* ——— Areas ——— */
+
+.xp-map-lane rect {
+  fill: transparent;
+}
+
+.xp-map-lane rect[data-odd] {
+  fill: color-mix(in oklab, var(--foreground) 2%, transparent);
+}
+
+.xp-map-lane text {
+  fill: var(--desktop-ink-2);
+  font-size: 12px;
+}
+
+.xp-map-thread {
+  fill: none;
+  stroke: color-mix(in oklab, var(--foreground) 45%, transparent);
+  stroke-width: 1.5;
+}
+
+.xp-map-origin {
+  fill: var(--xp-ring);
+  stroke: var(--desktop-muted);
+  stroke-width: 1.5;
+}
+
+.xp-map-dot {
+  fill: color-mix(in oklab, var(--xp-dot) 50%, transparent);
+  stroke: var(--xp-ring);
+  stroke-width: 2;
+  transition: r var(--desktop-base) var(--desktop-out);
+}
+
+.xp-map-dot[data-verdict="kept"] {
+  fill: var(--xp-dot);
+  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--xp-dot) 60%, transparent));
+}
+
+.xp-map-dot:is([data-verdict="overfit"], [data-verdict="costly"]) {
+  fill: var(--xp-ring);
+  stroke: var(--xp-warn);
+  stroke-width: 1.5;
+}
+
+.xp-map-dot[data-hovered] {
+  r: 8px;
+}
+
+.xp-hit {
+  fill: transparent;
+  cursor: pointer;
+}
+
+.xp-area-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.xp-area-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background:
+    radial-gradient(
+      120% 80% at 0% 0%,
+      color-mix(in oklab, var(--xp-area) 9%, transparent),
+      transparent 60%
+    ),
+    var(--xp-raise);
+}
+
+.xp-area-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.xp-area-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--desktop-text-read);
+  font-weight: 560;
+}
+
+.xp-area-hypothesis {
+  min-height: 2.8em;
+  margin: -4px 0 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.4;
+}
+
+.xp-area-stats {
+  display: flex;
+  gap: 24px;
+}
+
+.xp-area-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.xp-area-gain,
+.xp-area-count {
+  font-size: 22px;
+  font-weight: 560;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.xp-area-gain {
+  color: var(--xp-good);
+}
+
+.xp-area-gain[data-empty] {
+  color: var(--desktop-faint);
+}
+
+.xp-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.xp-strip-mark {
+  width: 8px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--foreground) 14%, transparent);
+  transition: transform var(--desktop-fast) var(--desktop-out);
+}
+
+.xp-strip-mark:hover {
+  transform: scaleY(1.2);
+}
+
+.xp-strip-mark[data-verdict="kept"] {
+  background: var(--xp-area);
+}
+
+.xp-strip-mark[data-verdict="regressed"] {
+  height: 10px;
+  margin-top: 8px;
+}
+
+.xp-strip-mark:is([data-verdict="overfit"], [data-verdict="costly"]) {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--xp-warn);
+}
+
+.xp-strip-mark[data-verdict="running"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--xp-area);
+  animation: xp-breathe 1.6s ease-in-out infinite;
+}
+
+.xp-strip-mark[data-verdict="queued"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--xp-line-strong);
+}
+
+@keyframes xp-breathe {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.xp-area-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--xp-line);
+}
+
+.xp-area-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.xp-area-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-area-latest {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+  text-align: left;
+}
+
+.xp-area-latest:hover {
+  color: var(--foreground);
+}
+
+/* ——— Runs ——— */
+
+/*
+ * The runs view holds still in the surface's height: the filters above, and
+ * the table below them capped to what is left, so only its rows scroll and
+ * its column names stay pinned (the design system's `Table` and sticky
+ * `TableHeader`). A short list leaves the card at its own height.
+ */
+.xp-scroll:has(> .xp-view > .xp-runs) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.xp-view:has(> .xp-runs) {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  padding-bottom: 16px;
+}
+
+.xp-runs {
+  min-height: 0;
+  flex: 1;
+  --xp-head-fill: color-mix(in oklab, var(--background) 95%, var(--foreground));
+}
+
+.xp-toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.xp-table-card {
+  display: flex;
+  min-height: 0;
+  flex: 0 1 auto;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.xp-table-scroll {
+  overscroll-behavior: contain;
+}
+
+.xp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-table th {
+  height: 34px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--xp-line);
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.xp-table td {
+  height: 48px;
+  padding: 0 10px;
+  vertical-align: middle;
+}
+
+.xp-table tr {
+  border-color: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+.xp-table :is(th, td):first-child {
+  padding-left: 16px;
+}
+
+.xp-table :is(th, td):last-child {
+  padding-right: 16px;
+}
+
+.xp-table tbody tr {
+  cursor: pointer;
+  transition: background var(--desktop-fast) ease;
+}
+
+.xp-table tbody tr:hover {
+  background: var(--desktop-hover);
+}
+
+.xp-table tbody tr[data-state="selected"] {
+  background: var(--desktop-selected);
+}
+
+/* A run that changed nothing reads a step quieter than one that did. */
+.xp-table
+  tbody
+  tr:is([data-verdict="flat"], [data-verdict="regressed"])
+  .xp-change-title {
+  color: var(--desktop-ink-2);
+}
+
+.xp-num {
+  text-align: right !important;
+  white-space: nowrap;
+}
+
+.xp-table td.xp-num .xp-meter {
+  width: 52px;
+  vertical-align: middle;
+}
+
+/*
+ * The change column takes what the others leave, and no more. Each of its
+ * lines is a block that truncates, so it can be as narrow as the table needs
+ * (cells do not wrap); marks sit inline at the start of a line.
+ */
+.xp-change {
+  width: 100%;
+  max-width: 0;
+}
+
+.xp-change-title,
+.xp-change-area {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.xp-change-title {
+  font-size: var(--desktop-text-body);
+}
+
+.xp-change-area {
+  margin-top: 2px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+.xp-change-area .xp-area-mark {
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+/* The inline mark shows only where the area's own line has given way. */
+.xp-change-mark .xp-area-mark {
+  display: inline-block;
+}
+
+.xp-change-mark {
+  display: none;
+  margin-right: 7px;
+  vertical-align: -1px;
+}
+
+.xp-agent-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--desktop-ink-2);
+  white-space: nowrap;
+}
+
+.xp-empty {
+  margin: 0;
+  padding: 24px;
+  color: var(--desktop-faint);
+  text-align: center;
+}
+
+/*
+ * The runs table gives way as its pane narrows: first the columns that
+ * describe a run (agent, train, cost, when); then the area's own line, its
+ * mark moving before the title; then the run's number and the verdict's word,
+ * which its mark and tooltip still carry.
+ */
+@container xp-surface (width < 640px) {
+  .xp-hide-narrow {
+    display: none;
+  }
+
+  .xp-change-area {
+    display: none;
+  }
+
+  .xp-change-mark {
+    display: inline-block;
+  }
+
+  .xp-table td {
+    height: 44px;
+  }
+}
+
+@container xp-surface (width < 460px) {
+  .xp-hide-tiny {
+    display: none;
+  }
+
+  .xp-table .xp-verdict-word {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .xp-table :is(th, td) {
+    padding: 0 8px;
+  }
+}
+
+/* ——— Run detail ——— */
+
+.xp-main {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.xp-main[data-covered] {
+  visibility: hidden;
+}
+
+/* An open run fills the experiment, over the view it came from. */
+.xp-detail {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  animation: xp-detail-in 220ms var(--desktop-out) both;
+}
+
+@keyframes xp-detail-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.xp-detail-head {
+  display: flex;
+  align-items: center;
+  padding: 12px 20px 10px 14px;
+  border-bottom: 1px solid var(--xp-line);
+}
+
+.xp-crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-crumbs li {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.xp-crumbs li + li::before {
+  margin: 0 4px;
+  color: var(--desktop-fainter);
+  content: "›";
+}
+
+.xp-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: transparent;
+  color: var(--desktop-muted);
+  font: inherit;
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease;
+}
+
+.xp-crumb:hover {
+  background: var(--desktop-hover);
+  color: var(--foreground);
+}
+
+.xp-crumb:focus-visible {
+  outline: 2px solid var(--desktop-focus-ring);
+  outline-offset: 1px;
+}
+
+.xp-crumb-here {
+  margin: 0 10px 0 6px;
+  color: var(--foreground);
+  font-weight: 550;
+}
+
+.xp-detail-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px max(20px, calc((100% - 720px) / 2)) 28px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  /* What scrolls up fades out under the header rather than sliding beneath it. */
+  mask-image: linear-gradient(to bottom, transparent, black 10px);
+}
+
+.xp-detail-title {
+  margin: 0;
+  font-size: var(--desktop-text-title);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+  text-wrap: pretty;
+}
+
+.xp-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 6px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-detail-meta .xp-sep {
+  margin: 0 2px;
+}
+
+/* The agent that made the run, which opens it: the line's own words until pointed at. */
+.xp-detail-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: -3px -6px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease;
+}
+
+.xp-detail-agent:hover {
+  background: var(--desktop-hover);
+  color: var(--foreground);
+}
+
+.xp-detail-agent:focus-visible {
+  outline: 2px solid var(--desktop-focus-ring);
+  outline-offset: 1px;
+}
+
+.xp-detail-block {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--desktop-radius-md);
+  background: var(--xp-raise);
+  box-shadow: inset 0 0 0 1px var(--xp-line);
+}
+
+.xp-detail-block h4 {
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  font-weight: 500;
+}
+
+/* The outcome leads, tinted by what happened. */
+.xp-detail-block[data-verdict="kept"] {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--xp-good) 9%, transparent),
+      transparent 70%
+    ),
+    var(--xp-raise);
+}
+
+.xp-detail-block:is([data-verdict="overfit"], [data-verdict="costly"]) {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--xp-warn) 8%, transparent),
+      transparent 70%
+    ),
+    var(--xp-raise);
+}
+
+.xp-detail-block[data-verdict="regressed"] {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--xp-bad) 8%, transparent),
+      transparent 70%
+    ),
+    var(--xp-raise);
+}
+
+.xp-detail-reason {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--desktop-text-body);
+  line-height: 1.5;
+}
+
+.xp-detail-note {
+  margin: 0;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.45;
+}
+
+.xp-detail-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--desktop-text-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+.xp-detail-progress strong {
+  font-size: var(--desktop-text-title);
+  font-weight: 600;
+}
+
+.xp-detail-block .xp-meter {
+  height: 4px;
+}
+
+.xp-dumbbells {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.xp-dumbbell {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.xp-dumbbell-track {
+  position: relative;
+  height: 20px;
+}
+
+.xp-dumbbell-track::before {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--xp-line);
+  content: "";
+}
+
+.xp-dumbbell-noise,
+.xp-dumbbell-ci,
+.xp-dumbbell-link {
+  position: absolute;
+  top: 50%;
+}
+
+.xp-dumbbell-noise {
+  height: 14px;
+  margin-top: -7px;
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+
+.xp-dumbbell-ci {
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.xp-dumbbell-link {
+  height: 2px;
+  margin-top: -1px;
+  background: var(--desktop-muted);
+}
+
+[data-tone="up"] > .xp-dumbbell-link {
+  background: var(--xp-good);
+}
+
+[data-tone="down"] > .xp-dumbbell-link {
+  background: var(--xp-bad);
+}
+
+.xp-dumbbell-before,
+.xp-dumbbell-after {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 999px;
+}
+
+.xp-dumbbell-before {
+  background: var(--xp-ring);
+  box-shadow: inset 0 0 0 1.5px var(--desktop-muted);
+}
+
+.xp-dumbbell-after {
+  background: var(--xp-ink);
+  box-shadow: 0 0 0 2px var(--xp-ring);
+}
+
+.xp-dumbbell-values {
+  font-size: var(--desktop-text-footnote);
+  white-space: nowrap;
+}
+
+.xp-cases {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.xp-case-grid {
+  display: grid;
+  grid-template-columns: repeat(20, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.xp-case {
+  aspect-ratio: 1;
+  min-width: 8px;
+  border-radius: 2.5px;
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+
+.xp-case[data-move="passing"] {
+  background: color-mix(in oklab, var(--foreground) 30%, transparent);
+}
+
+.xp-case[data-move="fixed"] {
+  background: var(--xp-good);
+}
+
+.xp-case[data-move="broke"] {
+  background: var(--xp-bad);
+}
+
+.xp-case-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-caption);
+}
+
+.xp-case-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.xp-case-legend .xp-case {
+  width: 10px;
+}
+
+.xp-case-legend .xp-mono {
+  color: var(--foreground);
+}
+
+.xp-lineage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.xp-lineage::before {
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 3px;
+  width: 1px;
+  background: var(--xp-line-strong);
+  content: "";
+}
+
+.xp-lineage-step {
+  position: relative;
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 5px 0 5px 18px;
+  border: 0;
+  background: none;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  text-align: left;
+}
+
+.xp-lineage-step::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  margin-top: -3.5px;
+  border-radius: 999px;
+  background: var(--xp-ring);
+  box-shadow: inset 0 0 0 1.25px var(--desktop-faint);
+  content: "";
+}
+
+.xp-lineage-step:hover {
+  color: var(--foreground);
+}
+
+.xp-lineage-step[aria-current] {
+  color: var(--foreground);
+  font-weight: 550;
+}
+
+.xp-lineage-step[aria-current]::before {
+  background: var(--xp-ink);
+  box-shadow: none;
+}
+
+.xp-lineage-fold {
+  position: relative;
+  width: 100%;
+  padding: 5px 0 5px 18px;
+  border: 0;
+  background: none;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+  text-align: left;
+}
+
+.xp-lineage-fold::before {
+  position: absolute;
+  top: 50%;
+  left: 1.5px;
+  width: 4px;
+  height: 4px;
+  margin-top: -2px;
+  border-radius: 999px;
+  background: var(--desktop-fainter);
+  box-shadow:
+    0 -5px 0 var(--desktop-fainter),
+    0 5px 0 var(--desktop-fainter);
+  content: "";
+}
+
+.xp-lineage-fold:hover {
+  color: var(--foreground);
+}
+
+.xp-lineage-score {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ——— Motion preferences ——— */
+
+:root[data-motion="reduced"] :is(.xp-surface, .xp-inline) *,
+:root[data-motion="reduced"] :is(.xp-surface, .xp-inline) {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.xp-surface, .xp-inline) *,
+  :is(.xp-surface, .xp-inline) {
+    animation: none !important;
+  }
+}
+
+.xp-live[data-idle] {
+  color: var(--desktop-faint);
+}
+
+/*
+ * In a pane of its own the surface is the pane's body: the pane already
+ * draws the glass, rim and shadow, so the surface adds none of its own.
+ */
+.xp-surface[data-placement="pane"] {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  animation: none;
+}
+
+.xp-suite {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What the swarm is doing, under the goal: it wraps with the title, never beside it. */
+.xp-swarm-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 8px;
+}
+
+/* The surface names its own width, so its header and tabs can give way in a narrow pane. */
+.xp-surface {
+  container: xp-frame / inline-size;
+}
+
+@container xp-frame (width < 560px) {
+  .xp-suite {
+    display: none;
+  }
+}
+
+.xp-inline {
+  container: xp-card / inline-size;
+}
+
+/* A narrow card puts the climb under the number rather than squeezing it beside. */
+@container xp-card (width < 420px) {
+  .xp-inline-figure {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+}
+
+/*
+ * The header, top to bottom: the title, balanced over its lines; the goal,
+ * two lines at most; what the swarm is doing. One left edge for all three
+ * and the tabs below, the same as the cards'.
+ */
+.xp-surface[data-placement="pane"] .xp-surface-head {
+  padding: 10px 20px 16px;
+}
+
+.xp-surface-title h2 {
+  font-size: 20px;
+  letter-spacing: -0.022em;
+  line-height: 1.25;
+  text-wrap: pretty;
+}
+
+.xp-surface-title .xp-goal {
+  display: -webkit-box;
+  margin-top: 6px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--desktop-muted);
+}
+
+.xp-swarm-line {
+  margin-top: 12px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-tabs {
+  gap: 16px;
+}
+
+/*
+ * Every scroller in an experiment wears the window's scrollbar (the
+ * composer's, `styles.css`): thin, no track, a translucent thumb that
+ * brightens under the pointer.
+ */
+:is(.xp-scroll, .xp-detail-body, .xp-table-scroll) {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 20%, transparent) transparent;
+}
+
+:is(.xp-scroll, .xp-detail-body, .xp-table-scroll)::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+:is(.xp-scroll, .xp-detail-body, .xp-table-scroll)::-webkit-scrollbar-track,
+:is(.xp-scroll, .xp-detail-body, .xp-table-scroll)::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:is(.xp-scroll, .xp-detail-body, .xp-table-scroll)::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 20%, transparent) padding-box;
+}
+
+:is(.xp-scroll, .xp-detail-body, .xp-table-scroll)::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--foreground) 35%, transparent);
+}
+
+/* ——— Test cases, at any size ——— */
+
+.xp-cases-head {
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-cases-head strong {
+  color: var(--foreground);
+  font-size: var(--desktop-text-title);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* One bar for the four outcomes; moved cases keep a visible sliver however large the suite. */
+.xp-case-bar {
+  display: flex;
+  height: 10px;
+  gap: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+}
+
+.xp-case-bar > span {
+  min-width: 3px;
+  flex-basis: 0;
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+
+.xp-case-bar > [data-move="passing"] {
+  background: color-mix(in oklab, var(--foreground) 30%, transparent);
+}
+
+.xp-case-bar > [data-move="fixed"] {
+  background: var(--xp-good);
+}
+
+.xp-case-bar > [data-move="broke"] {
+  background: var(--xp-bad);
+}
+
+.xp-cases h5 {
+  margin: 0 0 6px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-caption);
+  font-weight: 500;
+}
+
+.xp-slices,
+.xp-moved {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--xp-line);
+}
+
+.xp-slices ul {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.xp-slices li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto 48px;
+  align-items: baseline;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: var(--desktop-text-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+.xp-slices .xp-delta {
+  text-align: right;
+}
+
+.xp-slice-rate {
+  color: var(--desktop-ink-2);
+}
+
+.xp-moved-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.xp-moved-head h5 {
+  margin: 0;
+}
+
+.xp-moved-list {
+  width: 100%;
+  margin: 0 -6px;
+  width: calc(100% + 12px);
+}
+
+.xp-moved-row {
+  display: grid;
+  height: 100%;
+  grid-template-columns: 12px 64px minmax(0, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: 10px;
+  padding: 0 6px;
+  border-radius: var(--desktop-radius-sm);
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-moved-row:hover {
+  background: var(--desktop-hover);
+  color: var(--foreground);
+}
+
+.xp-moved-row[data-move="fixed"] .xp-verdict-mark {
+  color: var(--xp-good);
+}
+
+.xp-moved-row[data-move="broke"] .xp-verdict-mark {
+  color: var(--xp-bad);
+}
+
+.xp-moved-id {
+  color: var(--desktop-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.xp-moved-slice {
+  max-width: 120px;
+  color: var(--desktop-faint);
+  text-align: right;
+}
+
+@container xp-frame (width < 420px) {
+  .xp-moved-row {
+    grid-template-columns: 12px 64px minmax(0, 1fr);
+  }
+
+  .xp-moved-slice {
+    display: none;
+  }
+}
+
+/* ——— The change, at any size ——— */
+
+.xp-change-view {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.xp-change-view > * {
+  max-width: 100%;
+}
+
+.xp-change-totals {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: var(--desktop-ink-2);
+  font-size: var(--desktop-text-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+.xp-add {
+  color: var(--xp-good);
+}
+
+.xp-remove {
+  color: var(--xp-bad);
+}
+
+.xp-churn {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.xp-churn > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--xp-bad) 80%, transparent);
+}
+
+.xp-churn > [data-kind="add"] {
+  background: var(--xp-good);
+}
+
+.xp-files {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  margin: 0 -6px;
+  width: calc(100% + 12px);
+  padding: 0;
+  list-style: none;
+}
+
+.xp-file {
+  display: grid;
+  width: 100%;
+  min-height: 32px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "status path lines"
+    ". note note";
+  align-items: center;
+  column-gap: 8px;
+  padding: 6px;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--desktop-text-footnote);
+  text-align: left;
+}
+
+.xp-file:hover {
+  background: var(--desktop-hover);
+}
+
+.xp-file-status {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  grid-area: status;
+  place-items: center;
+  border-radius: 4px;
+  background: var(--xp-raise-2);
+  color: var(--desktop-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.xp-file-status[data-status="added"] {
+  color: var(--xp-good);
+}
+
+.xp-file-status[data-status="deleted"] {
+  color: var(--xp-bad);
+}
+
+/* The name reads first; its folder follows quietly and is what gives way. */
+.xp-file-path {
+  display: flex;
+  min-width: 0;
+  grid-area: path;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.xp-file-name {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--desktop-ink-2);
+  text-overflow: ellipsis;
+}
+
+.xp-file-folder {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+  text-overflow: ellipsis;
+}
+
+.xp-file-lines {
+  display: inline-flex;
+  grid-area: lines;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.xp-file-note {
+  min-width: 0;
+  grid-area: note;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The way out to the editor shows where the pointer is. */
+.xp-file-open {
+  display: inline-grid;
+  width: 12px;
+  place-items: center;
+  color: var(--desktop-faint);
+  opacity: 0;
+  transition: opacity var(--desktop-fast) ease;
+}
+
+.xp-file:is(:hover, :focus-visible) .xp-file-open {
+  opacity: 1;
+}
+
+.xp-all-files {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.xp-all-files-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.xp-file-search {
+  min-width: 0;
+  height: 28px;
+  flex: 1;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  outline: none;
+  background: var(--xp-raise-2);
+  box-shadow: inset 0 0 0 1px var(--xp-line);
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--desktop-text-footnote);
+}
+
+.xp-file-search:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--desktop-focus-ring);
+}
+
+.xp-files-list {
+  margin: 0 -6px;
+  width: calc(100% + 12px);
+}
+
+.xp-files-folder {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 6px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-caption);
+  font-weight: 500;
+}
+
+:is(.xp-moved-list, .xp-files-list) {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 20%, transparent) transparent;
+  outline: none;
+}
+
+/* ——— The change, told without its lines ——— */
+
+.xp-change-summary {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--desktop-text-body);
+  line-height: 1.5;
+}
+
+.xp-change-why {
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.45;
+}
+
+.xp-change-totals {
+  flex-wrap: wrap;
+}
+
+.xp-folders {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--xp-line);
+}
+
+.xp-folders h5 {
+  margin: 0 0 4px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-caption);
+  font-weight: 500;
+}
+
+.xp-folders ul {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.xp-folders li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 72px;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: var(--desktop-text-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+.xp-folder-path {
+  color: var(--desktop-ink-2);
+}
+
+.xp-folder-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--xp-line);
+}
+
+.xp-folder-bar > span {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+  background: color-mix(in oklab, var(--xp-bad) 75%, transparent);
+}
+
+.xp-folder-bar-add {
+  height: 100%;
+  background: var(--xp-good);
+}
+
+/* Under a folder's heading, a file sits indented, its row the list's fixed height. */
+.xp-files-list .xp-file {
+  height: 100%;
+  min-height: 0;
+  padding: 0 6px 0 18px;
+}
+
+.xp-change-view > .xp-change-totals {
+  width: 100%;
+}
+
+.xp-gains-rest {
+  color: var(--desktop-faint);
+}
+
+/*
+ * The card's foot in a narrow conversation: the run closest to done takes a
+ * line of its own, whole, and the way into the experiment sits under it.
+ */
+@container xp-card (width < 460px) {
+  .xp-inline-foot {
+    flex-wrap: wrap;
+  }
+
+  .xp-inline-lead {
+    flex-basis: 100%;
+  }
+
+  .xp-open {
+    margin-left: auto;
+  }
+}
+
+.xp-inline-lead-text .xp-meter {
+  max-width: 220px;
+}

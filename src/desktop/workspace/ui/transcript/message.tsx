@@ -6,6 +6,7 @@ import { RichText } from "./rich-text"
 import { ToolSteps } from "./tool-steps"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import { failureCopy } from "../failure-copy"
+import { InlineWidget } from "../../../widgets"
 
 /**
  * One message. The person's is a bubble, saying so when it has not reached
@@ -69,6 +70,7 @@ export const Message = memo(function Message({
                 <code>{group.code}</code>
               </pre>
             )
+          if (group.kind === "widget") return <InlineWidget key={index} widget={group} />
           if (group.kind === "list")
             return (
               <ul key={index} className="workspace-list-items">

@@ -22,6 +22,8 @@ export type Part =
     }
   | { readonly kind: "code"; readonly code: string }
   | { readonly kind: "list"; readonly items: readonly string[] }
+  /** Something the conversation carries besides words, drawn by the plugin it names. */
+  | { readonly kind: "widget"; readonly plugin: string; readonly id: string }
 
 export type StepPart = Extract<Part, { kind: "step" }>
 

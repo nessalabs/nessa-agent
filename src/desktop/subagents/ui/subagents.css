@@ -1,0 +1,333 @@
+/*
+ * A conversation's subagents: the panel, and the stack in a conversation's
+ * header. Colours are the window's — its series for tags, its status inks
+ * for states — so a subagent reads the same here as in an experiment.
+ */
+
+.sa-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 20px 24px;
+  color: var(--foreground);
+  font-size: var(--desktop-text-body);
+  font-variant-numeric: tabular-nums;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 20%, transparent) transparent;
+  container: sa-panel / inline-size;
+}
+
+.sa-empty {
+  margin: 24px 0;
+  color: var(--desktop-faint);
+}
+
+.sa-head h2,
+.sa-detail-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.022em;
+}
+
+.sa-summary {
+  margin: 6px 0 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+/* ——— The list ——— */
+
+.sa-list {
+  display: flex;
+  flex-direction: column;
+  margin: 14px -8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Two lines at any width: who, then what. Nothing sits beside the name to squeeze it. */
+.sa-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-areas:
+    "avatar top"
+    "avatar bottom";
+  column-gap: 12px;
+  row-gap: 4px;
+  align-items: center;
+  padding: 10px 8px;
+  border: 0;
+  border-radius: var(--desktop-radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: background var(--desktop-fast) ease;
+}
+
+.sa-row:hover {
+  background: var(--desktop-hover);
+}
+
+.sa-row:focus-visible {
+  outline: 2px solid var(--desktop-focus-ring);
+  outline-offset: 1px;
+}
+
+.sa-row > .sa-row-avatar {
+  grid-area: avatar;
+  align-self: start;
+}
+
+.sa-row-top {
+  display: flex;
+  min-width: 0;
+  grid-area: top;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.sa-name {
+  flex: none;
+  font-weight: 550;
+}
+
+.sa-time {
+  flex: none;
+  margin-left: auto;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+.sa-row-bottom {
+  display: flex;
+  min-width: 0;
+  grid-area: bottom;
+  align-items: center;
+  gap: 8px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.sa-headline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-avatar {
+  flex: none;
+  border-radius: 999px;
+}
+
+/* A tag: its mark in its hue, its name in ink. */
+.sa-tag {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+.sa-tag svg {
+  flex: none;
+  fill: none;
+  stroke: var(--sa-hue);
+  stroke-width: 1.45;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sa-tag-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sa-state {
+  flex: none;
+  color: var(--desktop-ink-2);
+  font-weight: 500;
+}
+
+.sa-state[data-state="working"] {
+  color: var(--desktop-good);
+}
+
+.sa-state[data-state="stuck"] {
+  color: var(--desktop-warn);
+}
+
+.sa-state[data-state="resting"] {
+  color: var(--desktop-faint);
+}
+
+.sa-progress {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+}
+
+.sa-meter {
+  position: relative;
+  height: 3px;
+  flex: 1;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.sa-meter > span {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: color-mix(in oklab, var(--foreground) 90%, transparent);
+  transform-origin: left;
+  transition: transform 420ms var(--desktop-out);
+}
+
+.sa-progress-count {
+  flex: none;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+/* ——— One subagent ——— */
+
+.sa-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: workspace-fade-in var(--desktop-base) ease both;
+}
+
+.sa-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 4px;
+}
+
+/* ——— In a conversation's header ——— */
+
+.sa-stack {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px 0 5px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--desktop-muted);
+  font: inherit;
+  font-size: var(--desktop-text-caption);
+  transition: background var(--desktop-fast) ease;
+}
+
+.sa-stack:hover {
+  background: var(--desktop-hover);
+  color: var(--foreground);
+}
+
+.sa-stack-faces {
+  display: inline-flex;
+}
+
+.sa-stack-faces > * + * {
+  margin-left: -6px;
+}
+
+.sa-stack-faces > * {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--background) 88%, var(--foreground));
+}
+
+:root[data-motion="reduced"] .sa-panel *,
+:root[data-motion="reduced"] .sa-stack * {
+  animation: none !important;
+}
+
+/* A working row: what it is on, then how far — the bar gives way before the words. */
+.sa-work {
+  flex: 1 1 auto;
+  color: var(--desktop-ink-2);
+}
+
+.sa-progress[data-compact] {
+  flex: 0 1 132px;
+}
+
+.workspace-pane-header .sa-stack {
+  margin-right: 2px;
+}
+
+/* ——— One subagent, as a chat ——— */
+
+/* The panel scrolls its list; a subagent's chat scrolls its own transcript under a fixed header and composer. */
+.sa-panel:has(> .sa-chat) {
+  overflow: hidden;
+  padding: 0;
+}
+
+.sa-chat {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  container: workspace-docked / inline-size;
+}
+
+.sa-chat-head {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 20px 14px;
+  border-bottom: 1px solid color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+
+.sa-chat-scroll {
+  min-height: 0;
+  flex: 1;
+}
+
+/* Its composer is a conversation's docked composer (`workspace-dock`), sized the same. */
+.sa-chat-dock {
+  padding-top: 8px;
+}
+
+.sa-row-avatar {
+  display: inline-flex;
+}
+
+/* What it says about itself: a line of character, quieter than what it is doing. */
+.sa-character {
+  margin: 2px 0 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  font-style: italic;
+}
+
+/* A name, and its tag beside it: the tag's mark in its hue, its word quiet. */
+.sa-name-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.sa-name-line .sa-tag {
+  font-size: var(--desktop-text-footnote);
+}

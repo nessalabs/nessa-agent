@@ -7,7 +7,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "../../../ui/menu"
-import { closePane } from "../../adapters/store/commands"
+import { closePane, openBeside } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectSession } from "../../adapters/store/selectors"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
@@ -17,6 +17,8 @@ import { StatusGlyph } from "../chrome/status-glyph"
 import { useWorkspaceFrame } from "../workspace-frame"
 import { PaneMenuItems } from "./pane-menu"
 import { tooltip } from "../../../ui/tooltip"
+import { SubagentStack } from "../../../subagents"
+import { widgetItem } from "../../model/pane-item"
 
 /**
  * A pane's title bar: the session's mark, title and state, then its "…" menu
@@ -73,6 +75,19 @@ export const PaneHeader = memo(function PaneHeader({
             className="workspace-spacer"
             data-tauri-drag-region={multi ? undefined : true}
           />
+          {session ? (
+            <SubagentStack
+              sessionId={session.id}
+              onOpen={() =>
+                void dispatch(
+                  openBeside({
+                    sessionId: widgetItem({ plugin: "subagents", id: session.id }),
+                    target: pane,
+                  }),
+                )
+              }
+            />
+          ) : null}
           <div className="workspace-pane-actions">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

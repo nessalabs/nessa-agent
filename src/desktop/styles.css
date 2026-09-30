@@ -159,6 +159,36 @@ body {
   --desktop-run: var(--desktop-light-edge);
 }
 
+/*
+ * The window's categorical series: five hues that tell apart the groups of
+ * one thing — an experiment's areas, a chat's subagents by area — validated
+ * together for colour-blind separation on each ground. On the root rather
+ * than a surface, so menus that portal out of every surface have them too.
+ * A series colour marks; text beside it keeps the ink.
+ */
+:root {
+  --desktop-series-1: #3987e5;
+  --desktop-series-2: #d95926;
+  --desktop-series-3: #199e70;
+  --desktop-series-4: #c98500;
+  --desktop-series-5: #d55181;
+  /* Status: what went well, badly, or wants a look. Always with a mark and a word. */
+  --desktop-good: oklch(0.8 0.13 160);
+  --desktop-bad: oklch(0.72 0.15 25);
+  --desktop-warn: oklch(0.82 0.13 78);
+}
+
+html:not(.dark) {
+  --desktop-series-1: #2a78d6;
+  --desktop-series-2: #eb6834;
+  --desktop-series-3: #1baf7a;
+  --desktop-series-4: #eda100;
+  --desktop-series-5: #e87ba4;
+  --desktop-good: oklch(0.55 0.13 160);
+  --desktop-bad: oklch(0.55 0.17 25);
+  --desktop-warn: oklch(0.62 0.14 70);
+}
+
 /* The lights were drawn for the dark window; in light they need ink in them. */
 html:not(.dark) [data-surface] {
   --desktop-rim: color-mix(in oklab, var(--foreground) 9%, transparent);

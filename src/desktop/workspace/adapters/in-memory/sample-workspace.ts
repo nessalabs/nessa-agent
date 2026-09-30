@@ -11,11 +11,12 @@ import type {
   SessionSummary,
 } from "../../model/workspace-index"
 import type { Activity, Message, Transcript } from "../../model/transcript"
+import { experimentSamples } from "./sample-experiments"
 import { labsSamples } from "./sample-labs"
 import { starredSamples } from "./sample-starred"
 
 const minute = 60_000
-const samples = [...starredSamples, ...labsSamples]
+const samples = [...experimentSamples, ...starredSamples, ...labsSamples]
 
 const sections: Section[] = [
   { id: "starred", name: "Starred" },
@@ -31,6 +32,7 @@ const channel = (
 ): Channel => ({ id, name: id, sectionId, topic, private: isPrivate })
 
 const channels: Channel[] = [
+  channel("checkout-agent", "starred", "The checkout support agent and its evals"),
   channel("desktop-app", "starred", "The Tauri desktop window: shell, home, composer"),
   channel("release", "starred", "Cutting, signing and shipping builds", true),
   channel("gateway", "labs", "nessa-gateway and the ACP harness"),

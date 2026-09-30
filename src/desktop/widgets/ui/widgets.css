@@ -1,0 +1,118 @@
+/*
+ * A widget opened in a pane. In a wide pane it sits beside the conversation,
+ * which narrows to a readable column; in a narrow pane, or asked to, it takes
+ * the whole pane, and the conversation stays mounted underneath so its scroll
+ * and draft are where they were.
+ */
+.widget-inline {
+  margin: 4px 0;
+}
+
+.widget-unknown {
+  margin: 0;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+}
+
+.workspace-pane-body[data-widget-open] {
+  flex-direction: row;
+}
+
+.workspace-pane-body[data-widget-open] > .workspace-conversation {
+  flex: 0 0 clamp(340px, 38%, 480px);
+  min-width: 0;
+  transition: flex-basis var(--desktop-slow) var(--desktop-out);
+}
+
+.widget-beside {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 8px 8px 0;
+}
+
+.widget-beside > * {
+  flex: 1;
+}
+
+.widget-beside[data-wide] {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  padding: 0 8px 8px;
+}
+
+.workspace-pane-body[data-widget-wide] > .workspace-conversation {
+  visibility: hidden;
+}
+
+@container workspace-pane (width < 900px) {
+  .widget-beside {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    padding: 0 8px 8px;
+  }
+
+  .workspace-pane-body[data-widget-open] > .workspace-conversation {
+    visibility: hidden;
+  }
+}
+
+/* A widget in a pane of its own fills the pane's body, as a conversation does. */
+.widget-in-pane {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.widget-in-pane > * {
+  flex: 1;
+}
+
+.workspace-pane-kind {
+  flex: none;
+  color: var(--desktop-faint);
+}
+
+/* A widget pane's way back to its conversation: the chat's mark and name, quiet until pointed at. */
+.workspace-widget-origin {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  margin-left: -4px;
+  padding: 0 6px 0 4px;
+  border: 0;
+  border-radius: var(--desktop-radius-sm);
+  background: transparent;
+  color: var(--desktop-muted);
+  font: inherit;
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease;
+}
+
+.workspace-widget-origin:hover {
+  background: var(--desktop-hover);
+  color: var(--foreground);
+}
+
+.workspace-widget-crumb {
+  flex: none;
+  color: var(--desktop-fainter);
+}
+
+[data-widget-pane] .workspace-pane-kind {
+  color: var(--foreground);
+  font-weight: 550;
+}
+
+/* Where the breadcrumb leads back out of a widget: its kind, as quiet as the chat before it. */
+.workspace-widget-up {
+  flex: none;
+  max-width: none;
+}

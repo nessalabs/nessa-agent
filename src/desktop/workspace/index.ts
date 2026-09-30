@@ -55,6 +55,7 @@ export { rememberedFilter } from "./adapters/storage/remembered-filter"
 export * from "./adapters/store/commands"
 export { useWorkspaceDispatch, useWorkspaceSelector } from "./adapters/store/hooks"
 export { selectSessionListChosen } from "./adapters/store/selectors"
+export { ReadOnlyTranscript } from "./ui/transcript/read-only-transcript"
 export { WorkspaceSourceError } from "./application/ports"
 export type {
   OutgoingMessage,
@@ -64,3 +65,4 @@ export type {
   WorkspaceUpdate,
 } from "./application/ports"
 export type { WorkspaceFailureReason } from "./model/failure"
+export type { Activity, Message, Part } from "./model/transcript"

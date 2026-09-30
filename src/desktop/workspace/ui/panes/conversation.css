@@ -159,8 +159,13 @@
     border-radius: var(--desktop-radius-xl);
   }
 
+  /*
+   * A reply starts as one line and grows as it is written: an empty field two
+   * lines tall took room from the conversation in every pane, and most in the
+   * short ones.
+   */
   .workspace-dock .desktop-composer textarea {
-    min-height: 44px;
+    min-height: 24px;
     font-size: var(--desktop-text-read);
   }
 
@@ -177,10 +182,6 @@
 
     .workspace-dock .desktop-composer {
       padding-top: 12px;
-    }
-
-    .workspace-dock .desktop-composer textarea {
-      min-height: 24px;
     }
   }
 

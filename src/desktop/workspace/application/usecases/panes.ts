@@ -7,6 +7,7 @@
  */
 import { fitted as fittedColumn } from "../../../model/side-column"
 import { defaultModel, type ModelRef } from "../../model/workspace-index"
+import { widgetOfItem } from "../../model/pane-item"
 import {
   focusPane as focusLayoutPane,
   locate,
@@ -44,10 +45,12 @@ import {
   type WorkspaceState,
 } from "../workspace-state"
 
-/** Whether a session id names something a pane can show: a listed session or a draft. */
+/** Whether an item names something a pane can show: a listed session, a draft, or a widget. */
 function showable(state: WorkspaceState, sessionId: string): boolean {
   return (
-    sessionOf(state, sessionId) !== undefined || draftOf(state, sessionId) !== undefined
+    sessionOf(state, sessionId) !== undefined ||
+    draftOf(state, sessionId) !== undefined ||
+    widgetOfItem(sessionId) !== null
   )
 }
 
