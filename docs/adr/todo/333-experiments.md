@@ -221,8 +221,10 @@ injected timer, `after(ms, run) → cancel`, the `Schedule` shape composition
 already builds for the in-memory workspace source (`dependencies.ts`), which
 #334 lifts into `WorkspaceDependencies` and `ClockProvider` beside `now`,
 overridable as `now` is — not a second timer. Nothing is retried, and every call
-settles (the adapter answers `refused`, `unavailable`, when no answer comes in
-its bound):
+settles: the adapter gives each request one answer — the editor's, or, when none
+comes within ten seconds, `refused` with the reason `noAnswer` ("No answer from
+the editor"), which says only that, since the file may yet open; an answer
+arriving after that is dropped.
 
 | At a target | Event | Next | Shown |
 | --- | --- | --- | --- |

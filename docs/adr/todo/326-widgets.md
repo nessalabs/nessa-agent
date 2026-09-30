@@ -110,21 +110,25 @@ widget's pane; from the window, it goes back to the panes and focuses the pane
 showing it, or opens it in the focused pane. A widget whose `origin` is removed
 stays where it is, without a way back.
 
-**Focus** follows 238: opening a widget in a pane focuses that pane, as opening
-a session does, and the pane's body takes focus for the view to place further;
-opening it in the window moves focus into it; going back to the panes returns
-focus to the focused pane — its composer when it shows a session, as leaving the
-overview does (238), and its body when it shows a widget; this record amends
-238's rule by that second case, for leaving the overview too.
+**Focus.** 238 has one rule for where the caret goes whenever a pane takes focus
+— a split, ⌘N, ⌘W, ⌘1–4, a pick in ⌘K, an agent's dispatch, leaving the overview
+(`workspace/adapters/dom/focus.ts`): into its composer. This record amends that
+rule, not a list of moments: whenever a pane takes focus, the caret goes into
+its composer when it shows a session, and into its body when it shows a widget,
+for the view to place further. Opening a widget in a pane is a pane taking
+focus; opening one in the window moves focus into it; going back to the panes is
+the focused pane taking focus.
 
 **Escape**, after 238's owners — a menu or dialog, a carrying drag, the edge
-peek, the open overview — goes to the widget in front: the window's while the
-content view is a widget, else a pane's widget, and only while focus is inside
-that pane. A field that handles Escape itself (the session list's search) keeps
-it, and the widget does not hear it. Its view has the first refusal (a view with
-somewhere to step back to — a run it opened, a subagent it shows — registers
-`onEscape` and handles it); then the host, which goes back to the panes from the
-window. A widget in a pane is not closed by Escape, as a session pane is not.
+peek, the open overview — goes to the widget in front. While the content view is
+a widget, that is the window's, wherever the keyboard is — as the overview hears
+Escape wherever it is, a field that handles Escape itself (the session list's
+search) included. Otherwise it is a pane's widget, only while focus is inside
+that pane, so a field elsewhere keeps its Escape. The view has the first refusal
+(a view with somewhere to step back to — a run it opened, a subagent it shows —
+registers `onEscape` and handles it); then the host, which goes back to the
+panes from the window. A widget in a pane is not closed by Escape, as a session
+pane is not.
 
 The window's **layout is not persisted** (238), and widgets do not change that.
 
