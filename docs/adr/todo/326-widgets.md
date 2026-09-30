@@ -65,18 +65,19 @@ What binds:
 - A **`WidgetRef`** is `{ plugin, id }`: the plugin that draws it and the
   plugin's own id for the thing drawn. It is the one shape everywhere — in a
   pane item, in a transcript part, in a command.
-- A **plugin** is `{ id, useWidget(id), views, SessionAccessory? }`.
-  `useWidget` is the plugin's hook answering, reactively, `{ kind: "ready",
-  title, origin? } | { kind: "unread" } | { kind: "missing" } | { kind: "off" }
-  | { kind: "unshowable" }` — `origin` is the session the widget belongs to,
-  when it has one; `off` says the plugin's preview is turned off;
+- A **plugin** is `{ id, name, useWidget(id), views, SessionAccessory? }` —
+  `name` is what the window calls it while a widget is not read yet
+  ("Experiment"). `useWidget` is the plugin's hook answering, reactively, `{
+  kind: "ready", title, origin? } | { kind: "unread" } | { kind: "missing" } | {
+  kind: "off" } | { kind: "unshowable" }` — `origin` is the session the widget
+  belongs to, when it has one; `off` says the plugin's preview is turned off;
   `unshowable` says the plugin holds the widget but cannot draw it (an
   experiment that failed validation, 333). `views` offers `pane`, and any of
-  `inline` and `window`. A `SessionAccessory` is something the plugin draws in
-  a session pane's header, given the session's id and the host's callbacks
-  (the subagents' avatar stack, which opens their panel), so the workspace
-  draws it without importing the plugin. Each plugin's hook is its own, so a
-  host keys the view it draws by plugin.
+  `inline` and `window`. A `SessionAccessory` is something the plugin draws in a
+  session pane's header, given the session's id and the host's callbacks (the
+  subagents' avatar stack, which opens their panel), so the workspace draws it
+  without importing the plugin. Each plugin's hook is its own, so a host keys
+  the view it draws by plugin.
 - Views are given only the widget's id and the **host's callbacks**:
   `open(place)`, `close()`, `openWidget(ref, place)` (a plugin opening another
   plugin's widget — an experiment's agent opening the subagents panel), and
@@ -91,8 +92,8 @@ What binds:
 | Place | What it is | Opened by | Left by |
 | --- | --- | --- | --- |
 | `inline` | a card in the message the widget part is in | the transcript | — |
-| `pane` | a pane of its own in the split grid, as a chat has | `open("pane")`: beside the pane showing its `origin`, by the workspace's `openBeside` and its rules, or in the focused pane's place when there is none | the pane's close or ⌘W, as any pane; the last pane, as 238 has it, goes back to a new session's home — in its `origin`'s channel, else where a new session goes (`createDraft`: the channel being looked at, else the first) |
-| `window` | the content region's third view, beside the panes and the overview: the widget drawn instead of the panes, which stay beneath it as they were | `open("window")` | exactly as the overview is: Escape, its close or ⌘W, a session chosen, or any change of the panes goes back to the panes; ⌘0 goes to the overview. ⌘W closes the window, never a pane beneath it |
+| `pane` | a pane of its own in the split grid, as a chat has | `open("pane")`: beside the pane showing its `origin`, by the workspace's `openBeside` and its rules, or in the focused pane's place when there is none | the pane's close or ⌘W, as any pane; the last pane, as 238 has it, goes back to a new session's home, where a new session goes (`createDraft`: the channel being looked at, else the first) |
+| `window` | the content region's third view, beside the panes and the overview: the widget drawn instead of the panes, which stay beneath it as they were | `open("window")` | as the overview is — Escape or its close, a session chosen, or any change of the panes goes back to the panes; ⌘0 goes to the overview — with one difference: ⌘W closes the window, never a pane beneath it (over the overview, ⌘W closes the focused pane, 238) |
 
 The content view is `panes | agents | { widget }`, one at a time, and the window
 place is its third value: nothing is moved into or out of the grid to show a
@@ -102,8 +103,9 @@ window replaces the widget shown there. A widget pane moves, resizes and closes
 as any pane does; nothing carries a widget into the grid from outside it. A
 widget with an `origin` offers a way back to it — its breadcrumb's first step —
 which focuses the pane showing that conversation, or opens it beside the
-widget's pane; from the window, it goes back to the panes and does the same. A
-widget whose `origin` is removed stays where it is, without a way back.
+widget's pane; from the window, it goes back to the panes and focuses the pane
+showing it, or opens it in the focused pane. A widget whose `origin` is removed
+stays where it is, without a way back.
 
 **Focus** follows 238: opening a widget in a pane focuses that pane, as opening
 a session does, and the pane's body takes focus for the view to place further;

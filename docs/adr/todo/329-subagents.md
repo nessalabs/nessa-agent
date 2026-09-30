@@ -84,26 +84,29 @@ source can deliver.
 
 **Where it is seen.** The panel is a widget (326), plugin `subagents`, whose id
 is the conversation's session id, in a pane beside the conversation or over the
-panes. It answers `ready` for a conversation the workspace lists (asked through
-a selector the workspace's barrel exports for it, #330) — one without subagents
-shows an empty state — and `missing` for one it does not (removed, or never
-known). Which subagent it shows is this vertical's state, one per conversation
-(`sessionId → subagentId | null`); the vertical exports `useOpenSubagent()` —
-set it, then open the widget through the host's `openWidget` in the caller's
-place: from a view in the window, in the window; from anywhere else, in a pane
-beside the conversation — which is how an experiment's agent opens its subagent.
-The plugin's `SessionAccessory` draws the conversation's subagents as an avatar
-stack in its pane header, the busiest first, and nothing when there are none; a
-click opens the panel.
+panes. It answers `unread` while the workspace has not read its index, then
+`ready` for a conversation the workspace lists (asked through a selector the
+workspace's barrel exports for it, #330) — one without subagents shows an empty
+state — and `missing` for one it does not (removed, or never known). Which
+subagent it shows is this vertical's state, one per conversation (`sessionId →
+subagentId | null`); the vertical exports `useOpenSubagent()` — set it, then
+open the widget through the host's `openWidget` in the caller's place: from a
+view in the window, in the window; from anywhere else, in a pane beside the
+conversation — which is how an experiment's agent opens its subagent. The
+plugin's `SessionAccessory` draws the conversation's subagents as an avatar
+stack in its pane header, in the model's order (the busiest first), and nothing
+when there are none; a click opens the panel.
 
 **One subagent** is drawn as a conversation is — its messages and its live
 activity line through the workspace's transcript views — with no composer.
 
 **The preview.** Subagents are offered only when their preview is on under
-Settings › Advanced › Experimental (its own switch, this vertical's catalogue
-entry). Off, no accessory; an open panel answers `off` (326); a consumer's
-link to a subagent is not offered. The in-memory sample serves the sample
-workspace's conversations.
+Settings › Advanced › Experimental. The switch is a window preference
+(`src/desktop/adapters/window-preferences.ts`, as the greeting's is) and its
+entry is the settings catalogue's, the one owner of what Settings names; this
+vertical reads the preference through its hook and owns neither. Off, no
+accessory; an open panel answers `off` (326); a consumer's link to a subagent is
+not offered. The in-memory sample serves the sample workspace's conversations.
 
 ## Alternatives considered
 

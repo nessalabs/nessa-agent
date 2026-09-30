@@ -100,28 +100,39 @@ interface Limit {
 }
 ```
 
-**Runs** carry `number` (the baseline, its own field, is run 0), `parentId`
-(what it was built on, for lineage), `scores` by split id, each `{ mean,
-interval? }` (the half-width of its confidence interval), `measures` by
-guardrail metric id, their `verdict` id, the harness's `reason` for it as text,
-and optionally `areaId`, `agentId`, `cases` and `change`. The **experiment**
-carries the definition, its baseline and runs, and — from the harness —
-`bestSoFar`: the ids of the runs that became the best, in the order they did,
-empty until one does. The best version is its last entry, or the baseline while
-it is empty; there is no second field naming it, so the two cannot disagree. A
-keep the harness withdraws leaves `bestSoFar` in the harness's next word. The
-window draws the climb and the best version from these and never finds either
-itself. A baseline is *scored* once it has a score on the primary split; until
-then the views say it is being scored, and a guardrail limited relative to it
-reads "not measured yet" until the baseline has that measure.
+**Runs** carry `number` (the order they started in; the baseline is run 0),
+`startedAt`, `settledAt` once settled, `parentId` (what it was built on, for
+lineage), `scores` by split id, each `{ mean, interval? }` (the half-width of
+its confidence interval), `measures` by guardrail metric id, their `verdict` id,
+the harness's `reason` for it as text, and optionally `areaId`, `agentId`,
+`cases` and `change`. The **baseline** is the same shape, its own field and not
+one of `runs`, with no verdict: it is what runs are judged against, not a run
+judged. The **experiment** carries its `id`, `title`, `goal`, the `sessionId` of
+the conversation that runs it (a widget's `origin`), `startedAt`, the harness's
+`notes` (each a tone, a text, a time, and the run it is about, if any), the
+definition, its baseline and runs, and — from the harness — `bestSoFar`: the ids
+of the runs that became the best, in the order they did, empty until one does.
+The best version is its last entry, or the baseline while it is empty; there is
+no second field naming it, so the two cannot disagree. A keep the harness
+withdraws leaves `bestSoFar` in the harness's next word. The window draws the
+climb and the best version from these and never finds either itself. The climb
+is drawn over time: each settled run a point at its `settledAt`, the best-so-far
+line stepping at each `bestSoFar` run's `settledAt` — which validation holds to
+be in order — so runs that finish out of order never step it backwards. The path
+to the best version is `bestSoFar` in order; a run's lineage (`parentId`) is
+drawn only in its own detail. A baseline is *scored* once it has a score on the
+primary split; until then the views say it is being scored, and a guardrail
+limited relative to it reads "not measured yet" until the baseline has that
+measure.
 
 **Validation** is at the source's adapter, where external data is parsed: every
 run's verdict is in the vocabulary, every score's split and every measure's
 metric is defined, `primarySplit` names a split, and `bestSoFar` names runs —
-not the baseline, none twice — that exist, have a score on the primary split and
-a verdict whose outcome is `kept`, and every kept run is in it. An experiment
-that fails is not drawn in part: the widget answers `unshowable` — "Can't show
-this here", 326's table — and the adapter logs what was wrong as a fault, as the
+none twice — that exist, are settled, have a score on the primary split and a
+verdict whose outcome is `kept`, in order of `settledAt`; every kept run is in
+it. These rules are over `runs`; the baseline is not one. An experiment that
+fails is not drawn in part: the widget answers `unshowable` — "Can't show this
+here", 326's table — and the adapter logs what was wrong as a fault, as the
 workspace's `failureReason` does. What validation returns is a branded
 `Experiment` that only `validateExperiment` makes, so a view cannot be handed
 one it did not check.
@@ -187,7 +198,10 @@ beside the conversation, over the panes. Navigation — the view, the trail of
 runs followed, scroll and focus on opening one — is one hook,
 `useExperimentNavigation`, which registers 326's `onEscape` while the trail is
 not empty; the views only render. Experiments are offered only when their own
-preview is on under Settings › Advanced › Experimental.
+preview is on under Settings › Advanced › Experimental — a window preference
+with its entry in the settings catalogue, read through its hook as 329's is;
+off, the swarm's adapter reports no subagents either, so nothing of an
+experiment shows through subagents behind a switch that is off.
 
 **Samples**, under the preview: the checkout-support hill-climb (percent, up,
 train and test, a cost guardrail relative to the baseline, five areas, a
