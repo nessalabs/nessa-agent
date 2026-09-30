@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 nessa-sdk = { path = "../nessa-sdk" }
-nessa-sync = { git = "https://github.com/nessalabs/sync-engine", rev = "f73369c94e93578db5f711570336495126f83a0d", default-features = false, features = ["transport"] }
+nessa-sync = { git = "https://github.com/nessalabs/sync-engine", rev = "8ce6a8226913cf8c455cab5a2f4e23ebadf01fb2", default-features = false, features = ["transport"] }
 nessa-images = { path = "../nessa-images" }
 nessa-local-database = { path = "../nessa-local-database" }
 nessa-local-storage = { path = "../nessa-local-storage" }
