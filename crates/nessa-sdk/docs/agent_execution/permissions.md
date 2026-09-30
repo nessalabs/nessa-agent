@@ -246,3 +246,31 @@ Existing stored event and gateway audit formats stay the same.
 | Selected then written or failed delivery | Change only delivery; retain the original admitted value and decision. |
 | Provider withdrawal, execution finish, or session end | Derive closure and actor-free cancellation evidence from the retained admission, even after the controller has moved on. |
 | Consumer loss, backpressure, or audit/write failure | Existing ACP ordering owns delivery and cleanup; the same admission supplies all surviving evidence. |
+
+## Refused asks and open accounting
+
+A refusal for room retains the candidate ask and the count and carrying cost of
+the asks already open. `RefusedAsk::new` takes those open asks by reference;
+`OpenQuestionAccounting` derives their totals through `AgentQuestion::carrying_cost`
+and owns the admitted-open limits and fit decision. It retains only immutable
+totals. Scalar estimates cannot construct this evidence. The adapter supplies
+its actual retained asks; the summary does not claim independent observation of
+the adapter or provider acknowledgement. Construction performs no I/O.
+
+| Input or ordering | Required behavior and evidence |
+| --- | --- |
+| Empty open collection; fitting candidate | Count and cost are zero; no refusal reason; `for_room` returns `InvalidQuestionRefusal`. |
+| Legal minimal asks below both ceilings | Derive count and cost from the asks; accept a fitting candidate. |
+| Exactly `MAX_OPEN_QUESTIONS` legal asks | `TooManyOpen`, retaining the candidate and actual totals. |
+| Open asks totaling exactly `MAX_OPEN_ASK_COST` | Accept accounting; another candidate is `TooLarge` unless the count limit wins. |
+| Count above its maximum or open carrying cost above its maximum | `InvalidQuestionRefusal` before refusal evidence exists. |
+| Candidate plus open cost exactly at the ceiling, or above it | No refusal reason at the ceiling; `TooLarge` above it. |
+| Count and candidate cost both exhausted | `TooManyOpen` takes precedence. |
+| Selected followed by written or failed delivery | Preserve session, execution, refusal identity, candidate, totals and reason; change only delivery. |
+| Selected audit failure, response failure, close or withdrawal | Existing ACP ordering owns delivery and cleanup; evidence keeps the same original comparison. |
+| Former scalar constructor call with `MAX_OPEN_QUESTIONS` and cost `1` | The public constructor accepts borrowed asks rather than scalar estimates; its compile-fail example enforces that boundary. |
+
+The refusal remains runtime evidence with no human actor. Its identity pairs the
+selected audit record with the later write result. `QuestionRefusalRecord` derives
+the reason from the domain comparison and rejects a room record when the
+candidate fits. Existing gateway audit fields and stored formats remain current.

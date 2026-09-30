@@ -2577,18 +2577,11 @@ impl<P: AcpProfile> Worker<P> {
         };
         // Room is decided from what is open, and a refusal for room keeps both
         // sides of that comparison: the ask, and what was already there.
-        let open_asks = self.questions.len();
-        let open_cost = self
-            .questions
-            .values()
-            .map(|open| open.admitted.question().carrying_cost())
-            .fold(0, usize::saturating_add);
-        // Bounded where the view that shows them is bounded: an ask nobody can
-        // see is an ask nobody can answer, so admitting more than the surface
-        // holds would strand the extras rather than queue them. What the open
-        // asks cost together is bounded the same way, and for the same reason.
-        let candidate = RefusedAsk::new(question, open_asks, open_cost)
-            .map_err(|error| json_rpc::protocol(&error.to_string()))?;
+        let candidate = RefusedAsk::new(
+            question,
+            self.questions.values().map(|open| open.admitted.question()),
+        )
+        .map_err(|error| json_rpc::protocol(&error.to_string()))?;
         if let Some(reason) = candidate.reason() {
             return self
                 .refuse_question(

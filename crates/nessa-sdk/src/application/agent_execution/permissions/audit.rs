@@ -7,10 +7,9 @@ use crate::application::agent_execution::executions::AdmittedQuestion;
 use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::permissions::{ReviewDecline, ReviewDeclineId};
 use crate::domain::agent_execution::questions::{
-    AcceptedAnswer, AgentQuestion, QuestionCancellation, QuestionChoice, QuestionId,
-    QuestionRefusalReason, QuestionResponse,
+    AcceptedAnswer, AgentQuestion, OpenQuestionAccounting, QuestionCancellation, QuestionChoice,
+    QuestionId, QuestionRefusalReason, QuestionResponse,
 };
-use crate::domain::agent_execution::questions::{MAX_OPEN_ASK_COST, MAX_OPEN_QUESTIONS};
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::agent_execution::ExecutionError;
 
@@ -244,39 +243,53 @@ impl QuestionAnswerRecord {
 /// A refusal for room is a comparison, and a comparison is only evidence with
 /// both sides of it: the ask that was read and would not fit, and what was
 /// already open when it arrived. The limits it was held to are the published
-/// [`MAX_OPEN_QUESTIONS`] and [`MAX_OPEN_ASK_COST`].
+/// [`MAX_OPEN_QUESTIONS`](crate::domain::agent_execution::questions::MAX_OPEN_QUESTIONS) and [`MAX_OPEN_ASK_COST`](crate::domain::agent_execution::questions::MAX_OPEN_ASK_COST).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefusedAsk {
     ask: AgentQuestion,
-    open_asks: usize,
-    open_cost: usize,
+    open: OpenQuestionAccounting,
 }
 impl RefusedAsk {
-    /// `ask` was refused while `open_asks` asks costing `open_cost` together
-    /// were already open.
+    /// Keep `ask` beside the accounting derived from the actual `open_asks`.
     ///
-    /// Only accounting that could describe asks a binding actually held is
-    /// accepted: never more open than [`MAX_OPEN_QUESTIONS`], never costing
-    /// more than [`MAX_OPEN_ASK_COST`] — each was admitted within it — and no
-    /// cost without an ask or an ask without a cost, since every ask costs
-    /// something to carry. Anything else is
-    /// [`ExecutionError::InvalidQuestionRefusal`]: evidence of a state that
-    /// never existed.
-    pub fn new(
+    /// `open_asks` borrows the asks the binding already holds. The domain derives
+    /// their count and carrying cost; no scalar estimate is accepted. Only the
+    /// candidate and immutable totals are retained. This performs no I/O and
+    /// does not itself admit or refuse the candidate; [`reason`](Self::reason)
+    /// reports the domain comparison used by the binding and audit record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionError::InvalidQuestionRefusal`] if the supplied open
+    /// collection exceeds [`MAX_OPEN_QUESTIONS`](crate::domain::agent_execution::questions::MAX_OPEN_QUESTIONS) or [`MAX_OPEN_ASK_COST`](crate::domain::agent_execution::questions::MAX_OPEN_ASK_COST).
+    ///
+    /// A binding passes its retained questions directly:
+    ///
+    /// ```
+    /// use nessa_sdk::application::agent_execution::permissions::RefusedAsk;
+    /// use nessa_sdk::domain::agent_execution::{questions::AgentQuestion, ExecutionError};
+    /// fn observe(ask: AgentQuestion, open: &[AgentQuestion]) -> Result<RefusedAsk, ExecutionError> {
+    ///     RefusedAsk::new(ask, open)
+    /// }
+    /// ```
+    ///
+    /// Scalar accounting cannot fabricate the formerly accepted evidence of
+    /// the maximum open count costing only one byte:
+    ///
+    /// ```compile_fail
+    /// use nessa_sdk::application::agent_execution::permissions::RefusedAsk;
+    /// use nessa_sdk::domain::agent_execution::questions::{AgentQuestion, MAX_OPEN_QUESTIONS};
+    /// fn fabricated(ask: AgentQuestion) {
+    ///     let _ = RefusedAsk::new(ask, MAX_OPEN_QUESTIONS, 1);
+    /// }
+    /// ```
+    pub fn new<'a>(
         ask: AgentQuestion,
-        open_asks: usize,
-        open_cost: usize,
+        open_asks: impl IntoIterator<Item = &'a AgentQuestion>,
     ) -> Result<Self, ExecutionError> {
-        if open_asks > MAX_OPEN_QUESTIONS
-            || open_cost > MAX_OPEN_ASK_COST
-            || (open_asks == 0) != (open_cost == 0)
-        {
-            return Err(ExecutionError::InvalidQuestionRefusal);
-        }
         Ok(Self {
             ask,
-            open_asks,
-            open_cost,
+            open: OpenQuestionAccounting::new(open_asks)?,
         })
     }
     /// The ask as it arrived.
@@ -289,25 +302,18 @@ impl RefusedAsk {
     }
     /// How many asks were already open.
     pub fn open_asks(&self) -> usize {
-        self.open_asks
+        self.open.count()
     }
     /// What the asks already open cost together to carry.
     pub fn open_cost(&self) -> usize {
-        self.open_cost
+        self.open.cost()
     }
     /// Why there was no room for the ask, or `None` if there was.
     ///
-    /// The one place the comparison is made: the binding decides a refusal
-    /// with it, and a record takes its reason from it, so a record can never
-    /// hold a reason its own evidence contradicts.
+    /// Delegates to [`OpenQuestionAccounting::reason_for`]. The binding and
+    /// [`QuestionRefusalRecord::for_room`] consume that same domain comparison.
     pub fn reason(&self) -> Option<QuestionRefusalReason> {
-        if self.open_asks >= MAX_OPEN_QUESTIONS {
-            Some(QuestionRefusalReason::TooManyOpen)
-        } else if self.open_cost.saturating_add(self.ask.carrying_cost()) > MAX_OPEN_ASK_COST {
-            Some(QuestionRefusalReason::TooLarge)
-        } else {
-            None
-        }
+        self.open.reason_for(&self.ask)
     }
 }
 
