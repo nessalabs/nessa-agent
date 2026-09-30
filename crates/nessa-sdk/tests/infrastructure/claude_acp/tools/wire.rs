@@ -482,3 +482,61 @@ fn a_call_cannot_change_between_reviewable_and_declined_under_one_identity() {
     .unwrap();
     assert_eq!(names.get("b"), Some(&ObservedTool::Declined));
 }
+
+/// A frame of the shape the pinned adapter (0.76.0, `tools.js:335-340`) sends
+/// for an MCP tool: the harness name as the title and in `_meta`, kind
+/// `other`, no content until completion.
+fn mcp_frame(id: &str, name: &str) -> Value {
+    json!({"toolCallId":id,"title":name,"kind":"other","content":[],
+        "_meta":{"claudeCode":{"toolName":name}}})
+}
+
+#[test]
+fn an_mcp_call_names_its_configured_server_and_tool() {
+    let configured = vec!["mcp__nessa__".to_owned(), "mcp__charts-app__".to_owned()];
+    let mut names = HashMap::new();
+    for (name, server, tool) in [
+        ("mcp__nessa__shell", "nessa", "shell"),
+        ("mcp__charts-app__show__v2", "charts-app", "show__v2"),
+    ] {
+        let update = super::tool_call(&mcp_frame(name, name), &mut names, &configured).unwrap();
+        let identity = update.mcp_tool().expect(name);
+        assert_eq!((identity.server(), identity.tool()), (server, tool));
+        assert_eq!(reviewable(&names, name).as_deref(), Some(name));
+    }
+    // The completion repeats the name, and the text result stays as it was.
+    let done = json!({"toolCallId":"mcp__nessa__shell","status":"completed",
+        "content":[{"type":"content","content":{"type":"text","text":"{\"ok\":true}"}}],
+        "_meta":{"claudeCode":{"toolName":"mcp__nessa__shell"}}});
+    let update = super::tool_call(&done, &mut names, &configured).unwrap();
+    assert_eq!(update.mcp_tool().unwrap().server(), "nessa");
+    assert_eq!(
+        update.content(),
+        &Some(vec![ToolContent::text("{\"ok\":true}")])
+    );
+}
+
+#[test]
+fn a_call_is_left_without_an_mcp_identity_where_none_can_be_named_exactly() {
+    let mut names = HashMap::new();
+    // Built-in tools, a frame naming nothing, an unconfigured server, and a
+    // name two configured servers both fit.
+    let ambiguous = vec!["mcp__a__".to_owned(), "mcp__a__b__".to_owned()];
+    for (frame, prefixes) in [
+        (mcp_frame("read", "Read"), vec!["mcp__nessa__".to_owned()]),
+        (
+            json!({"toolCallId":"bare","title":"mcp__nessa__shell"}),
+            vec!["mcp__nessa__".to_owned()],
+        ),
+        (
+            mcp_frame("other", "mcp__other__shell"),
+            vec!["mcp__nessa__".to_owned()],
+        ),
+        (mcp_frame("both", "mcp__a__b__c"), ambiguous),
+    ] {
+        let update = super::tool_call(&frame, &mut names, &prefixes).unwrap();
+        assert_eq!(update.mcp_tool(), None, "{frame}");
+    }
+    // The ambiguous call is still reviewable; only its identity is withheld.
+    assert_eq!(reviewable(&names, "both").as_deref(), Some("mcp__a__b__c"));
+}

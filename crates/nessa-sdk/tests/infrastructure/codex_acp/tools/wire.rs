@@ -2,7 +2,7 @@
 //! carried, and a permission request is never reviewed without naming its tool.
 use super::*;
 use crate::domain::agent_execution::tools::{
-    FilePath, ToolContent, ToolContentView, ToolKind, ToolObservation,
+    FilePath, ToolContent, ToolContentView, ToolKind, ToolObservation, MAX_STRUCTURED_RESULT_BYTES,
 };
 use serde_json::json;
 
@@ -482,4 +482,138 @@ fn rejected_observations_do_not_retain_input_or_charge_its_budget() {
     )
     .unwrap();
     assert_eq!(tools.input_bytes, json!({"text":"valid"}).to_string().len());
+}
+
+/// The announcement codex-acp 1.12.0 sends for an MCP call
+/// (`index.js:23035-23045`): dotted title, `execute`, exact names in
+/// `rawInput`, and the MCP marker in `_meta`.
+fn mcp_call(id: &str) -> Value {
+    json!({"toolCallId":id,"title":"mcp.charts.app.show","kind":"execute","status":"pending",
+        "rawInput":{"server":"charts.app","tool":"show","arguments":{"n":2}},
+        "_meta":{"is_mcp_tool_call":true}})
+}
+
+/// Its completion (`index.js:25123-25130`): `rawInput` again, and the MCP
+/// result only in `rawOutput`, with no ACP content.
+fn mcp_done(id: &str, output: Value) -> Value {
+    json!({"toolCallId":id,"status":"completed",
+        "rawInput":{"server":"charts.app","tool":"show","arguments":{"n":2}},
+        "rawOutput":output,"_meta":{"is_mcp_tool_call":true}})
+}
+
+#[test]
+fn an_mcp_call_names_its_server_and_tool_from_raw_input_never_the_dotted_title() {
+    let mut tools = ObservedTools::default();
+    let update = tool_call(&mcp_call("mcp-1"), &mut tools).unwrap();
+    let identity = update.mcp_tool().unwrap();
+    assert_eq!((identity.server(), identity.tool()), ("charts.app", "show"));
+    assert_eq!(update.content(), &None);
+    // Without the marker, or with names the domain will not keep, the call is
+    // shown as before and names nothing.
+    let mut unmarked = mcp_call("mcp-2");
+    unmarked["_meta"] = json!({});
+    let mut spaced = mcp_call("mcp-3");
+    spaced["rawInput"]["server"] = json!("two words");
+    let mut missing = mcp_call("mcp-4");
+    missing["rawInput"] = json!({"arguments":{}});
+    for frame in [unmarked, spaced, missing, terminal_command("shell")] {
+        let update = tool_call(&frame, &mut tools).unwrap();
+        assert_eq!(update.mcp_tool(), None, "{frame}");
+    }
+}
+
+#[test]
+fn an_mcp_result_keeps_its_text_blocks_structured_result_and_error() {
+    let mut tools = ObservedTools::default();
+    tool_call(&mcp_call("mcp-1"), &mut tools).unwrap();
+    let structured = json!({"rows":[{"x":1,"y":"é"}]});
+    let output = json!({"result":{"content":[
+            {"type":"text","text":"Two rows."},
+            {"type":"resource_link","uri":"file:///rows.csv","name":"rows"},
+            {"type":"resource","resource":{"uri":"ui://charts/a","text":"<p>embedded</p>"}},
+            {"type":"resource","resource":{"uri":"file:///b.bin","blob":"AAAA"}},
+            {"type":"image","data":"AAAA","mimeType":"image/png"}
+        ],"structuredContent":structured,"_meta":{"ui":{"note":"not kept"}}},"error":null});
+    let update = tool_call(&mcp_done("mcp-1", output), &mut tools).unwrap();
+    assert_eq!(update.mcp_tool().unwrap().tool(), "show");
+    assert_eq!(
+        update.content(),
+        &Some(vec![
+            text("Two rows."),
+            text("file:///rows.csv"),
+            text("<p>embedded</p>"),
+            text(UNSUPPORTED_TOOL_CONTENT),
+            text(UNSUPPORTED_TOOL_CONTENT),
+            ToolContent::structured(structured.to_string()).unwrap(),
+        ])
+    );
+    let failed = tool_call(
+        &mcp_done(
+            "mcp-1",
+            json!({"result":null,"error":{"message":"server went away"}}),
+        ),
+        &mut tools,
+    )
+    .unwrap();
+    assert_eq!(failed.content(), &Some(vec![text("server went away")]));
+    // No output yet leaves the observed content as it was.
+    let pending = tool_call(&mcp_done("mcp-1", Value::Null), &mut tools).unwrap();
+    assert_eq!(pending.content(), &None);
+}
+
+#[test]
+fn an_oversize_structured_result_is_said_rather_than_kept_or_refused() {
+    let mut tools = ObservedTools::default();
+    let exact = "a".repeat(MAX_STRUCTURED_RESULT_BYTES - 2);
+    let kept = tool_call(
+        &mcp_done(
+            "mcp-1",
+            json!({"result":{"content":[],"structuredContent":exact}}),
+        ),
+        &mut tools,
+    )
+    .unwrap();
+    assert_eq!(
+        kept.content(),
+        &Some(vec![
+            ToolContent::structured(format!("\"{exact}\"")).unwrap()
+        ])
+    );
+    let over = tool_call(
+        &mcp_done(
+            "mcp-2",
+            json!({"result":{"content":[{"type":"text","text":"big"}],
+            "structuredContent":format!("{exact}a")}}),
+        ),
+        &mut tools,
+    )
+    .unwrap();
+    assert_eq!(
+        over.content(),
+        &Some(vec![text("big"), text(STRUCTURED_RESULT_OMITTED)])
+    );
+}
+
+#[test]
+fn a_malformed_mcp_result_refuses_the_frame_before_anything_is_retained() {
+    let mut tools = ObservedTools::default();
+    for output in [
+        json!("text"),
+        json!({"result":"text"}),
+        json!({"result":{"content":"text"}}),
+        json!({"result":{"content":[{"text":"no type"}]}}),
+        json!({"result":{"content":[{"type":"text"}]}}),
+        json!({"result":{"content":[{"type":"resource"}]}}),
+        json!({"result":{"content":[{"type":"resource","resource":{"text":7}}]}}),
+        json!({"error":{"code":1}}),
+    ] {
+        assert!(
+            matches!(
+                tool_call(&mcp_done("bad", output.clone()), &mut tools),
+                Err(AgentError::Protocol(_))
+            ),
+            "{output}"
+        );
+        assert!(tools.entries.is_empty());
+    }
 }

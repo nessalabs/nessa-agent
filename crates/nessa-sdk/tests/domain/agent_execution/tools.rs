@@ -294,3 +294,121 @@ fn tool_content_is_compact_exact_and_distinguishes_unknown_from_empty_prior_text
         std::mem::size_of::<ToolContent>() + 8192 + 2 + 3
     );
 }
+
+#[test]
+fn mcp_tool_names_are_bounded_single_line_and_kept_exactly() {
+    let tool = McpTool::new("nessa-apps", "show_chart.v2").unwrap();
+    assert_eq!(
+        (tool.server(), tool.tool()),
+        ("nessa-apps", "show_chart.v2")
+    );
+    assert_eq!(
+        tool.payload_bytes(),
+        "nessa-apps".len() + "show_chart.v2".len()
+    );
+    let longest = "é".repeat(MAX_MCP_NAME_BYTES / 2);
+    let kept = McpTool::new(longest.clone(), longest.clone()).unwrap();
+    assert_eq!(
+        (kept.server(), kept.tool()),
+        (longest.as_str(), longest.as_str())
+    );
+    let too_long = format!("{longest}x");
+    for (server, tool, expected) in [
+        ("", "tool", ExecutionError::EmptyValue("MCP server name")),
+        ("server", "", ExecutionError::EmptyValue("MCP tool name")),
+        (
+            too_long.as_str(),
+            "tool",
+            ExecutionError::ValueTooLong {
+                field: "MCP server name",
+                max_bytes: MAX_MCP_NAME_BYTES,
+            },
+        ),
+        (
+            "server",
+            too_long.as_str(),
+            ExecutionError::ValueTooLong {
+                field: "MCP tool name",
+                max_bytes: MAX_MCP_NAME_BYTES,
+            },
+        ),
+        (
+            "two words",
+            "tool",
+            ExecutionError::InvalidMcpToolName("MCP server name"),
+        ),
+        (
+            "server",
+            "a\nb",
+            ExecutionError::InvalidMcpToolName("MCP tool name"),
+        ),
+        (
+            "server",
+            "a\u{7}",
+            ExecutionError::InvalidMcpToolName("MCP tool name"),
+        ),
+    ] {
+        assert_eq!(McpTool::new(server, tool), Err(expected));
+    }
+}
+
+#[test]
+fn an_mcp_identity_is_observed_once_carried_through_sparse_updates_and_counted() {
+    let execution = ExecutionId::new("execution").unwrap();
+    let id = ToolCallId::new("tool").unwrap();
+    let mcp = McpTool::new("charts", "show").unwrap();
+    let named = update("tool").with_mcp_tool(mcp.clone());
+    assert_eq!(named.mcp_tool(), Some(&mcp));
+    assert_eq!(update("tool").mcp_tool(), None);
+    // The names, and the box that holds them apart from the observation.
+    let retained = std::mem::size_of::<McpTool>() + mcp.payload_bytes();
+    assert_eq!(named.payload_bytes(), retained);
+    let mut session = session(&execution);
+    session.observe_tool(&execution, named).unwrap();
+    // A later update that names nothing keeps what was observed.
+    let status = ToolCallUpdate::new(
+        id.clone(),
+        None,
+        None,
+        Some(ToolStatus::Completed),
+        None,
+        None,
+    );
+    let tool = session.tool(&id).unwrap();
+    assert_eq!(tool.payload_bytes_after(&status), tool.payload_bytes());
+    session.observe_tool(&execution, status).unwrap();
+    let tool = session.tool(&id).unwrap();
+    assert_eq!(tool.observation().mcp_tool(), Some(&mcp));
+    assert_eq!(
+        tool.payload_bytes(),
+        execution.as_str().len() + id.as_str().len() + retained
+    );
+    // A tool no update named stays without one.
+    session.observe_tool(&execution, update("plain")).unwrap();
+    let plain = session.tool(&ToolCallId::new("plain").unwrap()).unwrap();
+    assert_eq!(plain.observation().mcp_tool(), None);
+}
+
+#[test]
+fn a_structured_result_is_bounded_exact_json_text_beside_the_result_text() {
+    let json = r#"{"rows":[1,2],"label":"é"}"#;
+    let structured = ToolContent::structured(json).unwrap();
+    assert_eq!(structured.view(), ToolContentView::Structured(json));
+    assert_eq!(structured.payload_bytes(), json.len());
+    assert_ne!(structured, ToolContent::text(json));
+    let exact = "a".repeat(MAX_STRUCTURED_RESULT_BYTES);
+    assert!(ToolContent::structured(exact.clone()).is_ok());
+    assert_eq!(
+        ToolContent::structured(format!("{exact}a")),
+        Err(ExecutionError::ValueTooLong {
+            field: "structured tool result",
+            max_bytes: MAX_STRUCTURED_RESULT_BYTES,
+        })
+    );
+    let replaced =
+        update("tool").with_content(vec![ToolContent::text("rows: 2"), structured.clone()]);
+    assert_eq!(
+        replaced.content(),
+        &Some(vec![ToolContent::text("rows: 2"), structured])
+    );
+}

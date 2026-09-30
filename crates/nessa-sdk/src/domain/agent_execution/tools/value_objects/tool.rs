@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use super::ToolCallId;
+use super::{McpTool, ToolCallId};
 use crate::domain::agent_execution::ExecutionError;
 
 /// An untrusted path description, not a resolved file or permission to access it.
@@ -90,6 +90,9 @@ pub struct ToolCallUpdate {
     status: Option<ToolStatus>,
     locations: Option<Vec<FileLocation>>,
     content: Option<Vec<ToolContent>>,
+    // Boxed: most tools are not MCP calls, and an observation is held (and
+    // undone) inline in larger values.
+    mcp_tool: Option<Box<McpTool>>,
 }
 impl ToolCallUpdate {
     /// Own one sparse update for `id`. `title`, `kind`, and `status` replace their
@@ -111,6 +114,26 @@ impl ToolCallUpdate {
             status,
             locations,
             content,
+            mcp_tool: None,
+        }
+    }
+    /// This update with `content` as its replacement content collection, which
+    /// replaces any the update carried. Returns a replacement; the original
+    /// value is consumed, never changed in place.
+    pub fn with_content(self, content: Vec<ToolContent>) -> Self {
+        Self {
+            content: Some(content),
+            ..self
+        }
+    }
+    /// This update, also naming the MCP server and tool the call was made to.
+    /// Returns a replacement; the original value is consumed, never changed in
+    /// place. Without it the update leaves any identity already observed as it
+    /// was: an MCP identity is observed once and not cleared.
+    pub fn with_mcp_tool(self, mcp_tool: McpTool) -> Self {
+        Self {
+            mcp_tool: Some(Box::new(mcp_tool)),
+            ..self
         }
     }
     /// Tool identity to which this update must be applied.
@@ -137,10 +160,20 @@ impl ToolCallUpdate {
     pub fn content(&self) -> &Option<Vec<ToolContent>> {
         &self.content
     }
-    /// Retained title, path, and content allocations, including vector storage.
-    /// ToolCall accounts for retained identities in addition to these observation bytes.
+    /// The MCP server and tool this update names; None leaves the observed one.
+    pub fn mcp_tool(&self) -> Option<&McpTool> {
+        self.mcp_tool.as_deref()
+    }
+    /// Retained title, path, content and MCP identity allocations, including
+    /// vector and box storage. ToolCall accounts for retained identities in addition to
+    /// these observation bytes.
     pub fn payload_bytes(&self) -> usize {
-        ToolObservation::measure_payload(&self.title, &self.locations, &self.content)
+        ToolObservation::measure_payload(
+            &self.title,
+            &self.locations,
+            &self.content,
+            &self.mcp_tool,
+        )
     }
 }
 
@@ -154,11 +187,14 @@ pub struct ToolObservation {
     status: Option<ToolStatus>,
     locations: Option<Vec<FileLocation>>,
     content: Option<Vec<ToolContent>>,
+    // Boxed: most tools are not MCP calls, and an observation is held (and
+    // undone) inline in larger values.
+    mcp_tool: Option<Box<McpTool>>,
 }
 /// Moved prior fields for a reversible entity-owned observation replacement.
 pub(crate) struct ToolObservationUndo {
     previous: ToolObservation,
-    changed: [bool; 5],
+    changed: [bool; 6],
 }
 impl ToolObservation {
     /// Last observed display title; None means no title has been observed.
@@ -181,10 +217,29 @@ impl ToolObservation {
     pub fn content(&self) -> &Option<Vec<ToolContent>> {
         &self.content
     }
+    /// The MCP server and tool the call was made to; None where no update has
+    /// named one — a harness's own tool, or a harness that does not say.
+    pub fn mcp_tool(&self) -> Option<&McpTool> {
+        self.mcp_tool.as_deref()
+    }
     /// Retained payload allocation in bytes, including vector capacity. Saturates at
     /// usize::MAX on overflow; excludes fixed identity/entity storage.
     pub fn payload_bytes(&self) -> usize {
-        Self::measure_payload(&self.title, &self.locations, &self.content)
+        Self::measure_payload(&self.title, &self.locations, &self.content, &self.mcp_tool)
+    }
+    /// A complete update for `id` that rebuilds this observation from nothing:
+    /// every observed field present, so applying it to an empty observation
+    /// yields an equal one. Clones the payload.
+    pub(crate) fn as_update(&self, id: ToolCallId) -> ToolCallUpdate {
+        ToolCallUpdate {
+            id,
+            title: self.title.clone(),
+            kind: self.kind,
+            status: self.status,
+            locations: self.locations.clone(),
+            content: self.content.clone(),
+            mcp_tool: self.mcp_tool.clone(),
+        }
     }
     pub(crate) fn payload_bytes_after(&self, update: &ToolCallUpdate) -> usize {
         Self::measure_payload(
@@ -203,14 +258,23 @@ impl ToolObservation {
             } else {
                 &self.content
             },
+            if update.mcp_tool.is_some() {
+                &update.mcp_tool
+            } else {
+                &self.mcp_tool
+            },
         )
     }
     fn measure_payload(
         title: &Option<String>,
         locations: &Option<Vec<FileLocation>>,
         content: &Option<Vec<ToolContent>>,
+        mcp_tool: &Option<Box<McpTool>>,
     ) -> usize {
         let mut bytes = title.as_ref().map_or(0, String::capacity);
+        bytes = bytes.saturating_add(mcp_tool.as_ref().map_or(0, |tool| {
+            size_of::<McpTool>().saturating_add(tool.payload_bytes())
+        }));
         if let Some(locations) = locations {
             bytes = bytes.saturating_add(
                 locations
@@ -249,6 +313,7 @@ impl ToolObservation {
             update.status.is_some(),
             update.locations.is_some(),
             update.content.is_some(),
+            update.mcp_tool.is_some(),
         ];
         let mut previous = self;
         let next = Self {
@@ -257,6 +322,7 @@ impl ToolObservation {
             status: update.status.or_else(|| previous.status.take()),
             locations: update.locations.or_else(|| previous.locations.take()),
             content: update.content.or_else(|| previous.content.take()),
+            mcp_tool: update.mcp_tool.or_else(|| previous.mcp_tool.take()),
         };
         (next, ToolObservationUndo { previous, changed })
     }
@@ -267,6 +333,7 @@ impl ToolObservation {
             status,
             locations,
             content,
+            mcp_tool,
         } = self;
         let ToolObservationUndo { previous, changed } = undo;
         Self {
@@ -283,12 +350,22 @@ impl ToolObservation {
             } else {
                 content
             },
+            mcp_tool: if changed[5] {
+                previous.mcp_tool
+            } else {
+                mcp_tool
+            },
         }
     }
 }
-/// Immutable provider-reported text or file change for observation and review.
-/// Construction preserves exact text, including empty strings, and compacts text
-/// allocations. This value never applies a change or authorizes filesystem access.
+/// The largest structured result retained, in UTF-8 bytes of its JSON text.
+/// A result past it is not kept; the adapter says so in text instead.
+pub const MAX_STRUCTURED_RESULT_BYTES: usize = 64 * 1024;
+
+/// Immutable provider-reported text, file change, or structured result for
+/// observation and review. Construction preserves exact text, including empty
+/// strings, and compacts text allocations. This value never applies a change or
+/// authorizes filesystem access.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolContent {
     value: ToolContentValue,
@@ -296,6 +373,7 @@ pub struct ToolContent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ToolContentValue {
     Text(Box<str>),
+    Structured(Box<str>),
     Diff {
         path: FilePath,
         old: Option<Box<str>>,
@@ -307,6 +385,9 @@ enum ToolContentValue {
 pub enum ToolContentView<'a> {
     /// Exact observed text, including empty or whitespace-only text.
     Text(&'a str),
+    /// A tool's structured result (MCP `structuredContent`), as the JSON text
+    /// the adapter wrote it in. Beside the result's text, never instead of it.
+    Structured(&'a str),
     /// A described file change; observing it does not apply or verify the change.
     Diff {
         /// Unresolved resource path supplied by the provider.
@@ -324,6 +405,25 @@ impl ToolContent {
         Self {
             value: ToolContentValue::Text(text.into().into_boxed_str()),
         }
+    }
+    /// Own a tool's structured result as `json`, the JSON text an adapter
+    /// serialized it to. Not parsed or checked here: the adapter that wrote it
+    /// owns its syntax, and nothing in the domain reads inside it.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError::ValueTooLong`] past [`MAX_STRUCTURED_RESULT_BYTES`].
+    pub fn structured(json: impl Into<String>) -> Result<Self, ExecutionError> {
+        let json = json.into();
+        if json.len() > MAX_STRUCTURED_RESULT_BYTES {
+            return Err(ExecutionError::ValueTooLong {
+                field: "structured tool result",
+                max_bytes: MAX_STRUCTURED_RESULT_BYTES,
+            });
+        }
+        Ok(Self {
+            value: ToolContentValue::Structured(json.into_boxed_str()),
+        })
     }
     /// Describe a change to unresolved `path` with optional prior `old` text and
     /// replacement `new` text. None means prior text was not supplied; Some(empty)
@@ -351,6 +451,7 @@ impl ToolContent {
     pub fn view(&self) -> ToolContentView<'_> {
         match &self.value {
             ToolContentValue::Text(text) => ToolContentView::Text(text),
+            ToolContentValue::Structured(json) => ToolContentView::Structured(json),
             ToolContentValue::Diff { path, old, new } => ToolContentView::Diff {
                 path,
                 old: old.as_deref(),
@@ -362,7 +463,7 @@ impl ToolContent {
     /// allocation capacity. Collection slots are measured by the owning observation.
     pub fn payload_bytes(&self) -> usize {
         match &self.value {
-            ToolContentValue::Text(text) => text.len(),
+            ToolContentValue::Text(text) | ToolContentValue::Structured(text) => text.len(),
             ToolContentValue::Diff { path, old, new } => path
                 .0
                 .capacity()
@@ -421,5 +522,53 @@ mod reversible_tests {
         let restored = cleared.restored(undo);
         assert_eq!(restored.title().as_ref().unwrap().as_ptr(), title);
         assert_eq!(content_pointer(&restored), content);
+    }
+
+    #[test]
+    fn an_observation_rebuilt_from_its_update_is_the_same_observation() {
+        let id = ToolCallId::new("tool").unwrap();
+        let full = ToolObservation::default().with_update(
+            ToolCallUpdate::new(
+                id.clone(),
+                Some("title".into()),
+                Some(ToolKind::Fetch),
+                Some(ToolStatus::Failed),
+                Some(vec![FileLocation::new(
+                    FilePath::new("a").unwrap(),
+                    Some(2),
+                )]),
+                Some(vec![
+                    ToolContent::text("text"),
+                    ToolContent::structured("{}").unwrap(),
+                ]),
+            )
+            .with_mcp_tool(McpTool::new("server", "tool").unwrap()),
+        );
+        let update = full.as_update(id.clone());
+        assert_eq!(update.id(), &id);
+        assert_eq!(ToolObservation::default().with_update(update), full);
+        let empty = ToolObservation::default();
+        assert_eq!(empty.clone().with_update(empty.as_update(id)), empty);
+    }
+
+    #[test]
+    fn rollback_restores_the_mcp_identity_an_update_replaced_or_left() {
+        let id = ToolCallId::new("tool").unwrap();
+        let bare = || ToolCallUpdate::new(id.clone(), None, None, None, None, None);
+        let first = McpTool::new("first", "tool").unwrap();
+        let second = McpTool::new("second", "tool").unwrap();
+        let original = ToolObservation::default().with_update(bare().with_mcp_tool(first.clone()));
+        let (replaced, undo) =
+            original.with_reversible_update(bare().with_mcp_tool(second.clone()));
+        assert_eq!(replaced.mcp_tool(), Some(&second));
+        assert_eq!(replaced.restored(undo).mcp_tool(), Some(&first));
+        let original = ToolObservation::default().with_update(bare().with_mcp_tool(first.clone()));
+        let (kept, undo) = original.with_reversible_update(bare());
+        assert_eq!(kept.mcp_tool(), Some(&first));
+        assert_eq!(kept.restored(undo).mcp_tool(), Some(&first));
+        let (named, undo) =
+            ToolObservation::default().with_reversible_update(bare().with_mcp_tool(first));
+        assert!(named.mcp_tool().is_some());
+        assert_eq!(named.restored(undo).mcp_tool(), None);
     }
 }

@@ -34,6 +34,18 @@ prior text. `payload_bytes()` measures retained text and path allocation; the ow
 tool observation separately counts collection slots. These values describe provider
 output and do not apply changes or authorize filesystem access.
 
+`ToolContent::structured` keeps a tool's structured result (MCP
+`structuredContent`) as the JSON text an adapter wrote, at most
+`MAX_STRUCTURED_RESULT_BYTES`; it sits beside the result's text, never instead of
+it. `McpTool` names the MCP server and tool a call went to, bounded by
+`MAX_MCP_NAME_BYTES`; `ToolCallUpdate::with_mcp_tool` attaches it, and a later
+update that names none keeps the observed one. It is identity for display and
+correlation, not access to the server. Which harness can say what is recorded in
+[ADR 344](../../../../docs/adr/todo/344-mcp-ui.md#what-each-harness-passes-through-acp):
+Claude's name is split at the one configured server prefix it starts with, Codex's
+comes exactly from `rawInput`, and Opencode's cannot be split, so it names none.
+No harness passes a tool's own `_meta` (its MCP Apps UI resource) through ACP.
+
 Tool schemas and raw arguments are parsed by infrastructure. The application's
 `tools::ToolReviewInput` preserves complete review arguments as opaque JSON text; it is
 not a domain entity or a grant. [Permission review](permissions.md) pairs this

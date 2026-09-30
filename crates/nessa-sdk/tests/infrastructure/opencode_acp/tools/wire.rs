@@ -246,3 +246,27 @@ fn an_execution_cannot_decide_how_many_identities_to_keep() {
     .unwrap();
     assert_eq!(input.name, "read");
 }
+
+/// An MCP call as Opencode 1.18.31's bundle builds it (read from the compiled
+/// binary, not observed in a turn): the title is `<server>_<tool>` with
+/// anything outside `[A-Za-z0-9_-]` replaced by `_`, kind `other`, no `_meta`,
+/// and the result as text. One `_` between two names that may hold `_`
+/// cannot be split back, so no identity is claimed and the text result stays.
+#[test]
+fn an_mcp_call_names_no_server_or_tool_and_keeps_its_text_result() {
+    let mut tools = HashMap::new();
+    let announced = json!({"sessionUpdate":"tool_call","toolCallId":"mcp","status":"pending",
+        "title":"charts_app_show","kind":"other","rawInput":{"n":2}});
+    assert_eq!(tool_call(&announced, &mut tools).unwrap().mcp_tool(), None);
+    let done = json!({"sessionUpdate":"tool_call_update","toolCallId":"mcp","status":"completed",
+        "content":[{"type":"content","content":{"type":"text","text":"{\"rows\":2}"}}],
+        "rawOutput":{"output":"{\"rows\":2}","metadata":{}}});
+    let update = tool_call(&done, &mut tools).unwrap();
+    assert_eq!(update.mcp_tool(), None);
+    assert_eq!(
+        update.content(),
+        &Some(vec![
+            crate::domain::agent_execution::tools::ToolContent::text("{\"rows\":2}")
+        ])
+    );
+}
