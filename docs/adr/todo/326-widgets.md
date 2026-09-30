@@ -115,21 +115,24 @@ stays where it is, without a way back.
 when whatever held the caret goes away, it lands in the focused pane's composer.
 This record amends the whole rule, both halves: the caret lands in the focused
 pane's composer when it shows a session, and in its body when it shows a widget,
-for the view to place further — so a run's detail closing, or a subagent list
-giving way to one subagent, leaves focus in the widget's pane, where the next
-Escape still reaches it. Opening a widget in a pane is a pane taking focus;
-opening one in the window moves focus into it; going back to the panes is the
-focused pane taking focus.
+for the view to place further; and while the content view is a widget, focus
+that falls away lands in the window's widget body, not a pane beneath it — so a
+run's detail closing, or a subagent list giving way to one subagent, leaves
+focus in the widget's pane, where the next Escape still reaches it. Opening a
+widget in a pane is a pane taking focus; opening one in the window moves focus
+into it; going back to the panes is the focused pane taking focus.
 
 **Escape**, after 238's owners — a menu or dialog, a carrying drag, the edge
 peek, the open overview — goes to the widget in front. While the content view is
 a widget, the window covers the content region only, and the session list beside
-it stays in reach; Escape anywhere outside a menu, dialog or carrying drag — the
-session list's search (which clears its query first) and its rows included —
-goes to the window's widget. Otherwise it is a pane's widget, only while focus
-is inside that pane, so a field elsewhere keeps its Escape. The view has the
-first refusal (a view with somewhere to step back to — a run it opened, a
-subagent it shows — registers `onEscape` and handles it); then the host, which
+it stays in reach; Escape anywhere outside a menu, dialog, carrying drag or
+shown edge peek (each of which keeps its Escape and goes no further) — the
+session list's rows included — goes to the window's widget. In the session
+list's search, an Escape with a query clears it and goes no further; the next,
+with none, goes to the window's widget. Otherwise it is a pane's widget, only
+while focus is inside that pane, so a field elsewhere keeps its Escape. The view
+has the first refusal (a view with somewhere to step back to — a run it opened,
+a subagent it shows — registers `onEscape` and handles it); then the host, which
 goes back to the panes from the window. A widget in a pane is not closed by
 Escape, as a session pane is not.
 
