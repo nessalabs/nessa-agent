@@ -261,7 +261,7 @@ pub enum PrivatePublicationStage {
     ValidateReservation,
     /// Flushing the reservation before rename failed.
     FlushBeforeRename,
-    /// The exclusive destination rename failed, so no publication is known.
+    /// The destination rename failed, so no publication is known.
     Rename,
     /// Flushing the already-renamed file handle failed.
     FlushAfterRename,
