@@ -17,6 +17,9 @@ export function checkHeaderImage(file: { type: string; size: number }): HeaderIm
 }
 
 /** What to tell the person about a refused file. */
+/** How long the reason a picture was refused stays in view, wherever it was asked for. */
+export const headerImageRefusalMs = 4000
+
 export const headerImageRefusalText: Record<HeaderImageRefusal, string> = {
   "not-an-image": "That file isn’t an image",
   "too-large": "Images up to 25 MB",

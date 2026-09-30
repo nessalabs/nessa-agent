@@ -35,11 +35,19 @@
  *                   Escape, and Tab past its end, close it onto its chip; with
  *                   the system's reduced motion, nothing animates and the words
  *                   that were shown are not drawn
+ *   header-picture  from a conversation pane's "…" menu, a picture chosen in the
+ *                   file dialog shows in the panes' header bands; a new
+ *                   session's home draws it from the pane's top edge, and in
+ *                   the window's corner with nothing beside it keeps it clear
+ *                   of the window's controls; Use Night Scene takes it back,
+ *                   and a file that is not an image is refused with why, in
+ *                   that pane's header (issue #320)
  *   home-shape      a new session's home in a pane smaller than 640px either
  *                   way takes a conversation's shape: its composer docked at
  *                   the foot as the conversation's beside it is, with the
- *                   greeting on and off, the scene gone, "Working late?" in
- *                   the middle at the conversation title's size; a larger
+ *                   greeting on and off, the header kept as a band across
+ *                   the top with its Customize control, "Working late?" under
+ *                   it at the pane's left at the conversation title's size; a larger
  *                   pane keeps the scene and the card; a home appearing plays
  *                   no settling, and each crossing plays one, by opacity and
  *                   transform alone, and none with less motion; the same
@@ -64,7 +72,8 @@
  * otherwise; the rest in the columns layout.
  * With --shots <dir>, screenshots of each width go there for a person to look at.
  */
-import { mkdirSync, readFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { attempt, CannotRun, chosen } from "./lib/cli.mjs"
@@ -336,7 +345,13 @@ const checks = {
           body: box(homePane?.querySelector(sel.paneBody)),
           composer: box(home?.querySelector(sel.composerCard)),
           greeting: box(home?.querySelector(".desktop-greeting")),
+          greetingAlign: home?.querySelector(".desktop-greeting")
+            ? getComputedStyle(home.querySelector(".desktop-greeting")).textAlign
+            : null,
           greetingType: type(document.querySelector(sel.greeting)),
+          header: box(document.querySelector(sel.homeScene)),
+          customize:
+            document.querySelector(sel.homeCustomize)?.checkVisibility() ?? false,
           scene: scene ? scene.checkVisibility() : false,
           text: field?.value ?? null,
           focused: !!field && document.activeElement === field,
@@ -392,13 +407,32 @@ const checks = {
         failures.push(
           `${tag}: the home's composer is ${Math.round(foot)}px from its pane's foot`,
         )
-      if (m.scene) failures.push(`${tag}: the scene is shown in a small pane`)
-      if (m.greeting && m.body) {
-        const across = m.greeting.x + m.greeting.w / 2 - (m.pane.x + m.pane.w / 2)
-        const down = m.greeting.y + m.greeting.h / 2 - (m.body.y + m.composer.y) / 2
-        if (Math.abs(across) > tolerance || Math.abs(down) > tolerance)
+      // The header stays, lower: a band from the top of the pane's body, its
+      // picture control with it (issue #320).
+      if (!m.scene || !m.header) failures.push(`${tag}: no header in a small pane`)
+      else {
+        if (m.body && Math.abs(m.header.y - m.body.y) > tolerance)
           failures.push(
-            `${tag}: the greeting is ${Math.round(across)}px across and ${Math.round(down)}px down from the middle above the composer`,
+            `${tag}: the header starts ${Math.round(m.header.y - m.body.y)}px below the top of the pane`,
+          )
+        // 72–150px of picture, and the scene's faded rows beneath it.
+        if (m.header.h < 72 || m.header.h > 190)
+          failures.push(
+            `${tag}: the header is ${Math.round(m.header.h)}px tall, not a band`,
+          )
+        if (!m.customize)
+          failures.push(`${tag}: the header's Customize control is not there`)
+      }
+      // The greeting under the header, at the pane's left, as a title is.
+      if (m.greeting && m.header && m.body) {
+        const under = m.greeting.y - (m.header.y + m.header.h)
+        if (under < -tolerance || under > 40)
+          failures.push(
+            `${tag}: the greeting is ${Math.round(under)}px below the header, not under it`,
+          )
+        if (Math.abs(m.greeting.x - m.body.x) > tolerance || m.greetingAlign !== "left")
+          failures.push(
+            `${tag}: the greeting is ${Math.round(m.greeting.x - m.body.x)}px in from the pane's left, set ${m.greetingAlign}`,
           )
       }
     }
@@ -1624,6 +1658,128 @@ checks["overview-story"] = async ({ page, engine, options }) => {
 
 /** Checks run in both workspace layouts by default (the rest, in columns). */
 const everyLayout = new Set(["overview-counts", "overview-story"])
+
+checks["header-picture"] = async ({ page, engine, layout, options }) => {
+  const failures = []
+  const dir = mkdtempSync(join(tmpdir(), "nessa-header-"))
+  // A small real picture, and a file that is not one.
+  const picture = join(dir, "sky.png")
+  writeFileSync(
+    picture,
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAG0lEQVR4nGNgYGD4z8DAwMDEwMDAwMDAwAAAHgQCAeJ+1ukAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  )
+  const notes = join(dir, "notes.txt")
+  writeFileSync(notes, "not a picture")
+  const header = page.locator(css.paneHeader).first()
+  await need(page, css.paneHeader, "a pane's header")
+  const openMenu = async () => {
+    // A menu just chosen from blinks as it closes; the next is opened once it has gone.
+    await page.locator(css.menu).first().waitFor({ state: "detached" })
+    await header.hover()
+    await page.locator(css.paneActions).first().click()
+  }
+  const pick = async (file) => {
+    await openMenu()
+    const [chooser] = await Promise.all([
+      page.waitForEvent("filechooser"),
+      page.getByRole("menuitem", { name: names.chooseHeaderPicture }).click(),
+    ])
+    await chooser.setFiles(file)
+  }
+  const pictured = () =>
+    page.evaluate((sel) => document.querySelectorAll(sel).length, css.sliverPicture)
+
+  await pick(picture)
+  const shown = await until(
+    page,
+    (sel) => document.querySelectorAll(sel).length > 0,
+    css.sliverPicture,
+  )
+  if (!shown) failures.push("a picture chosen from the pane's menu is not in its band")
+  await shot(options, page, `header-picture-${engine}-chosen`)
+
+  // A new session's home draws the picture from its pane's top edge…
+  const homePicture = () =>
+    page.evaluate(
+      ([home, pane, surface]) => {
+        const image = document.querySelector(`${home} .desktop-header-image`)
+        const box = image?.getBoundingClientRect()
+        const paneBox = image?.closest(pane)?.getBoundingClientRect()
+        const tokens = getComputedStyle(document.querySelector(surface))
+        const px = (name) => {
+          const probe = document.createElement("div")
+          probe.style.width = tokens.getPropertyValue(name)
+          document.querySelector(surface).append(probe)
+          const width = probe.getBoundingClientRect().width
+          probe.remove()
+          return width
+        }
+        return box && paneBox
+          ? {
+              top: box.top - paneBox.top,
+              left: box.left,
+              y: box.top,
+              safeStart: px("--desktop-titlebar-safe-start"),
+              titlebar: px("--desktop-titlebar-height"),
+            }
+          : null
+      },
+      [css.paneHome, css.pane, "[data-surface]"],
+    )
+  await page.keyboard.press(keys.newSession)
+  await need(page, css.paneHome, "a new session's home")
+  await settled(page)
+  const beside = await homePicture()
+  if (!beside) failures.push("a new session's home does not draw the picture")
+  else if (Math.abs(beside.top) > 1.5)
+    failures.push(
+      `the home's picture starts ${Math.round(beside.top)}px below its pane's top`,
+    )
+  // …but, alone in the window's corner, not beneath the window's controls.
+  await hideColumns(page, layout)
+  await settled(page)
+  const corner = await homePicture()
+  if (corner && corner.left < corner.safeStart && corner.y < corner.titlebar)
+    failures.push(
+      `in the window's corner the home's picture is drawn beneath the window's controls (${Math.round(corner.left)}, ${Math.round(corner.y)})`,
+    )
+  await shot(options, page, `header-picture-${engine}-corner`)
+
+  await openMenu()
+  const back = page.getByRole("menuitem", { name: names.useNightScene })
+  if (!(await back.count()))
+    failures.push("with a picture, the menu has no Use Night Scene")
+  else {
+    await back.click()
+    const gone = await until(
+      page,
+      (sel) => document.querySelectorAll(sel).length === 0,
+      css.sliverPicture,
+    )
+    if (!gone) failures.push("Use Night Scene left the picture in the bands")
+  }
+
+  await pick(notes)
+  const refusal = page.locator(css.paneRefusal).first()
+  const said = await until(
+    page,
+    (sel) => document.querySelector(sel) !== null,
+    css.paneRefusal,
+  )
+  if (!said) failures.push("a file that is not an image was refused silently")
+  else if (!(await refusal.isVisible()))
+    failures.push("the refusal is not visible in the header")
+  if ((await pictured()) > 0)
+    failures.push("a file that is not an image became the picture")
+  rmSync(dir, { recursive: true, force: true })
+  return {
+    measured: { pictureShown: shown, refusal: said ? await refusal.textContent() : null },
+    failures,
+  }
+}
 
 const meta = {
   name: "responsive",

@@ -125,6 +125,9 @@ export const css = {
   // Menus and tooltips
   menu: '[role="menu"]',
   menuItem: '[role^="menuitem"]',
+  paneActions: '[aria-label^="Pane Actions"]', // label: a pane's "…" menu, in its header
+  sliverPicture: "[data-sliver] img", // a conversation pane's band showing the header picture, not the scene
+  paneRefusal: '.workspace-pane-header [role="status"]', // why a picture chosen from a pane's menu was not taken
   tooltip: ".desktop-tooltip", // class
 
   // Picture band atop conversation panes (decorative, aria-hidden)
@@ -240,6 +243,9 @@ export const zoneSaid = {
 /** Accessible names, for getByRole / getByText. */
 export const names = {
   agentsEntry: "Agents",
+  /** A pane's "…" menu: the header picture's two choices (issue #320). */
+  chooseHeaderPicture: "Choose Header Picture…",
+  useNightScene: "Use Night Scene",
   allowOnce: "Allow Once",
   leaveSettings: "Back to nessa Agent",
   /** A sample session (in-memory source) that waits on an approval. */

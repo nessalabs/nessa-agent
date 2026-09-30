@@ -15,12 +15,53 @@
   flex: 1;
   min-height: 0;
   padding-top: 0;
+  /* The room the pane's title row takes above the home, and the picture's own height. */
+  --workspace-home-reach: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
+  --workspace-home-picture: clamp(120px, 32cqh, 290px);
+}
+
+/*
+ * A picture reaches up behind the pane's title row to the pane's top edge,
+ * fading in there, as a conversation's band does — rather than stopping short
+ * under the row and leaving a strip of the pane empty above it. It keeps its
+ * own height below the row; its Customize control moves down with it, clear
+ * of the row's controls. The scene, faint line work, stays where it was.
+ * In the window's corner, with nothing beside it, the row is where the
+ * window's own controls are, and nothing is drawn beneath them (ADR 238, the
+ * titlebar's safe area): there the picture stays under the row.
+ */
+.workspace[data-panes-alone]
+  .workspace-pane:is(
+    [data-split-corner]:not([data-drag-corner="no"]),
+    [data-drag-corner="yes"]
+  )
+  .workspace-pane-home
+  > .desktop-home {
+  --workspace-home-reach: 0px;
+}
+
+.workspace-pane-home
+  > .desktop-home:not([data-page])
+  .desktop-header:has(> .desktop-header-image) {
+  margin-top: calc(-1 * var(--workspace-home-reach));
+}
+
+.workspace-pane-home > .desktop-home:not([data-page]) .desktop-header-image {
+  height: calc(var(--workspace-home-picture) + var(--workspace-home-reach));
+}
+
+.workspace-pane-home
+  > .desktop-home:not([data-page])
+  .desktop-header:has(> .desktop-header-image)
+  .desktop-header-controls {
+  top: calc(10px + var(--workspace-home-reach));
 }
 
 /*
  * A small pane — narrower or shorter than 640px, the room the scene, the
  * greeting and the card need to read as a home — takes a conversation's
- * shape: the scene steps aside, the greeting sits in the middle of the pane
+ * shape: the header shrinks to a band across the top, its picture control
+ * still in its corner, the greeting sits under it at the pane's left
  * at the size of a conversation's title (`transcript.css`), and the composer
  * docks at the foot as a conversation's does (the dock, below). It is decided
  * by the pane's own size, not the window's, and is the same composer either
@@ -38,8 +79,21 @@
     padding: 0;
   }
 
+  /*
+   * The header stays — the picture, or the scene, and the control that
+   * changes it — only lower: a band as wide as the pane, its height a share of
+   * the pane's, so a short pane gives it less.
+   */
   .workspace-pane-home > .desktop-home:not([data-page]) .desktop-header {
-    display: none;
+    width: 100%;
+  }
+
+  .workspace-pane-home > .desktop-home:not([data-page]) {
+    --workspace-home-picture: clamp(72px, 22cqh, 150px);
+  }
+
+  .workspace-pane-home > .desktop-home:not([data-page]) .desktop-night-scene {
+    height: var(--workspace-home-picture);
   }
 
   .workspace-pane-home > .desktop-home:not([data-page]) .desktop-home-stack {
@@ -60,10 +114,12 @@
     justify-content: flex-end;
   }
 
+  /* The greeting starts under the header, at the pane's left, as a conversation's title does. */
   .workspace-pane-home > .desktop-home:not([data-page]) .desktop-greeting {
-    margin: auto;
+    align-self: flex-start;
+    margin: 0 0 auto;
     padding: 0 24px;
-    text-align: center;
+    text-align: left;
   }
 }
 

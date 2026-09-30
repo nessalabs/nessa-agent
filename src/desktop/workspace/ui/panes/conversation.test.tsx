@@ -163,3 +163,28 @@ describe("a new session's home in a pane", () => {
     ).not.toBeNull()
   })
 })
+
+describe("a new session's home greets by the hour of the window's clock", () => {
+  const at = (hour: number) => new Date(2026, 8, 29, hour, 0).getTime()
+  const greeting = () => host.querySelector(".desktop-greeting")?.textContent
+
+  it("says good morning in the morning, and asks if it is late only at night", async () => {
+    const store = testStore(fakeSource())
+    await store.dispatch(loadWorkspace())
+    for (const [hour, said] of [
+      [9, "Good morning"],
+      [23, "Working late?"],
+    ] as const) {
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => at(hour)}>
+              <PaneHome sessionId="a" onSend={() => {}} />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      expect(greeting()).toBe(said)
+    }
+  })
+})
