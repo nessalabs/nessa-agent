@@ -1,8 +1,10 @@
 import { useCallback, useSyncExternalStore } from "react"
 import {
+  checkHeaderImage,
   defaultHeaderFraming,
   parseHeaderFraming,
   type HeaderFraming,
+  type HeaderImageRefusal,
 } from "../model/header-image"
 import { storedPreference } from "./stored-preference"
 
@@ -194,3 +196,43 @@ const tintPreference = storedPreference({
 })
 
 export const useTintFromPicture = tintPreference.usePreference
+
+/**
+ * Asks for a header picture: the one way one is chosen, from the home
+ * header's Customize menu or a pane's "…" menu. A file dialog opens, the file
+ * is checked (`checkHeaderImage`), and one that passes becomes the picture,
+ * starting centred. `onRefused` hears why a file was not taken; `onChosen`
+ * that one was, for the header to go straight to framing it.
+ */
+export function useChooseHeaderPicture({
+  onChosen,
+  onRefused,
+}: {
+  onChosen?: () => void
+  onRefused?: (reason: HeaderImageRefusal) => void
+} = {}): () => void {
+  const [, choose] = useHeaderImage()
+  const [, keepFraming] = useHeaderFraming()
+  return useCallback(() => {
+    const input = document.createElement("input")
+    input.type = "file"
+    input.accept = "image/*"
+    input.addEventListener(
+      "change",
+      () => {
+        const file = input.files?.[0]
+        if (!file) return
+        const check = checkHeaderImage(file)
+        if (!check.ok) {
+          onRefused?.(check.reason)
+          return
+        }
+        choose(file)
+        keepFraming(defaultHeaderFraming)
+        onChosen?.()
+      },
+      { once: true },
+    )
+    input.click()
+  }, [choose, keepFraming, onChosen, onRefused])
+}

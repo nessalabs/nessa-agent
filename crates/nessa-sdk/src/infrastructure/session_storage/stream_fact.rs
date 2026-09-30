@@ -17,7 +17,8 @@ const START_SCHEMA: &str = "nessa.fact-start";
 const PIECE_SCHEMA: &str = "nessa.fact-piece";
 const SEAL_SCHEMA: &str = "nessa.fact-seal";
 const MAX_FRAME_BYTES: usize = 64 * 1024;
-const MAX_PIECE_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_PIECE_BYTES: usize = 64 * 1024;
+pub(crate) const PIECE_HEADER_BYTES: usize = 9;
 pub(crate) const MAX_BODY_BYTES: usize = 160 * 1024 * 1024;
 const START_TRAILER_BYTES: usize = 8 + 8 + 4 + 32 + 1;
 const ABORT_SCHEMA: &str = "nessa.fact-abort";
@@ -196,7 +197,7 @@ pub(crate) fn frame_fact(
     ));
     if !inline {
         for (index, bytes) in fact.body.chunks(MAX_PIECE_BYTES).enumerate() {
-            let mut payload = Vec::with_capacity(9 + bytes.len());
+            let mut payload = Vec::with_capacity(PIECE_HEADER_BYTES + bytes.len());
             payload.push(VERSION);
             payload.extend_from_slice(&(index as u32).to_be_bytes());
             payload.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
@@ -322,79 +323,208 @@ fn parse_start(start: &NewEvent) -> Result<ParsedStart<'_>, FactFrameError> {
     })
 }
 
+/// One incremental authority for physical framing. It retains only the start
+/// header and rolling hash; callers choose whether semantic body bytes are kept.
+#[derive(Clone)]
+pub(crate) struct FrameValidator {
+    offset: u64,
+    pending: Option<PendingFrame>,
+}
+
+#[derive(Clone)]
+struct PendingFrame {
+    key: FactKey,
+    attempt_start: u64,
+    body_length: usize,
+    count: u32,
+    digest: [u8; 32],
+    start_digest: [u8; 32],
+    next_piece: u32,
+    bytes: usize,
+    hash: Sha256,
+}
+
+pub(crate) enum FrameStep<'a> {
+    Pending(Option<&'a [u8]>),
+    Complete {
+        key: FactKey,
+        body: Option<&'a [u8]>,
+    },
+    Aborted,
+}
+
+impl FrameValidator {
+    pub(crate) fn after(offset: u64) -> Self {
+        Self {
+            offset,
+            pending: None,
+        }
+    }
+
+    pub(crate) fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    pub(crate) fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    pub(crate) fn push<'a>(
+        &mut self,
+        record: &'a NewEvent,
+        position: u64,
+    ) -> Result<FrameStep<'a>, FactFrameError> {
+        if self.offset.checked_add(1) != Some(position) {
+            return Err(FactFrameError::Invalid);
+        }
+        let Some(pending) = &self.pending else {
+            let parsed = parse_start(record)?;
+            if parsed.attempt_start != position {
+                return Err(FactFrameError::Invalid);
+            }
+            self.offset = position;
+            if let Some(body) = parsed.inline {
+                return Ok(FrameStep::Complete {
+                    key: parsed.key,
+                    body: Some(body),
+                });
+            }
+            self.pending = Some(PendingFrame {
+                key: parsed.key,
+                attempt_start: position,
+                body_length: parsed.body_length,
+                count: parsed.count,
+                digest: parsed.digest,
+                start_digest: Sha256::digest(record.payload.as_bytes()).into(),
+                next_piece: 0,
+                bytes: 0,
+                hash: Sha256::new(),
+            });
+            return Ok(FrameStep::Pending(None));
+        };
+        if record.schema == schema(ABORT_SCHEMA) {
+            let mut payload = Vec::with_capacity(49);
+            payload.push(VERSION);
+            payload.extend_from_slice(&pending.attempt_start.to_be_bytes());
+            payload.extend_from_slice(&self.offset.to_be_bytes());
+            payload.extend_from_slice(&pending.start_digest);
+            let expected = event(
+                &pending.key,
+                pending.attempt_start,
+                &format!("abort-{}", self.offset),
+                ABORT_SCHEMA,
+                &payload,
+            );
+            if record != &expected {
+                return Err(FactFrameError::Conflict);
+            }
+            self.pending = None;
+            self.offset = position;
+            return Ok(FrameStep::Aborted);
+        }
+        if pending.next_piece < pending.count {
+            check_event(
+                record,
+                &pending.key,
+                pending.attempt_start,
+                &format!("part-{}", pending.next_piece),
+                PIECE_SCHEMA,
+            )?;
+            let mut piece = record.payload.as_bytes();
+            if read_u8(&mut piece)? != VERSION || read_u32(&mut piece)? != pending.next_piece {
+                return Err(FactFrameError::Invalid);
+            }
+            let length = read_u32(&mut piece)? as usize;
+            let expected = (pending.body_length - pending.bytes).min(MAX_PIECE_BYTES);
+            if length != expected || piece.len() != length {
+                return Err(FactFrameError::Invalid);
+            }
+            // Update only after all checks: a refused frame leaves reusable progress.
+            let mut next = pending.clone();
+            next.hash.update(piece);
+            next.bytes += length;
+            next.next_piece += 1;
+            if next.next_piece == next.count
+                && next.hash.clone().finalize().as_slice() != next.digest
+            {
+                return Err(FactFrameError::Invalid);
+            }
+            self.pending = Some(next);
+            self.offset = position;
+            return Ok(FrameStep::Pending(Some(piece)));
+        }
+        check_event(
+            record,
+            &pending.key,
+            pending.attempt_start,
+            "seal",
+            SEAL_SCHEMA,
+        )?;
+        let mut bytes = record.payload.as_bytes();
+        if read_u8(&mut bytes)? != VERSION
+            || read_u32(&mut bytes)? != pending.count
+            || read_u64(&mut bytes)? != pending.body_length as u64
+            || take(&mut bytes, 32)? != pending.digest
+            || !bytes.is_empty()
+            || pending.hash.clone().finalize().as_slice() != pending.digest
+        {
+            return Err(FactFrameError::Invalid);
+        }
+        let key = pending.key.clone();
+        self.pending = None;
+        self.offset = position;
+        Ok(FrameStep::Complete { key, body: None })
+    }
+}
+
+/// Classifies a frame only after its enclosing immutable prefix was validated.
+/// This is not a substitute for `FrameValidator::push` on unvalidated data.
+pub(crate) fn terminal_in_validated_prefix(record: &NewEvent) -> Result<bool, FactFrameError> {
+    if record.schema == schema(START_SCHEMA) {
+        return Ok(parse_start(record)?.inline.is_some());
+    }
+    let tag = frame_tag(record)?;
+    Ok(tag == 3 || tag == 4)
+}
+
 pub(crate) fn decode_first(records: &[NewEvent]) -> Result<FactDecode, FactFrameError> {
     let Some(start) = records.first() else {
         return Ok(FactDecode::Partial);
     };
-    let ParsedStart {
-        key,
-        attempt_start,
-        body_length,
-        count,
-        digest,
-        inline,
-    } = parse_start(start)?;
-    if let Some(bytes) = inline {
-        return Ok(FactDecode::Complete {
-            fact: FramedFact {
-                key,
-                body: bytes.to_vec(),
-            },
-            records: 1,
-        });
-    }
-    let needed = count as usize + 2;
-    let mut body = Vec::with_capacity(
-        body_length.min(
-            records
-                .len()
-                .saturating_sub(1)
-                .saturating_mul(MAX_PIECE_BYTES),
-        ),
+    let parsed = parse_start(start)?;
+    let mut validator = FrameValidator::after(
+        parsed
+            .attempt_start
+            .checked_sub(1)
+            .ok_or(FactFrameError::Invalid)?,
     );
-    for index in 0..count as usize {
-        let Some(record) = records.get(index + 1) else {
-            return Ok(FactDecode::Partial);
-        };
-        check_event(
+    let mut body = Vec::with_capacity(parsed.body_length);
+    for (index, record) in records.iter().enumerate() {
+        match validator.push(
             record,
-            &key,
-            attempt_start,
-            &format!("part-{index}"),
-            PIECE_SCHEMA,
-        )?;
-        let mut piece = record.payload.as_bytes();
-        if read_u8(&mut piece)? != VERSION || read_u32(&mut piece)? != index as u32 {
-            return Err(FactFrameError::Invalid);
+            parsed
+                .attempt_start
+                .checked_add(index as u64)
+                .ok_or(FactFrameError::Invalid)?,
+        )? {
+            FrameStep::Pending(piece) => {
+                if let Some(piece) = piece {
+                    body.extend_from_slice(piece)
+                }
+            }
+            FrameStep::Complete { key, body: piece } => {
+                if let Some(piece) = piece {
+                    body.extend_from_slice(piece)
+                }
+                return Ok(FactDecode::Complete {
+                    fact: FramedFact { key, body },
+                    records: index + 1,
+                });
+            }
+            FrameStep::Aborted => return Err(FactFrameError::Conflict),
         }
-        let length = read_u32(&mut piece)? as usize;
-        let expected = (body_length - body.len()).min(MAX_PIECE_BYTES);
-        if length != expected || piece.len() != length {
-            return Err(FactFrameError::Invalid);
-        }
-        body.extend_from_slice(piece);
     }
-    let Some(seal) = records.get(needed - 1) else {
-        if Sha256::digest(&body).as_slice() != digest {
-            return Err(FactFrameError::Invalid);
-        }
-        return Ok(FactDecode::Partial);
-    };
-    check_event(seal, &key, attempt_start, "seal", SEAL_SCHEMA)?;
-    let mut seal_bytes = seal.payload.as_bytes();
-    if read_u8(&mut seal_bytes)? != VERSION
-        || read_u32(&mut seal_bytes)? != count
-        || read_u64(&mut seal_bytes)? != body_length as u64
-        || take(&mut seal_bytes, 32)? != digest
-        || !seal_bytes.is_empty()
-        || Sha256::digest(&body).as_slice() != digest
-    {
-        return Err(FactFrameError::Invalid);
-    }
-    Ok(FactDecode::Complete {
-        fact: FramedFact { key, body },
-        records: needed,
-    })
+    Ok(FactDecode::Partial)
 }
 
 fn abort_event(start: &NewEvent, prefix_end: u64) -> Result<NewEvent, FactFrameError> {
@@ -422,21 +552,31 @@ pub(crate) fn validate_abort_prefix(
     start_offset: u64,
     prefix_end: u64,
 ) -> Result<(), FactFrameError> {
-    let Some(start) = prefix.first() else {
-        return Err(FactFrameError::Invalid);
-    };
-    let parsed = parse_start(start)?;
-    if parsed.attempt_start != start_offset || parsed.inline.is_some() {
+    let mut validator =
+        FrameValidator::after(start_offset.checked_sub(1).ok_or(FactFrameError::Invalid)?);
+    for (index, record) in prefix.iter().enumerate() {
+        if !matches!(
+            validator.push(
+                record,
+                start_offset
+                    .checked_add(index as u64)
+                    .ok_or(FactFrameError::Invalid)?
+            )?,
+            FrameStep::Pending(_)
+        ) {
+            return Err(FactFrameError::Conflict);
+        }
+    }
+    if validator.offset() != prefix_end || !validator.is_pending() {
         return Err(FactFrameError::Invalid);
     }
-    let span = prefix_end
-        .checked_sub(start_offset)
-        .and_then(|distance| distance.checked_add(1))
-        .ok_or(FactFrameError::Invalid)?;
-    if !matches!(decode_first(prefix)?, FactDecode::Partial)
-        || prefix.len() as u64 != span
-        || *abort != abort_event(start, prefix_end)?
-    {
+    if !matches!(
+        validator.push(
+            abort,
+            prefix_end.checked_add(1).ok_or(FactFrameError::Invalid)?
+        )?,
+        FrameStep::Aborted
+    ) {
         return Err(FactFrameError::Conflict);
     }
     Ok(())
@@ -657,6 +797,93 @@ mod tests {
             0,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn incremental_validator_refuses_header_inline_piece_seal_and_abort_without_changing_state() {
+        let fact = FramedFact {
+            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
+            body: vec![b'x'; 100_000],
+        };
+        let frames = frame_fact(&fact, 1).unwrap();
+        for bad_index in 0..frames.len() {
+            let mut validator = FrameValidator::after(0);
+            for (index, frame) in frames.iter().take(bad_index).enumerate() {
+                validator.push(frame, index as u64 + 1).unwrap();
+            }
+            let before = validator.offset();
+            let mut bad = frames[bad_index].clone();
+            let mut payload = bad.payload.as_bytes().to_vec();
+            payload[0] = 99;
+            bad.payload = Payload::copy_from_slice(&payload);
+            assert!(validator.push(&bad, bad_index as u64 + 1).is_err());
+            assert_eq!(validator.offset(), before);
+            // A refusal must not alter the hash: the original remaining suffix
+            // still seals exactly this body through the same owner.
+            for (index, frame) in frames.iter().enumerate().skip(bad_index) {
+                validator.push(frame, index as u64 + 1).unwrap();
+            }
+            assert!(!validator.is_pending());
+        }
+        let inline = frame_fact(
+            &FramedFact {
+                key: fact.key.clone(),
+                body: b"inline".to_vec(),
+            },
+            1,
+        )
+        .unwrap()
+        .remove(0);
+        let mut bad = inline.clone();
+        let mut payload = bad.payload.as_bytes().to_vec();
+        *payload.last_mut().unwrap() ^= 1;
+        bad.payload = Payload::copy_from_slice(&payload);
+        let mut validator = FrameValidator::after(0);
+        assert!(validator.push(&bad, 1).is_err());
+        assert_eq!(validator.offset(), 0);
+        assert!(matches!(
+            validator.push(&inline, 1).unwrap(),
+            FrameStep::Complete { .. }
+        ));
+        let mut validator = FrameValidator::after(0);
+        validator.push(&frames[0], 1).unwrap();
+        validator.push(&frames[1], 2).unwrap();
+        let abort = abort_event(&frames[0], 2).unwrap();
+        let mut bad = abort.clone();
+        let mut payload = bad.payload.as_bytes().to_vec();
+        *payload.last_mut().unwrap() ^= 1;
+        bad.payload = Payload::copy_from_slice(&payload);
+        assert_eq!(
+            validator.push(&bad, 3).err(),
+            Some(FactFrameError::Conflict)
+        );
+        assert_eq!(validator.offset(), 2);
+        assert!(validator.is_pending());
+        assert!(matches!(
+            validator.push(&abort, 3).unwrap(),
+            FrameStep::Aborted
+        ));
+    }
+
+    #[test]
+    fn decoded_body_retains_exact_declared_capacity() {
+        for length in [1, 512, 65_536, 65_537, 200_000] {
+            let fact = FramedFact {
+                key: key(),
+                body: vec![b'x'; length],
+            };
+            let frames = frame_fact(&fact, 1).unwrap();
+            let FactDecode::Complete {
+                fact: decoded,
+                records,
+            } = decode_first(&frames).unwrap()
+            else {
+                panic!("complete frame sequence must decode")
+            };
+            assert_eq!(records, frames.len());
+            assert_eq!(decoded, fact);
+            assert_eq!(decoded.body.capacity(), length);
+        }
     }
 
     #[test]

@@ -143,7 +143,10 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
  * and wherever it is sliding — so a transcript scrolled, a narrow pane's
  * heading, or a home's scene never passes under the window's controls.
  */
+/* Above the body, whose home header picture reaches up behind it. */
 .workspace-pane-header {
+  position: relative;
+  z-index: 1;
   display: flex;
   height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
   flex: none;
@@ -279,4 +282,13 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
 :root[data-motion="reduced"] .workspace-pane {
   animation: none;
+}
+
+/* Why a picture chosen from the pane's menu was not taken, for a moment, before its actions. */
+.workspace-pane-refusal {
+  flex: none;
+  margin-right: 8px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  animation: workspace-fade-in var(--desktop-base) ease both;
 }

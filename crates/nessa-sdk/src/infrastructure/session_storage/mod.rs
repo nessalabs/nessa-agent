@@ -2,13 +2,18 @@
 //! Memory storage keeps snapshots for its shared lifetime. Record storage
 //! appends semantic facts to one SQLite runtime and folds them on load. The
 //! bounded read source maps validated physical frames into sync-engine records
-//! without taking the writer lease or repairing an incomplete tail.
+//! without taking the writer lease or repairing an incomplete tail. An
+//! identity-only lookup lets the authorized host compare scope before opening
+//! a worker; the expected-identity constructor rechecks the stream key. Bounded
+//! product reads reuse terminal-discovery metadata/hash in a sixteen-entry cache
+//! and return [`RecordReadStatus::Preparing`] until a captured tail is validated.
+//! That cache retains no worker or semantic body.
 //!
 //! ```text
 //! SessionStorage::open -> SessionStorageLease <- SessionManager
 //!                                      |-> memory snapshot
 //!                                      |-> semantic facts -> SQLite runtime
-//!                                      |-> bounded read source -> sync engine
+//! RecordStorage -> identity metadata -> expected bounded read source -> sync engine
 //! MessageCommitClock <--------------------- Tokio monotonic clock adapter
 //! ```
 //! Arrows show calls and representation mapping. A complete framed fact is
@@ -24,7 +29,12 @@ mod record_source;
 mod record_writer;
 mod snapshot;
 mod stream_fact;
+mod terminal_discovery;
 pub use memory::InMemoryStorage;
 pub use message_commit_clock::RuntimeMessageCommitClock;
-pub use record::RecordStorage;
-pub use record_source::{physical_record_schema, NessaRecordSource};
+pub use record::{RecordStorage, MAX_STORED_RECORD_BYTES};
+pub use record_source::{
+    physical_record_schema, NessaRecordSource, RecordStreamIdentity,
+    MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+};
+pub use terminal_discovery::RecordReadStatus;

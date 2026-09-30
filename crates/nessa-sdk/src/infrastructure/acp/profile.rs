@@ -8,6 +8,7 @@ use crate::application::agent_execution::providers::{
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
+use crate::domain::model_metadata::value_objects::EffortLevel;
 use serde_json::Value;
 
 /// Infrastructure strategy for differences between ACP implementations.
@@ -52,6 +53,25 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
         _mode: ApprovalMode,
     ) -> Result<Value, AgentError> {
         Err(AgentError::Unsupported("live approval mode change".into()))
+    }
+    /// The id of the agent's `thought_level` option this profile sends an
+    /// effort level to, or `None` for a profile that sends none. Only an
+    /// option under this id counts as offering levels: one under any other
+    /// id is an option this profile would never set.
+    fn effort_option(&self) -> Option<&'static str> {
+        None
+    }
+    /// Admit a live reasoning effort change into this profile before its RPC
+    /// is sent, as [`Self::change_approval_mode`] does for a preset: the
+    /// response, and any notification before it, are then checked against the
+    /// requested level. The caller has already refused a level the agent does
+    /// not offer.
+    fn change_effort_level(
+        &mut self,
+        _session_id: &str,
+        _level: EffortLevel,
+    ) -> Result<Value, AgentError> {
+        Err(AgentError::Unsupported("live effort level change".into()))
     }
     /// Check a session or configuration response against the configured context.
     ///

@@ -86,6 +86,7 @@ export const css = {
   overviewColumn: ".agents-overview-column", // class: the list the arrow keys walk
   overviewResting: ".agents-overview-resting", // class: a quiet line in the list ("Nothing needs you")
   inlinePeek: ".agents-inline-peek", // class: the peek opened beneath its row
+  overviewTitle: ".agents-overview-title", // class: the overview's heading and filter
   peekAsk: ".agents-peek-ask", // class: the request in full, after the story
 
   // The composer's thinking control (src/desktop/ui/thinking-control.tsx): a chip
@@ -125,6 +126,9 @@ export const css = {
   // Menus and tooltips
   menu: '[role="menu"]',
   menuItem: '[role^="menuitem"]',
+  paneActions: '[aria-label^="Pane Actions"]', // label: a pane's "…" menu, in its header
+  sliverPicture: "[data-sliver] img", // a conversation pane's band showing the header picture, not the scene
+  paneRefusal: '.workspace-pane-header [role="status"]', // why a picture chosen from a pane's menu was not taken
   tooltip: ".desktop-tooltip", // class
 
   // Picture band atop conversation panes (decorative, aria-hidden)
@@ -240,6 +244,9 @@ export const zoneSaid = {
 /** Accessible names, for getByRole / getByText. */
 export const names = {
   agentsEntry: "Agents",
+  /** A pane's "…" menu: the header picture's two choices (issue #320). */
+  chooseHeaderPicture: "Choose Header Picture…",
+  useNightScene: "Use Night Scene",
   allowOnce: "Allow Once",
   leaveSettings: "Back to nessa Agent",
   /** A sample session (in-memory source) that waits on an approval. */

@@ -44,15 +44,26 @@ def text(value):
     update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": value}})
 
 
+# codex-acp 1.12 lists `reasoning_effort` (category `thought_level`) only once
+# a model is selected; on gpt-6-astra and gpt-5.6-sol it offers `ultra` past
+# `max` and no `none`.
+EFFORT_CHOICES = ["low", "medium", "high", "xhigh", "max", "ultra"]
+effort = "medium"
+
+
 def configs():
     offered = ["codex-default"] if mode == "model-not-offered" else ["codex-default", model]
     current = "agent-full-access" if mode == "mode-refused" else selected_mode
-    return {"configOptions": [
+    options = [
         {"id": "model", "currentValue": selected,
          "options": [{"value": value} for value in offered]},
-        {"id": "reasoning_effort", "currentValue": "medium"},
         {"id": "mode", "currentValue": current},
-    ]}
+    ]
+    if selected == model:
+        options.append({"id": "reasoning_effort", "name": "Reasoning effort", "category": "thought_level",
+                        "type": "select", "currentValue": effort,
+                        "options": [{"value": value, "name": value} for value in EFFORT_CHOICES]})
+    return {"configOptions": options}
 
 
 def command_tool_call():
@@ -117,6 +128,15 @@ for line in sys.stdin:
         params = msg["params"]
         assert params["sessionId"] == session
         configured_steps.append(params["configId"])
+        if params["configId"] == "reasoning_effort":
+            # Only listed once the model is selected, so only then accepted.
+            if selected != model or params["value"] not in EFFORT_CHOICES:
+                send({"id": msg["id"], "error": {"code": -32602, "message": "Invalid params"}})
+                continue
+            if mode != "effort-misreported":
+                effort = params["value"]
+            result(msg["id"], configs())
+            continue
         if params["configId"] == "model":
             assert params["value"] == model
             # Codex reporting its own configuration while this binding is still
@@ -136,7 +156,10 @@ for line in sys.stdin:
                 assert params["value"] in ("read-only", "agent", "agent-full-access")
                 selected_mode = params["value"]
             else:
-                assert configured_steps == ["model", "mode"], configured_steps
+                # An effort level, where one is selected, follows the model.
+                assert configured_steps in (
+                    ["model", "mode"], ["model", "reasoning_effort", "mode"]
+                ), configured_steps
                 assert params["value"] == approval_mode
             # One line per process that got this far. A resumed session is a
             # fresh process, so the count is how many times this binding

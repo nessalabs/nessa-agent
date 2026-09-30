@@ -645,7 +645,7 @@ html:not(.dark) [data-surface] {
   overflow: hidden;
   mask-image:
     linear-gradient(to right, transparent, black 12%, black 88%, transparent),
-    linear-gradient(to bottom, transparent, black 18%, black 55%, transparent);
+    linear-gradient(to bottom, transparent, black 12%, black 75%, transparent);
   mask-composite: intersect;
   pointer-events: none;
   user-select: none;

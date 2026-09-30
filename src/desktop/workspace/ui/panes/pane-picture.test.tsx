@@ -3,7 +3,8 @@
  * A conversation pane carries a sliver of the header — the night scene held
  * still, or the picture — which moves only in the focused pane, and which
  * Settings › Appearance › Header turns off. A new session's home has the
- * header itself, so no sliver.
+ * header itself, so no sliver. Any pane's menu chooses the picture, and
+ * offers the scene back once there is one.
  */
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
@@ -14,6 +15,8 @@ import { paneFrame } from "../../../split-panes/testing"
 import { placements as placementsOf } from "../../../split-panes/model/pane-sizing"
 import { selectFocusedPaneKey, selectPanes } from "../../adapters/store/selectors"
 import { useHeaderImage } from "../../../adapters/header-image"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../../ui/menu"
+import { PaneMenuItems } from "./pane-menu"
 import { ClockProvider } from "../../adapters/dom/clock"
 import { fakeSource, settle, testStore } from "../../testing"
 import { Pane } from "./pane"
@@ -142,4 +145,68 @@ it("moves a GIF only in the focused pane; the others show its first frame", asyn
   expect(pictureOf(focused)).toBe("blob:picture-1")
   expect(pictureOf(other ?? null)).toBe("blob:picture-2")
   await act(async () => extra.unmount())
+})
+
+let choosePicture: (blob: Blob) => void = () => {}
+let clearPicture: () => void = () => {}
+function PictureChooser() {
+  ;[, choosePicture, clearPicture] = useHeaderImage()
+  return null
+}
+
+/**
+ * The first pane's menu items, open. Not the pane's own "…" menu: that one is
+ * modal, and a modal Radix menu loads a second React under Node (see
+ * `server.deps.inline` in vitest.config.ts), so the items are shown in a
+ * menu that is not.
+ */
+async function openPaneMenu(store: ReturnType<typeof testStore>, onChoose: () => void) {
+  const pane = selectFocusedPaneKey(store.getState())
+  const menu = document.createElement("div")
+  document.body.append(menu)
+  const menuRoot = createRoot(menu)
+  await act(async () =>
+    menuRoot.render(
+      <Provider store={store}>
+        <PictureChooser />
+        <DropdownMenu open modal={false}>
+          <DropdownMenuTrigger>…</DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <PaneMenuItems
+              pane={pane ?? 0}
+              sessionId="c"
+              moves={false}
+              onChooseHeaderPicture={onChoose}
+            />
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </Provider>,
+    ),
+  )
+  return async () => {
+    await act(async () => menuRoot.unmount())
+    menu.remove()
+  }
+}
+
+const menuItem = (label: string) =>
+  [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+    (item) => item.textContent?.trim() === label,
+  )
+
+it("offers the header picture in a pane's menu, and the scene back once there is one", async () => {
+  const store = await panes()
+  let asked = 0
+  const close = await openPaneMenu(store, () => asked++)
+  // The window's one picture outlives a test; this one starts from the scene.
+  await act(async () => clearPicture())
+  await act(async () => menuItem("Choose Header Picture…")?.click())
+  expect(asked).toBe(1)
+  // No picture yet: nothing to go back from.
+  expect(menuItem("Use Night Scene")).toBeUndefined()
+  await act(async () => choosePicture(new Blob(["png"], { type: "image/png" })))
+  expect(menuItem("Use Night Scene")).toBeDefined()
+  await act(async () => menuItem("Use Night Scene")?.click())
+  expect(menuItem("Use Night Scene")).toBeUndefined()
+  await close()
 })

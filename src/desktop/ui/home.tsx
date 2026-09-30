@@ -2,11 +2,14 @@ import { useState } from "react"
 import { useGreetingPreference } from "../adapters/window-preferences"
 import { Composer } from "./composer"
 import { HeaderArt } from "./header-art"
+import { greetingAt } from "../model/greeting"
+import { useNow } from "../workspace/adapters/dom/clock"
 
 /**
  * The first thing the window shows: a rainy night scene across the top, or a
- * picture the person chose in its place (`ui/header-art.tsx`), then
- * "Working late?", the scene's own caption, whatever the hour, and the
+ * picture the person chose in its place (`ui/header-art.tsx`), then a
+ * greeting for the hour of the person's day (`model/greeting.ts`, read from
+ * the window's clock each minute) — "Working late?" only when it is — and the
  * composer beneath it. A new session's pane shows the same home, its
  * composer wired to that session through the props below.
  * A draft that outgrows the composer turns it into a page filling the
@@ -39,13 +42,16 @@ export function Home({
 }) {
   const [page, setPage] = useState(false)
   const [greeting] = useGreetingPreference()
+  const now = useNow(60_000)
 
   return (
     <div className="desktop-home" data-page={page || undefined}>
       <div className="desktop-home-stack">
         <HeaderArt />
         <div className="desktop-home-inner">
-          {greeting === "on" ? <h1 className="desktop-greeting">Working late?</h1> : null}
+          {greeting === "on" ? (
+            <h1 className="desktop-greeting">{greetingAt(new Date(now).getHours())}</h1>
+          ) : null}
           <div
             className={
               composerClassName

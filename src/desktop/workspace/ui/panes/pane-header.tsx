@@ -1,4 +1,4 @@
-import { memo } from "react"
+import { memo, useCallback, useEffect, useState } from "react"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -19,6 +19,12 @@ import { PaneMenuItems } from "./pane-menu"
 import { tooltip } from "../../../ui/tooltip"
 import { SubagentStack } from "../../../subagents"
 import { widgetItem } from "../../model/pane-item"
+import { useChooseHeaderPicture } from "../../../adapters/header-image"
+import {
+  headerImageRefusalMs,
+  headerImageRefusalText,
+  type HeaderImageRefusal,
+} from "../../../model/header-image"
 
 /**
  * A pane's title bar: the session's mark, title and state, then its "…" menu
@@ -40,6 +46,21 @@ export const PaneHeader = memo(function PaneHeader({
   titleShown: boolean
 }) {
   const dispatch = useWorkspaceDispatch()
+  // Why a picture chosen from this pane's menu was not taken, said briefly in
+  // its header: the menu that asked is gone by the time the file dialog answers.
+  const [refusal, setRefusal] = useState<string | null>(null)
+  const choosePicture = useChooseHeaderPicture({
+    onChosen: useCallback(() => setRefusal(null), []),
+    onRefused: useCallback(
+      (reason: HeaderImageRefusal) => setRefusal(headerImageRefusalText[reason]),
+      [],
+    ),
+  })
+  useEffect(() => {
+    if (!refusal) return
+    const timer = window.setTimeout(() => setRefusal(null), headerImageRefusalMs)
+    return () => window.clearTimeout(timer)
+  }, [refusal])
   const frame = useWorkspaceFrame()
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
   const title = session?.title ?? "New session"
@@ -88,6 +109,11 @@ export const PaneHeader = memo(function PaneHeader({
               }
             />
           ) : null}
+          {refusal ? (
+            <span className="workspace-pane-refusal" role="status">
+              {refusal}
+            </span>
+          ) : null}
           <div className="workspace-pane-actions">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -98,7 +124,12 @@ export const PaneHeader = memo(function PaneHeader({
                 />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" sideOffset={6}>
-                <PaneMenuItems pane={pane} sessionId={sessionId} moves={false} />
+                <PaneMenuItems
+                  pane={pane}
+                  sessionId={sessionId}
+                  moves={false}
+                  onChooseHeaderPicture={choosePicture}
+                />
               </DropdownMenuContent>
             </DropdownMenu>
             <IconButton
@@ -118,7 +149,12 @@ export const PaneHeader = memo(function PaneHeader({
         </header>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <PaneMenuItems pane={pane} sessionId={sessionId} moves />
+        <PaneMenuItems
+          pane={pane}
+          sessionId={sessionId}
+          moves
+          onChooseHeaderPicture={choosePicture}
+        />
       </ContextMenuContent>
     </ContextMenu>
   )

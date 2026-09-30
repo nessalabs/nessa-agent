@@ -232,6 +232,26 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   sending, which moves the row from Needs you to Working and draws its pill
   anew, leaves the caret in that session's pill. _Check:_ `focus.mjs`
   (`focus-reply`, 1440 × 900 and 1000 × 700); unit test `overview.test.tsx`.
+- [ ] **Focus the overview loses, it gives back**: whatever takes the focused
+  element off the page, if only to put it back — its session changing group
+  (`focus-regroup-row`), the peek beneath its row going (`-peek`), its row
+  moved within its list (`focus-gives-back-moved`, which also holds the list
+  where the person scrolled it: focus is given back on the next frame,
+  without scrolling, and not over focus that landed elsewhere first; a moved
+  element that is still on the page gets focus itself, so a reply being
+  typed in a pill beneath a moved row keeps its caret: `-moved-pill`), the peek beside the list
+  going as the window narrows (`-beside`), Show All once nothing is left out
+  (`-show-all`), a count leaving the line (`responsive.mjs`,
+  `overview-counts`) — the keyboard goes to that session's row, or else the
+  current row, or the list, and the arrows walk it. Focus the person moved
+  with a press elsewhere stays where they put it, even when the element goes
+  in the same task (`focus-regroup-away`); a press that leaves focus where it
+  is (the titlebar's drag strip) changes nothing (`focus-regroup-held`). _Check:_ `focus.mjs`, as named;
+  unit test `overview.test.tsx`. Focus lost while the window is away
+  (another app, or tabbed out of the page) is given back when it returns,
+  unless the press that brings the window back puts it somewhere itself:
+  _check:_ manual, in the app (a headless page never loses the window), and
+  the unit test.
 - [ ] **The sidebar marks what is shown**: Agents while the overview is, a
   channel or session only while the panes are. _Check:_ manual.
 - [ ] **The header holds its place; only the list scrolls.** The title, its
@@ -309,9 +329,12 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
 - [ ] **A new session's home takes its pane's shape.** In a pane under 640px
   either way its composer docks at the foot as the conversation's beside it
   (same distance from the foot, inset and height, ± 1.5 px), with the
-  greeting on and turned off; the scene is gone and "Working late?" sits in
-  the middle above the composer at the conversation title's size, weight and
-  tracking; a larger pane keeps the scene and the card. A home appearing,
+  greeting on and turned off; the header stays as a band from the top of the
+  pane (72–150px of picture or scene) with its Customize control — in the
+  shortest window too, below the window's home's 520px cutoff — and the
+  greeting sits under it at the pane's left at the conversation title's size,
+  weight and tracking (issue #320); a larger pane keeps the scene and the
+  card. A home appearing,
   large or small, plays no settling; each crossing plays one, by opacity and
   transform alone, and with less motion the composer is there on the next
   frame. Across each crossing the same field keeps its draft, the model
@@ -319,10 +342,18 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   position. _ADR 238 › A new session's home takes its pane's shape_.
   _Check:_ `responsive.mjs --only home-shape --shots <dir>`, then look at the
   shots beside the conversation pane.
-- [ ] **Focus on a hidden scene goes to the composer.** Customize focused in a
-  new session's home, the window shortened until the home hides its scene:
-  the caret is in that home's composer, not on the page. _Check:_ `focus.mjs`
-  (`focus-home-scene`).
+- [ ] **Focus on Customize survives the home becoming small.** Customize
+  focused in a new session's home, the window shortened until the home takes
+  a small pane's shape: the header stays, and focus stays on Customize.
+  _Check:_ `focus.mjs` (`focus-home-scene`).
+- [ ] **Any pane's menu chooses the header picture.** From a conversation
+  pane's "…" menu, Choose Header Picture… opens the file dialog and the
+  picture chosen shows in the panes' bands; a new session's home draws it from
+  its pane's top edge, behind the title row — except in the window's corner
+  with nothing beside it, where nothing of it is under the window's controls;
+  Use Night Scene, offered only with a picture, takes it back; a file that is
+  not an image is refused with why, in that pane's header (issue #320).
+  _Check:_ `responsive.mjs --only header-picture`, and `safe-area.mjs`.
 
 ## Settings
 

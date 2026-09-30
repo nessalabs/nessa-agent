@@ -12,6 +12,7 @@ import {
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectPaneCount, selectSession } from "../../adapters/store/selectors"
 import type { Direction, PaneKey } from "../../../split-panes/model/pane-layout"
+import { useHeaderImage } from "../../../adapters/header-image"
 import { MenuItem, MenuSeparator, MenuShortcut } from "../../../ui/menu"
 import { useWorkspaceFrame, type ShortcutCommand } from "../workspace-frame"
 
@@ -26,18 +27,25 @@ const moves: readonly [Direction, string, ShortcutCommand][] = [
  * What a pane offers, in its "…" menu and on its header's context menu:
  * split it with a new session, open another beside it (where the layout has
  * a switcher), move it (context menu), even the panes out, show its session
- * in the sidebar, close it. Mounted only while a menu is open.
+ * in the sidebar, change the header picture, close it. Mounted only while a
+ * menu is open: the picture is chosen through `onChooseHeaderPicture`, which
+ * the pane's header holds, since the file dialog answers after the menu has
+ * gone.
  */
 export function PaneMenuItems({
   pane,
   sessionId,
   moves: offerMoves,
+  onChooseHeaderPicture,
 }: {
   pane: PaneKey
   sessionId: string
   /** Whether it offers the Move items, as the header's context menu does. */
   moves: boolean
+  /** Asks for a header picture (`useChooseHeaderPicture`). */
+  onChooseHeaderPicture: () => void
 }) {
+  const [picture, , clearPicture] = useHeaderImage()
   const dispatch = useWorkspaceDispatch()
   const frame = useWorkspaceFrame()
   const count = useWorkspaceSelector(selectPaneCount)
@@ -106,6 +114,10 @@ export function PaneMenuItems({
           Show in Sidebar
         </MenuItem>
       ) : null}
+      <MenuSeparator />
+      {/* The header's own choices, from any pane, however small. */}
+      <MenuItem onSelect={onChooseHeaderPicture}>Choose Header Picture…</MenuItem>
+      {picture ? <MenuItem onSelect={clearPicture}>Use Night Scene</MenuItem> : null}
       <MenuSeparator />
       <MenuItem disabled={!closable} onSelect={() => dispatch(closePane({ pane }))}>
         Close Pane

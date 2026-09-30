@@ -216,10 +216,20 @@ than be clipped.
 issue #285). In a pane at least 640px each way the home is the window's own:
 the scene, "Working late?" and the composer's card. In a smaller pane — split
 beside or below another, or in a short window — it takes a conversation's
-shape: the scene steps aside, the greeting sits in the middle of the room
-above the composer at a conversation title's size, and the composer docks at
-the pane's foot as a conversation's does, with the greeting turned off in
-Settings too. The pane's own size decides, by the container query the pane
+shape: the header shrinks to a band across the top of the pane — the
+picture or scene, a share of the pane's height, with its Customize control
+(issue #320; until then the scene stepped aside, and with it the only place
+the picture was chosen) — the greeting sits under it at the pane's left at a
+conversation title's size, and the composer docks at the pane's foot as a
+conversation's does, with the greeting turned off in Settings too. Every
+pane's "…" menu also offers Choose Header Picture… and, with a picture, Use
+Night Scene, through the same picker Customize uses. A home's picture, in
+either shape, reaches up behind the pane's title row to the pane's top edge,
+fading in there as a conversation's band does, except in the window's corner
+with nothing beside it, where the title row is the window's controls' and the
+picture stays below it. The greeting follows the hour of the window's clock
+(`model/greeting.ts`): good morning, afternoon or evening, and "Working
+late?" only from 10pm to 5am. The pane's own size decides, by the container query the pane
 already is (`workspace-pane`), never the window's. It is one composer in both
 shapes: the home holds it in the dock's box (`Home`'s `composerClassName`),
 and the dock's rules, and a title's type, ask for a `workspace-docked`
@@ -245,14 +255,15 @@ for the scene to come back.
 `responsive.mjs --only home-shape` measures, in Chromium and WebKit: the
 docked composer's distance from the foot, inset and height against the
 conversation's beside it, with the greeting on and off; the scene hidden and
-the greeting's place and type in a small pane; the scene and the card in a
-large one; that a home appearing, large or small, plays no settling, and
+the header band, its Customize control, and the greeting's place and type in
+a small pane; the scene and the card in a large one; that a home appearing, large or small, plays no settling, and
 that each crossing plays one, by opacity and transform alone, and none with
 less motion; and, across each crossing, the same field, its draft, the model
 chosen and an open page — and, where the crossing is a resize that moves
 nothing else, the caret's focus and position. `focus.mjs`
-(`focus-home-scene`) measures that focus on Customize goes to the home's
-composer as the scene steps aside. A first message sent from a small home
+(`focus-home-scene`) measures that focus on Customize stays there as the home
+becomes small, and `responsive.mjs` (`header-picture`) that a pane's menu
+chooses the picture, takes it back, and says why a file was refused. A first message sent from a small home
 arriving in place is not measured in a browser.
 
 **Side columns: chosen, or folded for room** (`src/desktop/model/side-column.ts`,

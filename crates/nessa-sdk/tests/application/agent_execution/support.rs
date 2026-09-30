@@ -325,6 +325,9 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
                             ExecutionAuditRecord::QueueReordered(_) => {
                                 panic!("close cannot reorder pending work")
                             }
+                            ExecutionAuditRecord::EffortLevelChanged(_) => {
+                                panic!("close cannot change the effort level")
+                            }
                             ExecutionAuditRecord::Attachment(_)
                             | ExecutionAuditRecord::QueueAdmitted(_)
                             | ExecutionAuditRecord::QueueSettled(_)

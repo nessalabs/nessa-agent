@@ -119,9 +119,9 @@ the domain catalog; a selected application metadata DTO can also be mapped throu
 The factory intersects model and binding input/output modalities, tool use,
 reasoning, and fast mode. A binding can remove support but cannot enable a
 model-false feature. The model's effort levels stay in the snapshot
-(`effort_levels()`) only while reasoning does. No binding sends an effort level
-or fast mode to its agent yet, so today's bindings declare both unsupported
-([#310](https://github.com/nessalabs/nessa-agent/issues/310)). No shared input or output modality is a setup error. Explicit configured
+(`effort_levels()`) only while reasoning does. The Claude and Codex bindings
+run reasoning and send an effort level; the OpenCode binding does not. No
+binding sends fast mode, so every binding declares it unsupported. No shared input or output modality is a setup error. Explicit configured
 context/output limits above either ceiling fail with `ConfiguredLimitExceeded`;
 valid smaller limits are retained exactly. The snapshot owns its model identity,
 features, and limits independently of other selections.
@@ -214,7 +214,15 @@ automatic session storage, hooks, invocation, and UI integration.
   Opencode turned out to need the same two options.
 - `infrastructure/session_storage/`: in-memory test snapshots and private SQLite semantic records,
   exclusive leases, bounded physical framing, explicit JSON evidence mapping,
-  and the Tokio streaming commit clock adapter.
+  and the Tokio streaming commit clock adapter. `terminal_discovery.rs` owns the
+  sixteen-entry process framing/hash cache used by `NessaRecordSource::bounded_head`
+  and `bounded_page`; [`RecordReadStatus::Preparing`](../../docs/design/bounded-terminal-discovery.md)
+  reports unfinished bounded validation. Its real SQLite tests live in
+  `tests/infrastructure/session_storage/terminal_discovery.rs`. The shared physical
+  framing validator lives in `stream_fact.rs`; request admissibility is asked of
+  sync-engine before stream metadata I/O, while the SDK owns physical identity,
+  retention and terminal relationships. Sync identifiers are constructed from
+  borrowed text by their core owner, including its compact retained storage.
 - `infrastructure/`: JSON parsing into application input DTOs, including required
   fields, unknown fields, and read errors. The host owns filesystem selection and
   injects the loaded catalog at composition.
@@ -263,7 +271,7 @@ domain/
     value_objects/
       identity.rs       ModelProvider, ModelKey
       capabilities.rs   Modalities, ModelFeatures
-      reasoning.rs      EffortLevel, EffortLevels
+      reasoning.rs      EffortLevel, EffortLevels, OfferedEffortLevels
       description.rs    ModelDescription
     entities/
       model.rs          ModelMetadata
