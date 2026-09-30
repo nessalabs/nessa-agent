@@ -261,7 +261,7 @@ pub enum PrivatePublicationStage {
     ValidateReservation,
     /// Flushing the reservation before rename failed.
     FlushBeforeRename,
-    /// The exclusive destination rename failed, so no publication is known.
+    /// The destination rename failed, so no publication is known.
     Rename,
     /// Flushing the already-renamed file handle failed.
     FlushAfterRename,
@@ -356,7 +356,14 @@ impl PrivateDirectoryTempFile<'_> {
         self.file.as_ref().expect("temporary file is open")
     }
 
-    /// Mutably borrow the reserved file.
+    /// Mutably borrow the writable payload.
+    ///
+    /// The shared publication owner validates that this file still identifies
+    /// the original reservation before flushing or renaming. Integration tests
+    /// `publish_new_refuses_foreign_writable_payload_before_effect` and
+    /// `replacement_refuses_foreign_writable_payload_before_effect` cover refusal;
+    /// `same_original_writable_clone_remains_accepted_for_both_operations`
+    /// covers valid writable clones.
     pub fn as_file_mut(&mut self) -> &mut File {
         self.file.as_mut().expect("temporary file is open")
     }
@@ -376,8 +383,36 @@ impl PrivateDirectoryTempFile<'_> {
     /// retains a [`PublishedPrivateFile`] so callers can reconcile the external
     /// effect without blindly reusing a sequence or filename.
     pub fn publish_new(
+        self,
+        destination: &OsStr,
+    ) -> Result<PublishedPrivateFile, PrivatePublicationFailure> {
+        self.publish(destination, PublicationKind::New, acknowledge_in_directory)
+    }
+
+    /// Atomically replace one name in the originating retained directory.
+    ///
+    /// Rename success disarms reservation cleanup. The returned handle retains
+    /// the published identity even when a later acknowledgement step fails.
+    /// Windows flushes the file but has no directory-fsync guarantee.
+    pub fn replace(
+        self,
+        destination: &OsStr,
+    ) -> Result<PublishedPrivateFile, PrivatePublicationFailure> {
+        self.publish(
+            destination,
+            PublicationKind::Replace,
+            acknowledge_in_directory,
+        )
+    }
+
+    fn publish(
         mut self,
         destination: &OsStr,
+        kind: PublicationKind,
+        acknowledge: impl FnOnce(
+            PublishedPrivateFile,
+            &Self,
+        ) -> Result<PublishedPrivateFile, PrivatePublicationFailure>,
     ) -> Result<PublishedPrivateFile, PrivatePublicationFailure> {
         if let Err(error) = validate_name(destination) {
             return Err(self.fail_before(PrivatePublicationStage::ValidateDestination, error));
@@ -401,20 +436,39 @@ impl PrivateDirectoryTempFile<'_> {
                 return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
             }
         }
-        if let Err(error) = file.sync_all() {
-            return Err(self.fail_before(PrivatePublicationStage::FlushBeforeRename, error));
-        }
         let identity = match self.directory.inner.file_identity(authority) {
             Ok(identity) => identity,
             Err(error) => {
                 return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
             }
         };
-        if let Err(error) = self
-            .directory
-            .inner
-            .publish_new(&self.name, destination, authority)
-        {
+        match self.directory.inner.file_identity(file) {
+            Ok(payload_identity) if payload_identity == identity => {}
+            Ok(_) => {
+                return Err(
+                    self.fail_before(PrivatePublicationStage::ValidateReservation, unsafe_file())
+                );
+            }
+            Err(error) => {
+                return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
+            }
+        }
+        if let Err(error) = file.sync_all() {
+            return Err(self.fail_before(PrivatePublicationStage::FlushBeforeRename, error));
+        }
+        let renamed = match kind {
+            PublicationKind::New => {
+                self.directory
+                    .inner
+                    .publish_new(&self.name, destination, authority)
+            }
+            PublicationKind::Replace => {
+                self.directory
+                    .inner
+                    .replace(&self.name, destination, authority)
+            }
+        };
+        if let Err(error) = renamed {
             return Err(self.fail_before(PrivatePublicationStage::Rename, error));
         }
 
@@ -427,92 +481,7 @@ impl PrivateDirectoryTempFile<'_> {
             file: self.file.take().expect("temporary file is open"),
         };
 
-        acknowledge_publication(
-            published,
-            |published| published.file.sync_all(),
-            |published| match self
-                .directory
-                .inner
-                .named_file_is(&published.name, &published.file)?
-            {
-                true => Ok(()),
-                false => Err(unsafe_file()),
-            },
-            || self.directory.verify_binding(),
-            || self.directory.inner.sync(),
-            || self.directory.verify_binding(),
-        )
-    }
-
-    /// Atomically replace one name in the originating retained directory.
-    ///
-    /// Rename success disarms reservation cleanup. The returned handle retains
-    /// the published identity even when a later acknowledgement step fails.
-    #[cfg(unix)]
-    pub fn replace(
-        mut self,
-        destination: &OsStr,
-    ) -> Result<PublishedPrivateFile, PrivatePublicationFailure> {
-        if let Err(error) = validate_name(destination) {
-            return Err(self.fail_before(PrivatePublicationStage::ValidateDestination, error));
-        }
-        if let Err(error) = self.directory.verify_binding() {
-            return Err(self.fail_before(PrivatePublicationStage::VerifyOriginBinding, error));
-        }
-        let file = self.file.as_ref().expect("temporary file is open");
-        let authority = self
-            .authority
-            .as_ref()
-            .expect("reservation authority is open");
-        match self.directory.named_file_is(&self.name, authority) {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(
-                    self.fail_before(PrivatePublicationStage::ValidateReservation, unsafe_file())
-                );
-            }
-            Err(error) => {
-                return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
-            }
-        }
-        if let Err(error) = file.sync_all() {
-            return Err(self.fail_before(PrivatePublicationStage::FlushBeforeRename, error));
-        }
-        let identity = match self.directory.inner.file_identity(authority) {
-            Ok(identity) => identity,
-            Err(error) => {
-                return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
-            }
-        };
-        if let Err(error) = self
-            .directory
-            .inner
-            .replace(&self.name, destination, authority)
-        {
-            return Err(self.fail_before(PrivatePublicationStage::Rename, error));
-        }
-
-        self.cleanup_required = false;
-        let published = PublishedPrivateFile {
-            name: destination.to_owned(),
-            identity,
-            file: self.file.take().expect("temporary file is open"),
-        };
-        acknowledge_publication(
-            published,
-            |published| published.file.sync_all(),
-            |published| match self
-                .directory
-                .inner
-                .named_file_is(&published.name, &published.file)?
-            {
-                true => Ok(()),
-                false => Err(unsafe_file()),
-            },
-            || self.directory.verify_binding(),
-            || self.directory.inner.sync(),
-            || self.directory.verify_binding(),
-        )
+        acknowledge(published, &self)
     }
 
     fn fail_before(
@@ -549,6 +518,32 @@ impl Drop for PrivateDirectoryTempFile<'_> {
             let _ = self.remove_reserved();
         }
     }
+}
+
+enum PublicationKind {
+    New,
+    Replace,
+}
+
+fn acknowledge_in_directory(
+    published: PublishedPrivateFile,
+    reservation: &PrivateDirectoryTempFile<'_>,
+) -> Result<PublishedPrivateFile, PrivatePublicationFailure> {
+    let directory = reservation.directory;
+    acknowledge_publication(
+        published,
+        |published| published.file.sync_all(),
+        |published| match directory
+            .inner
+            .named_file_is(&published.name, &published.file)?
+        {
+            true => Ok(()),
+            false => Err(unsafe_file()),
+        },
+        || directory.verify_binding(),
+        || directory.inner.sync(),
+        || directory.verify_binding(),
+    )
 }
 
 fn fail_after(
@@ -625,6 +620,11 @@ pub(crate) fn validate_name(name: &OsStr) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{Read, Write},
+        panic::AssertUnwindSafe,
+    };
+    use tempfile::TempDir;
 
     #[derive(Clone, Copy, Eq, PartialEq)]
     enum AcknowledgementCheckpoint {
@@ -701,6 +701,94 @@ mod tests {
             assert_eq!(published.name(), OsStr::new("record"));
             assert_eq!(published.identity(), PrivateFileIdentity::from_u64s(1, 2));
             assert!(published.as_file().metadata().unwrap().is_file());
+        }
+    }
+    fn native_fixture() -> (TempDir, PrivateDirectory) {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        crate::create_directory(&root).unwrap();
+        crate::create_private_directory_tree_beneath(&root, Path::new("records")).unwrap();
+        let directory = PrivateDirectory::open_beneath(&root, Path::new("records")).unwrap();
+        (temporary, directory)
+    }
+
+    #[test]
+    fn native_replacement_failed_acknowledgement_retains_published_identity() {
+        for kind in [PublicationKind::New, PublicationKind::Replace] {
+            let (_temporary, directory) = native_fixture();
+            if matches!(kind, PublicationKind::Replace) {
+                let mut old = directory
+                    .open_file(OsStr::new("record"), OpenMode::CreateNew)
+                    .unwrap();
+                old.write_all(b"old").unwrap();
+            }
+            let mut reservation = directory.reserve_temp().unwrap();
+            reservation.as_file_mut().write_all(b"new").unwrap();
+            let identity = directory
+                .inner
+                .file_identity(reservation.authority.as_ref().unwrap())
+                .unwrap();
+            let failure = reservation
+                .publish(OsStr::new("record"), kind, |published, reservation| {
+                    assert!(
+                        !reservation.cleanup_required,
+                        "rename disarms origin cleanup before acknowledgement"
+                    );
+                    let directory = reservation.directory;
+                    assert_eq!(published.identity(), identity);
+                    assert!(directory
+                        .named_file_is(published.name(), published.as_file())
+                        .unwrap());
+                    Err(fail_after(
+                        PrivatePublicationStage::VerifyPublishedBinding,
+                        io::Error::other("lost acknowledgement"),
+                        published,
+                    ))
+                })
+                .unwrap_err();
+            assert_eq!(
+                failure.stage(),
+                PrivatePublicationStage::VerifyPublishedBinding
+            );
+            assert!(failure.cleanup_error().is_none());
+            assert_eq!(failure.published().unwrap().identity(), identity);
+            drop(failure);
+            let mut bytes = Vec::new();
+            directory
+                .open_file(OsStr::new("record"), OpenMode::Read)
+                .unwrap()
+                .read_to_end(&mut bytes)
+                .unwrap();
+            assert_eq!(bytes, b"new");
+            assert_eq!(directory.entries().unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn native_publication_panic_after_rename_keeps_destination() {
+        for kind in [PublicationKind::New, PublicationKind::Replace] {
+            let (_temporary, directory) = native_fixture();
+            if matches!(kind, PublicationKind::Replace) {
+                drop(
+                    directory
+                        .open_file(OsStr::new("record"), OpenMode::CreateNew)
+                        .unwrap(),
+                );
+            }
+            let mut reservation = directory.reserve_temp().unwrap();
+            reservation.as_file_mut().write_all(b"new").unwrap();
+            let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                reservation.publish(OsStr::new("record"), kind, |_, _| panic!("caller lost"))
+            }));
+            assert!(result.is_err());
+            let mut bytes = Vec::new();
+            directory
+                .open_file(OsStr::new("record"), OpenMode::Read)
+                .unwrap()
+                .read_to_end(&mut bytes)
+                .unwrap();
+            assert_eq!(bytes, b"new");
+            assert_eq!(directory.entries().unwrap().count(), 1);
         }
     }
 }
