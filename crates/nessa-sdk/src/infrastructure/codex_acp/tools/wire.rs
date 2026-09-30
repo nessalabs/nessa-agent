@@ -1,8 +1,7 @@
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::tools::ToolReviewInput;
-use crate::domain::agent_execution::{
-    tools::{McpTool, ToolCallUpdate, ToolContent},
-    ExecutionError,
+use crate::domain::agent_execution::tools::{
+    McpTool, ToolCallUpdate, ToolContent, MAX_STRUCTURED_RESULT_BYTES,
 };
 use crate::infrastructure::acp::fields::{identifier, string};
 use crate::infrastructure::acp::tools::wire::{
@@ -342,8 +341,6 @@ fn mcp_tool(value: &Value, mcp: bool) -> Option<McpTool> {
 
 /// The text a structured result past the domain's bound
 /// ([`MAX_STRUCTURED_RESULT_BYTES`]) is replaced by: said, not silently dropped.
-///
-/// [`MAX_STRUCTURED_RESULT_BYTES`]: crate::domain::agent_execution::tools::MAX_STRUCTURED_RESULT_BYTES
 pub(in crate::infrastructure::codex_acp) const STRUCTURED_RESULT_OMITTED: &str =
     "[structured tool result omitted: too large]";
 
@@ -359,7 +356,7 @@ fn mcp_block(block: &Value) -> Result<ToolContent, AgentError> {
         .and_then(Value::as_str)
         .ok_or_else(|| protocol("invalid MCP result content type"))?;
     Ok(match kind {
-        "text" => ToolContent::text(string(block, "text")?),
+        "text" => ToolContent::text(exact_text(block, "text")?),
         "resource_link" => ToolContent::text(string(block, "uri")?),
         "resource" => match block
             .get("resource")
@@ -372,6 +369,30 @@ fn mcp_block(block: &Value) -> Result<ToolContent, AgentError> {
         },
         _ => ToolContent::text(UNSUPPORTED_TOOL_CONTENT),
     })
+}
+
+/// The string at `field`, exactly, empty included: an MCP tool may return
+/// empty text, and that is a result, not a malformed frame.
+fn exact_text<'a>(value: &'a Value, field: &str) -> Result<&'a str, AgentError> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| protocol("invalid MCP result text"))
+}
+
+/// A structured result's JSON text, or `None` when it would be longer than the
+/// domain keeps ([`MAX_STRUCTURED_RESULT_BYTES`]). Counted before it is
+/// written out, so a result of any size costs no more than the bound.
+fn structured_json(structured: &Value) -> Result<Option<String>, AgentError> {
+    let mut size = InputSize {
+        remaining: MAX_STRUCTURED_RESULT_BYTES,
+    };
+    if serde_json::to_writer(&mut size, structured).is_err() {
+        return Ok(None);
+    }
+    serde_json::to_string(structured)
+        .map(Some)
+        .map_err(|_| protocol("invalid MCP structured result"))
 }
 
 /// What a completed Codex MCP call returned, as observed content: its content
@@ -407,25 +428,19 @@ fn mcp_result(value: &Value, mcp: bool) -> Result<Option<Vec<ToolContent>>, Agen
             }
             match result.get("structuredContent") {
                 None | Some(Value::Null) => {}
-                Some(structured) => {
-                    let json = serde_json::to_string(structured)
-                        .map_err(|_| protocol("invalid MCP structured result"))?;
-                    // The bound is the domain's; this only says what past it.
-                    content.push(match ToolContent::structured(json) {
-                        Ok(structured) => structured,
-                        Err(ExecutionError::ValueTooLong { .. }) => {
-                            ToolContent::text(STRUCTURED_RESULT_OMITTED)
-                        }
-                        Err(error) => return Err(protocol(&error.to_string())),
-                    });
-                }
+                // Past the domain's bound it is said, not kept.
+                Some(structured) => content.push(match structured_json(structured)? {
+                    Some(json) => ToolContent::structured(json)
+                        .map_err(|error| protocol(&error.to_string()))?,
+                    None => ToolContent::text(STRUCTURED_RESULT_OMITTED),
+                }),
             }
         }
         Some(_) => return Err(protocol("invalid MCP result")),
     }
     match output.get("error") {
         None | Some(Value::Null) => {}
-        Some(error) => content.push(ToolContent::text(string(error, "message")?)),
+        Some(error) => content.push(ToolContent::text(exact_text(error, "message")?)),
     }
     Ok(Some(content))
 }

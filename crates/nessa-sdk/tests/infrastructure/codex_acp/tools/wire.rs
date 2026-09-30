@@ -557,6 +557,24 @@ fn an_mcp_result_keeps_its_text_blocks_structured_result_and_error() {
             ToolContent::structured(structured.to_string()).unwrap(),
         ])
     );
+    // Empty text, and an empty error, are results: kept exactly, not refused.
+    let empty = tool_call(
+        &mcp_done(
+            "mcp-1",
+            json!({"result":{"content":[{"type":"text","text":""}],"structuredContent":{}},
+                "error":{"message":""}}),
+        ),
+        &mut tools,
+    )
+    .unwrap();
+    assert_eq!(
+        empty.content(),
+        &Some(vec![
+            text(""),
+            ToolContent::structured("{}").unwrap(),
+            text("")
+        ])
+    );
     let failed = tool_call(
         &mcp_done(
             "mcp-1",

@@ -1070,9 +1070,9 @@ impl Projection {
         // MAX_OPEN_ASK_COST, which bounds what they take here, and everything
         // else gives way first.
         while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
-            view.truncated = true;
             // A structured result repeats what its tool's details say, so it is
             // the first thing given up, oldest first, and the details say so.
+            // No history is left out by it, so the view is not marked truncated.
             if let Some(tool) = view
                 .tools
                 .iter_mut()
@@ -1083,7 +1083,10 @@ impl Projection {
                     tool.details.push('\n');
                 }
                 tool.details.push_str(STRUCTURED_OMITTED);
-            } else if view.messages.len() > 1 {
+                continue;
+            }
+            view.truncated = true;
+            if view.messages.len() > 1 {
                 view.messages.remove(0);
             } else if view
                 .messages

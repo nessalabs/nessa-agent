@@ -1108,7 +1108,8 @@ fn a_view_past_its_budget_gives_up_structured_results_before_any_message() {
     }
     let view = projection.read();
     assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
-    assert!(view.truncated);
+    // Nothing of the history was left out, so the view does not say it was.
+    assert!(!view.truncated);
     assert_eq!(view.messages.len(), 1);
     assert_eq!(view.messages[0].parts.len(), 4);
     assert_eq!(view.tools.len(), 3);
