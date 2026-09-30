@@ -47,14 +47,14 @@ exports for it (#330, #331); never the other way. Counts and plurals ("6
 agents", "1 case") are the desktop's, one pure module in `src/desktop/model/`
 that this vertical and experiments both use.
 
-**A subagent** is its identity (`id`, below), a `name`, the `seed` its
-generated avatar is painted from (the same wherever it appears), the `tags` it
-was spun up with (each an id, a name, a series hue `1 | 2 | 3 | 4 | 5` and a
-glyph path — all data, none keyed on a known list), a `state`, a one-sentence
-`headline`, `since`, the `work` it is on with its progress when known, the
-`model` it runs on (shown), and its `conversation`: the workspace's transcript
-messages and live activity line. **States** are the few a person reads
-differently:
+**A subagent** is its identity (`id`, below), a `name`, the `seed` its generated
+avatar is painted from (the same wherever it appears), the `tags` it was spun up
+with (each an id, a name, a series hue `1 | 2 | 3 | 4 | 5` and a glyph path —
+all data, none keyed on a known list), a `state`, a one-sentence `headline`,
+`since`, the `work` it is on with its progress when known, the `model` it runs
+on when its source knows it (shown when present, nothing drawn otherwise), and
+its `conversation`: the workspace's transcript messages and live activity line.
+**States** are the few a person reads differently:
 
 | State | Means | Shown as |
 | --- | --- | --- |

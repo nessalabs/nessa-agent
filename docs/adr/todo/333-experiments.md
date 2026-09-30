@@ -115,27 +115,28 @@ time to get wrong. The **experiment** carries its `id`, `title`, `goal`, the
 `sessionId` of the conversation that runs it (a widget's `origin`), `startedAt`,
 the harness's `notes` (each a tone, a text, a time, and the run it is about, if
 any), the definition, its `areas` and `agents` (each with an `id`; an agent with
-an optional `areaId` and an activity, which may name the run it is on), its
-baseline and runs, and — from the harness — `bestSoFar`: the ids of the runs
-that became the best, in the order they did, empty until one does. The best
-version is its last entry, or the baseline while it is empty; there is no second
-field naming it, so the two cannot disagree. A keep the harness withdraws leaves
-`bestSoFar` in the harness's next word. The window draws the climb and the best
-version from these and never finds either itself. The climb is drawn over time,
-and its best-so-far series begins at the baseline's primary-split score at the
-experiment's `startedAt` once the baseline is scored (at the first keep until
-then): each settled run with a score on the primary split is a point at its
-`settledAt`, and the best-so-far line steps at each `bestSoFar` run's
-`settledAt` — for a kept run, when it became kept — so runs that finish out of
-order, or are kept after reruns, never step it backwards. The card's sparkline
-is the same series, drawn as given with no `better`, so it cannot disagree with
-the climb. The path to the best version, and the exploration map's thread, are
-`bestSoFar` in order; the runs table's newest-first is by `startedAt`, then
-`number`, and its score sorts follow the metric's `better`; a run's lineage
-(`parentId`) is drawn only in its own detail. A baseline is *scored* once it has
-a score on the primary split; until then the views say it is being scored, and a
-guardrail limited relative to it reads "not measured yet" until the baseline has
-that measure.
+a `name`, `since`, the `brief` it was given as text, an optional `areaId`, an
+optional `model`, and an `activity` — `{ kind: "evaluating", runId }`, or `{
+kind: "drafting" | "diagnosing" | "resting", note }`), its baseline and runs,
+and — from the harness — `bestSoFar`: the ids of the runs that became the best,
+in the order they did, empty until one does. The best version is its last entry,
+or the baseline while it is empty; there is no second field naming it, so the
+two cannot disagree. A keep the harness withdraws leaves `bestSoFar` in the
+harness's next word. The window draws the climb and the best version from these
+and never finds either itself. The climb is drawn over time, and its best-so-far
+series begins at the baseline's primary-split score at the experiment's
+`startedAt` once the baseline is scored (at the first keep until then): each
+settled run with a score on the primary split is a point at its `settledAt`, and
+the best-so-far line steps at each `bestSoFar` run's `settledAt` — for a kept
+run, when it became kept — so runs that finish out of order, or are kept after
+reruns, never step it backwards. The card's sparkline is the same series, drawn
+as given with no `better`, so it cannot disagree with the climb. The path to the
+best version, and the exploration map's thread, are `bestSoFar` in order; the
+runs table's newest-first is by `startedAt`, then `number`, and its score sorts
+follow the metric's `better`; a run's lineage (`parentId`) is drawn only in its
+own detail. A baseline is *scored* once it has a score on the primary split;
+until then the views say it is being scored, and a guardrail limited relative to
+it reads "not measured yet" until the baseline has that measure.
 
 **Validation** is at the source's adapter, where external data is parsed:
 
@@ -207,13 +208,18 @@ swarm, each with an activity; their conversations are subagents through an
 adapter (`experiments/adapters/subagents/`) registered with 329's join under its
 own key, the constant `experimentsSubagentKey` it exports, each subagent's id
 the experiment's id and the agent's, each through the desktop's one id encoder
-(326), joined by `/`, so two experiments in one conversation cannot collide. An
-experiment whose `get` answers `invalid` gives no subagents and counts as read,
-so it neither holds the join at `unread` nor goes unsaid: its own widget says it
-cannot be shown. Clicking an agent opens its subagent (329's `useOpenSubagent`,
-given that key and the agent's source id), offered only while subagents' preview
-is on. A run has no session of its own yet, so an agent opens its conversation,
-where the run is one of its turns.
+(326), joined by `/`, so two experiments in one conversation cannot collide. The
+adapter owns the one mapping from an agent to a subagent: its id is the
+subagent's seed; `evaluating` is `working`, with the run as its work and the
+run's progress; `drafting` is `planning`, `diagnosing` is `stuck`, `resting` is
+`idle`, each with its note as the headline; its brief opens its conversation,
+and each of its settled runs is a turn. An experiment whose `get` answers
+`invalid` gives no subagents and counts as read, so it neither holds the join at
+`unread` nor goes unsaid: its own widget says it cannot be shown. Clicking an
+agent opens its subagent (329's `useOpenSubagent`, given that key and the
+agent's source id), offered only while subagents' preview is on. A run has no
+session of its own yet, so an agent opens its conversation, where the run is one
+of its turns.
 
 **Cases** are counts: a total, how many a run fixed and broke, and a **slice** —
 a named group of cases, such as a category — each with its total and its passing
