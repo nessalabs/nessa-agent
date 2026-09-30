@@ -1,5 +1,7 @@
 //! Permission controls retain host attribution and exact reviewed tool input.
 //! Audit records retain cancellation causes and attributed answer delivery.
+//! Room refusal evidence consumes domain open-question accounting derived from
+//! the adapter's retained asks; this layer does not own its limits or fit policy.
 //!
 //! ```text
 //! host --> permission command --> adapter --> ExecutionController

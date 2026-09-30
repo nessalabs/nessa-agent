@@ -525,51 +525,88 @@ fn audit_maps_a_refused_ask_as_the_bindings_decision_about_no_question() {
         );
     }
     let ask = deploy_question();
-    // Accounting no binding could have held is not evidence of anything: more
-    // open than may be, costing more than was ever admitted, or a cost with no
-    // ask behind it and an ask with no cost.
-    for (open_asks, open_cost) in [
-        (MAX_OPEN_QUESTIONS + 1, 1_000),
-        (1, MAX_OPEN_ASK_COST + 1),
-        (0, 1),
-        (1, 0),
-    ] {
+    let full_count = vec![ask.clone(); MAX_OPEN_QUESTIONS];
+    let too_many = vec![ask.clone(); MAX_OPEN_QUESTIONS + 1];
+    let large = AgentQuestion::new(
+        "m",
+        vec![Question::new(
+            "k",
+            "p",
+            None,
+            AnswerShape::One,
+            (0..20)
+                .map(|i| AnswerOption::new(format!("v{i}"), "l".repeat(949), None).unwrap())
+                .collect(),
+            None,
+            false,
+        )
+        .unwrap()],
+    )
+    .unwrap();
+    assert!(large.carrying_cost() <= MAX_OPEN_ASK_COST);
+    assert!(large.carrying_cost() + ask.carrying_cost() > MAX_OPEN_ASK_COST);
+    for open in [&too_many, &vec![large.clone(), ask.clone()]] {
         assert_eq!(
-            RefusedAsk::new(deploy_question(), open_asks, open_cost).unwrap_err(),
+            RefusedAsk::new(ask.clone(), open).unwrap_err(),
             ExecutionError::InvalidQuestionRefusal,
-            "{open_asks} asks costing {open_cost}"
         );
     }
-    let for_room = |open_asks, open_cost| {
+    let for_room = |open: &[AgentQuestion]| {
         QuestionRefusalRecord::for_room(
             session(),
             run(),
             id(),
-            RefusedAsk::new(deploy_question(), open_asks, open_cost).unwrap(),
-            PermissionAnswerDelivery::Written,
+            RefusedAsk::new(ask.clone(), open).unwrap(),
+            PermissionAnswerDelivery::Selected,
         )
     };
-    // Evidence showing there was room records no refusal at all.
-    assert_eq!(
-        for_room(MAX_OPEN_QUESTIONS - 1, 1_000).unwrap_err(),
-        ExecutionError::InvalidQuestionRefusal
-    );
-    let too_large = MAX_OPEN_ASK_COST - ask.carrying_cost() + 1;
-    for ((open_asks, open_cost), code) in [
-        ((MAX_OPEN_QUESTIONS, 8_000), "too_many_open"),
-        ((1, too_large), "too_large"),
+    for open in [&[][..], &full_count[..MAX_OPEN_QUESTIONS - 1]] {
+        assert_eq!(
+            for_room(open).unwrap_err(),
+            ExecutionError::InvalidQuestionRefusal
+        );
+    }
+    for (open, reason, code) in [
+        (
+            full_count,
+            QuestionRefusalReason::TooManyOpen,
+            "too_many_open",
+        ),
+        (vec![large], QuestionRefusalReason::TooLarge, "too_large"),
     ] {
-        let value = record_value(&ExecutionAuditRecord::QuestionRefused(
-            for_room(open_asks, open_cost).unwrap(),
-        ));
-        assert_eq!(value["reason"], code);
-        let refused = &value["refused"];
-        assert_eq!(refused["ask"]["message"], "Where to?");
-        assert_eq!(refused["openAsks"], open_asks);
-        assert_eq!(refused["openCost"], open_cost);
-        assert_eq!(refused["askCost"], ask.carrying_cost());
-        assert_eq!(refused["maxOpenAsks"], MAX_OPEN_QUESTIONS);
-        assert_eq!(refused["maxOpenCost"], MAX_OPEN_ASK_COST);
+        let selected = for_room(&open).unwrap();
+        let written = selected
+            .clone()
+            .with_delivery(PermissionAnswerDelivery::Written);
+        let failed = selected
+            .clone()
+            .with_delivery(PermissionAnswerDelivery::Failed(AgentError::Transport(
+                "refusal write failed".into(),
+            )));
+        for record in [selected.clone(), written, failed] {
+            assert_eq!(record.reason(), reason);
+            assert_eq!(record.session_id(), selected.session_id());
+            assert_eq!(record.execution_id(), selected.execution_id());
+            assert_eq!(record.id(), selected.id());
+            assert_eq!(record.refused(), selected.refused());
+            let value = record_value(&ExecutionAuditRecord::QuestionRefused(record));
+            assert_eq!(value["reason"], code);
+            assert_eq!(value["sessionId"], "session");
+            assert_eq!(value["executionId"], "run");
+            assert_eq!(value["refusalId"], "7");
+            assert_eq!(value["origin"]["kind"], "runtime");
+            assert!(value.get("actor").is_none());
+            let refused = &value["refused"];
+            assert_eq!(refused["ask"]["message"], "Where to?");
+            assert_eq!(refused["openAsks"], open.len());
+            assert_eq!(
+                refused["openCost"],
+                open.iter().map(AgentQuestion::carrying_cost).sum::<usize>()
+            );
+            assert_eq!(refused["askCost"], ask.carrying_cost());
+            assert_eq!(refused["maxOpenAsks"], MAX_OPEN_QUESTIONS);
+            assert_eq!(refused["maxOpenCost"], MAX_OPEN_ASK_COST);
+        }
     }
 }
 

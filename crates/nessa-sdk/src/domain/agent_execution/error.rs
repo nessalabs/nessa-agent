@@ -87,8 +87,9 @@ pub enum ExecutionError {
     DuplicateAnswerOption,
     /// An answer names a question the agent did not ask in this ask.
     UnaskedQuestion,
-    /// A refused ask's evidence disagrees with why it was refused: a refusal
-    /// for room keeps the ask it was decided on, and no other refusal read one.
+    /// Open asks exceed their admitted count or carrying-cost limits, or refusal
+    /// evidence disagrees with its reason: a room refusal requires a candidate
+    /// that does not fit, and other refusal reasons carry no candidate.
     InvalidQuestionRefusal,
     /// An agent's question holds a control character it cannot be shown with:
     /// any in an identity, or any but a line break or tab in text. Identifies

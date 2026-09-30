@@ -6,11 +6,14 @@
 //!
 //! Arrows mean containment: options make up a question, questions make up one
 //! ask. Every text is bounded here, because an ask is held for as long as a
-//! turn waits for somebody to answer it.
+//! turn waits for somebody to answer it. `OpenQuestionAccounting` derives the
+//! open collection's count and cost and owns the admission comparison.
+mod accounting;
 mod answer;
 mod identity;
 mod question;
 mod refusal;
+pub use accounting::OpenQuestionAccounting;
 pub use answer::{AcceptedAnswer, QuestionCancellation, QuestionChoice, QuestionResponse};
 pub use identity::QuestionId;
 pub use question::{

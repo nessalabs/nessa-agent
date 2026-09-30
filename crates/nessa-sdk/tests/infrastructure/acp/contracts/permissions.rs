@@ -1337,6 +1337,15 @@ fn assert_refused(audit: &RecordingAudit, reason: QuestionRefusalReason) {
                 assert!(!refused.ask().questions().is_empty());
                 if reason == QuestionRefusalReason::TooManyOpen {
                     assert_eq!(refused.open_asks(), MAX_OPEN_QUESTIONS);
+                    let ended = audit.answered_questions.lock().unwrap();
+                    assert_eq!(ended.len(), refused.open_asks());
+                    assert_eq!(
+                        refused.open_cost(),
+                        ended
+                            .iter()
+                            .map(|answer| answer.question().carrying_cost())
+                            .sum::<usize>()
+                    );
                 } else {
                     assert!(
                         refused.open_cost() + refused.ask().carrying_cost() > MAX_OPEN_ASK_COST
