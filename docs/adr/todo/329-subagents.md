@@ -71,13 +71,13 @@ judging your regexes"). It is decoration, so a crew reads as a crew; it is
 drawn apart from the state and says nothing about it.
 
 **Identity.** A subagent's id is unique within its conversation by construction:
-composition joins sources (the in-memory sample under `sample` and the
-experiments adapter under `experiments` today, the gateway's later) into one
-`SubagentSource`, each under a key of its own, and the join makes every id its
-source's key, `:`, and the source's own id through the desktop's one id encoder
-(326). Two sources cannot produce one id. The join answers `unread` for a
-conversation while any of its sources has not read it, then `ready` with every
-source's subagents, so a list is never shown short.
+composition joins sources (the in-memory sample and the experiments adapter
+today, the gateway's later) into one `SubagentSource`, given as a `Record` from
+each source's key to the source, so a key cannot repeat, and the join makes
+every id its source's key, `:`, and the source's own id through the desktop's
+one id encoder (326). Two sources cannot produce one id. The join answers
+`unread` for a conversation while any of its sources has not read it, then
+`ready` with every source's subagents, so a list is never shown short.
 
 **`SubagentSource`** is the port: `forSession(sessionId)`, answering from what
 the source holds now (a view may read it on every render) `{ kind: "unread" }`
@@ -99,13 +99,15 @@ state. Which subagent it shows is this vertical's state, one per conversation
 `joinedSubagentId(sourceKey, sourceId)`, which this vertical exports; each
 source declares its own key (the experiments adapter's is its own constant,
 which composition registers it under), so no other vertical rebuilds the rule.
-The vertical exports `useOpenSubagent()`, taking `{ sessionId, sourceKey,
-sourceId }` — set it, then open the widget through the host's `openWidget` in
-the caller's place: from a view in the window, in the window; from anywhere
-else, in a pane beside the conversation — which is how an experiment's agent
-opens its subagent. The plugin's `SessionAccessory` draws the conversation's
-subagents as an avatar stack in its pane header, in the model's order (the
-busiest first), and nothing when there are none; a click opens the panel.
+The vertical exports `useOpenSubagent(host)`, given the calling view's host
+callbacks and place (326 hands them to every view), and returning `(target: {
+sessionId, sourceKey, sourceId }) => void`, which sets the subagent shown and
+opens the panel through `host.openWidget` in the caller's place: from a view in
+the window, in the window; from anywhere else, in a pane beside the conversation
+— which is how an experiment's agent opens its subagent. The plugin's
+`SessionAccessory` draws the conversation's subagents as an avatar stack in its
+pane header, in the model's order (the busiest first), and nothing when there
+are none; a click opens the panel.
 
 **One subagent** is drawn as a conversation is — its messages and its live
 activity line through the workspace's transcript views — with no composer.

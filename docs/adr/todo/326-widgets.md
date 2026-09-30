@@ -200,6 +200,8 @@ direction, in the forms of import `split-panes-boundary.mjs` reads.
 - Every workspace rule that reads a pane's item narrows on its kind — a wide,
   mechanical change in #327, paid once.
 - Split panes are unchanged: they still see an opaque item.
+- Remaining: what puts widget parts into a message over the wire, which is the
+  gateway's.
 - Watch for plugins that want state shared between their places (a tab, a scroll
   position): what a plugin shares between its places is the plugin's to keep,
   never the host's — the subagents panel keeps which subagent it shows per

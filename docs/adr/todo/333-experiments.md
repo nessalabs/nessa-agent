@@ -121,19 +121,21 @@ that became the best, in the order they did, empty until one does. The best
 version is its last entry, or the baseline while it is empty; there is no second
 field naming it, so the two cannot disagree. A keep the harness withdraws leaves
 `bestSoFar` in the harness's next word. The window draws the climb and the best
-version from these and never finds either itself. The climb is drawn over time:
-each settled run with a score on the primary split is a point at its
+version from these and never finds either itself. The climb is drawn over time,
+and its best-so-far series begins at the baseline's primary-split score at the
+experiment's `startedAt` once the baseline is scored (at the first keep until
+then): each settled run with a score on the primary split is a point at its
 `settledAt`, and the best-so-far line steps at each `bestSoFar` run's
 `settledAt` — for a kept run, when it became kept — so runs that finish out of
 order, or are kept after reruns, never step it backwards. The card's sparkline
 is the same series, drawn as given with no `better`, so it cannot disagree with
 the climb. The path to the best version, and the exploration map's thread, are
-`bestSoFar` in order; the runs table's newest-first is by `startedAt`, and its
-score sorts follow the metric's `better`; a run's lineage (`parentId`) is drawn
-only in its own detail. A baseline is *scored* once it has a score on the
-primary split; until then the views say it is being scored, and a guardrail
-limited relative to it reads "not measured yet" until the baseline has that
-measure.
+`bestSoFar` in order; the runs table's newest-first is by `startedAt`, then
+`number`, and its score sorts follow the metric's `better`; a run's lineage
+(`parentId`) is drawn only in its own detail. A baseline is *scored* once it has
+a score on the primary split; until then the views say it is being scored, and a
+guardrail limited relative to it reads "not measured yet" until the baseline has
+that measure.
 
 **Validation** is at the source's adapter, where external data is parsed:
 
@@ -179,12 +181,13 @@ desktop's counts module (329).
 **Words are props.** Every heading, subtitle and label a composite draws is a
 prop, its default derived from the definition (the climb is titled by the
 metric's name; a gain reads in `deltaUnit`), so a host can say it otherwise
-without a fork. Primitives come from nessa_ui (nessalabs/nessa_ui#103, #104,
-#105) — `Meter`, `Delta`, `Stat`, `StatusLabel`, `AvatarStack`, `Breadcrumb`,
-`EmptyState`, the glass `SegmentedControl`, `Sparkline`, `ChartTooltip`,
-`ProportionBar` — with the existing `Card`, `Table`, `FileDiffList`, `DiffStat`
-and `VirtualList`. The climb chart and the exploration map stay here, built from
-them, their geometry pure functions.
+without a fork. Primitives come from nessa_ui (nessalabs/nessa_ui#103,
+nessalabs/nessa_ui#104, nessalabs/nessa_ui#105) — `Meter`, `Delta`, `Stat`,
+`StatusLabel`, `AvatarStack`, `Breadcrumb`, `EmptyState`, the glass
+`SegmentedControl`, `Sparkline`, `ChartTooltip`, `ProportionBar` — with the
+existing `Card`, `Table`, `FileDiffList`, `DiffStat` and `VirtualList`. The
+climb chart and the exploration map stay here, built from them, their geometry
+pure functions.
 
 ### Areas, agents, cases and changes
 
@@ -209,10 +212,19 @@ count before and after; plus one page of moved cases from the source (at most
 status, lines added and removed), drawn as a virtualised tree with search.
 **`openFile({ experimentId, runId, path? })`** hands a file's diff to the
 person's editor, or with no path the run's whole change; it answers `opened`, or
-`refused` with a typed reason shown for four seconds where it was clicked. Each
-click is its own request and nothing is retried; where two answers arrive for
-one place, the later-asked request's is shown and an earlier one's arriving
-after it is let go.
+`refused` with a typed reason shown where it was clicked. Nothing is retried,
+and every call settles (the adapter answers `refused`, `unavailable`, when no
+answer comes in its bound):
+
+| At a place | Event | Next | Shown |
+| --- | --- | --- | --- |
+| idle | click | asked | nothing new |
+| asked | click again | asked, for the new request | nothing new |
+| asked | the latest request answers `opened` | idle | nothing |
+| asked | the latest request answers `refused` | refused | its reason, for four seconds |
+| asked | an earlier request answers | asked | nothing: it is let go |
+| refused | four seconds pass | idle | the reason goes |
+| refused | click | asked | the reason goes |
 
 ### The port, the places, the preview
 
