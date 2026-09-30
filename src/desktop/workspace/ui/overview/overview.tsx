@@ -464,18 +464,20 @@ export function AgentsOverview({
     // when it comes back, not now.
     if (!document.hasFocus()) return
     lastFocus.current = null
-    const id =
-      last.sessionId !== null && orderNow.current.includes(last.sessionId)
-        ? last.sessionId
-        : currentNow.current
+    const { sessionId } = last
     // On the next frame, once the page is laid out: WebKit scrolls an element
     // focused while its layout is pending into view, `preventScroll` or not.
     // Focus only — the list stays where the person has scrolled it, even as
     // rows reorder under them; walking the list is what brings a row into
-    // view. Given only if nothing has taken focus meanwhile.
+    // view. Given only if nothing has taken focus meanwhile, and to the row
+    // the list holds then, after every change before the frame.
     requestAnimationFrame(() => {
       const focus = document.activeElement
       if (focus !== null && focus !== document.body) return
+      const id =
+        sessionId !== null && orderNow.current.includes(sessionId)
+          ? sessionId
+          : currentNow.current
       const column = list.current
       const item =
         id === null

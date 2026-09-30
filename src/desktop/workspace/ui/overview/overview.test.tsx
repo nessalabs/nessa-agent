@@ -1052,6 +1052,29 @@ describe("a row keeps the keyboard as its session changes group", () => {
     expect(document.activeElement).toBe(document.body)
   })
 
+  it("chooses where focus goes on the frame it lands, after every change before it", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    // Its row drawn anew, then its session removed, within one frame.
+    await act(async () => {
+      source.emit({
+        kind: "session",
+        session: summary("run", "desktop", 600, "idle", {
+          title: "Split panes",
+          revision: 2,
+        }),
+      })
+      await settle(1)
+      source.emit({ kind: "session-removed", sessionId: "run", revision: 9 })
+      await settle(1)
+    })
+    await nextFrame()
+    expect(row("run")).toBeNull()
+    expect(document.activeElement).toBe(card("first"))
+  })
+
   it("does not take focus back from what took it before the frame", async () => {
     const { source, store } = await mount()
     store.dispatch(followWorkspace())
