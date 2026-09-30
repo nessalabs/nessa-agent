@@ -91,9 +91,10 @@ holds the others back, and a list is never shown short without saying so.
 **`SubagentSource`** is the port: `forSession(sessionId)`, answering from what
 the source holds now (a view may read it on every render) `{ kind: "unread" }`
 until the source has read that conversation's subagents, then `{ kind: "ready",
-subagents }`, or `{ kind: "failed", reason }` when it cannot (a typed reason;
-the source logs the fault) — and `subscribe`. It has no `send`: a subagent's
-conversation is read, not written to, until a source can deliver.
+subagents, unreadable }` — `unreadable` the keys of joined sources that failed,
+empty for a single source — or `{ kind: "failed", reason }` when it cannot (a
+typed reason; the source logs the fault) — and `subscribe`. It has no `send`: a
+subagent's conversation is read, not written to, until a source can deliver.
 
 **Where it is seen.** The panel is a widget (326), plugin `subagents`, whose id
 is the conversation's session id, in a pane beside the conversation or over the

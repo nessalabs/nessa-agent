@@ -102,26 +102,28 @@ interface Limit {
 
 **Runs** carry an `id`, `number` (the harness's label for the run, from 1,
 higher for a later-made run; nothing but lineage reads an order into it),
-`startedAt`, `settledAt` — when the run's outcome last changed: a keep decided
-after reruns moves it, a rerun that confirms the same outcome does not; present
-exactly when the outcome is not `pending` — `parentId` (what it was built on:
-the baseline or an earlier run), `scores` by split id, each `{ mean, interval?
-}` (the half-width of its confidence interval), `measures` by guardrail id,
-their `verdict` id, the harness's `reason` for it as text, and optionally
-`areaId`, `agentId`, `cases` and `change`. The **baseline** is a type of its own
-— an `id`, `scores` and `measures`, nothing else — and not one of `runs`: it is
-what runs are judged against, not a run judged, so it has no parent, verdict or
-time to get wrong. The **experiment** carries its `id`, `title`, `goal`, the
-`sessionId` of the conversation that runs it (a widget's `origin`), `startedAt`,
-the harness's `notes` (each a tone, a text, a time, and the run it is about, if
-any), the definition, its `areas` and `agents` (each with an `id`; an agent with
-a `name`, `since`, the `brief` it was given as text, an optional `areaId`, an
-optional `model`, and an `activity` — `{ kind: "evaluating", runId }`, or `{
-kind: "drafting" | "diagnosing" | "resting", note }`), its baseline and runs,
-and — from the harness — `bestSoFar`: the ids of the runs that became the best,
-in the order they did, empty until one does. The best version is its last entry,
-or the baseline while it is empty; there is no second field naming it, so the
-two cannot disagree. A keep the harness withdraws leaves `bestSoFar` in the
+`startedAt`, `progress` while it is being evaluated (`{ done, total }` cases,
+from the harness; absent when it does not say), `settledAt` — when the run's
+outcome last changed: a keep decided after reruns moves it, a rerun that
+confirms the same outcome does not; present exactly when the outcome is not
+`pending` — `parentId` (what it was built on: the baseline or an earlier run),
+`scores` by split id, each `{ mean, interval? }` (the half-width of its
+confidence interval), `measures` by guardrail id, their `verdict` id, the
+harness's `reason` for it as text, and optionally `areaId`, `agentId`, `cases`
+and `change`. The **baseline** is a type of its own — an `id`, `scores` and
+`measures`, nothing else — and not one of `runs`: it is what runs are judged
+against, not a run judged, so it has no parent, verdict or time to get wrong.
+The **experiment** carries its `id`, `title`, `goal`, the `sessionId` of the
+conversation that runs it (a widget's `origin`), `startedAt`, the harness's
+`notes` (each a tone, a text, a time, and the run it is about, if any), the
+definition, its `areas` and `agents` (each with an `id`; an agent with a `name`,
+`since`, the `brief` it was given as text, an optional `areaId`, an optional
+`model`, and an `activity` — `{ kind: "evaluating", runId }`, or `{ kind:
+"drafting" | "diagnosing" | "resting", note }`), its baseline and runs, and —
+from the harness — `bestSoFar`: the ids of the runs that became the best, in the
+order they did, empty until one does. The best version is its last entry, or the
+baseline while it is empty; there is no second field naming it, so the two
+cannot disagree. A keep the harness withdraws leaves `bestSoFar` in the
 harness's next word. The window draws the climb and the best version from these
 and never finds either itself. The climb is drawn over time, and its best-so-far
 series begins at the baseline's primary-split score at the experiment's
