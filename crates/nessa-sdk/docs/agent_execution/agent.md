@@ -366,6 +366,41 @@ No record-writer performance workload has been qualified yet. Report measured
 save, replay, CPU, and memory costs only with the workload and environment that
 produced them.
 
+## Committed transcript receivers
+
+`infrastructure::session_storage::TranscriptFold` applies the next contiguous
+physical records for one exact sync scope. The receiver journal owns duplicate
+byte checking and downloaded progress D; the fold owns semantic decisions and
+applied terminal A. Pending physical pieces can leave D greater than A. Source
+freshness is separate from semantic completeness: accepted records do not confirm
+Current. The caller authenticates and correlates a physical source-head response,
+then calls `observe_source_head`; unavailable source evidence remains Unknown.
+A restored checkpoint is Stale until that observation, and it cannot bootstrap
+arbitrary recent tail records without the preceding checkpoint or prefix.
+
+Use `transaction()` when receiving data, checkpoint, A and local effects must
+commit together. Its borrowed guard stages `apply`, `observe_source_head` and
+`confirm_empty`; immutable methods expose the staged checkpoint and positions.
+Dropping it, including unwind or an external SQL/audit error, rolls back staged
+semantic and physical evidence. A rejected operation rolls back the whole guard
+and disables commit. Commit on an active guard adds no validation, allocation or
+source observation; the caller confirms its physical transaction first.
+The guard performs no I/O, provider action or source reservation. Its exclusive
+borrow prevents another fold mutation during staging.
+
+The canonical continuation reuses semantic indices and validation state and
+undoes touched suffix components. It retains full history and derived allocation
+state; copied prefixes are unnecessary for receiver staging. Explicit `Clone`
+still copies/revalidates full history. A read publication materializes a separate
+immutable full snapshot in O(history), so repeated read results promise equal
+semantic values rather than Arc pointer identity. Checkpoint encoding also visits
+full history and retains full encoded output, using immutable bounded chunks and
+borrowed message text. Nested DTO working values follow existing per-value limits.
+Neither the cache eviction target nor one checkpoint chunk limits total valid
+conversation history. Undo working allocations follow the caller's batch size and
+touched component limits; public arbitrarily large batches do not promise constant
+memory. See the compiled transaction example on `TranscriptFold::transaction`.
+
 ## UI and tests
 
 `invoke` drains provider output even without a subscriber. Subscribe before

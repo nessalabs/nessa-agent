@@ -4,8 +4,9 @@ use crate::application::agent_execution::executions::{
     limits::{MAX_MESSAGE_CHUNK_BYTES, MAX_RETAINED_OUTPUT_EVENTS},
     ExecutionRequest,
 };
-use crate::application::agent_execution::sessions::SessionSnapshot;
+use crate::application::agent_execution::sessions::{QueueHistoryRecord, SessionSnapshot};
 use crate::domain::agent_execution::{
+    executions::QueueOrderChange,
     permissions::PermissionOption,
     prompts::{LinkedFile, UserMessage},
     questions::{
@@ -244,9 +245,12 @@ impl Shape {
         match self {
             Self::Invocations => SessionSnapshot::MAX_INVOCATIONS,
             Self::Events => MAX_RETAINED_OUTPUT_EVENTS,
+            Self::QueueHistory => {
+                QueueHistoryRecord::maximum_entries(SessionSnapshot::MAX_INVOCATIONS)
+            }
             Self::SemanticChanges => 262_144 + 16 * 1024,
             Self::Hooks => 128,
-            Self::QueueEntries | Self::QueueIds => 64,
+            Self::QueueEntries | Self::QueueIds => QueueOrderChange::MAX_PENDING,
             // The message's own constructor refuses more; refuse them here
             // before the excess references are built.
             Self::Images => UserMessage::MAX_IMAGES,

@@ -48,11 +48,31 @@ pub enum MessageKind {
 /// let mut chunk = MessageChunk::text("original");
 /// chunk.text = "replacement".into();
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MessageChunk {
     kind: MessageKind,
     message_id: Option<MessageId>,
     text: Box<str>,
+}
+#[cfg(test)]
+use std::cell::Cell;
+#[cfg(test)]
+std::thread_local! {
+    pub(crate) static MESSAGE_CLONES: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+}
+impl Clone for MessageChunk {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        MESSAGE_CLONES.with(|counter| {
+            let (count, bytes) = counter.get();
+            counter.set((count + 1, bytes + self.text.len()));
+        });
+        Self {
+            kind: self.kind,
+            message_id: self.message_id.clone(),
+            text: self.text.clone(),
+        }
+    }
 }
 impl MessageChunk {
     /// Own user-visible `text`, preserving empty text and whitespace exactly.

@@ -22,6 +22,11 @@
 //! ```
 //! Arrows show coordination and retained evidence. Provider-private execution
 //! state stays with the provider; snapshots never replay prompts automatically.
+//! CommittedTranscript -> records::continuation -> reversible records transitions
+//!                     -> validation::observations + retention::intervals
+//!                     -> existing domain history/queue and live controller limits
+//! The continuation retains derived indices/accounting; read publication creates
+//! one immutable full snapshot. Receiver guard Drop reverses only staged changes.
 //! Validation checks cross-record evidence at the application boundary, including
 //! custom storage adapters, before opening a provider or accepting observations.
 //! Per-invocation output accounting bounds saved observations independently from
@@ -67,3 +72,10 @@ pub use storage::{
     SessionStorage, SessionStorageLease, StorageError, StorageFuture, StorageShutdownFailure,
     SubmissionAcknowledgement,
 };
+
+pub(crate) use transcript::CommittedTransactionState;
+
+#[cfg(test)]
+pub(crate) use retained::SNAPSHOT_ACCOUNTING_CALLS;
+#[cfg(test)]
+pub(crate) use validation::VALIDATION_CALLS;

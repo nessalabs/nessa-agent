@@ -28,6 +28,13 @@ pub struct PermissionAuthority {
     pending: Weak<Mutex<HashMap<PermissionId, PermissionRequest>>>,
 }
 impl PermissionAuthority {
+    pub(crate) fn allocation_bytes(&self) -> usize {
+        self.session
+            .as_str()
+            .len()
+            .saturating_add(self.execution.as_str().len())
+    }
+
     pub(crate) fn new(
         session: ExecutionSessionId,
         execution: ExecutionId,

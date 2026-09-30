@@ -45,5 +45,6 @@ pub use record_source::{
 pub use terminal_discovery::RecordReadStatus;
 mod transcript;
 pub use transcript::{
-    TranscriptCheckpoint, TranscriptError, TranscriptFold, MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES,
+    TranscriptCheckpoint, TranscriptError, TranscriptFold, TranscriptTransaction,
+    MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES,
 };

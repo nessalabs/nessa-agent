@@ -19,6 +19,9 @@
 
 mod audit;
 mod controller;
+pub(crate) use controller::{
+    HistoricalReviewCost, RetentionControllerUndo, MAX_EXECUTION_PERMISSIONS,
+};
 mod events;
 pub(crate) mod limits;
 mod permission_authority;

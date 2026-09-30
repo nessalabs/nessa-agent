@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-enum WireChange {
+enum WireChange<E = Event> {
     Opened {
         id: String,
         provider: Provider,
@@ -39,7 +39,7 @@ enum WireChange {
         execution_id: String,
         event: SchedulingEvent,
     },
-    ProviderObservation(Event),
+    ProviderObservation(E),
     ReceiptUpdated {
         execution_id: String,
         before: Acknowledgement,
@@ -51,7 +51,7 @@ enum WireChange {
     },
     ProviderReport {
         execution_id: String,
-        report: Settlement,
+        report: Box<Settlement>,
         local_stop: Option<Cancellation>,
     },
     LocalSettlement {
@@ -68,8 +68,8 @@ enum WireChange {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WireBatch {
-    changes: Vec<WireChange>,
+struct WireBatch<C = WireChange> {
+    changes: Vec<C>,
 }
 
 fn encode_context(value: &ProviderContext) -> Option<String> {
@@ -93,8 +93,8 @@ fn encode_result(
     value.clone().map(Into::into).map_err(Into::into)
 }
 
-impl From<&SessionChange> for WireChange {
-    fn from(value: &SessionChange) -> Self {
+impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
+    fn from(value: &'a SessionChange) -> Self {
         match value {
             SessionChange::Opened {
                 id,
@@ -126,9 +126,7 @@ impl From<&SessionChange> for WireChange {
                 execution_id: execution_id.as_str().into(),
                 event: event.clone().into(),
             },
-            SessionChange::ProviderObservation(event) => {
-                Self::ProviderObservation(event.clone().into())
-            }
+            SessionChange::ProviderObservation(event) => Self::ProviderObservation(event.into()),
             SessionChange::ReceiptUpdated {
                 execution_id,
                 before,
@@ -151,7 +149,7 @@ impl From<&SessionChange> for WireChange {
                 local_stop,
             } => Self::ProviderReport {
                 execution_id: execution_id.as_str().into(),
-                report: report.clone().into(),
+                report: Box::new(report.clone().into()),
                 local_stop: local_stop.as_ref().map(Into::into),
             },
             SessionChange::LocalSettlement {
@@ -231,7 +229,7 @@ impl TryFrom<WireChange> for SessionChange {
                 local_stop,
             } => Self::ProviderReport {
                 execution_id: ExecutionId::new(execution_id).map_err(corrupt)?,
-                report: ExecutionReport::try_from(report)?,
+                report: ExecutionReport::try_from(*report)?,
                 local_stop: local_stop.map(Cancellation::decode).transpose()?,
             },
             WireChange::LocalSettlement {

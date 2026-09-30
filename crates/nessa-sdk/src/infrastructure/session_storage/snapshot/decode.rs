@@ -298,9 +298,38 @@ fn preflight_shape(reader: impl Read, shape: Shape) -> Result<(), StorageError> 
 mod storage_tree_tests {
     use super::*;
     use crate::{
-        application::agent_execution::agents::AgentError,
+        application::agent_execution::{
+            agents::AgentError,
+            sessions::{QueueHistoryRecord, SessionSnapshot},
+        },
         infrastructure::session_storage::snapshot::errors::{SavedError, StorageFailure},
     };
+
+    #[test]
+    fn queue_history_preflight_consumes_semantic_structural_bound_in_either_order() {
+        let maximum = QueueHistoryRecord::maximum_entries(SessionSnapshot::MAX_INVOCATIONS);
+        for count in [maximum, maximum + 1] {
+            let queue = std::iter::repeat_n(
+                r#"{"mutation":"Restored","actor":null,"scheduling_length":null}"#,
+                count,
+            )
+            .collect::<Vec<_>>()
+            .join(",");
+            for queue_first in [true, false] {
+                let text = if queue_first {
+                    format!(r#"{{"queue_history":[{queue}],"invocations":[]}}"#)
+                } else {
+                    format!(r#"{{"invocations":[],"queue_history":[{queue}]}}"#)
+                };
+                // This non-retaining bound uses the maximum possible invocation
+                // count. The full validator still owns the exact relative bound.
+                assert_eq!(
+                    preflight_shape(text.as_bytes(), Shape::Snapshot).is_ok(),
+                    count == maximum
+                );
+            }
+        }
+    }
 
     fn decode(text: &str) -> Result<StorageError, StorageError> {
         preflight_shape(text.as_bytes(), Shape::StorageError)?;

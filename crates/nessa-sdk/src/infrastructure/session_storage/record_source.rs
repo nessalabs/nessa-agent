@@ -1500,10 +1500,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert!(std::ptr::eq(
-                view.snapshot().unwrap(),
-                repeated.snapshot().unwrap()
-            ));
+            assert_eq!(view.snapshot(), repeated.snapshot());
             let change = SessionChange::ProviderContext {
                 before: ProviderContext::Absent,
                 after: ProviderContext::Recorded(ExecutionSessionId::new("new-context").unwrap()),
@@ -1519,6 +1516,11 @@ mod tests {
             assert_eq!(progressed.position(), 2);
             assert_eq!(progressed.incarnation(), view.incarnation());
             assert!(!current_entry.lifetime.is_obsolete());
+            assert_eq!(
+                view.snapshot().unwrap().provider_context,
+                ProviderContext::Absent
+            );
+            assert_eq!(repeated.snapshot(), view.snapshot());
             storage.shutdown().await.unwrap();
         }
     }
@@ -1951,10 +1953,7 @@ mod tests {
         for result in [second, third, fourth] {
             let concurrent = result.unwrap().unwrap();
             assert_eq!(concurrent.position(), 1);
-            assert!(std::ptr::eq(
-                view.snapshot().unwrap(),
-                concurrent.snapshot().unwrap()
-            ));
+            assert_eq!(view.snapshot(), concurrent.snapshot());
         }
         assert_eq!(view.position(), 1);
         assert_eq!(view.snapshot().unwrap().id, session);
@@ -1965,10 +1964,7 @@ mod tests {
             .unwrap();
         assert_eq!(unchanged.position(), view.position());
         assert_eq!(unchanged.snapshot(), view.snapshot());
-        assert!(std::ptr::eq(
-            view.snapshot().unwrap(),
-            unchanged.snapshot().unwrap()
-        ));
+        assert_eq!(view.snapshot(), unchanged.snapshot());
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
             after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
@@ -1988,6 +1984,11 @@ mod tests {
             newer.snapshot().unwrap().provider_context,
             ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap())
         );
+        assert_eq!(
+            view.snapshot().unwrap().provider_context,
+            ProviderContext::Absent
+        );
+        assert_eq!(unchanged.snapshot(), view.snapshot());
         let mut snapshot = newer.snapshot().unwrap().clone();
         for position in 3..=514u64 {
             let before = snapshot.provider_context.clone();

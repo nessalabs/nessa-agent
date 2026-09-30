@@ -9,6 +9,16 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Debug, Default)]
 pub struct PermissionAuthoritySource(Arc<Mutex<Option<PermissionAuthority>>>);
 impl PermissionAuthoritySource {
+    pub(super) fn allocation_bytes(&self) -> usize {
+        std::mem::size_of::<Mutex<Option<PermissionAuthority>>>()
+            .saturating_add(2 * std::mem::size_of::<usize>())
+            .saturating_add(self.0.lock().map_or(usize::MAX, |value| {
+                value
+                    .as_ref()
+                    .map_or(0, PermissionAuthority::allocation_bytes)
+            }))
+    }
+
     /// Acquire the last issued handle without I/O, audit or command-queue waits.
     /// The caller must validate its exact session/execution before querying it.
     ///

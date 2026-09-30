@@ -1,7 +1,23 @@
 //! Logical Nessa fact identity, separate from an event-stream cursor or retry ID.
 //! One accepted fact can use one inline record or several sealed physical records.
+pub(super) mod continuation;
 
-use crate::domain::agent_execution::executions::ExecutionId;
+use super::{
+    queue_validation::QueueReplayUndo,
+    validation::{InvocationContinuation, InvocationObservationUndo},
+    SessionChange, SessionSnapshot, StorageError, SubmissionAcknowledgement,
+};
+use crate::{
+    application::agent_execution::{agents::AgentError, executions::ExecutionUpdate},
+    domain::agent_execution::{
+        executions::{
+            ExecutionId, ExecutionOutcome, InvocationHistory, InvocationObservation,
+            InvocationStage, QueueMutation,
+        },
+        sessions::{ProviderContext, SessionId},
+    },
+};
+use std::{collections::HashMap, fmt::Display};
 
 /// Version 1 semantic fact kinds owned by the SDK conversation coordinator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +138,15 @@ pub(crate) fn key_for_changes(
     changes: &[SessionChange],
     previous_offset: u64,
 ) -> Result<FactKey, StorageError> {
+    key_for_changes_using(prior, changes, previous_offset, |id| invocation(prior, id))
+}
+
+fn key_for_changes_using<'a>(
+    prior: Option<&'a SessionSnapshot>,
+    changes: &[SessionChange],
+    previous_offset: u64,
+    lookup: impl Fn(&ExecutionId) -> Result<&'a super::InvocationRecord, StorageError>,
+) -> Result<FactKey, StorageError> {
     let [change] = changes else {
         if changes.len() < 2 {
             return Err(corrupt("empty semantic batch"));
@@ -147,12 +172,12 @@ pub(crate) fn key_for_changes(
         SessionChange::SchedulingTransition { execution_id, .. } => (
             FactKind::SchedulingTransition,
             Some(execution_id.clone()),
-            invocation(prior, execution_id)?.scheduling.len() as u64,
+            lookup(execution_id)?.scheduling.len() as u64,
         ),
         SessionChange::ProviderObservation(event) => (
             FactKind::ProviderObservation,
             Some(event.execution_id().clone()),
-            invocation(prior, event.execution_id())?.events.len() as u64,
+            lookup(event.execution_id())?.events.len() as u64,
         ),
         SessionChange::ReceiptUpdated { execution_id, .. } => (
             FactKind::ReceiptUpdated,
@@ -175,15 +200,7 @@ pub(crate) fn key_for_changes(
     FactKey::new(kind, execution_id, ordinal).ok_or_else(|| corrupt("invalid semantic fact key"))
 }
 
-use super::{SessionChange, SessionSnapshot, StorageError};
-use crate::application::agent_execution::executions::ExecutionUpdate;
-use crate::domain::agent_execution::{
-    executions::{InvocationHistory, InvocationObservation, InvocationStage, QueueMutation},
-    sessions::{ProviderContext, SessionId},
-};
-use std::collections::HashMap;
-
-fn corrupt(message: impl std::fmt::Display) -> StorageError {
+fn corrupt(message: impl Display) -> StorageError {
     StorageError::Corrupt(message.to_string())
 }
 
@@ -208,7 +225,7 @@ fn apply_history<T>(
     let id = &record.request.execution_id;
     let mut next = match histories.get(id) {
         Some(history) => history.clone(),
-        None => super::validation::invocation_history(record)?,
+        None => return Err(corrupt("validated invocation history is absent")),
     };
     let result = transition(&mut next)?;
     histories.insert(id.clone(), next);
@@ -220,7 +237,7 @@ fn apply_history<T>(
 fn validate_target_prefix(
     snapshot: &SessionSnapshot,
     positions: &HashMap<ExecutionId, usize>,
-    histories: &mut HashMap<ExecutionId, InvocationHistory>,
+    histories: &HashMap<ExecutionId, InvocationHistory>,
     target: Option<&ExecutionId>,
     offset: Option<usize>,
     exact: bool,
@@ -252,16 +269,11 @@ fn validate_target_prefix(
             .validate_steering_target()
             .map_err(|error| corrupt(error.to_string()));
     }
-    let history = super::validation::invocation_history(record)?;
-    history
-        .validate_steering_target()
-        .map_err(|error| corrupt(error.to_string()))?;
-    histories.insert(target.clone(), history);
-    Ok(())
+    Err(corrupt("validated target history is absent"))
 }
 
 #[derive(Clone, Copy, Default)]
-struct ProviderEvidence {
+pub(super) struct ProviderEvidence {
     observations: bool,
     reports: bool,
     dispatched: bool,
@@ -334,30 +346,154 @@ pub(crate) fn fold_changes(
     prior: Option<&SessionSnapshot>,
     changes: &[SessionChange],
 ) -> Result<SessionSnapshot, StorageError> {
-    if changes.is_empty() {
-        return prior
-            .cloned()
-            .ok_or_else(|| corrupt("empty semantic batch cannot open a session"));
+    let mut continuation = continuation::Continuation::restore(prior.cloned())?;
+    let mut undo = Vec::new();
+    continuation.stage(changes, &mut undo)?;
+    continuation
+        .snapshot
+        .ok_or_else(|| corrupt("semantic batch has no session"))
+}
+
+pub(super) fn affected_execution(change: &SessionChange) -> Option<&ExecutionId> {
+    match change {
+        SessionChange::InputAccepted(record) => Some(&record.request.execution_id),
+        SessionChange::ProviderObservation(event) => Some(event.execution_id()),
+        SessionChange::SchedulingTransition { execution_id, .. }
+        | SessionChange::ReceiptUpdated { execution_id, .. }
+        | SessionChange::StopDecision { execution_id, .. }
+        | SessionChange::ProviderReport { execution_id, .. }
+        | SessionChange::LocalSettlement { execution_id, .. } => Some(execution_id),
+        _ => None,
     }
-    let mut candidate = prior.cloned();
-    let mut positions = HashMap::new();
-    if let Some(snapshot) = &candidate {
-        for (index, record) in snapshot.invocations.iter().enumerate() {
-            if positions
-                .insert(record.request.execution_id.clone(), index)
-                .is_some()
-            {
-                return Err(corrupt("execution identity occurs in multiple invocations"));
+}
+
+pub(super) struct AllocationUndo {
+    before_snapshot: usize,
+    after_snapshot: usize,
+    spare_growth: usize,
+    after_derived: usize,
+    id: Option<ExecutionId>,
+}
+pub(super) enum ChangeUndo {
+    Allocation(AllocationUndo),
+    History(ExecutionId, InvocationHistory),
+    Opened,
+    Input(ExecutionId),
+    Queue(QueueReplayUndo),
+    Scheduling(usize),
+    Observation(usize, InvocationObservationUndo),
+    Receipt(usize, SubmissionAcknowledgement),
+    Stop(usize),
+    Report(usize),
+    Settlement(
+        usize,
+        Option<ExecutionOutcome>,
+        Option<Result<ExecutionOutcome, AgentError>>,
+    ),
+    Context(ProviderContext),
+}
+
+impl continuation::Continuation {
+    pub(super) fn stage(
+        &mut self,
+        changes: &[SessionChange],
+        undo: &mut Vec<ChangeUndo>,
+    ) -> Result<(), StorageError> {
+        for change in changes {
+            let before_snapshot =
+                super::retained::touched(self.snapshot.as_ref(), change, &self.positions, false);
+            let before_spare =
+                super::retained::spare_slots(self.snapshot.as_ref(), change, &self.positions);
+            let id = affected_execution(change).cloned();
+            let before_derived = self.derived_touched(id.as_ref());
+            let index = undo.len();
+            undo.push(ChangeUndo::Allocation(AllocationUndo {
+                before_snapshot,
+                after_snapshot: before_snapshot,
+                spare_growth: 0,
+                after_derived: before_derived,
+                id,
+            }));
+            let result = self.stage_change(change, undo);
+            let after_snapshot = super::retained::touched(
+                self.snapshot.as_ref(),
+                change,
+                &self.positions,
+                result.is_ok(),
+            )
+            .saturating_add(if result.is_ok() {
+                super::retained::append_payload(change)
+            } else {
+                0
+            });
+            let after_spare =
+                super::retained::spare_slots(self.snapshot.as_ref(), change, &self.positions);
+            let after_derived = self.derived_touched(affected_execution(change));
+            self.snapshot_bytes = self
+                .snapshot_bytes
+                .saturating_sub(before_snapshot)
+                .saturating_add(after_snapshot);
+            self.derived_bytes = self
+                .derived_bytes
+                .saturating_sub(before_derived)
+                .saturating_add(after_derived);
+            let ChangeUndo::Allocation(accounting) = &mut undo[index] else {
+                unreachable!("allocation undo precedes transition")
+            };
+            accounting.after_snapshot = after_snapshot;
+            accounting.spare_growth = after_spare.saturating_sub(before_spare);
+            accounting.after_derived = after_derived;
+            result?;
+        }
+        let Self {
+            snapshot: candidate,
+            histories,
+            queue,
+            positions,
+            ..
+        } = self;
+
+        let snapshot = candidate
+            .as_ref()
+            .ok_or_else(|| corrupt("semantic batch has no session"))?;
+        for change in changes {
+            if let Some(id) = affected_execution(change) {
+                if let Some(history) = histories.get(id) {
+                    history.validate_checkpoint().map_err(corrupt)?;
+                }
             }
         }
+        if snapshot.queue_history.len()
+            > super::QueueHistoryRecord::maximum_entries(snapshot.invocations.len())
+        {
+            return Err(corrupt("queue history exceeds its structural bound"));
+        }
+        queue.validate_current_checkpoint(snapshot, positions)?;
+        Ok(())
     }
-    let mut histories = HashMap::new();
-    let mut provider_evidence = ProviderEvidence::from_snapshot(candidate.as_ref());
-    let mut queue = match prior {
-        Some(snapshot) => super::queue_validation::QueueReplay::from_snapshot(snapshot)?,
-        None => super::queue_validation::QueueReplay::empty(),
-    };
-    for change in changes {
+
+    fn stage_change(
+        &mut self,
+        change: &SessionChange,
+        undo: &mut Vec<ChangeUndo>,
+    ) -> Result<(), StorageError> {
+        let Self {
+            snapshot: candidate,
+            positions,
+            histories,
+            invocations,
+            queue,
+            evidence: provider_evidence,
+            context_witness,
+            identity_bytes,
+            ..
+        } = self;
+
+        if let Some(id) = affected_execution(change) {
+            if let Some(history) = histories.get(id) {
+                undo.push(ChangeUndo::History(id.clone(), history.clone()));
+            }
+        }
         match change {
             SessionChange::Opened {
                 id,
@@ -367,7 +503,9 @@ pub(crate) fn fold_changes(
                 if candidate.is_some() {
                     return Err(corrupt("session was opened twice"));
                 }
-                candidate = Some(SessionSnapshot {
+                provider_evidence.validate(context)?;
+                undo.push(ChangeUndo::Opened);
+                *candidate = Some(SessionSnapshot {
                     id: id.clone(),
                     provider: provider.clone(),
                     provider_context: context.clone(),
@@ -377,14 +515,15 @@ pub(crate) fn fold_changes(
             }
             SessionChange::InputAccepted(record) => {
                 super::validation::validate_submission_acknowledgement(&record.acknowledgement)?;
-                let history = super::validation::invocation_history(record)?;
+                let mut state = InvocationContinuation::empty(record)?;
+                let history = state.history.take().expect("new invocation history");
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("input precedes session open"))?;
                 validate_target_prefix(
                     snapshot,
-                    &positions,
-                    &mut histories,
+                    positions,
+                    histories,
                     record
                         .scheduling
                         .first()
@@ -392,6 +531,9 @@ pub(crate) fn fold_changes(
                     record.target_event_offset,
                     true,
                 )?;
+                if snapshot.invocations.len() >= SessionSnapshot::MAX_INVOCATIONS {
+                    return Err(corrupt("too many retained invocations"));
+                }
                 if positions.contains_key(&record.request.execution_id) {
                     return Err(corrupt("execution identity was accepted twice"));
                 }
@@ -405,7 +547,7 @@ pub(crate) fn fold_changes(
                 {
                     return Err(corrupt("new input carries later evidence"));
                 }
-                let mut next_evidence = provider_evidence;
+                let mut next_evidence = *provider_evidence;
                 next_evidence.correlation |= record.target_event_offset.is_some()
                     || record.scheduling.iter().any(|event| event.target.is_some());
                 next_evidence.dispatched |= record.scheduling.iter().any(|event| {
@@ -415,7 +557,11 @@ pub(crate) fn fold_changes(
                     )
                 });
                 next_evidence.validate(&snapshot.provider_context)?;
-                provider_evidence = next_evidence;
+                *provider_evidence = next_evidence;
+                undo.push(ChangeUndo::Input(record.request.execution_id.clone()));
+                *identity_bytes =
+                    identity_bytes.saturating_add(2 * record.request.execution_id.as_str().len());
+                invocations.push(state);
                 positions.insert(
                     record.request.execution_id.clone(),
                     snapshot.invocations.len(),
@@ -427,12 +573,13 @@ pub(crate) fn fold_changes(
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("queue decision precedes session open"))?;
-                let mut next_evidence = provider_evidence;
+                let mut next_evidence = *provider_evidence;
                 next_evidence.selected |=
                     matches!(decision.mutation, QueueMutation::Selected { .. });
                 next_evidence.validate(&snapshot.provider_context)?;
-                queue.apply_current(snapshot, &positions, decision)?;
-                provider_evidence = next_evidence;
+                let queue_undo = queue.apply_current(snapshot, positions, decision)?;
+                undo.push(ChangeUndo::Queue(queue_undo));
+                *provider_evidence = next_evidence;
                 snapshot.queue_history.push(decision.clone());
             }
             SessionChange::SchedulingTransition {
@@ -442,7 +589,7 @@ pub(crate) fn fold_changes(
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("scheduling precedes session open"))?;
-                let mut next_evidence = provider_evidence;
+                let mut next_evidence = *provider_evidence;
                 next_evidence.dispatched |= matches!(
                     event.stage,
                     InvocationStage::Running | InvocationStage::Injected
@@ -459,15 +606,18 @@ pub(crate) fn fold_changes(
                         .ok_or_else(|| corrupt("semantic fact has no accepted input"))?;
                     validate_target_prefix(
                         snapshot,
-                        &positions,
-                        &mut histories,
+                        positions,
+                        histories,
                         event.target.as_ref(),
                         record.target_event_offset,
                         false,
                     )?;
                 }
-                let record = invocation_at(snapshot, &positions, execution_id)?;
-                apply_history(&mut histories, record, |history| {
+                let record = invocation_at(snapshot, positions, execution_id)?;
+                if record.scheduling.is_empty() {
+                    super::validation::validate_admission_actor(record, event)?;
+                }
+                apply_history(histories, record, |history| {
                     history
                         .schedule(
                             event
@@ -480,18 +630,20 @@ pub(crate) fn fold_changes(
                         Some(event),
                     )
                 })?;
-                provider_evidence = next_evidence;
+                *provider_evidence = next_evidence;
+                undo.push(ChangeUndo::Scheduling(positions[execution_id]));
                 record.scheduling.push(event.clone());
             }
             SessionChange::ProviderObservation(event) => {
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("observation precedes session open"))?;
-                let mut next_evidence = provider_evidence;
+                let mut next_evidence = *provider_evidence;
                 next_evidence.observations = true;
                 next_evidence.validate(&snapshot.provider_context)?;
                 super::validation::validate_observation_context(&snapshot.provider_context, event)?;
-                let record = invocation_at(snapshot, &positions, event.execution_id())?;
+                let context = snapshot.provider_context.clone();
+                let record = invocation_at(snapshot, positions, event.execution_id())?;
                 event
                     .validate_payload_size()
                     .map_err(|error| corrupt(error.to_string()))?;
@@ -502,12 +654,24 @@ pub(crate) fn fold_changes(
                     }
                     _ => InvocationObservation::Output,
                 };
-                apply_history(&mut histories, record, |history| {
+                apply_history(histories, record, |history| {
                     history
                         .observe(event.execution_id(), observation)
                         .map_err(|error| corrupt(error.to_string()))
                 })?;
-                provider_evidence = next_evidence;
+                *provider_evidence = next_evidence;
+                let index = positions[event.execution_id()];
+                let observation_undo =
+                    invocations[index].observe(&context, record, record.events.len(), event)?;
+                undo.push(ChangeUndo::Observation(index, observation_undo));
+                if context_witness.is_none()
+                    && matches!(event.update(), ExecutionUpdate::PermissionCancelled(_))
+                {
+                    *context_witness = Some((index, record.events.len()));
+                }
+                crate::application::agent_execution::executions::limits::reserve_observation_slot(
+                    &mut record.events,
+                );
                 record.events.push(event.clone());
             }
             SessionChange::ReceiptUpdated {
@@ -518,12 +682,15 @@ pub(crate) fn fold_changes(
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("receipt precedes session open"))?;
-                let record = invocation_at(snapshot, &positions, execution_id)?;
+                let record = invocation_at(snapshot, positions, execution_id)?;
                 if &record.acknowledgement != before || before == after {
                     return Err(corrupt("receipt revision does not match prior value"));
                 }
                 super::validation::validate_submission_acknowledgement(after)?;
-                record.acknowledgement = after.clone();
+                undo.push(ChangeUndo::Receipt(
+                    positions[execution_id],
+                    std::mem::replace(&mut record.acknowledgement, after.clone()),
+                ));
             }
             SessionChange::StopDecision {
                 execution_id,
@@ -532,15 +699,16 @@ pub(crate) fn fold_changes(
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("stop precedes session open"))?;
-                let record = invocation_at(snapshot, &positions, execution_id)?;
+                let record = invocation_at(snapshot, positions, execution_id)?;
                 if record.cancellation.is_some() {
                     return Err(corrupt("undispatched stop was already recorded"));
                 }
-                apply_history(&mut histories, record, |history| {
+                apply_history(histories, record, |history| {
                     history
                         .record_cancellation(event.cancellation()?)
                         .map_err(|error| corrupt(error.to_string()))
                 })?;
+                undo.push(ChangeUndo::Stop(positions[execution_id]));
                 record.cancellation = Some(event.clone());
             }
             SessionChange::ProviderReport {
@@ -551,17 +719,17 @@ pub(crate) fn fold_changes(
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("provider report precedes session open"))?;
-                let mut next_evidence = provider_evidence;
+                let mut next_evidence = *provider_evidence;
                 next_evidence.reports = true;
                 next_evidence.validate(&snapshot.provider_context)?;
-                let record = invocation_at(snapshot, &positions, execution_id)?;
+                let record = invocation_at(snapshot, positions, execution_id)?;
                 if record.provider_report.is_some() || record.local_cancellation.is_some() {
                     return Err(corrupt("provider report was already recorded"));
                 }
                 if let Some(result) = &record.result {
                     super::validation::validate_report_against_local_result(report, result)?;
                 }
-                apply_history(&mut histories, record, |history| {
+                apply_history(histories, record, |history| {
                     super::validation::record_report(
                         history,
                         Some(report),
@@ -569,7 +737,8 @@ pub(crate) fn fold_changes(
                         record.scheduling.last(),
                     )
                 })?;
-                provider_evidence = next_evidence;
+                *provider_evidence = next_evidence;
+                undo.push(ChangeUndo::Report(positions[execution_id]));
                 record.provider_report = Some(report.clone());
                 record.local_cancellation = local_stop.clone();
             }
@@ -582,12 +751,12 @@ pub(crate) fn fold_changes(
                 let snapshot = candidate
                     .as_mut()
                     .ok_or_else(|| corrupt("local result precedes session open"))?;
-                let record = invocation_at(snapshot, &positions, execution_id)?;
+                let record = invocation_at(snapshot, positions, execution_id)?;
                 if &record.result != before || record.result.as_ref() == Some(after) {
                     return Err(corrupt("local result revision does not match prior value"));
                 }
                 super::validation::validate_local_result(record, after)?;
-                let retained = apply_history(&mut histories, record, |history| {
+                let retained = apply_history(histories, record, |history| {
                     history
                         .record_local_result(after.as_ref().copied().map_err(|_| ()))
                         .map_err(|error| corrupt(error.to_string()))?;
@@ -596,8 +765,12 @@ pub(crate) fn fold_changes(
                 if retained != *local_outcome {
                     return Err(corrupt("local result changes its retained outcome"));
                 }
+                undo.push(ChangeUndo::Settlement(
+                    positions[execution_id],
+                    record.local_outcome,
+                    record.result.replace(after.clone()),
+                ));
                 record.local_outcome = *local_outcome;
-                record.result = Some(after.clone());
             }
             SessionChange::ProviderContext { before, after } => {
                 let snapshot = candidate
@@ -609,14 +782,85 @@ pub(crate) fn fold_changes(
                     ));
                 }
                 provider_evidence.validate(after)?;
-                snapshot.provider_context = after.clone();
+                if let Some((invocation, event)) = *context_witness {
+                    super::validation::validate_observation_context(
+                        after,
+                        &snapshot.invocations[invocation].events[event],
+                    )?;
+                }
+                undo.push(ChangeUndo::Context(std::mem::replace(
+                    &mut snapshot.provider_context,
+                    after.clone(),
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn rollback(&mut self, undo: ChangeUndo) {
+        match undo {
+            ChangeUndo::Allocation(accounting) => {
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(accounting.after_snapshot)
+                    .saturating_add(accounting.before_snapshot)
+                    .saturating_add(accounting.spare_growth);
+                self.derived_bytes = self
+                    .derived_bytes
+                    .saturating_sub(accounting.after_derived)
+                    .saturating_add(self.derived_touched(accounting.id.as_ref()));
+            }
+            ChangeUndo::History(id, history) => {
+                self.histories.insert(id, history);
+            }
+            ChangeUndo::Opened => {
+                self.snapshot = None;
+                self.snapshot_bytes = 0;
+            }
+            ChangeUndo::Input(id) => {
+                self.identity_bytes = self.identity_bytes.saturating_sub(2 * id.as_str().len());
+                self.positions.remove(&id);
+                self.histories.remove(&id);
+                self.invocations.pop();
+                self.snapshot.as_mut().expect("open").invocations.pop();
+            }
+            ChangeUndo::Queue(undo) => {
+                self.queue.restore(undo);
+                self.snapshot.as_mut().expect("open").queue_history.pop();
+            }
+            ChangeUndo::Scheduling(index) => {
+                self.snapshot.as_mut().expect("open").invocations[index]
+                    .scheduling
+                    .pop();
+            }
+            ChangeUndo::Observation(index, undo) => {
+                self.invocations[index].restore_observation(undo);
+                self.snapshot.as_mut().expect("open").invocations[index]
+                    .events
+                    .pop();
+            }
+            ChangeUndo::Receipt(index, receipt) => {
+                self.snapshot.as_mut().expect("open").invocations[index].acknowledgement = receipt
+            }
+            ChangeUndo::Stop(index) => {
+                self.snapshot.as_mut().expect("open").invocations[index].cancellation = None
+            }
+            ChangeUndo::Report(index) => {
+                let record = &mut self.snapshot.as_mut().expect("open").invocations[index];
+                record.provider_report = None;
+                record.local_cancellation = None;
+            }
+            ChangeUndo::Settlement(index, outcome, result) => {
+                let record = &mut self.snapshot.as_mut().expect("open").invocations[index];
+                record.result = result;
+                record.local_outcome = outcome;
+            }
+            ChangeUndo::Context(context) => {
+                self.snapshot.as_mut().expect("open").provider_context = context
             }
         }
     }
-    let candidate = candidate.ok_or_else(|| corrupt("semantic batch has no session"))?;
-    super::validation::validate(&candidate)?;
-    super::queue_validation::replay(&candidate)?;
-    Ok(candidate)
 }
 
 /// A writer checks the candidate against the SDK's observed state before append.

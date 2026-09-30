@@ -8,14 +8,15 @@ use super::{
 };
 use crate::{
     application::agent_execution::sessions::{
-        records, CommittedFreshness, CommittedSession, CommittedStatus, CommittedTranscript,
-        CommittedViewState, SessionSnapshot, StorageError,
+        records, CommittedFreshness, CommittedSession, CommittedStatus, CommittedTransactionState,
+        CommittedTranscript, CommittedViewState, SessionSnapshot, StorageError,
     },
     domain::agent_execution::sessions::{ProviderContext, SessionId},
 };
 use event_stream::{EventId, NewEvent, Payload};
 use nessa_sync::replication::domain::{Id, Record, Scope};
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 mod pending;
 use pending::PendingBody;
 mod checkpoint;
@@ -56,6 +57,10 @@ struct SavedFold<S = snapshot::checkpoint::Snapshot> {
 /// an entire input batch, then publishes it only after every frame and decision
 /// validates. A caller persists `checkpoint` and its own acknowledgement in one
 /// local transaction; this type performs no I/O or provider action.
+///
+/// Cloning copies and revalidates the complete retained semantic history. Use
+/// [`Self::transaction`] to stage receiver work without that full-history copy;
+/// full immutable read publication is a separate operation.
 #[derive(Clone)]
 pub struct TranscriptFold {
     scope: Scope,
@@ -172,15 +177,61 @@ impl TranscriptFold {
     /// # Errors
     /// Returns the typed scope, position, frame or SDK decision refusal.
     pub fn apply(&mut self, batch: &[Record]) -> Result<(), TranscriptError> {
-        let mut candidate = self.clone();
-        for record in batch {
-            candidate.apply_one(record)?;
-        }
-        *self = candidate;
-        Ok(())
+        let mut transaction = self.transaction();
+        transaction.apply(batch)?;
+        transaction.commit()
     }
 
-    fn apply_one(&mut self, record: &Record) -> Result<(), TranscriptError> {
+    /// Stage semantic and source-head evidence through an external receiver
+    /// transaction. Dropping the guard restores the entry state. Call `commit`
+    /// only after the receiver's data, checkpoint and applied-position effects
+    /// have committed. The guard performs no I/O and reserves no source head.
+    ///
+    /// Undo retains touched components and bounded physical continuation; it
+    /// does not clone the canonical semantic history. Explicit full read
+    /// publication is separate from this transaction.
+    ///
+    /// ```
+    /// use nessa_sdk::infrastructure::session_storage::{
+    ///     TranscriptCheckpoint, TranscriptError, TranscriptFold,
+    /// };
+    /// use nessa_sync::replication::domain::Record;
+    /// # fn receive(
+    /// #     fold: &mut TranscriptFold,
+    /// #     batch: &[Record],
+    /// #     commit_local: impl FnOnce(u64, &TranscriptCheckpoint) -> Result<(), TranscriptError>,
+    /// # ) -> Result<(), TranscriptError> {
+    /// let mut staged = fold.transaction();
+    /// staged.apply(batch)?;
+    /// let checkpoint = staged.checkpoint()?;
+    /// // The receiver atomically commits data, checkpoint, A and local effects.
+    /// commit_local(staged.applied(), &checkpoint)?;
+    /// // A prior refusal is the only possible commit error.
+    /// staged.commit()
+    /// # }
+    /// ```
+    pub fn transaction(&mut self) -> TranscriptTransaction<'_> {
+        let backup = ReceiverBackup {
+            semantic: Some(self.committed.begin_transaction()),
+            frames: self.frames.clone(),
+            pending: self.pending.clone(),
+            loaded: self.loaded,
+            freshness: self.freshness,
+            #[cfg(test)]
+            semantic_decodes: self.semantic_decodes,
+        };
+        TranscriptTransaction {
+            fold: self,
+            backup: Some(backup),
+            failed: false,
+        }
+    }
+
+    fn apply_one(
+        &mut self,
+        record: &Record,
+        semantic: &mut CommittedTransactionState,
+    ) -> Result<(), TranscriptError> {
         if record.scope != self.scope {
             return Err(TranscriptError::Scope);
         }
@@ -242,13 +293,15 @@ impl TranscriptFold {
                     &context,
                 )
                 .map_err(TranscriptError::Decision)?;
-                let key = records::key_for_changes(self.snapshot(), &changes, self.applied())
+                let key = self
+                    .committed
+                    .key(&changes)
                     .map_err(TranscriptError::Decision)?;
                 if physical_key != key {
                     return Err(TranscriptError::Frame);
                 }
                 self.committed
-                    .apply(record.position, &changes)
+                    .stage_apply(record.position, &changes, semantic)
                     .map_err(TranscriptError::Decision)?;
                 if self
                     .snapshot()
@@ -440,6 +493,128 @@ impl TranscriptFold {
     }
 }
 
+struct ReceiverBackup {
+    semantic: Option<CommittedTransactionState>,
+    frames: FrameValidator,
+    pending: PendingBody,
+    loaded: bool,
+    freshness: CommittedFreshness,
+    #[cfg(test)]
+    semantic_decodes: usize,
+}
+
+/// Borrowed receiver staging guard. Its immutable methods expose the staged
+/// checkpoint and positions for one external commit. Drop, including unwind,
+/// restores semantic and physical evidence unless `commit` succeeds.
+/// A rejected operation restores the entry state and makes commit refuse.
+/// This is local staging, not a reservation of authenticated source evidence.
+pub struct TranscriptTransaction<'a> {
+    fold: &'a mut TranscriptFold,
+    backup: Option<ReceiverBackup>,
+    failed: bool,
+}
+impl Deref for TranscriptTransaction<'_> {
+    type Target = TranscriptFold;
+    fn deref(&self) -> &Self::Target {
+        self.fold
+    }
+}
+impl TranscriptTransaction<'_> {
+    fn rollback(&mut self) {
+        if let Some(backup) = self.backup.take() {
+            self.fold
+                .committed
+                .restore_transaction(backup.semantic.expect("transaction semantic backup"));
+            self.fold.frames = backup.frames;
+            self.fold.pending = backup.pending;
+            self.fold.loaded = backup.loaded;
+            self.fold.freshness = backup.freshness;
+            #[cfg(test)]
+            {
+                self.fold.semantic_decodes = backup.semantic_decodes;
+            }
+        }
+    }
+    fn refuse<T>(&mut self, error: TranscriptError) -> Result<T, TranscriptError> {
+        self.rollback();
+        self.failed = true;
+        Err(error)
+    }
+    /// Stage the next contiguous suffix. Any refusal restores the entire guard
+    /// entry state, including successful earlier operations on this guard.
+    ///
+    /// # Errors
+    /// Returns scope, position, physical frame or semantic decision refusal.
+    pub fn apply(&mut self, batch: &[Record]) -> Result<(), TranscriptError> {
+        if self.failed {
+            return Err(TranscriptError::Position);
+        }
+        for record in batch {
+            let semantic = self
+                .backup
+                .as_mut()
+                .expect("active transaction")
+                .semantic
+                .as_mut()
+                .expect("semantic backup");
+            if let Err(error) = self.fold.apply_one(record, semantic) {
+                return self.refuse(error);
+            }
+        }
+        Ok(())
+    }
+    /// Stage an independently authenticated exact-scope physical source head.
+    /// The caller owns authentication and response correlation.
+    ///
+    /// # Errors
+    /// Returns scope or backwards-position refusal without retaining any staged evidence.
+    pub fn observe_source_head(&mut self, scope: &Scope, head: u64) -> Result<(), TranscriptError> {
+        if self.failed {
+            return Err(TranscriptError::Position);
+        }
+        if let Err(error) = self.fold.observe_source_head(scope, head) {
+            return self.refuse(error);
+        }
+        Ok(())
+    }
+    /// Stage a confirmed empty source.
+    ///
+    /// # Errors
+    /// Refuses emptiness after downloaded progress or a failed transaction.
+    pub fn confirm_empty(&mut self) -> Result<(), TranscriptError> {
+        if self.failed {
+            return Err(TranscriptError::Position);
+        }
+        if let Err(error) = self.fold.confirm_empty() {
+            return self.refuse(error);
+        }
+        Ok(())
+    }
+    /// Keep the staged state after the caller's external commit succeeds.
+    /// This confirms no I/O, source reservation, or provider action.
+    ///
+    /// # Errors
+    /// The only refusal is an operation previously rejected on this guard.
+    /// For an active guard, commit performs no validation, allocation or source
+    /// observation: it consumes the undo and preserves the already validated
+    /// state. The exclusive borrow prevents intervening fold mutation.
+    /// `receiver_guard_rolls_back_drop_unwind_external_failure_and_late_refusal`
+    /// covers active commit and `receiver_guard_stages_zero_head_and_foreign_head_refuses_all_staged_evidence`
+    /// covers disabled commit.
+    pub fn commit(mut self) -> Result<(), TranscriptError> {
+        if self.failed {
+            return Err(TranscriptError::Position);
+        }
+        self.backup = None;
+        Ok(())
+    }
+}
+impl Drop for TranscriptTransaction<'_> {
+    fn drop(&mut self) {
+        self.rollback();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,7 +637,31 @@ mod tests {
         infrastructure::session_storage::stream_fact::FramedFact,
     };
 
+    use crate::application::agent_execution::sessions::{
+        SNAPSHOT_ACCOUNTING_CALLS, VALIDATION_CALLS,
+    };
+    use crate::application::agent_execution::{
+        executions::{ExecutionEvent, ExecutionUpdate},
+        permissions::{CancellationOrigin, PermissionCancellation},
+        tools::ToolReviewInput,
+    };
+    use crate::domain::agent_execution::executions::MessageChunk;
+    use crate::domain::agent_execution::executions::MESSAGE_CLONES;
+    use crate::domain::agent_execution::{
+        permissions::{
+            PermissionCancellationReason, PermissionDecision, PermissionEffect, PermissionId,
+            PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
+            PermissionRequest, PermissionScope,
+        },
+        sessions::ExecutionSession,
+        tools::{ToolCallId, ToolCallUpdate, ToolObservation},
+    };
+    use crate::{
+        application::agent_execution::sessions::QueueHistoryRecord,
+        domain::agent_execution::executions::QueueMutation,
+    };
     use serde_json::Value;
+    use std::panic::AssertUnwindSafe;
 
     fn id(value: &str) -> Id {
         Id::new(value).unwrap()
@@ -513,6 +712,409 @@ mod tests {
             records::key_for_changes(prior, std::slice::from_ref(&change), position - 1).unwrap();
         let body = snapshot::encode_semantic_change(&change).unwrap();
         stream_fact::frame_fact(&FramedFact { key, body }, position).unwrap()
+    }
+
+    fn accepted_input(name: &str) -> SessionChange {
+        SessionChange::InputAccepted(Box::new(InvocationRecord {
+            request: ExecutionRequest {
+                execution_id: ExecutionId::new(name).unwrap(),
+                user_message: UserMessage::text_only(PromptText::new("message").unwrap()),
+                estimated_input_tokens: 1,
+                reserved_output_tokens: 1,
+            },
+            submission: SubmissionMode::Immediate,
+            target_event_offset: None,
+            actor: ActionContext::new("user", "surface", "request").unwrap(),
+            acknowledgement: SubmissionAcknowledgement::Pending,
+            events: Vec::new(),
+            scheduling: Vec::new(),
+            cancellation: None,
+            local_cancellation: None,
+            provider_report: None,
+            result: None,
+            local_outcome: None,
+        }))
+    }
+
+    #[test]
+    fn each_fact_refuses_queue_context_and_target_contradictions_before_later_evidence() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+            .unwrap();
+        fold.apply(&records(
+            &scope,
+            2,
+            &fact(fold.snapshot(), accepted_input("output"), 2),
+        ))
+        .unwrap();
+        let before = fold.checkpoint().unwrap();
+        let queue = SessionChange::QueueDecision(QueueHistoryRecord {
+            mutation: QueueMutation::Selected {
+                id: ExecutionId::new("output").unwrap(),
+            },
+            actor: None,
+            scheduling_length: Some(0),
+        });
+        let mut target = accepted_input("steer");
+        let SessionChange::InputAccepted(record) = &mut target else {
+            unreachable!()
+        };
+        record.target_event_offset = Some(0);
+        let invalid = [
+            records(&scope, 3, &fact(fold.snapshot(), queue, 3)),
+            vec![message_record(&scope, 0, 3, 1024)],
+            records(&scope, 3, &fact(fold.snapshot(), target, 3)),
+        ];
+        for mut suffix in invalid {
+            let context = SessionChange::ProviderContext {
+                before: ProviderContext::Absent,
+                after: ProviderContext::Recorded(ExecutionSessionId::new("later").unwrap()),
+            };
+            suffix.extend(records(&scope, 4, &fact(fold.snapshot(), context, 4)));
+            assert!(matches!(
+                fold.apply(&suffix),
+                Err(TranscriptError::Decision(_))
+            ));
+            assert_eq!(fold.checkpoint().unwrap(), before);
+            assert_eq!((fold.applied(), fold.downloaded()), (2, 2));
+            fold.committed.assert_retained_accounting();
+        }
+    }
+
+    #[test]
+    fn receiver_guard_rolls_back_drop_unwind_external_failure_and_late_refusal() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+            .unwrap();
+        fold.observe_source_head(&scope, 1).unwrap();
+        let before = fold.checkpoint().unwrap();
+        let status = fold.status();
+        let published = fold.committed.snapshot_handle().unwrap();
+        let suffix = records(&scope, 2, &fact(fold.snapshot(), accepted_input("next"), 2));
+        {
+            let mut staged = fold.transaction();
+            staged.apply(&suffix).unwrap();
+            staged.observe_source_head(&scope, 2).unwrap();
+            assert_eq!(staged.applied(), 2);
+            assert_eq!(staged.snapshot().unwrap().invocations.len(), 1);
+            let _checkpoint_for_external_transaction = staged.checkpoint().unwrap();
+            // Simulated external data/audit commit failure drops the same guard.
+        }
+        assert_eq!(fold.checkpoint().unwrap(), before);
+        assert_eq!(fold.status(), status);
+        let unwind = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut staged = fold.transaction();
+            staged.apply(&suffix).unwrap();
+            panic!("external transaction unwinds");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(fold.checkpoint().unwrap(), before);
+        let mut late_invalid = suffix.clone();
+        late_invalid.extend(records(&scope, 3, &fact(None, opened(), 3)));
+        assert!(fold.apply(&late_invalid).is_err());
+        assert_eq!(fold.checkpoint().unwrap(), before);
+        assert_eq!(fold.status(), status);
+        fold.committed.assert_retained_accounting();
+        assert_eq!(published.invocations.len(), 0);
+        {
+            let mut staged = fold.transaction();
+            staged.apply(&suffix).unwrap();
+            staged.observe_source_head(&scope, 2).unwrap();
+            staged.commit().unwrap();
+        }
+        assert_eq!(fold.applied(), 2);
+        assert_eq!(fold.snapshot().unwrap().invocations.len(), 1);
+        fold.committed.assert_retained_accounting();
+        assert_eq!(published.invocations.len(), 0);
+    }
+
+    #[test]
+    fn receiver_guard_stages_zero_head_and_foreign_head_refuses_all_staged_evidence() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let before = fold.status();
+        {
+            let mut staged = fold.transaction();
+            staged.observe_source_head(&scope, 0).unwrap();
+            assert_eq!(staged.view_state(), CommittedViewState::CompleteEmpty);
+        }
+        assert_eq!(fold.status(), before);
+        let checkpoint = fold.checkpoint().unwrap();
+        let foreign = Scope::new(
+            id("foreign"),
+            scope.origin().clone(),
+            scope.stream().clone(),
+            scope.incarnation().clone(),
+            scope.schema().clone(),
+            scope.access_epoch().clone(),
+        );
+        let mut staged = fold.transaction();
+        staged.confirm_empty().unwrap();
+        assert_eq!(
+            staged.observe_source_head(&foreign, 0),
+            Err(TranscriptError::Scope)
+        );
+        assert_eq!(staged.status(), before);
+        assert_eq!(staged.checkpoint().unwrap(), checkpoint);
+        assert!(staged.commit().is_err());
+    }
+
+    fn message_record(scope: &Scope, ordinal: usize, position: u64, bytes: usize) -> Record {
+        let event = ExecutionEvent::new(
+            ExecutionId::new("output").unwrap(),
+            ExecutionUpdate::Message(MessageChunk::text("x".repeat(bytes))),
+        );
+        let key = records::FactKey::new(
+            records::FactKind::ProviderObservation,
+            Some(event.execution_id().clone()),
+            ordinal as u64,
+        )
+        .unwrap();
+        let body =
+            snapshot::encode_semantic_change(&SessionChange::ProviderObservation(event)).unwrap();
+        let frames = stream_fact::frame_fact(&FramedFact { key, body }, position).unwrap();
+        assert_eq!(
+            frames.len(),
+            1,
+            "fixture is one published codec inline frame"
+        );
+        records(scope, position, &frames).pop().unwrap()
+    }
+
+    #[test]
+    fn growing_output_pages_copy_only_suffix_and_checkpoint_borrows_canonical_history() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let mut open = opened();
+        let SessionChange::Opened { context, .. } = &mut open else {
+            unreachable!()
+        };
+        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        fold.apply(&records(&scope, 1, &fact(None, open, 1)))
+            .unwrap();
+        fold.apply(&records(
+            &scope,
+            2,
+            &fact(fold.snapshot(), accepted_input("output"), 2),
+        ))
+        .unwrap();
+        let prefix: Vec<_> = (0..512)
+            .map(|ordinal| message_record(&scope, ordinal, ordinal as u64 + 3, 32 * 1024))
+            .collect();
+        fold.apply(&prefix).unwrap();
+        fold.committed.assert_retained_accounting();
+        MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
+        let published = fold.committed.snapshot_handle().unwrap();
+        assert_eq!(
+            MESSAGE_CLONES.with(|counter| counter.get()),
+            (512, 512 * 32 * 1024)
+        );
+        for page in 0..4 {
+            let ordinal = 512 + page * 64;
+            let suffix: Vec<_> = (ordinal..ordinal + 64)
+                .map(|ordinal| message_record(&scope, ordinal, ordinal as u64 + 3, 4096))
+                .collect();
+            MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
+            VALIDATION_CALLS.with(|counter| counter.set((0, 0)));
+            SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(0));
+            if page == 0 {
+                fold.apply(&suffix[..1]).unwrap();
+                fold.apply(&suffix[1..]).unwrap();
+            } else {
+                fold.apply(&suffix).unwrap();
+            }
+            assert_eq!(
+                MESSAGE_CLONES.with(|counter| counter.get()),
+                (64, 64 * 4096)
+            );
+            assert_eq!(VALIDATION_CALLS.with(|counter| counter.get()), (0, 0));
+            assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
+            let _checkpoint = fold.checkpoint().unwrap();
+            let _retained = fold.retained_bytes();
+            assert_eq!(
+                MESSAGE_CLONES.with(|counter| counter.get()),
+                (64, 64 * 4096)
+            );
+            assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
+            fold.committed.assert_retained_accounting();
+        }
+        assert_eq!(published.invocations[0].events.len(), 512);
+        let before = fold.checkpoint().unwrap();
+        let ordinal = 768;
+        let mut rejected: Vec<_> = (ordinal..ordinal + 64)
+            .map(|ordinal| message_record(&scope, ordinal, ordinal as u64 + 3, 4096))
+            .collect();
+        rejected.extend(records(
+            &scope,
+            ordinal as u64 + 67,
+            &fact(None, opened(), ordinal as u64 + 67),
+        ));
+        MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
+        VALIDATION_CALLS.with(|counter| counter.set((0, 0)));
+        SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(0));
+        assert!(fold.apply(&rejected).is_err());
+        assert_eq!(
+            MESSAGE_CLONES.with(|counter| counter.get()),
+            (64, 64 * 4096)
+        );
+        assert_eq!(VALIDATION_CALLS.with(|counter| counter.get()), (0, 0));
+        assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
+        assert_eq!(fold.checkpoint().unwrap(), before);
+        fold.committed.assert_retained_accounting();
+    }
+
+    #[test]
+    fn large_review_later_cancel_then_earlier_cancel_refuses_atomic_public_suffix() {
+        fn review(name: &str) -> ExecutionEvent {
+            let options = PermissionOptions::new(
+                vec![PermissionOption::new(
+                    PermissionOptionId::new("allow").unwrap(),
+                    "Allow",
+                    PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+                )
+                .unwrap()],
+                &PermissionOfferPolicy::once_only(),
+            )
+            .unwrap();
+            ExecutionEvent::new(
+                ExecutionId::new("output").unwrap(),
+                ExecutionUpdate::PermissionRequested {
+                    id: PermissionId::new(name).unwrap(),
+                    tool_id: ToolCallId::new(name).unwrap(),
+                    observation: ToolObservation::default(),
+                    input: ToolReviewInput {
+                        name: "tool".into(),
+                        arguments_json: "x".repeat(17 * 1024 * 1024),
+                    },
+                    options,
+                },
+            )
+        }
+        fn cancelled(event: &ExecutionEvent) -> ExecutionEvent {
+            let ExecutionUpdate::PermissionRequested {
+                id,
+                tool_id,
+                input,
+                options,
+                ..
+            } = event.update()
+            else {
+                unreachable!()
+            };
+            let mut domain = ExecutionSession::new(ExecutionSessionId::new("remote").unwrap());
+            domain
+                .begin_execution(event.execution_id().clone())
+                .unwrap();
+            domain
+                .observe_tool(
+                    event.execution_id(),
+                    ToolCallUpdate::new(tool_id.clone(), None, None, None, None, None),
+                )
+                .unwrap();
+            domain
+                .request_permission(PermissionRequest::new(
+                    id.clone(),
+                    event.execution_id().clone(),
+                    tool_id.clone(),
+                    options.clone(),
+                ))
+                .unwrap();
+            let record = domain
+                .cancel_permission(
+                    event.execution_id(),
+                    id,
+                    PermissionCancellationReason::provider_withdrawal(),
+                )
+                .unwrap()
+                .unwrap();
+            ExecutionEvent::new(
+                event.execution_id().clone(),
+                ExecutionUpdate::PermissionCancelled(
+                    PermissionCancellation::from_record(
+                        ExecutionSessionId::new("remote").unwrap(),
+                        record,
+                        input.clone(),
+                        CancellationOrigin::Provider,
+                    )
+                    .unwrap(),
+                ),
+            )
+        }
+        fn observation(
+            scope: &Scope,
+            event: ExecutionEvent,
+            ordinal: u64,
+            position: u64,
+        ) -> Vec<Record> {
+            let key = records::FactKey::new(
+                records::FactKind::ProviderObservation,
+                Some(event.execution_id().clone()),
+                ordinal,
+            )
+            .unwrap();
+            let body = snapshot::encode_semantic_change(&SessionChange::ProviderObservation(event))
+                .unwrap();
+            records(
+                scope,
+                position,
+                &stream_fact::frame_fact(&FramedFact { key, body }, position).unwrap(),
+            )
+        }
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let mut open = opened();
+        let SessionChange::Opened { context, .. } = &mut open else {
+            unreachable!()
+        };
+        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        fold.apply(&records(&scope, 1, &fact(None, open, 1)))
+            .unwrap();
+        fold.apply(&records(
+            &scope,
+            2,
+            &fact(fold.snapshot(), accepted_input("output"), 2),
+        ))
+        .unwrap();
+        let earlier = review("earlier");
+        let later = review("later");
+        let close_earlier = cancelled(&earlier);
+        let close_later = cancelled(&later);
+        fold.apply(&observation(&scope, earlier, 0, 3)).unwrap();
+        fold.apply(&observation(&scope, later, 1, fold.downloaded() + 1))
+            .unwrap();
+        let applied = fold.applied();
+        let downloaded = fold.downloaded();
+        let facts = fold.fact_count();
+        let accepted_later = observation(&scope, close_later, 2, downloaded + 1);
+        let rejected_earlier = observation(
+            &scope,
+            close_earlier,
+            3,
+            accepted_later.last().unwrap().position + 1,
+        );
+        let mut both = accepted_later.clone();
+        both.extend(rejected_earlier.clone());
+        assert!(matches!(
+            fold.apply(&both),
+            Err(TranscriptError::Decision(_))
+        ));
+        assert_eq!(
+            (fold.applied(), fold.downloaded(), fold.fact_count()),
+            (applied, downloaded, facts)
+        );
+        assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 2);
+        fold.committed.assert_retained_accounting();
+        fold.apply(&accepted_later).unwrap();
+        let after_later = fold.applied();
+        assert!(matches!(
+            fold.apply(&rejected_earlier),
+            Err(TranscriptError::Decision(_))
+        ));
+        assert_eq!(fold.applied(), after_later);
+        assert_eq!(fold.snapshot().unwrap().invocations[0].events.len(), 3);
+        fold.committed.assert_retained_accounting();
     }
 
     #[test]

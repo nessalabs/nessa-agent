@@ -11,6 +11,7 @@
 mod identity;
 mod tool;
 pub use identity::ToolCallId;
+pub(crate) use tool::ToolObservationUndo;
 pub use tool::{
     FileLocation, FilePath, ToolCallUpdate, ToolContent, ToolContentView, ToolKind,
     ToolObservation, ToolStatus,

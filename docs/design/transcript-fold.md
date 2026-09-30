@@ -227,3 +227,122 @@ Consumed in an error return.
 | Committed pending review | Restart/remote absence | Preserve semantic fact and unresolved display; offer no controls. Existing committed renderer authority tests. |
 | Custom backend | Absent, foreign or stale handle; poisoned owner | Explicit unavailable or typed refusal before effects; preserve transcript. `current_permission_authority_tracks_consumption_before_audit`, `permission_authority_reports_poison_and_drop_without_retaining_owner` |
 | Incoming main assembly (#314/#311/#321) | Reasoning control keeps the existing scheduler idle check and exact provider generation; permission read membership remains synchronous through the existing lifecycle/carrier and never enters that command queue. Focus recovery and pane picture/home layout remain owned by their merged desktop adapters/components. | Union of imports and adjacent backend methods only; no new transcript fact, freshness or permission collection. Active permission refuses an effort command; effort replacement cannot confer old permission authority. Combined Agent/ACP permission authority and merged effort tests; full frontend plus real committed/focus/responsive browser checks preserve incoming behavior. |
+
+## Automated review resource correction (PR #323)
+
+The exact published SDK head `11508f5b` was reproduced through the public fold
+and checkpoint APIs. Applying 128/256/512 valid inputs with 4 KiB prompts requested
+51/199/787 MB of cumulative allocations in one batch. The prior fold deep-cloned
+and rescanned the growing semantic snapshot at every terminal. A checkpoint with
+100000 shaped queue events passed preflight and requested 56 MB during owned
+restore before semantic rejection. These are defects; earlier clean local review
+and green checks do not close them.
+
+The accepted representation decision keeps the current public `SessionSnapshot`
+contract. The existing records semantic owner will retain its canonical owned
+state and the actual invocation index, history, queue, provider-evidence and
+allocation continuation. A reversible transaction stages only touched fields,
+appends and derived-owner changes; dropping it rolls back unless the caller
+explicitly commits. The public receiver can keep this guard through its SQLite
+checkpoint/A/effect commit, so SQL or audit failure does not require cloning the
+old fold. The transition match remains in that semantic owner; full admission and
+incremental decisions share the same validation helpers and domain authorities.
+
+Full immutable public snapshot materialization at the actual read-publication
+boundary is an explicit O(full retained history) cost, separately accounted from
+bounded suffix work. It must not occur inside apply, checkpoint encoding or
+retained-byte accounting. Checkpoint encoding borrows canonical state through the
+existing codec. This choice does not claim that publishing an immutable complete
+snapshot costs only the downloaded suffix. Persistent public collection APIs and
+a new persistent-collection dependency are outside this decision.
+
+The previous retention validator had a retroactive relationship:
+it first finds later permission cancellations and then retains their earlier
+request payloads during replay; other requests are released hypothetically. A
+later cancellation can therefore change the earlier retention witness. Reusing a
+single forward disposable controller without representing this retroactive
+relationship would change accepted history. The correction stays at that
+retention owner and preserve the controller's actual count/payload policies; no
+mirrored live pending ledger or invented persisted answer is permitted.
+
+| State | Ordering | Required decision / evidence |
+| --- | --- | --- |
+| Valid restored continuation | Repeated growing pages or 1 versus 64 complete facts | Actual semantic indices/history/queue/provider state is reused; no prefix cloning, replay or accounting scan per fact/chunk. Work/allocation counters measure suffix separately from full publication. |
+| Valid terminals followed by malformed final frame or decision | Transaction has staged appends and changed small fields | Roll back the whole batch, including A/D/fact count/status, correlations and resource accounting; prior checkpoint and held published snapshot remain unchanged. |
+| Receiver transaction accepted by SDK | SQL checkpoint/A/effects commit fails or waiter drops | Borrowed guard rolls back unless commit is confirmed; no cloned receiver candidate or second semantic fold. |
+| Canonical state advances | Prior immutable published snapshot is still retained | Publish a separately owned complete snapshot only at the read boundary; old snapshot remains immutable and both allocations are measured. |
+| Exact receiver has unchanged semantic state | Another read publication is requested | Return equal full semantic values in a separately materialized immutable result; Arc pointer reuse is not promised. Prior results remain unchanged after subsequent physical source updates. Each publication explicitly costs O(full retained history). |
+| Pending physical pieces | Partial, seal, abort or invalid suffix | Existing FrameValidator remains sole physical owner; Arc pieces are staged without copying a prefix; body decodes once at seal. |
+| Sparse tool state | Accepted replacement followed by rollback | Move untouched large payloads into the replacement and touched old fields into entity-issued undo; rollback reconstructs the old value by replacement, without cloning the old tool payload. Pointer-allocation tests cover omitted and cleared fields. |
+| Queue state | Admit, select, reorder, restore, then reverse undo | Restore exact membership/order and remove only newly admitted seen identities. Older dispatched identities remain unavailable for reuse; the queue stays non-Cloneable. |
+| Queue, provider context or steering target | Contradiction occurs across two complete facts in one batch | Each logical boundary must be valid, even if a later fact would hide the contradiction; sole semantic transition helpers refuse atomically. |
+| Two individually valid reviews larger than half the controller review budget | Both requests arrive; cancellation of the later request is feasible; subsequent cancellation of the earlier request proves retroactive overlap | Refuse the second cancellation atomically at the existing retention owner. If the earlier request has no later cancellation, its hypothetical answer witness remains valid; cancelling earlier before admitting later also permits the valid nonoverlapping counterpart. No answer/pending fact is invented. |
+| Untrusted checkpoint queue array | Queue history precedes or follows invocations | Shape preflight consumes the semantic owner's published structural maximum, never a copied 4096/multiplier. Refuse excessive elements before owned QueueEvent allocation. Exact invocation-relative semantic validation remains authoritative. |
+| Queue checkpoint at the structural limit | Immediate successor exceeds limit | Positive valid history and negative excess, both JSON field orders; allocator/preflight and owner mutation evidence distinguish refusal before allocation from eventual semantic rejection. |
+
+The historical-retention correction consumes controller-issued
+`HistoricalReviewCost` (the existing input/options/identity allocation charge)
+and `ExecutionController::validate_review_totals`. Live review admission consumes
+that same aggregate decision. A historical request point includes its own
+admission charge before hypothetical release; a later cancellation adds its
+charge to subsequent request points up to cancellation, then queries maxima
+through the controller decision. Cancelling the later of two large reviews first
+is feasible; subsequently cancelling the earlier review makes the later request
+point infeasible. Cancelling the earlier review before the later request arrives
+is the nonoverlapping valid counterpart. Sparse tool merging, tool count/bytes,
+seen permission identities and individual payload checks remain owned by the
+forward disposable controller, independently of the derived interval summary.
+
+Queue replay retains the existing non-cloneable `InvocationQueue` entity. Its
+reversible mutation token moves selected/removed identities and replacement
+pending deques, and removes only a newly admitted seen identity on rollback.
+Reorder validation and reconstruction remain in the existing order owner used
+by both public order application and semantic replay. Pending work is bounded
+by the existing queue capacity; the entire seen-ID prefix is never cloned or
+replayed to stage a decision. Token allocation and retained seen-ID accounting
+belong to that entity. The physical guard also stages head/empty observations,
+so external receiver commit failure can restore their exact metadata.
+
+Allocation evidence distinguishes retained payload copies from amortized slot
+growth in the existing `Vec`/`HashMap` owners. MessageChunk's test-only clone
+counter measures actual copied text bytes; full validation counters measure cold
+prefix replay. Growing-page tests must copy only new message payloads and perform
+no cold prefix validation. Collection capacity can grow or remain after rollback;
+the retained owner charges those actual slots. The standalone allocator fixture
+measures all requested allocations separately from full read-publication copies.
+
+Derived allocation helpers charge separately allocated map/vector slots, compact
+identity text and Arc control/payload nodes. Inline owner layouts are charged by
+the enclosing continuation or invocation-vector slot, rather than repeated by
+every helper. Disposable historical-controller pending-map spare capacity and
+its issued weak-handle carrier remain owned allocations after hypothetical review
+release; accounting includes them without inferring any live pending decision.
+
+Checkpoint Event serialization uses the single borrowed records mapping; its
+Text/Thought fields borrow the original chunk. The owned decoder keeps String
+fields and the wire bytes stay identical. Checkpoint traversal/output allocation
+is O(full history), distinct from suffix application. Existing nested field
+codecs may construct one validated bounded Metadata/Event DTO at a time; those
+working values obey the existing message, tool/review, question and error owners,
+while the ChunkWriter retains the intentional full encoded checkpoint. There is
+no simultaneous full snapshot DTO clone. Byte equality and roundtrip fixtures
+exercise the shared owned shape, and a growing output fixture requires no old
+message payload clones during checkpoint traversal. The quota-limited ChunkWriter
+seam is separately owned by #261 and will consume the same borrowed mapping.
+
+The borrowed semantic codec keeps the provider-report DTO in a private Box to
+reduce the generic enum's fixed slots. Serde encodes the same report fields; this
+is working representation only, with no new transition or admission decision.
+The derived interval recursion carries its request range as one pair; its tree
+and controller-issued decisions are unchanged.
+
+A live borrowed guard owns suffix undo until commit/drop. Undo retains moved
+replaced field payloads, changed domain metadata and per-change interval nodes;
+its size follows the staged suffix and the existing touched component limits,
+rather than a copied prefix. `retained_bytes` describes canonical continuation
+allocations and retained spare slots, while this temporary undo and the incoming
+physical/decoded suffix are separate working allocations. The storage reader's
+existing fixed frame/page admission bounds its staged batch. A public receiver
+chooses its own input batch size; the guard does not claim constant memory for an
+arbitrarily large caller-provided batch. Checkpoint output and explicit published
+full snapshots are intentional separate O(history) allocations.

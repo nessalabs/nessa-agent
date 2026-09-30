@@ -16,7 +16,7 @@ use crate::domain::agent_execution::questions::{AgentQuestion, QuestionId};
 use crate::domain::agent_execution::{
     executions::*,
     permissions::*,
-    sessions::{ExecutionSession, ExecutionSessionId},
+    sessions::{ExecutionSession, ExecutionSessionId, HistoricalToolUndo},
     tools::*,
     ExecutionError,
 };
@@ -24,8 +24,26 @@ use std::collections::{HashMap, HashSet};
 
 const MAX_TOOLS: usize = 4096;
 const MAX_PERMISSIONS: usize = 128;
-const MAX_EXECUTION_PERMISSIONS: usize = 4096;
+pub(crate) const MAX_EXECUTION_PERMISSIONS: usize = 4096;
 const MAX_RETAINED_BYTES: usize = 32 * 1024 * 1024;
+
+/// Controller-owned admission charge for a historical review request.
+/// The retention witness consumes this charge without inventing pending state.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HistoricalReviewCost {
+    bytes: usize,
+}
+impl HistoricalReviewCost {
+    pub(crate) fn bytes(self) -> usize {
+        self.bytes
+    }
+}
+/// Moved touched-owner state; only a disposable historical witness consumes it.
+pub(crate) struct RetentionControllerUndo {
+    tool: HistoricalToolUndo,
+    permission: Option<(ExecutionId, PermissionId)>,
+    tool_bytes: usize,
+}
 
 /// Ephemeral execution coordination shared by session adapters. The aggregate
 /// owns lifecycle decisions; this controller pairs review input with permissions
@@ -243,15 +261,101 @@ impl ExecutionController {
                 "execution permission limit exceeded".into(),
             ));
         }
-        if self.review_inputs.len() >= MAX_PERMISSIONS {
+        let charged_bytes =
+            Self::historical_review_cost(execution, id, tool, input, options)?.bytes();
+        let review_bytes = self.retained_review_bytes.saturating_add(charged_bytes);
+        Self::validate_review_totals(self.review_inputs.len().saturating_add(1), review_bytes)?;
+        Ok((charged_bytes, review_bytes))
+    }
+    pub(crate) fn historical_review_cost(
+        execution: &ExecutionId,
+        id: &PermissionId,
+        tool: &ToolCallId,
+        input: &ToolReviewInput,
+        options: &PermissionOptions,
+    ) -> Result<HistoricalReviewCost, AgentError> {
+        Self::validate_review_payload(execution, id, tool, input, options)
+            .map(|bytes| HistoricalReviewCost { bytes })
+    }
+    pub(crate) fn validate_review_totals(count: usize, bytes: usize) -> Result<(), AgentError> {
+        if count > MAX_PERMISSIONS {
             return Err(AgentError::Protocol(
                 "pending permission limit exceeded".into(),
             ));
         }
-        let charged_bytes = Self::validate_review_payload(execution, id, tool, input, options)?;
-        let review_bytes = self.retained_review_bytes.saturating_add(charged_bytes);
-        Self::validate_review_bytes(review_bytes)?;
-        Ok((charged_bytes, review_bytes))
+        Self::validate_review_bytes(bytes)
+    }
+    pub(crate) fn retain_historical_tool(
+        &mut self,
+        execution: &ExecutionId,
+        update: ToolCallUpdate,
+    ) -> Result<RetentionControllerUndo, AgentError> {
+        let total = self.validate_tool_retention(execution, &update)?;
+        let tool = self
+            .session
+            .observe_tool_reversible(execution, update)
+            .map_err(domain_error)?;
+        let tool_bytes = std::mem::replace(&mut self.retained_tool_bytes, total);
+        Ok(RetentionControllerUndo {
+            tool,
+            permission: None,
+            tool_bytes,
+        })
+    }
+    pub(crate) fn retain_historical_review(
+        &mut self,
+        execution: &ExecutionId,
+        id: PermissionId,
+        tool: ToolCallUpdate,
+        input: &ToolReviewInput,
+        options: &PermissionOptions,
+    ) -> Result<(HistoricalReviewCost, RetentionControllerUndo), AgentError> {
+        let (bytes, _) =
+            self.validate_review_retention(execution, &id, tool.id(), input, options)?;
+        let request = PermissionRequest::new(
+            id.clone(),
+            execution.clone(),
+            tool.id().clone(),
+            options.clone(),
+        );
+        self.session
+            .validate_permission_admission(&request)
+            .map_err(domain_error)?;
+        let mut undo = self.retain_historical_tool(execution, tool)?;
+        if let Err(error) = self.session.request_permission(request) {
+            self.restore_historical_retention(undo);
+            return Err(domain_error(error));
+        }
+        // This is the same minimum-retention witness as the full snapshot
+        // validator: possible immediate release, never persisted answer evidence.
+        self.session
+            .answer_permission(execution, &id, options.choices()[0].id())
+            .map_err(domain_error)?;
+        undo.permission = Some((execution.clone(), id));
+        Ok((HistoricalReviewCost { bytes }, undo))
+    }
+    pub(crate) fn restore_historical_retention(&mut self, undo: RetentionControllerUndo) {
+        if let Some((execution, permission)) = undo.permission {
+            self.session
+                .restore_historical_permission_identity(&execution, &permission);
+        }
+        self.session.restore_historical_tool(undo.tool);
+        self.retained_tool_bytes = undo.tool_bytes;
+    }
+    pub(crate) fn historical_retained_bytes(&self) -> usize {
+        self.session
+            .historical_retained_bytes()
+            .saturating_add(self.authority.allocation_bytes())
+            .saturating_add(self.retained_tool_bytes)
+            .saturating_add(self.review_inputs.capacity().saturating_mul(
+                std::mem::size_of::<(PermissionId, (ToolReviewInput, usize))>()
+                    + std::mem::size_of::<usize>(),
+            ))
+            .saturating_add(
+                self.admitted_question_ids.capacity().saturating_mul(
+                    std::mem::size_of::<QuestionId>() + std::mem::size_of::<usize>(),
+                ),
+            )
     }
     pub(crate) fn validate_review_payload(
         execution: &ExecutionId,
@@ -304,22 +408,6 @@ impl ExecutionController {
     // Only the snapshot retention validator uses this on a disposable controller.
     // Answers are absent from observations: release the hypothetical pending
     // payload without manufacturing attribution or durable resolution evidence.
-    pub(crate) fn release_review_for_retention_validation(
-        &mut self,
-        execution: &ExecutionId,
-        id: &PermissionId,
-        option: &PermissionOptionId,
-    ) -> Result<(), AgentError> {
-        self.session
-            .answer_permission(execution, id, option)
-            .map_err(domain_error)?;
-        let (_, charged_bytes) = self
-            .review_inputs
-            .remove(id)
-            .expect("accepted review input");
-        self.retained_review_bytes -= charged_bytes;
-        Ok(())
-    }
     /// Resolves explicit cancellation `input`, retaining its actor and exact reason.
     /// Returns InvalidInput for a non-Custom caller cause, or Closed/StalePermission
     /// when the live review cannot be matched. Rejection leaves pending state intact.

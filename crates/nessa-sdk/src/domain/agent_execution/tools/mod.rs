@@ -9,6 +9,7 @@
 pub mod entities;
 pub mod value_objects;
 pub use entities::ToolCall;
+pub(crate) use value_objects::ToolObservationUndo;
 pub use value_objects::{
     FileLocation, FilePath, ToolCallId, ToolCallUpdate, ToolContent, ToolContentView, ToolKind,
     ToolObservation, ToolStatus,

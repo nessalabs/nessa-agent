@@ -1,16 +1,34 @@
 //! Effect-free committed semantic state; lifecycle interpretation belongs to `records::fold_changes`.
 #![deny(missing_docs)]
-use super::{records, validation, SessionChange, SessionSnapshot, StorageError};
-use std::{mem, sync::Arc};
+#[cfg(test)]
+use super::validation::InvocationContinuation;
+use super::{records, SessionChange, SessionSnapshot, StorageError};
+#[cfg(test)]
+use crate::domain::agent_execution::executions::InvocationHistory;
+use std::sync::Arc;
 
 /// Full validated semantic continuation, separate from bounded transcript display.
 /// Physical adapters publish one complete fact and its applied position together.
-#[derive(Clone, Default)]
+/// Cloning explicitly copies the full semantic history; receiver transactions
+/// use touched-state undo instead.
+#[derive(Default)]
 pub struct CommittedTranscript {
-    snapshot: Option<Arc<SessionSnapshot>>,
-    retained_bytes: usize,
+    continuation: records::continuation::Continuation,
     applied: u64,
     facts: u64,
+}
+impl Clone for CommittedTranscript {
+    fn clone(&self) -> Self {
+        Self::restore(self.snapshot().cloned(), self.applied, self.facts)
+            .expect("validated committed transcript")
+    }
+}
+pub(crate) struct CommittedTransactionState {
+    undo: Vec<records::ChangeUndo>,
+    applied: u64,
+    facts: u64,
+    evidence: records::ProviderEvidence,
+    context_witness: Option<(usize, usize)>,
 }
 impl CommittedTranscript {
     /// Last complete semantic fact or aborted attempt position.
@@ -23,24 +41,72 @@ impl CommittedTranscript {
     }
     /// Complete committed history; consumers bound display independently.
     pub fn snapshot(&self) -> Option<&SessionSnapshot> {
-        self.snapshot.as_deref()
+        self.continuation.snapshot.as_ref()
     }
-
+    // This is the explicit full-history read-publication materialization.
     pub(crate) fn snapshot_handle(&self) -> Option<Arc<SessionSnapshot>> {
-        self.snapshot.clone()
+        self.snapshot().map(|snapshot| Arc::new(snapshot.clone()))
     }
     pub(crate) fn retained_bytes(&self) -> usize {
-        self.retained_bytes.saturating_add(
-            self.snapshot
-                .as_ref()
-                .map_or(0, |_| 2 * mem::size_of::<usize>()),
-        )
+        self.continuation
+            .snapshot_bytes
+            .saturating_sub(
+                self.snapshot()
+                    .map_or(0, |_| std::mem::size_of::<SessionSnapshot>()),
+            )
+            .saturating_add(self.continuation.derived_bytes)
     }
-
-    pub(crate) fn apply(
+    #[cfg(test)]
+    pub(crate) fn assert_retained_accounting(&self) {
+        assert_eq!(
+            self.continuation.snapshot_bytes,
+            self.snapshot().map_or(0, super::retained::snapshot)
+        );
+        let expected = self
+            .continuation
+            .derived_global()
+            .saturating_add(
+                self.continuation
+                    .invocations
+                    .iter()
+                    .map(InvocationContinuation::retained_bytes)
+                    .fold(0usize, usize::saturating_add),
+            )
+            .saturating_add(
+                self.continuation
+                    .histories
+                    .values()
+                    .map(InvocationHistory::allocation_bytes)
+                    .fold(0usize, usize::saturating_add),
+            );
+        assert_eq!(self.continuation.derived_bytes, expected);
+    }
+    pub(crate) fn key(&self, changes: &[SessionChange]) -> Result<records::FactKey, StorageError> {
+        self.continuation.key(changes, self.applied)
+    }
+    pub(crate) fn begin_transaction(&self) -> CommittedTransactionState {
+        CommittedTransactionState {
+            undo: Vec::new(),
+            applied: self.applied,
+            facts: self.facts,
+            evidence: self.continuation.evidence,
+            context_witness: self.continuation.context_witness,
+        }
+    }
+    pub(crate) fn restore_transaction(&mut self, state: CommittedTransactionState) {
+        for undo in state.undo.into_iter().rev() {
+            self.continuation.rollback(undo);
+        }
+        self.continuation.evidence = state.evidence;
+        self.continuation.context_witness = state.context_witness;
+        self.applied = state.applied;
+        self.facts = state.facts;
+    }
+    pub(crate) fn stage_apply(
         &mut self,
         position: u64,
         changes: &[SessionChange],
+        state: &mut CommittedTransactionState,
     ) -> Result<(), StorageError> {
         if position <= self.applied {
             return Err(StorageError::Corrupt(
@@ -51,9 +117,7 @@ impl CommittedTranscript {
             .facts
             .checked_add(1)
             .ok_or_else(|| StorageError::Corrupt("semantic fact count exhausted".into()))?;
-        let snapshot = records::fold_changes(self.snapshot(), changes)?;
-        self.retained_bytes = super::retained::snapshot(&snapshot);
-        self.snapshot = Some(Arc::new(snapshot));
+        self.continuation.stage(changes, &mut state.undo)?;
         self.applied = position;
         self.facts = facts;
         Ok(())
@@ -74,12 +138,8 @@ impl CommittedTranscript {
                 "semantic checkpoint positions disagree".into(),
             ));
         }
-        if let Some(snapshot) = &snapshot {
-            validation::validate(snapshot)?;
-        }
         Ok(Self {
-            retained_bytes: snapshot.as_ref().map_or(0, super::retained::snapshot),
-            snapshot: snapshot.map(Arc::new),
+            continuation: records::continuation::Continuation::restore(snapshot)?,
             applied,
             facts,
         })
@@ -213,7 +273,7 @@ mod retained_tests {
         domain::agent_execution::sessions::{ProviderContext, SessionId},
     };
     #[test]
-    fn semantic_snapshot_retention_counts_arc_control_slots_once() {
+    fn publication_materializes_independent_immutable_snapshot() {
         let snapshot = SessionSnapshot {
             id: SessionId::new("session").unwrap(),
             provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
@@ -221,22 +281,16 @@ mod retained_tests {
             invocations: Vec::new(),
             queue_history: Vec::new(),
         };
-        let expected = super::super::retained::snapshot(&snapshot) + 2 * mem::size_of::<usize>();
+        let expected = super::super::retained::snapshot(&snapshot);
         let mut state = CommittedTranscript::restore(Some(snapshot), 1, 1).unwrap();
-        assert_eq!(state.retained_bytes(), expected);
-        let copy = state.clone();
-        assert!(Arc::ptr_eq(
-            state.snapshot.as_ref().unwrap(),
-            copy.snapshot.as_ref().unwrap()
-        ));
-        assert_eq!(copy.retained_bytes(), expected);
+        assert_eq!(state.continuation.snapshot_bytes, expected);
+        let published = state.snapshot_handle().unwrap();
+        let second = state.snapshot_handle().unwrap();
+        assert!(!Arc::ptr_eq(&published, &second));
+        assert_eq!(published, second);
+        let retained = state.retained_bytes();
         state.abort(2);
-        assert_eq!(state.retained_bytes(), expected);
-        assert_eq!(
-            CommittedTranscript::restore(None, 3, 0)
-                .unwrap()
-                .retained_bytes(),
-            0
-        );
+        assert_eq!(state.retained_bytes(), retained);
+        assert_eq!(published.id.as_str(), "session");
     }
 }

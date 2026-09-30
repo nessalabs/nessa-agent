@@ -98,7 +98,7 @@ impl Serialize for EventList<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
         for event in self.0 {
-            seq.serialize_element(&Event::from(event.clone()))?;
+            seq.serialize_element(&Event::from(event))?;
         }
         seq.end()
     }

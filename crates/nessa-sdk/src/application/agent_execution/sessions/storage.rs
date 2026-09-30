@@ -423,6 +423,15 @@ impl QueueHistoryRecord {
     /// Maximum actual reorder decisions retained; membership events have a
     /// separate bound proportional to admitted invocation history.
     pub const MAX_REORDERS: usize = 1024;
+
+    /// Structural upper bound for retained queue evidence at an invocation count.
+    /// Membership may retain admission, selection and removal evidence; reorder
+    /// evidence has its separately owned limit. Uses saturating arithmetic.
+    pub const fn maximum_entries(invocations: usize) -> usize {
+        invocations
+            .saturating_mul(3)
+            .saturating_add(Self::MAX_REORDERS)
+    }
 }
 
 /// Saved input and observations. Never replay an input solely because its result
