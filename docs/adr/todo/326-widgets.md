@@ -101,8 +101,8 @@ What binds:
 
 The sidebar beside the window keeps the channel and the focused session marked
 as chosen, as over the panes; only the overview takes the sidebar's choice for
-itself (the readers that mark a choice test `content !== "agents"`, not
-`content === "panes"`).
+itself. A session row dragged over the window finds no target and a release
+changes nothing, as over the overview (238's drag table).
 
 The content view is `panes | agents | { widget }`, one at a time, and the window
 place is its third value: nothing is moved into or out of the grid to show a
