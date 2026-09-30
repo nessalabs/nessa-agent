@@ -237,7 +237,9 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   (`focus-regroup-row`), the peek beneath its row going (`-peek`), its row
   moved within its list (`focus-gives-back-moved`, which also holds the list
   where the person scrolled it: focus is given back on the next frame,
-  without scrolling, and not over focus that landed elsewhere first), the peek beside the list
+  without scrolling, and not over focus that landed elsewhere first; a moved
+  element that is still on the page gets focus itself, so a reply being
+  typed in a pill beneath a moved row keeps its caret: `-moved-pill`), the peek beside the list
   going as the window narrows (`-beside`), Show All once nothing is left out
   (`-show-all`), a count leaving the line (`responsive.mjs`,
   `overview-counts`) — the keyboard goes to that session's row, or else the

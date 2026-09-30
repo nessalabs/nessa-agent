@@ -1075,6 +1075,29 @@ describe("a row keeps the keyboard as its session changes group", () => {
     expect(document.activeElement).toBe(card("first"))
   })
 
+  it("gives focus back to the reply pill itself when its row is moved, not to the row", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await moveOn(source, "second", "Notarize", "running")
+    await open()
+    // Beneath its row (no room beside the list): ⌘R, and a reply being typed.
+    await press(row("run") as HTMLElement, "KeyR", { command: true })
+    const field = host.querySelector<HTMLTextAreaElement>(
+      '[data-reply-for="run"] textarea',
+    )
+    expect(document.activeElement).toBe(field)
+    // The row is moved within its list — the element kept — and, as an engine
+    // does, focus falls to the page as it goes.
+    await act(async () => {
+      const item = row("run")?.closest("li") as HTMLElement
+      item.parentElement?.insertBefore(item, item.parentElement.firstElementChild)
+      field?.blur()
+      await settle(1)
+    })
+    await nextFrame()
+    expect(document.activeElement).toBe(field)
+  })
+
   it("does not take focus back from what took it before the frame", async () => {
     const { source, store } = await mount()
     store.dispatch(followWorkspace())

@@ -599,6 +599,37 @@ async function givesBackLostFocus(page, cause) {
     }, css.overviewItem)
     if (!moved) throw new CannotRun("no list holds two rows to move one within")
     trail.push({ step: "moved its row", row: moved })
+  } else if (cause === "moved-pill") {
+    // Typing a reply beneath a row (no room beside the list), and its row moved.
+    await page.setViewportSize({ width: 1000, height: 700 })
+    await frames(page, 3)
+    await page.keyboard.press(keys.reply)
+    await page.keyboard.type("half")
+    const moved = await page.evaluate((field) => {
+      const typing = document.activeElement
+      if (!typing?.matches(field)) return null
+      const li = typing.closest("li")
+      if (!li || li.parentElement.children.length < 2) return "alone"
+      const other = [...li.parentElement.children].find((child) => child !== li)
+      li.parentElement.insertBefore(
+        li,
+        li === li.parentElement.firstElementChild ? null : other,
+      )
+      return typing.closest("[data-reply-for]")?.dataset.replyFor ?? null
+    }, css.overviewReplyField)
+    if (moved === null) throw new CannotRun("⌘R did not put the caret in a reply pill")
+    if (moved === "alone") throw new CannotRun("the replied-to row is alone in its list")
+    await settled(page)
+    await frames(page, 3)
+    await page.keyboard.type("-way")
+    const caret = await replyCaret(page)
+    trail.push({ step: "moved the row being replied to", ...caret })
+    if (caret.session !== moved || caret.value !== "half-way")
+      failures.push(
+        `after its row moved, the caret is on ${caret.active ?? caret.session} holding "${caret.value ?? ""}", not ${moved}'s pill holding "half-way"`,
+      )
+    await page.keyboard.press(keys.escape)
+    return { trail, failures }
   } else if (cause === "beside") {
     const peek = page.locator(`${css.overviewPeek} button`).first()
     if ((await peek.count()) === 0)
@@ -682,8 +713,10 @@ Steps (each asserts where the caret is afterwards):
   the title (away), it stays on the page's body; with a press held across
   the move that leaves focus on the row (held, a strip that cancels its
   mousedown), it follows the row
-  focus-gives-back-moved, -beside, -show-all: the focused row's item moved
-  within its list, the list scrolled away (1440 × 520) and left there; focus in the peek beside the list as the window narrows
+  focus-gives-back-moved, -moved-pill, -beside, -show-all: the focused row's
+  item moved within its list, the list scrolled away (1440 × 520) and left
+  there; a reply being typed beneath a row (1000 × 700) whose row is moved,
+  the caret kept in the pill and the next keys in it; focus in the peek beside the list as the window narrows
   to 700; Show All pressed once nothing is left out → the keyboard is on a
   row, and ↓ walks the list
   focus-home-scene: Customize focused in a new session's home, the window
@@ -823,7 +856,7 @@ await main(meta, async ({ options, rep, url }) => {
             }
           },
         )
-      for (const cause of ["moved", "beside", "show-all"])
+      for (const cause of ["moved", "moved-pill", "beside", "show-all"])
         await attempt(
           rep,
           { name: `focus-gives-back-${cause}`, engine, layout },

@@ -464,7 +464,7 @@ export function AgentsOverview({
     // when it comes back, not now.
     if (!document.hasFocus()) return
     lastFocus.current = null
-    const { sessionId } = last
+    const { element, sessionId } = last
     // On the next frame, once the page is laid out: WebKit scrolls an element
     // focused while its layout is pending into view, `preventScroll` or not.
     // Focus only — the list stays where the person has scrolled it, even as
@@ -474,10 +474,15 @@ export function AgentsOverview({
     requestAnimationFrame(() => {
       const focus = document.activeElement
       if (focus !== null && focus !== document.body) return
-      const id =
-        sessionId !== null && orderNow.current.includes(sessionId)
-          ? sessionId
-          : currentNow.current
+      const listed = sessionId !== null && orderNow.current.includes(sessionId)
+      // Moved, not taken away (a row, or a reply pill beneath it, reordered
+      // as sessions stream): focus goes back to the element itself, caret
+      // and all, so the key typed next lands where the one before did.
+      if (listed && element.isConnected) {
+        element.focus({ preventScroll: true })
+        return
+      }
+      const id = listed ? sessionId : currentNow.current
       const column = list.current
       const item =
         id === null
