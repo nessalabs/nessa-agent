@@ -2,14 +2,15 @@
 
 ## Purpose
 
-A conversation can run an experiment: a swarm of agents trying changes to a
-product against a metric, keeping what improves it
+A conversation can run an experiment: agents trying changes to a product
+against a metric, keeping what improves it
 ([background](https://claude.dev/blog/automating-eval-design-and-hillclimbing/#eval-design)).
 This record settles how the desktop window shows one — the climb, the areas
 explored, every run, one run in detail — so that the same views serve a
-percent score that should rise, a latency that should fall, or an A/B test
-with no areas at all. It builds on widgets ([326](326-widgets.md)) for where
-an experiment appears and on subagents ([329](329-subagents.md)) for its swarm.
+percent score that should rise, a latency that should fall, or a comparison
+with no areas and no swarm. It builds on widgets ([326](326-widgets.md)) for
+where an experiment appears and on subagents ([329](329-subagents.md)) for its
+agents.
 
 - **Date:** 2026-09-30
 - **Status:** proposed
@@ -17,128 +18,175 @@ an experiment appears and on subagents ([329](329-subagents.md)) for its swarm.
 ## Context
 
 The prototype (`exp-prototype` @ `5bfaa225`, `src/desktop/experiments/`) is
-the look and the flow people signed off: a card in the conversation, an
-overview with the climb and the path to the best version, an exploration map
-by area, a runs table, and a run opening over any of them with a breadcrumb
-back. Every word and number in it is the one sample's:
+the look and flow people signed off: a card in the conversation, an overview
+with the climb and the path to the best version, an exploration map by area,
+a runs table, and a run opening over any of them with a breadcrumb back. Every
+word and number in it is the one sample's:
 
-- one metric, in percent, higher is better, to one decimal, deltas in "pts";
+- one metric, in percent, higher is better, to one decimal, changes in "pts";
 - a train/test split on every run, with *overfit* as a verdict;
 - a cost-per-task guardrail in dollars, with *costly* as a verdict;
 - a noise floor, a ceiling "best model, max effort", and a run budget;
-- five areas with glyphs looked up by the sample's area ids;
-- verdict reasons composed as English sentences in the model.
+- five areas, their glyphs looked up by the sample's area ids;
+- verdict reasons composed as English sentences in the model;
+- the best run found by taking the last kept run in array order.
 
-The `Experiment.metric` string exists and nothing reads it. A second kind of
-experiment would mean a second set of views.
+`Experiment.metric` is a string nothing reads. A second kind of experiment
+would mean a second set of views.
 
 What binds:
 
-- **The harness decides, the window shows.** Whether a run is kept, and why a
-  run was judged as it was, is the experiment runner's decision. The window
-  must not re-judge runs from their numbers (gate 13).
-- **The definition travels as data.** When the gateway serves experiments, the
-  definition arrives over the wire; it cannot carry functions.
-- **Scale.** One run can move a million cases and touch ten thousand files;
-  views read aggregates and page or virtualise lists, never draw them whole.
+- **The harness decides, the window shows.** Whether a run is kept, which run
+  is best, and why a run was judged as it was, are the experiment runner's
+  decisions, made with evidence the window does not have (intervals, reruns)
+  and revisable by it. The window does not re-judge runs (gate 13).
+- **The definition travels as data.** When the gateway serves experiments,
+  the definition arrives over the wire; it cannot carry functions.
+- **Scale.** A run can move a million cases and touch ten thousand files.
 - **No gateway source yet.** Until there is one, experiments come from
-  in-memory samples, offered only under the preview.
+  in-memory samples under the preview.
 
 ## Decision
 
-An **`ExperimentDefinition`** comes with every experiment from its source:
+### The definition
+
+Every experiment arrives with its definition:
 
 ```ts
 interface ExperimentDefinition {
   /** The metric the climb is on. */
   readonly metric: Metric
-  /** What each run is scored on; exactly one is primary (the climb's). */
-  readonly splits: readonly { id: string; label: string; primary?: true }[]
+  /** What each run is scored on, and which of them the climb follows. */
+  readonly splits: readonly { readonly id: string; readonly label: string }[]
+  readonly primarySplit: string
   /** Limits a run must stay within, each on a metric of its own. */
-  readonly guardrails: readonly { metric: Metric; limit: Limit }[]
+  readonly guardrails: readonly {
+    readonly id: string
+    readonly metric: Metric
+    readonly limit: Limit
+  }[]
   /** The verdicts runs are given, in the order a filter lists them. */
   readonly verdicts: readonly {
-    id: string
-    label: string
-    tone: "good" | "bad" | "neutral" | "warning" | "active"
-    /** A kept run became the new best. */
-    kept: boolean
-    /** Still running or queued: no scores yet. */
-    pending: boolean
+    readonly id: string
+    readonly label: string
+    readonly tone: "good" | "bad" | "neutral" | "warning" | "active"
+    /** Kept: became the new best. Rejected: settled and not kept. Pending: no scores yet. */
+    readonly outcome: "kept" | "rejected" | "pending"
   }[]
+  /** Changes within it read as flat. */
   readonly noise?: number
-  readonly ceiling?: { value: number; label: string }
-  readonly budget?: { runs: number }
-  /** What a case is called ("test case", "prompt", "request"). */
-  readonly caseNoun?: { one: string; other: string }
+  /** A value to draw a line at, with what it is ("best model, max effort"). */
+  readonly reference?: { readonly value: number; readonly label: string }
+  readonly budget?: { readonly runs: number }
+  /** What a case is called: "test case", "prompt", "request". */
+  readonly caseNoun?: { readonly one: string; readonly other: string }
 }
 
 interface Metric {
-  id: string
-  name: string
-  /** Shown after a value: "%", "ms", "$". */
-  unit: string
-  /** Shown after a change, when it differs from `unit`: "pts". */
-  deltaUnit?: string
-  better: "up" | "down"
-  decimals: number
+  readonly id: string
+  readonly name: string
+  /** After a value: "%", "ms", "$". */
+  readonly unit: string
+  /** After a change, when it differs from `unit`: "pts". */
+  readonly deltaUnit?: string
+  readonly better: "up" | "down"
+  readonly decimals: number
 }
 
-type Limit =
-  | { kind: "at-most"; value: number }
-  | { kind: "change-at-most"; ratio: number }
+/** `relativeTo: "baseline"` reads `value` as a ratio of the baseline's (1.1 = 10% above it). */
+interface Limit {
+  readonly bound: "at-most" | "at-least"
+  readonly value: number
+  readonly relativeTo?: "baseline"
+}
 ```
 
-Which sections an experiment has follows from its data, not from flags: no
-areas, no exploration map or area cards; no agents, no swarm; no cases or no
-change on a run, no such block in its detail; a guardrail, a column and a
-tile. Formatting a value or a change is derived from `Metric` in one place
-(`model/metric.ts`), and every view that shows a number uses it.
+**Runs** carry `number` (the baseline is run 0), `parentId` (what it was built
+on, for lineage), `scores` by split id, each `{ mean, interval? }` (the
+half-width of its confidence interval), `measures` by guardrail metric id,
+their `verdict` id, the harness's `reason` for it as text, and optionally
+`areaId`, `agentId`, `cases` and `change`. The **experiment** carries the
+definition, its runs and baseline, and — from the harness — `championRunId`
+and `bestSoFar`, the run ids that were the best in the order they became it.
+The window draws the climb from `bestSoFar` and the best version from
+`championRunId`; it never finds either itself.
 
-**Runs** carry `scores` by split id and `guardrails` by metric id, a
-`verdict` id from the vocabulary, and the harness's `reason` for it, as text.
-The **champion** is the last kept run, or the baseline: *kept* already means
-"became the new best", so the window never compares numbers to find it, and
-direction does not enter into it. The best-so-far line is the kept runs in
-order.
+**Validation** is at the source's adapter, where external data is parsed: every
+run's verdict is in the vocabulary, every score's split and every measure's
+metric is defined, `primarySplit` names a split, `championRunId` and
+`bestSoFar` name runs that exist. An experiment that fails is not drawn in
+part: the widget answers `missing` (326's table says what is shown), and the
+adapter logs what was wrong as a fault, as the workspace's `failureReason`
+does. Inside the window the types can hold only
+what validation let through.
+
+**Sections follow the data.** No areas, no exploration map or area cards; no
+agents, no swarm; no `cases` or `change` on a run, no such block in its
+detail; guardrails, a column and a tile each; no `noise`, no band; no
+`reference`, no line; no `budget`, no budget line in the status.
+
+**Numbers are formatted in one place**, `experiments/model/metric.ts`, from a
+`Metric`: a value with its unit and decimals, a change with its sign and
+`deltaUnit`, whether a change is good by `better` and `noise`. An architecture
+rule refuses `toFixed`, `toPrecision` and `Intl.NumberFormat` under
+`experiments/ui/`, which is what holds it.
+
+**Words are props.** Every heading, subtitle and label a composite draws is a
+prop, its default derived from the definition (the climb is titled by the
+metric's name; a gain reads in `deltaUnit`), so a host can say it otherwise
+without a fork. Primitives come from nessa_ui (#103, #104, #105) — `Meter`,
+`Delta`, `Stat`, `StatusLabel`, `AvatarStack`, `Breadcrumb`, `EmptyState`, the
+glass `SegmentedControl`, `Sparkline`, `ChartTooltip`, `ProportionBar` — with
+the existing `Card`, `Table`, `FileDiffList`, `DiffStat` and `VirtualList`.
+The climb chart and the exploration map stay here, built from them, their
+geometry pure functions.
+
+### Areas, agents, cases and changes
 
 **Areas** carry their glyph as data (a path on a 16-unit grid) and a series
-hue; nothing is keyed on a known area id. **Agents** are the swarm; their
-conversations are subagents through an adapter to `SubagentSource`
-(`adapters/subagents/`), so the subagents panel shows them like any other and
-clicking an agent opens it there. A run has no session of its own yet, so an
-agent opens its conversation, where the run is one of its turns.
+hue `1 | 2 | 3 | 4 | 5`; nothing is keyed on a known area id. **Agents** are
+the swarm, each with an activity; their conversations are subagents through an
+adapter (`experiments/adapters/subagents/`) registered with 329's join under
+the key `experiments`, each subagent's id minted from the experiment's and the
+agent's (`<experimentId>/<agentId>`), so two experiments in one conversation
+cannot collide. Clicking an agent opens its subagent (329's
+`useOpenSubagent`), offered only while subagents' preview is on. A run has no
+session of its own yet, so an agent opens its conversation, where the run is
+one of its turns.
 
-**`ExperimentSource`** is the port: `get(id)`, `forSession(sessionId)` (a
-conversation may run several), `subscribe`, and `openFile({ experimentId,
-runId, path? }) → Opened` — `opened`, or `refused` with a typed reason shown
-for a moment where the file was clicked. Nothing is retried.
+**Cases** are counts: a total, how many a run fixed and broke, and a
+**slice** — a named group of cases, such as a category — each with its total
+and its passing count before and after; plus one page of moved cases from the
+source (at most 200) with the total that moved. **A change** is a summary and
+its files (path, status, lines added and removed), drawn as a virtualised
+tree with search. **`openFile({ experimentId, runId, path? })`** hands a file's
+diff to the person's editor, or with no path the run's whole change; it
+answers `opened`, or `refused` with a typed reason shown for four seconds
+where it was clicked. Nothing is retried.
 
-**Components take their words as props.** Every heading, subtitle and label a
-composite draws is a prop with a default derived from the definition (the
-climb's title is the metric's name; a gain reads in `deltaUnit`), so a host
-can say it differently without a fork. Primitives come from nessa_ui (#103,
-#104, #105): `Meter`, `Delta`, `Stat`, `StatusLabel`, `AvatarStack`,
-`Breadcrumb`, `EmptyState`, the glass `SegmentedControl`, `Sparkline`,
-`ChartTooltip`, `ProportionBar`, and the existing `Card`, `Table`,
-`FileDiffList`, `DiffStat`, `VirtualList`. The climb chart and the exploration
-map stay here, built from them, with their geometry as pure functions.
+### The port, the places, the preview
 
-**Where it appears** is a widget (326), plugin `experiments`: a card in the
-conversation's message, the surface beside it, in its own pane, or filling
-the window; Escape steps back along the run trail, then out. Navigation — the
-view, the trail of runs followed, scroll and focus on opening one — is one
-hook, `useExperimentNavigation`; the views only render.
-
-**Scale**: cases are counts by slice with at most the source's page of moved
-cases (and the total); files are a virtualised tree with search. Both are
-measured at 1M cases and 10K files in the browser checks.
+**`ExperimentSource`**: `get(id)`, `forSession(sessionId)` (a conversation may
+run several), `subscribe`, and `openFile`. An experiment appears as a widget
+(326), plugin `experiments`, in all four places — its card inline, attached,
+in a pane, over the panes. Navigation — the view, the trail of runs followed,
+scroll and focus on opening one — is one hook, `useExperimentNavigation`,
+which registers 326's `onEscape` while the trail is not empty; the views only
+render. Experiments are offered only when their own preview is on under
+Settings › Advanced › Experimental.
 
 **Samples**, under the preview: the checkout-support hill-climb (percent, up,
-train and test, a cost guardrail, five areas) and a second of another kind —
-p95 latency in milliseconds, lower is better, one split, no areas — which
-exists to prove this record: if a view needs a change to show it, the
-definition is missing something.
+train and test, a cost guardrail relative to the baseline, five areas, a
+swarm), and a second of another kind — p95 latency in milliseconds, lower is
+better, one split, an accuracy guardrail at least a fixed value, no areas and
+no swarm. The second exists to test this record: if a view needs a change to
+show it, the definition is missing something. A scale sample moves a million
+cases and touches ten thousand files in one run.
+
+**Scale contract**, measured in `experiments.mjs` on the scale sample: opening
+the run and scrolling its files and cases keeps every frame within the
+window's 50 ms budget (`perf-budget.mjs`), and the page draws at most the
+visible files plus overscan.
 
 ## Alternatives considered
 
@@ -147,33 +195,27 @@ definition is missing something.
 - **Formatting functions in the definition.** Flexible, but a definition must
   arrive over the wire; a unit, a delta unit and a precision cover every
   metric in view, and a new need adds a field.
-- **Section flags in the definition.** Explicit, but a flag can say "areas"
-  while the data has none, and then the view must decide which to believe.
-  Deriving sections from the data leaves one answer.
-- **The window judging runs.** Computing *kept*, *overfit* or *costly* from
-  scores and guardrails. It lost because the harness already decides, with
-  information the window does not have (confidence intervals, reruns), and two
-  judges will disagree.
+- **Section flags.** A flag can say "areas" while the data has none, and then
+  a view has to decide which to believe.
+- **The window finding the best run.** The last kept run, or the best score in
+  the metric's direction. Swarm runs finish out of order and a harness may
+  withdraw a keep after reruns; either rule would be a second owner of "best".
+- **The window judging runs** from scores and guardrails. The harness already
+  decides, with evidence the window does not have.
 
 ## Consequences
 
 - A new kind of experiment is a definition and a source; if it needs a view
-  change, that is a gap in this record, found by the second sample first.
+  change, that is a gap in this record, and the second sample should find it
+  first.
 - The prototype's 3K-line stylesheet and private palette go; each component
   has its stylesheet on the desktop's and nessa_ui's tokens.
-- The views cannot say anything the definition or the harness did not: a
-  reason the harness leaves out is not invented.
+- The views say nothing the definition or the harness did not: a reason the
+  harness leaves out is not invented.
 - Remaining: the gateway's `ExperimentSource`; opening a run's own session
   once runs have one; an editor inside the window, which would change
   `openFile` from handing off to showing.
-
-## Work
-
-| Issue | Scope |
-| --- | --- |
-| #334 | The definition, `model/metric.ts`, the model on it, the port, both samples and the scale sample, the preview |
-| #335 | The components: climb, exploration map, area card, verdict, cases, change |
-| #336 | The composites and the surface, the inline card, `useExperimentNavigation`, `experiments.mjs` |
-| #337 | The swarm as subagents, and an agent opening its subagent |
-
-Part of #325.
+- Work: #334 (the definition and validation, `model/metric.ts`, the model, the
+  port, the samples, the preview), #335 (the components and the formatting
+  rule), #336 (the composites, the surface, the inline card, navigation,
+  `experiments.mjs`), #337 (the swarm as subagents). Part of #325.

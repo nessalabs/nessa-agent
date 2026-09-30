@@ -1,4 +1,4 @@
-# 329. A conversation's subagents are a vertical of their own, read and written like chats
+# 329. A conversation's subagents are a vertical of their own, read and written to like conversations
 
 ## Purpose
 
@@ -6,8 +6,8 @@ A conversation can put other agents to work — an experiment's swarm is one
 case ([333](333-experiments.md)), a fan-out of reviewers or researchers is
 another. This record settles what the desktop window knows of those
 subagents, where it reads them from, and how a person sees and talks to one:
-in a panel of the conversation's own, each subagent read like any chat. It
-knows no experiment.
+in a panel of the conversation's own, each subagent read and written to as a
+conversation is. It knows no experiment.
 
 - **Date:** 2026-09-30
 - **Status:** proposed
@@ -15,106 +15,135 @@ knows no experiment.
 ## Context
 
 The prototype (`exp-prototype` @ `5bfaa225`, `src/desktop/subagents/`) showed
-the shape people wanted: a face pile in the conversation's header, a panel
-listing every subagent — its face, its name with the tags it was spun up with
-beside it, what it is doing now, a line of character — and one subagent opening
-as an ordinary conversation with a composer. Its only source was the
-experiment's swarm read as subagents, which is why the vertical has to be
+the shape people wanted: the conversation's subagents as an avatar stack in
+its pane header, a panel listing every one — its avatar, its name with the
+tags it was spun up with beside it, what it is doing now, a tagline — and one
+subagent opening as an ordinary conversation with a composer. Its only source
+was an experiment's swarm read as subagents, which is why this vertical is
 settled on its own before either consumer builds on it.
 
 What binds:
 
-- **Independent of experiments.** Any conversation may have subagents; the
-  subagents vertical must not import the experiments vertical, and the
-  experiments vertical reaches it only through its port.
+- **Independent of experiments.** Any conversation may have subagents. The
+  subagents vertical imports no experiment; the experiments vertical depends
+  on this one (326, *Boundaries*, enforced by `desktop-verticals.mjs`).
+- **One way to send.** The window already sends a message to a conversation
+  (238): the window mints the message's id, holds it in the outbox as
+  sending, answers `sent`, `refused` or `unknown`, says "Not sent. …" with
+  Send Again and Discard, and retires it when the conversation includes it.
+  A subagent's composer is the window's composer, so it sends the same way.
 - **No gateway source yet.** The gateway does not report a conversation's
-  subagents today. Until it does, the window has in-memory samples and must say
-  so rather than imply a live connection.
-- **Sending can be lost.** A message to a subagent is an action with an answer
-  that may not arrive; its states are written down before it is built (gate 15).
+  subagents. Until it does, the window has an in-memory sample and must not
+  look as if it were live.
 
 ## Decision
 
-`src/desktop/subagents/` owns the model, the port, and the views.
+`src/desktop/subagents/` owns the model, the port, the panel, and the session
+accessory; it depends on the workspace's barrel for the conversation it draws
+(transcript messages and views, the composer, the outbox rules, the clock and
+the time labels), never the other way.
 
-**The subagent** is its identity (`id`, unique within its conversation), a
-`name`, the `seed` its generated face is painted from (the same wherever it
-appears), the `tags` it was spun up with (id, name, a series hue 1–5, a glyph
-path — all data, none keyed on a known list), a `state` (`working | thinking |
-stuck | resting`), a one-sentence `headline`, `since`, the `work` it is on with
-its progress when known, the `model` it runs on, and its `conversation` as the
-workspace's own transcript messages plus the live activity line. The order a
-list shows them in (`byActivity`) and the counts by state are the model's.
+**A subagent** is its identity (`id`, below), a `name`, the `seed` its
+generated avatar is painted from (the same wherever it appears), the `tags` it
+was spun up with (each an id, a name, a series hue `1 | 2 | 3 | 4 | 5` and a
+glyph path — all data, none keyed on a known list), a `state`, a one-sentence
+`headline`, `since`, the `work` it is on with its progress when known, the
+`model` it runs on, and its `conversation`: the workspace's transcript
+messages and live activity line. **States** are the few a person acts on
+differently:
 
-**Its character** is one line picked from its seed by a stable hash
-("Quietly judging your regexes"). It is decoration so a crew reads as a crew;
-nothing reads meaning into it, and it is never shown as status.
+| State | Means | Shown as |
+| --- | --- | --- |
+| `working` | doing a piece of work now; `work` says what | Working, with its progress when known |
+| `planning` | between pieces of work, choosing the next | Planning |
+| `stuck` | its line of work stalled; it is working out why | Stuck |
+| `idle` | nothing left for it to do | Idle |
+
+The order a list shows them in (working, the furthest along first, then
+planning, stuck, idle) and the counts by state are the model's.
+
+**Its tagline** is one line picked from its seed by a stable hash ("Quietly
+judging your regexes"). It is decoration, so a crew reads as a crew; it is
+drawn apart from the state and says nothing about it.
+
+**Identity.** A subagent's id is unique within its conversation by
+construction: composition joins sources (the experiments adapter today, the
+gateway's later) into one `SubagentSource`, each under a key of its own, and
+the join prefixes every id with its source's key. Two sources cannot produce
+one id, and the join routes each call to the source that owns the subagent.
 
 **`SubagentSource`** is the port: `forSession(sessionId)` answers from what the
-source holds now (so a view may read it on every render), `subscribe`, and
-`send(sessionId, subagentId, text) → Sent`. Composition may join several
-sources into one (the experiments adapter, later the gateway's); a subagent id
-seen from two sources for one conversation is the second source's defect,
-reported to diagnostics and not shown twice.
+source holds now (a view may read it on every render), `subscribe`, and
+`send({ sessionId, subagentId, messageId, text }) → Promise<void>`, settling
+as the workspace's `send` does — resolved when taken, rejected with a typed
+refusal, or with `unavailable` when no answer came in the source's bound.
+There is no model choice: a subagent's model is shown, not chosen, until a
+source can change it.
 
-**Sending**, from the composer in a subagent's conversation:
+**Sending** follows 238 row for row, with the outbox held by this vertical
+above the panel, per subagent, per message (keyed by `messageId`), so it
+survives the panel closing:
 
-| State | Event | Next | Shown |
+| Event | While | Outcome | Shown |
 | --- | --- | --- | --- |
-| idle | person sends | sending | the message, marked sending |
-| sending | source accepts | sent | the message |
-| sending | source refuses (typed reason) | idle | the message, with why it was not sent; the draft is kept |
-| sending | no answer in the source's bound | unconfirmed | the message, "not confirmed — the conversation shows where it stands" |
-| unconfirmed | the message appears in the subagent's conversation | sent | the message |
+| person sends | — | the message joins the outbox, sending | the message, "sending" |
+| another send | one is sending | the second joins the outbox beside it; each settles on its own | both, in order |
+| source takes it | sending | `sent`; it stays in the outbox until the conversation includes it | the message |
+| source refuses (typed) | sending | `refused` | "Not sent. …", with Send Again and Discard |
+| no answer in the bound | sending | `unknown` | as refused, with the reason that no answer came |
+| the conversation includes its id | any | retired from the outbox; a late answer to it is let go | the message, once |
+| the panel closes | any | nothing changes | the outbox as it was when the panel opens again |
+| the subagent or the conversation is removed | any | its outbox is let go | nothing |
 
-Nothing is retried by the window. The in-memory sample accepts at once and
-appends a reply; the gateway source, when it exists, owns its bound.
+The rule that retires a message the conversation includes is the workspace's
+(`unconfirmed` in `workspace/model/transcript.ts`), used here, not
+copied. Nothing is retried by the window; the tests of this table in #331
+hold it.
 
-**Where it is seen**: the panel is a widget ([326](326-widgets.md)) whose id is
-the conversation's session id, opened beside the conversation or in a pane of
-its own; which subagent it shows is held above the panes, so a click anywhere
-(a face in the header, an agent in an experiment) can open it on one. The
-conversation's pane header shows its subagents as an `AvatarStack`, the
-busiest first, and nothing when there are none.
+**Where it is seen.** The panel is a widget (326), plugin `subagents`, whose id
+is the conversation's session id: attached to the conversation's pane, in a
+pane of its own, or over the panes. Which subagent it shows is this
+vertical's state, one per conversation (`sessionId → subagentId | null`); the
+vertical exports `useOpenSubagent()` — set it, then open the widget through
+the host's `openWidget` — which is how an experiment's agent opens its
+subagent. The plugin's `SessionAccessory` draws the conversation's subagents
+as an avatar stack in its pane header, the busiest first, and nothing when
+there are none; a click opens the panel.
 
-**Until the gateway reports subagents**, an in-memory sample source serves the
-sample workspace's conversations, and the window offers subagents only when
-the preview is on under Settings › Advanced › Experimental.
+**The preview.** Subagents are offered only when their preview is on under
+Settings › Advanced › Experimental (its own switch, owned by this vertical's
+catalogue entry). Off, no accessory, no panel, and a consumer's link to a
+subagent is not offered. The in-memory sample serves the sample workspace's
+conversations.
 
 ## Alternatives considered
 
-- **Subagents as sessions in the workspace.** Each subagent a hidden session
-  with its own pane. It lost because a session carries retention, drafts,
-  approvals and a place in the list and the overview — none of which a
-  subagent has — and because the parent conversation is what a person opened.
-- **A subagent view inside each consumer.** The experiment drawing its own
-  agents' conversations. It lost because the next consumer would draw them
-  again, and the two would disagree about state and order.
-- **A generic "status" instead of the four states.** It lost because a person
-  acts differently on stuck than on thinking, and a free string cannot be
-  ordered.
-- **Character lines from the model.** Asking the subagent to describe itself.
-  It lost for now on cost and noise; the line is decoration, and a fixed list
-  keeps it so.
+- **Subagents as sessions in the workspace.** Each a hidden session with its
+  own pane. It lost because a session carries retention, drafts, approvals and
+  a place in the list and the overview, none of which a subagent has, and
+  because the conversation a person opened is the parent.
+- **A subagent view inside each consumer.** The experiment drawing its agents'
+  conversations. The next consumer would draw them again, and the two would
+  disagree about state and order.
+- **Its own send states.** Simpler to write here; a second machine for one
+  composer, which would disagree with 238 the first time either changed.
+- **A free status string.** A person acts differently on stuck than on
+  planning, and a free string cannot be ordered.
+- **Taglines from the model.** Cost and noise for decoration; a fixed list
+  keeps it decoration.
 
 ## Consequences
 
-- Any source of subagents — the experiment's swarm today, the gateway's later —
-  appears in one panel with one order and one way to talk to it.
-- The composer in a subagent's conversation reuses the window's composer, so
-  its model choice and send behave as a conversation's do; the source decides
-  what a model change means for a subagent.
+- Any source of subagents appears in one panel, with one order, and is
+  written to the way a conversation is.
+- The workspace's outbox rule becomes shared: a change to it changes both, as
+  it should.
 - The sample is visible only under the preview; nothing ships that looks live
   and is not.
-- Remaining: the gateway's `SubagentSource`, once the gateway reports a
-  conversation's subagents; this record's send table is its contract.
-
-## Work
-
-| Issue | Scope |
-| --- | --- |
-| #330 | The model, the character line, the port, the sample source, the preview, the shared time formatting |
-| #331 | The panel: the list and one subagent's conversation, the send states above, `subagents.mjs` |
-| #332 | The face pile in a conversation's pane header |
-
-Part of #325.
+- Remaining: the gateway's `SubagentSource`, when the gateway reports a
+  conversation's subagents, with this record's send table as its contract;
+  choosing a subagent's model, once a source can.
+- Work: #330 (the model, taglines, the port and the join, the sample, the
+  preview, the time labels it needs added to the workspace's
+  `model/time-labels.ts`), #331 (the panel, the outbox and the send table,
+  `subagents.mjs`), #332 (the session accessory). Part of #325.
