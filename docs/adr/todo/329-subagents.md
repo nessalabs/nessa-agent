@@ -43,7 +43,7 @@ What binds:
 `src/desktop/subagents/` owns the model, the port, the panel, and the session
 accessory. It depends on the workspace's barrel for the conversation it draws
 — transcript messages and views, the clock, the time labels — which the
-barrel exports for it (#330, #331); never the other way.
+barrel exports for it (#330, #331); never the other way. Counts and plurals ("6 agents", "1 case") are the desktop's, one pure module in `src/desktop/model/` that this vertical and experiments both use.
 
 **A subagent** is its identity (`id`, below), a `name`, the `seed` its
 generated avatar is painted from (the same wherever it appears), the `tags` it
@@ -81,11 +81,9 @@ source can deliver.
 
 **Where it is seen.** The panel is a widget (326), plugin `subagents`, whose id
 is the conversation's session id, in a pane beside the conversation or over
-the panes. It answers `ready` for any conversation; one without subagents
-shows an empty state. Which subagent it shows is this vertical's state, one
+the panes. It answers `ready` for a conversation the workspace lists — one without subagents shows an empty state — and `missing` for one it does not (removed, or never known). Which subagent it shows is this vertical's state, one
 per conversation (`sessionId → subagentId | null`); the vertical exports
-`useOpenSubagent()` — set it, then open the widget through the host's
-`openWidget` — which is how an experiment's agent opens its subagent. The
+`useOpenSubagent()` — set it, then open the widget through the host's `openWidget` in the caller's place: from a view in the window, in the window; from anywhere else, in a pane beside the conversation — which is how an experiment's agent opens its subagent. The
 plugin's `SessionAccessory` draws the conversation's subagents as an avatar
 stack in its pane header, the busiest first, and nothing when there are none;
 a click opens the panel.

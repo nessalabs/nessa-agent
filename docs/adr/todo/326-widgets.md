@@ -50,9 +50,10 @@ What binds:
 - **Escape already has owners** in 238: menus and dialogs, the drag (it
   cancels and goes no further), the overview, the edge peek.
 - **The content region already has a second view.** The Agents overview
-  replaces the panes, and 238 says how it is left: Escape, or going anywhere
-  else — a session chosen, ⌘0, any change of the panes — is going back to
-  them (`ContentView`, `usecases/navigation.ts`).
+  (⌘0) is drawn instead of the panes, which stay as they were beneath it; 238
+  says how it is left: Escape, or going anywhere else — a session chosen, any
+  change of the panes — is going back to them (`ContentView`,
+  `usecases/navigation.ts`, `goesSomewhere` and `changesPanes` in the slice).
 
 ## Decision
 
@@ -65,9 +66,11 @@ What binds:
   pane item, in a transcript part, in a command.
 - A **plugin** is `{ id, useWidget(id), views, SessionAccessory? }`.
   `useWidget` is the plugin's hook answering, reactively, `{ kind: "ready",
-  title, origin? } | { kind: "unread" } | { kind: "missing" } | { kind: "off" }`
-  — `origin` is the session the widget belongs to, when it has one; `off`
-  says the plugin's preview is turned off. `views` offers `pane`, and any of
+  title, origin? } | { kind: "unread" } | { kind: "missing" } | { kind: "off" }
+  | { kind: "unshowable" }` — `origin` is the session the widget belongs to,
+  when it has one; `off` says the plugin's preview is turned off;
+  `unshowable` says the plugin holds the widget but cannot draw it (an
+  experiment that failed validation, 333). `views` offers `pane`, and any of
   `inline` and `window`. A `SessionAccessory` is something the plugin draws in
   a session pane's header, given the session's id and the host's callbacks
   (the subagents' avatar stack, which opens their panel), so the workspace
@@ -87,27 +90,29 @@ What binds:
 | Place | What it is | Opened by | Left by |
 | --- | --- | --- | --- |
 | `inline` | a card in the message the widget part is in | the transcript | — |
-| `pane` | a pane of its own in the split grid, as a chat has | `open("pane")`: beside the pane showing its `origin`, by the workspace's `openBeside` and its rules, or in the focused pane's place when there is none | the pane's close, as any pane |
-| `window` | the widget fills the content region instead of the panes, as the Agents overview does | `open("window")` | as the overview is left: Escape, its close, or going anywhere else — a session chosen, ⌘0, any change of the panes — which is going back to the panes as they were |
+| `pane` | a pane of its own in the split grid, as a chat has | `open("pane")`: beside the pane showing its `origin`, by the workspace's `openBeside` and its rules, or in the focused pane's place when there is none | the pane's close, as any pane; the last pane, as 238 has it, goes back to a new session's home — in its `origin`'s channel, else the focused channel |
+| `window` | the content region's third view, beside the panes and the overview: the widget drawn instead of the panes, which stay beneath it as they were | `open("window")` | exactly as the overview is: Escape or its close, a session chosen, or any change of the panes goes back to the panes; ⌘0 goes to the overview |
 
-A widget is in **at most one** of `pane` and `window` at once; opening it in
-the other moves it (its inline card stays in its message). `openWidget` from
-a widget in the window replaces it there; Escape then goes back to the panes.
-A widget pane moves, resizes and closes as any pane does in the grid; nothing
-carries a widget in from outside the grid. A widget whose `origin` session is
-removed stays where it is, without a way back to a conversation.
+The content view is `panes | agents | { widget }`, one at a time, and the
+window place is its third value: nothing is moved into or out of the grid to
+show a widget over it, so a widget can be in a pane and in the window at once,
+as a session can be in a pane and in the overview's peek. `openWidget` from
+the window replaces the widget shown there. A widget pane moves, resizes and
+closes as any pane does; nothing carries a widget into the grid from outside
+it. A widget whose `origin` is removed stays where it is, without a way back.
 
 **Focus** follows 238: opening a widget in a pane focuses that pane, as
 opening a session does, and the pane's body takes focus for the view to place
-further; opening it in the window moves focus into it; leaving the window
-returns focus to the focused pane.
+further; opening it in the window moves focus into it; going back to the
+panes returns focus to the focused pane, as leaving the overview does.
 
 **Escape**, after 238's owners — a menu or dialog, a carrying drag, the edge
-peek — goes to the widget in front: the one in the window when the window
-shows one, else the focused pane's. Its view has the first refusal (a view
-with somewhere to step back to — a run it opened, a subagent it shows —
-registers `onEscape` and handles it); then the host, which leaves the window.
-A widget in a pane is not closed by Escape, as a session pane is not.
+peek, the open overview — goes to the widget in front: the window's while the
+content view is a widget, else the focused pane's when it shows one. Its view
+has the first refusal (a view with somewhere to step back to — a run it
+opened, a subagent it shows — registers `onEscape` and handles it); then the
+host, which goes back to the panes from the window. A widget in a pane is not
+closed by Escape, as a session pane is not.
 
 The window's **layout is not persisted** (238), and widgets do not change that.
 
@@ -120,8 +125,9 @@ plugin and the id, each percent-encoded, joined by `:`. The encoding is
 one-to-one and canonical over any string (it encodes UTF-16 code units, so a
 lone surrogate encodes too, where `encodeURIComponent` would throw), and two
 items are the same pane exactly when they are equal; a property test holds
-both. The key is a branded type only the codec makes, so a reader cannot
-build or parse one by hand. The panes' use cases take the union; what is showable, on
+both. The key is a branded type only the codec makes, so no reader can build
+one by hand; reading one back goes through the codec's `decode`, which is the
+only thing the module exports that takes a key. The panes' use cases take the union; what is showable, on
 screen, or kept as a draft is decided per kind.
 
 A transcript part `{ kind: "widget", widget: WidgetRef }` is drawn by
@@ -137,6 +143,7 @@ widget parts over the wire is the gateway's, and remaining.
 | unread | yes | a quiet placeholder with its plugin's name | the same, in the place's chrome |
 | missing | yes | "This is no longer available" | the same line, with close |
 | off | yes | "Turned off in Settings › Advanced › Experimental" | the same line, with close |
+| unshowable | yes | "Can't show this here" | the same line, with close |
 | — | no | "Can't show this here" | the same line, with close |
 
 Nothing is retried by the host and nothing pretends to be live (gate 7, gate

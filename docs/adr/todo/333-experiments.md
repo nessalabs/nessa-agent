@@ -105,20 +105,11 @@ interface Limit {
 on, for lineage), `scores` by split id, each `{ mean, interval? }` (the
 half-width of its confidence interval), `measures` by guardrail metric id,
 their `verdict` id, the harness's `reason` for it as text, and optionally
-`areaId`, `agentId`, `cases` and `change`. The **experiment** carries the
-definition, its runs and baseline, and — from the harness — `championRunId`
-and `bestSoFar`, the run ids that were the best in the order they became it.
-The window draws the climb from `bestSoFar` and the best version from
-`championRunId`; it never finds either itself.
+`areaId`, `agentId`, `cases` and `change`. The **experiment** carries the definition, its baseline and runs, and — from the harness — `championRunId` (`null` while the baseline is still the best) and `bestSoFar`, the ids of the runs that became the best, in the order they did (empty until one does). The window draws the climb from the baseline and `bestSoFar`, and the best version from `championRunId`; it never finds either itself. A baseline still being scored has no scores yet, and the views say so.
 
 **Validation** is at the source's adapter, where external data is parsed: every
 run's verdict is in the vocabulary, every score's split and every measure's
-metric is defined, `primarySplit` names a split, `championRunId` and
-`bestSoFar` name runs that exist and have a score on the primary split, and
-the baseline has a measure for every guardrail limited relative to it. An experiment that fails is not drawn in
-part: the widget answers `missing` (326's table says what is shown), and the
-adapter logs what was wrong as a fault, as the workspace's `failureReason`
-does. What validation returns is a branded `Experiment` that
+metric is defined, `primarySplit` names a split, `championRunId` and `bestSoFar` name runs (not the baseline) that exist and have a score on the primary split, and a scored baseline has a measure for every guardrail limited relative to it. An experiment that fails is not drawn in part: the widget answers `unshowable` — "Can't show this here", 326's table — and the adapter logs what was wrong as a fault, as the workspace's `failureReason` does. What validation returns is a branded `Experiment` that
 only `validateExperiment` makes, so a view cannot be handed one it did not
 check.
 
@@ -127,13 +118,7 @@ agents, no swarm; no `cases` or `change` on a run, no such block in its
 detail; guardrails, a column and a tile each; no `noise`, no band; no
 `reference`, no line; no `budget`, no budget line in the status.
 
-**Numbers are formatted in one place**, `experiments/model/metric.ts`, from a
-`Metric`: a value with its unit and decimals, a change with its sign and
-`deltaUnit`, and whether a change is good, bad or flat by `better` and
-`noise`. What it returns is a branded `Formatted` text, and every number a
-component draws is typed `Formatted`, so a component cannot draw a number it
-formatted itself. nessa_ui's `Delta` is given its tone; it does not judge the
-change.
+**A metric's numbers are formatted in one place**, `experiments/model/metric.ts`, from a `Metric`: a value with its unit and decimals, the size of a change in `deltaUnit`, and whether a change is good, bad or flat by `better` and `noise`. Values come back as a branded `Formatted` text, and every metric value a component takes is typed `Formatted`, so a component cannot pass a metric value it formatted itself. A change is always drawn with nessa_ui's `Delta`, which owns its sign and is given its size's format and its tone by `metric.ts`; it does not judge the change. Counts are not metric values: they go through the desktop's counts module (329).
 
 **Words are props.** Every heading, subtitle and label a composite draws is a
 prop, its default derived from the definition (the climb is titled by the
