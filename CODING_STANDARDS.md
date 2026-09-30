@@ -171,6 +171,16 @@ A reviewer is the second pair of eyes, not the first.
   prefer removing behaviour to adding it.
 - **Stop rule.** The loop ends when a full round reports nothing at any
   priority. Each round gets a fresh reviewer and the current dispositions.
+- **Bounded rounds.** A code review runs at most three rounds. Findings still
+  open after the third mean something is structurally wrong: stop patching,
+  write down what is mostly producing them (an ownership in the wrong place, a
+  missing type, one rule in two places, a design that fights the codebase),
+  make that structural change, and review again — at most two more rounds.
+  Still open after those, the work stops: push what is done to the branch, and
+  hand it off in a draft pull request and on its issue — what is done, what is
+  not, the open findings with their evidence, the diagnosis, and the suggested
+  next step — for a person to take up. Review loops are for code; a design
+  record gets one round, and detail it cannot settle goes to its slices' tests.
 
 ### Agreement across fields and layers
 
@@ -442,6 +452,13 @@ not someone reconstructing it afterwards.
 | Its pull request is opened | **In review** |
 | Its pull request merges, or the issue is closed as done | **Done** |
 | Work stops before it is done | Back to **Ready** or **Backlog**, with a comment on the issue saying where it was left and why |
+
+Whoever works on an issue also keeps its description current, not only its
+Status: a **Status** section at the top of the body naming the remote
+branch(es) that hold the work, its pull request, a Mermaid sequence diagram of
+the flow as it is now implemented, and its **Blockers** (or none). It is
+updated when work starts, when the pull request opens, whenever the design
+moves, and when work stops or is handed off (the review loop's bounded rounds).
 
 - An issue that belongs to another repository (nessa_ui owns the UI package)
   is filed there and added to the board all the same.
