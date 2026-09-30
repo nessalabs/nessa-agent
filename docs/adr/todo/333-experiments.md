@@ -130,14 +130,17 @@ until the baseline has that measure.
 
 **Validation** is at the source's adapter, where external data is parsed: every
 run's verdict is in the vocabulary, every score's split and every measure's
-metric is defined, `primarySplit` names a split, run and area and agent ids are
-unique; every reference resolves — a run's `parentId` (to a run or the
-baseline), `areaId`, `agentId`, a note's run; and `bestSoFar` names runs — none
-twice, its `at` never decreasing — that have a score on the primary split and a
-verdict whose outcome is `kept`, with every kept run in it. These rules are over
-`runs`; the baseline, with its own `id`, is not one. An experiment that fails is
-not drawn in part: the widget answers `unshowable` — "Can't show this here",
-326's table — and the adapter logs what was wrong as a fault, as the workspace's
+metric is defined, `primarySplit` names a split, ids are unique — the baseline's
+and every run's together, and areas' and agents' each; runs' `number`s are
+unique and at least 1; a run's `parentId` names the baseline or a run with a
+lower `number`, so lineage cannot loop; `areaId`, `agentId` and a note's run
+(the baseline or a run) resolve; `settledAt` is present exactly when a run's
+verdict outcome is not `pending`; and `bestSoFar` names runs — none twice, its
+`at` never decreasing — that have a score on the primary split and a verdict
+whose outcome is `kept`, with every kept run in it. These rules are over `runs`;
+the baseline, with its own `id`, is not one. An experiment that fails is not
+drawn in part: the widget answers `unshowable` — "Can't show this here", 326's
+table — and the adapter logs what was wrong as a fault, as the workspace's
 `failureReason` does. What validation returns is a branded `Experiment` that
 only `validateExperiment` makes, so a view cannot be handed one it did not
 check.
@@ -198,11 +201,12 @@ after it is let go.
 **`ExperimentSource`**: `get(id)` answering `{ kind: "ready", experiment } | {
 kind: "unread" } | { kind: "missing" } | { kind: "invalid" }` — which the
 plugin's `useWidget` maps to 326's `ready`, `unread`, `missing` and `unshowable`
-— `forSession(sessionId)` (the ids of the experiments a conversation runs; it
-may run several), `subscribe`, and `openFile`. An experiment appears as a widget
-(326), plugin `experiments`, in all three places — its card inline, a pane
-beside the conversation, over the panes. Navigation — the view, the trail of
-runs followed, scroll and focus on opening one — is one hook,
+— `forSession(sessionId)` answering `{ kind: "unread" }` until the source has
+read that conversation, then `{ kind: "ready", ids }` (a conversation may run
+several, or none), `subscribe`, and `openFile`. An experiment appears as a
+widget (326), plugin `experiments`, in all three places — its card inline, a
+pane beside the conversation, over the panes. Navigation — the view, the trail
+of runs followed, scroll and focus on opening one — is one hook,
 `useExperimentNavigation`, which registers 326's `onEscape` while the trail is
 not empty; the views only render. Experiments are offered only when their own
 preview is on under Settings › Advanced › Experimental — a window preference

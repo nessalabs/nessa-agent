@@ -75,27 +75,30 @@ composition joins sources (the in-memory sample under `sample` and the
 experiments adapter under `experiments` today, the gateway's later) into one
 `SubagentSource`, each under a key of its own, and the join makes every id its
 source's key, `:`, and the source's own id percent-encoded. Two sources cannot
-produce one id.
+produce one id. The join answers `unread` for a conversation while any of its
+sources has not read it, then `ready` with every source's subagents, so a list
+is never shown short.
 
 **`SubagentSource`** is the port: `forSession(sessionId)`, answering from what
 the source holds now (a view may read it on every render) `{ kind: "unread" }`
 until the source has read that conversation's subagents, then `{ kind: "ready",
-subagents }`, and `subscribe`. The panel answers 326's `unread` for the first.
+subagents }`, and `subscribe`.
 It has no `send`: a subagent's conversation is read, not written to, until a
 source can deliver.
 
 **Where it is seen.** The panel is a widget (326), plugin `subagents`, whose id
 is the conversation's session id, in a pane beside the conversation or over the
-panes. It answers `unread` while the workspace has not read its index, then
-`ready` for a conversation the workspace lists (asked through a selector the
-workspace's barrel exports for it, #330) — one without subagents shows an empty
-state — and `missing` for one it does not (removed, or never known). Which
-subagent it shows is this vertical's state, one per conversation (`sessionId →
-subagentId | null`); the vertical exports `useOpenSubagent()` — set it, then
-open the widget through the host's `openWidget` in the caller's place: from a
-view in the window, in the window; from anywhere else, in a pane beside the
-conversation — which is how an experiment's agent opens its subagent. The
-plugin's `SessionAccessory` draws the conversation's subagents as an avatar
+panes. Its `useWidget` answers, in this order: `missing` for a conversation the
+workspace does not list once it has read its index (removed, or never known),
+asked through a selector the workspace's barrel exports for it (#330); `unread`
+while the workspace has not read its index or the source has not read the
+conversation; otherwise `ready` — one without subagents shows an empty state.
+Which subagent it shows is this vertical's state, one per conversation
+(`sessionId → subagentId | null`); the vertical exports `useOpenSubagent()` —
+set it, then open the widget through the host's `openWidget` in the caller's
+place: from a view in the window, in the window; from anywhere else, in a pane
+beside the conversation — which is how an experiment's agent opens its subagent.
+The plugin's `SessionAccessory` draws the conversation's subagents as an avatar
 stack in its pane header, in the model's order (the busiest first), and nothing
 when there are none; a click opens the panel.
 
