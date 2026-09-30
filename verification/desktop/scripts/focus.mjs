@@ -487,7 +487,10 @@ async function regroupKeepsKeyboard(page, from) {
       strip.addEventListener("mousedown", (event) => event.preventDefault())
       document.body.append(strip)
     })
-    await page.locator("#press-keeps-focus").click()
+    // Pressed, and held until the row has moved on.
+    const strip = await page.locator("#press-keeps-focus").boundingBox()
+    await page.mouse.move(strip.x + strip.width / 2, strip.y + strip.height / 2)
+    await page.mouse.down()
   }
   await frames(page, 2)
   const waiting = await page.evaluate(
@@ -515,6 +518,7 @@ async function regroupKeepsKeyboard(page, from) {
   )
   if (!moved) throw new CannotRun(`${on} never left Working: its turn did not end`)
   await frames(page, 3)
+  if (from === "held") await page.mouse.up()
   const after = await state(page)
   const under = await groupOf(page, on)
   trail.push({ step: "turn ended", under, ...after })
@@ -656,9 +660,9 @@ Steps (each asserts where the caret is afterwards):
   puts the keyboard on its row, its turn ends and the row moves on → from the
   row (1440 × 900) or from the peek beneath it (1000 × 700), the keyboard is
   on that session's row, and ↓ walks the list from the row; after a click on
-  the title (away), it stays on the page's body; after a press that leaves
-  focus on the row (held, a strip that cancels its mousedown), it follows
-  the row
+  the title (away), it stays on the page's body; with a press held across
+  the move that leaves focus on the row (held, a strip that cancels its
+  mousedown), it follows the row
   focus-gives-back-moved, -beside, -show-all: the focused row's item moved
   within its list; focus in the peek beside the list as the window narrows
   to 700; Show All pressed once nothing is left out → the keyboard is on a

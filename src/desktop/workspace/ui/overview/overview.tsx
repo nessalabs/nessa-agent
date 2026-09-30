@@ -483,18 +483,20 @@ export function AgentsOverview({
           ? { element, sessionId: sessionOf(element) }
           : null
     }
-    // A press elsewhere is the person moving focus only if focus does move
-    // while it is held: a press that leaves it where it is (the titlebar's
-    // drag strip, the edge strip, a scrollbar) changes nothing.
+    // A press elsewhere is the person moving focus only if focus moves as
+    // part of that press: in the same task, as a click's does. A press that
+    // leaves focus where it is (the titlebar's drag strip, the edge strip, a
+    // scrollbar) changes nothing, and a row taken away while a press is held
+    // — Chromium tells it it is losing focus then too — arrives in a later
+    // task and is given back. Nothing waits on the release, which a native
+    // window drag may swallow.
     let pressing = false
     const onPress = (event: PointerEvent) => {
       const last = lastFocus.current
       pressing =
         last !== null &&
         !(event.target instanceof Node && last.element.contains(event.target))
-    }
-    const onRelease = () => {
-      pressing = false
+      if (pressing) window.setTimeout(() => (pressing = false), 0)
     }
     const onFocusOut = (event: FocusEvent) => {
       if (pressing && lastFocus.current?.element === event.target)
@@ -506,16 +508,12 @@ export function AgentsOverview({
     document.addEventListener("focusin", onFocusIn)
     document.addEventListener("focusout", onFocusOut)
     document.addEventListener("pointerdown", onPress, true)
-    document.addEventListener("pointerup", onRelease, true)
-    document.addEventListener("pointercancel", onRelease, true)
     window.addEventListener("focus", onReturn)
     return () => {
       removals.disconnect()
       document.removeEventListener("focusin", onFocusIn)
       document.removeEventListener("focusout", onFocusOut)
       document.removeEventListener("pointerdown", onPress, true)
-      document.removeEventListener("pointerup", onRelease, true)
-      document.removeEventListener("pointercancel", onRelease, true)
       window.removeEventListener("focus", onReturn)
     }
   }, [])

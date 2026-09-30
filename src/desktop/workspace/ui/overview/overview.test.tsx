@@ -992,6 +992,25 @@ describe("a row keeps the keyboard as its session changes group", () => {
     expect(document.activeElement).toBe(row("run"))
   })
 
+  it("gives it back when its row goes while a press elsewhere is still held", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    // Pressed and held on the drag strip; the press's own task ends.
+    await act(async () => {
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }))
+      await new Promise((done) => setTimeout(done, 1))
+    })
+    // Taken away as Chromium does: told it loses focus, then removed.
+    await act(async () => {
+      row("run")?.dispatchEvent(new FocusEvent("focusout", { bubbles: true }))
+    })
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).toBe("Earlier")
+    expect(document.activeElement).toBe(row("run"))
+  })
+
   it("leaves it there when a click away and the row's removal land in the same tick", async () => {
     const { source, store } = await mount()
     store.dispatch(followWorkspace())
