@@ -99,6 +99,11 @@ What binds:
 | `pane` | a pane of its own in the split grid, as a chat has | `open("pane")`: beside the pane showing its `origin`, by the workspace's `openBeside` and its rules, or in the focused pane's place when there is none | the pane's close or ⌘W, as any pane; the last pane, as 238 has it, goes back to a new session's home, where a new session goes (`createDraft`: the channel being looked at, else the first) — `closePane` gains that case, which today leaves a last pane not showing a session as it is |
 | `window` | the content region's third view, beside the panes and the overview: the widget drawn instead of the panes, which stay beneath it as they were | `open("window")` | as the overview is — Escape or its close, a session chosen, or any change of the panes goes back to the panes; ⌘0 goes to the overview — with two differences: it covers the content region only, so the session list stays in reach beside it; and ⌘W closes the window, never a pane beneath it (over the overview, ⌘W closes the focused pane, 238) |
 
+The sidebar beside the window keeps the channel and the focused session marked
+as chosen, as over the panes; only the overview takes the sidebar's choice for
+itself (the readers that mark a choice test `content !== "agents"`, not
+`content === "panes"`).
+
 The content view is `panes | agents | { widget }`, one at a time, and the window
 place is its third value: nothing is moved into or out of the grid to show a
 widget over it, so a widget can be in a pane and in the window at once, as a
