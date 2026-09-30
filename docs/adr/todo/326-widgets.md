@@ -73,16 +73,17 @@ What binds:
   `unshowable` says the plugin holds the widget but cannot draw it (an
   experiment that failed validation, 333). `views` offers `pane`, and any of
   `inline` and `window`. A `SessionAccessory` is something the plugin draws in a
-  session pane's header, given the session's id and the host's callbacks (the
-  subagents' avatar stack, which opens their panel), so the workspace draws it
-  without importing the plugin. Each plugin's hook is its own, so a host keys
-  the view it draws by plugin.
-- Views are given only the widget's id and the **host's callbacks**:
-  `open(place)`, `close()`, `openWidget(ref, place)` (a plugin opening another
-  plugin's widget — an experiment's agent opening the subagents panel; its pane
-  goes beside the pane showing the *caller's* `origin` — for a
-  `SessionAccessory`, the header's own session — which the caller's host holds,
-  since only a plugin's own hook knows its widget's origin), and
+  session pane's header, given the session's id and the host's callbacks but no
+  place — what it opens goes beside that session's pane (the subagents' avatar
+  stack, which opens their panel), so the workspace draws it without importing
+  the plugin. Each plugin's hook is its own, so a host keys the view it draws by
+  plugin.
+- Views are given only the widget's id, the `place` they are drawn in, and the
+  **host's callbacks**: `open(place)`, `close()`, `openWidget(ref, place)` (a
+  plugin opening another plugin's widget — an experiment's agent opening the
+  subagents panel; its pane goes beside the pane showing the *caller's* `origin`
+  — for a `SessionAccessory`, the header's own session — which the caller's host
+  holds, since only a plugin's own hook knows its widget's origin), and
   `onEscape(handler)` (below).
 - Plugins are **registered once, in composition** (`main.tsx`), into a
   `WidgetRegistry` provided to the tree. Two plugins with one id is a

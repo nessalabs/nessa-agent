@@ -150,7 +150,8 @@ that measure.
   `agentId`, an agent's `areaId` and its activity's run, and a note's run (the
   baseline or a run) resolve.
 - **Settling**: a run's `settledAt` present exactly when its verdict's outcome
-  is not `pending`.
+  is not `pending`; a run's `startedAt` at or after the experiment's, and its
+  `settledAt` at or after its own `startedAt`.
 - **The best**: `bestSoFar` names runs, none twice, each kept and scored on the
   primary split, their `settledAt` never decreasing along it, with every kept
   run in it.
@@ -223,6 +224,8 @@ answer comes in its bound):
 | asked | the latest request answers `opened` | idle | nothing |
 | asked | the latest request answers `refused` | refused | its reason, for four seconds |
 | asked | an earlier request answers | asked | nothing: it is let go |
+| idle | an earlier request answers | idle | nothing: it is let go |
+| refused | an earlier request answers | refused | nothing: it is let go |
 | refused | four seconds pass | idle | the reason goes |
 | refused | click | asked | the reason goes |
 
