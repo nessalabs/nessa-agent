@@ -619,3 +619,7 @@ impl SessionClosureResult {
         (self.closure, self.permissions)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/domain/agent_execution/historical_session.rs"]
+mod historical_tests;

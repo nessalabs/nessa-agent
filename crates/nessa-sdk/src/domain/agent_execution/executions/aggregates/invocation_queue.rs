@@ -372,3 +372,7 @@ mod reversible_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/domain/agent_execution/queue_rollback.rs"]
+mod rollback_tests;

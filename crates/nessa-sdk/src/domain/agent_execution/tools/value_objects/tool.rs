@@ -376,11 +376,8 @@ impl ToolContent {
 mod reversible_tests {
     use super::*;
 
-    fn content_pointer(observation: &ToolObservation) -> *const u8 {
-        let ToolContentView::Text(text) = observation.content().as_ref().unwrap()[0].view() else {
-            unreachable!()
-        };
-        text.as_ptr()
+    fn content_pointer(observation: &ToolObservation) -> *const ToolContent {
+        observation.content().as_ref().unwrap().as_ptr()
     }
 
     #[test]
