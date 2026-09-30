@@ -14,6 +14,19 @@ function conversation(...messages: Message[]): Transcript {
 }
 
 describe("peekOf", () => {
+  it("drops widgets before counting a turn's parts, keeping messages without one as they are", () => {
+    const widget: Part = { kind: "widget", widget: { plugin: "mcp:charts", id: "call" } }
+    const asked = message("user", 1, text("Chart it."))
+    const drawn = message("agent", 2, step("a"), widget, text("Here."), widget)
+    const plain = message("agent", 3, step("b"))
+    const peek = peekOf(conversation(asked, drawn, plain), 3)
+    expect(peek.since[0].parts).toEqual([step("a"), text("Here.")])
+    expect(peek.since[0].id).toBe(drawn.id)
+    expect(peek.since[1]).toBe(plain)
+    expect(peek.earlier).toBe(false)
+    expect(peekOf(conversation(asked, drawn, plain), 2).earlier).toBe(true)
+  })
+
   it("tells the turn from the person's latest message, then everything the agent did since, in order", () => {
     const first = message("user", 1, text("Fix it."))
     const earlier = message("agent", 2, step("old"), text("Fixed."))

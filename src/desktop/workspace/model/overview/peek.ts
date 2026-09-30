@@ -9,7 +9,8 @@
  * A peek is a glance, drawn afresh for each session the keyboard lands on,
  * so it draws a bounded part of the turn: its latest `peekParts` parts —
  * steps, paragraphs, code, lists — and says there is more above, which the
- * session shows in full.
+ * session shows in full. A widget is not one of them: a plugin's view is the
+ * session's to draw, so it is dropped before the parts are counted.
  */
 import type { Activity, Message, Transcript } from "../transcript"
 
@@ -39,7 +40,7 @@ export function peekOf(transcript: Transcript, limit = peekParts): Peek {
   let room = limit
   let total = 0
   for (let index = messages.length - 1; index > last; index--) {
-    const message = messages[index]
+    const message = withoutWidgets(messages[index])
     total += message.parts.length
     if (room === 0) continue
     const drawn =
@@ -55,4 +56,11 @@ export function peekOf(transcript: Transcript, limit = peekParts): Peek {
     earlier: total > limit,
     activity: transcript.activity,
   }
+}
+
+/** `message` without its widget parts; the same message when it has none. */
+function withoutWidgets(message: Message): Message {
+  return message.parts.some((part) => part.kind === "widget")
+    ? { ...message, parts: message.parts.filter((part) => part.kind !== "widget") }
+    : message
 }

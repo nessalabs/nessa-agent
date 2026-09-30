@@ -6,6 +6,7 @@
  * title from a first message) live here, not in the views.
  */
 import type { WorkspaceFailureReason } from "./failure"
+import type { WidgetRef } from "./widget-ref"
 
 export type StepKind = "read" | "edit" | "run" | "search"
 
@@ -22,6 +23,12 @@ export type Part =
     }
   | { readonly kind: "code"; readonly code: string }
   | { readonly kind: "list"; readonly items: readonly string[] }
+  /**
+   * A view a plugin draws in the message (ADR 326), such as an MCP app's UI
+   * for the tool call that produced it. Nothing draws it yet (#328, #349);
+   * the readers of a message's text and steps pass over it.
+   */
+  | { readonly kind: "widget"; readonly widget: WidgetRef }
 
 export type StepPart = Extract<Part, { kind: "step" }>
 
@@ -84,7 +91,10 @@ export function unconfirmed(
     : sent
 }
 
-/** A message's parts with consecutive steps gathered, so they read as one quiet group. */
+/**
+ * A message's parts with consecutive steps gathered, so they read as one quiet
+ * group. Anything that is not a step — prose, code, a widget — ends a group.
+ */
 export function groupSteps(parts: readonly Part[]): (Part | StepPart[])[] {
   const groups: (Part | StepPart[])[] = []
   for (const part of parts) {
@@ -148,4 +158,43 @@ export function messageText(message: Message): string {
       part.kind === "text" ? [part.text] : part.kind === "list" ? part.items : [],
     )
     .join(" ")
+}
+
+/**
+ * One tool call as the source reports it, for deciding whether a plugin draws
+ * something for it: the call's identity, and — when the agent's harness said —
+ * the MCP server and tool it went to and the UI resource the tool declared.
+ */
+export interface ToolCallIdentity {
+  readonly executionId: string
+  readonly toolId: string
+  readonly mcp?: {
+    readonly server: string
+    readonly tool: string
+    readonly resourceUri?: string
+  }
+}
+
+/** The plugin id an MCP server's app is registered under. */
+export function mcpAppPlugin(server: string): string {
+  return `mcp:${server}`
+}
+
+/**
+ * The widget part a tool call's UI is drawn in, or `null` for a call whose
+ * tool declared none, and for one whose harness did not say — the call's
+ * steps and result read as they always have. The plugin is the MCP server's
+ * app; the id is the call, by the execution and tool identities that name it.
+ */
+export function toolWidget(
+  call: ToolCallIdentity,
+): Extract<Part, { kind: "widget" }> | null {
+  if (!call.mcp?.resourceUri) return null
+  return {
+    kind: "widget",
+    widget: {
+      plugin: mcpAppPlugin(call.mcp.server),
+      id: JSON.stringify([call.executionId, call.toolId]),
+    },
+  }
 }
