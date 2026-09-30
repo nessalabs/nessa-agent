@@ -65,8 +65,13 @@ What binds:
 - A **`WidgetRef`** is `{ plugin, id }`: the plugin that draws it and the
   plugin's own id for the thing drawn. It is the one shape everywhere — in a
   pane item, in a transcript part, in a command.
-- A **plugin** is `{ id, name, useWidget(id), views, SessionAccessory? }` —
-  `name` is what the window calls it while a widget is not read yet
+- A plugin is one of **two kinds** behind the same host, places and states:
+  `native` — in-process React the window trusts (subagents, 329) — and `app` —
+  an MCP App, HTML rendered in a sandboxed iframe and spoken to over the `ui/*`
+  bridge ([344](344-mcp-ui.md)). The host picks the renderer by kind; nothing
+  else about a widget depends on it.
+- A **native plugin** is `{ id, name, useWidget(id), views, SessionAccessory? }`
+  — `name` is what the window calls it while a widget is not read yet
   ("Experiment"). `useWidget` is the plugin's hook answering, reactively, `{
   kind: "ready", title, origin? } | { kind: "unread" } | { kind: "missing" } | {
   kind: "off" } | { kind: "unshowable" }` — `origin` is the session the widget
@@ -85,11 +90,19 @@ What binds:
   subagents panel; its pane goes beside the pane showing the *caller's* `origin`
   — for a `SessionAccessory`, the header's own session — which the caller's host
   holds, since only a plugin's own hook knows its widget's origin), and
-  `onEscape(handler)` (below).
-- Plugins are **registered once, in composition** (`main.tsx`), into a
-  `WidgetRegistry` provided to the tree. Two plugins with one id is a
-  composition error, raised when the registry is built and tested there. The
-  host looks a plugin up by id through the registry and nothing else.
+  `onEscape(handler)` (below), with a read-only **host context** — theme,
+  locale, the place's size and safe area. These are shaped after MCP Apps'
+  bridge so the `app` kind is a translation, not a second contract:
+  `open(place)` is `ui/request-display-mode`, the host context is `hostContext`;
+  sending a message and updating the model's context (`ui/message`,
+  `ui/update-model-context`) are named for both kinds and built with the `app`
+  host (344).
+- Native plugins are **registered once, in composition** (`main.tsx`), into a
+  `WidgetRegistry` provided to the tree; `app` plugins are **registered and
+  unregistered while the window runs**, as the gateway reports MCP servers with
+  UI (344). Two plugins with one id is an error either way — a composition error
+  at start, a typed refusal at run time — tested for both. The host looks a
+  plugin up by id through the registry and nothing else.
 
 ### Places
 
