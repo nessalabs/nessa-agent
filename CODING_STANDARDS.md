@@ -151,7 +151,10 @@ review it, and hands over the result with the change:
 - **Break it on purpose.** Change each rule the diff adds or touches — one at a
   time — and confirm a test fails, as a revert probe under
   [evidence and closure](#evidence-and-closure). A rule that fails no test is
-  untested: add the test, or the rule is not load-bearing and goes.
+  untested: add the test, or the rule is not load-bearing and goes. This is for
+  rules the code enforces; a rule about how the work is done — the review
+  loop's rounds, tracking on the board — is held by the reviewer and the
+  board, not by a test.
 - The checks from gate 6, run on the tree being handed over.
 - For a UI change, the [browser verification](#browser-verification-for-ui)
   scripts that cover it, extended to cover what the change adds.
@@ -456,9 +459,11 @@ not someone reconstructing it afterwards.
 Whoever works on an issue also keeps its description current, not only its
 Status: a **Status** section at the top of the body naming the remote
 branch(es) that hold the work, its pull request, a Mermaid sequence diagram of
-the flow as it is now implemented, and its **Blockers** (or none). It is
-updated when work starts, when the pull request opens, whenever the design
-moves, and when work stops or is handed off (the review loop's bounded rounds).
+the flow as it is now implemented, and its **Blockers** — each field saying
+"none yet" until it exists, so a branch not yet pushed or a flow not yet built
+is said truthfully. It is updated when work starts, when a branch is pushed and
+the pull request opens, whenever the design moves, and when work stops or is
+handed off (the review loop's bounded rounds).
 
 - An issue that belongs to another repository (nessa_ui owns the UI package)
   is filed there and added to the board all the same.
