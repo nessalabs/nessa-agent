@@ -311,15 +311,13 @@ export function createDraft(
 ): WorkspaceState {
   const panes = state.panes
   if (!panes || showable(state, sessionItem(draftId))) return state
-  const home = channelId && channelOf(state, channelId) ? channelId : draftChannel(state)
-  // A new session runs on a model; with none to start on, none starts.
-  const startsOn = model ?? defaultModel()
-  if (!home || !startsOn) return state
+  const home = draftHome(state, { channelId, model })
+  if (!home) return state
   const drafted: WorkspaceState = {
     ...state,
     drafts: {
       ...state.drafts,
-      [draftId]: { id: draftId, channelId: home, model: startsOn },
+      [draftId]: { id: draftId, ...home },
     },
   }
   const placed = beside
@@ -342,48 +340,70 @@ function draftChannel(state: WorkspaceState): string | undefined {
 }
 
 /**
- * Whether a pane closes: any one of several; the last only when it has
- * something to go back from — a listed session, or a widget — for a new
- * session's home is where it would go. The one rule `closePane` follows, and
- * what a pane's close button and menu item ask before they offer it.
+ * Where a new session starts and on what: `channelId` if the window has it,
+ * else where a new session goes (`draftChannel`); `model`, else the default.
+ * None when there is no channel or no model to start on — a new session
+ * runs on a model, and with none, none starts.
+ */
+function draftHome(
+  state: WorkspaceState,
+  { channelId, model }: { channelId?: string; model?: ModelRef },
+): { channelId: string; model: ModelRef } | undefined {
+  const home = channelId && channelOf(state, channelId) ? channelId : draftChannel(state)
+  const startsOn = model ?? defaultModel()
+  return home && startsOn ? { channelId: home, model: startsOn } : undefined
+}
+
+/**
+ * Where the last pane goes back to when it closes: a new session's home in
+ * the channel of the listed session it shows, on the model its next message
+ * would take; showing a widget, where a new session goes, on the default
+ * model. None for a home already, or where no new session can start.
+ */
+function homeAfterLast(
+  state: WorkspaceState,
+  item: PaneItem | null,
+): { channelId: string; model: ModelRef } | undefined {
+  if (item?.kind === "widget") return draftHome(state, {})
+  const session = item ? sessionOf(state, item.sessionId) : undefined
+  if (!session) return undefined
+  return draftHome(state, {
+    channelId: session.channelId,
+    model: modelForNextTurn(state, session.id) ?? session.model,
+  })
+}
+
+/**
+ * Whether a pane closes: any one of several; the last only when it goes
+ * back to a new session's home (`homeAfterLast`). The one rule `closePane`
+ * follows, and what a pane's close button and menu item ask before they
+ * offer it.
  */
 export function canClosePane(state: WorkspaceState, pane: PaneKey): boolean {
   const panes = state.panes
   const shown = panes && paneByKey(panes, pane)
   if (!panes || !shown) return false
-  if (paneCount(panes) > 1) return true
-  const item = itemIn(shown)
-  if (item?.kind === "widget") return true
-  return item?.kind === "session" && sessionOf(state, item.sessionId) !== undefined
+  return paneCount(panes) > 1 || homeAfterLast(state, itemIn(shown)) !== undefined
 }
 
 /**
  * Closes a pane; its neighbour takes the room. The last pane cannot close:
- * showing a conversation, it goes back to a new session's home in the same
- * channel, under `draftId`; showing a widget, to a new session's home where
- * a new session goes (`createDraft`: the channel being looked at, else the
- * first), on the default model; showing a home already, nothing changes
- * (`canClosePane`).
+ * it goes back to a new session's home under `draftId` (`homeAfterLast`) —
+ * showing a conversation, in its channel; showing a widget, where a new
+ * session goes (the channel being looked at, else the first), on the
+ * default model. Showing a home already, nothing changes (`canClosePane`).
  */
 export function closePane(
   state: WorkspaceState,
   { pane, draftId }: { pane: PaneKey; draftId?: string },
 ): WorkspaceState {
   const panes = state.panes
-  if (!panes || !canClosePane(state, pane)) return state
+  const shown = panes && paneByKey(panes, pane)
+  if (!panes || !shown) return state
   if (paneCount(panes) > 1) return withPanes(state, removePane(panes, pane))
-  const shown = paneByKey(panes, pane)
-  const item = shown && itemIn(shown)
-  if (!item || !draftId) return state
-  if (item.kind === "widget") return createDraft(state, { draftId, target: pane })
-  const session = sessionOf(state, item.sessionId)
-  if (!session) return state
-  return createDraft(state, {
-    draftId,
-    channelId: session.channelId,
-    model: modelForNextTurn(state, session.id) ?? session.model,
-    target: pane,
-  })
+  const home = homeAfterLast(state, itemIn(shown))
+  if (!home || !draftId) return state
+  return createDraft(state, { draftId, ...home, target: pane })
 }
 
 /**

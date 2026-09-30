@@ -23,6 +23,8 @@ import {
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
 import { settle, shownBy, testStore } from "../../testing"
 import { paneItemOf } from "../../model/pane-item"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../../ui/menu"
+import { PaneMenuItems } from "../panes/pane-menu"
 import { SessionsInSidebar } from "./sessions-in-sidebar"
 import { workspaceShortcuts } from "./shortcuts"
 import { ThreeColumns } from "./three-columns"
@@ -347,15 +349,49 @@ describe("a pane's close is offered where closing it does something", () => {
       [...host.querySelectorAll('.workspace-pane-header [aria-label^="Close Pane"]')].map(
         (button) => !button.hasAttribute("data-reserved"),
       )
+    // And the pane's menu offers it alike: shown in a menu that is not modal,
+    // as `pane-picture.test.tsx` shows it, for a modal one loads a second React.
+    const menuOffers = async () => {
+      const menu = document.createElement("div")
+      document.body.append(menu)
+      const menuRoot = createRoot(menu)
+      await act(async () =>
+        menuRoot.render(
+          <Provider store={store}>
+            <DropdownMenu open modal={false}>
+              <DropdownMenuTrigger>…</DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <PaneMenuItems
+                  pane={store.getState().workspace.panes?.focused ?? 0}
+                  sessionId=""
+                  moves={false}
+                  onChooseHeaderPicture={() => {}}
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </Provider>,
+        ),
+      )
+      const item = [...menu.ownerDocument.querySelectorAll('[role="menuitem"]')].find(
+        (each) => each.textContent?.startsWith("Close Pane"),
+      )
+      const enabled = item ? !item.hasAttribute("data-disabled") : null
+      await act(async () => menuRoot.unmount())
+      menu.remove()
+      return enabled
+    }
     expect(offered()).toEqual([true, true])
     await act(async () => void store.dispatch(closePane()))
     expect(offered()).toEqual([true])
+    expect(await menuOffers()).toBe(true)
     await act(async () => void store.dispatch(newSession()))
     expect(offered()).toEqual([false])
+    expect(await menuOffers()).toBe(false)
     await act(async () =>
       store.dispatch(openWidget({ widget: { plugin: "p", id: "i" }, place: "pane" })),
     )
     expect(offered()).toEqual([true])
+    expect(await menuOffers()).toBe(true)
     await act(async () => root.unmount())
   })
 })

@@ -81,6 +81,9 @@ export function SessionMenuItems({ sessionId }: { sessionId: string }) {
         Open Beside
         {besideKey.on ? <MenuShortcut>{commandLabel(isMac)}Click</MenuShortcut> : null}
       </MenuItem>
+      {/* Only among several: from a session's row, closing its pane is taking the
+          session away, never putting a new session's home in its place, which
+          closing the last pane does (`canClosePane`). */}
       {shown && count > 1 ? (
         <MenuItem onSelect={() => dispatch(closePane({ pane }))}>Close Pane</MenuItem>
       ) : null}

@@ -17,6 +17,7 @@ import {
 } from "../workspace-state"
 import { defaultModel } from "../../model/workspace-index"
 import {
+  canClosePane,
   canOpenBeside,
   closePane,
   createDraft,
@@ -534,6 +535,22 @@ describe("closing the last pane when it shows a widget", () => {
       draftId: "fresh",
     })
     expect(there.drafts.fresh.channelId).toBe("gateway")
+  })
+
+  it("is not offered, and changes nothing, where no new session could start", () => {
+    const shown = openWidget(loaded(), { widget: run, room: roomy })
+    const bare = { ...shown, channels: [], view: { channelId: "" } }
+    const pane = bare.panes!.focused
+    expect(canClosePane(shown, pane)).toBe(true)
+    expect(canClosePane(bare, pane)).toBe(false)
+    expect(closePane(bare, { pane, draftId: "fresh" })).toBe(bare)
+    // Offered exactly where it does something, whatever the last pane shows.
+    const drafted = createDraft(loaded(), { draftId: "home" })
+    for (const state of [loaded(), shown, bare, drafted]) {
+      const last = state.panes!.focused
+      const closed = closePane(state, { pane: last, draftId: "fresh" })
+      expect(canClosePane(state, last)).toBe(closed !== state)
+    }
   })
 
   it("leaves it as it is without an id for the new session", () => {
