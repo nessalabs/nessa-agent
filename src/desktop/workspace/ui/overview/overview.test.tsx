@@ -1098,6 +1098,48 @@ describe("a row keeps the keyboard as its session changes group", () => {
     expect(document.activeElement).toBe(field)
   })
 
+  it("falls back to the row when the element it would focus can no longer take focus", async () => {
+    await mount()
+    await open()
+    await act(async () => row("run")?.click())
+    await act(async () => settle(10))
+    const story = host.querySelector<HTMLElement>(
+      ".agents-inline-peek .agents-peek-story",
+    )
+    await act(async () => story?.focus())
+    expect(document.activeElement).toBe(story)
+    // No longer focusable as it acts — a button disabled, which a browser
+    // will not focus (jsdom would) — and focus falls to the page; the list
+    // changes.
+    await act(async () => {
+      if (!story) return
+      story.focus = () => {}
+      story.blur()
+      story.append(document.createElement("span"))
+      await settle(1)
+    })
+    await nextFrame()
+    expect(document.activeElement).toBe(row("run"))
+  })
+
+  it("leaves focus alone when the window comes back by a click", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    windowFocused = false
+    await moveOn(source, "run", "Split panes", "idle")
+    windowFocused = true
+    // The window returns, and the press that brought it back lands on text.
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"))
+      document.body.dispatchEvent(new Event("mousedown", { bubbles: true }))
+      await settle(1)
+    })
+    await nextFrame()
+    expect(document.activeElement).toBe(document.body)
+  })
+
   it("does not take focus back from what took it before the frame", async () => {
     const { source, store } = await mount()
     store.dispatch(followWorkspace())

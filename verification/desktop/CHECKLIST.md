@@ -248,7 +248,8 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   in the same task (`focus-regroup-away`); a press that leaves focus where it
   is (the titlebar's drag strip) changes nothing (`focus-regroup-held`). _Check:_ `focus.mjs`, as named;
   unit test `overview.test.tsx`. Focus lost while the window is away
-  (another app, or tabbed out of the page) is given back when it returns:
+  (another app, or tabbed out of the page) is given back when it returns,
+  unless the press that brings the window back puts it somewhere itself:
   _check:_ manual, in the app (a headless page never loses the window), and
   the unit test.
 - [ ] **The sidebar marks what is shown**: Agents while the overview is, a

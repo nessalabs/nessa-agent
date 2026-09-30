@@ -455,6 +455,9 @@ export function AgentsOverview({
   )
   const orderNow = useRef(order)
   orderNow.current = order
+  // Every press on the page, counted: one after focus is due back (the click
+  // that brings the window back, say) is the person choosing, and wins.
+  const presses = useRef(0)
   const giveBack = useRef(() => {})
   giveBack.current = () => {
     const last = lastFocus.current
@@ -465,6 +468,7 @@ export function AgentsOverview({
     if (!document.hasFocus()) return
     lastFocus.current = null
     const { element, sessionId } = last
+    const pressed = presses.current
     // On the next frame, once the page is laid out: WebKit scrolls an element
     // focused while its layout is pending into view, `preventScroll` or not.
     // Focus only — the list stays where the person has scrolled it, even as
@@ -473,14 +477,16 @@ export function AgentsOverview({
     // the list holds then, after every change before the frame.
     requestAnimationFrame(() => {
       const focus = document.activeElement
-      if (focus !== null && focus !== document.body) return
+      if (presses.current !== pressed || (focus !== null && focus !== document.body))
+        return
       const listed = sessionId !== null && orderNow.current.includes(sessionId)
       // Moved, not taken away (a row, or a reply pill beneath it, reordered
       // as sessions stream): focus goes back to the element itself, caret
-      // and all, so the key typed next lands where the one before did.
+      // and all, so the key typed next lands where the one before did — if
+      // it can still take it; a button disabled as it acted cannot.
       if (listed && element.isConnected) {
         element.focus({ preventScroll: true })
-        return
+        if (document.activeElement === element) return
       }
       const id = listed ? sessionId : currentNow.current
       const column = list.current
@@ -516,6 +522,7 @@ export function AgentsOverview({
     // Nothing waits on the release, which a native window drag may swallow.
     let pressing = false
     const onPress = (event: MouseEvent) => {
+      presses.current += 1
       const last = lastFocus.current
       pressing =
         last !== null &&
