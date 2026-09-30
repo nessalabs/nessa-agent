@@ -149,7 +149,7 @@ impl RetainedDirectory {
     }
 
     pub fn replace(&self, _: &OsStr, to: &OsStr, file: &File) -> io::Result<()> {
-        self.rename(to, file, true)
+        self.rename(to, file, false)
     }
 
     fn rename(&self, to: &OsStr, file: &File, replace: bool) -> io::Result<()> {
