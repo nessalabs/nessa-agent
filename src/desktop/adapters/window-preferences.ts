@@ -6,7 +6,7 @@ import { storedPreference } from "./stored-preference"
  * The window's own on-or-off preferences, chosen in Settings and remembered
  * like its others (`stored-preference.ts`):
  *
- * - **greeting** — "Working late?" above a new session's composer;
+ * - **greeting** — the hour's greeting ("Working late?" at night) above a new session's composer;
  * - **drifting light** — the slow drift of the light behind the window,
  *   carried on the page's root as `data-drift` for the stylesheet;
  * - **⌘-click opens beside** — a row ⌘-clicked, or ⌘↩'d, opens beside the

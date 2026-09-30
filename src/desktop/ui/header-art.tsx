@@ -1,5 +1,6 @@
-import { memo, useEffect, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useRef, useState } from "react"
 import {
+  useChooseHeaderPicture,
   useHeaderFraming,
   useHeaderImage,
   useHeaderPictureUrl,
@@ -7,10 +8,11 @@ import {
 } from "../adapters/header-image"
 import { readImagePixels } from "../adapters/image-pixels"
 import {
-  checkHeaderImage,
   defaultHeaderFraming,
+  headerImageRefusalMs,
   headerImageRefusalText,
   type HeaderFraming,
+  type HeaderImageRefusal,
 } from "../model/header-image"
 import {
   extractPalette,
@@ -32,7 +34,6 @@ import {
 import { NightScene } from "./night-scene"
 
 /** How long a refused file's reason stays on screen. */
-const refusalMs = 4000
 
 /**
  * The home header: the night scene, or a picture the person chose, GIFs
@@ -45,7 +46,7 @@ const refusalMs = 4000
  * tints the whole window unless the person turns that off.
  */
 export function HeaderArt() {
-  const [image, choose, clear] = useHeaderImage()
+  const [image, , clear] = useHeaderImage()
   const [framing, keepFraming] = useHeaderFraming()
   // While adjusting, the framing being tried; it replaces the kept one on Done.
   const [draft, setDraft] = useState<HeaderFraming | null>(null)
@@ -54,7 +55,6 @@ export function HeaderArt() {
   adjustingRef.current = adjusting
   const url = useHeaderPictureUrl()
   const [refusal, setRefusal] = useState<string | null>(null)
-  const input = useRef<HTMLInputElement>(null)
   const headerRef = useRef<HTMLDivElement>(null)
   const [palette, setPalette] = useState<PaletteColor[]>([])
   const [tint, setTint] = useTintFromPicture()
@@ -96,23 +96,21 @@ export function HeaderArt() {
 
   useEffect(() => {
     if (!refusal) return
-    const timer = window.setTimeout(() => setRefusal(null), refusalMs)
+    const timer = window.setTimeout(() => setRefusal(null), headerImageRefusalMs)
     return () => window.clearTimeout(timer)
   }, [refusal])
 
-  const accept = (file: File | undefined) => {
-    if (!file) return
-    const check = checkHeaderImage(file)
-    if (!check.ok) {
-      setRefusal(headerImageRefusalText[check.reason])
-      return
-    }
-    setRefusal(null)
-    choose(file)
-    // A new picture starts centred, and straight into adjusting it.
-    keepFraming(defaultHeaderFraming)
-    setDraft(defaultHeaderFraming)
-  }
+  // A new picture starts centred, and straight into adjusting it.
+  const choosePicture = useChooseHeaderPicture({
+    onChosen: useCallback(() => {
+      setRefusal(null)
+      setDraft(defaultHeaderFraming)
+    }, []),
+    onRefused: useCallback(
+      (reason: HeaderImageRefusal) => setRefusal(headerImageRefusalText[reason]),
+      [],
+    ),
+  })
 
   return (
     <div
@@ -168,9 +166,7 @@ export function HeaderArt() {
             >
               Night scene
             </MenuItem>
-            <MenuItem onSelect={() => input.current?.click()}>
-              Choose image or GIF…
-            </MenuItem>
+            <MenuItem onSelect={choosePicture}>Choose image or GIF…</MenuItem>
             {image ? (
               <MenuItem onSelect={() => setDraft(framing)}>Adjust position…</MenuItem>
             ) : null}
@@ -201,16 +197,6 @@ export function HeaderArt() {
             ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
-        <input
-          ref={input}
-          type="file"
-          accept="image/*"
-          hidden
-          onChange={(event) => {
-            accept(event.target.files?.[0])
-            event.target.value = ""
-          }}
-        />
       </div>
     </div>
   )

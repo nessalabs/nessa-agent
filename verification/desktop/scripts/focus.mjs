@@ -17,9 +17,9 @@
  * on a row whose session changes group follows it to its new row, and the
  * arrows walk the list from there — from the peek beneath the row too — while
  * focus the person took to the page stays there (focus-regroup-*). Focus on the
- * scene's Customize control in a new session's home, as the window shortens
- * and the pane's home hides the scene, goes to that home's composer, not to
- * the page (focus-home-scene).
+ * scene's Customize control in a new session's home stays there as the window
+ * shortens and the home takes a small pane's shape, its header kept as a
+ * band (focus-home-scene).
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
@@ -720,16 +720,17 @@ Steps (each asserts where the caret is afterwards):
   to 700; Show All pressed once nothing is left out → the keyboard is on a
   row, and ↓ walks the list
   focus-home-scene: Customize focused in a new session's home, the window
-  shortened so the home hides its scene → the caret is in the home's composer`,
+  shortened so the home takes a small pane's shape → focus stays on Customize`,
 }
 
 /**
  * A new session's home alone in the pane shows its scene; the scene's
  * Customize control takes focus; the window shortens, so the pane is under
- * 640px and its home hides the scene (`conversation.css`). The caret goes to
- * the home's composer rather than falling to the page.
+ * 640px and its home takes a conversation's shape. The header stays, lower,
+ * with Customize in it (`conversation.css`, issue #320), so the focus stays
+ * where the person put it rather than being moved or lost to the page.
  */
-async function sceneHiddenKeepsCaret(page) {
+async function sceneKeepsFocus(page) {
   const failures = []
   await page.keyboard.press(keys.newSession)
   await need(page, css.homeCustomize, "the scene's Customize control")
@@ -744,19 +745,24 @@ async function sceneHiddenKeepsCaret(page) {
   await settled(page)
   await frames(page, 3)
   const after = await state(page)
+  const paneHeight = await page.evaluate(
+    ([home, pane]) =>
+      document.querySelector(home)?.closest(pane)?.getBoundingClientRect().height ?? 0,
+    [css.paneHome, css.pane],
+  )
+  if (paneHeight >= 640)
+    throw new CannotRun(`the home's pane is ${Math.round(paneHeight)}px tall at 600px`)
   const scene = await page.evaluate(
     (sel) => document.querySelector(sel)?.checkVisibility() ?? false,
     css.homeCustomize,
   )
-  if (scene) throw new CannotRun("the scene still shows in a 600px window")
-  const inHome = await page.evaluate(
-    ([home, field]) => document.activeElement?.matches(`${home} ${field}`) === true,
-    [css.paneHome, css.field],
+  if (!scene) failures.push("the scene's Customize control is gone in a small pane")
+  const onCustomize = await page.evaluate(
+    (sel) => document.activeElement?.matches(sel) === true,
+    css.homeCustomize,
   )
-  if (!inHome)
-    failures.push(
-      `the scene hid: the caret is on ${after.active}, not the home's composer`,
-    )
+  if (!onCustomize)
+    failures.push(`the home became small: focus moved to ${after.active}, off Customize`)
   return { after, failures }
 }
 
@@ -881,7 +887,7 @@ await main(meta, async ({ options, rep, url }) => {
         const fresh = await openPage(browser, { url, layout, width: 1440, height: 900 })
         try {
           await need(fresh.page, css.composer, "a composer")
-          const result = await sceneHiddenKeepsCaret(fresh.page)
+          const result = await sceneKeepsFocus(fresh.page)
           return { ...result, failures: [...result.failures, ...fresh.errors] }
         } finally {
           await fresh.close()

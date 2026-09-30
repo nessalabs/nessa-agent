@@ -4,8 +4,7 @@
  * ⌘K, an agent's dispatch — the caret lands in that pane's composer once it
  * is on the page. So does focus that falls to the page because what held it
  * went away: an answered approval, a closed pane — or was hidden by the
- * stylesheet, as a small pane's home hides its scene and the Customize
- * control in it (`ui/panes/conversation.css`).
+ * stylesheet.
  *
  * When another pane takes focus, the caret goes with it from wherever it
  * was but a dialog or a menu. When only what the focused pane shows

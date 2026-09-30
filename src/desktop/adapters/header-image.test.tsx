@@ -7,8 +7,12 @@
  */
 import { act } from "react"
 import { createRoot } from "react-dom/client"
-import { afterEach, beforeEach, expect, it } from "vitest"
-import { useHeaderImage, useHeaderPictureUrl } from "./header-image"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import {
+  useChooseHeaderPicture,
+  useHeaderImage,
+  useHeaderPictureUrl,
+} from "./header-image"
 
 let host: HTMLDivElement
 let made = 0
@@ -87,5 +91,67 @@ it("shows a GIF's first frame, drawn once, wherever it is not to move", async ()
   expect(urlOf("a")).toMatch(/^blob:picture-/)
   expect(urlOf("b")).toBe(urlOf("a"))
   expect(drawn).toEqual(["frame"])
+  await act(async () => root.unmount())
+})
+
+/** Picks `file` in the file dialog that `ask` opens. */
+async function pick(ask: () => void, file: File) {
+  // The input the dialog belongs to, made as it is asked for; its click opens nothing here.
+  const made: HTMLInputElement[] = []
+  const create = document.createElement.bind(document)
+  const creating = vi
+    .spyOn(document, "createElement")
+    .mockImplementation((tag: string, options?: ElementCreationOptions) => {
+      const element = create(tag, options)
+      if (element instanceof HTMLInputElement) {
+        element.click = () => {}
+        made.push(element)
+      }
+      return element
+    })
+  try {
+    await act(async () => ask())
+  } finally {
+    creating.mockRestore()
+  }
+  const input = made[0]
+  expect(input?.type).toBe("file")
+  expect(input?.accept).toBe("image/*")
+  Object.defineProperty(input, "files", { value: [file] })
+  await act(async () => {
+    input?.dispatchEvent(new Event("change"))
+  })
+}
+
+it("asks for a picture the one way, wherever it is asked from: taken, or refused with why", async () => {
+  const heard: string[] = []
+  let ask: () => void = () => {}
+  let clear: () => void = () => {}
+  function Asker() {
+    clear = useHeaderImage()[2]
+    ask = useChooseHeaderPicture({
+      onChosen: () => heard.push("chosen"),
+      onRefused: (reason) => heard.push(reason),
+    })
+    return null
+  }
+  const root = createRoot(host)
+  await act(async () =>
+    root.render(
+      <>
+        <Asker />
+        <Shown id="shown" still={false} />
+      </>,
+    ),
+  )
+  // The window's one picture outlives a test; this one starts from the scene.
+  await act(async () => clear())
+  await pick(() => ask(), new File(["text"], "notes.txt", { type: "text/plain" }))
+  expect(heard).toEqual(["not-an-image"])
+  expect(urlOf("shown")).toBe("")
+  await pick(() => ask(), new File(["png"], "sky.png", { type: "image/png" }))
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+  expect(heard).toEqual(["not-an-image", "chosen"])
+  expect(urlOf("shown")).not.toBe("")
   await act(async () => root.unmount())
 })
