@@ -148,9 +148,11 @@ The Claude and Codex bindings select a level for every session they open with
 `with_effort_level`; without one nothing is sent and the agent keeps its own
 default. `agent.set_effort_level(level, actor)` changes it on an idle attachment,
 under the same scheduler lock as `set_approval_mode`. A change that reaches the
-agent is audited as requested, then applied or failed
-(`ExecutionAuditRecord::EffortLevelChanged`, with the caller and both levels),
-and succeeds only once both records are accepted. Nothing is sent when a turn is
+agent is audited as requested, then applied, refused or failed
+(`ExecutionAuditRecord::EffortLevelChanged`, both records made from one
+`EffortLevelChange` with the caller and both levels), and succeeds only once
+both records are accepted. It runs to its settlement on a task of its own:
+dropping the caller's future does not leave a request without its outcome. Nothing is sent when a turn is
 queued or running (`Busy`), when nothing is attached or the connection is not
 negotiated yet (`AttachmentUnavailable`), or when the level is not offered
 (`InvalidInput`). The agent's reported level must match the one selected, at

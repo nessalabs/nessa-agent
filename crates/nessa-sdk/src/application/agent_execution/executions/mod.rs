@@ -25,10 +25,10 @@ mod question;
 mod request;
 pub use audit::{
     AdmissionAuditCause, AdmissionAuditStage, AttachmentAuditCause, AttachmentAuditRecord,
-    AttachmentAuditStage, EffortChangeStage, EffortLevelChangeRecord, ExecutionAudit,
-    ExecutionAuditRecord, QueueAdmissionRecord, QueueOrderCause, QueueOrderRecord,
-    QueueSettlementRecord, SessionClosureRecord, SteeringAcknowledgementRecord, SteeringAuditCause,
-    SteeringAuditStage,
+    AttachmentAuditStage, EffortChangeOutcome, EffortChangeStage, EffortLevelChange,
+    EffortLevelChangeRecord, ExecutionAudit, ExecutionAuditRecord, QueueAdmissionRecord,
+    QueueOrderCause, QueueOrderRecord, QueueSettlementRecord, SessionClosureRecord,
+    SteeringAcknowledgementRecord, SteeringAuditCause, SteeringAuditStage,
 };
 pub use controller::ExecutionController;
 pub use events::{ExecutionEvent, ExecutionUpdate};

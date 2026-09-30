@@ -4,6 +4,7 @@
 
 use super::MemoryStorage;
 use crate::application::agent_execution::support::*;
+use nessa_sdk::application::agent_execution::executions::EffortChangeStage;
 use nessa_sdk::application::dto::ReasoningDto;
 use nessa_sdk::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
 use std::sync::atomic::AtomicBool;
@@ -49,15 +50,25 @@ fn reasoning_capabilities() -> EffectiveCapabilities {
     .unwrap()
 }
 
-/// Reports negotiation only once told to, offering `low`; counts levels sent.
+/// Reports negotiation only once told to, offering `low`; counts levels sent,
+/// or refuses them as busy once told to.
 struct Backend {
     negotiated: AtomicBool,
+    busy: AtomicBool,
     sent: Mutex<Vec<String>>,
     capabilities: EffectiveCapabilities,
     inner: RecordingSession,
 }
 impl ProviderSessionBackend for Backend {
     fn set_effort_level(&self, level: EffortLevel) -> ProviderOperationFuture<'_, ()> {
+        if self.busy.load(Ordering::SeqCst) {
+            return Box::pin(async {
+                Err(ProviderOperationFailure::new(
+                    AgentError::Busy,
+                    ProviderSessionState::Usable,
+                ))
+            });
+        }
         self.sent.lock().unwrap().push(level.as_str().to_owned());
         Box::pin(async { Ok(()) })
     }
@@ -128,6 +139,7 @@ impl AgentProvider for Provider {
 async fn nothing_is_sent_until_negotiated_nor_a_level_not_offered() {
     let backend = Arc::new(Backend {
         negotiated: AtomicBool::new(false),
+        busy: AtomicBool::new(false),
         sent: Mutex::new(Vec::new()),
         capabilities: reasoning_capabilities(),
         inner: RecordingSession {
@@ -168,4 +180,255 @@ async fn nothing_is_sent_until_negotiated_nor_a_level_not_offered() {
     assert_eq!(*backend.sent.lock().unwrap(), ["low"]);
     assert_eq!(agent.effort_level(), Some(level("low")));
     agent.close(close_action()).await.unwrap();
+}
+
+/// Keeps the stage of each effort change record.
+#[derive(Default)]
+struct Stages(Mutex<Vec<EffortChangeStage>>);
+impl ExecutionAudit for Stages {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        if let ExecutionAuditRecord::EffortLevelChanged(change) = record {
+            self.0.lock().unwrap().push(change.stage());
+        }
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn a_change_the_connection_refuses_unsent_is_recorded_as_refused() {
+    let backend = Arc::new(Backend {
+        negotiated: AtomicBool::new(true),
+        busy: AtomicBool::new(true),
+        sent: Mutex::new(Vec::new()),
+        capabilities: reasoning_capabilities(),
+        inner: RecordingSession {
+            prompts: AtomicUsize::new(0),
+        },
+    });
+    let stages = Arc::new(Stages::default());
+    let agent = Agent::prepare(
+        Arc::new(Provider(backend.clone())),
+        MemoryStorage::default().manager().await,
+        stages.clone(),
+    )
+    .await
+    .map_err(|error| error.cause().clone())
+    .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    let failure = agent
+        .set_effort_level(level("low"), close_action())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error(), &AgentError::Busy);
+    assert_eq!(failure.session_state(), &ProviderSessionState::Usable);
+    assert_eq!(
+        *stages.0.lock().unwrap(),
+        [EffortChangeStage::Requested, EffortChangeStage::Refused]
+    );
+    assert_eq!(agent.effort_level(), None);
+    agent.close(close_action()).await.unwrap();
+}
+
+/// Holds each effort change record until released, to drop its caller mid-change.
+struct Gated {
+    stages: Mutex<Vec<EffortChangeStage>>,
+    gate: tokio::sync::Semaphore,
+}
+impl ExecutionAudit for Gated {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        let stage = match record {
+            ExecutionAuditRecord::EffortLevelChanged(change) => Some(change.stage()),
+            _ => None,
+        };
+        Box::pin(async move {
+            if let Some(stage) = stage {
+                self.stages.lock().unwrap().push(stage);
+                if stage == EffortChangeStage::Requested {
+                    self.gate.acquire().await.unwrap().forget();
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_change_whose_caller_goes_away_still_settles_and_is_recorded() {
+    let backend = Arc::new(Backend {
+        negotiated: AtomicBool::new(true),
+        busy: AtomicBool::new(false),
+        sent: Mutex::new(Vec::new()),
+        capabilities: reasoning_capabilities(),
+        inner: RecordingSession {
+            prompts: AtomicUsize::new(0),
+        },
+    });
+    let audit = Arc::new(Gated {
+        stages: Mutex::new(Vec::new()),
+        gate: tokio::sync::Semaphore::new(0),
+    });
+    let agent = Agent::prepare(
+        Arc::new(Provider(backend.clone())),
+        MemoryStorage::default().manager().await,
+        audit.clone(),
+    )
+    .await
+    .map_err(|error| error.cause().clone())
+    .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    // The caller gives up while the request is being recorded.
+    let waited = tokio::time::timeout(
+        std::time::Duration::from_millis(20),
+        agent.set_effort_level(level("low"), close_action()),
+    )
+    .await;
+    assert!(waited.is_err());
+    assert_eq!(
+        *audit.stages.lock().unwrap(),
+        [EffortChangeStage::Requested]
+    );
+    audit.gate.add_permits(1);
+    for _ in 0..100 {
+        if audit.stages.lock().unwrap().len() == 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    assert_eq!(
+        *audit.stages.lock().unwrap(),
+        [EffortChangeStage::Requested, EffortChangeStage::Applied]
+    );
+    assert_eq!(*backend.sent.lock().unwrap(), ["low"]);
+    assert_eq!(agent.effort_level(), Some(level("low")));
+    agent.close(close_action()).await.unwrap();
+}
+
+/// Panics on the settlement of an effort change.
+struct Panicking;
+impl ExecutionAudit for Panicking {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        if let ExecutionAuditRecord::EffortLevelChanged(change) = &record {
+            if change.stage() != EffortChangeStage::Requested {
+                panic!("sink failed");
+            }
+        }
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn a_sink_that_panics_on_the_settlement_has_not_recorded_it() {
+    let backend = Arc::new(Backend {
+        negotiated: AtomicBool::new(true),
+        busy: AtomicBool::new(false),
+        sent: Mutex::new(Vec::new()),
+        capabilities: reasoning_capabilities(),
+        inner: RecordingSession {
+            prompts: AtomicUsize::new(0),
+        },
+    });
+    let agent = Agent::prepare(
+        Arc::new(Provider(backend.clone())),
+        MemoryStorage::default().manager().await,
+        Arc::new(Panicking),
+    )
+    .await
+    .map_err(|error| error.cause().clone())
+    .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    let failure = agent
+        .set_effort_level(level("low"), close_action())
+        .await
+        .unwrap_err();
+    // Applied, and not recorded: in force, and no turn may run under it.
+    assert_eq!(failure.error(), &AgentError::AuditFailure);
+    assert_eq!(
+        failure.session_state(),
+        &ProviderSessionState::CleanupRequired
+    );
+    assert_eq!(agent.effort_level(), Some(level("low")));
+    let _ = agent.close(close_action()).await;
+}
+
+/// Panics while its future is polled, on the settlement of an effort change.
+struct PanickingLater;
+impl ExecutionAudit for PanickingLater {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        let settles = matches!(
+            &record,
+            ExecutionAuditRecord::EffortLevelChanged(change)
+                if change.stage() != EffortChangeStage::Requested
+        );
+        Box::pin(async move {
+            if settles {
+                panic!("sink failed while delivering");
+            }
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_sink_that_panics_delivering_the_settlement_has_not_recorded_it() {
+    let backend = Arc::new(Backend {
+        negotiated: AtomicBool::new(true),
+        busy: AtomicBool::new(false),
+        sent: Mutex::new(Vec::new()),
+        capabilities: reasoning_capabilities(),
+        inner: RecordingSession {
+            prompts: AtomicUsize::new(0),
+        },
+    });
+    let agent = Agent::prepare(
+        Arc::new(Provider(backend.clone())),
+        MemoryStorage::default().manager().await,
+        Arc::new(PanickingLater),
+    )
+    .await
+    .map_err(|error| error.cause().clone())
+    .unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(close_action()))
+        .unwrap();
+    agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    let failure = agent
+        .set_effort_level(level("low"), close_action())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error(), &AgentError::AuditFailure);
+    assert_eq!(
+        failure.session_state(),
+        &ProviderSessionState::CleanupRequired
+    );
+    let _ = agent.close(close_action()).await;
 }

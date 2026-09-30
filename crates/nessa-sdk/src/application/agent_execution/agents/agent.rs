@@ -16,8 +16,8 @@ use crate::application::agent_execution::agents::{
 };
 use crate::application::agent_execution::executions::{
     limits::MAX_RETAINED_OUTPUT_EVENTS, AttachmentAuditCause, AttachmentAuditRecord,
-    AttachmentAuditStage, EffortLevelChangeRecord, ExecutionAudit, ExecutionAuditRecord,
-    ExecutionEvent, ExecutionRequest, ExecutionUpdate,
+    AttachmentAuditStage, EffortChangeOutcome, EffortLevelChange, EffortLevelChangeRecord,
+    ExecutionAudit, ExecutionAuditRecord, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
 };
 use crate::application::agent_execution::hooks::{
     HookRegistration, InvocationContext, InvocationHook, InvocationHooks,
@@ -194,9 +194,11 @@ impl Agent {
     ///
     /// `actor` is the host-verified caller. A change that reaches the agent is
     /// audited twice through this Agent's audit sink
-    /// ([`EffortLevelChangeRecord`](crate::application::agent_execution::executions::EffortLevelChangeRecord)):
-    /// as requested before anything is sent, and as applied or failed after.
-    /// Success is reported only once both are recorded. Every later
+    /// ([`EffortLevelChange`](crate::application::agent_execution::executions::EffortLevelChange)):
+    /// as requested before anything is sent, and as applied, refused or failed
+    /// after. Success is reported only once both are recorded. The change runs
+    /// to its settlement on a task of its own: dropping this future does not
+    /// leave a request without its outcome. Every later
     /// admission records the level in force
     /// ([`QueueAdmissionRecord::effort_level`](crate::application::agent_execution::executions::QueueAdmissionRecord::effort_level)).
     ///
@@ -214,15 +216,41 @@ impl Agent {
     /// And once the change is under way:
     /// - The audit sink's error with [`ProviderSessionState::Usable`] when the
     ///   request cannot be recorded; nothing is sent.
+    /// - The connection's refusal ([`AgentError::Busy`] with a permission still
+    ///   open, say) with [`ProviderSessionState::Usable`], recorded as refused;
+    ///   nothing was sent.
     /// - The agent's failure with explicit session status when the change
     ///   fails or cannot be verified; the previous level stays in force, and
     ///   the uncertain generation must be retired before another turn. If the
-    ///   failure cannot be recorded either, both are returned, in that order,
-    ///   as [`AgentError::MultipleOperationFailures`].
+    ///   settlement cannot be recorded either, both are returned, in that
+    ///   order, as [`AgentError::MultipleOperationFailures`].
+    /// - [`AgentError::SubmissionUnresolved`] with
+    ///   [`ProviderSessionState::CleanupRequired`] if the change panics: whether
+    ///   it reached the agent is not known. A sink that panics has not
+    ///   recorded, and is reported as [`AgentError::AuditFailure`].
     /// - The audit sink's error with [`ProviderSessionState::CleanupRequired`]
     ///   when the agent verified the change but it cannot be recorded: the
     ///   level is in force, and no turn may run under it unrecorded.
     pub async fn set_effort_level(
+        &self,
+        level: EffortLevel,
+        actor: ActionContext,
+    ) -> ProviderOperationResult<()> {
+        // Owned by a task of its own, not by the caller: once the request is
+        // recorded, its settlement is recorded and applied to this Agent and
+        // its connection whether or not the caller still waits.
+        let agent = self.clone();
+        tokio::spawn(async move { agent.change_effort_level(level, actor).await })
+            .await
+            .unwrap_or_else(|_| {
+                // The change panicked: whether it reached the agent is not known.
+                Err(ProviderOperationFailure::new(
+                    AgentError::SubmissionUnresolved,
+                    ProviderSessionState::CleanupRequired,
+                ))
+            })
+    }
+    async fn change_effort_level(
         &self,
         level: EffortLevel,
         actor: ActionContext,
@@ -270,7 +298,7 @@ impl Agent {
                 ProviderSessionState::Usable,
             ));
         }
-        let requested = EffortLevelChangeRecord::requested(
+        let change = EffortLevelChange::new(
             self.inner.manager.id().clone(),
             format!(
                 "{}:{}",
@@ -281,53 +309,74 @@ impl Agent {
             self.effort_level(),
             level.clone(),
         );
-        self.inner
-            .audit
-            .record(ExecutionAuditRecord::EffortLevelChanged(requested.clone()))
+        self.record_effort_change(change.requested())
             .await
             .map_err(|error| ProviderOperationFailure::new(error, ProviderSessionState::Usable))?;
-        let result = attached.session.set_effort_level(level.clone()).await;
-        let result = match result {
+        let result = match attached.session.set_effort_level(level.clone()).await {
             Ok(()) => {
                 *self
                     .inner
                     .live_effort_level
                     .write()
                     .expect("effort level lock") = Some((permit.provider_generation(), level));
-                self.inner
-                    .audit
-                    .record(ExecutionAuditRecord::EffortLevelChanged(
-                        requested.applied(),
-                    ))
+                self.record_effort_change(change.settled(EffortChangeOutcome::Applied))
                     .await
                     .map_err(|error| {
                         ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
                     })
             }
             Err(failure) => {
-                let recorded = self
-                    .inner
-                    .audit
-                    .record(ExecutionAuditRecord::EffortLevelChanged(requested.failed()))
-                    .await;
-                Err(match recorded {
-                    Ok(()) => failure,
-                    Err(audit) => {
-                        let (error, state) = failure.into_parts();
-                        ProviderOperationFailure::new(
-                            AgentError::MultipleOperationFailures {
-                                first_error: Box::new(error),
-                                subsequent_error: Box::new(audit),
-                            },
-                            state,
-                        )
-                    }
-                })
+                // Refused without being sent, the session as it was; anything
+                // else is a change that may or may not have been made.
+                let outcome = if failure.session_state() == &ProviderSessionState::Usable {
+                    EffortChangeOutcome::Refused
+                } else {
+                    EffortChangeOutcome::Failed
+                };
+                Err(
+                    match self.record_effort_change(change.settled(outcome)).await {
+                        Ok(()) => failure,
+                        Err(audit) => {
+                            let (error, state) = failure.into_parts();
+                            ProviderOperationFailure::new(
+                                AgentError::MultipleOperationFailures {
+                                    first_error: Box::new(error),
+                                    subsequent_error: Box::new(audit),
+                                },
+                                state,
+                            )
+                        }
+                    },
+                )
             }
         };
         drop(permit);
         drop(scheduler);
         result
+    }
+    /// Deliver one effort change record; a sink that panics has not recorded
+    /// it, and says so as [`AgentError::AuditFailure`].
+    async fn record_effort_change(
+        &self,
+        record: EffortLevelChangeRecord,
+    ) -> Result<(), AgentError> {
+        // A sink may panic making its future as well as polling it.
+        let Ok(mut delivery) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.inner
+                .audit
+                .record(ExecutionAuditRecord::EffortLevelChanged(record))
+        })) else {
+            return Err(AgentError::AuditFailure);
+        };
+        std::future::poll_fn(|context| {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                delivery.as_mut().poll(context)
+            })) {
+                Ok(poll) => poll,
+                Err(_) => std::task::Poll::Ready(Err(AgentError::AuditFailure)),
+            }
+        })
+        .await
     }
     /// Load and validate saved evidence without opening a provider context.
     ///

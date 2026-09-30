@@ -47,6 +47,7 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                 "executionId":record.execution_id().as_str(),
                 "mode":submission_mode(record.mode()),
                 "approvalMode":record.approval_mode().map(|mode| mode.as_str()),
+                "effortLevel":record.effort_level().map(|level| level.as_str()),
                 "admissionGeneration":record.admission_generation(),
                 "before":admission_stage(record.before()),
                 "after":admission_stage(record.after()),
@@ -107,6 +108,7 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                 "stage":match record.stage() {
                     EffortChangeStage::Requested => "requested",
                     EffortChangeStage::Applied => "applied",
+                    EffortChangeStage::Refused => "refused",
                     EffortChangeStage::Failed => "failed",
                 },
                 "cause":"caller_requested",

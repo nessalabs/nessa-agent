@@ -469,39 +469,52 @@ impl QueueOrderRecord {
 }
 
 /// Where a caller's live reasoning effort change stands: asked for before
-/// anything is sent, then either verified by the agent or not.
+/// anything is sent, then settled once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EffortChangeStage {
     /// Recorded before the request is sent. Nothing has reached the agent.
     Requested,
     /// The agent reported the requested level back: it is the level in force.
     Applied,
-    /// The request failed or its answer could not be verified; the attachment
-    /// must be retired, and the level in force is not known to have changed.
+    /// The connection refused the change without sending it (a turn or a
+    /// permission still open, or a backend that cannot change it live): the
+    /// level is unchanged and the attachment usable.
+    Refused,
+    /// The request failed or its answer could not be verified: the level in
+    /// force is not known to have changed, and the attachment must be retired.
     Failed,
 }
 
-/// A caller's live change of the reasoning effort level on one attachment
-/// ([`Agent::set_effort_level`](crate::application::agent_execution::agents::Agent::set_effort_level)).
-/// Two records describe one change: [`EffortChangeStage::Requested`] before
-/// the request is sent, and [`EffortChangeStage::Applied`] or
-/// [`EffortChangeStage::Failed`] after, with the same identity, caller and
-/// levels. A change refused before anything is sent records nothing.
+/// How a requested effort change settled; one of the non-requested stages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffortChangeOutcome {
+    /// See [`EffortChangeStage::Applied`].
+    Applied,
+    /// See [`EffortChangeStage::Refused`].
+    Refused,
+    /// See [`EffortChangeStage::Failed`].
+    Failed,
+}
+
+/// One caller's live change of the reasoning effort level on one attachment
+/// ([`Agent::set_effort_level`](crate::application::agent_execution::agents::Agent::set_effort_level)):
+/// the source of both records that describe it, so the two always agree on
+/// identity, caller and levels, and a record can only be the request or one
+/// settlement of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EffortLevelChangeRecord {
+pub struct EffortLevelChange {
     session_id: SessionId,
     attachment_generation: String,
     actor: ActionContext,
     before: Option<EffortLevel>,
     after: EffortLevel,
-    stage: EffortChangeStage,
 }
-impl EffortLevelChangeRecord {
+impl EffortLevelChange {
     /// A change of the local session `session_id`'s attachment
     /// `attachment_generation` (Agent instance and provider generation, as on
     /// [`QueueAdmissionRecord::admission_generation`]) from `before` — `None`
     /// is the agent's own default — to `after`, asked for by `actor`.
-    pub fn requested(
+    pub fn new(
         session_id: SessionId,
         attachment_generation: String,
         actor: ActionContext,
@@ -514,42 +527,55 @@ impl EffortLevelChangeRecord {
             actor,
             before,
             after,
-            stage: EffortChangeStage::Requested,
         }
     }
-    /// The same change, verified by the agent.
-    pub fn applied(&self) -> Self {
-        Self {
-            stage: EffortChangeStage::Applied,
-            ..self.clone()
+    /// The record made before the request is sent.
+    pub fn requested(&self) -> EffortLevelChangeRecord {
+        self.record(EffortChangeStage::Requested)
+    }
+    /// The record of how the request settled.
+    pub fn settled(&self, outcome: EffortChangeOutcome) -> EffortLevelChangeRecord {
+        self.record(match outcome {
+            EffortChangeOutcome::Applied => EffortChangeStage::Applied,
+            EffortChangeOutcome::Refused => EffortChangeStage::Refused,
+            EffortChangeOutcome::Failed => EffortChangeStage::Failed,
+        })
+    }
+    fn record(&self, stage: EffortChangeStage) -> EffortLevelChangeRecord {
+        EffortLevelChangeRecord {
+            change: self.clone(),
+            stage,
         }
     }
-    /// The same change, failed or unverified.
-    pub fn failed(&self) -> Self {
-        Self {
-            stage: EffortChangeStage::Failed,
-            ..self.clone()
-        }
-    }
+}
+
+/// One of the two records of an [`EffortLevelChange`]: the request, or how it
+/// settled. Made only from the change, never assembled field by field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffortLevelChangeRecord {
+    change: EffortLevelChange,
+    stage: EffortChangeStage,
+}
+impl EffortLevelChangeRecord {
     /// Local session whose attachment the change is for.
     pub fn session_id(&self) -> &SessionId {
-        &self.session_id
+        &self.change.session_id
     }
     /// Agent instance and provider generation of that attachment.
     pub fn attachment_generation(&self) -> &str {
-        &self.attachment_generation
+        &self.change.attachment_generation
     }
     /// Host-verified caller attribution.
     pub fn actor(&self) -> &ActionContext {
-        &self.actor
+        &self.change.actor
     }
     /// The level in force before the change; `None` is the agent's own default.
     pub fn before(&self) -> Option<&EffortLevel> {
-        self.before.as_ref()
+        self.change.before.as_ref()
     }
     /// The level asked for.
     pub fn after(&self) -> &EffortLevel {
-        &self.after
+        &self.change.after
     }
     /// Where the change stands.
     pub fn stage(&self) -> EffortChangeStage {

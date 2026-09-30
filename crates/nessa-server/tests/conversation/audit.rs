@@ -80,6 +80,7 @@ fn audit_maps_attachment_and_admission_evidence_without_losing_correlation() {
     assert_eq!(admission["executionId"], "steering");
     assert_eq!(admission["mode"], "steering");
     assert!(admission["approvalMode"].is_null());
+    assert!(admission["effortLevel"].is_null());
     assert!(admission["admissionGeneration"].is_null());
     assert_eq!(admission["before"], "unowned");
     assert_eq!(admission["after"], "owned");
@@ -204,9 +205,11 @@ fn audit_maps_complete_queue_transition_with_priority_and_actor() {
 }
 #[test]
 fn effort_level_change_keeps_target_levels_stage_and_actor() {
-    use nessa_sdk::application::agent_execution::executions::EffortLevelChangeRecord;
+    use nessa_sdk::application::agent_execution::executions::{
+        EffortChangeOutcome, EffortLevelChange,
+    };
     use nessa_sdk::domain::model_metadata::value_objects::EffortLevel;
-    let requested = EffortLevelChangeRecord::requested(
+    let change = EffortLevelChange::new(
         SessionId::new("session").unwrap(),
         "instance:2".into(),
         actor(),
@@ -214,9 +217,10 @@ fn effort_level_change_keeps_target_levels_stage_and_actor() {
         EffortLevel::new("xhigh".into()).unwrap(),
     );
     for (record, stage) in [
-        (requested.clone(), "requested"),
-        (requested.applied(), "applied"),
-        (requested.failed(), "failed"),
+        (change.requested(), "requested"),
+        (change.settled(EffortChangeOutcome::Applied), "applied"),
+        (change.settled(EffortChangeOutcome::Refused), "refused"),
+        (change.settled(EffortChangeOutcome::Failed), "failed"),
     ] {
         let value = record_value(&ExecutionAuditRecord::EffortLevelChanged(record));
         assert_eq!(value["kind"], "effort_level_change");
