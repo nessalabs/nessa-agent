@@ -595,6 +595,14 @@ const checks = {
     docked(short, "a short window")
     kept(short, "a short window", want)
     await record("short", short)
+    // As short as the window goes: the band stays, below the window's home's
+    // own 520px cutoff for its scene (`styles.css`).
+    await resize(480)
+    await settles("shortest, the same shape")
+    const shortest = await measure()
+    docked(shortest, "the shortest window")
+    kept(shortest, "the shortest window", want)
+    await record("shortest", shortest)
     await resize(900)
     await settles("crossing back to the card", "workspace-home-card")
     const back = await measure()

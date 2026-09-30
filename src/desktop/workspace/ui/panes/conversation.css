@@ -82,9 +82,12 @@
   /*
    * The header stays — the picture, or the scene, and the control that
    * changes it — only lower: a band as wide as the pane, its height a share of
-   * the pane's, so a short pane gives it less.
+   * the pane's, so a short pane gives it less. Shown in a pane of any
+   * height: the window's home hides its header below 520px (`styles.css`),
+   * where the full scene would not fit, but the band is made to.
    */
   .workspace-pane-home > .desktop-home:not([data-page]) .desktop-header {
+    display: flex;
     width: 100%;
   }
 

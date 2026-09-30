@@ -310,7 +310,8 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   either way its composer docks at the foot as the conversation's beside it
   (same distance from the foot, inset and height, ± 1.5 px), with the
   greeting on and turned off; the header stays as a band from the top of the
-  pane (72–150px of picture or scene) with its Customize control, and the
+  pane (72–150px of picture or scene) with its Customize control — in the
+  shortest window too, below the window's home's 520px cutoff — and the
   greeting sits under it at the pane's left at the conversation title's size,
   weight and tracking (issue #320); a larger pane keeps the scene and the
   card. A home appearing,
