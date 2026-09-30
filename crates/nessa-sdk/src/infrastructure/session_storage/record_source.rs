@@ -1964,7 +1964,6 @@ mod tests {
             .unwrap();
         assert_eq!(unchanged.position(), view.position());
         assert_eq!(unchanged.snapshot(), view.snapshot());
-        assert_eq!(view.snapshot(), unchanged.snapshot());
         let context = SessionChange::ProviderContext {
             before: ProviderContext::Absent,
             after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),

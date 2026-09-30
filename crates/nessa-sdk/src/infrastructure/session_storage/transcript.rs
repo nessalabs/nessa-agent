@@ -621,44 +621,28 @@ mod tests {
     use crate::{
         application::agent_execution::{
             agents::AgentError,
-            executions::{ExecutionRequest, SubmissionMode},
-            permissions::ActionContext,
+            executions::{ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode},
+            permissions::{ActionContext, CancellationOrigin, PermissionCancellation},
             providers::ProviderIdentity,
             sessions::{
-                CommittedCompleteness, InvocationRecord, SessionChange, StorageShutdownFailure,
-                SubmissionAcknowledgement,
+                CommittedCompleteness, InvocationRecord, QueueHistoryRecord, SessionChange,
+                StorageShutdownFailure, SubmissionAcknowledgement, SNAPSHOT_ACCOUNTING_CALLS,
+                VALIDATION_CALLS,
             },
+            tools::ToolReviewInput,
         },
         domain::agent_execution::{
-            executions::ExecutionId,
+            executions::{ExecutionId, MessageChunk, QueueMutation, MESSAGE_CLONES},
+            permissions::{
+                PermissionCancellationReason, PermissionDecision, PermissionEffect, PermissionId,
+                PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
+                PermissionRequest, PermissionScope,
+            },
             prompts::{PromptText, UserMessage},
-            sessions::{ExecutionSessionId, SessionId},
+            sessions::{ExecutionSession, ExecutionSessionId, SessionId},
+            tools::{ToolCallId, ToolCallUpdate, ToolObservation},
         },
         infrastructure::session_storage::stream_fact::FramedFact,
-    };
-
-    use crate::application::agent_execution::sessions::{
-        SNAPSHOT_ACCOUNTING_CALLS, VALIDATION_CALLS,
-    };
-    use crate::application::agent_execution::{
-        executions::{ExecutionEvent, ExecutionUpdate},
-        permissions::{CancellationOrigin, PermissionCancellation},
-        tools::ToolReviewInput,
-    };
-    use crate::domain::agent_execution::executions::MessageChunk;
-    use crate::domain::agent_execution::executions::MESSAGE_CLONES;
-    use crate::domain::agent_execution::{
-        permissions::{
-            PermissionCancellationReason, PermissionDecision, PermissionEffect, PermissionId,
-            PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
-            PermissionRequest, PermissionScope,
-        },
-        sessions::ExecutionSession,
-        tools::{ToolCallId, ToolCallUpdate, ToolObservation},
-    };
-    use crate::{
-        application::agent_execution::sessions::QueueHistoryRecord,
-        domain::agent_execution::executions::QueueMutation,
     };
     use serde_json::Value;
     use std::panic::AssertUnwindSafe;
