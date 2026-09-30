@@ -7,6 +7,7 @@
  * ```ts
  * store.dispatch(openBeside({ sessionId: "retry" }))
  * store.dispatch(closePane())              // the focused pane
+ * store.dispatch(openWidget({ widget: { plugin: "experiments", id: "run" }, place: "window" }))
  * await store.dispatch(sendMessage({ sessionId: "retry", text: "Run it.", initiator: "agent" }))
  * ```
  */
@@ -27,6 +28,8 @@ import {
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import { consistentIndex, contradicts, type ModelRef } from "../../model/workspace-index"
+import { paneItemOf } from "../../model/pane-item"
+import type { WidgetRef } from "../../model/widget-ref"
 import { fromSource, knownToSource } from "../../model/revision"
 import {
   answering,
@@ -79,6 +82,8 @@ const {
   sessionRemoved,
   draftCreated,
   paneClosed,
+  closeInFront: closedInFront,
+  widgetOpened,
   channelOpened,
   messageSent,
   messageDelivered,
@@ -273,11 +278,14 @@ export function measureRoom(): WorkspaceCommand<PaneRoom | undefined> {
  */
 export function commitDrop({ carried, target, zone, room }: Drop): WorkspaceCommand {
   return (dispatch) => {
-    dispatch(
-      carried.kind === "pane"
-        ? paneMoved({ pane: carried.pane, target, zone, room })
-        : sessionDropped({ sessionId: carried.item, target, zone, room }),
-    )
+    if (carried.kind === "pane") {
+      dispatch(paneMoved({ pane: carried.pane, target, zone, room }))
+      return
+    }
+    // Carried from outside the grid: a session's row. Nothing carries a widget in.
+    const item = paneItemOf(carried.item)
+    if (item?.kind === "session")
+      dispatch(sessionDropped({ sessionId: item.sessionId, target, zone, room }))
   }
 }
 
@@ -334,6 +342,41 @@ export function closePane({ pane }: { pane?: PaneKey } = {}): WorkspaceCommand {
     const panes = getState().workspace.panes
     if (!panes) return
     dispatch(paneClosed({ pane: pane ?? panes.focused, draftId: newId() }))
+  }
+}
+
+/**
+ * Closes what is in front (⌘W): a widget over the panes, back to the panes,
+ * never a pane beneath it; else the focused pane, which, the last, goes
+ * back to a new session's home.
+ */
+export function closeInFront(): WorkspaceCommand {
+  return (dispatch, _getState, { newId }) => {
+    dispatch(closedInFront({ draftId: newId() }))
+  }
+}
+
+/**
+ * Opens a widget (ADR 326): in a pane of its own — beside the pane showing
+ * `origin`, the session the caller says it belongs to, where the room the
+ * page measures allows, else in the focused pane's place — or over the
+ * panes, in the window, replacing any widget there.
+ */
+export function openWidget({
+  widget,
+  place,
+  origin,
+}: {
+  widget: WidgetRef
+  place: "pane" | "window"
+  origin?: string
+}): WorkspaceCommand {
+  return (dispatch, _getState, { measure }) => {
+    dispatch(
+      place === "window"
+        ? showContent({ content: { widget } })
+        : widgetOpened({ widget, origin, room: measure() }),
+    )
   }
 }
 

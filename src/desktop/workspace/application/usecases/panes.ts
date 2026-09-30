@@ -1,9 +1,11 @@
 /**
- * What the person (or an agent) does with panes: open a session in one, open
- * one beside another, drop a session on a pane, move, nudge, resize, close.
- * Each is a pure function of the workspace; the layout rules themselves are
- * the split panes' model (`split-panes/model/pane-layout.ts`,
- * `split-panes/model/pane-sizing.ts`, `split-panes/model/drop.ts`).
+ * What the person (or an agent) does with panes: open a session or a widget
+ * in one, open one beside another, drop a session on a pane, move, nudge,
+ * resize, close. Each is a pure function of the workspace; the layout rules
+ * themselves are the split panes' model (`split-panes/model/pane-layout.ts`,
+ * `split-panes/model/pane-sizing.ts`, `split-panes/model/drop.ts`), which
+ * holds each pane's item as its key (`model/pane-item.ts`). What a pane can
+ * show, and what opening it does, is decided here per kind of item.
  */
 import { fitted as fittedColumn } from "../../../model/side-column"
 import { defaultModel, type ModelRef } from "../../model/workspace-index"
@@ -13,7 +15,6 @@ import {
   nudgePane as nudgeLayoutPane,
   paneByKey,
   paneCount,
-  paneShowing,
   removePane,
   showInPane,
   splitPane,
@@ -34,20 +35,36 @@ import {
   type PaneRoom,
 } from "../../../split-panes/model/pane-sizing"
 import {
+  paneItemKey,
+  sessionItem,
+  widgetItem,
+  type PaneItem,
+} from "../../model/pane-item"
+import type { WidgetRef } from "../../model/widget-ref"
+import {
   channelOf,
   draftOf,
   focusedChannel,
+  itemIn,
   modelForNextTurn,
+  paneShowingItem,
+  paneShowingSession,
   sessionOf,
   toggled,
   withPanes,
   type WorkspaceState,
 } from "../workspace-state"
 
-/** Whether a session id names something a pane can show: a listed session or a draft. */
-function showable(state: WorkspaceState, sessionId: string): boolean {
+/**
+ * Whether a pane can show an item: a session the window has, listed or a
+ * draft; any widget, which the widgets' host draws as it can — ready, not
+ * read yet, gone, or not to be shown (ADR 326).
+ */
+function showable(state: WorkspaceState, item: PaneItem): boolean {
+  if (item.kind === "widget") return true
   return (
-    sessionOf(state, sessionId) !== undefined || draftOf(state, sessionId) !== undefined
+    sessionOf(state, item.sessionId) !== undefined ||
+    draftOf(state, item.sessionId) !== undefined
   )
 }
 
@@ -61,12 +78,12 @@ function discloseChannel(state: WorkspaceState, sessionId: string): WorkspaceSta
 }
 
 /**
- * A session opened: its channel is disclosed. It is marked read by the
+ * An item opened. A session's channel is disclosed; it is marked read by the
  * effect that owns "shown means read" (`adapters/store/effects.ts`), whoever
- * showed it and however.
+ * showed it and however. A widget changes nothing beside its pane.
  */
-function opened(state: WorkspaceState, sessionId: string): WorkspaceState {
-  return discloseChannel(state, sessionId)
+function opened(state: WorkspaceState, item: PaneItem): WorkspaceState {
+  return item.kind === "session" ? discloseChannel(state, item.sessionId) : state
 }
 
 /**
@@ -95,30 +112,77 @@ export function focusPane(state: WorkspaceState, pane: PaneKey): WorkspaceState 
 }
 
 /**
+ * Shows an item in `pane` — the focused pane when none is named — or, shown
+ * already, focuses the pane showing it (`showInPane`, which never shows an
+ * item twice).
+ */
+function openItem(
+  state: WorkspaceState,
+  { item, pane }: { item: PaneItem; pane?: PaneKey },
+): WorkspaceState {
+  const panes = state.panes
+  if (!panes || !showable(state, item)) return state
+  const next = showInPane(panes, pane ?? panes.focused, paneItemKey(item))
+  if (next === panes && !paneShowingItem(panes, item)) return state
+  return withPanes(opened(state, item), next)
+}
+
+/**
  * Opens a session: shows it in `pane` — the focused pane when none is named
- * — or, shown already, focuses the pane showing it (`showInPane`, which
- * never shows a session twice).
+ * — or, shown already, focuses the pane showing it.
  */
 export function openSession(
   state: WorkspaceState,
   { sessionId, pane }: { sessionId: string; pane?: PaneKey },
 ): WorkspaceState {
-  const panes = state.panes
-  if (!panes || !showable(state, sessionId)) return state
-  const next = showInPane(panes, pane ?? panes.focused, sessionId)
-  if (next === panes && !paneShowing(panes, sessionId)) return state
-  return withPanes(opened(state, sessionId), next)
+  return openItem(state, { item: sessionItem(sessionId), pane })
 }
 
-/** Where a new pane showing `sessionId` goes on `side` of `target`, if the room allows. */
+/** Where a new pane showing `item` goes on `side` of `target`, if the room allows. */
 function besideIn(
   panes: PaneLayout,
   target: PaneKey,
   side: Side,
-  sessionId: string,
+  item: string,
   room: PaneRoom | undefined,
 ): Arranged | null {
-  return arrange(panes, splitPane(panes, target, side, sessionId), room)
+  return arrange(panes, splitPane(panes, target, side, item), room)
+}
+
+/**
+ * Opens an item beside a pane, by `openBeside`'s rules: on `side` of
+ * `target`, or with none named to the right, else below; where it will not
+ * fit, in the target's place unless `replace` is false; shown already,
+ * focused where it is.
+ */
+function openItemBeside(
+  state: WorkspaceState,
+  {
+    item,
+    target,
+    side,
+    room,
+    replace = true,
+  }: {
+    item: PaneItem
+    target?: PaneKey
+    side?: Side
+    room: PaneRoom | undefined
+    replace?: boolean
+  },
+): WorkspaceState {
+  const panes = state.panes
+  if (!panes || !showable(state, item)) return state
+  const beside = target ?? panes.focused
+  if (paneShowingItem(panes, item) || !locate(panes, beside))
+    return openItem(state, { item })
+  const key = paneItemKey(item)
+  const placed = side
+    ? besideIn(panes, beside, side, key, room)
+    : (besideIn(panes, beside, "right", key, room) ??
+      besideIn(panes, beside, "bottom", key, room))
+  if (placed) return arranged(opened(state, item), placed)
+  return replace ? openItem(state, { item, pane: beside }) : state
 }
 
 /**
@@ -136,7 +200,7 @@ export function openBeside(
     target,
     side,
     room,
-    replace = true,
+    replace,
   }: {
     sessionId: string
     target?: PaneKey
@@ -145,17 +209,37 @@ export function openBeside(
     replace?: boolean
   },
 ): WorkspaceState {
+  return openItemBeside(state, {
+    item: sessionItem(sessionId),
+    target,
+    side,
+    room,
+    replace,
+  })
+}
+
+/**
+ * Opens a widget in a pane of its own (ADR 326's `pane` place): beside the
+ * pane showing `origin` — the session the caller says the widget belongs
+ * to — by `openBeside`'s rules, or in the focused pane's place when no pane
+ * shows it or there is none. A widget on screen already is focused where it
+ * is.
+ */
+export function openWidget(
+  state: WorkspaceState,
+  {
+    widget,
+    origin,
+    room,
+  }: { widget: WidgetRef; origin?: string; room: PaneRoom | undefined },
+): WorkspaceState {
   const panes = state.panes
-  if (!panes || !showable(state, sessionId)) return state
-  const beside = target ?? panes.focused
-  if (paneShowing(panes, sessionId) || !locate(panes, beside))
-    return openSession(state, { sessionId })
-  const placed = side
-    ? besideIn(panes, beside, side, sessionId, room)
-    : (besideIn(panes, beside, "right", sessionId, room) ??
-      besideIn(panes, beside, "bottom", sessionId, room))
-  if (placed) return arranged(opened(state, sessionId), placed)
-  return replace ? openSession(state, { sessionId, pane: beside }) : state
+  if (!panes) return state
+  const item = widgetItem(widget)
+  const beside = origin === undefined ? undefined : paneShowingSession(panes, origin)
+  return beside
+    ? openItemBeside(state, { item, target: beside.key, room })
+    : openItem(state, { item })
 }
 
 /**
@@ -190,15 +274,16 @@ export function dropSession(
     room,
   }: { sessionId: string; target: PaneKey; zone: Zone; room: PaneRoom | undefined },
 ): WorkspaceState {
-  if (!state.panes || !showable(state, sessionId)) return state
+  const item = sessionItem(sessionId)
+  if (!state.panes || !showable(state, item)) return state
   const outcome = dropOutcome(
     state.panes,
-    { kind: "item", item: sessionId },
+    { kind: "item", item: paneItemKey(item) },
     target,
     zone,
     room,
   )
-  return outcome ? arranged(opened(state, sessionId), outcome) : state
+  return outcome ? arranged(opened(state, item), outcome) : state
 }
 
 /**
@@ -225,7 +310,7 @@ export function createDraft(
   },
 ): WorkspaceState {
   const panes = state.panes
-  if (!panes || showable(state, draftId)) return state
+  if (!panes || showable(state, sessionItem(draftId))) return state
   const home = channelId && channelOf(state, channelId) ? channelId : draftChannel(state)
   // A new session runs on a model; with none to start on, none starts.
   const startsOn = model ?? defaultModel()
@@ -259,7 +344,9 @@ function draftChannel(state: WorkspaceState): string | undefined {
 /**
  * Closes a pane; its neighbour takes the room. The last pane cannot close:
  * showing a conversation, it goes back to a new session's home in the same
- * channel, under `draftId`; showing a home already, nothing changes.
+ * channel, under `draftId`; showing a widget, to a new session's home where
+ * a new session goes (`createDraft`: the channel being looked at, else the
+ * first), on the default model; showing a home already, nothing changes.
  */
 export function closePane(
   state: WorkspaceState,
@@ -268,9 +355,12 @@ export function closePane(
   const panes = state.panes
   if (!panes || !locate(panes, pane)) return state
   if (paneCount(panes) > 1) return withPanes(state, removePane(panes, pane))
-  const shown = paneByKey(panes, pane)?.item
-  const session = shown ? sessionOf(state, shown) : undefined
-  if (!session || !draftId) return state
+  const shown = paneByKey(panes, pane)
+  const item = shown ? itemIn(shown) : null
+  if (!item || !draftId) return state
+  if (item.kind === "widget") return createDraft(state, { draftId, target: pane })
+  const session = sessionOf(state, item.sessionId)
+  if (!session) return state
   return createDraft(state, {
     draftId,
     channelId: session.channelId,

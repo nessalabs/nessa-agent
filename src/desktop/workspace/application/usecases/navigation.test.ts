@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest"
-import { focusedPane, panesOf } from "../../../split-panes/model/pane-layout"
+import { focusedPane } from "../../../split-panes/model/pane-layout"
 import { sessionListLimits, sidebarLimits } from "../../model/window-fit"
-import { roomyGrid, testIndex } from "../../testing"
-import { drawnColumns, initialWorkspace, type WorkspaceState } from "../workspace-state"
+import { roomyGrid, shownBy, shownIn, testIndex } from "../../testing"
 import {
+  drawnColumns,
+  initialWorkspace,
+  overviewShows,
+  sameContent,
+  type WorkspaceState,
+} from "../workspace-state"
+import {
+  closeInFront,
   fitToWindow,
   navigated,
   openChannel,
@@ -18,7 +25,7 @@ import {
   toggleShowAll,
   toggleSidebar,
 } from "./navigation"
-import { closePane, openBeside } from "./panes"
+import { closePane, openBeside, openWidget } from "./panes"
 import { indexLoaded } from "./updates"
 
 const loaded = () =>
@@ -28,7 +35,7 @@ const loaded = () =>
     read: "r",
   })
 
-const shown = (state: WorkspaceState) => panesOf(state.panes!).map((pane) => pane.item)
+const shown = (state: WorkspaceState) => shownIn(state.panes)
 
 describe("choosing what the list shows", () => {
   it("shows a channel's sessions and leaves the panes alone while the list is open", () => {
@@ -79,7 +86,7 @@ describe("opening a channel from the sidebar", () => {
     const state = openChannel(loaded(), { channelId: "empty", draftId: "new" })
     expect(shown(state)).toEqual(["new"])
     expect(state.drafts.new.channelId).toBe("empty")
-    expect(focusedPane(state.panes!).item).toBe("new")
+    expect(shownBy(focusedPane(state.panes!))).toBe("new")
   })
 })
 
@@ -227,5 +234,92 @@ describe("what fills the content region", () => {
     expect(navigated(agents).content).toBe("panes")
     const panes = loaded()
     expect(navigated(panes)).toBe(panes)
+  })
+})
+
+describe("a widget over the panes: the window place", () => {
+  const run = { plugin: "experiments", id: "run" }
+  const over = (state: WorkspaceState, widget = run) =>
+    showContent(state, { content: { widget } })
+
+  it("covers the panes, which stay beneath it as they were", () => {
+    const two = openBeside(loaded(), { sessionId: "c", room: roomyGrid })
+    const shownOver = over(two)
+    expect(shownOver.content).toEqual({ widget: run })
+    expect(shownOver.panes).toBe(two.panes)
+    expect(overviewShows(shownOver, "b")).toBe(false)
+  })
+
+  it("stays when the widget shown is asked for again, compared by value", () => {
+    const shownOver = over(loaded())
+    expect(over(shownOver, { plugin: "experiments", id: "run" })).toBe(shownOver)
+    expect(showContent(shownOver, { content: shownOver.content })).toBe(shownOver)
+  })
+
+  it("replaces the widget shown with another asked for", () => {
+    const other = { plugin: "experiments", id: "other" }
+    expect(over(over(loaded()), other).content).toEqual({ widget: other })
+    const plugin = { plugin: "subagents", id: "run" }
+    expect(over(over(loaded()), plugin).content).toEqual({ widget: plugin })
+  })
+
+  it("holds a widget that is in a pane too", () => {
+    const inPane = openWidget(loaded(), { widget: run, origin: "a", room: roomyGrid })
+    const both = over(inPane)
+    expect(shown(both)).toEqual(["a", "widget experiments/run"])
+    expect(both.content).toEqual({ widget: run })
+  })
+
+  it("is left for the panes by Escape or its close, and by going anywhere else", () => {
+    expect(showContent(over(loaded()), { content: "panes" }).content).toBe("panes")
+    expect(navigated(over(loaded())).content).toBe("panes")
+  })
+
+  it("gives way to the overview on ⌘0, and the overview to it", () => {
+    const agents = showContent(over(loaded()), { content: "agents" })
+    expect(agents.content).toBe("agents")
+    expect(over(agents).content).toEqual({ widget: run })
+  })
+})
+
+describe("the same place in the content region", () => {
+  const run = { plugin: "p", id: "i" }
+  it("is the same view, and a widget the same by plugin and id", () => {
+    expect(sameContent("panes", "panes")).toBe(true)
+    expect(sameContent("panes", "agents")).toBe(false)
+    expect(sameContent("agents", { widget: run })).toBe(false)
+    expect(sameContent({ widget: run }, "panes")).toBe(false)
+    expect(sameContent({ widget: run }, { widget: { plugin: "p", id: "i" } })).toBe(true)
+    expect(sameContent({ widget: run }, { widget: { plugin: "p", id: "j" } })).toBe(false)
+    expect(sameContent({ widget: run }, { widget: { plugin: "q", id: "i" } })).toBe(false)
+  })
+})
+
+describe("closing what is in front (⌘W)", () => {
+  const run = { plugin: "experiments", id: "run" }
+
+  it("closes a widget over the panes, and never a pane beneath it", () => {
+    const two = openBeside(loaded(), { sessionId: "c", room: roomyGrid })
+    const shownOver = showContent(two, { content: { widget: run } })
+    const closed = closeInFront(shownOver, { draftId: "fresh" })
+    expect(closed.content).toBe("panes")
+    expect(closed.panes).toBe(two.panes)
+    expect(closed.drafts).toEqual({})
+  })
+
+  it("closes the focused pane over the panes, and over the overview", () => {
+    const two = openBeside(loaded(), { sessionId: "c", room: roomyGrid })
+    expect(shown(closeInFront(two, { draftId: "fresh" }))).toEqual(["a"])
+    const agents = showContent(two, { content: "agents" })
+    expect(shown(closeInFront(agents, { draftId: "fresh" }))).toEqual(["a"])
+  })
+
+  it("turns the last pane back into a new session's home, as closing it does", () => {
+    const closed = closeInFront(loaded(), { draftId: "fresh" })
+    expect(shown(closed)).toEqual(["fresh"])
+  })
+
+  it("does nothing before the index arrives", () => {
+    expect(closeInFront(initialWorkspace, { draftId: "fresh" })).toBe(initialWorkspace)
   })
 })

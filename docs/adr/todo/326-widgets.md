@@ -11,7 +11,7 @@ drawn when it cannot be — without the window knowing any plugin, and without
 any plugin reaching into the workspace.
 
 - **Date:** 2026-09-30
-- **Status:** proposed
+- **Status:** accepted
 
 ## Context
 

@@ -8,6 +8,7 @@
  */
 import type { SplitPanesDragOptions } from "../../../split-panes"
 import type { DesktopStore } from "../../../store"
+import { paneItemOf } from "../../model/pane-item"
 import { focusedPaneAttribute } from "./focus"
 
 /** How many of a session's latest messages its copy shows: a screen's worth. */
@@ -19,7 +20,10 @@ const latestShown = 12
  * Built detached, from the store and the row pressed.
  */
 export function carriedSession(store: DesktopStore): SplitPanesDragOptions["copyOf"] {
-  return (sessionId, { pressed, picture, focusedPane }) => {
+  return (key, { pressed, picture, focusedPane }) => {
+    // A row carries its session's pane item; nothing else is carried in.
+    const item = paneItemOf(key)
+    const sessionId = item?.kind === "session" ? item.sessionId : ""
     const card = document.createElement("article")
     card.className = "workspace-pane"
     const header = document.createElement("header")

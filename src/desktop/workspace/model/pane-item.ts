@@ -1,0 +1,66 @@
+/**
+ * What a pane shows: a session (listed, or a new one not started), or a
+ * widget (ADR 326). Split panes know an item only as an opaque string, and
+ * treat two panes with one string as the same pane (`paneShowing`), so this
+ * is the one codec between the two:
+ *
+ * ```text
+ *   { kind: "session", sessionId }        ──▶  "s:" + sessionId
+ *   { kind: "widget", widget: { plugin, id } } ──▶  "w:" + encodeId(plugin) + ":" + encodeId(id)
+ * ```
+ *
+ * The prefix tells the kinds apart, and an encoded part never holds a `:`
+ * (`model/id-encoding.ts`), so the encoding is one-to-one — two items share a
+ * key exactly when they are equal — and canonical: `paneItemOf` reads back
+ * only a key `paneItemKey` writes (`pane-item.test.ts`).
+ *
+ * The key is a branded type only `paneItemKey` makes, so no reader builds one
+ * by hand; reading one back is `paneItemOf`, the only thing here that takes a
+ * key.
+ */
+import { decodeId, encodeId } from "../../model/id-encoding"
+import type { WidgetRef } from "./widget-ref"
+
+export type PaneItem =
+  | { readonly kind: "session"; readonly sessionId: string }
+  | { readonly kind: "widget"; readonly widget: WidgetRef }
+
+declare const paneItemBrand: unique symbol
+/** A pane item as split panes hold it; made only by `paneItemKey`. */
+export type PaneItemKey = string & { readonly [paneItemBrand]: true }
+
+const sessionPrefix = "s:"
+const widgetPrefix = "w:"
+
+/** The item showing a session, listed or new. */
+export function sessionItem(sessionId: string): PaneItem {
+  return { kind: "session", sessionId }
+}
+
+/** The item showing a widget. */
+export function widgetItem(widget: WidgetRef): PaneItem {
+  return { kind: "widget", widget }
+}
+
+/** The key split panes hold for `item`. */
+export function paneItemKey(item: PaneItem): PaneItemKey {
+  const key =
+    item.kind === "session"
+      ? `${sessionPrefix}${item.sessionId}`
+      : `${widgetPrefix}${encodeId(item.widget.plugin)}:${encodeId(item.widget.id)}`
+  return key as PaneItemKey
+}
+
+/**
+ * The item a pane's key names, or `null` for a string `paneItemKey` did not
+ * write — which no pane holds, but a drag may carry from outside the grid.
+ */
+export function paneItemOf(key: string): PaneItem | null {
+  if (key.startsWith(sessionPrefix)) return sessionItem(key.slice(sessionPrefix.length))
+  if (!key.startsWith(widgetPrefix)) return null
+  const parts = key.slice(widgetPrefix.length).split(":")
+  if (parts.length !== 2) return null
+  const plugin = decodeId(parts[0])
+  const id = decodeId(parts[1])
+  return plugin === null || id === null ? null : widgetItem({ plugin, id })
+}

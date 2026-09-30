@@ -16,10 +16,10 @@ import {
 import {
   paneCount,
   panesOf,
-  paneShowing,
   removePane,
   singlePane,
 } from "../../../split-panes/model/pane-layout"
+import { paneItemKey, sessionItem } from "../../model/pane-item"
 import { forgotten, remembered, removedAt } from "../../model/retention"
 import { fromSource, knownToSource, supersedes } from "../../model/revision"
 import type { Transcript } from "../../model/transcript"
@@ -30,6 +30,8 @@ import {
   forgetSession,
   listedSessions,
   modelForNextTurn,
+  paneShowingSession,
+  sessionIn,
   sessionOf,
   shownIds,
   withPanes,
@@ -118,7 +120,7 @@ function removeSession(
   if (!session) return state
   const removed = forgetSession(state, sessionId)
   const panes = state.panes
-  const showing = panes && paneShowing(panes, sessionId)
+  const showing = panes && paneShowingSession(panes, sessionId)
   if (!panes || !showing) return removed
   if (paneCount(panes) > 1) return withPanes(removed, removePane(panes, showing.key))
   const restarted = createDraft(removed, {
@@ -226,12 +228,12 @@ export function indexLoaded(
     view: { channelId },
     tree: { ...state.tree, expandedChannels },
   }
-  if (opening) return withPanes(opened, singlePane(opening.id))
+  if (opening) return withPanes(opened, singlePane(paneItemKey(sessionItem(opening.id))))
   const model = defaultModel()
   if (!channelId || !model) return opened
   return withPanes(
     { ...opened, drafts: { [draftId]: { id: draftId, channelId, model } } },
-    singlePane(draftId),
+    singlePane(paneItemKey(sessionItem(draftId))),
   )
 }
 
@@ -390,7 +392,8 @@ export function transcriptRetried(
 function sessionsInPanes(state: WorkspaceState): SessionSummary[] {
   if (!state.panes) return []
   return panesOf(state.panes).flatMap((pane) => {
-    const session = sessionOf(state, pane.item)
+    const sessionId = sessionIn(pane)
+    const session = sessionId === undefined ? undefined : sessionOf(state, sessionId)
     return session ? [session] : []
   })
 }

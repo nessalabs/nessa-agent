@@ -21,6 +21,25 @@ import type {
 } from "./model/workspace-index"
 import type { Transcript } from "./model/transcript"
 import { emptyTranscript } from "./model/transcript"
+import { panesOf, type Pane, type PaneLayout } from "../split-panes/model/pane-layout"
+import { paneItemOf } from "./model/pane-item"
+
+/**
+ * What a pane shows, as a test reads it: a session's id, or a widget as
+ * `widget <plugin>/<id>` — read through the one codec, as every reader is.
+ */
+export function shownBy(pane: Pane): string {
+  const item = paneItemOf(pane.item)
+  if (!item) throw new Error(`a pane holds a key the codec did not write: ${pane.item}`)
+  return item.kind === "session"
+    ? item.sessionId
+    : `widget ${item.widget.plugin}/${item.widget.id}`
+}
+
+/** What the panes show, in reading order. */
+export function shownIn(panes: PaneLayout | null): string[] {
+  return panes ? panesOf(panes).map(shownBy) : []
+}
 
 export const opus = { provider: "anthropic", modelId: "claude-opus-5" } as const
 export const astra = { provider: "openai", modelId: "gpt-6-astra" } as const

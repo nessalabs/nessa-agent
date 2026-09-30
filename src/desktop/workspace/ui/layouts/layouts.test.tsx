@@ -11,9 +11,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { isMac } from "../../../adapters/platform"
 import { chordEvent } from "../../../model/keyboard"
 import { ClockProvider } from "../../adapters/dom/clock"
-import { focusPane, loadWorkspace, openBeside } from "../../adapters/store/commands"
+import {
+  focusPane,
+  loadWorkspace,
+  openBeside,
+  openWidget,
+  showContent,
+} from "../../adapters/store/commands"
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
-import { settle, testStore } from "../../testing"
+import { settle, shownBy, testStore } from "../../testing"
 import { SessionsInSidebar } from "./sessions-in-sidebar"
 import { workspaceShortcuts } from "./shortcuts"
 import { ThreeColumns } from "./three-columns"
@@ -106,7 +112,10 @@ function outcome(store: ReturnType<typeof testStore>) {
     panes: state.panes ? layoutShape(state.panes) : "",
     focused: state.panes?.focused,
     shown: state.panes?.columns.flatMap((column) =>
-      column.panes.map((pane) => (pane.item.startsWith("id-") ? "new" : pane.item)),
+      column.panes.map((pane) => {
+        const shown = shownBy(pane)
+        return shown.startsWith("id-") ? "new" : shown
+      }),
     ),
     sidebar: state.chrome.sidebar,
     content: state.content,
@@ -271,6 +280,39 @@ describe("⌘0 and the sidebar's Agents entry always open the overview, with not
       await act(async () => press("showOverview"))
       expect(store.getState().workspace.content).toBe("agents")
       // A place, as the entry is: asked again, it stays.
+      await act(async () => press("showOverview"))
+      expect(store.getState().workspace.content).toBe("agents")
+      await act(async () => root.unmount())
+    })
+})
+
+describe("a widget over the panes keeps the sidebar's choice, and ⌘W closes it alone", () => {
+  const run = { plugin: "experiments", id: "run" }
+  for (const [name, Layout] of [
+    ["three columns", ThreeColumns],
+    ["sessions in the sidebar", SessionsInSidebar],
+  ] as const)
+    it(`in ${name}`, async () => {
+      const { store, root } = await render(Layout)
+      const current = () =>
+        [...host.querySelectorAll('.workspace-sidebar [aria-current="page"]')].map(
+          (row) => row.textContent?.trim(),
+        )
+      const overPanes = current()
+      expect(overPanes).not.toEqual([])
+      await act(async () => store.dispatch(openWidget({ widget: run, place: "window" })))
+      // The channel and the focused session stay chosen beside it.
+      expect(current()).toEqual(overPanes)
+      await act(async () => store.dispatch(showContent({ content: "agents" })))
+      expect(current()).toEqual([expect.stringMatching(/^Agents/)])
+
+      await act(async () => store.dispatch(openWidget({ widget: run, place: "window" })))
+      const panes = store.getState().workspace.panes
+      await act(async () => press("closePane"))
+      expect(store.getState().workspace.content).toBe("panes")
+      expect(store.getState().workspace.panes).toBe(panes)
+
+      await act(async () => store.dispatch(openWidget({ widget: run, place: "window" })))
       await act(async () => press("showOverview"))
       expect(store.getState().workspace.content).toBe("agents")
       await act(async () => root.unmount())

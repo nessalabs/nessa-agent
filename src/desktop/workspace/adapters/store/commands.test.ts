@@ -13,6 +13,7 @@ import {
   fakeSource,
   keptFilter,
   settle,
+  shownIn,
   summary,
   testIndex,
   testStore,
@@ -54,7 +55,12 @@ import {
   setComposerText,
   toggleSessionList,
   toggleSidebar,
+  closeInFront,
+  commitDrop,
+  openWidget,
 } from "./commands"
+import { workspaceSplitPanes } from "./split-panes-source"
+import { paneItemKey, sessionItem, widgetItem } from "../../model/pane-item"
 
 async function ready(source = fakeSource()) {
   const store = testStore(source)
@@ -64,7 +70,7 @@ async function ready(source = fakeSource()) {
 }
 
 const shown = (store: ReturnType<typeof testStore>) =>
-  panesOf(store.getState().workspace.panes!).map((pane) => pane.item)
+  shownIn(store.getState().workspace.panes)
 
 const outboxOf = (store: ReturnType<typeof testStore>, sessionId: string) =>
   store.getState().workspace.outbox[sessionId] ?? []
@@ -1318,6 +1324,172 @@ describe("the Agents overview is a place in the sidebar, left by going anywhere 
     store.dispatch(toggleSidebar())
     store.dispatch(toggleSessionList())
     expect(store.getState().workspace.content).toBe("agents")
+  })
+})
+
+describe("a widget over the panes is left as the overview is, but for ⌘W", () => {
+  const run = { plugin: "experiments", id: "run" }
+  const ways = {
+    "Escape or its close": showContent({ content: "panes" }),
+    "the channel already listed": selectChannel({ channelId: "desktop" }),
+    "a session": openSession({ sessionId: "c" }),
+    "a session beside": openBeside({ sessionId: "c" }),
+    "a channel from the tree": openChannel({ channelId: "gateway" }),
+    "a new session": newSession(),
+    "another pane": focusPane({ pane: 1 }),
+    "a widget in a pane": openWidget({ widget: run, place: "pane", origin: "a" }),
+    "closing a pane": closePane(),
+    "closing what is in front (⌘W)": closeInFront(),
+    "moving a pane": nudgePane({ pane: 1, direction: "right" }),
+    "evening the panes out": equalizePanes(),
+    "resizing panes": resizePanes({
+      edge: { axis: "x", column: 0 },
+      fraction: 0.6,
+      pair: 1,
+    }),
+  }
+  for (const [way, action] of Object.entries(ways))
+    it(`goes back to the panes on ${way}`, async () => {
+      const { store } = await ready()
+      store.dispatch(openBeside({ sessionId: "c", side: "right" }))
+      store.dispatch(
+        resizePanes({ edge: { axis: "x", column: 0 }, fraction: 0.4, pair: 1 }),
+      )
+      store.dispatch(openWidget({ widget: run, place: "window" }))
+      expect(store.getState().workspace.content).toEqual({ widget: run })
+      store.dispatch(action as Parameters<typeof store.dispatch>[0])
+      expect(store.getState().workspace.content).toBe("panes")
+    })
+
+  it("closes on ⌘W, leaving every pane beneath it as it was", async () => {
+    const { store } = await ready()
+    store.dispatch(openBeside({ sessionId: "c", side: "right" }))
+    const panes = store.getState().workspace.panes
+    store.dispatch(openWidget({ widget: run, place: "window" }))
+    store.dispatch(closeInFront())
+    expect(store.getState().workspace.panes).toBe(panes)
+    expect(store.getState().workspace.content).toBe("panes")
+    // Over the panes, ⌘W is the focused pane's again.
+    store.dispatch(closeInFront())
+    expect(shown(store)).toEqual(["a"])
+  })
+
+  it("closes the focused pane on ⌘W over the overview, as 238 has it", async () => {
+    const { store } = await ready()
+    store.dispatch(openBeside({ sessionId: "c", side: "right" }))
+    store.dispatch(showContent({ content: "agents" }))
+    store.dispatch(closeInFront())
+    expect(shown(store)).toEqual(["a"])
+    expect(store.getState().workspace.content).toBe("panes")
+  })
+
+  it("goes to the overview on ⌘0", async () => {
+    const { store } = await ready()
+    store.dispatch(openWidget({ widget: run, place: "window" }))
+    store.dispatch(showContent({ content: "agents" }))
+    expect(store.getState().workspace.content).toBe("agents")
+  })
+
+  it("stays when asked for again, and when a change to the panes changes nothing", async () => {
+    const { store } = await ready()
+    store.dispatch(openWidget({ widget: run, place: "window" }))
+    const state = store.getState().workspace
+    store.dispatch(
+      openWidget({ widget: { plugin: "experiments", id: "run" }, place: "window" }),
+    )
+    expect(store.getState().workspace).toBe(state)
+    const panes = state.panes
+    if (!panes) throw new Error("no panes")
+    store.dispatch(nudgePane({ pane: panes.focused, direction: "left" }))
+    store.dispatch(closePane({ pane: 999 }))
+    store.dispatch(toggleSidebar())
+    expect(store.getState().workspace.panes).toBe(panes)
+    expect(store.getState().workspace.content).toEqual({ widget: run })
+  })
+
+  it("replaces the widget it shows with another opened there", async () => {
+    const { store } = await ready()
+    const other = { plugin: "subagents", id: "a" }
+    store.dispatch(openWidget({ widget: run, place: "window" }))
+    store.dispatch(openWidget({ widget: other, place: "window" }))
+    expect(store.getState().workspace.content).toEqual({ widget: other })
+  })
+
+  it("is aimed at by no drag, as the overview is not", async () => {
+    const { store } = await ready()
+    const source = workspaceSplitPanes(store)
+    expect(source.targetable()).toBe(true)
+    store.dispatch(openWidget({ widget: run, place: "window" }))
+    expect(source.targetable()).toBe(false)
+  })
+})
+
+describe("a widget in a pane, as a person or an agent opens one", () => {
+  const run = { plugin: "experiments", id: "run" }
+
+  it("opens beside its origin's pane, in the room the page measures", async () => {
+    const { store } = await ready()
+    store.dispatch(openWidget({ widget: run, place: "pane", origin: "a" }))
+    expect(shown(store)).toEqual(["a", "widget experiments/run"])
+  })
+
+  it("is in a pane and over the panes at once", async () => {
+    const { store } = await ready()
+    store.dispatch(openWidget({ widget: run, place: "pane", origin: "a" }))
+    store.dispatch(openWidget({ widget: run, place: "window" }))
+    expect(shown(store)).toEqual(["a", "widget experiments/run"])
+    expect(store.getState().workspace.content).toEqual({ widget: run })
+  })
+
+  it("reads no conversation and marks nothing read for it", async () => {
+    const { store, source } = await ready()
+    const calls = source.calls.length
+    store.dispatch(openWidget({ widget: run, place: "pane" }))
+    await settle()
+    expect(source.calls.slice(calls)).toEqual([])
+  })
+})
+
+describe("what a drag carries into the grid", () => {
+  it("holds a listed session's row by its pane item, and nothing else", async () => {
+    const { store } = await ready()
+    const source = workspaceSplitPanes(store)
+    expect(source.holds(paneItemKey(sessionItem("d")))).toBe(true)
+    expect(source.holds(paneItemKey(sessionItem("missing")))).toBe(false)
+    expect(source.holds(paneItemKey(sessionItem("constructor")))).toBe(false)
+    expect(source.holds(paneItemKey(widgetItem({ plugin: "p", id: "d" })))).toBe(false)
+    // A bare session id is no pane item: nothing reads it as one.
+    expect(source.holds("d")).toBe(false)
+  })
+
+  it("drops a session's row, and nothing that is not one", async () => {
+    const { store } = await ready()
+    const target = store.getState().workspace.panes!.focused
+    const room = { width: 1100, height: 800, spare: 0 }
+    store.dispatch(
+      commitDrop({
+        carried: {
+          kind: "item",
+          item: paneItemKey(widgetItem({ plugin: "p", id: "d" })),
+        },
+        target,
+        zone: "center",
+        room,
+      }),
+    )
+    store.dispatch(
+      commitDrop({ carried: { kind: "item", item: "d" }, target, zone: "center", room }),
+    )
+    expect(shown(store)).toEqual(["a"])
+    store.dispatch(
+      commitDrop({
+        carried: { kind: "item", item: paneItemKey(sessionItem("d")) },
+        target,
+        zone: "center",
+        room,
+      }),
+    )
+    expect(shown(store)).toEqual(["d"])
   })
 })
 

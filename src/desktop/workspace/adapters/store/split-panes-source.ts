@@ -7,6 +7,7 @@
  */
 import type { SplitPanesSource } from "../../../split-panes"
 import type { DesktopStore } from "../../../store"
+import { paneItemOf } from "../../model/pane-item"
 import { commitDrop, equalizePanes, fitPanes, measureRoom, resizePanes } from "./commands"
 
 export function workspaceSplitPanes(store: DesktopStore): SplitPanesSource {
@@ -16,7 +17,13 @@ export function workspaceSplitPanes(store: DesktopStore): SplitPanesSource {
     subscribe: (onChange) => store.subscribe(onChange),
     // What the content region shows, and the side columns: a drag read both.
     watched: () => [workspace().content, workspace().chrome],
-    holds: (sessionId) => Object.hasOwn(workspace().sessions, sessionId),
+    // Carried from outside the grid: a listed session's row, by its pane item.
+    holds: (key) => {
+      const item = paneItemOf(key)
+      return (
+        item?.kind === "session" && Object.hasOwn(workspace().sessions, item.sessionId)
+      )
+    },
     // Only panes a person can see are aimed at: none under the Agents overview.
     targetable: () => workspace().content === "panes",
     measure: () => store.dispatch(measureRoom()),

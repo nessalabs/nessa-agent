@@ -4,7 +4,7 @@
  * open it beside the focused pane (⌘-click), and its context menu.
  */
 import { shallowEqual } from "react-redux"
-import { paneShowing } from "../../split-panes/model/pane-layout"
+import { paneShowingSession } from "../application/workspace-state"
 import { knownToSource } from "../model/revision"
 import {
   archiveSession,
@@ -66,7 +66,7 @@ export function SessionMenuItems({ sessionId }: { sessionId: string }) {
     const panes = selectPanes(state)
     return {
       count: selectPaneCount(state),
-      pane: panes ? paneShowing(panes, sessionId)?.key : undefined,
+      pane: panes ? paneShowingSession(panes, sessionId)?.key : undefined,
     }
   }, shallowEqual)
   const shown = pane !== undefined

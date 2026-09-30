@@ -47,6 +47,7 @@ import {
   entry,
   modelForNextTurn,
   focusedChannel,
+  sessionIn,
   type Answer,
   type Chrome,
   type WorkspaceState,
@@ -69,8 +70,6 @@ export const selectSessionListChosen = (state: Root) =>
 export const selectColumnCount = (state: Root) =>
   state.workspace.panes?.columns.length ?? 1
 export const selectView = (state: Root): SessionView => state.workspace.view
-/** What fills the content region: the panes, or the Agents overview. */
-export const selectContentView = (state: Root) => state.workspace.content
 /** Whether the Agents overview fills the content region. */
 export const selectOverviewOpen = (state: Root) => state.workspace.content === "agents"
 /** The session the overview's peek shows, as chosen in its list. */
@@ -175,16 +174,21 @@ export const selectPaneCount = (state: Root) =>
 export const selectFocusedPaneKey = (state: Root): PaneKey | null =>
   state.workspace.panes ? focusedPane(state.workspace.panes).key : null
 
-export const selectFocusedSessionId = (state: Root): string | null =>
-  state.workspace.panes ? focusedPane(state.workspace.panes).item : null
+/** The session in the focused pane; none while it shows a widget. */
+export const selectFocusedSessionId = (state: Root): string | null => {
+  const panes = state.workspace.panes
+  return (panes && sessionIn(focusedPane(panes))) ?? null
+}
 
-/** The session a pane shows. */
-export const selectPaneSession = (state: Root, pane: PaneKey): string | null =>
-  state.workspace.panes ? (paneByKey(state.workspace.panes, pane)?.item ?? null) : null
+/** The session a pane shows; none when it shows a widget. */
+export const selectPaneSession = (state: Root, pane: PaneKey): string | null => {
+  const shown = state.workspace.panes && paneByKey(state.workspace.panes, pane)
+  return (shown && sessionIn(shown)) ?? null
+}
 
-/** The sessions on screen, in reading order. */
+/** The sessions the panes show, in reading order. */
 export const selectShownSessionIds = createSelector([selectPanes], (panes) =>
-  panes ? panesOf(panes).map((pane) => pane.item) : [],
+  panes ? panesOf(panes).flatMap((pane) => sessionIn(pane) ?? []) : [],
 )
 
 export const selectStatusCounts = createSelector([listed], statusCounts)

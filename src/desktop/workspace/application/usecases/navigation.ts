@@ -18,23 +18,27 @@ import {
   drawnColumns,
   keepShownFailures,
   listedSessions,
+  sameContent,
   sessionOf,
   toggled,
   type ContentView,
   type WorkspaceState,
 } from "../workspace-state"
-import { createDraft, openBeside, openSession } from "./panes"
+import { closePane, createDraft, openBeside, openSession } from "./panes"
 
 /**
- * Shows the panes or the Agents overview in the content region. Asking for
- * the one already shown leaves it: the sidebar's Agents entry is a place to
- * go, like a channel, not a switch.
+ * Shows the panes, the Agents overview or a widget in the content region.
+ * Asking for the one already shown leaves it — a widget compared by value
+ * (`sameContent`): the sidebar's Agents entry is a place to go, like a
+ * channel, not a switch. A widget asked for over another replaces it.
  */
 export function showContent(
   state: WorkspaceState,
   { content }: { content: ContentView },
 ): WorkspaceState {
-  return state.content === content ? state : keepShownFailures({ ...state, content })
+  return sameContent(state.content, content)
+    ? state
+    : keepShownFailures({ ...state, content })
 }
 
 /**
@@ -47,6 +51,21 @@ export function showContent(
  */
 export function navigated(state: WorkspaceState): WorkspaceState {
   return showContent(state, { content: "panes" })
+}
+
+/**
+ * Closing what is in front (⌘W): a widget over the panes goes, back to the
+ * panes, and no pane beneath it closes; otherwise — over the panes, or over
+ * the overview (ADR 238) — the focused pane closes (`closePane`, `draftId`
+ * for the last).
+ */
+export function closeInFront(
+  state: WorkspaceState,
+  { draftId }: { draftId?: string },
+): WorkspaceState {
+  if (typeof state.content === "object") return navigated(state)
+  if (!state.panes) return state
+  return closePane(state, { pane: state.panes.focused, draftId })
 }
 
 /**

@@ -27,7 +27,9 @@
  * ```
  *
  * An arrow points the way data flows. The panes are split panes, a module of
- * the window's the workspace wraps (`../split-panes`, ADR 253): the window
+ * the window's the workspace wraps (`../split-panes`, ADR 253), each showing
+ * an opaque item the workspace writes and reads through one codec
+ * (`model/pane-item.ts`: a session, or a widget, ADR 326): the window
  * builds one source over the store, which the grid and the drag share, and
  * the drag's options from `split-panes-drag.ts`; the module reads the layout
  * through the source and changes it only through the commands here.

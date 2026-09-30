@@ -14,8 +14,11 @@ import {
   focusedPane,
   panesOf,
   paneShowing,
+  type Pane,
   type PaneLayout,
 } from "../../split-panes/model/pane-layout"
+import { paneItemKey, paneItemOf, sessionItem, type PaneItem } from "../model/pane-item"
+import { sameWidget, type WidgetRef } from "../model/widget-ref"
 import { keptConversations, retention, type Removal } from "../model/retention"
 import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overview/filter"
 import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
@@ -135,10 +138,10 @@ export interface WorkspaceState {
   readonly panes: PaneLayout | null
   readonly view: SessionView
   /**
-   * What fills the content region: the panes, or the Agents overview over
-   * them — the overview's open state. Going anywhere else, or changing the
-   * panes, is going back to the panes (`usecases/navigation.ts`,
-   * `navigated`).
+   * What fills the content region: the panes, the Agents overview over
+   * them — the overview's open state — or a widget over them (the window
+   * place, ADR 326). Going anywhere else, or changing the panes, is going
+   * back to the panes (`usecases/navigation.ts`, `navigated`).
    */
   readonly content: ContentView
   /** What the Agents overview shows while open: its filter, the group shown alone, and the session chosen. */
@@ -147,8 +150,19 @@ export interface WorkspaceState {
   readonly tree: Tree
 }
 
-/** The content region's view: the chat panes, or every agent at a glance. */
-export type ContentView = "panes" | "agents"
+/**
+ * The content region's view: the chat panes; every agent at a glance, over
+ * the session list and the panes; or one widget over the panes alone, the
+ * session list in reach beside it. The panes stay as they were beneath
+ * either, so a widget can be in a pane and over the panes at once.
+ */
+export type ContentView = "panes" | "agents" | { readonly widget: WidgetRef }
+
+/** Whether two content views are the same place: a widget compared by value (`sameWidget`). */
+export function sameContent(a: ContentView, b: ContentView): boolean {
+  if (typeof a === "string" || typeof b === "string") return a === b
+  return sameWidget(a.widget, b.widget)
+}
 
 /** The Agents overview's own state: kept while it is closed, for when it opens again. */
 export interface OverviewState {
@@ -233,9 +247,33 @@ export function withSession(
   return { ...state, sessions: { ...state.sessions, [session.id]: session } }
 }
 
-/** The sessions the panes show, drafts among them. */
+/** What a pane shows, read through the one codec (`model/pane-item.ts`). */
+export function itemIn(pane: Pane): PaneItem | null {
+  return paneItemOf(pane.item)
+}
+
+/** The session a pane shows, draft or not; none when it shows a widget. */
+export function sessionIn(pane: Pane): string | undefined {
+  const item = itemIn(pane)
+  return item?.kind === "session" ? item.sessionId : undefined
+}
+
+/** The pane showing `item`, if one does. */
+export function paneShowingItem(panes: PaneLayout, item: PaneItem): Pane | undefined {
+  return paneShowing(panes, paneItemKey(item))
+}
+
+/** The pane showing a session, draft or not, if one does. */
+export function paneShowingSession(
+  panes: PaneLayout,
+  sessionId: string,
+): Pane | undefined {
+  return paneShowingItem(panes, sessionItem(sessionId))
+}
+
+/** The sessions the panes show, drafts among them; a widget's pane shows none. */
 function paneIds(panes: PaneLayout | null): string[] {
-  return panes ? panesOf(panes).map((pane) => pane.item) : []
+  return panes ? panesOf(panes).flatMap((pane) => sessionIn(pane) ?? []) : []
 }
 
 /**
@@ -262,7 +300,7 @@ export function overviewShows(state: WorkspaceState, sessionId: string): boolean
  */
 export function onScreen(state: WorkspaceState, sessionId: string): boolean {
   return (
-    (state.panes !== null && paneShowing(state.panes, sessionId) !== undefined) ||
+    (state.panes !== null && paneShowingSession(state.panes, sessionId) !== undefined) ||
     overviewShows(state, sessionId)
   )
 }
@@ -390,10 +428,11 @@ export function toggled(
   return include ? [...ids, id] : ids.filter((other) => other !== id)
 }
 
-/** The channel of the session in the focused pane, draft or not. */
+/** The channel of the session in the focused pane, draft or not; none when it shows a widget. */
 export function focusedChannel(state: WorkspaceState): string | undefined {
   if (!state.panes) return undefined
-  const sessionId = focusedPane(state.panes).item
+  const sessionId = sessionIn(focusedPane(state.panes))
+  if (sessionId === undefined) return undefined
   return sessionOf(state, sessionId)?.channelId ?? draftOf(state, sessionId)?.channelId
 }
 

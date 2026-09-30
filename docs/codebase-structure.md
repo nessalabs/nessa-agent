@@ -214,7 +214,10 @@ writing the full defaults on first launch is buying.
 - The desktop window's workspace is its own vertical, nested in the window:
   `src/desktop/workspace/` with `model/` (index, conversations,
   revisions, how the window fits the side columns, failures, retention,
-  session groups, the new-session lifecycle), `application/` (the
+  session groups, the new-session lifecycle, and what a pane shows —
+  `pane-item.ts`, a session or a widget, with the one codec to split panes'
+  opaque key, and `widget-ref.ts`, held there until the widgets vertical of
+  [ADR 326](adr/todo/326-widgets.md) exists), `application/` (the
   `WorkspaceSource` port and pure use cases over the workspace's state),
   `adapters/` (the Redux slice, commands, effects, typed hooks, selectors and
   the split panes' source in `store/`; the in-memory source in `in-memory/`;
@@ -227,7 +230,10 @@ writing the full defaults on first launch is buying.
   (`src/desktop/dependencies.ts`). How the window's keys are matched and
   written on this platform is the window's, not the workspace's:
   `src/desktop/model/keyboard.ts`, with the platform read once in
-  `src/desktop/adapters/platform.ts`. Views select what they show — a pane its own
+  `src/desktop/adapters/platform.ts`. So is the one id encoder
+  (`src/desktop/model/id-encoding.ts`), which writes any string, a lone
+  surrogate too, in an alphabet a separator is never part of; whatever joins
+  ids into one string encodes them through it. Views select what they show — a pane its own
   session, a row its own summary — and the architecture check refuses a view
   that selects the whole workspace. Settings is `src/desktop/settings/`
   (its map is `index.ts`), a typed catalogue (`model/`) rendered generically

@@ -26,7 +26,8 @@ import {
   toggleSidebar,
 } from "../store/commands"
 import { panesOf } from "../../../split-panes/model/pane-layout"
-import { fakeSource, settle, testStore } from "../../testing"
+import { fakeSource, settle, shownBy, shownIn, testStore } from "../../testing"
+import { paneItemKey, sessionItem } from "../../model/pane-item"
 import { restAfter } from "../../../split-panes/model/drop"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import { measureWorkspace } from "./measure"
@@ -69,7 +70,7 @@ function Grid() {
   const panes = store.getState().workspace.panes
   return (
     <div ref={root} data-workspace data-sidebar="closed">
-      <div data-drag-item="d">Session d</div>
+      <div data-drag-item={paneItemKey(sessionItem("d"))}>Session d</div>
       <nav className="workspace-sidebar" />
       <section className="workspace-list" />
       <div className="split-panes-grid" data-split-grid>
@@ -77,14 +78,14 @@ function Grid() {
           <article
             key={pane.key}
             data-pane-key={pane.key}
-            aria-label={`Session ${pane.item}`}
+            aria-label={`Session ${shownBy(pane)}`}
           >
             <header
               className="workspace-pane-header"
               data-split-keeps="top-left"
               data-drag-pane={pane.key}
             >
-              {pane.item}
+              {shownBy(pane)}
               <button type="button" aria-label="Close Pane" />
             </header>
             <div className="workspace-pane-body" data-split-through>
@@ -92,7 +93,7 @@ function Grid() {
                 <div className="workspace-transcript-inner">
                   {[0, 1, 2, 3, 4].map((part) => (
                     <p key={part} data-part={part}>
-                      {`${pane.item} part ${part}`}
+                      {`${shownBy(pane)} part ${part}`}
                     </p>
                   ))}
                 </div>
@@ -229,7 +230,7 @@ it("carries the copy under the pointer, gliding to its centre, and commits the z
   pointer("pointerup", 827, 400)
   await frames()
   const after = store.getState().workspace.panes
-  expect((after ? panesOf(after) : []).map((pane) => pane.item)).toEqual(["c", "a"])
+  expect(shownIn(after)).toEqual(["c", "a"])
   nothingLeft()
   await act(async () => root.unmount())
 })
@@ -318,7 +319,7 @@ it("reads the page only as the press begins: beginning, previewing, dropping and
     expect(reads).toBe(again)
     expect(measured).toBe(1)
     const after = store.getState().workspace.panes
-    expect((after ? panesOf(after) : []).map((pane) => pane.item)).toEqual(["c", "a"])
+    expect(shownIn(after)).toEqual(["c", "a"])
   } finally {
     window.getComputedStyle = style
     for (const [name, descriptor] of kept)
@@ -514,7 +515,7 @@ it("commits the zone on the page when let go in another before the frame drew it
   pointer("pointerup", 1090, 400)
   await frames()
   const after = store.getState().workspace.panes
-  expect((after ? panesOf(after) : []).map((pane) => pane.item)).toEqual(["c", "a"])
+  expect(shownIn(after)).toEqual(["c", "a"])
   nothingLeft()
   await act(async () => root.unmount())
 })
@@ -923,7 +924,7 @@ it("draws the copy at the slot it would land in, and the panes at the rects the 
   pointer("pointerup", 827, 30)
   await frames()
   const after = store.getState().workspace.panes
-  expect((after ? panesOf(after) : []).map((each) => each.item)).toEqual(["a", "c"])
+  expect(shownIn(after)).toEqual(["a", "c"])
   for (const each of host.querySelectorAll<HTMLElement>("[data-pane-key]")) {
     expect([each.style.width, each.style.height]).toEqual(["", ""])
     expect(each.hasAttribute(marks.dragCorner)).toBe(false)
@@ -1015,10 +1016,9 @@ it("ends at once on a change: a command key, a resize, the store, Settings", asy
     pointer("pointerup", 827, 400)
     await frames()
     const sessions = () => {
-      const panes = store.getState().workspace.panes
-      return panes ? panesOf(panes).map((pane) => pane.item) : []
+      return shownIn(store.getState().workspace.panes)
     }
-    const was = before.panes ? panesOf(before.panes).map((pane) => pane.item) : []
+    const was = shownIn(before.panes)
     // What the change did, it did; the drop did nothing on top of it: the
     // panes as they were, or — closed by the change — the one left.
     expect(sessions(), name).toEqual(sessions().length === was.length ? was : ["a"])
@@ -1044,7 +1044,7 @@ it("keeps carrying when only focus moves: pressing a pane focuses it, and that i
   pointer("pointerup", 827, 400)
   await frames()
   const after = store.getState().workspace.panes
-  expect((after ? panesOf(after) : []).map((pane) => pane.item)).toEqual(["c", "a"])
+  expect(shownIn(after)).toEqual(["c", "a"])
   await act(async () => root.unmount())
 })
 
