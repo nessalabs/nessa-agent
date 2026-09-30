@@ -39,6 +39,7 @@ import {
   sessionItem,
   widgetItem,
   type PaneItem,
+  type PaneItemKey,
 } from "../../model/pane-item"
 import type { WidgetRef } from "../../model/widget-ref"
 import {
@@ -143,7 +144,7 @@ function besideIn(
   panes: PaneLayout,
   target: PaneKey,
   side: Side,
-  item: string,
+  item: PaneItemKey,
   room: PaneRoom | undefined,
 ): Arranged | null {
   return arrange(panes, splitPane(panes, target, side, item), room)
@@ -254,8 +255,8 @@ export function canOpenBeside(
   const panes = state.panes
   if (!panes) return false
   const beside = target ?? panes.focused
-  // A stand-in id no pane shows, so only the room decides.
-  const probe = "\u0000beside"
+  // A stand-in no pane is expected to show — a widget of no plugin — so only the room decides.
+  const probe = paneItemKey(widgetItem({ plugin: "", id: "beside" }))
   const sides: readonly Side[] = side ? [side] : ["right", "bottom"]
   return sides.some((each) => besideIn(panes, beside, each, probe, room) !== null)
 }

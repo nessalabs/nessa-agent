@@ -546,7 +546,9 @@ describe("closing the last pane when it shows a widget", () => {
     expect(closePane(bare, { pane, draftId: "fresh" })).toBe(bare)
     // Offered exactly where it does something, whatever the last pane shows.
     const drafted = createDraft(loaded(), { draftId: "home" })
-    for (const state of [loaded(), shown, bare, drafted]) {
+    // A conversation whose channel the window no longer holds starts over where a new session goes.
+    const unheld = { ...loaded(), channels: [] }
+    for (const state of [loaded(), shown, bare, drafted, unheld]) {
       const last = state.panes!.focused
       const closed = closePane(state, { pane: last, draftId: "fresh" })
       expect(canClosePane(state, last)).toBe(closed !== state)
