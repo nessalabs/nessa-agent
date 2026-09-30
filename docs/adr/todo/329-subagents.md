@@ -72,24 +72,28 @@ drawn apart from the state and says nothing about it.
 
 **Identity.** A subagent's id is unique within its conversation by construction:
 composition joins sources (the in-memory sample and the experiments adapter
-today, the gateway's later) into one `SubagentSource`, given as a `Record` from
-each source's key to the source, so a key cannot repeat, and the join makes
-every id its source's key, `:`, and the source's own id through the desktop's
-one id encoder (326). Two sources cannot produce one id, and each source keeps
-its own ids unique for a conversation — the experiments adapter through 333's
-validation of agent ids; the join drops a repeated id from one source when it
-takes in that source's update — keeping the first copy in the source's order —
-and logs it as a fault once per update, so reading the join on every render
-neither logs again nor changes which copy is shown. The join answers `unread`
-for a conversation while any of its sources has not read it, then `ready` with
-every source's subagents, so a list is never shown short.
+today, the gateway's later) into one `SubagentSource` through a builder,
+`joinSubagentSources([{ key, source }, …])`, which raises a composition error on
+a repeated key before any lookup is built (a `Record` would silently keep the
+last), and the join makes every id its source's key, `:`, and the source's own
+id through the desktop's one id encoder (326). Two sources cannot produce one
+id, and each source keeps its own ids unique for a conversation — the
+experiments adapter through 333's validation of agent ids; the join drops a
+repeated id from one source when it takes in that source's update — keeping the
+first copy in the source's order — and logs it as a fault once per update, so
+reading the join on every render neither logs again nor changes which copy is
+shown. The join answers `unread` for a conversation while any source that has
+not failed has not read it; then `ready` with every readable source's subagents,
+and the keys of any that `failed`, so the panel shows what it has and says,
+under the list, that some subagents could not be read — a failed source never
+holds the others back, and a list is never shown short without saying so.
 
 **`SubagentSource`** is the port: `forSession(sessionId)`, answering from what
 the source holds now (a view may read it on every render) `{ kind: "unread" }`
 until the source has read that conversation's subagents, then `{ kind: "ready",
-subagents }`, and `subscribe`.
-It has no `send`: a subagent's conversation is read, not written to, until a
-source can deliver.
+subagents }`, or `{ kind: "failed", reason }` when it cannot (a typed reason;
+the source logs the fault) — and `subscribe`. It has no `send`: a subagent's
+conversation is read, not written to, until a source can deliver.
 
 **Where it is seen.** The panel is a widget (326), plugin `subagents`, whose id
 is the conversation's session id, in a pane beside the conversation or over the
@@ -100,7 +104,9 @@ exports for it (#330); `unread` while the workspace has not read its index or
 the source has not read the conversation; otherwise `ready`, titled "Subagents"
 with the conversation as its `origin` — one without subagents shows an empty
 state. Which subagent it shows is this vertical's state, one per conversation
-(`sessionId → subagentId | null`). The joined id is built in one place,
+(`sessionId → subagentId | null`); when the source's next answer no longer lists
+the selected subagent, the selection clears and the panel returns to the list,
+or to its empty state (#331 tests it). The joined id is built in one place,
 `joinedSubagentId(sourceKey, sourceId)`, which this vertical exports; each
 source declares its own key (the experiments adapter's is its own constant,
 which composition registers it under), so no other vertical rebuilds the rule.

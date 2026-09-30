@@ -138,17 +138,17 @@ own detail. A baseline is *scored* once it has a score on the primary split;
 until then the views say it is being scored, and a guardrail limited relative to
 it reads "not measured yet" until the baseline has that measure.
 
-**Validation** is at the source's adapter, where external data is parsed, and
-it is the one place the experiment's integrity is checked: the definition is
+**Validation** is at the source's adapter, where external data is parsed, and it
+is the one place the experiment's integrity is checked: the definition is
 coherent, ids are unique and every reference resolves (lineage cannot loop,
 because a run's parent is the baseline or an earlier run), times and counts are
-consistent, and `bestSoFar` names exactly the kept runs in the order they
-became best. #334 lists the rules and tests each one both ways. An experiment that fails is not
-drawn in part: the widget answers `unshowable` — "Can't show this here", 326's
-table — and the adapter logs what was wrong as a fault, as the workspace's
-`failureReason` does. What validation returns is a branded `Experiment` that
-only `validateExperiment` makes, so a view cannot be handed one it did not
-check.
+consistent, and `bestSoFar` names exactly the kept runs in the order they became
+best. #334 lists the rules and tests each one both ways. An experiment that
+fails is not drawn in part: the widget answers `unshowable` — "Can't show this
+here", 326's table — and the adapter logs what was wrong as a fault, as the
+workspace's `failureReason` does. What validation returns is a branded
+`Experiment` that only `validateExperiment` makes, so a view cannot be handed
+one it did not check.
 
 **Sections follow the data.** No areas, no exploration map or area cards; no
 agents, no swarm; no `cases` or `change` on a run, no such block in its
@@ -210,15 +210,16 @@ run's whole change; it answers `opened`, or `refused` with a typed reason shown
 where it was clicked. One hook, `useOpenFile`, owns the table below — the latest
 request per target (a file's row, or the whole-change control) and the four
 seconds — and `ChangeView` takes its state and callbacks as props. Both it and
-the adapter's bound run on an injected timer, `after(ms, run) → cancel`, the
+the adapter's bound run on an injected timer, `after(ms, run) → cancel`: the
 `Schedule` shape composition already builds for the in-memory workspace source
-(`dependencies.ts`), which
-#334 lifts into `WorkspaceDependencies` and `ClockProvider` beside `now`,
-overridable as `now` is — not a second timer. Nothing is retried, and every call
-settles: the adapter gives each request one answer — the editor's, or, when none
-comes within ten seconds, `refused` with the reason `noAnswer` ("No answer from
-the editor"), which says only that, since the file may yet open; an answer
-arriving after that is dropped.
+(`dependencies.ts`), which #334 moves to a desktop-shared contract
+(`src/desktop/model/schedule.ts`) so composition hands the one implementation to
+the workspace and to experiments' own dependencies — the workspace's contract
+does not grow for experiments. Nothing is retried, and every call settles: the
+adapter gives each request one answer — the editor's, or, when none comes within
+ten seconds, `refused` with the reason `noAnswer` ("No answer from the editor"),
+which says only that, since the file may yet open; an answer arriving after that
+is dropped.
 
 | At a target | Event | Next | Shown |
 | --- | --- | --- | --- |
@@ -235,23 +236,26 @@ arriving after that is dropped.
 ### The port, the places, the preview
 
 **`ExperimentSource`**: `get(id)` answering `{ kind: "ready", experiment } | {
-kind: "unread" } | { kind: "missing" } | { kind: "invalid" }` — which the
-plugin's `useWidget` maps to 326's `ready`, `unread`, `missing` and `unshowable`
-— `forSession(sessionId)` answering `{ kind: "unread" }` until the source has
-read that conversation, then `{ kind: "ready", ids }` — exactly the experiments
-whose `sessionId` is that conversation, derived from them in the adapter, not
-held beside them (a conversation may run several, or none) — `subscribe`, and
-`openFile`. An experiment appears as a widget (326), plugin `experiments`, in
-all three places — its card inline, a pane beside the conversation, over the
-panes. Navigation — the view, the trail of runs followed, scroll and focus on
-opening one — is one hook, `useExperimentNavigation`, which registers 326's
-`onEscape` while the trail is not empty; the views only render. Experiments are
-offered only when their own preview is on under Settings › Advanced ›
-Experimental — a window preference with its entry in the settings catalogue,
-read through its hook as 329's is. A preview decides only whether the window
-offers a way in (`docs/codebase-structure.md`): off, no experiment's card, pane
-or window view is offered, and a widget already open answers `off`; the swarm's
-subagents are subagents, offered or not by subagents' own preview.
+kind: "unread" } | { kind: "missing" } | { kind: "invalid" } | { kind: "failed",
+reason }` — which the plugin's `useWidget` maps to 326's `ready`, `unread`,
+`missing`, and `unshowable` for the last two (the adapter logs why) —
+`forSession(sessionId)` answering `{ kind: "unread" }` until the source has read
+that conversation, then `{ kind: "ready", ids }`, or `{ kind: "failed", reason
+}` (the swarm adapter then reports its subagent source failed for that
+conversation, 329) — exactly the experiments whose `sessionId` is that
+conversation, derived from them in the adapter, not held beside them (a
+conversation may run several, or none) — `subscribe`, and `openFile`. An
+experiment appears as a widget (326), plugin `experiments`, in all three places
+— its card inline, a pane beside the conversation, over the panes. Navigation —
+the view, the trail of runs followed, scroll and focus on opening one — is one
+hook, `useExperimentNavigation`, which registers 326's `onEscape` while the
+trail is not empty; the views only render. Experiments are offered only when
+their own preview is on under Settings › Advanced › Experimental — a window
+preference with its entry in the settings catalogue, read through its hook as
+329's is. A preview decides only whether the window offers a way in
+(`docs/codebase-structure.md`): off, no experiment's card, pane or window view
+is offered, and a widget already open answers `off`; the swarm's subagents are
+subagents, offered or not by subagents' own preview.
 
 **Samples**, under the preview: the checkout-support hill-climb (percent, up,
 train and test, a cost guardrail relative to the baseline, five areas, a
