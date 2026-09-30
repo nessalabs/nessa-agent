@@ -2,7 +2,7 @@
 
 #![deny(missing_docs)]
 
-use super::{paths::SessionPaths, record_writer::RecordWriter};
+use super::{paths::SessionPaths, record_writer::RecordWriter, terminal_discovery::TerminalCache};
 use crate::{
     application::agent_execution::sessions::storage::{
         SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage, SessionStorageLease,
@@ -38,7 +38,7 @@ pub struct RecordStorage {
     options: SqliteOptions,
     runtime: OnceCell<Runtime<SqliteStore>>,
     leases: Arc<Mutex<HashSet<String>>>,
-    pub(super) terminal_cache: Arc<super::terminal_discovery::TerminalCache>,
+    pub(super) terminal_cache: Arc<TerminalCache>,
     #[cfg(test)]
     lose_reset_reply: Arc<AtomicBool>,
 }

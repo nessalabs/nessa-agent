@@ -1,5 +1,6 @@
 //! Real SQLite bounded discovery, lifetime, refusal and work-accounting evidence.
 
+use super::super::stream_fact::{self, FramedFact};
 use super::*;
 use crate::application::agent_execution::sessions::SessionStorage;
 use crate::{
@@ -7,9 +8,12 @@ use crate::{
     domain::agent_execution::sessions::SessionId,
     infrastructure::session_storage::RecordStorage,
 };
-use event_stream::{EventSink, StreamId};
-use nessa_sync::replication::domain::{Id, PageRequest};
-use std::sync::atomic::Ordering;
+use event_stream::{
+    AdvanceRetentionFloor, EnableRetryPolicy, EventSink, IncarnationId, LifecycleAction,
+    LifecycleOperationId, LifecycleRequest, Payload, RetentionOperationId, StreamId,
+};
+use nessa_sync::replication::domain::{Id, PageRequest, Scope};
+use std::{env, panic, process::Command, sync::atomic::Ordering, thread};
 
 fn sid(value: &str) -> Id {
     Id::new(value).unwrap()
@@ -22,7 +26,7 @@ async fn head(storage: &RecordStorage, id: &SessionId) -> RecordReadStatus<u64> 
         .unwrap();
     let scope = source.scope(sid("receiver"), sid("epoch"));
     tokio::task::spawn_blocking(move || {
-        std::thread::spawn(move || source.bounded_head(&scope).unwrap())
+        thread::spawn(move || source.bounded_head(&scope).unwrap())
             .join()
             .unwrap()
     })
@@ -37,7 +41,7 @@ async fn append_fact(
 ) -> u64 {
     let runtime = storage.runtime().await.unwrap();
     let start = runtime.bounds(stream).await.unwrap().tail.offset + 1;
-    let fact = super::super::stream_fact::FramedFact {
+    let fact = FramedFact {
         key: FactKey::new(
             if ordinal == 0 {
                 FactKind::SessionOpen
@@ -50,7 +54,7 @@ async fn append_fact(
         .unwrap(),
         body: vec![b'x'; bytes],
     };
-    let frames = super::super::stream_fact::frame_fact(&fact, start).unwrap();
+    let frames = stream_fact::frame_fact(&fact, start).unwrap();
     for frame in frames {
         runtime.append(stream, frame).await.unwrap();
     }
@@ -106,7 +110,7 @@ async fn recreated_sources_resume_bounded_large_fact_validation_and_pages_do_not
         .unwrap();
     let scope = source.scope(sid("receiver"), sid("epoch"));
     let read = tokio::task::spawn_blocking(move || {
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let mut after = 0;
             while after < target {
                 let request = PageRequest {
@@ -237,11 +241,11 @@ async fn partial_tail_preserves_hash_until_seal_and_unknown_target_stays_invalid
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    let fact = super::super::stream_fact::FramedFact {
+    let fact = FramedFact {
         key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
         body: vec![b'x'; 2 * 1024 * 1024],
     };
-    let frames = super::super::stream_fact::frame_fact(&fact, 1).unwrap();
+    let frames = stream_fact::frame_fact(&fact, 1).unwrap();
     for frame in frames.iter().take(frames.len() - 1) {
         runtime.append(&stream, frame.clone()).await.unwrap();
     }
@@ -268,7 +272,7 @@ async fn partial_tail_preserves_hash_until_seal_and_unknown_target_stays_invalid
         max_record_bytes: 128,
     };
     let result = tokio::task::spawn_blocking(move || {
-        std::thread::spawn(move || source.bounded_page(&request))
+        thread::spawn(move || source.bounded_page(&request))
             .join()
             .unwrap()
     })
@@ -313,7 +317,7 @@ async fn abandoned_answer_retains_progress_and_cold_cache_repeats_only_bounded_s
     source.abandon_bounded_head_answer(scope);
     // Final drop on a non-entered thread joins admitted physical work even
     // though its reply consumer has gone away.
-    tokio::task::spawn_blocking(move || std::thread::spawn(move || drop(source)).join().unwrap())
+    tokio::task::spawn_blocking(move || thread::spawn(move || drop(source)).join().unwrap())
         .await
         .unwrap();
     let first = storage
@@ -375,7 +379,7 @@ async fn occupied_stream_and_full_active_cache_refuse_without_replacement_work()
                 .terminal_cache
                 .acquire(&StreamKey {
                     id: StreamId::new(format!("occupied-{index}")).unwrap(),
-                    incarnation: event_stream::IncarnationId([0; 16]),
+                    incarnation: IncarnationId([0; 16]),
                 })
                 .unwrap(),
         );
@@ -417,7 +421,7 @@ async fn invalid_scope_and_page_input_do_not_check_out_or_publish_progress() {
         .unwrap()
         .unwrap();
     let scope = source.scope(sid("receiver"), sid("epoch"));
-    let wrong = nessa_sync::replication::domain::Scope::new(
+    let wrong = Scope::new(
         scope.receiver().clone(),
         sid("foreign"),
         scope.stream().clone(),
@@ -434,7 +438,7 @@ async fn invalid_scope_and_page_input_do_not_check_out_or_publish_progress() {
         max_record_bytes: 128,
     };
     let failures = tokio::task::spawn_blocking(move || {
-        std::thread::spawn(move || (source.bounded_head(&wrong), source.bounded_page(&request)))
+        thread::spawn(move || (source.bounded_head(&wrong), source.bounded_page(&request)))
             .join()
             .unwrap()
     })
@@ -461,10 +465,6 @@ async fn invalid_scope_and_page_input_do_not_check_out_or_publish_progress() {
 
 #[tokio::test]
 async fn cached_old_incarnation_and_pruned_prefix_are_typed_refusals() {
-    use event_stream::{
-        AdvanceRetentionFloor, EnableRetryPolicy, LifecycleAction, LifecycleOperationId,
-        LifecycleRequest, RetentionOperationId,
-    };
     let directory = tempfile::tempdir().unwrap();
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
     let id = SessionId::new("conversation").unwrap();
@@ -490,7 +490,7 @@ async fn cached_old_incarnation_and_pruned_prefix_are_typed_refusals() {
         .await
         .unwrap();
     let refusal = tokio::task::spawn_blocking(move || {
-        std::thread::spawn(move || old.bounded_head(&old_scope))
+        thread::spawn(move || old.bounded_head(&old_scope))
             .join()
             .unwrap()
     })
@@ -528,7 +528,7 @@ async fn cached_old_incarnation_and_pruned_prefix_are_typed_refusals() {
         .unwrap();
     let scope = source.scope(sid("receiver"), sid("epoch"));
     let refusal = tokio::task::spawn_blocking(move || {
-        std::thread::spawn(move || source.bounded_head(&scope))
+        thread::spawn(move || source.bounded_head(&scope))
             .join()
             .unwrap()
     })
@@ -548,11 +548,11 @@ async fn cached_partial_prefix_accepts_abort_then_later_fact_and_refuses_corrupt
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    let fact = super::super::stream_fact::FramedFact {
+    let fact = FramedFact {
         key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
         body: vec![b'x'; 2 * 1024 * 1024],
     };
-    let frames = super::super::stream_fact::frame_fact(&fact, 1).unwrap();
+    let frames = stream_fact::frame_fact(&fact, 1).unwrap();
     for frame in frames.iter().take(20) {
         runtime.append(&stream, frame.clone()).await.unwrap();
     }
@@ -562,19 +562,16 @@ async fn cached_partial_prefix_accepts_abort_then_later_fact_and_refuses_corrupt
             break;
         }
     }
-    let aborted = super::super::stream_fact::abort_partial_fact(
-        runtime,
-        &stream,
-        &Cursor::new(stream.clone(), 0),
-    )
-    .await
-    .unwrap()
-    .offset;
+    let aborted =
+        stream_fact::abort_partial_fact(runtime, &stream, &Cursor::new(stream.clone(), 0))
+            .await
+            .unwrap()
+            .offset;
     assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(aborted));
     let valid = append_fact(&storage, &stream, 1, 8).await;
     assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(valid));
-    let mut invalid = super::super::stream_fact::frame_fact(
-        &super::super::stream_fact::FramedFact {
+    let mut invalid = stream_fact::frame_fact(
+        &FramedFact {
             key: FactKey::new(FactKind::ProviderContext, None, 2).unwrap(),
             body: vec![b'x'; 8],
         },
@@ -582,7 +579,7 @@ async fn cached_partial_prefix_accepts_abort_then_later_fact_and_refuses_corrupt
     )
     .unwrap()
     .remove(0);
-    invalid.payload = event_stream::Payload::copy_from_slice(&[99]);
+    invalid.payload = Payload::copy_from_slice(&[99]);
     runtime.append(&stream, invalid).await.unwrap();
     let mut source = storage
         .record_source(&id, sid("origin"))
@@ -591,7 +588,7 @@ async fn cached_partial_prefix_accepts_abort_then_later_fact_and_refuses_corrupt
         .unwrap();
     let scope = source.scope(sid("receiver"), sid("epoch"));
     let refusal = tokio::task::spawn_blocking(move || {
-        std::thread::spawn(move || source.bounded_head(&scope))
+        thread::spawn(move || source.bounded_head(&scope))
             .join()
             .unwrap()
     })
@@ -627,8 +624,8 @@ async fn maximum_accounted_corrupt_record_is_bounded_and_publishes_no_progress()
         .create_stream(&StreamId::new(id.as_str()).unwrap())
         .await
         .unwrap();
-    let mut invalid = super::super::stream_fact::frame_fact(
-        &super::super::stream_fact::FramedFact {
+    let mut invalid = stream_fact::frame_fact(
+        &FramedFact {
             key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
             body: vec![b'x'; 8],
         },
@@ -636,9 +633,9 @@ async fn maximum_accounted_corrupt_record_is_bounded_and_publishes_no_progress()
     )
     .unwrap()
     .remove(0);
-    invalid.payload = event_stream::Payload::copy_from_slice(&[]);
+    invalid.payload = Payload::copy_from_slice(&[]);
     let payload = vec![99; 1024 * 1024 - invalid.accounted_bytes()];
-    invalid.payload = event_stream::Payload::copy_from_slice(&payload);
+    invalid.payload = Payload::copy_from_slice(&payload);
     assert_eq!(invalid.accounted_bytes(), 1024 * 1024);
     runtime.append(&stream, invalid).await.unwrap();
     let mut source = storage
@@ -648,7 +645,7 @@ async fn maximum_accounted_corrupt_record_is_bounded_and_publishes_no_progress()
         .unwrap();
     let scope = source.scope(sid("receiver"), sid("epoch"));
     let refusal = tokio::task::spawn_blocking(move || {
-        std::thread::spawn(move || source.bounded_head(&scope))
+        thread::spawn(move || source.bounded_head(&scope))
             .join()
             .unwrap()
     })
@@ -669,7 +666,7 @@ async fn maximum_accounted_corrupt_record_is_bounded_and_publishes_no_progress()
 
 #[test]
 fn cold_restart_child() {
-    let Ok(root) = std::env::var("NESSA_315_RESTART_ROOT") else {
+    let Ok(root) = env::var("NESSA_315_RESTART_ROOT") else {
         return;
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -718,7 +715,7 @@ async fn restarted_process_revalidates_durable_stream_in_bounded_steps() {
     storage.shutdown().await.unwrap();
     drop(storage);
     let output = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(std::env::current_exe().unwrap())
+        Command::new(env::current_exe().unwrap())
             .args([
                 "--exact",
                 "infrastructure::session_storage::terminal_discovery::tests::cold_restart_child",
@@ -746,7 +743,7 @@ fn cache_bounds_entries_and_exclusive_owner_returns_progress_after_unwind() {
     let cache = Arc::new(TerminalCache::default());
     let key = |index| StreamKey {
         id: StreamId::new(format!("stream-{index}")).unwrap(),
-        incarnation: event_stream::IncarnationId([0; 16]),
+        incarnation: IncarnationId([0; 16]),
     };
     let first = key(0);
     let owner = cache.acquire(&first).unwrap();
@@ -765,7 +762,7 @@ fn cache_bounds_entries_and_exclusive_owner_returns_progress_after_unwind() {
             .any(|entry| entry.key == first),
         "active owner cannot be evicted"
     );
-    let result = std::panic::catch_unwind(move || {
+    let result = panic::catch_unwind(move || {
         let _owner = owner;
         panic!("physical operation failed")
     });
@@ -787,11 +784,11 @@ async fn byte_limited_lookahead_returns_only_prefix_then_validates_or_refuses() 
             .unwrap();
         // Sixteen candidate frames fit the count cap, but fifteen pieces plus
         // their start consume the byte cap before the next piece can return.
-        let fact = super::super::stream_fact::FramedFact {
+        let fact = FramedFact {
             key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
             body: vec![b'x'; 2 * 1024 * 1024],
         };
-        let mut frames = super::super::stream_fact::frame_fact(&fact, 1).unwrap();
+        let mut frames = stream_fact::frame_fact(&fact, 1).unwrap();
         let first_count = frames[16..]
             .iter()
             .scan(0usize, |bytes, frame| {
@@ -808,10 +805,10 @@ async fn byte_limited_lookahead_returns_only_prefix_then_validates_or_refuses() 
             .sum();
         assert!(returned + lookahead <= 2 * super::super::MAX_STORED_RECORD_BYTES);
         if malformed {
-            frames[16 + first_count].payload = event_stream::Payload::copy_from_slice(&[99]);
+            frames[16 + first_count].payload = Payload::copy_from_slice(&[99]);
             // Preserve the original large charge so this malformed frame remains
             // a lookahead candidate instead of fitting the first returned page.
-            frames[16 + first_count].payload = event_stream::Payload::copy_from_slice(&vec![
+            frames[16 + first_count].payload = Payload::copy_from_slice(&vec![
                 99;
                 lookahead
                     - (frames[16 + first_count].accounted_bytes()
@@ -847,7 +844,7 @@ async fn byte_limited_lookahead_returns_only_prefix_then_validates_or_refuses() 
             .unwrap();
         let scope = source.scope(sid("receiver"), sid("epoch"));
         let result = tokio::task::spawn_blocking(move || {
-            std::thread::spawn(move || source.bounded_head(&scope))
+            thread::spawn(move || source.bounded_head(&scope))
                 .join()
                 .unwrap()
         })

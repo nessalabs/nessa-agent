@@ -13,6 +13,8 @@ use event_stream::{
     infrastructure::SqliteStore, Cursor, EventReader, PageLimits, Runtime, StreamKey,
 };
 use nessa_sync::replication::application::SourceError;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -37,9 +39,9 @@ pub enum RecordReadStatus<T> {
 #[derive(Default)]
 pub(super) struct TerminalCache {
     #[cfg(test)]
-    returned_records: std::sync::atomic::AtomicUsize,
+    returned_records: AtomicUsize,
     #[cfg(test)]
-    returned_bytes: std::sync::atomic::AtomicUsize,
+    returned_bytes: AtomicUsize,
     entries: Mutex<VecDeque<Entry>>,
 }
 struct Entry {
@@ -134,14 +136,14 @@ impl TerminalCache {
             }
             #[cfg(test)]
             self.returned_records
-                .fetch_add(page.records.len(), std::sync::atomic::Ordering::SeqCst);
+                .fetch_add(page.records.len(), Ordering::SeqCst);
             #[cfg(test)]
             self.returned_bytes.fetch_add(
                 page.records
                     .iter()
                     .map(|record| record.event.accounted_bytes())
                     .sum::<usize>(),
-                std::sync::atomic::Ordering::SeqCst,
+                Ordering::SeqCst,
             );
             for record in page.records {
                 if record.cursor.stream != *key {
