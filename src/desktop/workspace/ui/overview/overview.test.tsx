@@ -880,6 +880,19 @@ describe("the peek's story is bounded, and scrolls from the keyboard beneath its
 })
 
 describe("a row keeps the keyboard as its session changes group", () => {
+  // The window has focus, as the person's does; jsdom says it has only while
+  // an element does. A test that sends it away says so.
+  let windowFocused = true
+  beforeEach(() => {
+    windowFocused = true
+    vi.spyOn(document, "hasFocus").mockImplementation(() => windowFocused)
+  })
+  afterEach(() => vi.restoreAllMocks())
+  /** A click on plain text: a press, then focus to the page's body. */
+  const clickAway = (from: HTMLElement) => {
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }))
+    from.blur()
+  }
   const heading = (sessionId: string) =>
     row(sessionId)?.closest(".agents-overview-group")?.querySelector("h2")?.textContent
   it("follows its session to its new row, and the arrows walk the list from there", async () => {
@@ -948,9 +961,8 @@ describe("a row keeps the keyboard as its session changes group", () => {
     store.dispatch(followWorkspace())
     await open()
     await act(async () => row("run")?.focus())
-    // A click on plain text takes focus to the page's body.
     await act(async () => {
-      ;(document.activeElement as HTMLElement).blur()
+      clickAway(document.activeElement as HTMLElement)
       await settle(1)
     })
     expect(document.activeElement).toBe(document.body)
@@ -962,16 +974,14 @@ describe("a row keeps the keyboard as its session changes group", () => {
     expect(document.activeElement).toBe(document.body)
   })
 
-  it("gives focus back when a click away and the row's removal land in the same tick", async () => {
+  it("leaves it there when a click away and the row's removal land in the same tick", async () => {
     const { source, store } = await mount()
     store.dispatch(followWorkspace())
     await open()
     const before = row("run") as HTMLElement
     await act(async () => before.focus())
-    // Chromium tells a removed element it is losing focus just as a click away
-    // does, so within one tick the two cannot be told apart: the removal wins.
     act(() => {
-      before.blur()
+      clickAway(before)
       source.emit({
         kind: "session",
         session: summary("run", "desktop", 600, "idle", {
@@ -982,6 +992,52 @@ describe("a row keeps the keyboard as its session changes group", () => {
     })
     await act(async () => settle(1))
     expect(heading("run")).toBe("Earlier")
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it("keeps it on a row moved within its group", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    // Two working sessions: "second", the later, listed above "run".
+    await moveOn(source, "second", "Notarize", "running")
+    await open()
+    const orderIn = () =>
+      [...host.querySelectorAll<HTMLElement>(".agents-row")].map(
+        (each) => each.dataset.overviewItem,
+      )
+    expect(orderIn()).toEqual(["second", "run"])
+    const focused = row("second") as HTMLElement
+    await act(async () => focused.focus())
+    // "run" streams on and is now the latest: the rows swap, and the page
+    // moves "second" — the focused row, the same element — below it.
+    await act(async () => {
+      source.emit({
+        kind: "session",
+        session: summary("run", "desktop", 5000, "running", {
+          title: "Split panes",
+          revision: 3,
+        }),
+      })
+      await settle(10)
+    })
+    expect(orderIn()).toEqual(["run", "second"])
+    expect(row("second")).toBe(focused)
+    expect(document.activeElement).toBe(focused)
+  })
+
+  it("gives it back when the window returns, if it was lost while away", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await act(async () => row("run")?.focus())
+    windowFocused = false
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(document.activeElement).toBe(document.body)
+    windowFocused = true
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"))
+      await settle(1)
+    })
     expect(document.activeElement).toBe(row("run"))
   })
 
@@ -1020,25 +1076,6 @@ describe("a row keeps the keyboard as its session changes group", () => {
       story?.remove()
       await settle(1)
     })
-    expect(document.activeElement).toBe(row("run"))
-  })
-
-  it("keeps the element through another app taking the window, and gives focus back after", async () => {
-    const { source, store } = await mount()
-    store.dispatch(followWorkspace())
-    await open()
-    const before = row("run") as HTMLElement
-    await act(async () => before.focus())
-    // The window loses focus: the element is told, and stays the focused one.
-    await act(async () => {
-      before.dispatchEvent(
-        new FocusEvent("focusout", { bubbles: true, relatedTarget: null }),
-      )
-      await settle(1)
-    })
-    expect(document.activeElement).toBe(before)
-    await moveOn(source, "run", "Split panes", "idle")
-    expect(heading("run")).toBe("Earlier")
     expect(document.activeElement).toBe(row("run"))
   })
 

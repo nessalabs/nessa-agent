@@ -533,6 +533,86 @@ async function regroupKeepsKeyboard(page, from) {
   return { trail, failures }
 }
 
+/** What has focus: an overview row (its session), the page's body, or something else. */
+const focused = (page) =>
+  page.evaluate((item) => {
+    const a = document.activeElement
+    if (a === null || a === document.body) return { on: "body" }
+    const row = a.matches(item) ? a.dataset.overviewItem : null
+    return row ? { on: "row", row } : { on: `${a.tagName}.${a.className}` }
+  }, css.overviewItem)
+
+/**
+ * Focus the overview loses, it gives back, in cases the regroup checks do
+ * not reach (#311 review round 3): `moved`, the focused row's item moved
+ * elsewhere in its list in the page, as a list reorders its rows when a
+ * session streams past another (the engine's own handling of focus on a
+ * move, not a simulation of it); `beside`, focus in the peek beside the list
+ * when the window narrows and it goes; `show-all`, Show All from the
+ * keyboard, once nothing is left out and it goes. The keyboard must land on
+ * a row, and the arrows walk the list from there.
+ */
+async function givesBackLostFocus(page, cause) {
+  const failures = []
+  const trail = []
+  await page.keyboard.press(keys.overview)
+  await contentIs(page, content.overview)
+  await settled(page)
+  await frames(page, 4)
+  if (cause === "moved") {
+    const moved = await page.evaluate((item) => {
+      const rows = [...document.querySelectorAll(item)].filter(
+        (row) => row.closest("li")?.parentElement?.children.length > 1,
+      )
+      const row = rows.at(-1)
+      if (!row) return null
+      row.focus()
+      const li = row.closest("li")
+      li.parentElement.insertBefore(li, li.parentElement.firstElementChild)
+      return row.dataset.overviewItem
+    }, css.overviewItem)
+    if (!moved) throw new CannotRun("no list holds two rows to move one within")
+    trail.push({ step: "moved its row", row: moved })
+  } else if (cause === "beside") {
+    const peek = page.locator(`${css.overviewPeek} button`).first()
+    if ((await peek.count()) === 0)
+      throw new CannotRun("no peek beside the list with a control")
+    await peek.focus()
+    await page.setViewportSize({ width: 700, height: 900 })
+    trail.push({ step: "narrowed to 700" })
+  } else {
+    // The overview's own, not the sidebar's.
+    const showAll = page
+      .locator(css.overviewColumn)
+      .getByRole("button", { name: "Show All" })
+    if ((await showAll.count()) === 0)
+      throw new CannotRun("the overview leaves nothing out")
+    await showAll.focus()
+    await page.keyboard.press(keys.enter)
+    trail.push({ step: "Show All" })
+  }
+  await settled(page)
+  await frames(page, 3)
+  const after = await focused(page)
+  trail.push({ step: "after", ...after })
+  if (after.on !== "row")
+    failures.push(`after ${cause}, the keyboard is on ${after.on}, not a row`)
+  else {
+    await page.keyboard.press(keys.down)
+    await frames(page, 3)
+    let walked = await focused(page)
+    if (walked.row === after.row) {
+      await page.keyboard.press(keys.up)
+      await frames(page, 3)
+      walked = await focused(page)
+    }
+    trail.push({ step: "↓ (or ↑)", ...walked })
+    if (walked.on !== "row" || walked.row === after.row)
+      failures.push(`the arrows do not walk the list after ${cause}: ${walked.on}`)
+  }
+  return { trail, failures }
+}
+
 const meta = {
   name: "focus",
   summary:
@@ -565,6 +645,10 @@ Steps (each asserts where the caret is afterwards):
   row (1440 × 900) or from the peek beneath it (1000 × 700), the keyboard is
   on that session's row, and ↓ walks the list from the row; after a click on
   the title (away), it stays on the page's body
+  focus-gives-back-moved, -beside, -show-all: the focused row's item moved
+  within its list; focus in the peek beside the list as the window narrows
+  to 700; Show All pressed once nothing is left out → the keyboard is on a
+  row, and ↓ walks the list
   focus-home-scene: Customize focused in a new session's home, the window
   shortened so the home hides its scene → the caret is in the home's composer`,
 }
@@ -695,6 +779,27 @@ await main(meta, async ({ options, rep, url }) => {
               await need(fresh.page, css.composer, "a composer")
               await focusComposer(fresh.page)
               const result = await regroupKeepsKeyboard(fresh.page, from)
+              return { ...result, failures: [...result.failures, ...fresh.errors] }
+            } finally {
+              await fresh.close()
+            }
+          },
+        )
+      for (const cause of ["moved", "beside", "show-all"])
+        await attempt(
+          rep,
+          { name: `focus-gives-back-${cause}`, engine, layout },
+          async () => {
+            const fresh = await openPage(browser, {
+              url,
+              layout,
+              width: 1440,
+              height: 900,
+            })
+            try {
+              await need(fresh.page, css.composer, "a composer")
+              await focusComposer(fresh.page)
+              const result = await givesBackLostFocus(fresh.page, cause)
               return { ...result, failures: [...result.failures, ...fresh.errors] }
             } finally {
               await fresh.close()

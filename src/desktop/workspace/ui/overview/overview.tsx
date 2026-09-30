@@ -427,26 +427,29 @@ export function AgentsOverview({
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [dispatch])
-  // Escape in a pill, or a count the keyboard was on gone from the line: to
-  // the list, on the current row, or at its top where it lists none.
+  // Escape in a pill: to the list, on the current row, or at its top where
+  // it lists none.
   const leaveReply = useCallback(() => focusItem(currentNow.current), [focusItem])
 
-  // Focus the overview loses, it gives back — one rule, whatever took the
-  // element away: a session changing group (its row drawn anew under another
-  // heading), the peek beneath a row or beside the list going, a count
-  // leaving the line, Show All once nothing is left out. The element leaves
-  // the page with focus on it, and focus falls to the page's body, where no
-  // key is heard. It goes instead to that element's session's row (a row, or
-  // the peek beneath it) — or, the session gone from the list or the element
-  // no row's (a count, the peek beside the list, which shows the current
-  // session), to the current row, or the list where it lists none — before
-  // the frame is painted: a mutation is answered at the microtask after the
-  // change, whoever made it. Focus that has already landed elsewhere (a reply
-  // pill drawn anew takes its caret itself) is held there, and nothing is due.
+  // Focus the overview loses, it gives back — one rule, whatever lost it: a
+  // session changing group (its row drawn anew under another heading) or
+  // moving within one (a row reordered as its session streams), the peek
+  // beneath a row or beside the list going, a count leaving the line, Show
+  // All once nothing is left out. Each takes the focused element off the
+  // page, if only to put it back, and focus falls to the page's body, where
+  // no key is heard. It goes instead to that element's session's row (a row,
+  // or the peek beneath it) — or, the session gone from the list or the
+  // element no row's (a count, the peek beside the list, which shows the
+  // current session), to the current row, or the list where it lists none —
+  // before the frame is painted: a mutation is answered at the microtask
+  // after the change, whoever made it.
   //
-  // What the person does is left alone. Focus they move (a click on text)
-  // lets the element go; focus the window takes with it (another app) leaves
-  // the element focused, and it is kept.
+  // Focus the person moves is theirs. A press anywhere but on the focused
+  // element (a click on text, the page, another app's window is not one)
+  // lets it go before focus moves, so what follows in the same tick does not
+  // take it back. Focus lost while the window is away (another app, or
+  // tabbed out of the page) is given back when the window has it again. Focus that has landed elsewhere (a reply pill drawn
+  // anew takes its caret itself) is left there.
   const lastFocus = useRef<{ element: HTMLElement; sessionId: string | null } | null>(
     null,
   )
@@ -455,7 +458,11 @@ export function AgentsOverview({
   const giveBack = useRef(() => {})
   giveBack.current = () => {
     const last = lastFocus.current
-    if (last === null || last.element.isConnected) return
+    const focus = document.activeElement
+    if (last === null || (focus !== null && focus !== document.body)) return
+    // Away from the window (another app, or tabbed out of the page): due
+    // when it comes back, not now.
+    if (!document.hasFocus()) return
     lastFocus.current = null
     focusItem(
       last.sessionId !== null && orderNow.current.includes(last.sessionId)
@@ -477,29 +484,22 @@ export function AgentsOverview({
           ? { element, sessionId: sessionOf(element) }
           : null
     }
-    const onFocusOut = (event: FocusEvent) => {
-      const element = event.target
-      if (!(element instanceof HTMLElement)) return
-      // Decided once the change that moved focus has settled: Chromium tells
-      // an element it is losing focus as it is taken off the page, before it
-      // has gone, so only afterwards can a removal be told from a person
-      // leaving. Still on the page and no longer focused, it was left; the
-      // window going to another app leaves it the focused element, and it is
-      // kept. A click away in the same tick as the element's removal looks
-      // like the removal, and focus is given back.
-      queueMicrotask(() => {
-        if (lastFocus.current?.element !== element || !element.isConnected) return
-        if (document.activeElement !== element) lastFocus.current = null
-      })
+    const onPress = (event: PointerEvent) => {
+      const last = lastFocus.current
+      if (last && !(event.target instanceof Node && last.element.contains(event.target)))
+        lastFocus.current = null
     }
     const removals = new MutationObserver(() => giveBack.current())
     removals.observe(root, { childList: true, subtree: true })
+    const onReturn = () => giveBack.current()
     document.addEventListener("focusin", onFocusIn)
-    document.addEventListener("focusout", onFocusOut)
+    document.addEventListener("pointerdown", onPress, true)
+    window.addEventListener("focus", onReturn)
     return () => {
       removals.disconnect()
       document.removeEventListener("focusin", onFocusIn)
-      document.removeEventListener("focusout", onFocusOut)
+      document.removeEventListener("pointerdown", onPress, true)
+      window.removeEventListener("focus", onReturn)
     }
   }, [])
 
