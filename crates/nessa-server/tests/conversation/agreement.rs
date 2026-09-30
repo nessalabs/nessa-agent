@@ -2,9 +2,10 @@
 //! again. Each is valid on its own; these check that they describe the same
 //! gateway, so changing one without the other fails here.
 use crate::conversation::{
-    application::MAX_LISTED_CONVERSATIONS,
+    application::{MAX_LISTED_CONVERSATIONS, MAX_STRUCTURED_CONTENT_BYTES},
     domain::{ConversationPreview, ConversationTitle, LATEST_TIME_MS},
 };
+use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
 use serde_json::Value;
 
 fn schema() -> Value {
@@ -60,4 +61,23 @@ fn a_read_states_the_same_title_bound_as_the_list() {
         .as_array()
         .unwrap()
         .contains(&Value::from("title")));
+}
+
+#[test]
+fn a_tool_states_the_mcp_name_and_structured_result_bounds_the_view_keeps() {
+    let schema = schema();
+    let tool = &schema["$defs"]["ConversationTool"]["properties"];
+    assert_eq!(
+        tool["structuredContent"]["x-utf8MaxBytes"].as_u64(),
+        Some(MAX_STRUCTURED_CONTENT_BYTES as u64)
+    );
+    // The names are the SDK domain's, which bounds them; the schema says the same.
+    let mcp = &schema["$defs"]["ConversationMcpTool"]["properties"];
+    for field in ["server", "tool"] {
+        assert_eq!(
+            mcp[field]["x-utf8MaxBytes"].as_u64(),
+            Some(MAX_MCP_NAME_BYTES as u64),
+            "{field}"
+        );
+    }
 }

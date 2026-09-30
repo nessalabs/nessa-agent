@@ -389,7 +389,17 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   const toolIds = new Set<string>()
   for (const tool of items(item, "tools", 128)) {
-    exact(tool, ["executionId", "toolId", "title", "kind", "status", "details", "input"])
+    exact(tool, [
+      "executionId",
+      "toolId",
+      "title",
+      "kind",
+      "status",
+      "details",
+      "input",
+      "mcp",
+      "structuredContent",
+    ])
     identity(tool, "executionId")
     identity(tool, "toolId")
     const toolKey = JSON.stringify([tool.executionId, tool.toolId])
@@ -414,6 +424,16 @@ export function conversationView(value: unknown, expected: string): Conversation
     text(tool, "status", 64)
     text(tool, "details", 16384)
     text(tool, "input", 32768)
+    // Present only once the harness named the MCP server and tool; which names
+    // are valid is the SDK's rule, and only the published bound is checked here.
+    if (tool.mcp !== undefined) {
+      const mcp = record(tool.mcp)
+      exact(mcp, ["server", "tool"])
+      text(mcp, "server", bounds.maxMcpNameBytes, false)
+      text(mcp, "tool", bounds.maxMcpNameBytes, false)
+    }
+    if (tool.structuredContent !== undefined)
+      text(tool, "structuredContent", bounds.maxToolStructuredContentBytes)
   }
   if (!item.truncated) {
     for (const toolKey of toolIds) {

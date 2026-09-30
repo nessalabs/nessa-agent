@@ -6,6 +6,7 @@ use super::{
     ConversationDependencies, ConversationLifecycle, ConversationLifecyclePhase,
     ConversationLimits, ConversationMessageStatus, ConversationPendingMode, ConversationService,
     PermissionDenialSupport, ProviderSessionErasers, SubmissionMode, SubmittedMessage,
+    MAX_STRUCTURED_CONTENT_BYTES,
 };
 use crate::{
     conversation::domain::ConversationId,
@@ -43,7 +44,7 @@ use nessa_sdk::{
             AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId, MAX_OPEN_ASK_COST,
         },
         sessions::{ExecutionSessionId, ProviderContext, SessionId},
-        tools::{ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
+        tools::{McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
     },
 };
 use std::sync::Arc;
@@ -987,6 +988,109 @@ fn tool_details_preserve_whitespace_sparse_updates_and_explicit_clear() {
         Some(vec![]),
     ))));
     assert_eq!(projection.read().tools[0].details, "");
+}
+
+#[test]
+fn an_mcp_tool_carries_its_identity_and_structured_result_beside_its_text() {
+    let mut projection = projection();
+    let tool = ToolCallId::new("chart").unwrap();
+    let json = r#"{"rows":[1,2]}"#;
+    projection.event(&event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            tool.clone(),
+            Some("mcp.charts.show".into()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
+    )));
+    // A later update naming nothing keeps the identity.
+    projection.event(&event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            tool.clone(),
+            None,
+            None,
+            Some(ToolStatus::Completed),
+            None,
+            None,
+        )
+        .with_content(vec![
+            ToolContent::text("Two rows."),
+            ToolContent::structured(json).unwrap(),
+        ]),
+    )));
+    let view = projection.read();
+    let mcp = view.tools[0].mcp.as_ref().unwrap();
+    assert_eq!((mcp.server.as_str(), mcp.tool.as_str()), ("charts", "show"));
+    assert_eq!(view.tools[0].structured_content.as_deref(), Some(json));
+    assert_eq!(view.tools[0].details, "Two rows.");
+    let wire = serde_json::to_value(&view.tools[0]).unwrap();
+    assert_eq!(
+        wire["mcp"],
+        serde_json::json!({"server":"charts","tool":"show"})
+    );
+    assert_eq!(wire["structuredContent"], json);
+
+    // Past the view's bound it is said, not cut; content replaced without one
+    // no longer has one.
+    let large = format!("\"{}\"", "a".repeat(MAX_STRUCTURED_CONTENT_BYTES));
+    projection.event(&event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(tool.clone(), None, None, None, None, None)
+            .with_content(vec![ToolContent::structured(large).unwrap()]),
+    )));
+    let view = projection.read();
+    assert_eq!(view.tools[0].structured_content, None);
+    assert_eq!(
+        view.tools[0].details,
+        "[Structured result omitted: too large for this view]"
+    );
+    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+        tool,
+        None,
+        None,
+        None,
+        None,
+        Some(vec![ToolContent::structured(json).unwrap()]),
+    ))));
+    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+        ToolCallId::new("chart").unwrap(),
+        None,
+        None,
+        None,
+        None,
+        Some(vec![ToolContent::text("plain")]),
+    ))));
+    assert_eq!(projection.read().tools[0].structured_content, None);
+}
+
+#[test]
+fn a_tool_without_an_mcp_identity_is_written_as_before() {
+    let mut projection = projection();
+    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+        ToolCallId::new("shell").unwrap(),
+        Some("Shell".into()),
+        None,
+        None,
+        None,
+        Some(vec![ToolContent::text("out")]),
+    ))));
+    let wire = serde_json::to_value(&projection.read().tools[0]).unwrap();
+    let mut keys: Vec<_> = wire.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "details",
+            "executionId",
+            "input",
+            "kind",
+            "status",
+            "title",
+            "toolId"
+        ]
+    );
 }
 
 #[test]

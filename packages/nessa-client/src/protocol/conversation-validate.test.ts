@@ -8,6 +8,7 @@ import {
   conversationReorder,
   conversationView,
 } from "./conversation-validate.js"
+import { bounds } from "../generated/product.js"
 
 const DIGEST = `sha256:${"0".repeat(64)}`
 function image(change: { size?: number } = {}) {
@@ -110,6 +111,41 @@ describe("conversation view agreement", () => {
 
   it("accepts complete matching pending and tool evidence", () => {
     expect(conversationView(view(), "conversation").revision).toBe("1")
+  })
+
+  it("accepts a tool's MCP identity and structured result within the published bounds", () => {
+    const value = view()
+    Object.assign(value.tools[0]!, {
+      mcp: { server: "é".repeat(bounds.maxMcpNameBytes / 2), tool: "show" },
+      structuredContent: "a".repeat(bounds.maxToolStructuredContentBytes),
+    })
+    expect(conversationView(value, "conversation").tools[0]).toMatchObject({
+      mcp: { tool: "show" },
+    })
+    // Without them the tool reads as it always has.
+    expect(conversationView(view(), "conversation").tools[0]?.mcp).toBeUndefined()
+  })
+
+  it("rejects a tool's MCP identity or structured result outside the published bounds", () => {
+    const mutations: Array<Record<string, unknown>> = [
+      { mcp: { server: "", tool: "show" } },
+      { mcp: { server: "charts", tool: "" } },
+      { mcp: { server: "a".repeat(bounds.maxMcpNameBytes + 1), tool: "show" } },
+      { mcp: { server: "charts", tool: "é".repeat(bounds.maxMcpNameBytes / 2 + 1) } },
+      { mcp: { server: "charts" } },
+      { mcp: { server: "charts", tool: "show", resourceUri: "ui://x" } },
+      { mcp: "charts" },
+      { structuredContent: "a".repeat(bounds.maxToolStructuredContentBytes + 1) },
+      { structuredContent: { rows: 2 } },
+    ]
+    for (const mutation of mutations) {
+      const value = view()
+      Object.assign(value.tools[0]!, mutation)
+      expect(
+        () => conversationView(value, "conversation"),
+        JSON.stringify(mutation),
+      ).toThrow()
+    }
   })
 
   it("keeps the committed approval mode separate from a pending request", () => {

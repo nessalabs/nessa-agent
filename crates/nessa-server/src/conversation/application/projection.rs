@@ -1,10 +1,10 @@
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationAsked,
     ConversationAttachment, ConversationCapabilities, ConversationLifecycle,
-    ConversationLifecyclePhase, ConversationLinkedFile, ConversationMessage,
+    ConversationLifecyclePhase, ConversationLinkedFile, ConversationMcpTool, ConversationMessage,
     ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
     ConversationPermission, ConversationPermissionOption, ConversationQuestion, ConversationTool,
-    ConversationView,
+    ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -786,6 +786,8 @@ impl Projection {
                         title: "Tool".into(),
                         kind: String::new(),
                         status: "pending".into(),
+                        mcp: None,
+                        structured_content: None,
                     });
                     self.view.tools.last_mut().unwrap()
                 };
@@ -810,10 +812,30 @@ impl Projection {
                     }
                     .into();
                 }
+                if let Some(mcp) = update.mcp_tool() {
+                    tool.mcp = Some(ConversationMcpTool {
+                        server: mcp.server().into(),
+                        tool: mcp.tool().into(),
+                    });
+                }
                 if let Some(content) = update.content() {
                     let mut details = String::new();
+                    // Replaced with the content, as details are: a result
+                    // reported again without one no longer has one.
+                    tool.structured_content = None;
                     for item in content {
                         let text = match item.view() {
+                            ToolContentView::Structured(json)
+                                if json.len() <= MAX_STRUCTURED_CONTENT_BYTES =>
+                            {
+                                tool.structured_content = Some(json.into());
+                                continue;
+                            }
+                            // Said in the details rather than cut: JSON cut short
+                            // is not JSON.
+                            ToolContentView::Structured(_) => {
+                                "[Structured result omitted: too large for this view]".into()
+                            }
                             ToolContentView::Text(text) => clipped(text, 16384),
                             ToolContentView::Diff { path, old, new } => format!(
                                 "File: {}\nBefore:\n{}\nAfter:\n{}",

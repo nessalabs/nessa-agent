@@ -515,6 +515,17 @@ export interface ConversationTool {
   details: string
   /** Exact tool arguments observed through a permission request, or empty when unavailable. */
   input: string
+  /** The MCP server and tool the call went to, when the agent's harness named them exactly; absent for a harness's own tools and where the harness does not say. */
+  mcp?: ConversationMcpTool
+  /** The call's structured result (MCP structuredContent) as JSON text, when the harness passed it on and it fits; absent otherwise. The result's text stays in details either way. */
+  structuredContent?: string
+}
+/** An MCP tool's identity: the server by the name it was configured under, and the tool on it. */
+export interface ConversationMcpTool {
+  /** The MCP server's configured name. Which names are valid is the SDK domain's rule (McpTool); only its byte bound is repeated here, generated for both sides. */
+  server: string
+  /** The tool's name on that server, under the same rule. */
+  tool: string
 }
 /** Bounded full replacement of the current live conversation view. Polling never implies cancellation or durable streaming storage. */
 export interface ConversationView {
@@ -982,6 +993,8 @@ export const bounds = {
   maxConversationTitleBytes: 256,
   maxConversationPreviewBytes: 512,
   maxListedConversations: 500,
+  maxToolStructuredContentBytes: 16384,
+  maxMcpNameBytes: 128,
 } as const
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",

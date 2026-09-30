@@ -34,6 +34,19 @@ function toolKind(kind: string): ToolKind {
       return "other"
   }
 }
+/**
+ * A tool's structured result, as the stream's JSON value. Absent — the
+ * harness gave none, or the view could not carry it — is `null`, as is text
+ * that is not JSON: the result's text is in `details` either way.
+ */
+function structured(json: string | undefined): JsonValue {
+  if (json === undefined) return null
+  try {
+    return JSON.parse(json) as JsonValue
+  } catch {
+    return null
+  }
+}
 /** Map a bounded replacement view, never append polling snapshots to a live log.
  * Provider offsets preserve observation order; steering offsets mark local admission.
  * Raw DTOs retain details the common contract does not model, such as partial output.
@@ -194,7 +207,7 @@ export function agentTranscript(
           result: {
             text: tool.details,
             isError: tool.status === "failed",
-            structured: null,
+            structured: structured(tool.structuredContent),
             images: [],
           },
         })
