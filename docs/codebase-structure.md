@@ -368,15 +368,17 @@ equivalent; sinks flush record files and use write-through moves separately.
 `PrivateDirectory` is the narrower retained-authority API for a store that scans,
 locks, opens, and publishes repeatedly in one directory. It preserves the original
 root, directory chain, and native identities; each enumeration owns an independent
-non-atomic cursor, and every file operation takes one native component. Publication
-never replaces a name and returns the still-open destination handle. A failure after
+non-atomic cursor, and every file operation takes one native component. Exclusive
+publication refuses occupied names; replacement atomically replaces a name or
+publishes an absent name. Both return the still-open destination handle. A failure after
 rename retains that published fact separately from its failed acknowledgement, while
 a pre-rename cleanup failure stays separate from the primary failure. On Unix the
 caller must hold its stable lock across each residual leaf check/effect interval; on
 Windows non-delete-sharing handles pin the directory chain. Binding checks are
 acknowledgement checkpoints rather than continuous attachment. Windows `sync` only
 revalidates binding and does not claim directory durability or arbitrary power-loss
-survival. See the [local-storage module map](../crates/nessa-local-storage/README.md#module-map).
+survival. See the [local-storage module map](../crates/nessa-local-storage/README.md#module-map)
+and [retained publication design](design/retained-directory-publication.md).
 
 On Unix, `create_private_directory_path` and `PrivateDirectory::open_path` retain an
 absolute private store through ordinary locator ancestry. System and account

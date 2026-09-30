@@ -145,6 +145,14 @@ impl RetainedDirectory {
     }
 
     pub fn publish_new(&self, _: &OsStr, to: &OsStr, file: &File) -> io::Result<()> {
+        self.rename(to, file, false)
+    }
+
+    pub fn replace(&self, _: &OsStr, to: &OsStr, file: &File) -> io::Result<()> {
+        self.rename(to, file, true)
+    }
+
+    fn rename(&self, to: &OsStr, file: &File, replace: bool) -> io::Result<()> {
         let name = wide(&self.path(to)?)?;
         let name_bytes = name
             .len()
@@ -167,7 +175,7 @@ impl RetainedDirectory {
         let mut buffer = vec![0usize; words];
         let rename = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
         unsafe {
-            (*rename).Anonymous.ReplaceIfExists = false;
+            (*rename).Anonymous.ReplaceIfExists = replace;
             (*rename).RootDirectory = null_mut();
             (*rename).FileNameLength = name_bytes;
             std::ptr::copy_nonoverlapping(

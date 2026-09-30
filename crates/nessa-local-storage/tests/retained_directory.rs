@@ -136,7 +136,6 @@ fn publication_returns_the_open_destination_for_identity_acknowledgement() {
     assert_eq!(bytes, b"published");
 }
 
-#[cfg(unix)]
 #[test]
 fn retained_replacement_publishes_the_reserved_identity_atomically() {
     let (_temporary, root, directory) = fixture();
@@ -622,6 +621,22 @@ fn windows_publication_accepts_a_unicode_destination_beyond_max_path() {
         .read_to_end(&mut bytes)
         .unwrap();
     assert_eq!(bytes, b"long unicode destination");
+    let destination = published.name().to_owned();
+    drop(published);
+    let mut replacement = directory.reserve_temp().unwrap();
+    replacement.as_file_mut().write_all(b"replacement").unwrap();
+    let published = replacement.replace(&destination).unwrap();
+    assert!(directory
+        .named_file_is(published.name(), published.as_file())
+        .unwrap());
+    let mut replaced = Vec::new();
+    directory
+        .open_file(published.name(), OpenMode::Read)
+        .unwrap()
+        .read_to_end(&mut replaced)
+        .unwrap();
+    assert_eq!(replaced, b"replacement");
+    assert_eq!(names(&directory).len(), 1);
 }
 
 #[cfg(windows)]
@@ -652,4 +667,114 @@ fn file_open_refuses_a_reparse_point_leaf() {
     assert!(directory
         .open_file(OsStr::new("link"), OpenMode::Read)
         .is_err());
+}
+
+#[test]
+fn retained_replacement_accepts_an_absent_destination() {
+    let (_temporary, _root, directory) = fixture();
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation.as_file_mut().write_all(b"new").unwrap();
+    let published = reservation.replace(OsStr::new("new-name")).unwrap();
+    assert!(directory
+        .named_file_is(published.name(), published.as_file())
+        .unwrap());
+    drop(published);
+    assert_eq!(
+        names(&directory),
+        vec![(OsString::from("new-name"), PrivateFileType::RegularFile)]
+    );
+}
+
+#[test]
+fn replacement_invalid_name_keeps_original_destination() {
+    let (_temporary, root, directory) = fixture();
+    write_named(&directory, "original", b"old");
+    let reservation = directory.reserve_temp().unwrap();
+    let failure = reservation.replace(OsStr::new("../original")).unwrap_err();
+    assert_eq!(
+        failure.stage(),
+        PrivatePublicationStage::ValidateDestination
+    );
+    assert!(failure.published().is_none());
+    assert!(failure.cleanup_error().is_none());
+    assert_eq!(
+        std::fs::read(root.join("records/original")).unwrap(),
+        b"old"
+    );
+    assert_eq!(names(&directory).len(), 1);
+}
+
+#[test]
+fn replacement_refuses_a_directory_destination() {
+    let (_temporary, root, directory) = fixture();
+    create_private_directory_tree_beneath(&root, Path::new("records/occupied")).unwrap();
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation.as_file_mut().write_all(b"new").unwrap();
+    let failure = reservation.replace(OsStr::new("occupied")).unwrap_err();
+    assert_eq!(failure.stage(), PrivatePublicationStage::Rename);
+    assert!(failure.published().is_none());
+    assert!(failure.cleanup_error().is_none());
+    assert_eq!(
+        names(&directory),
+        vec![(OsString::from("occupied"), PrivateFileType::Directory)]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn replacement_changed_reservation_retains_foreign_name() {
+    let (_temporary, root, directory) = fixture();
+    write_named(&directory, "original", b"old");
+    let reservation = directory.reserve_temp().unwrap();
+    let name = reservation.name().to_owned();
+    std::fs::rename(root.join("records").join(&name), root.join("records/moved")).unwrap();
+    let mut foreign = directory.open_file(&name, OpenMode::CreateNew).unwrap();
+    foreign.write_all(b"foreign").unwrap();
+    let failure = reservation.replace(OsStr::new("original")).unwrap_err();
+    assert_eq!(
+        failure.stage(),
+        PrivatePublicationStage::ValidateReservation
+    );
+    assert!(failure.published().is_none());
+    assert!(failure.cleanup_error().is_some());
+    assert_eq!(
+        std::fs::read(root.join("records").join(name)).unwrap(),
+        b"foreign"
+    );
+    assert_eq!(
+        std::fs::read(root.join("records/original")).unwrap(),
+        b"old"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_replacement_refuses_a_pinned_destination_then_accepts_after_release() {
+    let (_temporary, root, directory) = fixture();
+    write_named(&directory, "original", b"old");
+    let pinned = directory
+        .open_file(OsStr::new("original"), OpenMode::ReadWrite)
+        .unwrap();
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation.as_file_mut().write_all(b"refused").unwrap();
+    let failure = reservation.replace(OsStr::new("original")).unwrap_err();
+    assert_eq!(failure.stage(), PrivatePublicationStage::Rename);
+    assert!(failure.published().is_none());
+    assert!(failure.cleanup_error().is_none());
+    assert_eq!(
+        std::fs::read(root.join("records/original")).unwrap(),
+        b"old"
+    );
+    assert_eq!(names(&directory).len(), 1);
+    drop(pinned);
+    let mut reservation = directory.reserve_temp().unwrap();
+    reservation.as_file_mut().write_all(b"accepted").unwrap();
+    let published = reservation.replace(OsStr::new("original")).unwrap();
+    assert!(directory
+        .named_file_is(published.name(), published.as_file())
+        .unwrap());
+    assert_eq!(
+        std::fs::read(root.join("records/original")).unwrap(),
+        b"accepted"
+    );
 }

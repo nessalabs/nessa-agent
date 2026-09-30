@@ -9,8 +9,12 @@ Windows supplies a protected DACL at creation (current user SID + LocalSystem),
 then checks the DACL, owner, persistent-ACL volume support, link count and reparse
 attributes through the same file handle used for I/O. Windows paths must be local
 absolute drive paths; alternate streams and device namespaces are rejected.
-Temporary files are private before data is written. Windows replacements request
-write-through moves after file flush; Unix callers sync the containing directory.
+Temporary files are private before data is written. Path-based Windows replacements
+request write-through moves. Retained Windows replacement flushes the file before
+and after handle rename; Unix callers also sync the containing directory.
+
+[Retained-directory publication design](../../docs/design/retained-directory-publication.md)
+owns the #324 ordering table and platform evidence boundaries.
 
 ## Module map
 
@@ -19,7 +23,7 @@ write-through moves after file flush; Unix callers sync the containing directory
 | `src/lib.rs` | Crate documentation, module declarations, path-based private-storage API, and the exact reservation-name syntax classifier. |
 | `src/retained_directory.rs` | `PrivateDirectory`, native entry snapshots, origin-bound temporary files, and typed publication evidence. |
 | `src/unix/retained_directory.rs` | Retained directory descriptors through private roots or safe absolute locator ancestry, independent `openat(".")` enumeration cursors, identity checks, exclusive publication, atomic replacement, cleanup, and directory sync. |
-| `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, transient identity probes, handle enumeration, `FileRenameInfo` publication, and handle disposition cleanup. |
+| `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, transient identity probes, handle enumeration, `FileRenameInfo` exclusive publication/replacement, and handle disposition cleanup. |
 | `tests/retained_directory.rs` | Cross-platform authority, enumeration, publication, cleanup, replacement, and native Windows handle-lifetime coverage. |
 
 `PrivateDirectory` is acquired once beneath a trusted absolute root. Every file
@@ -37,7 +41,8 @@ ancestors only when group and other users cannot write them, require the final
 directory to be current-user-owned and private, and retain every traversed identity
 for later binding checks.
 
-Publication never replaces a destination. Its result keeps the exact destination,
+`publish_new` refuses occupied destinations; `replace` replaces a name or publishes
+an absent name. Both results keep the exact destination,
 opaque native identity, and open file handle. If rename succeeds but a later flush,
 binding check, or directory sync fails, the typed failure retains that published
 fact and handle so the consumer can reconcile it. Cleanup is disarmed immediately
