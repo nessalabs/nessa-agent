@@ -383,8 +383,10 @@ commit together. Its borrowed guard stages `apply`, `observe_source_head` and
 `confirm_empty`; immutable methods expose the staged checkpoint and positions.
 Dropping it, including unwind or an external SQL/audit error, rolls back staged
 semantic and physical evidence. A rejected operation rolls back the whole guard
-and disables commit. Commit on an active guard adds no validation, allocation or
-source observation; the caller confirms its physical transaction first.
+and disables commit. Commit on an active guard adds no validation, new typed
+refusal or source observation; the caller confirms its physical transaction first.
+It releases moved undo values. Their existing destructors can allocate bounded
+teardown work, including the shared typed diagnostic tree owner.
 The guard performs no I/O, provider action or source reservation. Its exclusive
 borrow prevents another fold mutation during staging.
 

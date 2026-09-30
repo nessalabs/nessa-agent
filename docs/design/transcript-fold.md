@@ -269,6 +269,7 @@ mirrored live pending ledger or invented persisted answer is permitted.
 | --- | --- | --- |
 | Valid restored continuation | Repeated growing pages or 1 versus 64 complete facts | Actual semantic indices/history/queue/provider state is reused; no prefix cloning, replay or accounting scan per fact/chunk. Work/allocation counters measure suffix separately from full publication. |
 | Valid terminals followed by malformed final frame or decision | Transaction has staged appends and changed small fields | Roll back the whole batch, including A/D/fact count/status, correlations and resource accounting; prior checkpoint and held published snapshot remain unchanged. |
+| Active guard replaces a failed acknowledgement | External commit succeeds; moved old typed diagnostic is released | Commit adds no validation or typed refusal. Existing value destructors can allocate bounded teardown work for retained diagnostic trees; this is separate from semantic staging and full publication. Actual replaced-ack commit and checkpoint restore retain typed read/runtime causes; guard Drop restores the prior failure. |
 | Receiver transaction accepted by SDK | SQL checkpoint/A/effects commit fails or waiter drops | Borrowed guard rolls back unless commit is confirmed; no cloned receiver candidate or second semantic fold. |
 | Canonical state advances | Prior immutable published snapshot is still retained | Publish a separately owned complete snapshot only at the read boundary; old snapshot remains immutable and both allocations are measured. |
 | Exact receiver has unchanged semantic state | Another read publication is requested | Return equal full semantic values in a separately materialized immutable result; Arc pointer reuse is not promised. Prior results remain unchanged after subsequent physical source updates. Each publication explicitly costs O(full retained history). |
@@ -346,3 +347,13 @@ existing fixed frame/page admission bounds its staged batch. A public receiver
 chooses its own input batch size; the guard does not claim constant memory for an
 arbitrarily large caller-provided batch. Checkpoint output and explicit published
 full snapshots are intentional separate O(history) allocations.
+
+The truthful commit contract separates refusal from value release. On an active
+guard, commit performs no new validation or source observation and cannot return
+a new refusal; prior rejected staging is the only disabled-guard error. Existing
+`StorageShutdownFailure::drop` uses an iterative Vec worklist under the shared
+diagnostic tree bounds. A standalone allocator fixture measured actual replaced
+acknowledgement commit teardown for 3/31/127-node trees: 64/1344/4416 requested
+bytes and 1/17/65 allocation calls. This disproves a no-allocation comment but
+does not show a resource/lifecycle bound violation. The existing destructor and
+typed error codec are preserved; no intrusive representation is introduced.

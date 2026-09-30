@@ -595,9 +595,10 @@ impl TranscriptTransaction<'_> {
     ///
     /// # Errors
     /// The only refusal is an operation previously rejected on this guard.
-    /// For an active guard, commit performs no validation, allocation or source
-    /// observation: it consumes the undo and preserves the already validated
-    /// state. The exclusive borrow prevents intervening fold mutation.
+    /// For an active guard, commit performs no validation or source observation:
+    /// it consumes the undo and preserves the already validated state. Dropping
+    /// moved values can allocate bounded teardown work in their existing owners,
+    /// including typed shutdown diagnostic trees. The exclusive borrow prevents intervening fold mutation.
     /// `receiver_guard_rolls_back_drop_unwind_external_failure_and_late_refusal`
     /// covers active commit and `receiver_guard_stages_zero_head_and_foreign_head_refuses_all_staged_evidence`
     /// covers disabled commit.
@@ -812,6 +813,79 @@ mod tests {
         assert_eq!(fold.snapshot().unwrap().invocations.len(), 1);
         fold.committed.assert_retained_accounting();
         assert_eq!(published.invocations.len(), 0);
+    }
+
+    #[test]
+    fn receiver_guard_replaces_and_restores_typed_failed_acknowledgement() {
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        fold.apply(&records(&scope, 1, &fact(None, opened(), 1)))
+            .unwrap();
+        fold.apply(&records(
+            &scope,
+            2,
+            &fact(fold.snapshot(), accepted_input("output"), 2),
+        ))
+        .unwrap();
+        let failure = StorageError::ShutdownFailures(Box::new(
+            StorageShutdownFailure::new(StorageError::ReadWorkerPanicked, StorageError::Unresolved)
+                .unwrap(),
+        ));
+        let failed = SubmissionAcknowledgement::Failed {
+            audit: None,
+            storage: Some(failure),
+        };
+        let failed_change = SessionChange::ReceiptUpdated {
+            execution_id: ExecutionId::new("output").unwrap(),
+            before: SubmissionAcknowledgement::Pending,
+            after: failed.clone(),
+        };
+        fold.apply(&records(
+            &scope,
+            3,
+            &fact(fold.snapshot(), failed_change, 3),
+        ))
+        .unwrap();
+        let checkpoint = fold.checkpoint().unwrap();
+        let replacement = SessionChange::ReceiptUpdated {
+            execution_id: ExecutionId::new("output").unwrap(),
+            before: failed.clone(),
+            after: SubmissionAcknowledgement::Acknowledged,
+        };
+        let batch = records(&scope, 4, &fact(fold.snapshot(), replacement, 4));
+        {
+            let mut staged = fold.transaction();
+            staged.apply(&batch).unwrap();
+            assert_eq!(
+                staged.snapshot().unwrap().invocations[0].acknowledgement,
+                SubmissionAcknowledgement::Acknowledged
+            );
+        }
+        assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+        assert_eq!(
+            fold.snapshot().unwrap().invocations[0].acknowledgement,
+            failed
+        );
+        let restored = TranscriptFold::restore(scope, 3, &checkpoint).unwrap();
+        let SubmissionAcknowledgement::Failed {
+            storage: Some(StorageError::ShutdownFailures(causes)),
+            ..
+        } = &restored.snapshot().unwrap().invocations[0].acknowledgement
+        else {
+            panic!("typed acknowledgement causes lost")
+        };
+        assert_eq!(causes.read(), &StorageError::ReadWorkerPanicked);
+        assert_eq!(causes.runtime(), &StorageError::Unresolved);
+        let mut staged = fold.transaction();
+        staged.apply(&batch).unwrap();
+        let published_checkpoint = staged.checkpoint().unwrap();
+        staged.commit().unwrap();
+        assert_eq!(fold.checkpoint().unwrap(), published_checkpoint);
+        assert_eq!(
+            fold.snapshot().unwrap().invocations[0].acknowledgement,
+            SubmissionAcknowledgement::Acknowledged
+        );
+        fold.committed.assert_retained_accounting();
     }
 
     #[test]
