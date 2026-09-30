@@ -9,6 +9,7 @@
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -177,3 +178,66 @@ pub enum SurfaceKind {
     #[serde(rename = "cli")]
     Cli,
 }
+pub(crate) fn wire_shape_gateway_error(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("code").is_some_and(|field| {
+            let _ = field;
+            field.as_str().is_some_and(|text| text.chars().count() >= 1)
+        }) && object.get("message").is_some_and(|field| {
+            let _ = field;
+            field.is_string()
+        }) && object.get("details").is_none_or(|field| {
+            let _ = field;
+            true
+        }) && object
+            .keys()
+            .all(|key| ["code", "message", "details"].contains(&key.as_str()))
+    })
+}
+pub(crate) fn wire_shape_res_frame(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("type").is_some_and(|field| {
+            let _ = field;
+            field.as_str() == Some("res")
+        }) && object.get("id").is_some_and(|field| {
+            let _ = field;
+            field.as_str().is_some_and(|text| text.chars().count() >= 1)
+        }) && object.get("ok").is_some_and(|field| {
+            let _ = field;
+            field.is_boolean()
+        }) && object.get("payload").is_none_or(|field| {
+            let _ = field;
+            true
+        }) && object.get("error").is_none_or(|field| {
+            let _ = field;
+            wire_shape_gateway_error(field)
+        }) && object
+            .keys()
+            .all(|key| ["type", "id", "ok", "payload", "error"].contains(&key.as_str()))
+    })
+}
+pub(crate) fn wire_shape_event_frame(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("type").is_some_and(|field| {
+            let _ = field;
+            field.as_str() == Some("event")
+        }) && object.get("event").is_some_and(|field| {
+            let _ = field;
+            field.as_str().is_some_and(|text| text.chars().count() >= 1)
+        }) && object.get("payload").is_some_and(|field| {
+            let _ = field;
+            true
+        }) && object.get("seq").is_some_and(|field| {
+            let _ = field;
+            field.as_u64().is_some()
+        }) && object.get("stateVersion").is_some_and(|field| {
+            let _ = field;
+            field.as_u64().is_some()
+        }) && object
+            .keys()
+            .all(|key| ["type", "event", "payload", "seq", "stateVersion"].contains(&key.as_str()))
+    })
+}
+
+/// Schema-derived response presence agreement; index = ok*4 + payload*2 + error.
+pub const RESPONSE_PRESENCE: [bool; 8] = [false, true, false, false, false, false, true, false];

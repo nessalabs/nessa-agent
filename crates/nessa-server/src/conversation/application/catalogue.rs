@@ -1,9 +1,13 @@
 //! Owner-scoped current conversation metadata for bounded linked readers.
 //! The repository owns revisions; this port exposes no receiver progress.
 
+mod metadata;
+pub use metadata::{CatalogueMetadata, CatalogueMetadataError};
+
 use super::ConversationFuture;
 use crate::conversation::domain::{Conversation, ConversationId, ConversationSummary};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_sync::replication::catalogue::ManifestRequest;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogueHead {
@@ -34,11 +38,8 @@ pub struct CataloguePage {
 pub struct CataloguePageRequest {
     pub organization: OrganizationId,
     pub owner: PrincipalId,
-    pub incarnation: String,
-    pub completed: u64,
-    pub boundary: u64,
-    pub after: Option<CatalogueKey>,
-    pub limit: usize,
+    /// The actual finite-pass request; query fields are derived, not mirrored.
+    pub manifest: ManifestRequest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

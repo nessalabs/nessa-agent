@@ -17,10 +17,15 @@ when reviewing it, and after anything performance-sensitive.
 ```
 verification/
   README.md                 this file
+  conversation/
+    README.md               committed transcript fixture and publication ownership
+    fixture.html            real ConversationControls and applyView browser fixture
+    fixture.tsx             typed current gateway view cases
   desktop/
     CHECKLIST.md            what we always test and reproduce, with the contract each item holds
     scripts/
       run-all.mjs           every check, summarised
+      committed-transcript.mjs history notices, permission controls, re-enable
       smoke.mjs             loads, sends, splits, Settings, overview; console errors
       perf-budget.mjs       the frame budget, production build, 4× CPU throttling
       safe-area.mjs         nothing painted under the window controls, per frame

@@ -783,6 +783,17 @@ boundaries and mandatory audit records independently. Unfinished streaming text
 can be lost on crash. Reads are bounded current views, not a durable cursor stream.
 The shared record database is opened before the gateway listens.
 
+Authorized physical history uses `conversation.recordsHead` and
+`conversation.recordsPage` on that same authenticated `/session` socket. Each
+request passes current credential, receiver-binding and conversation-owner
+admission before the server checks the exact SDK stream identity. A tracked
+source thread reads one bounded head or page without opening an Agent or writer
+lease. The socket reserves one record response per connection and four across
+the gateway, retaining global capacity through source completion and physical
+delivery. Product JSON/base64 responses have a separate 128 KiB ceiling; other
+responses retain their existing limit. Receiver download and semantic-apply
+checkpoints belong to the receiving process, not this gateway.
+
 A message refers to an image by digest, media type and size; its bytes never
 ride the product socket. `attachment.begin` on the authenticated socket answers
 with a single-use, five-minute ticket bound to one file, conversation and caller,
@@ -843,6 +854,13 @@ and packaged OpenCode cold-open resolution. A standalone explicit OpenCode
 runtime instead uses only `OPENCODE_API_KEY` captured when composition starts;
 it does not read the stage-scoped store or promise live environment refresh. See the
 [crate guide](../crates/nessa-agent-credentials/README.md).
+
+## Shared product contract
+
+`product_contract/generated.rs` contains pure schema-derived product outcome
+values and close policy. Product DTOs/socket and read-only sync application ports
+consume that publication. The product schema owns its vocabulary; this contract
+contains no routing or IO and is separate from generic protocol frames.
 
 ## Gateway authorization
 

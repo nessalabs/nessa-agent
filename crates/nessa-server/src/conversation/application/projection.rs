@@ -1,20 +1,19 @@
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationAsked,
-    ConversationAttachment, ConversationCapabilities, ConversationLifecycle,
-    ConversationLifecyclePhase, ConversationLinkedFile, ConversationMessage,
-    ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
-    ConversationPermission, ConversationPermissionOption, ConversationQuestion, ConversationTool,
-    ConversationView,
+    ConversationCapabilities, ConversationLifecycle, ConversationLifecyclePhase,
+    ConversationMessage, ConversationMessageStatus, ConversationPart, ConversationPending,
+    ConversationPendingMode, ConversationPermission, ConversationPermissionOption,
+    ConversationQuestion, ConversationTool, ConversationTranscriptState, ConversationView,
 };
+use crate::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
-    executions::{ExecutionEvent, ExecutionUpdate},
-    sessions::{InvocationRecord, SessionSnapshot},
+    executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
+    sessions::{CommittedSession, CommittedStatus, InvocationRecord, SessionSnapshot},
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{ReviewDecline, ReviewDeclineReason, ReviewDeclineStage},
-    prompts::UserMessage,
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
 };
@@ -26,27 +25,46 @@ const MAX_MESSAGES: usize = 24;
 pub(super) const MAX_TEXT: usize = 8192;
 const MAX_TOOLS: usize = 16;
 const MAX_PERMISSIONS: usize = 16;
-const MAX_VIEW_BYTES: usize = 60_000;
+// Application transcript body; product catalog enrichment is serialized afterward.
+pub(super) const MAX_VIEW_BYTES: usize = 60_000;
 /// The largest single review the view offers, encoded. One review may not take
 /// most of the view's budget from everything else.
 const MAX_REVIEW_BYTES: usize = 16_000;
 const REQUIRED_WORK_FAILURE: &str = "The turn could not complete all required work.";
 const PROVIDER_FAILURE_PREFIX: &str = "The agent provider reported an error: ";
 
+fn record_status(record: &InvocationRecord, restoring: bool) -> ConversationMessageStatus {
+    match &record.result {
+        Some(Ok(value)) => outcome(*value),
+        Some(Err(_))
+            if record
+                .scheduling
+                .last()
+                .is_some_and(|event| event.stage == InvocationStage::Cancelled) =>
+        {
+            ConversationMessageStatus::Cancelled
+        }
+        Some(Err(_)) => ConversationMessageStatus::Failed,
+        None => match record.scheduling.last().map(|event| event.stage) {
+            Some(InvocationStage::Injected) => ConversationMessageStatus::Injected,
+            Some(InvocationStage::Cancelled) => ConversationMessageStatus::Cancelled,
+            _ if restoring => ConversationMessageStatus::Unresolved,
+            _ => ConversationMessageStatus::Running,
+        },
+    }
+}
+
 pub(super) struct Projection {
     pub view: ConversationView,
     epoch: Uuid,
     revision: u64,
-    lagged: bool,
+    committed_position: Option<(String, u64, u64, u64)>,
     resolved_permissions: HashSet<(String, String)>,
     /// Asks that have stopped waiting, so a replayed ask does not reopen one.
     answered_questions: HashSet<(String, String)>,
     terminal_executions: HashSet<String>,
-    /// Executions this process saw begin — admitted here, or observed live —
-    /// and has not seen stop running. Only these can be waiting on anybody
-    /// through this process, and a message missing from the view says nothing
-    /// either way: one from before a restart and one pushed out by newer turns
-    /// are both absent. This is what tells them apart during lag recovery.
+    /// Exact local execution identity supplied by Agent for this replacement.
+    /// It supplies action locality, never semantic completion or freshness.
     live_here: HashSet<String>,
 }
 pub(super) fn clipped(value: &str, bytes: usize) -> String {
@@ -117,20 +135,62 @@ fn failure_notice(record: &InvocationRecord) -> Option<String> {
     }
     Some(notice)
 }
+/// Bound a retained snapshot through the same display owner as gateway reads.
+///
+/// The cache supplies the snapshot and status from one validated fold for `id`.
+/// This mapping performs no semantic validation, source contact or dispatch.
+/// The injected revision identity is transient presentation evidence; all action
+/// capabilities are disabled. Display truncation does not change SDK completeness.
+pub(crate) fn retained_view(
+    id: &ConversationId,
+    snapshot: Option<&SessionSnapshot>,
+    status: CommittedStatus,
+    revision: Uuid,
+) -> ConversationView {
+    let mut projection = Projection::from_snapshot_with_epoch(
+        id.to_string(),
+        ConversationCapabilities::read_only(),
+        snapshot,
+        HashSet::new(),
+        revision,
+    );
+    projection.transcript_state(status.view_state().into());
+    bound_view(projection.read())
+}
+
 impl Projection {
     pub fn new(
         id: String,
         capabilities: ConversationCapabilities,
         snapshot: Option<&SessionSnapshot>,
     ) -> Self {
+        Self::from_snapshot(id, capabilities, snapshot, HashSet::new())
+    }
+
+    fn from_snapshot(
+        id: String,
+        capabilities: ConversationCapabilities,
+        snapshot: Option<&SessionSnapshot>,
+        live_here: HashSet<String>,
+    ) -> Self {
+        Self::from_snapshot_with_epoch(id, capabilities, snapshot, live_here, Uuid::new_v4())
+    }
+
+    fn from_snapshot_with_epoch(
+        id: String,
+        capabilities: ConversationCapabilities,
+        snapshot: Option<&SessionSnapshot>,
+        live_here: HashSet<String>,
+        epoch: Uuid,
+    ) -> Self {
         let mut projection = Self {
-            epoch: Uuid::new_v4(),
+            epoch,
             revision: 0,
-            lagged: false,
+            committed_position: None,
             resolved_permissions: HashSet::new(),
             answered_questions: HashSet::new(),
             terminal_executions: HashSet::new(),
-            live_here: HashSet::new(),
+            live_here: live_here.clone(),
             view: ConversationView {
                 selection: None,
                 approval_mode_change: None,
@@ -150,13 +210,21 @@ impl Projection {
                 },
                 truncated: false,
                 queue_complete: true,
-                permission_view_error: None,
+                transcript_state: ConversationTranscriptState::NotLoaded,
+                interaction_view_error: None,
                 // Not the projection's: the service fills it from the summary.
                 title: None,
             },
         };
         if let Some(snapshot) = snapshot {
             projection.view.truncated = snapshot.invocations.len() > MAX_MESSAGES;
+            for record in
+                &snapshot.invocations[..snapshot.invocations.len().saturating_sub(MAX_MESSAGES)]
+            {
+                if live_here.contains(record.request.execution_id.as_str()) {
+                    projection.active_interactions(record);
+                }
+            }
             for record in snapshot
                 .invocations
                 .iter()
@@ -166,11 +234,139 @@ impl Projection {
                 .into_iter()
                 .rev()
             {
-                projection.record(record, true);
+                projection.record(
+                    record,
+                    !live_here.contains(record.request.execution_id.as_str()),
+                );
             }
         }
         projection.bump();
         projection
+    }
+
+    /// Replace transcript fields from the SDK's committed snapshot. Live
+    /// broadcast callbacks may prompt this read, but their provisional text or
+    /// terminal status cannot become a replacement view. The SDK owns the
+    /// lifecycle fold that produced `snapshot`; this method only bounds display.
+    pub fn replace_committed(
+        &mut self,
+        committed: &CommittedSession,
+        order: &[ExecutionId],
+        active: Option<&ExecutionId>,
+    ) -> bool {
+        let incarnation = committed.incarnation();
+        let position = committed.position();
+        let downloaded = committed.downloaded();
+        let observed_head = committed.observed_head();
+        let snapshot = committed.snapshot();
+        if let Some((current_incarnation, current_position, current_downloaded, current_head)) =
+            &self.committed_position
+        {
+            if current_incarnation != incarnation
+                || position < *current_position
+                || downloaded < *current_downloaded
+                || observed_head < *current_head
+            {
+                return false;
+            }
+        }
+        let active = active
+            .map(|id| id.as_str().to_owned())
+            .into_iter()
+            .collect();
+        let mut next = Self::from_snapshot(
+            self.view.conversation_id.clone(),
+            self.view.capabilities.clone(),
+            snapshot,
+            active,
+        );
+        next.epoch = self.epoch;
+        next.revision = self.revision;
+        next.committed_position = Some((incarnation.into(), position, downloaded, observed_head));
+        next.view.revision = self.view.revision.clone();
+        next.view.transcript_state = self.view.transcript_state;
+        next.view.selection = self.view.selection.clone();
+        next.view.runtime = self.view.runtime.clone();
+        next.view.lifecycle = self.view.lifecycle.clone();
+        next.view.approval_mode_change = self.view.approval_mode_change.clone();
+        next.view.title = self.view.title.clone();
+        if let Some(snapshot) = snapshot {
+            for id in order {
+                let Some(record) = snapshot
+                    .invocations
+                    .iter()
+                    .find(|record| record.request.execution_id == *id)
+                else {
+                    next.view.queue_complete = false;
+                    continue;
+                };
+                let text = record.request.user_message.text_str();
+                let mode = match record.submission {
+                    SubmissionMode::Steering | SubmissionMode::BoundarySteering => {
+                        ConversationPendingMode::Steering
+                    }
+                    SubmissionMode::Immediate | SubmissionMode::Queued => {
+                        ConversationPendingMode::Queued
+                    }
+                };
+                if next.view.pending.len() < 64 {
+                    next.view.pending.push(ConversationPending {
+                        execution_id: id.as_str().into(),
+                        text: clipped(text, MAX_TEXT),
+                        attachments: record
+                            .request
+                            .user_message
+                            .images()
+                            .iter()
+                            .map(Into::into)
+                            .collect(),
+                        files: record
+                            .request
+                            .user_message
+                            .files()
+                            .iter()
+                            .map(Into::into)
+                            .collect(),
+                        mode,
+                    });
+                } else {
+                    next.view.queue_complete = false;
+                    next.view.truncated = true;
+                }
+                if let Some(message) = next
+                    .view
+                    .messages
+                    .iter_mut()
+                    .find(|message| message.execution_id == id.as_str())
+                {
+                    message.status = ConversationMessageStatus::Queued;
+                }
+            }
+        }
+        let changed = serde_json::to_vec(&next.view).ok() != serde_json::to_vec(&self.view).ok();
+        if changed {
+            next.bump();
+        }
+        *self = next;
+        true
+    }
+    pub fn transcript_state(&mut self, state: ConversationTranscriptState) {
+        if self.view.transcript_state != state {
+            self.view.transcript_state = state;
+            self.bump();
+        }
+        if !matches!(
+            state,
+            ConversationTranscriptState::Complete | ConversationTranscriptState::CompleteEmpty
+        ) {
+            self.view.queue_complete = false;
+            self.view.capabilities.queue = false;
+            self.view.capabilities.steer = false;
+            self.view.capabilities.permissions = false;
+            self.view.permissions.clear();
+            self.view.questions.clear();
+            self.view.pending.clear();
+        }
     }
     fn bump(&mut self) {
         self.revision = self.revision.wrapping_add(1);
@@ -184,6 +380,15 @@ impl Projection {
     }
     /// Replace the coherent capability snapshot and revise the view only when it changed.
     pub fn capabilities(&mut self, capabilities: ConversationCapabilities) {
+        let mut capabilities = capabilities;
+        if !matches!(
+            self.view.transcript_state,
+            ConversationTranscriptState::Complete | ConversationTranscriptState::CompleteEmpty
+        ) {
+            capabilities.queue = false;
+            capabilities.steer = false;
+            capabilities.permissions = false;
+        }
         if self.view.capabilities != capabilities {
             self.view.capabilities = capabilities;
             self.bump();
@@ -216,66 +421,7 @@ impl Projection {
         });
         self.view.messages.len() - 1
     }
-    pub fn admitted(&mut self, id: &str, input: &UserMessage, mode: ConversationPendingMode) {
-        self.live_here.insert(id.to_owned());
-        let text = input.text_str();
-        let attachments: Vec<ConversationAttachment> =
-            input.images().iter().map(Into::into).collect();
-        let files: Vec<ConversationLinkedFile> = input.files().iter().map(Into::into).collect();
-        let existed = self
-            .view
-            .messages
-            .iter()
-            .any(|message| message.execution_id == id);
-        let index = self.ensure_message(id);
-        let message = &mut self.view.messages[index];
-        message.user_text = clipped(text, MAX_TEXT);
-        message.attachments = attachments.clone();
-        message.files = files.clone();
-        if !existed {
-            // A retried submission can rebuild a message newer turns pushed
-            // out. If its turn already has an ask or review open, it was
-            // dispatched and is waiting — only a dispatched turn can have one —
-            // and rebuilding it as queued hid exactly what it waits on.
-            let waiting = self
-                .view
-                .questions
-                .iter()
-                .any(|question| question.execution_id == id)
-                || self
-                    .view
-                    .permissions
-                    .iter()
-                    .any(|permission| permission.execution_id == id);
-            let message = &mut self.view.messages[index];
-            message.status = if waiting {
-                ConversationMessageStatus::Running
-            } else {
-                ConversationMessageStatus::Queued
-            };
-        }
-        let message = &mut self.view.messages[index];
-        if !self
-            .view
-            .pending
-            .iter()
-            .any(|pending| pending.execution_id == id)
-            && message.status == ConversationMessageStatus::Queued
-        {
-            if self.view.pending.len() < 64 {
-                self.view.pending.push(ConversationPending {
-                    execution_id: id.into(),
-                    text: clipped(text, MAX_TEXT),
-                    attachments,
-                    files,
-                    mode,
-                });
-            } else {
-                self.view.truncated = true;
-            }
-        }
-        self.bump();
-    }
+
     pub fn injected(&mut self, id: &str, target: &str) {
         let index = self.ensure_message(id);
         self.view.messages[index].status = ConversationMessageStatus::Injected;
@@ -290,145 +436,6 @@ impl Projection {
             .permissions
             .retain(|value| value.execution_id != execution || value.permission_id != id);
         self.bump();
-    }
-    pub fn uncertain_permission(&mut self, execution: &str, id: &str) {
-        self.resolved_permissions
-            .insert((execution.to_owned(), id.to_owned()));
-        self.view
-            .permissions
-            .retain(|value| value.execution_id != execution || value.permission_id != id);
-        self.view.permission_view_error = Some(
-            "The permission answer was interrupted after admission; this review is no longer actionable. Close the conversation if provider cleanup remains pending."
-                .into(),
-        );
-        self.bump();
-    }
-    /// Rebuild actionable reviews from committed SDK evidence after observation lag.
-    /// The lag fence remains active for output because broadcast updates have no
-    /// durable cursor. Successful local answers are retained separately because
-    /// their mandatory audit is not an execution observation.
-    pub fn recover_permissions(&mut self, snapshot: Option<&SessionSnapshot>) {
-        if !self.lagged {
-            return;
-        }
-        let previous = serde_json::to_vec(&self.view.permissions).ok();
-        let previous_questions = serde_json::to_vec(&self.view.questions).ok();
-        let previous_error = self.view.permission_view_error.clone();
-        self.view.permissions.clear();
-        self.view.permission_view_error = None;
-        let Some(snapshot) = snapshot else {
-            if previous.as_deref() != Some(b"[]") {
-                self.bump();
-            }
-            return;
-        };
-        for record in &snapshot.invocations {
-            let execution = record.request.execution_id.as_str();
-            if self.terminal_executions.contains(execution)
-                || record.result.is_some()
-                || record.scheduling.last().is_some_and(|event| {
-                    matches!(
-                        event.stage,
-                        InvocationStage::Cancelled
-                            | InvocationStage::Injected
-                            | InvocationStage::Settled
-                    )
-                })
-            {
-                continue;
-            }
-            for event in &record.events {
-                match event.update() {
-                    ExecutionUpdate::PermissionRequested { .. } => {
-                        if self.recovered_waiting(execution) {
-                            self.observe_permission(event)
-                        }
-                    }
-                    ExecutionUpdate::PermissionCancelled(cancellation) => {
-                        let permission = cancellation.request().id().as_str();
-                        self.resolved_permissions
-                            .insert((execution.to_owned(), permission.to_owned()));
-                        self.view.permissions.retain(|value| {
-                            value.execution_id != execution || value.permission_id != permission
-                        });
-                    }
-                    ExecutionUpdate::Finished(_) => {
-                        self.view
-                            .permissions
-                            .retain(|permission| permission.execution_id != execution);
-                        self.view
-                            .questions
-                            .retain(|question| question.execution_id != execution);
-                    }
-                    ExecutionUpdate::QuestionAsked { .. } => {
-                        if self.recovered_waiting(execution) {
-                            self.observe_question(event)
-                        }
-                    }
-                    ExecutionUpdate::QuestionClosed { id } => {
-                        self.answered_questions
-                            .insert((execution.to_owned(), id.as_str().to_owned()));
-                        self.view.questions.retain(|question| {
-                            question.execution_id != execution
-                                || question.question_id != id.as_str()
-                        });
-                    }
-                    ExecutionUpdate::Message(_)
-                    | ExecutionUpdate::Tool(_)
-                    | ExecutionUpdate::ReviewDeclined(_) => {}
-                }
-            }
-        }
-        if self.view.permissions.is_empty() && self.view.permission_view_error.is_none() {
-            self.view.permission_view_error = Some(
-                "Live observations were missed; no current tool review can be recovered safely."
-                    .into(),
-            );
-        }
-        // Asks recovered or dropped here change the view as much as reviews do.
-        if previous != serde_json::to_vec(&self.view.permissions).ok()
-            || previous_questions != serde_json::to_vec(&self.view.questions).ok()
-            || previous_error != self.view.permission_view_error
-        {
-            self.bump();
-        }
-    }
-
-    /// An ask or review on record for an execution that has not settled was made
-    /// by one that was dispatched and is waiting on it. Lag may have dropped the
-    /// dispatch, leaving the message queued; the evidence says otherwise, so the
-    /// message runs and leaves the queue, rather than the ask being hidden from
-    /// the only person who could answer it.
-    ///
-    /// Returns whether the execution is waiting, so its evidence may be offered.
-    /// A message present in the view decides by its status: queued or running
-    /// is waiting, anything else — unresolved above all, a turn from before a
-    /// restart that nothing here can answer for — is not. A message absent from
-    /// the view decides by where the turn began: one this process saw begin
-    /// was pushed out by newer turns and is still waiting, and is offered
-    /// without its message, as a truncated view allows; any other is not. A
-    /// message is never created here — recreating one put a dead turn back on
-    /// screen as running and pushed a live one out to make room.
-    fn recovered_waiting(&mut self, execution: &str) -> bool {
-        let Some(index) = self
-            .view
-            .messages
-            .iter()
-            .position(|message| message.execution_id == execution)
-        else {
-            return self.live_here.contains(execution) && self.view.truncated;
-        };
-        match self.view.messages[index].status {
-            ConversationMessageStatus::Running => true,
-            ConversationMessageStatus::Queued => {
-                self.view.messages[index].status = ConversationMessageStatus::Running;
-                self.view
-                    .pending
-                    .retain(|item| item.execution_id != execution);
-                true
-            }
-            _ => false,
-        }
     }
 
     /// An execution's message has stopped running, so nothing it asked or
@@ -474,6 +481,10 @@ impl Projection {
             >= MAX_OPEN_QUESTIONS
         {
             self.view.truncated = true;
+            self.view.interaction_view_error = Some(
+                "Some pending interactions exceed this display limit. Use Stop to cancel them."
+                    .into(),
+            );
             return;
         }
         let value = ConversationQuestion {
@@ -534,7 +545,7 @@ impl Projection {
             || input.arguments_json.len() > 32768
             || serde_json::from_str::<serde_json::Value>(&input.arguments_json).is_err()
         {
-            self.view.permission_view_error = Some("The complete tool input cannot be displayed safely; this review has no actionable choices in this view.".into());
+            self.view.interaction_view_error = Some("The complete tool input cannot be displayed safely; this review has no actionable choices in this view.".into());
             self.view.truncated = true;
             return;
         }
@@ -573,7 +584,7 @@ impl Projection {
             .filter(|known| offered(&self.view, &known.execution_id))
             .count();
         if size > MAX_REVIEW_BYTES || open >= MAX_PERMISSIONS {
-            self.view.permission_view_error = Some("A pending tool review exceeds the display limit; no choices were silently removed.".into());
+            self.view.interaction_view_error = Some("A pending tool review exceeds the display limit; no choices were silently removed.".into());
             self.view.truncated = true;
         } else if !self.view.permissions.iter().any(|known| {
             known.execution_id == execution && known.permission_id == value.permission_id
@@ -581,63 +592,43 @@ impl Projection {
             self.view.permissions.push(value);
         }
     }
-    pub fn lagged(&mut self) {
-        self.lagged = true;
-        self.view.truncated = true;
-        self.view.permissions.clear();
-        for message in &mut self.view.messages {
-            if matches!(
-                message.status,
-                ConversationMessageStatus::Running | ConversationMessageStatus::Queued
-            ) {
-                message.parts.clear();
-            }
-        }
-        self.view.permission_view_error = Some(
-            "Live observations were missed; pending reviews require a refreshed saved view.".into(),
-        );
-        self.bump();
-    }
-    /// Apply one live broadcast observation. Live updates carry no durable
-    /// cursor, so the lag fence drops their text.
-    pub fn event(&mut self, event: &ExecutionEvent) {
-        // A live event says a turn began here, unless the view already shows
-        // it stopped: an event buffered before a failed receipt and delivered
-        // after it would otherwise revive a turn nothing is running any more.
-        let id = event.execution_id().as_str();
-        let stopped = self.terminal_executions.contains(id)
-            || self.view.messages.iter().any(|message| {
-                message.execution_id == id
-                    && !matches!(
-                        message.status,
-                        ConversationMessageStatus::Queued | ConversationMessageStatus::Running
-                    )
-            });
-        if !stopped {
-            self.live_here.insert(id.to_owned());
-        }
-        self.observe(event, false);
-    }
-    /// Apply one observation. `authoritative` marks replay of a committed record
-    /// rebuilt from the SDK snapshot: that text is proven to belong to this
-    /// message, so the lag fence must not erase it.
-    fn observe(&mut self, event: &ExecutionEvent, authoritative: bool) {
-        let id = event.execution_id().as_str();
-        // A completion watcher can restore the final snapshot before this
-        // observer drains already-buffered chunks. Do not append those twice.
-        if self.view.messages.iter().any(|message| {
-            message.execution_id == id
-                && matches!(
-                    message.status,
-                    ConversationMessageStatus::Completed
-                        | ConversationMessageStatus::Cancelled
-                        | ConversationMessageStatus::Failed
-                        | ConversationMessageStatus::Injected
-                )
-        }) && !matches!(event.update(), ExecutionUpdate::PermissionCancelled(_))
-        {
+
+    // The exact active record can precede the recent message window. Read only
+    // its interactions; its prompt, attachments and output are never copied.
+    fn active_interactions(&mut self, record: &InvocationRecord) {
+        if record_status(record, false) != ConversationMessageStatus::Running {
             return;
         }
+        for event in &record.events {
+            self.observe_interaction(event);
+        }
+    }
+    fn observe_interaction(&mut self, event: &ExecutionEvent) {
+        let execution = event.execution_id().as_str();
+        match event.update() {
+            ExecutionUpdate::PermissionRequested { .. } => self.observe_permission(event),
+            ExecutionUpdate::QuestionAsked { .. } => self.observe_question(event),
+            ExecutionUpdate::PermissionCancelled(cancellation) => {
+                self.resolved_permission(execution, cancellation.request().id().as_str());
+            }
+            ExecutionUpdate::QuestionClosed { id } => {
+                self.answered_questions
+                    .insert((execution.to_owned(), id.as_str().to_owned()));
+                self.view.questions.retain(|open| {
+                    open.execution_id != execution || open.question_id != id.as_str()
+                });
+            }
+            ExecutionUpdate::Finished(_) => {
+                self.terminal_executions.insert(execution.to_owned());
+                self.stop_waiting(execution);
+            }
+            _ => {}
+        }
+    }
+
+    /// Render one observation from a validated committed SDK record.
+    fn observe(&mut self, event: &ExecutionEvent) {
+        let id = event.execution_id().as_str();
         let index = self.ensure_message(id);
         self.view
             .pending
@@ -655,21 +646,19 @@ impl Projection {
             self.view.truncated = true;
         }
         let part = match event.update() {
-            ExecutionUpdate::Message(chunk) if authoritative || !self.lagged => {
-                Some(ConversationPart {
-                    message_id: chunk.message_id().map(str::to_owned),
-                    offset,
-                    kind: if chunk.kind() == MessageKind::Text {
-                        "text"
-                    } else {
-                        "thought"
-                    }
-                    .into(),
-                    text: clipped(chunk.as_str(), available),
-                    tool_id: String::new(),
-                    notice_id: String::new(),
-                })
-            }
+            ExecutionUpdate::Message(chunk) => Some(ConversationPart {
+                message_id: chunk.message_id().map(str::to_owned),
+                offset,
+                kind: if chunk.kind() == MessageKind::Text {
+                    "text"
+                } else {
+                    "thought"
+                }
+                .into(),
+                text: clipped(chunk.as_str(), available),
+                tool_id: String::new(),
+                notice_id: String::new(),
+            }),
             ExecutionUpdate::Tool(update) => Some(ConversationPart {
                 message_id: None,
                 offset,
@@ -728,41 +717,18 @@ impl Projection {
                 self.view.truncated = true;
             }
         }
+        self.observe_interaction(event);
         match event.update() {
             ExecutionUpdate::Message(_) => {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
             }
             ExecutionUpdate::Finished(result) => {
                 self.view.messages[index].status = outcome(*result);
-                self.terminal_executions.insert(id.to_owned());
-                self.stop_waiting(id);
             }
-            ExecutionUpdate::PermissionCancelled(cancellation) => {
-                self.resolved_permission(id, cancellation.request().id().as_str())
-            }
-            ExecutionUpdate::QuestionAsked { .. } => {
-                // An agent waiting on an answer is still running: it has not
-                // stopped, it has asked.
+            ExecutionUpdate::QuestionAsked { .. } | ExecutionUpdate::PermissionRequested { .. } => {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
-                self.observe_question(event);
             }
-            // `question`, not `id`: `id` here is the execution, and shadowing it
-            // recorded the closure under (question, question) — so a replayed
-            // ask missed its tombstone and reopened. An ask is identified by the
-            // execution that asked and its own identity, together.
-            ExecutionUpdate::QuestionClosed { id: question } => {
-                self.answered_questions
-                    .insert((id.to_owned(), question.as_str().to_owned()));
-                self.view.questions.retain(|open| {
-                    open.execution_id != id || open.question_id != question.as_str()
-                });
-            }
-            ExecutionUpdate::PermissionRequested { .. } => {
-                self.view.messages[index].status = ConversationMessageStatus::Running;
-                if !self.lagged {
-                    self.observe_permission(event);
-                }
-            }
+            ExecutionUpdate::PermissionCancelled(_) | ExecutionUpdate::QuestionClosed { .. } => {}
             ExecutionUpdate::ReviewDeclined(_) => {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
             }
@@ -878,27 +844,10 @@ impl Projection {
         self.view.messages[index].status = ConversationMessageStatus::Running;
         self.view.messages[index].error = None;
         for event in &record.events {
-            self.observe(event, true);
+            self.observe(event);
         }
         let index = self.ensure_message(id);
-        self.view.messages[index].status = match &record.result {
-            Some(Ok(value)) => outcome(*value),
-            Some(Err(_))
-                if record
-                    .scheduling
-                    .last()
-                    .is_some_and(|event| event.stage == InvocationStage::Cancelled) =>
-            {
-                ConversationMessageStatus::Cancelled
-            }
-            Some(Err(_)) => ConversationMessageStatus::Failed,
-            None => match record.scheduling.last().map(|event| event.stage) {
-                Some(InvocationStage::Injected) => ConversationMessageStatus::Injected,
-                Some(InvocationStage::Cancelled) => ConversationMessageStatus::Cancelled,
-                _ if restoring => ConversationMessageStatus::Unresolved,
-                _ => ConversationMessageStatus::Running,
-            },
-        };
+        self.view.messages[index].status = record_status(record, restoring);
         if self.view.messages[index].status == ConversationMessageStatus::Injected {
             if let Some(target) = self.view.messages[index].steering_target.clone() {
                 self.injected(id, &target);
@@ -913,86 +862,7 @@ impl Projection {
         }
         self.view.pending.retain(|value| value.execution_id != id);
     }
-    pub fn settled_all(&mut self, snapshot: Option<&SessionSnapshot>) {
-        if let Some(snapshot) = snapshot {
-            for record in snapshot
-                .invocations
-                .iter()
-                .rev()
-                .take(MAX_MESSAGES)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-            {
-                if record.result.is_some()
-                    || record.scheduling.last().is_some_and(|event| {
-                        matches!(
-                            event.stage,
-                            InvocationStage::Cancelled
-                                | InvocationStage::Injected
-                                | InvocationStage::Settled
-                        )
-                    })
-                {
-                    self.record(record, false);
-                }
-            }
-        }
-        self.bump();
-    }
-    pub fn receipt_failed(&mut self, id: &str) {
-        let index = self.ensure_message(id);
-        if self.view.messages[index].status != ConversationMessageStatus::Cancelled {
-            self.view.messages[index].status = ConversationMessageStatus::Failed;
-        }
-        self.stop_waiting(id);
-        // Both receipt watchers call `settled` under this same projection lock
-        // first. Preserve any diagnostic derived from the refreshed durable
-        // record; absent snapshot evidence still receives the generic fallback.
-        if self.view.messages[index].error.is_none() {
-            self.view.messages[index].error = Some(REQUIRED_WORK_FAILURE.into());
-        }
-        self.bump();
-    }
-    pub fn settled(&mut self, id: &str, snapshot: Option<&SessionSnapshot>) {
-        if let Some(record) = snapshot.and_then(|snapshot| {
-            snapshot
-                .invocations
-                .iter()
-                .find(|record| record.request.execution_id.as_str() == id)
-        }) {
-            self.record(record, false);
-        }
-        self.bump();
-    }
-    /// Read ordering comes from the SDK queue; this projection never schedules work.
-    pub fn queue_order(&mut self, order: &[ExecutionId]) {
-        let was_complete = self.view.queue_complete;
-        let previous = self
-            .view
-            .pending
-            .iter()
-            .map(|item| item.execution_id.clone())
-            .collect::<Vec<_>>();
-        self.view
-            .pending
-            .retain(|item| order.iter().any(|id| id.as_str() == item.execution_id));
-        self.view
-            .pending
-            .sort_by_key(|item| order.iter().position(|id| id.as_str() == item.execution_id));
-        self.view.queue_complete = order.len() == self.view.pending.len();
-        if was_complete != self.view.queue_complete
-            || previous
-                != self
-                    .view
-                    .pending
-                    .iter()
-                    .map(|item| item.execution_id.clone())
-                    .collect::<Vec<_>>()
-        {
-            self.bump();
-        }
-    }
+
     pub fn read(&self) -> ConversationView {
         self.read_with_mode_change(None)
     }
@@ -1034,54 +904,65 @@ impl Projection {
             .collect();
         view.questions = questions;
         view.permissions = permissions;
-        // Bound actual encoded bytes, including JSON escaping. Reviews are
-        // atomic units: never truncate an option or fabricate a choice. Asks are
-        // never given up at all — each is one an agent is waiting on, and hiding
-        // it would leave nobody able to answer. They need not be: the binding
-        // admits asks only while their carrying cost stays within
-        // MAX_OPEN_ASK_COST, which bounds what they take here, and everything
-        // else gives way first.
-        while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
-            view.truncated = true;
-            if view.messages.len() > 1 {
-                view.messages.remove(0);
-            } else if view
-                .messages
-                .first()
-                .is_some_and(|message| !message.parts.is_empty())
-            {
-                view.messages[0].parts.pop();
-            } else if let Some(message) = view
-                .messages
-                .first_mut()
-                .filter(|message| !message.user_text.is_empty())
-            {
-                message.user_text = clipped(&message.user_text, message.user_text.len() / 2);
-            } else if let Some(message) = view
-                .messages
-                .first_mut()
-                .filter(|message| !message.files.is_empty() || !message.attachments.is_empty())
-            {
-                // What the message linked is shown by name, and a path can be
-                // long; past the budget the view says it left some out rather
-                // than break its bound or give up an ask somebody must answer.
-                if message.files.pop().is_none() {
-                    message.attachments.pop();
-                }
-            } else if !view.tools.is_empty() {
-                view.tools.remove(0);
-            } else if !view.pending.is_empty() {
-                view.pending.remove(0);
-                view.queue_complete = false;
-            } else if !view.permissions.is_empty() {
-                view.permissions.pop();
-                view.permission_view_error = Some("Additional tool reviews exceed this bounded view; close the session to cancel all pending reviews.".into());
-            } else {
-                break;
-            }
-        }
         view
     }
+}
+
+/// Bound the complete service result after its metadata and authority additions.
+pub(super) fn bound_view(mut view: ConversationView) -> ConversationView {
+    // The binding bounds actual admitted ACP asks. Custom backends can
+    // retain other valid histories, so the encoded display owner gives up
+    // whole interactions with an explicit notice rather than cutting choices.
+    while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
+        view.truncated = true;
+        if view.messages.len() > 1 {
+            view.messages.remove(0);
+        } else if view
+            .messages
+            .first()
+            .is_some_and(|message| !message.parts.is_empty())
+        {
+            view.messages[0].parts.pop();
+        } else if let Some(message) = view
+            .messages
+            .first_mut()
+            .filter(|message| !message.user_text.is_empty())
+        {
+            message.user_text = clipped(&message.user_text, message.user_text.len() / 2);
+        } else if let Some(message) = view
+            .messages
+            .first_mut()
+            .filter(|message| !message.files.is_empty() || !message.attachments.is_empty())
+        {
+            // What the message linked is shown by name, and a path can be
+            // long; past the budget the view says it left some out rather
+            // than break its bound. Whole interactions yield afterward
+            // with an explicit display-limit notice.
+            if message.files.pop().is_none() {
+                message.attachments.pop();
+            }
+        } else if !view.tools.is_empty() {
+            view.tools.remove(0);
+        } else if !view.pending.is_empty() {
+            view.pending.remove(0);
+            view.queue_complete = false;
+        } else if !view.permissions.is_empty() {
+            view.permissions.pop();
+            view.interaction_view_error = Some(
+                "Some pending interactions exceed this display limit. Use Stop to cancel them."
+                    .into(),
+            );
+        } else if !view.questions.is_empty() {
+            view.questions.pop();
+            view.interaction_view_error = Some(
+                "Some pending interactions exceed this display limit. Use Stop to cancel them."
+                    .into(),
+            );
+        } else {
+            break;
+        }
+    }
+    view
 }
 
 /// Whether `view` may offer an ask or review from `execution`: only while its

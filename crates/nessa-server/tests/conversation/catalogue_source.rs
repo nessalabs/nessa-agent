@@ -31,7 +31,12 @@ async fn failed_worker_start_returns_unavailable_without_scheduler_panic() {
         |_run| Err(std::io::Error::other("injected thread failure")),
         || panic!("runtime builder must not run after spawn fails"),
     );
-    assert!(matches!(result, Err(CatalogueSourceError::Unavailable)));
+    assert!(matches!(
+        result,
+        Err(CatalogueWorkerError::Source(
+            CatalogueSourceError::Unavailable
+        ))
+    ));
     let result = NessaCatalogueSource::start_with_spawn(
         store,
         caller(),
@@ -39,7 +44,12 @@ async fn failed_worker_start_returns_unavailable_without_scheduler_panic() {
         |run| thread::Builder::new().spawn(run),
         || Err(std::io::Error::other("injected runtime failure")),
     );
-    assert!(matches!(result, Err(CatalogueSourceError::Unavailable)));
+    assert!(matches!(
+        result,
+        Err(CatalogueWorkerError::Source(
+            CatalogueSourceError::Unavailable
+        ))
+    ));
 }
 
 #[test]
@@ -90,7 +100,7 @@ fn scope(incarnation: &str) -> Scope {
     Scope::new(
         id("receiver"),
         id("origin"),
-        conversation_catalogue_stream(&caller()),
+        conversation_catalogue_stream(&caller().organization_id, &caller().principal_id),
         id(incarnation),
         conversation_catalogue_schema(),
         id("epoch"),
@@ -142,7 +152,9 @@ async fn source_reads_owner_scoped_current_values_and_rejects_wrong_scope() {
     bob_caller.principal_id = PrincipalId::new("bob").unwrap();
     assert!(matches!(
         NessaCatalogueSource::new(store.clone(), bob_caller, exact.clone()),
-        Err(CatalogueSourceError::IdentityChanged)
+        Err(CatalogueWorkerError::Source(
+            CatalogueSourceError::IdentityChanged
+        ))
     ));
     let mut source = NessaCatalogueSource::new(store.clone(), caller(), exact.clone()).unwrap();
     let mut blocking = source.clone();
@@ -212,7 +224,7 @@ async fn source_reads_owner_scoped_current_values_and_rejects_wrong_scope() {
     let wrong = Scope::new(
         id("other-receiver"),
         id("origin"),
-        conversation_catalogue_stream(&caller()),
+        conversation_catalogue_stream(&caller().organization_id, &caller().principal_id),
         id(&head.incarnation),
         conversation_catalogue_schema(),
         id("epoch"),
@@ -224,7 +236,7 @@ async fn source_reads_owner_scoped_current_values_and_rejects_wrong_scope() {
     let wrong_epoch = Scope::new(
         id("receiver"),
         id("origin"),
-        conversation_catalogue_stream(&caller()),
+        conversation_catalogue_stream(&caller().organization_id, &caller().principal_id),
         id(&head.incarnation),
         conversation_catalogue_schema(),
         id("new-epoch"),
@@ -236,7 +248,7 @@ async fn source_reads_owner_scoped_current_values_and_rejects_wrong_scope() {
     let wrong_incarnation = Scope::new(
         id("receiver"),
         id("origin"),
-        conversation_catalogue_stream(&caller()),
+        conversation_catalogue_stream(&caller().organization_id, &caller().principal_id),
         id("new-incarnation"),
         conversation_catalogue_schema(),
         id("epoch"),

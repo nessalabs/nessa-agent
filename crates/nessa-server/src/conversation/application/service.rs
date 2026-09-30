@@ -1,6 +1,6 @@
 use super::{
     locks::ConversationLocks,
-    projection::{clipped, Projection, MAX_TEXT},
+    projection::{bound_view, clipped, Projection, MAX_TEXT},
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
     view::{
@@ -8,9 +8,9 @@ use super::{
         ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
         ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
         ConversationLifecyclePhase, ConversationList, ConversationListEntry,
-        ConversationMessageStatus, ConversationPendingMode, ConversationReorderOutcome,
-        ConversationRuntime, ConversationSelectionView, ConversationStartupFailure,
-        ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
+        ConversationReorderOutcome, ConversationRuntime, ConversationSelectionView,
+        ConversationStartupFailure, ConversationStartupFailureCode, ConversationView,
+        SubmissionReceipt,
     },
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
     ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
@@ -38,7 +38,7 @@ use nessa_sdk::application::agent_execution::{
     executions::{ExecutionAudit, ExecutionRequest, ExecutionUpdate},
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
-        PermissionCancellationRequest, PermissionSelectionState, QuestionAnswer,
+        PermissionCancellationRequest, QuestionAnswer,
     },
     providers::{AgentProvider, ApprovalMode as ProviderApprovalMode, OperationCapabilities},
     sessions::{
@@ -378,10 +378,7 @@ pub enum SubmissionMode {
 }
 enum SubmissionDelivery {
     Queued(QueueAdmission),
-    Injected {
-        target: ExecutionId,
-        evidence: SteeringEvidence,
-    },
+    Injected { evidence: SteeringEvidence },
 }
 struct LiveConversation {
     agent: Agent,
@@ -1059,7 +1056,6 @@ impl ConversationService {
                                     cause: ConversationError::Agent(error),
                                     holds: true,
                                 })?;
-                            let mut events = agent.subscribe();
                             let snapshot = agent.session_manager().snapshot().await;
                             let operation_capabilities = agent.operation_capabilities();
                             let capabilities = ConversationCapabilities {
@@ -1094,20 +1090,6 @@ impl ConversationService {
                                 projection: Mutex::new(projection),
                                 watched: Mutex::new(HashSet::new()),
                                 attachment_owner: Mutex::new(None),
-                            });
-                            let weak = Arc::downgrade(&live);
-                            tokio::spawn(async move {
-                                loop {
-                                    let event = events.next().await;
-                                    let Some(live) = weak.upgrade() else {
-                                        break;
-                                    };
-                                    match event {
-                                        Ok(Some(event)) => live.projection.lock().await.event(&event),
-                                        Err(_) => live.projection.lock().await.lagged(),
-                                        Ok(None) => break,
-                                    }
-                                }
                             });
                             let attachment = live.clone();
                             let attachment_id = id.clone();
@@ -1481,33 +1463,58 @@ impl ConversationService {
             return Err(error);
         }
         let live = self.resolve(&id, &caller).await?;
-        let order = live.agent.queued_ids().await;
-        let snapshot = live.agent.session_manager().snapshot().await;
+        let session_id = SessionId::new(id.to_string()).expect("conversation UUID session key");
+        let committed = self
+            .inner
+            .storage
+            .read_committed(session_id.clone())
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        if committed.id() != &session_id {
+            return Err(ConversationError::Storage(StorageError::IdentityMismatch));
+        }
+        let order = committed
+            .snapshot()
+            .map(SessionSnapshot::pending_order)
+            .transpose()?
+            .unwrap_or_default();
+        let active = live.agent.active_execution_id();
         let mut projection = live.projection.lock().await;
-        projection.recover_permissions(snapshot.as_ref());
-        projection.queue_order(&order);
+        let accepted = projection.replace_committed(&committed, &order, active.as_ref());
+        if accepted {
+            projection.transcript_state(committed.state().into());
+        }
         let operation_capabilities = live.agent.operation_capabilities();
         // The last known answer stands while the agent is being restored, so the
         // view never says no to what a send at the same moment would admit.
         let image_input = self
             .takes_images(&live.agent, operation_capabilities)
             .unwrap_or(projection.view.capabilities.image_input);
-        let queue = projection.view.capabilities.queue;
-        let steer = projection.view.capabilities.steer;
-        let permissions = projection.view.capabilities.permissions;
         projection.capabilities(ConversationCapabilities {
-            queue,
-            steer,
+            queue: true,
+            steer: true,
             resume: operation_capabilities.session_resume(),
-            permissions,
+            permissions: live.agent.capabilities().features().tool_use(),
             image_input,
             agent_features: operation_capabilities.into(),
         });
         projection.lifecycle(lifecycle_view(&live.agent));
         let mut view = projection.read();
         drop(projection);
+        view.permissions.retain(|review| {
+            let execution = ExecutionId::new(&review.execution_id);
+            let permission = PermissionId::new(&review.permission_id);
+            match (execution, permission) {
+                (Ok(execution), Ok(permission)) => live
+                    .agent
+                    .pending_permission(&execution, &permission)
+                    .unwrap_or(false),
+                _ => false,
+            }
+        });
         view.title = self.title(&id).await;
-        Ok(view)
+        self.check_view_access(&id, &caller).await?;
+        Ok(bound_view(view))
     }
     async fn read_pending_mode_change(
         &self,
@@ -1539,31 +1546,35 @@ impl ConversationService {
             .and_then(|slot| slot.value.get())
             .and_then(|result| result.as_ref().ok())
             .cloned();
+        let session_id = SessionId::new(id.to_string()).expect("conversation UUID session key");
+        let committed = self
+            .inner
+            .storage
+            .read_committed(session_id.clone())
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        if committed.id() != &session_id {
+            return Err(ConversationError::Storage(StorageError::IdentityMismatch));
+        }
+        let order = committed
+            .snapshot()
+            .map(SessionSnapshot::pending_order)
+            .transpose()?
+            .unwrap_or_default();
         let mut view = if let Some(live) = live {
-            live.projection
-                .lock()
-                .await
-                .read_with_mode_change(Some(change.clone()))
+            let active = live.agent.active_execution_id();
+            let mut projection = live.projection.lock().await;
+            let accepted = projection.replace_committed(&committed, &order, active.as_ref());
+            if accepted {
+                projection.transcript_state(committed.state().into());
+            }
+            projection.read_with_mode_change(Some(change.clone()))
         } else {
-            let session_id = SessionId::new(id.to_string()).expect("conversation UUID session key");
-            let lease = self.inner.storage.open_existing(session_id).await?;
-            let snapshot = match &lease {
-                Some(lease) => lease.load().await?,
-                None => None,
-            };
-            Projection::new(
-                id.to_string(),
-                ConversationCapabilities {
-                    queue: false,
-                    steer: false,
-                    resume: false,
-                    permissions: false,
-                    image_input: false,
-                    agent_features: OperationCapabilities::default().into(),
-                },
-                snapshot.as_ref(),
-            )
-            .read_with_mode_change(Some(change))
+            let mut projection =
+                Projection::new(id.to_string(), ConversationCapabilities::read_only(), None);
+            projection.replace_committed(&committed, &order, None);
+            projection.transcript_state(committed.state().into());
+            projection.read_with_mode_change(Some(change))
         };
         view.selection = Some(ConversationSelectionView {
             agent: record.agent().ok_or(ConversationError::AgentUnsupported)?,
@@ -1578,7 +1589,21 @@ impl ConversationService {
         view.permissions.clear();
         view.questions.clear();
         view.title = self.title(id).await;
-        Ok(Some(view))
+        self.check_view_access(id, caller).await?;
+        Ok(Some(bound_view(view)))
+    }
+    async fn check_view_access(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<(), ConversationError> {
+        self.inner
+            .metadata
+            .load(id)
+            .await?
+            .ok_or(ConversationError::NotFound)?
+            .check_access(&caller.organization_id, &caller.principal_id)?;
+        Ok(())
     }
     /// The title a list shows for the conversation, which a read shows too:
     /// one rule, the summary's, whichever of the two is drawing it
@@ -1802,37 +1827,13 @@ impl ConversationService {
                             SteeringDelivery::Queued(receipt) => {
                                 SubmissionDelivery::Queued(receipt)
                             }
-                            SteeringDelivery::Injected { target, evidence } => {
-                                SubmissionDelivery::Injected { target, evidence }
+                            SteeringDelivery::Injected { evidence, .. } => {
+                                SubmissionDelivery::Injected { evidence }
                             }
                         })
                 }
             };
-            let pending_mode = if matches!(mode, SubmissionMode::Queue) {
-                ConversationPendingMode::Queued
-            } else {
-                ConversationPendingMode::Steering
-            };
-            let delivery = match delivery {
-                Ok(delivery) => delivery,
-                Err(AgentError::SubmissionUnresolved) => {
-                    live.projection
-                        .lock()
-                        .await
-                        .admitted(&execution_id, &message, pending_mode);
-                    let snapshot = live.agent.session_manager().snapshot().await;
-                    live.projection
-                        .lock()
-                        .await
-                        .settled(&execution_id, snapshot.as_ref());
-                    return Err(ConversationError::Agent(AgentError::SubmissionUnresolved));
-                }
-                Err(error) => return Err(ConversationError::Agent(error)),
-            };
-            live.projection
-                .lock()
-                .await
-                .admitted(&execution_id, &message, pending_mode);
+            let delivery = delivery.map_err(ConversationError::Agent)?;
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A
             // retry of a message the agent already had says nothing new.
@@ -1860,12 +1861,7 @@ impl ConversationService {
                         },
                     })
                 }
-                SubmissionDelivery::Injected { target, evidence } => {
-                    let snapshot = live.agent.session_manager().snapshot().await;
-                    let mut projection = live.projection.lock().await;
-                    projection.settled(&execution_id, snapshot.as_ref());
-                    projection.injected(&execution_id, target.as_str());
-                    drop(projection);
+                SubmissionDelivery::Injected { evidence, .. } => {
                     if let SteeringEvidence::Failed(failure) = &evidence {
                         return Err(admission_evidence_error(failure));
                     }
@@ -1892,21 +1888,9 @@ impl ConversationService {
         let mut completion = Box::pin(receipt.wait());
         // Inspect the actual SDK receipt, not a second admission ledger. A retry
         // can already be settled; dropping this wait never cancels SDK work.
-        if let Some(result) = completion.as_mut().now_or_never() {
+        if let Some(_result) = completion.as_mut().now_or_never() {
             let snapshot = live.agent.session_manager().snapshot().await;
             let reply = completed_reply(snapshot.as_ref(), &id).filter(|_| new_submission);
-            let mut projection = live.projection.lock().await;
-            projection.settled(&id, snapshot.as_ref());
-            if result.is_err()
-                && !(matches!(result, Err(AgentError::Closed))
-                    && projection.view.messages.iter().any(|message| {
-                        message.execution_id == id
-                            && message.status == ConversationMessageStatus::Cancelled
-                    }))
-            {
-                projection.receipt_failed(&id);
-            }
-            drop(projection);
             // Let go of the agent before waiting for the summary lock: a
             // summary is not a reason to keep a stopped agent's history
             // leased (`a_reply_waiting_to_be_summarized_does_not_keep_a_deleted_history_leased`).
@@ -1922,21 +1906,9 @@ impl ConversationService {
         let service = self.clone();
         let conversation = conversation.clone();
         tokio::spawn(async move {
-            let result = completion.await;
+            let _result = completion.await;
             let snapshot = live.agent.session_manager().snapshot().await;
             let reply = completed_reply(snapshot.as_ref(), &id);
-            let mut projection = live.projection.lock().await;
-            projection.settled(&id, snapshot.as_ref());
-            if result.is_err()
-                && !(matches!(result, Err(AgentError::Closed))
-                    && projection.view.messages.iter().any(|message| {
-                        message.execution_id == id
-                            && message.status == ConversationMessageStatus::Cancelled
-                    }))
-            {
-                projection.receipt_failed(&id);
-            }
-            drop(projection);
             live.watched.lock().await.remove(&id);
             // As above: the agent is let go of before the summary lock is
             // waited for, so a watcher cannot hold a stopped agent's history
@@ -2177,11 +2149,6 @@ impl ConversationService {
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
             let result = live.agent.remove_queued(execution.clone(), actor).await?;
-            let snapshot = live.agent.session_manager().snapshot().await;
-            live.projection
-                .lock()
-                .await
-                .settled(execution.as_str(), snapshot.as_ref());
             Ok(result == QueueRemoval::Removed)
         })
         .await
@@ -2261,29 +2228,10 @@ impl ConversationService {
                     option_id,
                 })
                 .await;
-            match answer {
-                Ok(_) => {
-                    live.projection
-                        .lock()
-                        .await
-                        .resolved_permission(&execution, &permission);
-                    Ok(())
-                }
-                Err(failure) => {
-                    let (error, selection) = failure.into_parts();
-                    let mut projection = live.projection.lock().await;
-                    match selection {
-                        PermissionSelectionState::Pending => {}
-                        PermissionSelectionState::Consumed => {
-                            projection.resolved_permission(&execution, &permission)
-                        }
-                        PermissionSelectionState::Unknown => {
-                            projection.uncertain_permission(&execution, &permission)
-                        }
-                    }
-                    Err(ConversationError::PermissionAnswer { error, selection })
-                }
-            }
+            answer.map(|_| ()).map_err(|failure| {
+                let (error, selection) = failure.into_parts();
+                ConversationError::PermissionAnswer { error, selection }
+            })
         })
         .await
     }
@@ -2318,10 +2266,6 @@ impl ConversationService {
                     actor,
                 })
                 .await?;
-            live.projection
-                .lock()
-                .await
-                .resolved_permission(&execution, &permission);
             Ok(())
         })
         .await
@@ -2368,10 +2312,7 @@ impl ConversationService {
                             live.join_attachment_owner().await;
                             service.release_live_slot(&id, &live).await;
                         }
-                        // Refresh only terminal records. A concurrently accepted new turn
-                        // retains its live observation state; there is no second closed flag.
                         let snapshot = live.agent.session_manager().snapshot().await;
-                        live.projection.lock().await.settled_all(snapshot.as_ref());
                         // A closed agent runs nothing more, so nothing can still
                         // need the files. An agent that did not close keeps its
                         // saved invocations, and one of those may be a turn that

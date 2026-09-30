@@ -1,7 +1,9 @@
 //! Translate an admitted receiver into the exact SDK record source scope.
 
-use crate::conversation::application::{ReadRefusal, ReceiverReadScope};
-use nessa_sdk::infrastructure::session_storage::NessaRecordSource;
+use crate::conversation::application::{
+    passive_read_selector, validate_record_selector, ReadRefusal, ReceiverReadScope,
+};
+use nessa_sdk::infrastructure::session_storage::{NessaRecordSource, RecordStreamIdentity};
 use nessa_sync::replication::domain::{Id, Scope};
 
 /// The SDK source owns origin, stream, incarnation and schema. The gateway
@@ -12,10 +14,28 @@ pub fn exact_record_scope(
     source: &NessaRecordSource,
     requested: &Scope,
 ) -> Result<Scope, ReadRefusal> {
-    let receiver = Id::new(admitted.receiver_id.clone()).map_err(|_| ReadRefusal::Unverifiable)?;
-    let epoch = Id::new(format!("epoch-{}", admitted.access_epoch))
-        .map_err(|_| ReadRefusal::Unverifiable)?;
-    let exact = source.scope(receiver, epoch);
+    exact_scope_with(admitted, requested, |receiver, epoch| {
+        source.scope(receiver, epoch)
+    })
+}
+
+pub fn record_scope_from_identity(
+    admitted: &ReceiverReadScope,
+    identity: &RecordStreamIdentity,
+) -> Result<Scope, ReadRefusal> {
+    let (receiver, epoch) = passive_read_selector(&admitted.receiver_id, admitted.access_epoch)?;
+    let scope = identity.scope(receiver, epoch);
+    validate_record_selector(admitted, &scope)?;
+    Ok(scope)
+}
+
+fn exact_scope_with(
+    admitted: &ReceiverReadScope,
+    requested: &Scope,
+    scope: impl FnOnce(Id, Id) -> Scope,
+) -> Result<Scope, ReadRefusal> {
+    let (receiver, epoch) = passive_read_selector(&admitted.receiver_id, admitted.access_epoch)?;
+    let exact = scope(receiver, epoch);
     compare_record_scope(admitted, exact, requested)
 }
 
@@ -24,15 +44,8 @@ fn compare_record_scope(
     exact: Scope,
     requested: &Scope,
 ) -> Result<Scope, ReadRefusal> {
-    if exact.stream().as_str() != admitted.conversation_id.to_string() {
-        return Err(ReadRefusal::WrongOwner);
-    }
-    if exact.receiver() != requested.receiver() {
-        return Err(ReadRefusal::WrongReceiver);
-    }
-    if exact.access_epoch() != requested.access_epoch() {
-        return Err(ReadRefusal::StaleEpoch);
-    }
+    validate_record_selector(admitted, &exact)?;
+    validate_record_selector(admitted, requested)?;
     if &exact != requested {
         return Err(ReadRefusal::Unverifiable);
     }
@@ -114,7 +127,7 @@ mod tests {
         );
         assert_eq!(
             compare_record_scope(&admitted, exact, &wrong_stream),
-            Err(ReadRefusal::Unverifiable)
+            Err(ReadRefusal::WrongOwner)
         );
     }
 }

@@ -10,6 +10,8 @@
     "credential.revoke": "CredentialRevokeParams",
     "conversation.create": "ConversationCreateParams",
     "conversation.read": "ConversationReadParams",
+    "conversation.recordsHead": "ConversationRecordsHeadParams",
+    "conversation.recordsPage": "ConversationRecordsPageParams",
     "conversation.list": "ConversationListParams",
     "conversation.send": "ConversationSendParams",
     "conversation.steer": "ConversationSendParams",
@@ -26,9 +28,13 @@
     "agents.list": null,
     "conversation.setApprovalMode": "ConversationSetApprovalModeParams",
     "agents.installOptions": null,
-    "agents.install": "AgentInstallParams"
+    "agents.install": "AgentInstallParams",
+    "conversation.catalogueHead": "ConversationCatalogueHeadParams",
+    "conversation.catalogueManifest": "ConversationCatalogueManifestParams",
+    "conversation.catalogueResolve": "ConversationCatalogueResolveParams"
   },
   "events": {
     "session.challenge": "SessionChallenge"
-  }
+  },
+  "handshakeMethod": "session.authenticate"
 }

@@ -119,6 +119,7 @@ function workingConversation(id: string): Conversation {
       },
       lifecycle: { phase: "attached" },
       queueComplete: false,
+      transcriptState: "complete",
       truncated: false,
     },
   }
@@ -210,6 +211,7 @@ function terminalConversation(
       },
       lifecycle: { phase: "attached" },
       queueComplete: true,
+      transcriptState: "complete",
       truncated: false,
     },
   }
@@ -262,6 +264,7 @@ function queuedConversation(): Conversation {
       },
       lifecycle: { phase: "starting" },
       queueComplete: true,
+      transcriptState: "complete",
       truncated: false,
     },
   }

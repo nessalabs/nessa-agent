@@ -29,6 +29,7 @@ function view() {
     ],
     truncated: false,
     queueComplete: true,
+    transcriptState: "complete",
     messages: [
       {
         executionId: "queued",
@@ -93,6 +94,39 @@ function view() {
 }
 
 describe("conversation view agreement", () => {
+  it("requires a current transcript state and refuses unconfirmed controls", () => {
+    const missing: Record<string, unknown> = view()
+    delete missing.transcriptState
+    expect(() => conversationView(missing, "conversation")).toThrow()
+    expect(() =>
+      conversationView({ ...view(), transcriptState: "future" }, "conversation"),
+    ).toThrow()
+    for (const transcriptState of ["not_loaded", "partial", "stale", "unknown"]) {
+      expect(() =>
+        conversationView({ ...view(), transcriptState }, "conversation"),
+      ).toThrow(/Unconfirmed/)
+      const sample = view()
+      const safe = {
+        ...sample,
+        transcriptState,
+        queueComplete: false,
+        pending: [],
+        permissions: [],
+        questions: [],
+        capabilities: {
+          ...sample.capabilities,
+          queue: false,
+          steer: false,
+          permissions: false,
+        },
+      }
+      expect(conversationView(safe, "conversation").transcriptState).toBe(transcriptState)
+    }
+    expect(() =>
+      conversationView({ ...view(), transcriptState: "complete_empty" }, "conversation"),
+    ).toThrow(/Empty conversation/)
+  })
+
   it("keeps the product fixture's question attached to a running turn", () => {
     const fixtures = JSON.parse(
       readFileSync(
@@ -345,6 +379,19 @@ describe("conversation view agreement", () => {
     expect(() => conversationView(contradictoryFeature, "conversation")).toThrow(
       "Invalid conversation state",
     )
+  })
+
+  it("accepts the single current interaction display notice contract", () => {
+    const value = {
+      ...view(),
+      interactionViewError: "Use Stop to cancel pending interactions.",
+    }
+    expect(conversationView(value, "conversation").interactionViewError).toBe(
+      value.interactionViewError,
+    )
+    expect(() =>
+      conversationView({ ...view(), permissionViewError: "old field" }, "conversation"),
+    ).toThrow()
   })
 
   it("rejects unknown fields in receipts and control results", () => {

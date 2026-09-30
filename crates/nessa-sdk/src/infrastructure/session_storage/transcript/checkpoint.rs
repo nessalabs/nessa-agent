@@ -53,13 +53,29 @@ impl TranscriptCheckpoint {
 pub(super) struct ChunkWriter {
     chunks: Vec<Arc<[u8]>>,
     current: Vec<u8>,
+    limit: Option<usize>,
+    written: usize,
+    limit_exceeded: bool,
 }
 impl ChunkWriter {
     pub fn new() -> Self {
+        Self::with_limit(None)
+    }
+    pub fn with_limit(limit: Option<usize>) -> Self {
         Self {
             chunks: Vec::new(),
-            current: Vec::with_capacity(MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES),
+            current: Vec::with_capacity(
+                limit.map_or(MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES, |bytes| {
+                    bytes.min(MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES)
+                }),
+            ),
+            limit,
+            written: 0,
+            limit_exceeded: false,
         }
+    }
+    pub fn limit_exceeded(&self) -> bool {
+        self.limit_exceeded
     }
     pub fn finish(mut self) -> TranscriptCheckpoint {
         if !self.current.is_empty() {
@@ -71,6 +87,12 @@ impl ChunkWriter {
 impl Write for ChunkWriter {
     fn write(&mut self, mut bytes: &[u8]) -> io::Result<usize> {
         let written = bytes.len();
+        let total = self.written.checked_add(written);
+        if total.is_none_or(|total| self.limit.is_some_and(|limit| total > limit)) {
+            self.limit_exceeded = true;
+            return Err(io::ErrorKind::FileTooLarge.into());
+        }
+        self.written = total.expect("checkpoint byte addition was checked");
         while !bytes.is_empty() {
             let size = bytes
                 .len()
@@ -78,12 +100,18 @@ impl Write for ChunkWriter {
             self.current.extend_from_slice(&bytes[..size]);
             bytes = &bytes[size..];
             if self.current.len() == MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES {
+                let capacity = self
+                    .limit
+                    .map_or(MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES, |limit| {
+                        let retained = (self.chunks.len() + 1)
+                            .saturating_mul(MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES);
+                        limit
+                            .saturating_sub(retained)
+                            .min(MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES)
+                    });
                 self.chunks.push(Arc::from(
-                    std::mem::replace(
-                        &mut self.current,
-                        Vec::with_capacity(MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES),
-                    )
-                    .into_boxed_slice(),
+                    std::mem::replace(&mut self.current, Vec::with_capacity(capacity))
+                        .into_boxed_slice(),
                 ));
             }
         }
@@ -116,3 +144,7 @@ impl<C: AsRef<[u8]>> Read for ChunkReader<'_, C> {
         Ok(length)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/session_storage/transcript_checkpoint_budget.rs"]
+mod budget_tests;

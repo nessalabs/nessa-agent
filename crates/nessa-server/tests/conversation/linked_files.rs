@@ -16,7 +16,8 @@ use crate::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
     application::agent_execution::sessions::{
-        SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+        CommittedSession, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+        StorageFuture,
     },
     domain::agent_execution::sessions::SessionId,
     infrastructure::session_storage::InMemoryStorage,
@@ -408,6 +409,9 @@ struct RefuseFirstInput {
     inner: Arc<InMemoryStorage>,
 }
 impl SessionStorage for RefuseFirstInput {
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        self.inner.read_committed(id)
+    }
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
         let refused = self.refused.clone();
         let inner = self.inner.clone();

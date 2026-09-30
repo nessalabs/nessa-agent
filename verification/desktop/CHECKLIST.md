@@ -437,3 +437,12 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   kept in the JSON as `harmless`). Vite's `[vite] connecting…` / HMR
   messages are logs, not errors. A reload caused by another edit landing on
   the dev server mid-run is not a finding — re-run.
+
+## Committed transcript controls
+
+- [ ] **Unconfirmed history has one notice and no offered controls.**
+  _Check:_ `committed-transcript.mjs` mounts the production conversation controls
+  and `applyView`; covers partial, stale, unknown and not loaded, complete empty,
+  complete without live attachment, and complete with offered authority, including
+  re-enable after incomplete history. Server projection tests own execution identity.
+  Fixture map: [conversation verification](../conversation/README.md).

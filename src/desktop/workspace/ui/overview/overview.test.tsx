@@ -1400,20 +1400,6 @@ describe("the reply pill keeps the caret", () => {
 })
 
 describe("Escape in the overview", () => {
-  it("leaves at once, before the keyboard has landed on its row", async () => {
-    const { store } = await mount()
-    const composer = host.querySelector<HTMLTextAreaElement>(
-      'textarea[aria-label="Message"]',
-    )
-    composer?.focus()
-    // ⌘0's dispatch, and Escape straight after it: no frame has passed.
-    await act(async () => store.dispatch(showContent({ content: "agents" })))
-    expect(selectOverviewOpen(store.getState())).toBe(true)
-    expect(document.activeElement).toBe(composer)
-    await press(composer as HTMLElement, "Escape")
-    expect(selectOverviewOpen(store.getState())).toBe(false)
-  })
-
   it("leaves Escape in a menu over it to the menu", async () => {
     const { store } = await mount()
     await open()
@@ -1452,6 +1438,20 @@ describe("the frame the overview opens on", () => {
       due.forEach((run) => run(0))
       await settle(10)
     })
+
+  it("leaves at once, before the keyboard has landed on its row", async () => {
+    const { store } = await mount()
+    const composer = host.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Message"]',
+    )
+    composer?.focus()
+    // ⌘0's dispatch, and Escape straight after it: no frame has passed.
+    await act(async () => store.dispatch(showContent({ content: "agents" })))
+    expect(selectOverviewOpen(store.getState())).toBe(true)
+    expect(document.activeElement).toBe(composer)
+    await press(composer as HTMLElement, "Escape")
+    expect(selectOverviewOpen(store.getState())).toBe(false)
+  })
 
   it("lays the page out once: the keyboard arrives a frame later, on what is already current", async () => {
     await mount()

@@ -1,3 +1,4 @@
+use std::net::{IpAddr, SocketAddr};
 use url::{Host, Url};
 use uuid::Uuid;
 
@@ -37,6 +38,7 @@ impl EndpointIdentity {
 pub struct GatewayEndpoint {
     web_socket_url: String,
     identity: EndpointIdentity,
+    socket_address: SocketAddr,
 }
 
 impl GatewayEndpoint {
@@ -62,14 +64,26 @@ impl GatewayEndpoint {
         {
             return Err("gateway endpoint must be a bound loopback socket");
         }
+        let address = match parsed.host() {
+            Some(Host::Ipv4(address)) => IpAddr::V4(address),
+            Some(Host::Ipv6(address)) => IpAddr::V6(address),
+            _ => return Err("gateway endpoint must be a bound loopback socket"),
+        };
+        let socket_address = SocketAddr::new(address, explicit_port.ok_or("missing port")?);
         Ok(Self {
             web_socket_url,
             identity,
+            socket_address,
         })
     }
 
     pub fn web_socket_url(&self) -> String {
         self.web_socket_url.clone()
+    }
+
+    /// Numeric listener captured by the same validated endpoint constructor.
+    pub fn socket_address(&self) -> SocketAddr {
+        self.socket_address
     }
 
     pub fn identity(&self) -> &EndpointIdentity {

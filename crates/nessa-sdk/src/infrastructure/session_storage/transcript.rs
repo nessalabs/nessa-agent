@@ -36,6 +36,8 @@ pub enum TranscriptError {
     Decision(StorageError),
     /// A saved continuation is malformed or inconsistent.
     Checkpoint,
+    /// Checkpoint encoding exceeded the caller's aggregate byte allowance.
+    CheckpointTooLarge,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -425,6 +427,34 @@ impl TranscriptFold {
     /// # Errors
     /// Returns `Checkpoint` if serialization fails.
     pub fn checkpoint(&self) -> Result<TranscriptCheckpoint, TranscriptError> {
+        self.encode_checkpoint(None)
+    }
+
+    /// Encode the same complete continuation as [`Self::checkpoint`], with a
+    /// caller-owned aggregate byte allowance. `max_bytes` counts encoded JSON
+    /// bytes across all chunks, including scope and snapshot metadata; zero
+    /// refuses this nonempty representation. Chunk-size limits still apply.
+    ///
+    /// Encoding stops before retaining a write that exceeds the allowance. It
+    /// performs no I/O and leaves the fold unchanged. This bounds the encoded
+    /// checkpoint, not the already loaded snapshot or total process memory.
+    /// Save returned chunks and the applied position in one cache transaction.
+    ///
+    /// # Errors
+    /// Returns [`TranscriptError::CheckpointTooLarge`] if encoding cannot fit
+    /// `max_bytes`, and [`TranscriptError::Checkpoint`] for another encoding
+    /// failure. A refusal returns no partial continuation.
+    pub fn checkpoint_with_limit(
+        &self,
+        max_bytes: usize,
+    ) -> Result<TranscriptCheckpoint, TranscriptError> {
+        self.encode_checkpoint(Some(max_bytes))
+    }
+
+    fn encode_checkpoint(
+        &self,
+        max_bytes: Option<usize>,
+    ) -> Result<TranscriptCheckpoint, TranscriptError> {
         let saved = SavedFold {
             receiver: self.scope.receiver().as_str().into(),
             origin: self.scope.origin().as_str().into(),
@@ -437,8 +467,14 @@ impl TranscriptFold {
             facts: self.fact_count(),
             snapshot: self.snapshot().map(snapshot::checkpoint::SnapshotRef),
         };
-        let mut output = ChunkWriter::new();
-        serde_json::to_writer(&mut output, &saved).map_err(|_| TranscriptError::Checkpoint)?;
+        let mut output = ChunkWriter::with_limit(max_bytes);
+        if serde_json::to_writer(&mut output, &saved).is_err() {
+            return Err(if output.limit_exceeded() {
+                TranscriptError::CheckpointTooLarge
+            } else {
+                TranscriptError::Checkpoint
+            });
+        }
         Ok(output.finish())
     }
 

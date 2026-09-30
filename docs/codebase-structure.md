@@ -455,6 +455,17 @@ between those decisions and the service. Yesterday's
 conversations still reopen on their recorded agent even when it is not today's
 default. `product/conversation.rs` maps the canonical product wire contract;
 composition supplies the agents, storage and audit.
+Passive physical record reads follow a separate path in this conversation
+context: `application/record_read/` invokes fresh receiver admission before
+SDK metadata identity lookup, and `infrastructure/record_read/` checks the
+owner-produced exact scope, opens one expected SDK source per operation, and
+joins its worker on a tracked thread before storage shutdown. Composition
+`root.rs` owns the ordered cleanup report; `core/shutdown.rs` carries typed
+reader deadline/drain and conversation cleanup failures back to the process. The product
+`record_read/` codec validates pages through sync-engine and caps encoded
+replies; `product/socket.rs` reserves independent record capacity and retains
+it through physical send or socket teardown.
+Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
 waiting for runtime readiness, and retains one bounded task that joins readiness
@@ -1288,3 +1299,51 @@ cleanup; `scripts/conversation-smoke/` supplies its bounded deterministic Claude
 ACP process and evidence helpers. Offline bootstrap
 remains in `composition/auth_command.rs`; it requires explicit `--local` selection.
 Cloud auth is reserved but not implemented. See [local auth](guides/local-auth.md).
+
+### Product wire generation
+
+`protocol/product/v1.json` owns product transport shapes. The generator and check
+entrypoints in `scripts/` use `scripts/product-protocol/` for external Rust type
+mapping and the resolved sync-engine's machine-readable `wire_contract` export.
+`wire-shape-schema.mjs` admits the reachable current wire grammar before
+`rust-wire-shapes.mjs` emits Rust from admitted forms. Adjacent compiler tests
+compare actual generated Rust with Ajv; generation fixtures enforce refusal
+before publication. Both suites run in the existing product protocol check.
+Annotated identifier byte caps derive from that owner; generator `--check`
+refuses a stale schema. The adjacent core-contract tests run through the existing
+product protocol check. Cargo's reported target directory owns artifact location;
+the export builds in its `wire-contract` subdirectory.
+
+### Shared product contract values
+
+`crates/nessa-server/src/product_contract/generated.rs` publishes the pure typed
+product error/close values and their schema-derived policy. The product schema
+remains their owner. Generated product DTOs, the product socket and read-only
+sync application ports consume this publication; it contains no routing, IO or
+runtime state. Generic frame protocol types remain under `protocol/`.
+
+### Retained read-only example
+
+`crates/nessa-server/examples/read_only_sync.rs` starts the standalone example
+through `composition/read_only_example.rs`. Its `profile.rs` child admits
+bounded private configuration and delegates current endpoint discovery. Its
+`online.rs` child composes real socket facades and the private cache after actual
+authenticated discovery; the existing finite drivers own work.
+The `read_only_sync/entrypoint/`
+owns argument parsing and JSON output; its `online.rs` presents separate captured
+checks, confirmed durable progress, transport and core/cache refusal evidence; `online/causes.rs` owns their sanitized
+typed JSON presentation. `application/driver.rs` schedules finite
+core passes, `application/offline.rs` owns the saved-read port, and
+`application/reset.rs` exposes attributed reset receipts. The private
+SQLite adapter under `infrastructure/cache/` retains catalogue values, SDK
+checkpoints, pending physical records and their atomic progress. Offline
+transcript views use the conversation feature's shared bounded passive
+projection. Cache/command evidence lives under
+`tests/read_only_sync/infrastructure/`; the [example design](design/read-only-sync-example.md)
+names ordering and resource evidence. Real paired-credential client/gateway
+process, restart, output loss and authority-order evidence lives under
+`tests/composition/read_only_online.rs`, with canonical gateway provisioning and
+client/encoder support in its `read_only_online/fixtures/` children. Pure parser
+and JSON presentation evidence lives under `tests/read_only_sync/entrypoint/`.
+
+The client incoming wire admission uses `packages/nessa-client/src/protocol/unique-json.ts` for decoded object-key uniqueness before `parseWireMessage` delegates grammar/value conversion to JSON.parse.

@@ -87,6 +87,25 @@ export function workspaceRustSourceRoots(root, metadata) {
   return [...new Set(roots.map((path) => resolve(path)))]
 }
 
+// These std values represent addresses; none can open or operate a socket.
+function pureNetValueImport(item) {
+  const match = /^\s*std::net::(?:([A-Za-z0-9_]+)|\{([\s\S]*)\})\s*$/.exec(item)
+  if (!match) return false
+  const names = (match[1] ?? match[2])
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean)
+  const values = new Set([
+    "IpAddr",
+    "Ipv4Addr",
+    "Ipv6Addr",
+    "SocketAddr",
+    "SocketAddrV4",
+    "SocketAddrV6",
+  ])
+  return names.length > 0 && names.every((name) => values.has(name))
+}
+
 export function rustBoundaryViolations(path, source) {
   path = normalizedPath(path)
   const domain = /(?:\/domain\/|\/domain\.rs$)/.test(path)
@@ -107,7 +126,11 @@ export function rustBoundaryViolations(path, source) {
       failures.add(
         "domain must not import runtime, transport, or serialization libraries",
       )
-    if (domain && /\bstd\b[\s\S]*\b(fs|net|process)\b/.test(item))
+    if (
+      domain &&
+      /\bstd\b[\s\S]*\b(fs|net|process)\b/.test(item) &&
+      !pureNetValueImport(item)
+    )
       failures.add("domain must not import filesystem, network, or process effects")
   }
   return [...failures]

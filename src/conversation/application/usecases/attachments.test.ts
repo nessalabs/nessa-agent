@@ -101,6 +101,7 @@ const remote = {
   capabilities,
   lifecycle: { phase: "attached" as const },
   queueComplete: true,
+  transcriptState: "complete" as const,
   truncated: false,
 }
 

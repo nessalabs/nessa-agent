@@ -27,7 +27,7 @@ use crate::{
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
         DurableConversationFileLinkAudit, DurableConversationModeAudit, LocalConversationStore,
-        LocalReceiverAuthority,
+        LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
     },
 };
 use crate::{
@@ -66,6 +66,7 @@ use nessa_sdk::{
         model_metadata_json::load_catalog, opencode_acp::sessions::OpencodeAcpProvider,
     },
 };
+use nessa_sync::replication::domain::Id as RecordId;
 #[cfg(unix)]
 use std::collections::HashSet;
 use std::{
@@ -92,6 +93,8 @@ impl Clock for SystemClock {
 /// cannot be started here.
 pub(super) struct LocalProduct {
     pub(super) routes: ProductRouteState,
+    pub(super) record_reader: Option<Arc<NessaRecordReadSource>>,
+    pub(super) catalogue_reader: Option<Arc<NessaCatalogueReadSource>>,
     /// Startup preparations for fixed providers plus the current OpenCode
     /// resolver when configured. Empty when no agent is configured.
     pub(super) warm_ups: Vec<StartupWarmUp>,
@@ -162,6 +165,8 @@ pub(super) async fn product_state(
             "local gateway requires exactly one personal organization".into(),
         ));
     }
+    let record_origin = RecordId::new(identity.gateway_id.clone())
+        .map_err(|error| RunError::Authentication(format!("invalid record origin: {error:?}")))?;
     let gateway = ResourceId::new(identity.gateway_id.clone()).map_err(setup_error)?;
     let audience = AudienceId::new(identity.gateway_id).map_err(setup_error)?;
     let organization =
@@ -188,6 +193,7 @@ pub(super) async fn product_state(
                 agent_credentials.clone(),
                 packaged_agents,
                 &CedarPolicyEvaluator::profile_digest(),
+                record_origin.clone(),
             )
             .await?;
             (
@@ -197,6 +203,8 @@ pub(super) async fn product_state(
                     built.agents_catalog,
                     built.receivers,
                     built.metadata,
+                    built.record_reader,
+                    built.catalogue_reader,
                 )),
                 built.agent_probe,
                 built.warm_ups,
@@ -245,15 +253,25 @@ pub(super) async fn product_state(
             }));
     }
     product.browser_http_allowed = config.browser_http_allowed();
-    if let Some((service, attachments, agents_catalog, receivers, metadata)) = conversations {
+    let mut record_reader = None;
+    let mut catalogue_reader = None;
+    if let Some((service, attachments, agents_catalog, receivers, metadata, reader, catalogue)) =
+        conversations
+    {
+        record_reader = Some(reader.clone());
+        catalogue_reader = Some(catalogue.clone());
         product = product
             .with_conversations(Arc::new(service))
             .with_passive_read(receivers, metadata)
+            .with_record_source(reader)
+            .with_catalogue_source(catalogue)
             .with_attachments(attachments)
             .with_agents_catalog(agents_catalog);
     }
     Ok(LocalProduct {
         routes: product,
+        record_reader,
+        catalogue_reader,
         warm_ups,
     })
 }
@@ -307,6 +325,8 @@ fn launch_files(
 /// Everything building the conversation stack settled.
 struct BuiltConversations {
     service: ConversationService,
+    record_reader: Arc<NessaRecordReadSource>,
+    catalogue_reader: Arc<NessaCatalogueReadSource>,
     receivers: Arc<dyn ReceiverAuthority>,
     metadata: Arc<dyn ConversationRepository>,
     attachments: AttachmentService,
@@ -329,6 +349,7 @@ async fn conversations(
     _credentials: Arc<dyn AgentCredentialSource>,
     _packaged_agents: bool,
     _policy_revision: &str,
+    _record_origin: RecordId,
 ) -> Result<BuiltConversations, RunError> {
     Err(RunError::Agent(
         "ACP agents require Unix process supervision".into(),
@@ -349,6 +370,7 @@ async fn conversations(
     credentials: Arc<dyn AgentCredentialSource>,
     packaged_agents: bool,
     policy_revision: &str,
+    record_origin: RecordId,
 ) -> Result<BuiltConversations, RunError> {
     let mut warm_ups = Vec::new();
     let root = conversation_root(
@@ -497,6 +519,15 @@ async fn conversations(
         .initialize()
         .await
         .map_err(|error| RunError::Agent(error.to_string()))?;
+    let record_reader = Arc::new(NessaRecordReadSource::new(
+        storage.clone(),
+        record_origin.clone(),
+        tokio::runtime::Handle::current(),
+    ));
+    let catalogue_reader = Arc::new(NessaCatalogueReadSource::new(
+        metadata.clone(),
+        record_origin,
+    ));
     let creation_audit = Arc::new(
         DurableConversationCreationAudit::new(root.join("audit").join("creation"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -586,6 +617,8 @@ async fn conversations(
         metadata,
         attachments: attachments.service,
         agents_catalog,
+        record_reader,
+        catalogue_reader,
         agent_probe: resolver,
         warm_ups,
     })

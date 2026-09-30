@@ -1,24 +1,39 @@
 //! Shared conversation ownership and admission tests use real SDK scheduling.
+use super::view::ConversationTranscriptState;
 use super::{
     service::attachment_failure_message, ConversationAgent, ConversationAgents, ConversationCaller,
     ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
     ConversationDependencies, ConversationDisposition, ConversationError, ConversationFuture,
     ConversationLifecyclePhase, ConversationLimits, ConversationMessageStatus,
     ConversationOwnershipState, ConversationRepository, ConversationService,
-    ConversationStartupFailureCode, ProviderSessionErasers, RequestedAgent, RuntimeReadiness,
-    SubmissionMode, SubmittedMessage, UnfinishedDeletions,
+    ConversationStartupFailureCode, ProviderSessionErasers, RequestedAgent, RequestedConversation,
+    RuntimeReadiness, SubmissionMode, SubmittedMessage, UnfinishedDeletions,
 };
 use crate::conversation::domain::ConversationApprovalMode;
 use crate::{
     agents::domain::AgentId,
-    conversation::domain::{Conversation, ConversationDeletion, ConversationId},
+    conversation::domain::{
+        Conversation, ConversationDeletion, ConversationId, ConversationSummary, ConversationTitle,
+    },
     conversation_test_support::{
-        capabilities, fixture, mode_fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit,
-        MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit,
+        capabilities, fixture, mode_agents, mode_fixture, only, AcceptingCreationAudit,
+        AcceptingDeletionAudit, AcceptingModeAudit, MemoryRepository, MemorySummaries, Provider,
+        ProviderFactory, RecordingFileLinkAudit, RecordingModeAudit, RecordingModeExecutionAudit,
         TestClock, Unlisted, DELETION_BUDGETS,
     },
 };
 use nessa_sdk::application::agent_execution::providers::ApprovalMode as ProviderApprovalMode;
+use nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock;
+use nessa_sdk::{
+    application::agent_execution::executions::{
+        ExecutionController, ExecutionEvent, ExecutionUpdate,
+    },
+    domain::agent_execution::{
+        executions::{ExecutionId, MessageChunk, MessageId},
+        permissions::PermissionAuthorityError,
+    },
+};
+use std::time::Duration;
 
 #[tokio::test]
 async fn an_idle_mode_change_commits_once_and_an_uncertain_change_recovers_prior_mode() {
@@ -962,6 +977,7 @@ use nessa_sdk::{
             ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest,
         },
         sessions::{
+            CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus,
             SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
         },
     },
@@ -1676,9 +1692,20 @@ async fn malformed_controls_do_not_open_a_dormant_owned_provider() {
 }
 
 #[tokio::test]
-async fn consumed_permission_failure_is_not_reoffered_on_the_immediate_read() {
+async fn current_permission_authority_tracks_consumption_before_audit() {
+    permission_consumption_case(false, PermissionSelectionState::Pending).await;
+    permission_consumption_case(false, PermissionSelectionState::Consumed).await;
+    permission_consumption_case(true, PermissionSelectionState::Consumed).await;
+}
+async fn permission_consumption_case(
+    consume_before_gate: bool,
+    selection: PermissionSelectionState,
+) {
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     provider.request_permission.store(1, Ordering::SeqCst);
+    provider
+        .consume_before_answer_gate
+        .store(consume_before_gate, Ordering::SeqCst);
     let (finish, execution_gate) = oneshot::channel();
     *provider.permission_gate.lock().unwrap() = Some(execution_gate);
     let id = id();
@@ -1720,8 +1747,43 @@ async fn consumed_permission_failure_is_not_reoffered_on_the_immediate_read() {
     })
     .await
     .unwrap();
-    *provider.answer_failure.lock().unwrap() =
-        Some((AgentError::AuditFailure, PermissionSelectionState::Consumed));
+    {
+        let mut foreign =
+            ExecutionController::new(ExecutionSessionId::new("foreign-context").unwrap());
+        foreign
+            .begin_execution(ExecutionId::new("review").unwrap())
+            .unwrap();
+        let handle = foreign
+            .permission_authority_source()
+            .read()
+            .unwrap()
+            .unwrap();
+        for replacement in [
+            Ok(None),
+            Ok(Some(handle)),
+            Err(PermissionAuthorityError::Poisoned),
+        ] {
+            *provider.authority_override.lock().unwrap() = Some(replacement);
+            let view = service
+                .read(id.clone(), caller("panel", "custom-authority-refusal"))
+                .await
+                .unwrap();
+            assert!(view.permissions.is_empty());
+            assert_eq!(view.messages.len(), 1);
+            assert_eq!(view.transcript_state, ConversationTranscriptState::Complete);
+        }
+        *provider.authority_override.lock().unwrap() = None;
+        assert_eq!(
+            service
+                .read(id.clone(), caller("panel", "owner-restored"))
+                .await
+                .unwrap()
+                .permissions
+                .len(),
+            1
+        );
+    }
+    *provider.answer_failure.lock().unwrap() = Some((AgentError::AuditFailure, selection));
     let (release, gate) = oneshot::channel();
     *provider.answer_gate.lock().unwrap() = Some(gate);
     let answer = tokio::spawn({
@@ -1742,27 +1804,33 @@ async fn consumed_permission_failure_is_not_reoffered_on_the_immediate_read() {
     provider.answer_started.notified().await;
     assert_eq!(
         service
-            .read(id.clone(), caller("panel", "while-audit-pending"))
+            .read(
+                id.clone(),
+                caller("panel", "at-domain-consumption-boundary")
+            )
             .await
             .unwrap()
             .permissions
             .len(),
-        1
+        usize::from(!consume_before_gate)
     );
     release.send(()).unwrap();
-    assert!(matches!(
-        answer.await.unwrap(),
+    match answer.await.unwrap() {
         Err(ConversationError::PermissionAnswer {
             error: AgentError::AuditFailure,
-            selection: PermissionSelectionState::Consumed,
-        })
-    ));
-    assert!(service
-        .read(id.clone(), caller("panel", "fresh-read"))
-        .await
-        .unwrap()
-        .permissions
-        .is_empty());
+            selection: actual,
+        }) => assert_eq!(actual, selection),
+        other => panic!("unexpected answer result: {other:?}"),
+    }
+    assert_eq!(
+        service
+            .read(id.clone(), caller("panel", "fresh-read"))
+            .await
+            .unwrap()
+            .permissions
+            .len(),
+        usize::from(selection == PermissionSelectionState::Pending)
+    );
     finish.send(()).unwrap();
     service.shutdown().await.unwrap();
 }
@@ -4560,4 +4628,405 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
     assert!(!claude_readiness.waited.load(Ordering::SeqCst));
     assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
     service.shutdown().await.unwrap();
+}
+
+struct SubstitutedCommittedStorage {
+    inner: Arc<InMemoryStorage>,
+    substitute: AtomicBool,
+}
+impl SessionStorage for SubstitutedCommittedStorage {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        self.inner.open(id)
+    }
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        self.inner.open_existing(id)
+    }
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        Box::pin(async move {
+            if self.substitute.load(Ordering::SeqCst) {
+                Ok(Some(CommittedSession::new(
+                    SessionId::new("another-session").unwrap(),
+                    "foreign-incarnation".into(),
+                    0,
+                    0,
+                    0,
+                    None,
+                    CommittedStatus::new(
+                        CommittedCompleteness::CompleteEmpty,
+                        CommittedFreshness::Current,
+                    ),
+                )?))
+            } else {
+                self.inner.read_committed(id).await
+            }
+        })
+    }
+}
+#[tokio::test]
+async fn custom_committed_adapter_cannot_substitute_requested_session_or_destroy_prior_view() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let storage = Arc::new(SubstitutedCommittedStorage {
+        inner: storage,
+        substitute: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(provider))),
+            storage: storage.clone(),
+            metadata: repository,
+            mode_audit: Arc::new(AcceptingModeAudit),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    service
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let before = service
+        .read(id.clone(), caller("panel", "read-before"))
+        .await
+        .unwrap();
+    storage.substitute.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        service
+            .read(id.clone(), caller("panel", "read-foreign"))
+            .await,
+        Err(ConversationError::Storage(StorageError::IdentityMismatch))
+    ));
+    storage.substitute.store(false, Ordering::SeqCst);
+    let after = service
+        .read(id, caller("panel", "read-after"))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(after).unwrap()
+    );
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn committed_reads_recheck_tombstone_after_title_lookup() {
+    for pending_mode in [false, true] {
+        let provider = Arc::new(ProviderFactory::default());
+        let records = Arc::new(MemoryRepository::default());
+        let summaries = Arc::new(MemorySummaries::default());
+        let mode_audit = Arc::new(RecordingModeAudit::default());
+        let service = ConversationService::new(
+            ConversationDependencies {
+                agents: mode_agents(provider, Arc::new(RecordingModeExecutionAudit::default())),
+                storage: Arc::new(InMemoryStorage::new()),
+                metadata: records.clone(),
+                mode_audit: mode_audit.clone(),
+                creation_audit: Arc::new(AcceptingCreationAudit),
+                file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                attachments: None,
+                summaries: summaries.clone(),
+                listing: Arc::new(Unlisted),
+                deletion_audit: Arc::new(AcceptingDeletionAudit),
+                provider_sessions: ProviderSessionErasers::default(),
+                deletion_budgets: DELETION_BUDGETS,
+                message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+                clock: Arc::new(TestClock),
+            },
+            ConversationLimits::default(),
+            None,
+        )
+        .unwrap();
+        let id = id();
+        service
+            .create(
+                id.clone(),
+                caller("panel", "create-read-race"),
+                RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+        service
+            .read(id.clone(), caller("panel", "load-read-race"))
+            .await
+            .unwrap();
+        if pending_mode {
+            mode_audit
+                .fail_application_once
+                .store(true, Ordering::SeqCst);
+            mode_audit.refuse_recovery.store(true, Ordering::SeqCst);
+            assert!(matches!(
+                service
+                    .set_approval_mode(
+                        id.clone(),
+                        caller("panel", "mode-race"),
+                        ConversationApprovalMode::Auto
+                    )
+                    .await,
+                Err(ConversationError::Audit)
+            ));
+        }
+        let (entered, waiting) = oneshot::channel();
+        let (release, held) = oneshot::channel();
+        *summaries.load_gate.lock().unwrap() = Some((entered, held));
+        let reading = tokio::spawn({
+            let service = service.clone();
+            let id = id.clone();
+            async move { service.read(id, caller("panel", "held-read")).await }
+        });
+        tokio::time::timeout(Duration::from_secs(3), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        // Another metadata writer commits the authoritative deletion while the
+        // candidate is waiting for its title. The view must never publish it.
+        records
+            .record_deletion(
+                &id,
+                ConversationDeletion::new(
+                    OrganizationId::new("org").unwrap(),
+                    PrincipalId::new("person").unwrap(),
+                    "other-gateway".into(),
+                    "delete-race".into(),
+                    1_700_000_000_123,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        release.send(()).unwrap();
+        assert!(matches!(
+            reading.await.unwrap(),
+            Err(ConversationError::Deleted)
+        ));
+        service.shutdown().await.unwrap();
+    }
+}
+
+struct BudgetCommittedStorage {
+    inner: Arc<InMemoryStorage>,
+    snapshot: Mutex<Option<SessionSnapshot>>,
+    position: AtomicUsize,
+}
+impl SessionStorage for BudgetCommittedStorage {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        self.inner.open(id)
+    }
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        self.inner.open_existing(id)
+    }
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        Box::pin(async move {
+            if let Some(snapshot) = snapshot {
+                let position = self.position.load(Ordering::SeqCst) as u64;
+                Ok(Some(CommittedSession::new(
+                    id.clone(),
+                    self.inner
+                        .read_committed(id.clone())
+                        .await?
+                        .unwrap()
+                        .incarnation()
+                        .into(),
+                    position,
+                    position,
+                    position,
+                    Some(snapshot),
+                    CommittedStatus::new(
+                        CommittedCompleteness::Complete,
+                        CommittedFreshness::Current,
+                    ),
+                )?))
+            } else {
+                self.inner.read_committed(id).await
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn returned_committed_views_bound_late_titles_and_preserve_pending_selection() {
+    for pending_mode in [false, true] {
+        let provider = Arc::new(ProviderFactory::default());
+        let records = Arc::new(MemoryRepository::default());
+        let summaries = Arc::new(MemorySummaries::default());
+        let mode_audit = Arc::new(RecordingModeAudit::default());
+        let storage = Arc::new(BudgetCommittedStorage {
+            inner: Arc::new(InMemoryStorage::new()),
+            snapshot: Mutex::new(None),
+            position: AtomicUsize::new(100),
+        });
+        let service = ConversationService::new(
+            ConversationDependencies {
+                agents: mode_agents(
+                    provider.clone(),
+                    Arc::new(RecordingModeExecutionAudit::default()),
+                ),
+                storage: storage.clone(),
+                metadata: records,
+                mode_audit: mode_audit.clone(),
+                creation_audit: Arc::new(AcceptingCreationAudit),
+                file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                attachments: None,
+                summaries: summaries.clone(),
+                listing: Arc::new(Unlisted),
+                deletion_audit: Arc::new(AcceptingDeletionAudit),
+                provider_sessions: ProviderSessionErasers::default(),
+                deletion_budgets: DELETION_BUDGETS,
+                message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+                clock: Arc::new(TestClock),
+            },
+            ConversationLimits::default(),
+            None,
+        )
+        .unwrap();
+        let id = id();
+        service
+            .create(
+                id.clone(),
+                caller("panel", "budget-create"),
+                RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+        for index in 0..4 {
+            *provider.execution_updates.lock().unwrap() = vec![ExecutionUpdate::Message(
+                MessageChunk::text("\"".repeat(if index == 3 { 500 } else { 8192 }))
+                    .with_message_id(MessageId::new(format!("budget-{index}")).unwrap()),
+            )];
+            let execution = format!("budget-turn-{index}");
+            service
+                .submit(
+                    id.clone(),
+                    caller("panel", "budget-send"),
+                    execution.clone(),
+                    SubmittedMessage {
+                        text: "Input".into(),
+                        ..SubmittedMessage::default()
+                    },
+                    SubmissionMode::Queue,
+                )
+                .await
+                .unwrap();
+            let baseline = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    let view = service
+                        .read(id.clone(), caller("panel", "budget-wait"))
+                        .await
+                        .unwrap();
+                    if view.messages.iter().any(|message| {
+                        message.execution_id == execution
+                            && message.status == ConversationMessageStatus::Completed
+                    }) {
+                        break view;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(!baseline.truncated);
+        }
+        if pending_mode {
+            mode_audit
+                .fail_application_once
+                .store(true, Ordering::SeqCst);
+            mode_audit.refuse_recovery.store(true, Ordering::SeqCst);
+            assert!(matches!(
+                service
+                    .set_approval_mode(
+                        id.clone(),
+                        caller("panel", "budget-mode"),
+                        ConversationApprovalMode::Auto
+                    )
+                    .await,
+                Err(ConversationError::Audit)
+            ));
+        }
+        let mut snapshot = storage
+            .inner
+            .read_committed(SessionId::new(id.to_string()).unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .clone();
+        *storage.snapshot.lock().unwrap() = Some(snapshot.clone());
+        let baseline = service
+            .read(id.clone(), caller("panel", "budget-baseline"))
+            .await
+            .unwrap();
+        assert!(!baseline.truncated);
+        // Calibrate from the actual service result, excluding the metadata whose
+        // late addition this regression exercises. The semantic snapshot remains
+        // complete and valid at the custom adapter boundary.
+        let mut without_metadata = baseline.clone();
+        without_metadata.title = None;
+        without_metadata.selection = None;
+        let size = serde_json::to_vec(&without_metadata).unwrap().len();
+        assert!(size < 59_980);
+        let length = 500 + (59_980 - size) / 2;
+        assert!(length <= 8192);
+        let record = snapshot
+            .invocations
+            .iter_mut()
+            .find(|record| record.request.execution_id.as_str() == "budget-turn-3")
+            .unwrap();
+        let event = record.events.iter_mut().find(|event| matches!(event.update(), ExecutionUpdate::Message(chunk) if chunk.message_id().is_some_and(|id| id == "budget-3"))).unwrap();
+        *event = ExecutionEvent::new(
+            record.request.execution_id.clone(),
+            ExecutionUpdate::Message(
+                MessageChunk::text("\"".repeat(length))
+                    .with_message_id(MessageId::new("budget-3").unwrap()),
+            ),
+        );
+        *storage.snapshot.lock().unwrap() = Some(snapshot);
+        storage.position.store(101, Ordering::SeqCst);
+        summaries.summaries.lock().unwrap().insert(
+            id.clone(),
+            ConversationSummary::new(
+                Some(ConversationTitle::new(&"🦀".repeat(48)).unwrap()),
+                None,
+                1_700_000_000_123,
+                false,
+            )
+            .unwrap(),
+        );
+        let view = service
+            .read(id, caller("panel", "budget-final"))
+            .await
+            .unwrap();
+        assert!(
+            view.truncated,
+            "metadata addition must reach the budget owner: pending={pending_mode}, size={}, baseline={size}, length={length}", serde_json::to_vec(&view).unwrap().len()
+        );
+        assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
+        if pending_mode {
+            assert!(view.selection.is_some());
+            assert!(view.approval_mode_change.is_some());
+        } else {
+            assert_eq!(view.title.as_deref(), Some("🦀".repeat(48).as_str()));
+        }
+        service.shutdown().await.unwrap();
+    }
 }

@@ -10,6 +10,7 @@ use nessa_auth::{
     },
     domain::{Action, CredentialId, OrganizationId, PrincipalId, Resource},
 };
+use nessa_sync::replication::domain::{Id, Scope};
 use std::{future::Future, pin::Pin};
 
 /// A binding authority reads committed state. A missing or unavailable binding
@@ -186,4 +187,26 @@ impl AdmitPassiveRead<'_> {
         }
         Ok(binding)
     }
+}
+
+/// Encode the trusted passive receiver and numeric epoch into opaque sync IDs.
+pub(crate) fn passive_read_selector(receiver: &str, epoch: u64) -> Result<(Id, Id), ReadRefusal> {
+    let receiver = Id::new(receiver).map_err(|_| ReadRefusal::Unverifiable)?;
+    let epoch = Id::new(format!("epoch-{epoch}")).map_err(|_| ReadRefusal::Unverifiable)?;
+    Ok((receiver, epoch))
+}
+
+pub(crate) fn validate_passive_read_selector(
+    receiver: &str,
+    epoch: u64,
+    scope: &Scope,
+) -> Result<(), ReadRefusal> {
+    let (receiver, epoch) = passive_read_selector(receiver, epoch)?;
+    if scope.receiver() != &receiver {
+        return Err(ReadRefusal::WrongReceiver);
+    }
+    if scope.access_epoch() != &epoch {
+        return Err(ReadRefusal::StaleEpoch);
+    }
+    Ok(())
 }

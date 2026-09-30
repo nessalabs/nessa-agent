@@ -51,3 +51,6 @@ auth API readiness and operating bounds are in [ADR 0007](adr/done/0007-authenti
 The SDK owns admitted follow-up queueing and steering. UI drafts and the
 gateway's authenticated routing are separate responsibilities. Read the current
 SDK guides before the proposed conversation contract in [ADR 0008](adr/todo/0008-agent-client-api.md).
+
+Proposed [authorized bounded record reads](design/authorized-record-reads.md) defines
+issue #296’s product transport, byte budgets, source lifetime and recovery tests.

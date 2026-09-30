@@ -1,5 +1,5 @@
 use crate::cli::entrypoint::{Command, LocalProvisioning, HELP};
-use crate::conversation::application::ConversationError;
+use crate::conversation::application::{CatalogueReadError, ConversationError, RecordReadError};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::desktop_runtime::{
     application::{restore_retirement, retire},
@@ -9,7 +9,9 @@ use crate::env::Environment;
 use crate::server::entrypoint::http;
 use crate::{
     app::dependencies::RuntimeDependencies,
-    core::{Launch, RunError},
+    core::{
+        Launch, PassiveReaderOutcomes, PassiveReaderShutdownFailure, RunError, ShutdownFailure,
+    },
     env::UptimeBackend,
 };
 use axum::Extension;
@@ -23,6 +25,7 @@ use nessa_gateway_endpoint::{
 use std::future::Future;
 use std::io::Write;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 use uuid::Uuid;
@@ -102,6 +105,8 @@ impl CompositionRoot {
         let dependencies = runtime_dependencies(&config);
         let super::local_auth::LocalProduct {
             routes: product,
+            record_reader,
+            catalogue_reader,
             warm_ups,
         } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle).await?;
         let conversations = product.conversations.clone();
@@ -299,7 +304,24 @@ impl CompositionRoot {
             .with_graceful_shutdown(async move {
                 shutdown_signal().await;
                 let Some(service) = conversations else { return };
-                record_conversation_shutdown(&slot, service.shutdown()).await;
+                passive_cleanup(
+                    &slot,
+                    async {
+                        match record_reader {
+                            Some(reader) => reader.shutdown().await,
+                            None => Ok(()),
+                        }
+                    },
+                    async {
+                        match catalogue_reader {
+                            Some(reader) => reader.shutdown().await,
+                            None => Ok(()),
+                        }
+                    },
+                    async { service.shutdown().await },
+                    Duration::from_secs(30),
+                )
+                .await;
             })
             .await;
         serve_outcome(served, &report)
@@ -321,38 +343,110 @@ fn serve_outcome(
     unconfirmed
 }
 
-/// What graceful shutdown managed to say about itself.
+/// What the one graceful-shutdown callback has established so far.
 #[derive(Debug)]
 enum ShutdownReport {
-    /// Nothing is outstanding: conversations confirmed their cleanup and audit
-    /// delivery, or there were none to stop and no shutdown ever began. This is
-    /// also the slot's starting value, which is what makes those the same fact.
+    /// All owners confirmed cleanup, or no cleanup began.
     Confirmed,
-    /// Shutdown began and said nothing further — the callback did not finish.
+    /// Callback has not yet published reader evidence.
     Unreported,
-    /// Shutdown finished and reported this failure.
-    Failed(ConversationError),
+    /// The report retains each result as it is observed, including deadline evidence.
+    ReadersPending(PassiveReaderOutcomes),
+    /// Both physical drains completed; conversation cleanup has not reported.
+    ConversationsPending {
+        readers: Result<(), PassiveReaderShutdownFailure>,
+    },
+    /// All cleanup owners returned; at least one failed.
+    Failed(ShutdownFailure),
 }
 
-/// Stop conversations, recording whatever that manages to say about itself.
-///
-/// The slot is armed before `stop` is awaited and written again only by an
-/// outcome, so a shutdown that is cancelled or panics partway leaves
-/// `Unreported` behind rather than the `Confirmed` the slot started life with.
-/// Axum runs this callback in a task of its own, so that is a reachable ending
-/// and not a theoretical one.
-async fn record_conversation_shutdown(
+/// Own reader drain, conversation cleanup, and their report together.
+/// Each pending stage publishes known evidence before its next await. The final
+/// synchronous publication consumes that evidence rather than cloning errors.
+async fn passive_cleanup(
     slot: &Mutex<ShutdownReport>,
-    stop: impl Future<Output = Result<(), ConversationError>>,
+    record: impl Future<Output = Result<(), RecordReadError>>,
+    catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
+    conversations: impl Future<Output = Result<(), ConversationError>>,
+    deadline: Duration,
 ) {
-    record_shutdown(slot, ShutdownReport::Unreported);
-    match stop.await {
-        Ok(()) => record_shutdown(slot, ShutdownReport::Confirmed),
-        Err(error) => {
-            tracing::error!(%error, "conversation shutdown did not confirm all cleanup");
-            record_shutdown(slot, ShutdownReport::Failed(error));
+    record_shutdown(
+        slot,
+        ShutdownReport::ReadersPending(PassiveReaderOutcomes::default()),
+    );
+    tokio::pin!(record, catalogue);
+    let timeout = tokio::time::sleep(deadline);
+    tokio::pin!(timeout);
+    loop {
+        let (record_pending, catalogue_pending, deadline_pending) = {
+            let report = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            let ShutdownReport::ReadersPending(outcomes) = &*report else {
+                unreachable!()
+            };
+            (
+                outcomes.record().is_none(),
+                outcomes.catalogue().is_none(),
+                !outcomes.deadline_exceeded(),
+            )
+        };
+        if !record_pending && !catalogue_pending {
+            break;
+        }
+        // Ready completions win over a simultaneous deadline, including zero.
+        // Each observed result is published synchronously before another await.
+        tokio::select! {
+            biased;
+            result = &mut record, if record_pending => update_reader_report(slot, |outcomes| outcomes.observe_record(result)),
+            result = &mut catalogue, if catalogue_pending => update_reader_report(slot, |outcomes| outcomes.observe_catalogue(result)),
+            _ = &mut timeout, if deadline_pending => {
+                update_reader_report(slot, PassiveReaderOutcomes::observe_deadline);
+                tracing::error!("passive reader shutdown exceeded deadline; retaining runtime until physical work ends");
+            }
         }
     }
+    {
+        let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        let ShutdownReport::ReadersPending(outcomes) =
+            std::mem::replace(&mut *report, ShutdownReport::Unreported)
+        else {
+            unreachable!()
+        };
+        *report = ShutdownReport::ConversationsPending {
+            readers: outcomes.into_result(),
+        };
+    }
+    let conversations = conversations.await;
+    let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    let ShutdownReport::ConversationsPending { readers } =
+        std::mem::replace(&mut *report, ShutdownReport::Unreported)
+    else {
+        unreachable!()
+    };
+    *report = match (readers, conversations) {
+        (Ok(()), Ok(())) => ShutdownReport::Confirmed,
+        (Err(readers), Ok(())) => ShutdownReport::Failed(ShutdownFailure::Readers(readers)),
+        (Ok(()), Err(conversations)) => {
+            ShutdownReport::Failed(ShutdownFailure::Conversations(conversations))
+        }
+        (Err(readers), Err(conversations)) => ShutdownReport::Failed(ShutdownFailure::Both {
+            readers,
+            conversations,
+        }),
+    };
+    if let ShutdownReport::Failed(error) = &*report {
+        tracing::error!(%error, "gateway shutdown did not confirm all cleanup");
+    }
+}
+
+fn update_reader_report(
+    slot: &Mutex<ShutdownReport>,
+    update: impl FnOnce(&mut PassiveReaderOutcomes),
+) {
+    let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    let ShutdownReport::ReadersPending(outcomes) = &mut *report else {
+        unreachable!()
+    };
+    update(outcomes);
 }
 
 fn record_shutdown(slot: &Mutex<ShutdownReport>, report: ShutdownReport) {
@@ -378,6 +472,12 @@ fn shutdown_result(report: &Mutex<ShutdownReport>) -> Result<(), RunError> {
     }
     let unconfirmed = match std::mem::replace(&mut *slot, ShutdownReport::Unreported) {
         ShutdownReport::Failed(error) => Some(error),
+        ShutdownReport::ReadersPending(outcomes) => {
+            Some(ShutdownFailure::ReadersUnreported { outcomes })
+        }
+        ShutdownReport::ConversationsPending { readers } => {
+            Some(ShutdownFailure::ConversationsUnreported { readers })
+        }
         // `Confirmed` returned above; named rather than wildcarded so a new
         // report has to say what it means instead of inheriting "said nothing".
         ShutdownReport::Unreported | ShutdownReport::Confirmed => None,
@@ -428,6 +528,317 @@ impl crate::desktop_runtime::application::BackgroundWork for StartupWarmUps {
 mod tests {
     use super::*;
     use crate::env::{MockEnv, Stage, STAGE};
+    use std::{
+        sync::atomic::{AtomicBool, Ordering},
+        task::Poll,
+    };
+
+    #[tokio::test]
+    async fn shutdown_owner_outcomes_preserve_each_independent_failure() {
+        for record_fails in [false, true] {
+            for catalogue_fails in [false, true] {
+                for conversation_fails in [false, true] {
+                    let report = Mutex::new(ShutdownReport::Confirmed);
+                    let record = if record_fails {
+                        Err(RecordReadError::WorkerPanicked)
+                    } else {
+                        Ok(())
+                    };
+                    let catalogue = if catalogue_fails {
+                        Err(CatalogueReadError::WorkerPanicked)
+                    } else {
+                        Ok(())
+                    };
+                    let cleaned = AtomicBool::new(false);
+                    passive_cleanup(
+                        &report,
+                        std::future::ready(record),
+                        std::future::ready(catalogue.clone()),
+                        async {
+                            cleaned.store(true, Ordering::SeqCst);
+                            if conversation_fails {
+                                Err(ConversationError::Audit)
+                            } else {
+                                Ok(())
+                            }
+                        },
+                        Duration::from_secs(30),
+                    )
+                    .await;
+                    assert!(cleaned.load(Ordering::SeqCst));
+                    let outcome = shutdown_result(&report);
+                    match outcome {
+                        Ok(()) => assert!(!record_fails && !catalogue_fails && !conversation_fails),
+                        Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
+                            ConversationError::Audit,
+                        )))) => assert!(!record_fails && !catalogue_fails && conversation_fails),
+                        Err(RunError::Shutdown(Some(ShutdownFailure::Readers(readers)))) => {
+                            assert!(!conversation_fails);
+                            assert_eq!(readers.outcomes().record(), Some(&record));
+                            assert_eq!(readers.outcomes().catalogue(), Some(&catalogue));
+                            assert!(!readers.outcomes().deadline_exceeded());
+                        }
+                        Err(RunError::Shutdown(Some(ShutdownFailure::Both {
+                            readers,
+                            conversations: ConversationError::Audit,
+                        }))) => {
+                            assert!(conversation_fails);
+                            assert_eq!(readers.outcomes().record(), Some(&record));
+                            assert_eq!(readers.outcomes().catalogue(), Some(&catalogue));
+                        }
+                        other => panic!("cleanup causes changed: {other:?}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn gated_second_reader_retains_first_fault_deadline_and_eventual_both_causes() {
+        let (release, waiting) = tokio::sync::oneshot::channel();
+        let report = Arc::new(Mutex::new(ShutdownReport::Confirmed));
+        let output = report.clone();
+        let cleaned = Arc::new(AtomicBool::new(false));
+        let cleanup = cleaned.clone();
+        let task = tokio::spawn(async move {
+            passive_cleanup(
+                &output,
+                std::future::ready(Err(RecordReadError::WorkerPanicked)),
+                async {
+                    waiting.await.unwrap();
+                    Err(CatalogueReadError::WorkerPanicked)
+                },
+                async {
+                    cleanup.store(true, Ordering::SeqCst);
+                    Err(ConversationError::Audit)
+                },
+                Duration::from_secs(30),
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(31)).await;
+        tokio::task::yield_now().await;
+        assert!(!cleaned.load(Ordering::SeqCst));
+        assert!(!task.is_finished());
+        release.send(()).unwrap();
+        task.await.unwrap();
+        let Err(RunError::Shutdown(Some(ShutdownFailure::Both {
+            readers,
+            conversations: ConversationError::Audit,
+        }))) = shutdown_result(&report)
+        else {
+            panic!("all cleanup causes must survive")
+        };
+        assert_eq!(
+            readers.outcomes().record(),
+            Some(&Err(RecordReadError::WorkerPanicked))
+        );
+        assert_eq!(
+            readers.outcomes().catalogue(),
+            Some(&Err(CatalogueReadError::WorkerPanicked))
+        );
+        assert!(readers.outcomes().deadline_exceeded());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_second_reader_preserves_known_fault_or_success_before_and_after_deadline() {
+        for result in [Ok(()), Err(RecordReadError::WorkerPanicked)] {
+            for after_deadline in [false, true] {
+                let report = Mutex::new(ShutdownReport::Confirmed);
+                let cleaned = AtomicBool::new(false);
+                {
+                    let stop = passive_cleanup(
+                        &report,
+                        std::future::ready(result),
+                        std::future::pending(),
+                        async {
+                            cleaned.store(true, Ordering::SeqCst);
+                            Ok(())
+                        },
+                        Duration::from_secs(30),
+                    );
+                    tokio::pin!(stop);
+                    assert!(
+                        std::future::poll_fn(|cx| Poll::Ready(stop.as_mut().poll(cx).is_pending()))
+                            .await
+                    );
+                    if after_deadline {
+                        tokio::time::advance(Duration::from_secs(31)).await;
+                        assert!(
+                            std::future::poll_fn(|cx| Poll::Ready(
+                                stop.as_mut().poll(cx).is_pending()
+                            ))
+                            .await
+                        );
+                    }
+                }
+                let Err(RunError::Shutdown(Some(ShutdownFailure::ReadersUnreported { outcomes }))) =
+                    shutdown_result(&report)
+                else {
+                    panic!("pending reader evidence must survive")
+                };
+                assert_eq!(outcomes.record(), Some(&result));
+                assert_eq!(outcomes.catalogue(), None);
+                assert_eq!(outcomes.deadline_exceeded(), after_deadline);
+                assert!(!cleaned.load(Ordering::SeqCst));
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_before_either_reader_outcome_retains_unknown_drain_and_deadline() {
+        for after_deadline in [false, true] {
+            let report = Mutex::new(ShutdownReport::Confirmed);
+            {
+                let stop = passive_cleanup(
+                    &report,
+                    std::future::pending(),
+                    std::future::pending(),
+                    std::future::ready(Ok(())),
+                    Duration::from_secs(30),
+                );
+                tokio::pin!(stop);
+                assert!(
+                    std::future::poll_fn(|cx| Poll::Ready(stop.as_mut().poll(cx).is_pending()))
+                        .await
+                );
+                if after_deadline {
+                    tokio::time::advance(Duration::from_secs(31)).await;
+                    assert!(
+                        std::future::poll_fn(|cx| Poll::Ready(stop.as_mut().poll(cx).is_pending()))
+                            .await
+                    );
+                }
+            }
+            let Err(RunError::Shutdown(Some(ShutdownFailure::ReadersUnreported { outcomes }))) =
+                shutdown_result(&report)
+            else {
+                panic!("unknown is not successful")
+            };
+            assert_eq!(outcomes.record(), None);
+            assert_eq!(outcomes.catalogue(), None);
+            assert_eq!(outcomes.deadline_exceeded(), after_deadline);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_conversation_cleanup_retains_complete_reader_evidence() {
+        for result in [Ok(()), Err(RecordReadError::WorkerPanicked)] {
+            let report = Mutex::new(ShutdownReport::Confirmed);
+            {
+                let stop = passive_cleanup(
+                    &report,
+                    std::future::ready(result),
+                    std::future::ready(Ok(())),
+                    std::future::pending(),
+                    Duration::from_secs(30),
+                );
+                tokio::pin!(stop);
+                assert!(
+                    std::future::poll_fn(|cx| Poll::Ready(stop.as_mut().poll(cx).is_pending()))
+                        .await
+                );
+            }
+            let Err(RunError::Shutdown(Some(ShutdownFailure::ConversationsUnreported { readers }))) =
+                shutdown_result(&report)
+            else {
+                panic!("conversation completion remains unknown")
+            };
+            match (result, readers) {
+                (Ok(()), Ok(())) => {}
+                (Err(error), Err(readers)) => {
+                    assert_eq!(readers.outcomes().record(), Some(&Err(error)));
+                    assert_eq!(readers.outcomes().catalogue(), Some(&Ok(())));
+                }
+                other => panic!("known evidence changed: {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reader_deadline_retains_eventual_successful_drain() {
+        let report = Mutex::new(ShutdownReport::Confirmed);
+        passive_cleanup(
+            &report,
+            async {
+                tokio::time::sleep(Duration::from_secs(31)).await;
+                Ok(())
+            },
+            std::future::ready(Ok(())),
+            std::future::ready(Ok(())),
+            Duration::from_secs(30),
+        )
+        .await;
+        let Err(RunError::Shutdown(Some(ShutdownFailure::Readers(readers)))) =
+            shutdown_result(&report)
+        else {
+            panic!("deadline evidence must survive successful drains")
+        };
+        assert!(readers.outcomes().deadline_exceeded());
+        assert_eq!(readers.outcomes().record(), Some(&Ok(())));
+        assert_eq!(readers.outcomes().catalogue(), Some(&Ok(())));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_conversation_after_deadline_retains_both_reader_results() {
+        let report = Mutex::new(ShutdownReport::Confirmed);
+        let (release, waiting) = tokio::sync::oneshot::channel();
+        {
+            let stop = passive_cleanup(
+                &report,
+                std::future::ready(Ok(())),
+                async {
+                    waiting.await.unwrap();
+                    Err(CatalogueReadError::OperationAndWorkerPanicked(Box::new(
+                        CatalogueReadError::IdentityChanged,
+                    )))
+                },
+                std::future::pending(),
+                Duration::from_secs(30),
+            );
+            tokio::pin!(stop);
+            assert!(
+                std::future::poll_fn(|cx| Poll::Ready(stop.as_mut().poll(cx).is_pending())).await
+            );
+            tokio::time::advance(Duration::from_secs(31)).await;
+            assert!(
+                std::future::poll_fn(|cx| Poll::Ready(stop.as_mut().poll(cx).is_pending())).await
+            );
+            release.send(()).unwrap();
+            assert!(
+                std::future::poll_fn(|cx| Poll::Ready(stop.as_mut().poll(cx).is_pending())).await
+            );
+        }
+        let Err(RunError::Shutdown(Some(ShutdownFailure::ConversationsUnreported {
+            readers: Err(readers),
+        }))) = shutdown_result(&report)
+        else {
+            panic!("retain typed catalogue failure and unknown conversation cleanup")
+        };
+        assert!(readers.outcomes().deadline_exceeded());
+        assert_eq!(readers.outcomes().record(), Some(&Ok(())));
+        assert_eq!(
+            readers.outcomes().catalogue(),
+            Some(&Err(CatalogueReadError::OperationAndWorkerPanicked(
+                Box::new(CatalogueReadError::IdentityChanged)
+            )))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ready_readers_at_zero_deadline_are_not_labeled_timeout() {
+        let report = Mutex::new(ShutdownReport::Confirmed);
+        passive_cleanup(
+            &report,
+            std::future::ready(Ok(())),
+            std::future::ready(Ok(())),
+            std::future::ready(Ok(())),
+            Duration::ZERO,
+        )
+        .await;
+        assert!(shutdown_result(&report).is_ok());
+    }
 
     #[test]
     fn fixed_clock_flows_from_config_to_runtime() {
@@ -466,14 +877,15 @@ mod tests {
         let confirmed = Mutex::new(ShutdownReport::Confirmed);
         assert!(shutdown_result(&confirmed).is_ok());
 
-        let undrained = Mutex::new(ShutdownReport::Failed(
+        let undrained = Mutex::new(ShutdownReport::Failed(ShutdownFailure::Conversations(
             ConversationError::RetirementAdmission {
                 cleanup_error: Some(Box::new(ConversationError::Audit)),
             },
-        ));
+        )));
         // The typed failure survives the boundary rather than becoming a log line.
-        let Err(RunError::Shutdown(Some(ConversationError::RetirementAdmission { cleanup_error }))) =
-            shutdown_result(&undrained)
+        let Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
+            ConversationError::RetirementAdmission { cleanup_error },
+        )))) = shutdown_result(&undrained)
         else {
             panic!("undrained admission must fail the process result")
         };
@@ -491,20 +903,28 @@ mod tests {
         assert!(shutdown_result(&confirmed_twice).is_ok());
         assert!(shutdown_result(&confirmed_twice).is_ok());
 
-        let audit = Mutex::new(ShutdownReport::Failed(ConversationError::Audit));
+        let audit = Mutex::new(ShutdownReport::Failed(ShutdownFailure::Conversations(
+            ConversationError::Audit,
+        )));
         assert!(matches!(
             shutdown_result(&audit),
-            Err(RunError::Shutdown(Some(ConversationError::Audit)))
+            Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
+                ConversationError::Audit
+            ))))
         ));
     }
 
     #[test]
     fn the_process_result_carries_both_serving_and_what_shutdown_reported() {
         // Serving finishing is not confirmation that conversations stopped.
-        let unconfirmed = Mutex::new(ShutdownReport::Failed(ConversationError::Audit));
+        let unconfirmed = Mutex::new(ShutdownReport::Failed(ShutdownFailure::Conversations(
+            ConversationError::Audit,
+        )));
         assert!(matches!(
             serve_outcome(Ok(()), &unconfirmed),
-            Err(RunError::Shutdown(Some(ConversationError::Audit)))
+            Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
+                ConversationError::Audit
+            ))))
         ));
 
         let confirmed = Mutex::new(ShutdownReport::Confirmed);
@@ -512,7 +932,9 @@ mod tests {
 
         // A serve failure is the fault that stopped the process, so it wins —
         // but the report is read first, so it cannot be skipped past.
-        let both = Mutex::new(ShutdownReport::Failed(ConversationError::Audit));
+        let both = Mutex::new(ShutdownReport::Failed(ShutdownFailure::Conversations(
+            ConversationError::Audit,
+        )));
         let served = Err(std::io::Error::other("listener died"));
         assert!(matches!(
             serve_outcome(served, &both),
@@ -522,41 +944,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_shutdown_that_is_dropped_partway_leaves_no_confirmation() {
-        // What the arming is for: the slot starts as `Confirmed`, so a stop that
-        // never finishes must have moved it off that before it began waiting.
-        let slot = Mutex::new(ShutdownReport::Confirmed);
-        {
-            let stop = record_conversation_shutdown(
-                &slot,
-                std::future::pending::<Result<(), ConversationError>>(),
-            );
-            tokio::pin!(stop);
-            tokio::select! {
-                biased;
-                _ = &mut stop => unreachable!("a pending stop cannot finish"),
-                _ = std::future::ready(()) => {}
-            }
-            // `stop` is dropped here, mid-await, as a cancelled task would be.
-        }
-        assert!(matches!(
-            shutdown_result(&slot),
-            Err(RunError::Shutdown(None))
-        ));
-    }
-
-    #[tokio::test]
     async fn a_shutdown_that_finishes_records_which_way_it_went() {
         let confirmed = Mutex::new(ShutdownReport::Unreported);
-        record_conversation_shutdown(&confirmed, std::future::ready(Ok(()))).await;
+        passive_cleanup(
+            &confirmed,
+            std::future::ready(Ok(())),
+            std::future::ready(Ok(())),
+            std::future::ready(Ok(())),
+            Duration::from_secs(30),
+        )
+        .await;
         assert!(shutdown_result(&confirmed).is_ok());
 
         let failed = Mutex::new(ShutdownReport::Confirmed);
-        record_conversation_shutdown(&failed, std::future::ready(Err(ConversationError::Audit)))
-            .await;
+        passive_cleanup(
+            &failed,
+            std::future::ready(Ok(())),
+            std::future::ready(Ok(())),
+            std::future::ready(Err(ConversationError::Audit)),
+            Duration::from_secs(30),
+        )
+        .await;
         assert!(matches!(
             shutdown_result(&failed),
-            Err(RunError::Shutdown(Some(ConversationError::Audit)))
+            Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
+                ConversationError::Audit
+            ))))
         ));
     }
 
@@ -571,14 +984,18 @@ mod tests {
 
         // A poisoned slot is read through, so a failure already recorded is
         // still the answer rather than being downgraded to "never reported".
-        let poisoned = Mutex::new(ShutdownReport::Failed(ConversationError::Audit));
+        let poisoned = Mutex::new(ShutdownReport::Failed(ShutdownFailure::Conversations(
+            ConversationError::Audit,
+        )));
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = poisoned.lock().unwrap();
             panic!("panicked while the report was held")
         }));
         assert!(matches!(
             shutdown_result(&poisoned),
-            Err(RunError::Shutdown(Some(ConversationError::Audit)))
+            Err(RunError::Shutdown(Some(ShutdownFailure::Conversations(
+                ConversationError::Audit
+            ))))
         ));
     }
 

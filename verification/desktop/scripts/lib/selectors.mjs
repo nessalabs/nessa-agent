@@ -14,6 +14,14 @@ export const content = {
 
 /** CSS selectors, grouped by the part of the window they belong to. */
 export const css = {
+  // Committed conversation production-component fixture
+  committedFixture: "[data-committed-fixture]",
+  committedControls: "[data-committed-controls]",
+  committedQuestions: "[data-committed-questions]",
+  committedLimitNotice: "[data-committed-limit-notice]",
+  committedNotice: '[data-committed-controls] [role="status"]',
+  committedActions: "[data-committed-controls] button",
+
   // The window
   surface: "[data-surface]",
   workspace: "[data-workspace]", // carries data-content (see `content`)

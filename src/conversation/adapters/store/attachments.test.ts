@@ -225,6 +225,7 @@ function viewSaying(imageInput: boolean): ConversationEffects["read"] {
     lifecycle: { phase: "attached" },
     truncated: false,
     queueComplete: true,
+    transcriptState: "complete",
   })
 }
 

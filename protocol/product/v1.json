@@ -138,18 +138,14 @@
         },
         "grants": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ProductGrant"
-          },
+          "items": { "$ref": "#/$defs/ProductGrant" },
           "maxItems": 16,
           "description": "Current credential restrictions; not permanent authorization."
         },
         "methods": {
           "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 16,
+          "items": { "type": "string" },
+          "maxItems": 29,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -308,9 +304,7 @@
         },
         "grants": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ProductGrant"
-          },
+          "items": { "$ref": "#/$defs/ProductGrant" },
           "maxItems": 16,
           "description": "Action/resource restrictions evaluated along with current server policy."
         }
@@ -354,9 +348,7 @@
         },
         "grants": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ProductGrant"
-          },
+          "items": { "$ref": "#/$defs/ProductGrant" },
           "minItems": 1,
           "maxItems": 16,
           "description": "Requested action/resource restrictions; at least one is required."
@@ -433,9 +425,7 @@
       "properties": {
         "credentials": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ProductCredentialMetadata"
-          },
+          "items": { "$ref": "#/$defs/ProductCredentialMetadata" },
           "maxItems": 1000,
           "description": "Non-secret credential records returned by the gateway."
         }
@@ -479,50 +469,17 @@
         "transport_interrupted"
       ],
       "x-close-policy": {
-        "authentication_failed": {
-          "webSocketCode": 4001,
-          "retryable": false
-        },
-        "credential_revoked": {
-          "webSocketCode": 4002,
-          "retryable": false
-        },
-        "credential_expired": {
-          "webSocketCode": 4003,
-          "retryable": false
-        },
-        "authorization_lost": {
-          "webSocketCode": 4004,
-          "retryable": false
-        },
-        "protocol_incompatible": {
-          "webSocketCode": 4005,
-          "retryable": false
-        },
-        "handshake_timeout": {
-          "webSocketCode": 4006,
-          "retryable": true
-        },
-        "temporary_unavailable": {
-          "webSocketCode": 4010,
-          "retryable": true
-        },
-        "gateway_restarting": {
-          "webSocketCode": 1012,
-          "retryable": true
-        },
-        "gateway_overloaded": {
-          "webSocketCode": 1013,
-          "retryable": true
-        },
-        "server_shutdown": {
-          "webSocketCode": 1000,
-          "retryable": false
-        },
-        "transport_interrupted": {
-          "webSocketCode": 1006,
-          "retryable": true
-        }
+        "authentication_failed": { "webSocketCode": 4001, "retryable": false },
+        "credential_revoked": { "webSocketCode": 4002, "retryable": false },
+        "credential_expired": { "webSocketCode": 4003, "retryable": false },
+        "authorization_lost": { "webSocketCode": 4004, "retryable": false },
+        "protocol_incompatible": { "webSocketCode": 4005, "retryable": false },
+        "handshake_timeout": { "webSocketCode": 4006, "retryable": true },
+        "temporary_unavailable": { "webSocketCode": 4010, "retryable": true },
+        "gateway_restarting": { "webSocketCode": 1012, "retryable": true },
+        "gateway_overloaded": { "webSocketCode": 1013, "retryable": true },
+        "server_shutdown": { "webSocketCode": 1000, "retryable": false },
+        "transport_interrupted": { "webSocketCode": 1006, "retryable": true }
       },
       "description": "Product session termination reasons used to determine whether connection recovery is allowed. Revocation, expiry, authorization loss, and incompatible protocols are terminal; transient transport and gateway failures may retry."
     },
@@ -657,21 +614,11 @@
       "allOf": [
         {
           "if": {
-            "properties": {
-              "phase": {
-                "const": "failed"
-              }
-            },
+            "properties": { "phase": { "const": "failed" } },
             "required": ["phase"]
           },
-          "then": {
-            "required": ["failure"]
-          },
-          "else": {
-            "not": {
-              "required": ["failure"]
-            }
-          }
+          "then": { "required": ["failure"] },
+          "else": { "not": { "required": ["failure"] } }
         }
       ]
     },
@@ -992,17 +939,13 @@
           "type": "array",
           "maxItems": 10,
           "x-maxTotalBytes": 10485760,
-          "items": {
-            "$ref": "#/$defs/ImageAttachment"
-          },
+          "items": { "$ref": "#/$defs/ImageAttachment" },
           "description": "Images the user sent with this turn, in attachment order."
         },
         "files": {
           "type": "array",
           "maxItems": 10,
-          "items": {
-            "$ref": "#/$defs/LinkedFile"
-          },
+          "items": { "$ref": "#/$defs/LinkedFile" },
           "description": "Files the user pointed this turn at, in attachment order. No bytes were ever carried for them."
         },
         "status": {
@@ -1026,9 +969,7 @@
         "parts": {
           "type": "array",
           "maxItems": 512,
-          "items": {
-            "$ref": "#/$defs/ConversationPart"
-          },
+          "items": { "$ref": "#/$defs/ConversationPart" },
           "description": "Provider observations in execution order; offsets address the retained SDK event sequence."
         },
         "steeringOffset": {
@@ -1063,17 +1004,13 @@
           "type": "array",
           "maxItems": 10,
           "x-maxTotalBytes": 10485760,
-          "items": {
-            "$ref": "#/$defs/ImageAttachment"
-          },
+          "items": { "$ref": "#/$defs/ImageAttachment" },
           "description": "Images waiting with this input, in attachment order."
         },
         "files": {
           "type": "array",
           "maxItems": 10,
-          "items": {
-            "$ref": "#/$defs/LinkedFile"
-          },
+          "items": { "$ref": "#/$defs/LinkedFile" },
           "description": "Files the waiting input points at, in attachment order."
         },
         "mode": {
@@ -1140,9 +1077,7 @@
         },
         "options": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ConversationPermissionOption"
-          },
+          "items": { "$ref": "#/$defs/ConversationPermissionOption" },
           "maxItems": 64,
           "description": "Complete offered choices; never silently shortened.",
           "minItems": 1
@@ -1256,33 +1191,25 @@
         },
         "messages": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ConversationMessage"
-          },
+          "items": { "$ref": "#/$defs/ConversationMessage" },
           "maxItems": 128,
           "description": "Recent turns with current streamed output."
         },
         "pending": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ConversationPending"
-          },
+          "items": { "$ref": "#/$defs/ConversationPending" },
           "maxItems": 128,
           "description": "Current removable queue entries."
         },
         "permissions": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ConversationPermission"
-          },
+          "items": { "$ref": "#/$defs/ConversationPermission" },
           "maxItems": 64,
           "description": "Actionable permission reviews."
         },
         "tools": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ConversationTool"
-          },
+          "items": { "$ref": "#/$defs/ConversationTool" },
           "maxItems": 128,
           "description": "Recent tool states."
         },
@@ -1296,18 +1223,30 @@
         },
         "truncated": {
           "type": "boolean",
-          "description": "Some non-actionable history or text was omitted to bound this response."
+          "description": "Some history, text or whole interactions were omitted to bound this response; interactionViewError explains omitted actionable units."
         },
-        "permissionViewError": {
+        "interactionViewError": {
           "type": "string",
           "minLength": 1,
           "maxLength": 2048,
           "x-utf8MaxBytes": 2048,
-          "description": "Why pending review choices cannot safely be shown; do not offer inferred choices."
+          "description": "Why complete pending reviews or questions cannot safely be shown; do not infer omitted choices or question fields."
         },
         "queueComplete": {
           "type": "boolean",
           "description": "All currently pending execution IDs are represented, so an exact reorder may be attempted."
+        },
+        "transcriptState": {
+          "type": "string",
+          "enum": [
+            "not_loaded",
+            "partial",
+            "complete_empty",
+            "complete",
+            "stale",
+            "unknown"
+          ],
+          "description": "Committed physical transcript completeness and freshness, independent of display truncation."
         },
         "runtime": {
           "$ref": "#/$defs/ConversationRuntime",
@@ -1323,9 +1262,7 @@
         "questions": {
           "type": "array",
           "maxItems": 8,
-          "items": {
-            "$ref": "#/$defs/ConversationQuestion"
-          },
+          "items": { "$ref": "#/$defs/ConversationQuestion" },
           "description": "Questions the agent is waiting on, oldest first."
         },
         "approvalMode": {
@@ -1334,9 +1271,7 @@
         },
         "approvalModes": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ApprovalModeChoice"
-          },
+          "items": { "$ref": "#/$defs/ApprovalModeChoice" },
           "maxItems": 3,
           "description": "Presets supported by this model."
         },
@@ -1356,6 +1291,7 @@
         "lifecycle",
         "truncated",
         "queueComplete",
+        "transcriptState",
         "title",
         "questions",
         "approvalMode",
@@ -1507,9 +1443,7 @@
       "properties": {
         "conversations": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ConversationSummary"
-          },
+          "items": { "$ref": "#/$defs/ConversationSummary" },
           "maxItems": 500,
           "description": "The caller's conversations, most recently updated first. Ownership is applied before the bound, so another principal's conversations never take a place in it."
         },
@@ -1558,17 +1492,13 @@
           "type": "array",
           "maxItems": 10,
           "x-maxTotalBytes": 10485760,
-          "items": {
-            "$ref": "#/$defs/ImageAttachment"
-          },
+          "items": { "$ref": "#/$defs/ImageAttachment" },
           "description": "Images already uploaded into this conversation, in attachment order; at most 10 MiB in total. Empty for a message of text alone."
         },
         "files": {
           "type": "array",
           "maxItems": 10,
-          "items": {
-            "$ref": "#/$defs/LinkedFile"
-          },
+          "items": { "$ref": "#/$defs/LinkedFile" },
           "description": "Files on this machine the message points the agent at, in attachment order. Nothing is uploaded for them and nothing is read here. Empty for a message that points at none."
         }
       },
@@ -1924,10 +1854,7 @@
           "maximum": 4294967295,
           "description": "Catalog context-window ceiling."
         },
-        "reasoning": {
-          "type": "boolean",
-          "description": "Catalog reasoning capability."
-        }
+        "reasoning": { "type": "boolean", "description": "Catalog reasoning capability." }
       },
       "required": [
         "model",
@@ -2091,9 +2018,7 @@
         "options": {
           "type": "array",
           "maxItems": 32,
-          "items": {
-            "$ref": "#/$defs/ConversationAnswerOption"
-          },
+          "items": { "$ref": "#/$defs/ConversationAnswerOption" },
           "description": "What may be chosen, in the order the agent offered it."
         }
       },
@@ -2128,9 +2053,7 @@
         "questions": {
           "type": "array",
           "maxItems": 16,
-          "items": {
-            "$ref": "#/$defs/ConversationAsked"
-          },
+          "items": { "$ref": "#/$defs/ConversationAsked" },
           "description": "What is being asked, in the order the agent asked it."
         }
       },
@@ -2204,9 +2127,7 @@
         "choices": {
           "type": ["array", "null"],
           "maxItems": 16,
-          "items": {
-            "$ref": "#/$defs/ConversationQuestionChoice"
-          },
+          "items": { "$ref": "#/$defs/ConversationQuestionChoice" },
           "description": "What was chosen. Null declines the question, which is an answer the agent is told."
         }
       },
@@ -2278,9 +2199,7 @@
         },
         "approvalModes": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ApprovalModeChoice"
-          },
+          "items": { "$ref": "#/$defs/ApprovalModeChoice" },
           "maxItems": 3,
           "description": "Presets verified for this model."
         }
@@ -2315,9 +2234,7 @@
         },
         "models": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/AgentModelOption"
-          },
+          "items": { "$ref": "#/$defs/AgentModelOption" },
           "maxItems": 256,
           "description": "Models runnable by this agent."
         }
@@ -2331,9 +2248,7 @@
       "properties": {
         "agents": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/AgentOption"
-          },
+          "items": { "$ref": "#/$defs/AgentOption" },
           "maxItems": 3,
           "description": "Configured agents."
         }
@@ -2462,9 +2377,7 @@
       "properties": {
         "agents": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/AgentInstallOffer"
-          },
+          "items": { "$ref": "#/$defs/AgentInstallOffer" },
           "maxItems": 3,
           "description": "Supported native downloads; unsupported agents are absent."
         }
@@ -2501,6 +2414,496 @@
       "type": "string",
       "enum": ["claude", "codex", "opencode"],
       "description": "Native runtimes the authenticated installer can offer."
+    },
+    "RecordScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Exact receiver authority and physical stream identity.",
+      "properties": {
+        "receiver": {
+          "type": "string",
+          "description": "Validated sync-engine Id, at most 128 UTF-8 bytes.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        },
+        "origin": {
+          "type": "string",
+          "description": "Validated sync-engine Id, at most 128 UTF-8 bytes.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        },
+        "stream": {
+          "type": "string",
+          "description": "Validated sync-engine Id, at most 128 UTF-8 bytes.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        },
+        "incarnation": {
+          "type": "string",
+          "description": "Validated sync-engine Id, at most 128 UTF-8 bytes.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        },
+        "schema": {
+          "type": "string",
+          "description": "Validated sync-engine Id, at most 128 UTF-8 bytes.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        },
+        "accessEpoch": {
+          "type": "string",
+          "description": "Validated sync-engine Id, at most 128 UTF-8 bytes.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        }
+      },
+      "required": ["receiver", "origin", "stream", "incarnation", "schema", "accessEpoch"]
+    },
+    "RecordPageRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Fixed target page after a downloaded checkpoint.",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/RecordScope",
+          "description": "Exact authorized receiver and physical stream identity."
+        },
+        "after": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "maxLength": 20,
+          "description": "Last downloaded position, as canonical unsigned decimal."
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "maxLength": 20,
+          "description": "Captured committed head for this pass, as canonical unsigned decimal."
+        },
+        "maxRecords": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "description": "Maximum returned records, from one through the product bound."
+        },
+        "maxPayloadBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65546,
+          "description": "Maximum aggregate decoded physical payload bytes."
+        },
+        "maxRecordBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65546,
+          "description": "Maximum decoded bytes in one physical record."
+        }
+      },
+      "required": [
+        "scope",
+        "after",
+        "target",
+        "maxRecords",
+        "maxPayloadBytes",
+        "maxRecordBytes"
+      ]
+    },
+    "RecordWireRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One physical record; payload is canonical padded RFC 4648 base64.",
+      "properties": {
+        "position": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "maxLength": 20,
+          "description": "Dense physical position, starting at one."
+        },
+        "id": {
+          "type": "string",
+          "description": "Immutable physical record identity.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        },
+        "payload": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 87396,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+          "description": "Canonical padded RFC 4648 base64 physical payload."
+        }
+      },
+      "required": ["position", "id", "payload"]
+    },
+    "ConversationRecordsHeadParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read a committed physical head under fresh receiver authority.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Conversation selected under authenticated ownership."
+        },
+        "accessEpoch": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "maxLength": 20,
+          "description": "Positive current numeric receiver binding epoch."
+        },
+        "receiverId": {
+          "type": "string",
+          "description": "Trusted receiver binding selector; the actual physical scope is returned by the authenticated head read.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        }
+      },
+      "required": ["conversationId", "accessEpoch", "receiverId"]
+    },
+    "ConversationRecordsHeadResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Committed head for the exact requested scope.",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/RecordScope",
+          "description": "Exact scope for this committed head."
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "maxLength": 20,
+          "description": "Committed terminal physical position, as canonical unsigned decimal."
+        }
+      },
+      "required": ["scope", "head"]
+    },
+    "ConversationRecordsPageParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read a bounded page through a captured terminal target.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Conversation selected under authenticated ownership."
+        },
+        "accessEpoch": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "maxLength": 20,
+          "description": "Positive current numeric receiver binding epoch."
+        },
+        "request": {
+          "$ref": "#/$defs/RecordPageRequest",
+          "description": "Bounded fixed-target page request."
+        }
+      },
+      "required": ["conversationId", "accessEpoch", "request"]
+    },
+    "ConversationRecordsPageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Echoed request and bounded physical records.",
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/RecordPageRequest",
+          "description": "Exact request echoed by the source."
+        },
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/RecordWireRecord" },
+          "description": "One through sixteen contiguous physical records, validated before encoding."
+        }
+      },
+      "required": ["request", "records"],
+      "x-maxEncodedBytes": 131072
+    },
+    "RecordReadErrorCode": {
+      "type": "string",
+      "enum": [
+        "invalid_request",
+        "unauthorized",
+        "forbidden",
+        "wrong_owner",
+        "wrong_receiver",
+        "stale_epoch",
+        "unverifiable",
+        "identity_changed",
+        "history_pruned",
+        "record_too_large",
+        "response_too_large",
+        "temporarily_unavailable",
+        "read_timeout",
+        "source_preparing"
+      ],
+      "description": "Typed refusal for bounded authorized record reads; transport loss is not a delivery acknowledgement."
+    },
+    "CatalogueEntryKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "creation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "description": "Creation revision of this stable identity."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable owner catalogue identity; text is preserved unchanged.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        }
+      },
+      "required": ["creation", "id"],
+      "description": "Stable creation-order key; absence conveys no deletion."
+    },
+    "CatalogueDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/CatalogueEntryKey",
+          "description": "Stable creation-order identity of this descriptor."
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "description": "Current committed revision, possibly newer than the captured pass boundary."
+        },
+        "deleted": {
+          "type": "boolean",
+          "description": "Explicit retained deletion marker for this identity."
+        }
+      },
+      "required": ["key", "revision", "deleted"],
+      "description": "Current catalogue descriptor or explicit retained deletion marker."
+    },
+    "CataloguePass": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/RecordScope",
+          "description": "Exact authorized owner scope saved with this finite pass."
+        },
+        "completed": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "description": "Last fully completed owner revision."
+        },
+        "boundary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "description": "Fixed head captured when this finite pass began."
+        },
+        "cursor": {
+          "$ref": "#/$defs/CatalogueEntryKey",
+          "description": "Last committed stable key; omitted before the first page."
+        },
+        "generation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "description": "Positive receiver generation; delayed responses must match the saved pass."
+        }
+      },
+      "required": ["scope", "completed", "boundary", "generation"],
+      "description": "Saved finite pass; the receiver owns durable progress and validates echoed correlation."
+    },
+    "CatalogueManifestRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pass": {
+          "$ref": "#/$defs/CataloguePass",
+          "description": "Saved finite pass whose boundary and cursor select the next descriptors."
+        },
+        "maxEntries": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum manifest entries; sync-engine owns the accepted bound.",
+          "x-core-maximum-bound": "catalogue_max_entries",
+          "maximum": 256
+        }
+      },
+      "required": ["pass", "maxEntries"],
+      "description": "Bounded creation-order descriptor request."
+    },
+    "ConversationCatalogueHeadParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "receiverId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Server-bound receiver identity requesting this owner catalogue.",
+          "x-core-utf8-bound": "id_max_utf8_bytes",
+          "x-utf8MaxBytes": 128
+        },
+        "accessEpoch": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "maxLength": 20,
+          "description": "Positive current numeric receiver binding epoch."
+        }
+      },
+      "required": ["receiverId", "accessEpoch"],
+      "description": "Discover catalogue scope and head after fresh authenticated owner admission."
+    },
+    "ConversationCatalogueHeadResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/RecordScope",
+          "description": "Server-selected authorized owner scope, including current incarnation."
+        },
+        "head": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "description": "Current owner catalogue head."
+        }
+      },
+      "required": ["scope", "head"],
+      "description": "Server-selected owner stream, physical incarnation, and head.",
+      "x-maxEncodedBytes": 131072
+    },
+    "ConversationCatalogueManifestParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/CatalogueManifestRequest",
+          "description": "Saved finite pass and requested descriptor count."
+        },
+        "accessEpoch": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "maxLength": 20,
+          "description": "Positive current numeric receiver binding epoch."
+        }
+      },
+      "required": ["request", "accessEpoch"],
+      "description": "Read a bounded manifest under exact freshly authorized scope."
+    },
+    "ConversationCatalogueManifestResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/CatalogueManifestRequest",
+          "description": "Returned request evidence retained for receiver core correlation."
+        },
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CatalogueDescriptor" },
+          "description": "Current descriptors returned in stable creation order.",
+          "x-core-max-items-bound": "catalogue_max_entries",
+          "maxItems": 256
+        },
+        "hasMore": {
+          "type": "boolean",
+          "description": "Whether eligible descriptors remain beyond this page."
+        }
+      },
+      "required": ["request", "entries", "hasMore"],
+      "description": "Exact echoed request and current descriptors in stable creation order.",
+      "x-maxEncodedBytes": 131072
+    },
+    "ConversationCatalogueResolveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pass": {
+          "$ref": "#/$defs/CataloguePass",
+          "description": "Saved finite pass authorizing this descriptor resolution."
+        },
+        "descriptor": {
+          "$ref": "#/$defs/CatalogueDescriptor",
+          "description": "Manifest descriptor naming the key and minimum revision to resolve."
+        },
+        "maxPayloadBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum decoded payload bytes; sync-engine owns the accepted bound.",
+          "x-core-maximum-bound": "catalogue_max_payload_bytes",
+          "maximum": 1048576
+        },
+        "accessEpoch": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "maxLength": 20,
+          "description": "Positive current numeric receiver binding epoch."
+        }
+      },
+      "required": ["pass", "descriptor", "maxPayloadBytes", "accessEpoch"],
+      "description": "Resolve current value at the descriptor key and at least its revision."
+    },
+    "ConversationCatalogueResolveResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pass": {
+          "$ref": "#/$defs/CataloguePass",
+          "description": "Returned pass evidence retained for receiver correlation."
+        },
+        "descriptor": {
+          "$ref": "#/$defs/CatalogueDescriptor",
+          "description": "Returned requested descriptor evidence retained for receiver correlation."
+        },
+        "entry": {
+          "$ref": "#/$defs/CatalogueDescriptor",
+          "description": "Current descriptor corresponding to the returned value or deletion marker."
+        },
+        "payload": {
+          "type": "string",
+          "description": "Base64 current metadata payload; empty for a retained deletion marker.",
+          "x-core-base64-bound": "catalogue_max_payload_bytes",
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+          "maxLength": 1398104
+        }
+      },
+      "required": ["pass", "descriptor", "entry", "payload"],
+      "description": "Exact request correlation and current equal-or-newer value; no truncation.",
+      "x-maxEncodedBytes": 131072
+    },
+    "CatalogueReadErrorCode": {
+      "type": "string",
+      "enum": [
+        "invalid_request",
+        "unauthorized",
+        "forbidden",
+        "wrong_owner",
+        "wrong_receiver",
+        "stale_epoch",
+        "unverifiable",
+        "identity_changed",
+        "source_unavailable",
+        "oversized_entry",
+        "read_timeout",
+        "response_too_large",
+        "server_busy"
+      ],
+      "description": "Typed catalogue admission, source, capacity, and transport refusals."
     }
   }
 }

@@ -13,7 +13,7 @@ base64 = "0.22"
 nessa-local-storage = { path = "../nessa-local-storage" }
 tracing = "0.1"
 event-stream = { git = "https://github.com/nessalabs/event-stream", rev = "59624a2", default-features = false, features = ["codec", "sqlite", "retention"] }
-nessa-sync = { git = "https://github.com/nessalabs/sync-engine", rev = "8ce6a8226913cf8c455cab5a2f4e23ebadf01fb2", default-features = false, features = ["transport"] }
+nessa-sync.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }

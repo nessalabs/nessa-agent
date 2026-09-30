@@ -13,6 +13,7 @@ export {
   type Conversation,
   type ConversationCapabilities,
   type ConversationRuntime,
+  type ConversationTranscriptState,
   type IdleConversation,
   type Phase,
   type ReadFailure,

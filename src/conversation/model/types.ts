@@ -1,6 +1,9 @@
 import type { ImageReference } from "./attachments"
 import type { MessageContent } from "./content"
 
+export type ConversationTranscriptState =
+  "not_loaded" | "partial" | "complete_empty" | "complete" | "stale" | "unknown"
+
 export type AgentFeatures = {
   permissionDenial: "unknown" | "unsupported" | "supported_for_offered_permission_reviews"
   nativeHookSuppression: "unknown" | "unsupported" | "supported_for_user_configured_hooks"
@@ -334,8 +337,9 @@ type ConversationState = {
       }
     }
     queueComplete: boolean
+    transcriptState: ConversationTranscriptState
     truncated: boolean
-    permissionViewError?: string
+    interactionViewError?: string
   }
 }
 export type IdleConversation = ConversationState & { phase: "idle" }

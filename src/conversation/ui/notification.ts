@@ -139,7 +139,7 @@ export function conversationNotice(
       description: `${conversation.error} Your draft is still here. Retry sends the current draft.`,
       retry: conversation.draft.length ? { kind: "draft" } : null,
     }
-  const error = conversation.remote?.permissionViewError ?? conversation.error
+  const error = conversation.remote?.interactionViewError ?? conversation.error
   const startupFailure = conversation.remote?.lifecycle.failure
   if (startupFailure)
     return {

@@ -112,6 +112,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
           lifecycle: { phase: "attached" },
           truncated: false,
           queueComplete: true,
+          transcriptState: "complete_empty",
         })
       return { conversationId }
     },

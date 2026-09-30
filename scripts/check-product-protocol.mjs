@@ -1,4 +1,8 @@
 /** Validate product fixtures and generated Rust/TypeScript contract consistency. */
+import {
+  applyCoreWireBounds,
+  coreWireContract,
+} from "./product-protocol/core-contract.mjs"
 import Ajv2020 from "ajv/dist/2020.js"
 import { readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
@@ -9,7 +13,7 @@ const read = (name) =>
   JSON.parse(
     readFileSync(new URL(`../protocol/product/${name}`, import.meta.url), "utf8"),
   )
-const schema = read("v1.json")
+const schema = applyCoreWireBounds(read("v1.json"), coreWireContract(root))
 const manifest = read("manifest.json")
 const ajv = new Ajv2020({ allErrors: true, strict: false })
 ajv.addKeyword({
@@ -72,6 +76,31 @@ if (
   throw new Error("Product lifecycle evidence rejects an exact UTF-8 bound")
 const validateAuth = ajv.getSchema(`${schema.$id}#/$defs/SessionAuthenticateParams`)
 const auth = read("fixtures.json").SessionAuthenticateParams
+const head = read("fixtures.json").ConversationRecordsHeadParams
+const page = read("fixtures.json").ConversationRecordsPageParams
+const validateRecordHead = ajv.getSchema(
+  `${schema.$id}#/$defs/ConversationRecordsHeadParams`,
+)
+const validateRecordPage = ajv.getSchema(
+  `${schema.$id}#/$defs/ConversationRecordsPageParams`,
+)
+for (const invalid of [
+  { ...head, accessEpoch: "0" },
+  { ...head, accessEpoch: "03" },
+  { ...head, receiverId: "😀".repeat(33) },
+  { ...head, foreign: "receiver" },
+]) {
+  if (validateRecordHead(invalid))
+    throw new Error("Record head accepts invalid selector or epoch")
+}
+for (const invalid of [
+  { ...page, request: { ...page.request, maxRecords: 0 } },
+  { ...page, request: { ...page.request, maxRecords: 17 } },
+  { ...page, request: { ...page.request, maxPayloadBytes: 65_547 } },
+  { ...page, request: { ...page.request, target: "01" } },
+]) {
+  if (validateRecordPage(invalid)) throw new Error("Record page accepts invalid bounds")
+}
 for (const invalid of [
   { ...auth, credential: "" },
   { ...auth, client: { id: "fixture", role: "admin" } },
@@ -259,6 +288,17 @@ for (const invalid of [
 }
 if (!validateReorder({ ...reorder, executionIds: [] }))
   throw new Error("Empty queue order must be valid")
+const contractTests = spawnSync(
+  process.execPath,
+  [
+    "--test",
+    "scripts/product-protocol/core-contract.test.mjs",
+    "scripts/product-protocol/rust-wire-shapes.test.mjs",
+    "scripts/product-protocol/protocol-generation.test.mjs",
+  ],
+  { cwd: root, stdio: "inherit" },
+)
+if (contractTests.status !== 0) process.exit(contractTests.status ?? 1)
 const result = spawnSync(
   process.execPath,
   ["scripts/generate-product-protocol.mjs", "--check"],

@@ -35,9 +35,11 @@ pub mod launch;
 mod log_file;
 pub mod logging;
 mod restart;
+mod shutdown;
 mod startup_failure;
 pub mod trusted_origin;
 
 pub use bootstrap::run;
 pub use error::{Dataset, DatasetRefusal, RunError};
 pub use launch::Launch;
+pub use shutdown::{PassiveReaderOutcomes, PassiveReaderShutdownFailure, ShutdownFailure};

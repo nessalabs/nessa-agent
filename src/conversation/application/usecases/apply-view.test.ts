@@ -15,6 +15,7 @@ const view: ConversationView = {
   revision: "opaque-revision",
   truncated: true,
   queueComplete: true,
+  transcriptState: "complete",
   messages: [
     {
       executionId: "run",
@@ -119,7 +120,7 @@ it("keeps error and status separate from actual assistant text, and handles empt
     pending: [],
     permissions: [],
     questions: [],
-    permissionViewError: "Review exceeds safe view limit",
+    interactionViewError: "Review exceeds safe view limit",
   })
   expect(projected.phase).toBe("idle")
   expect(projected.turns[1]).toMatchObject({
@@ -128,7 +129,7 @@ it("keeps error and status separate from actual assistant text, and handles empt
     status: "Provider failed",
   })
   expect(projected.remote?.permissions).toEqual([])
-  expect(projected.remote?.permissionViewError).toBe("Review exceeds safe view limit")
+  expect(projected.remote?.interactionViewError).toBe("Review exceeds safe view limit")
 })
 
 it("replaces server-only queue rows when the next complete view removes them", () => {
@@ -214,6 +215,7 @@ function stoppedQueue(queueComplete: boolean) {
     questions: [],
     tools: [],
     queueComplete: true,
+    transcriptState: "complete",
     pending: identities.map((executionId) => ({
       executionId,
       text: executionId,
@@ -332,6 +334,7 @@ it("a complete queue still keeps unacknowledged local sends and local failures",
     questions: [],
     tools: [],
     queueComplete: true,
+    transcriptState: "complete",
   })
   expect(userReceipts(projected.turns)).toEqual([
     ["sending", "sending"],

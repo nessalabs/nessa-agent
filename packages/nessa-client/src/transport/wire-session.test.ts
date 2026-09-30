@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { NessaConnectionClosedError } from "../application/connection-closed-error.js"
 import { WireSession } from "./wire-session.js"
+import { bounds, ProductMethod } from "../generated/product.js"
 
 describe("WireSession", () => {
   /**
@@ -161,5 +162,53 @@ describe("WireSession", () => {
       await expect(pending).rejects.toBeInstanceOf(NessaConnectionClosedError)
       await expect(pending).rejects.toMatchObject({ code: 4001, reason: "unauthorized" })
     }
+  })
+
+  it("accepts a larger response only for a pending record read", async () => {
+    const listeners = new Map<string, (event: { data: string }) => void>()
+    const close = vi.fn()
+    const socket = {
+      readyState: 1,
+      send: () => {},
+      addEventListener: (kind: string, handler: (event: { data: string }) => void) => {
+        listeners.set(kind, handler)
+      },
+      close,
+    } as unknown as WebSocket
+    const session = new WireSession(socket)
+    const payload = { content: "x".repeat(bounds.maxOrdinaryResponseBytes) }
+    const wire = (id: string) => JSON.stringify({ type: "res", id, ok: true, payload })
+    expect(new TextEncoder().encode(wire("1")).length).toBeLessThan(
+      bounds.maxRecordResponseBytes,
+    )
+
+    const record = session.request(ProductMethod.ConversationRecordsPage, {})
+    listeners.get("message")?.({ data: wire("1") })
+    await expect(record).resolves.toEqual(payload)
+
+    const ordinary = session.request(ProductMethod.ServerHealth, {})
+    listeners.get("message")?.({ data: wire("2") })
+    await expect(ordinary).rejects.toMatchObject({ code: 1009 })
+    expect(close).toHaveBeenCalledOnce()
+  })
+
+  it("closes above the record ceiling before parsing JSON", async () => {
+    const listeners = new Map<string, (event: { data: string }) => void>()
+    const close = vi.fn()
+    const socket = {
+      readyState: 1,
+      send: () => {},
+      addEventListener: (kind: string, handler: (event: { data: string }) => void) => {
+        listeners.set(kind, handler)
+      },
+      close,
+    } as unknown as WebSocket
+    const session = new WireSession(socket)
+    const pending = session.request(ProductMethod.ConversationRecordsPage, {})
+    listeners.get("message")?.({
+      data: "😀".repeat(Math.floor(bounds.maxRecordResponseBytes / 4) + 1),
+    })
+    await expect(pending).rejects.toMatchObject({ code: 1009 })
+    expect(close).toHaveBeenCalledOnce()
   })
 })
