@@ -893,9 +893,8 @@ describe("a row keeps the keyboard as its session changes group", () => {
   afterEach(() => vi.restoreAllMocks())
   /** A click on plain text: a press, then focus to the page's body. */
   const clickAway = (from: HTMLElement) => {
-    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }))
+    document.body.dispatchEvent(new Event("mousedown", { bubbles: true }))
     from.blur()
-    document.body.dispatchEvent(new Event("pointerup", { bubbles: true }))
   }
   const heading = (sessionId: string) =>
     row(sessionId)?.closest(".agents-overview-group")?.querySelector("h2")?.textContent
@@ -986,8 +985,7 @@ describe("a row keeps the keyboard as its session changes group", () => {
     await act(async () => row("run")?.focus())
     // The titlebar's drag strip, a scrollbar: pressed, and focus stays put.
     await act(async () => {
-      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }))
-      document.body.dispatchEvent(new Event("pointerup", { bubbles: true }))
+      document.body.dispatchEvent(new Event("mousedown", { bubbles: true }))
       await settle(1)
     })
     expect(document.activeElement).toBe(row("run"))
@@ -1003,7 +1001,7 @@ describe("a row keeps the keyboard as its session changes group", () => {
     await act(async () => row("run")?.focus())
     // Pressed and held on the drag strip; the press's own task ends.
     await act(async () => {
-      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }))
+      document.body.dispatchEvent(new Event("mousedown", { bubbles: true }))
       await new Promise((done) => setTimeout(done, 1))
     })
     // Taken away as Chromium does: told it loses focus, then removed.
@@ -1015,7 +1013,25 @@ describe("a row keeps the keyboard as its session changes group", () => {
     expect(document.activeElement).toBe(row("run"))
   })
 
-  it("leaves it there when a click away and the row's removal land in the same tick", async () => {
+  it("lets it go on a tap on text, whose focus moves as the finger lifts", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const before = row("run") as HTMLElement
+    await act(async () => before.focus())
+    // Contact: a pointer press, in its own task, and nothing moves yet.
+    await act(async () => {
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }))
+      await new Promise((done) => setTimeout(done, 1))
+    })
+    // Lift: the mouse events a touch sends, and focus moves with them.
+    await act(async () => clickAway(before))
+    await moveOn(source, "run", "Split panes", "idle")
+    expect(heading("run")).toBe("Earlier")
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it("leaves it there when a click away and the row's removal land in the same task", async () => {
     const { source, store } = await mount()
     store.dispatch(followWorkspace())
     await open()

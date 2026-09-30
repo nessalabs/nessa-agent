@@ -446,9 +446,10 @@ export function AgentsOverview({
   //
   // Focus the person moves is theirs. A press anywhere but on the focused
   // element that takes focus from it (a click on text) lets it go as focus
-  // leaves, so what follows in the same tick does not take it back. Focus lost while the window is away (another app, or
-  // tabbed out of the page) is given back when the window has it again. Focus that has landed elsewhere (a reply pill drawn
-  // anew takes its caret itself) is left there.
+  // leaves, so what follows in the same task does not take it back. Focus
+  // lost while the window is away (another app, or tabbed out of the page)
+  // is given back when the window has it again. Focus that has landed
+  // elsewhere (a reply pill drawn anew takes its caret itself) is left there.
   const lastFocus = useRef<{ element: HTMLElement; sessionId: string | null } | null>(
     null,
   )
@@ -498,14 +499,16 @@ export function AgentsOverview({
           : null
     }
     // A press elsewhere is the person moving focus only if focus moves as
-    // part of that press: in the same task, as a click's does. A press that
-    // leaves focus where it is (the titlebar's drag strip, the edge strip, a
-    // scrollbar) changes nothing, and a row taken away while a press is held
-    // — Chromium tells it it is losing focus then too — arrives in a later
-    // task and is given back. Nothing waits on the release, which a native
-    // window drag may swallow.
+    // part of that press. Focus moves as the default action of `mousedown` —
+    // for a mouse, and for the mouse events a touch or a pen sends as it
+    // lifts — so the press is taken at `mousedown`, and counts for that task
+    // only. A press that leaves focus where it is (the titlebar's drag strip,
+    // the edge strip, a scrollbar, a `mousedown` cancelled) changes nothing,
+    // and a row taken away while a press is held — Chromium tells it it is
+    // losing focus then too — arrives in a later task and is given back.
+    // Nothing waits on the release, which a native window drag may swallow.
     let pressing = false
-    const onPress = (event: PointerEvent) => {
+    const onPress = (event: MouseEvent) => {
       const last = lastFocus.current
       pressing =
         last !== null &&
@@ -521,13 +524,13 @@ export function AgentsOverview({
     const onReturn = () => giveBack.current()
     document.addEventListener("focusin", onFocusIn)
     document.addEventListener("focusout", onFocusOut)
-    document.addEventListener("pointerdown", onPress, true)
+    document.addEventListener("mousedown", onPress, true)
     window.addEventListener("focus", onReturn)
     return () => {
       removals.disconnect()
       document.removeEventListener("focusin", onFocusIn)
       document.removeEventListener("focusout", onFocusOut)
-      document.removeEventListener("pointerdown", onPress, true)
+      document.removeEventListener("mousedown", onPress, true)
       window.removeEventListener("focus", onReturn)
     }
   }, [])
@@ -615,7 +618,7 @@ const everySession: AgentsFilter = { scope: "all", range: "any", tags: [] }
  * A count goes from the line when its group has none the filter lets
  * through and is not shown alone — let go at nought, or emptied by the
  * source. When the keyboard was on it, the overview gives it back to the
- * list in the same frame, as it does any focus it loses.
+ * list on the next frame, as it does any focus it loses.
  */
 function Counts({
   ready,

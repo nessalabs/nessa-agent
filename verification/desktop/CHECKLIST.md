@@ -243,7 +243,7 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   `overview-counts`) — the keyboard goes to that session's row, or else the
   current row, or the list, and the arrows walk it. Focus the person moved
   with a press elsewhere stays where they put it, even when the element goes
-  in the same tick (`focus-regroup-away`); a press that leaves focus where it
+  in the same task (`focus-regroup-away`); a press that leaves focus where it
   is (the titlebar's drag strip) changes nothing (`focus-regroup-held`). _Check:_ `focus.mjs`, as named;
   unit test `overview.test.tsx`. Focus lost while the window is away
   (another app, or tabbed out of the page) is given back when it returns:
