@@ -15,6 +15,14 @@ exclusive publication; `replace` selects replacement. No path fallback or POSIX
 sharing override is used. Tests are in the storage owner and retained-directory
 integration suite, indexed by the crate README.
 
+The reservation carries two handles: original rename/cleanup authority and writable
+payload. Public mutable file access can replace the payload slot. The shared
+publication owner validates their native identities before flushing that payload
+or renaming, using the existing platform identity owner. Original name validation
+precedes this comparison; the captured original identity is reused afterward.
+A same-object writable clone is valid. No content-immutability or application CAS
+guarantee is implied by matching file identity.
+
 The consumer owns application authorization and expected-old CAS under its
 stable lock. Storage replacement can also publish to an absent name; it does not
 establish that an application expected an existing record. Pairing consumption,
@@ -39,6 +47,11 @@ owned by #264, outside this shared-storage slice.
 | W12 | Same-user leaf mutation inside final check/effect interval | Cooperating callers excluded by consumer lock; no native compare-and-swap claim | documented exclusion; Windows directory/lock lifetime tests |
 | W14 | Valid Unicode extended destination path beyond MAX_PATH | Same validated encoder accepts exclusive publication followed by replacement; original private checks apply | `windows_publication_accepts_a_unicode_destination_beyond_max_path` |
 | W13 | Process crash or power loss | Reopen may observe old/new/missing/corrupt; no automatic repair or fabricated result | normal reopen tests; power-loss experiment excluded |
+| W15 | publish_new receives a valid private foreign payload through public as_file_mut replacement | ValidateReservation before payload flush/rename; published absent. Destination stays absent, foreign file stays intact; clean only original reservation | `publish_new_refuses_foreign_writable_payload_before_effect` |
+| W16 | replace receives that foreign payload while original destination exists | Same pre-effect refusal; original destination identity/bytes and foreign file remain unchanged; original reservation cleanup only | `replacement_refuses_foreign_writable_payload_before_effect` |
+| W17 | Ordinary writes or public slot replacement with try_clone of SAME original payload | Both operations remain accepted; payload/native authority/published destination all identify the same object | `same_original_writable_clone_remains_accepted_for_both_operations`; ordinary replacement/publication tests |
+| W18 | Original reservation name changed before publication, with foreign payload also substituted | Original name check keeps precedence: ValidateReservation; independently retained cleanup failure; foreign same-name witness/destination remain untouched | `changed_origin_keeps_precedence_with_substituted_payload` (Unix namespace mutation); Windows retains original name-pinning tests |
+
 
 Windows directory and mutation-capable handles pin names while held. A locked
 replacement target is refused; releasing that obstruction admits ordinary

@@ -356,7 +356,14 @@ impl PrivateDirectoryTempFile<'_> {
         self.file.as_ref().expect("temporary file is open")
     }
 
-    /// Mutably borrow the reserved file.
+    /// Mutably borrow the writable payload.
+    ///
+    /// The shared publication owner validates that this file still identifies
+    /// the original reservation before flushing or renaming. Integration tests
+    /// `publish_new_refuses_foreign_writable_payload_before_effect` and
+    /// `replacement_refuses_foreign_writable_payload_before_effect` cover refusal;
+    /// `same_original_writable_clone_remains_accepted_for_both_operations`
+    /// covers valid writable clones.
     pub fn as_file_mut(&mut self) -> &mut File {
         self.file.as_mut().expect("temporary file is open")
     }
@@ -429,15 +436,26 @@ impl PrivateDirectoryTempFile<'_> {
                 return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
             }
         }
-        if let Err(error) = file.sync_all() {
-            return Err(self.fail_before(PrivatePublicationStage::FlushBeforeRename, error));
-        }
         let identity = match self.directory.inner.file_identity(authority) {
             Ok(identity) => identity,
             Err(error) => {
                 return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
             }
         };
+        match self.directory.inner.file_identity(file) {
+            Ok(payload_identity) if payload_identity == identity => {}
+            Ok(_) => {
+                return Err(
+                    self.fail_before(PrivatePublicationStage::ValidateReservation, unsafe_file())
+                );
+            }
+            Err(error) => {
+                return Err(self.fail_before(PrivatePublicationStage::ValidateReservation, error));
+            }
+        }
+        if let Err(error) = file.sync_all() {
+            return Err(self.fail_before(PrivatePublicationStage::FlushBeforeRename, error));
+        }
         let renamed = match kind {
             PublicationKind::New => {
                 self.directory

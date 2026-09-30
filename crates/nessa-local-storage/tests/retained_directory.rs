@@ -4,8 +4,6 @@ use nessa_local_storage::{
     create_directory, create_private_directory_tree_beneath, is_private_temporary_name, OpenMode,
     PrivateDirectory, PrivateFileType, PrivatePublicationStage,
 };
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::{
@@ -13,6 +11,8 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
+#[cfg(unix)]
+use std::{io::ErrorKind, os::unix::fs::PermissionsExt};
 
 fn fixture() -> (tempfile::TempDir, PathBuf, PrivateDirectory) {
     let temporary = tempfile::tempdir().unwrap();
@@ -777,4 +777,162 @@ fn windows_replacement_refuses_a_pinned_destination_then_accepts_after_release()
         std::fs::read(root.join("records/original")).unwrap(),
         b"accepted"
     );
+}
+
+fn foreign_payload_refuses_before_effect(replace: bool) {
+    let (_temporary, root, directory) = fixture();
+    let original = if replace {
+        write_named(&directory, "destination", b"original destination");
+        Some(
+            directory
+                .open_file(OsStr::new("destination"), OpenMode::Read)
+                .unwrap(),
+        )
+    } else {
+        None
+    };
+    let mut reservation = directory.reserve_temp().unwrap();
+    let reserved_name = reservation.name().to_owned();
+    reservation
+        .as_file_mut()
+        .write_all(b"reservation bytes")
+        .unwrap();
+    write_named(&directory, "foreign", b"foreign bytes");
+    let foreign_identity = directory
+        .open_file(OsStr::new("foreign"), OpenMode::Read)
+        .unwrap();
+    let foreign = directory
+        .open_file(OsStr::new("foreign"), OpenMode::ReadWrite)
+        .unwrap();
+    drop(std::mem::replace(reservation.as_file_mut(), foreign));
+    let failure = if replace {
+        reservation.replace(OsStr::new("destination"))
+    } else {
+        reservation.publish_new(OsStr::new("destination"))
+    }
+    .unwrap_err();
+    if let Some(original) = original {
+        assert!(directory
+            .named_file_is(OsStr::new("destination"), &original)
+            .unwrap());
+        assert_eq!(
+            std::fs::read(root.join("records/destination")).unwrap(),
+            b"original destination"
+        );
+    } else {
+        assert!(!root.join("records/destination").exists());
+    }
+    assert!(directory
+        .named_file_is(OsStr::new("foreign"), &foreign_identity)
+        .unwrap());
+    assert_eq!(
+        std::fs::read(root.join("records/foreign")).unwrap(),
+        b"foreign bytes"
+    );
+    assert!(!root.join("records").join(reserved_name).exists());
+    assert_eq!(names(&directory).len(), if replace { 2 } else { 1 });
+    assert_eq!(
+        failure.stage(),
+        PrivatePublicationStage::ValidateReservation
+    );
+    assert!(failure.published().is_none());
+    assert!(failure.cleanup_error().is_none());
+}
+
+#[test]
+fn publish_new_refuses_foreign_writable_payload_before_effect() {
+    foreign_payload_refuses_before_effect(false);
+}
+
+#[test]
+fn replacement_refuses_foreign_writable_payload_before_effect() {
+    foreign_payload_refuses_before_effect(true);
+}
+
+#[test]
+fn same_original_writable_clone_remains_accepted_for_both_operations() {
+    for replace in [false, true] {
+        let (_temporary, root, directory) = fixture();
+        if replace {
+            write_named(&directory, "destination", b"old");
+        }
+        let mut reservation = directory.reserve_temp().unwrap();
+        let clone = reservation.as_file().try_clone().unwrap();
+        drop(std::mem::replace(reservation.as_file_mut(), clone));
+        reservation
+            .as_file_mut()
+            .write_all(b"same original bytes")
+            .unwrap();
+        let published = if replace {
+            reservation.replace(OsStr::new("destination"))
+        } else {
+            reservation.publish_new(OsStr::new("destination"))
+        }
+        .unwrap();
+        assert!(directory
+            .named_file_is(published.name(), published.as_file())
+            .unwrap());
+        assert_eq!(
+            std::fs::read(root.join("records/destination")).unwrap(),
+            b"same original bytes"
+        );
+        assert_eq!(names(&directory).len(), 1);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn changed_origin_keeps_precedence_with_substituted_payload() {
+    for replace in [false, true] {
+        let (_temporary, root, directory) = fixture();
+        if replace {
+            write_named(&directory, "destination", b"old");
+        }
+        let mut reservation = directory.reserve_temp().unwrap();
+        reservation.as_file_mut().write_all(b"reservation").unwrap();
+        let name = reservation.name().to_owned();
+        std::fs::rename(root.join("records").join(&name), root.join("records/moved")).unwrap();
+        let mut witness = directory.open_file(&name, OpenMode::CreateNew).unwrap();
+        witness.write_all(b"foreign witness").unwrap();
+        write_named(&directory, "foreign-payload", b"foreign payload");
+        let foreign = directory
+            .open_file(OsStr::new("foreign-payload"), OpenMode::ReadWrite)
+            .unwrap();
+        drop(std::mem::replace(reservation.as_file_mut(), foreign));
+        let failure = if replace {
+            reservation.replace(OsStr::new("destination"))
+        } else {
+            reservation.publish_new(OsStr::new("destination"))
+        }
+        .unwrap_err();
+        assert_eq!(
+            failure.stage(),
+            PrivatePublicationStage::ValidateReservation
+        );
+        assert!(failure.published().is_none());
+        assert_eq!(
+            failure.cleanup_error().unwrap().kind(),
+            ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            std::fs::read(root.join("records").join(name)).unwrap(),
+            b"foreign witness"
+        );
+        assert_eq!(
+            std::fs::read(root.join("records/moved")).unwrap(),
+            b"reservation"
+        );
+        assert_eq!(
+            std::fs::read(root.join("records/foreign-payload")).unwrap(),
+            b"foreign payload"
+        );
+        if replace {
+            assert_eq!(
+                std::fs::read(root.join("records/destination")).unwrap(),
+                b"old"
+            );
+        } else {
+            assert!(!root.join("records/destination").exists());
+        }
+    }
 }
