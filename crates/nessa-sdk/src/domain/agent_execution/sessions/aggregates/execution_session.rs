@@ -3,14 +3,18 @@
 use crate::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome},
     permissions::{
-        PermissionCancellationReason, PermissionCancellationReasonView, PermissionId,
-        PermissionOptionId, PermissionRequest, PermissionStateView,
+        PendingPermissions, PermissionAuthority, PermissionCancellationReason,
+        PermissionCancellationReasonView, PermissionId, PermissionOptionId, PermissionRequest,
+        PermissionStateView,
     },
     sessions::{ExecutionFinish, ExecutionSessionId, SessionClosure},
     tools::{ToolCall, ToolCallId, ToolCallUpdate},
     ExecutionError,
 };
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
 
 /// State for one live attachment to an agent context, with sequential executions.
 /// Restoring a closed provider context creates a fresh aggregate; it never revives this one.
@@ -36,7 +40,7 @@ struct ActiveExecution {
     id: ExecutionId,
     tools: HashMap<ToolCallId, ToolCall>,
     // Resolved reviews leave this map and become application evidence.
-    pending_permissions: HashMap<PermissionId, PermissionRequest>,
+    pending_permissions: PendingPermissions,
     // Reserves every admitted review ID until finish, preventing replay after resolution.
     seen_permission_ids: HashSet<PermissionId>,
 }
@@ -45,7 +49,7 @@ impl ActiveExecution {
         Self {
             id,
             tools: HashMap::new(),
-            pending_permissions: HashMap::new(),
+            pending_permissions: Arc::new(Mutex::new(HashMap::new())),
             seen_permission_ids: HashSet::new(),
         }
     }
@@ -53,15 +57,20 @@ impl ActiveExecution {
         &mut self,
         reason: PermissionCancellationReason,
     ) -> Vec<PermissionRequest> {
-        std::mem::take(&mut self.pending_permissions)
-            .into_values()
-            .map(|mut request| {
-                request
-                    .cancel(reason.clone())
-                    .expect("session retains only pending permissions");
-                request
-            })
-            .collect()
+        std::mem::take(
+            &mut *self
+                .pending_permissions
+                .lock()
+                .expect("pending permissions"),
+        )
+        .into_values()
+        .map(|mut request| {
+            request
+                .cancel(reason.clone())
+                .expect("session retains only pending permissions");
+            request
+        })
+        .collect()
     }
 }
 impl ExecutionSession {
@@ -291,6 +300,17 @@ impl ExecutionSession {
             .as_ref()
             .map_or(0, |active| active.tools.len())
     }
+    /// Issue a weak read handle to the existing exact active review collection.
+    /// Settlement/drop invalidates its owner; this creates no new review state.
+    pub fn permission_authority(&self) -> Option<PermissionAuthority> {
+        self.active_execution.as_ref().map(|active| {
+            PermissionAuthority::new(
+                self.id.clone(),
+                active.id.clone(),
+                &active.pending_permissions,
+            )
+        })
+    }
     /// All requests admitted in the active execution, including resolved requests.
     pub fn permission_count(&self) -> usize {
         self.active_execution
@@ -310,6 +330,8 @@ impl ExecutionSession {
                 .fold(0usize, |total, id| total.saturating_add(id.as_str().len()));
             active
                 .pending_permissions
+                .lock()
+                .expect("pending permissions")
                 .iter()
                 .fold(seen, |total, (id, request)| {
                     total
@@ -367,6 +389,8 @@ impl ExecutionSession {
         active.seen_permission_ids.insert(request.id().clone());
         active
             .pending_permissions
+            .lock()
+            .expect("pending permissions")
             .insert(request.id().clone(), request);
         Ok(())
     }
@@ -385,15 +409,15 @@ impl ExecutionSession {
             .active_execution
             .as_mut()
             .expect("checked active execution");
-        let request = active
+        let mut pending = active
             .pending_permissions
+            .lock()
+            .expect("pending permissions");
+        let request = pending
             .get_mut(id)
             .ok_or(ExecutionError::UnknownPermission)?;
         request.answer(execution, option)?;
-        Ok(active
-            .pending_permissions
-            .remove(id)
-            .expect("answered permission"))
+        Ok(pending.remove(id).expect("answered permission"))
     }
     /// Cancel one pending review in `execution` without affecting other requests or reopening its identity.
     /// Execution-terminal causes require `finish_execution`, or correlated `close`
@@ -415,6 +439,8 @@ impl ExecutionSession {
             .as_mut()
             .expect("checked active execution")
             .pending_permissions
+            .lock()
+            .expect("pending permissions")
             .remove(id)
         else {
             return Ok(None);

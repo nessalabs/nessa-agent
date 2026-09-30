@@ -144,9 +144,10 @@ impl ExecutionEvent {
                 .as_str()
                 .len()
                 .saturating_add(observation.decline().declared().map_or(0, str::len)),
-            ExecutionUpdate::QuestionAsked { id, question } => {
-                id.as_str().len().saturating_add(question.payload_bytes())
-            }
+            ExecutionUpdate::QuestionAsked { id, question } => id
+                .as_str()
+                .len()
+                .saturating_add(question.allocation_bytes()),
             ExecutionUpdate::QuestionClosed { id } => id.as_str().len(),
         };
         size_of::<Self>()

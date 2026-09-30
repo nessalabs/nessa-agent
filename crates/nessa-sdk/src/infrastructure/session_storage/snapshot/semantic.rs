@@ -93,15 +93,6 @@ fn encode_result(
     value.clone().map(Into::into).map_err(Into::into)
 }
 
-fn decode_result(
-    value: Result<Outcome, SavedError>,
-) -> Result<
-    crate::domain::agent_execution::executions::ExecutionOutcome,
-    crate::application::agent_execution::agents::AgentError,
-> {
-    value.map(Into::into).map_err(Into::into)
-}
-
 impl From<&SessionChange> for WireChange {
     fn from(value: &SessionChange) -> Self {
         match value {
@@ -224,8 +215,8 @@ impl TryFrom<WireChange> for SessionChange {
                 after,
             } => Self::ReceiptUpdated {
                 execution_id: ExecutionId::new(execution_id).map_err(corrupt)?,
-                before: before.into(),
-                after: after.into(),
+                before: before.try_into()?,
+                after: after.try_into()?,
             },
             WireChange::StopDecision {
                 execution_id,
@@ -250,8 +241,8 @@ impl TryFrom<WireChange> for SessionChange {
                 local_outcome,
             } => Self::LocalSettlement {
                 execution_id: ExecutionId::new(execution_id).map_err(corrupt)?,
-                before: before.map(decode_result),
-                after: decode_result(after),
+                before: before.map(super::errors::decode_result).transpose()?,
+                after: super::errors::decode_result(after)?,
                 local_outcome: local_outcome.map(Into::into),
             },
             WireChange::ProviderContext { before, after } => Self::ProviderContext {

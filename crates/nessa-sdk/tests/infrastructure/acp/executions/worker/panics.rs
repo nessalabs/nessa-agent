@@ -117,6 +117,7 @@ fn spawn_worker<P: AcpProfile>(
         Arc::new(AtomicU64::new(0)),
         Arc::new(AtomicU64::new(0)),
         operations,
+        PermissionAuthoritySource::default(),
         recovery.clone(),
     ));
     (

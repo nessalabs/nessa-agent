@@ -167,6 +167,7 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     steering: None,
                     steering_supported: false,
                     agent_accepts_images: false,
+                    permission_authority: PermissionAuthoritySource::default(),
                     operation_capabilities,
                     permissions: HashMap::new(),
                     startup_advisory_session: None,

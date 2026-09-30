@@ -3,7 +3,8 @@
 
 use super::{
     limits::{validate_message_chunk, validate_observation_id},
-    AdmittedQuestion, ExecutionAuditRecord, ExecutionEvent, ExecutionUpdate, SessionClosureRecord,
+    AdmittedQuestion, ExecutionAuditRecord, ExecutionEvent, ExecutionUpdate,
+    PermissionAuthoritySource, SessionClosureRecord,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::permissions::{
@@ -31,6 +32,7 @@ const MAX_RETAINED_BYTES: usize = 32 * 1024 * 1024;
 /// and projects accepted observations. It owns no transport or durable history.
 #[derive(Debug)]
 pub struct ExecutionController {
+    authority: PermissionAuthoritySource,
     session: ExecutionSession,
     review_inputs: HashMap<PermissionId, (ToolReviewInput, usize)>,
     admitted_question_ids: HashSet<QuestionId>,
@@ -45,13 +47,24 @@ impl ExecutionController {
     /// Creates an idle live aggregate for provider context `id`, with empty tool
     /// and permission observations. This does not open a provider or load history.
     pub fn new(id: ExecutionSessionId) -> Self {
+        Self::with_authority_source(id, PermissionAuthoritySource::default())
+    }
+    pub(crate) fn with_authority_source(
+        id: ExecutionSessionId,
+        authority: PermissionAuthoritySource,
+    ) -> Self {
         Self {
+            authority,
             session: ExecutionSession::new(id),
             review_inputs: HashMap::new(),
             admitted_question_ids: HashSet::new(),
             retained_tool_bytes: 0,
             retained_review_bytes: 0,
         }
+    }
+    /// Read-only carrier for the handles this controller issues on successful begin.
+    pub fn permission_authority_source(&self) -> PermissionAuthoritySource {
+        self.authority.clone()
     }
     /// Whether this live attachment has already recorded its permanent closure.
     /// Adapters may skip repeated teardown recording; this does not confirm resource cleanup.
@@ -74,6 +87,11 @@ impl ExecutionController {
     /// normal settlement releases observations but never makes an ID reusable.
     pub fn begin_execution(&mut self, id: ExecutionId) -> Result<(), AgentError> {
         self.session.begin_execution(id).map_err(domain_error)?;
+        self.authority.publish(
+            self.session
+                .permission_authority()
+                .expect("successful execution admission"),
+        );
         self.retained_tool_bytes = 0;
         Ok(())
     }
@@ -750,6 +768,57 @@ mod tests {
             ),
         }
     }
+    #[test]
+    fn permission_authority_is_scoped_and_weak() {
+        let mut controller = controller();
+        let source = controller.permission_authority_source();
+        let first = source.read().unwrap().unwrap();
+        let permission = PermissionId::new("permission").unwrap();
+        assert_eq!(first.session_id(), controller.id());
+        assert_eq!(
+            first.execution_id(),
+            controller.active_execution_id().unwrap()
+        );
+        assert!(!first.pending(&permission).unwrap());
+        request(&mut controller, "permission", "original").unwrap();
+        assert!(first.pending(&permission).unwrap());
+        controller.answer_permission(answer("permission")).unwrap();
+        assert!(!first.pending(&permission).unwrap());
+        controller
+            .finish_execution(
+                &ExecutionId::new("execution").unwrap(),
+                Ok(ExecutionOutcome::Completed),
+            )
+            .unwrap();
+        assert_eq!(
+            first.pending(&permission),
+            Err(PermissionAuthorityError::Unavailable)
+        );
+        controller
+            .begin_execution(ExecutionId::new("next").unwrap())
+            .unwrap();
+        request(&mut controller, "permission", "new execution").unwrap();
+        let next = source.read().unwrap().unwrap();
+        assert!(next.pending(&permission).unwrap());
+        assert_eq!(
+            first.pending(&permission),
+            Err(PermissionAuthorityError::Unavailable)
+        );
+        controller
+            .cancel_permissions(
+                &ExecutionId::new("next").unwrap(),
+                PermissionCancellationReason::provider_withdrawal(),
+                CancellationOrigin::Provider,
+            )
+            .unwrap();
+        assert!(!next.pending(&permission).unwrap());
+        drop(controller);
+        assert_eq!(
+            next.pending(&permission),
+            Err(PermissionAuthorityError::Unavailable)
+        );
+    }
+
     #[test]
     fn rejected_reviews_preserve_the_observation_and_exact_pending_input() {
         let mut controller = controller();

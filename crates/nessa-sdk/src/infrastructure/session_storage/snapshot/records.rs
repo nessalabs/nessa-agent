@@ -1,6 +1,6 @@
 use super::{
     cancellation::Cancellation as InvocationCancellation,
-    errors::{Outcome, SavedError, StorageFailure},
+    errors::{decode_result, Outcome, SavedError, StorageFailure},
     permissions::{self, Actor, Cancellation, Choice, Input},
     settlement::Settlement,
     tools::{corrupt, Tool},
@@ -128,16 +128,18 @@ impl From<&SubmissionAcknowledgement> for Acknowledgement {
         }
     }
 }
-impl From<Acknowledgement> for SubmissionAcknowledgement {
-    fn from(value: Acknowledgement) -> Self {
-        match value {
+impl TryFrom<Acknowledgement> for SubmissionAcknowledgement {
+    type Error = StorageError;
+
+    fn try_from(value: Acknowledgement) -> Result<Self, Self::Error> {
+        Ok(match value {
             Acknowledgement::Pending => Self::Pending,
             Acknowledgement::Acknowledged => Self::Acknowledged,
             Acknowledgement::Failed { audit, storage } => Self::Failed {
-                audit: audit.map(Into::into),
-                storage: storage.map(Into::into),
+                audit: audit.map(TryInto::try_into).transpose()?,
+                storage: storage.map(TryInto::try_into).transpose()?,
             },
-        }
+        })
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -360,7 +362,7 @@ impl Metadata {
                 reserved_output_tokens: self.reserved_output_tokens,
             },
             actor: self.actor.decode()?,
-            acknowledgement: self.acknowledgement.into(),
+            acknowledgement: self.acknowledgement.try_into()?,
             events: Vec::new(),
             scheduling: Vec::new(),
             provider_report: self
@@ -376,9 +378,7 @@ impl Metadata {
                 .cancellation
                 .map(InvocationCancellation::decode)
                 .transpose()?,
-            result: self
-                .result
-                .map(|result| result.map(Into::into).map_err(Into::into)),
+            result: self.result.map(decode_result).transpose()?,
         })
     }
 }

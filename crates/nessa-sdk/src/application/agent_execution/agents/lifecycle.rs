@@ -50,7 +50,7 @@ pub(super) struct WorkGeneration(u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ProviderGeneration(u64);
 // Supervisor diagnostics retain identity without keeping completed work admitted.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct ControlOrigin {
     work_generation: WorkGeneration,
     provider_generation: ProviderGeneration,
@@ -929,6 +929,30 @@ impl SessionLifecycle {
                 Ok(provider.clone())
             }
             _ => Err(AgentError::AttachmentUnavailable(Self::phase(&state))),
+        }
+    }
+    pub(super) fn permission_read_context(
+        &self,
+        execution: &ExecutionId,
+    ) -> Option<(ControlOrigin, AttachedProvider)> {
+        let state = self.state.lock().expect("session lifecycle");
+        if !state.provider_ready
+            || !matches!(state.work_status, WorkStatus::Open)
+            || !state.active.as_ref().is_some_and(|(generation, id)| {
+                *generation == state.work_generation && id == execution
+            })
+        {
+            return None;
+        }
+        match &state.attachment {
+            AttachmentState::Attached { provider, .. } => Some((
+                ControlOrigin {
+                    work_generation: state.work_generation,
+                    provider_generation: state.provider_generation,
+                },
+                provider.clone(),
+            )),
+            _ => None,
         }
     }
     pub(super) fn active(&self) -> Option<ExecutionId> {

@@ -11,7 +11,8 @@
 //! Cancellation maps an undispatched local decision and caller separately from
 //! scheduling edges and provider settlement reports.
 mod cancellation;
-mod decode;
+pub(super) mod checkpoint;
+pub(super) mod decode;
 mod errors;
 mod permissions;
 mod queue_order;

@@ -913,3 +913,94 @@ async fn admitted_answer_failures_retain_both_orders_and_confirmed_process_clean
         assert_gone(&root, "pid");
     }
 }
+
+#[tokio::test]
+async fn agent_acp_permission_query_does_not_wait_behind_consumed_answer_audit() {
+    use crate::domain::agent_execution::sessions::SessionId;
+    use crate::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
+    let _slot = process_test_slot().await;
+    let audit = Arc::new(AnswerAudit {
+        reject_call: Some(1),
+        ..Default::default()
+    });
+    let (root, mut config, model) = test_acp_configuration("permission", 16);
+    config.execution_timeout = None;
+    let provider = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
+    let manager = SessionManager::open(
+        Some(SessionId::new("authority").unwrap()),
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = attached_agent(Arc::new(provider), manager).await.unwrap();
+    let mut events = agent.subscribe();
+    let receipt = agent
+        .enqueue(prompt("write"), close_action())
+        .await
+        .unwrap();
+    let permission = loop {
+        let event = timeout(Duration::from_secs(3), events.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if let ExecutionUpdate::PermissionRequested { id, .. } = event.update() {
+            break id.clone();
+        }
+    };
+    let execution = ExecutionId::new("write").unwrap();
+    assert!(agent.pending_permission(&execution, &permission).unwrap());
+    let (entered, observing) = oneshot::channel();
+    let (release, waiting) = oneshot::channel();
+    *audit.pause.lock().unwrap() = Some((entered, waiting));
+    let answering = tokio::spawn({
+        let agent = agent.clone();
+        let permission = permission.clone();
+        let execution = execution.clone();
+        async move {
+            agent
+                .answer_permission(PermissionAnswer {
+                    execution_id: execution,
+                    id: permission,
+                    option_id: PermissionOptionId::new("approve-one").unwrap(),
+                    attribution: attribution(),
+                })
+                .await
+        }
+    });
+    timeout(Duration::from_secs(3), observing)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        audit.records.lock().unwrap().last(),
+        Some(ExecutionAuditRecord::Answered(_))
+    ));
+    assert!(!root.path().join("fixture.txt").exists());
+    let query = tokio::task::spawn_blocking({
+        let agent = agent.clone();
+        let execution = execution.clone();
+        let permission = permission.clone();
+        move || agent.pending_permission(&execution, &permission)
+    });
+    let queried = timeout(Duration::from_secs(1), query).await;
+    release.send(()).unwrap();
+    let failure = answering.await.unwrap().unwrap_err();
+    assert_eq!(failure.error(), &AgentError::AuditFailure);
+    assert_eq!(failure.selection(), PermissionSelectionState::Consumed);
+    assert!(
+        matches!(receipt.wait().await, Err(AgentError::ExecutionObservation { execution_result: Some(result), .. }) if *result == Err(AgentError::AuditFailure))
+    );
+    assert!(!agent.pending_permission(&execution, &permission).unwrap());
+    let _ = agent.close(close_action()).await;
+    assert!(!agent.pending_permission(&execution, &permission).unwrap());
+    assert_gone(&root, "pid");
+    assert_eq!(queried.unwrap().unwrap(), Ok(false));
+}

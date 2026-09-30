@@ -1,5 +1,7 @@
 #![deny(missing_docs)]
 
+use crate::domain::agent_execution::permissions::{PermissionAuthority, PermissionAuthorityError};
+
 use super::{
     CleanupFuture, ProviderExecutionFuture, ProviderIdentity, ProviderObservationFuture,
     ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
@@ -31,6 +33,17 @@ pub struct CloseOutcome {
 /// context before executing again, and fails explicitly if it cannot be restored.
 /// Dropping all handles requests shutdown; hosts must await close before exit.
 pub trait ProviderSessionBackend: Send + Sync {
+    /// Read a domain-issued weak handle without I/O, audit or command-queue waits.
+    /// Explicit absence means this backend exposes no current review authority;
+    /// a committed pending review alone must not enable a live answer.
+    ///
+    /// # Errors
+    /// Returns typed owner/carrier faults; wrappers validate exact scope.
+    fn permission_authority(
+        &self,
+    ) -> Result<Option<PermissionAuthority>, PermissionAuthorityError> {
+        Ok(None)
+    }
     /// Apply and verify one native approval preset on the current provider
     /// generation. A failed or lost response must not authorize another turn
     /// on that generation.

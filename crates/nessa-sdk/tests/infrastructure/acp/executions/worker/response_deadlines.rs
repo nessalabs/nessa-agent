@@ -109,6 +109,7 @@ async fn blocked_worker(
         steering: None,
         steering_supported: false,
         agent_accepts_images: false,
+        permission_authority: PermissionAuthoritySource::default(),
         operation_capabilities,
         permissions: HashMap::new(),
         startup_advisory_session: None,

@@ -2,11 +2,19 @@
 
 #![deny(missing_docs)]
 
-use super::{paths::SessionPaths, record_writer::RecordWriter, terminal_discovery::TerminalCache};
+#[cfg(test)]
+use super::record_source::CommittedReadGate;
+use super::{
+    paths::SessionPaths,
+    record_lifecycle::{join, shutdown_result, StorageOwner},
+    record_source::CachedCommittedRead,
+    record_writer::RecordWriter,
+    terminal_discovery::TerminalCache,
+};
 use crate::{
     application::agent_execution::sessions::storage::{
-        SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage, SessionStorageLease,
-        StorageError, StorageFuture,
+        CommittedSession, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+        SessionStorageLease, StorageError, StorageFuture,
     },
     domain::agent_execution::sessions::SessionId,
 };
@@ -15,11 +23,12 @@ use event_stream::{
     EventConfig, EventReader, EventRuntime, LifecycleAction, LifecycleOperationId,
     LifecycleRequest, PersistenceProfile, Runtime, RuntimeConfig, StreamId,
 };
+use nessa_sync::replication::domain::Scope;
 use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     io,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -36,11 +45,14 @@ pub const MAX_STORED_RECORD_BYTES: usize = 1024 * 1024;
 pub struct RecordStorage {
     root: PathBuf,
     options: SqliteOptions,
-    runtime: OnceCell<Runtime<SqliteStore>>,
-    leases: Arc<Mutex<HashSet<String>>>,
+    runtime: Arc<OnceCell<Runtime<SqliteStore>>>,
+    pub(super) owner: Arc<StorageOwner>,
+    pub(super) committed_views: Arc<Mutex<HashMap<Scope, Arc<CachedCommittedRead>>>>,
     pub(super) terminal_cache: Arc<TerminalCache>,
     #[cfg(test)]
     lose_reset_reply: Arc<AtomicBool>,
+    #[cfg(test)]
+    pub(super) committed_read_gate: Mutex<Option<CommittedReadGate>>,
 }
 
 impl RecordStorage {
@@ -54,11 +66,14 @@ impl RecordStorage {
         Ok(Self {
             root,
             options,
-            runtime: OnceCell::new(),
-            leases: Arc::new(Mutex::new(HashSet::new())),
+            runtime: Arc::new(OnceCell::new()),
+            owner: Arc::default(),
+            committed_views: Arc::new(Mutex::new(HashMap::new())),
             terminal_cache: Arc::default(),
             #[cfg(test)]
             lose_reset_reply: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            committed_read_gate: Mutex::new(None),
         })
     }
 
@@ -68,21 +83,8 @@ impl RecordStorage {
     }
 
     pub(super) async fn runtime(&self) -> Result<&Runtime<SqliteStore>, StorageError> {
-        self.runtime
-            .get_or_try_init(|| async {
-                let options = self.options.clone();
-                let config = RuntimeConfig {
-                    events: EventConfig {
-                        max_bytes: MAX_STORED_RECORD_BYTES,
-                        minimum_persistence: PersistenceProfile::ProcessRestart,
-                    },
-                    ..RuntimeConfig::default()
-                };
-                Runtime::<SqliteStore>::open(options, config)
-                    .await
-                    .map_err(store_error)
-            })
-            .await
+        self.owner.initialize()?;
+        initialize_runtime(&self.runtime, &self.options).await
     }
 
     async fn open_inner(
@@ -90,7 +92,7 @@ impl RecordStorage {
         id: SessionId,
         existing: bool,
     ) -> Result<Option<Box<dyn SessionStorageLease>>, StorageError> {
-        let reservation = Reservation::acquire(self.leases.clone(), id.as_str())?;
+        let reservation = Reservation::acquire(self.owner.clone(), id.as_str())?;
         let legacy = SessionPaths::new(&self.root, &id).journal;
         let has_legacy_history =
             tokio::task::spawn_blocking(move || match std::fs::symlink_metadata(legacy) {
@@ -145,20 +147,42 @@ impl RecordStorage {
 impl SessionStorage for RecordStorage {
     fn shutdown(&self) -> StorageFuture<'_, ()> {
         Box::pin(async move {
-            let Some(runtime) = self.runtime.get() else {
-                return Ok(());
-            };
-            let report = runtime
-                .shutdown(Duration::from_secs(10))
-                .await
-                .map_err(store_error)?;
-            if report.closed {
-                Ok(())
-            } else {
-                Err(StorageError::Io(
-                    "record runtime retained unresolved operations".into(),
-                ))
+            let (completion, work) = self.owner.close()?;
+            if let Some(work) = work {
+                let runtime = self.runtime.clone();
+                let options = self.options.clone();
+                tokio::spawn(async move {
+                    let read = tokio::task::spawn_blocking(move || {
+                        let mut failure = work.read_failure;
+                        for task in work.reads {
+                            if let Err(error) = join(task) {
+                                failure.get_or_insert(error);
+                            }
+                        }
+                        failure.map_or(Ok(()), Err)
+                    })
+                    .await
+                    .unwrap_or_else(|error| Err(StorageError::Io(error.to_string())));
+                    let cleanup = if work.initialized {
+                        match initialize_runtime(&runtime, &options).await {
+                            Ok(runtime) => match runtime
+                                .shutdown(Duration::from_secs(10))
+                                .await
+                                .map_err(store_error)
+                            {
+                                Ok(report) if report.closed => Ok(()),
+                                Ok(_) => Err(StorageError::Unresolved),
+                                Err(error) => Err(error),
+                            },
+                            Err(error) => Err(error),
+                        }
+                    } else {
+                        Ok(())
+                    };
+                    work.completion.finish(shutdown_result(read, cleanup));
+                });
             }
+            completion.wait().await
         })
     }
 
@@ -176,34 +200,46 @@ impl SessionStorage for RecordStorage {
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         Box::pin(async move { self.open_inner(id, true).await })
     }
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        Box::pin(async move { self.read_committed_source(&id).await })
+    }
+}
+
+async fn initialize_runtime<'a>(
+    cell: &'a OnceCell<Runtime<SqliteStore>>,
+    options: &SqliteOptions,
+) -> Result<&'a Runtime<SqliteStore>, StorageError> {
+    cell.get_or_try_init(|| async {
+        let config = RuntimeConfig {
+            events: EventConfig {
+                max_bytes: MAX_STORED_RECORD_BYTES,
+                minimum_persistence: PersistenceProfile::ProcessRestart,
+            },
+            ..RuntimeConfig::default()
+        };
+        Runtime::<SqliteStore>::open(options.clone(), config)
+            .await
+            .map_err(store_error)
+    })
+    .await
 }
 
 struct Reservation {
     id: String,
-    leases: Arc<Mutex<HashSet<String>>>,
+    owner: Arc<StorageOwner>,
 }
-
 impl Reservation {
-    fn acquire(leases: Arc<Mutex<HashSet<String>>>, id: &str) -> Result<Self, StorageError> {
-        let mut held = leases
-            .lock()
-            .map_err(|_| StorageError::Io("record lease lock poisoned".into()))?;
-        if !held.insert(id.to_owned()) {
-            return Err(StorageError::Busy);
-        }
+    fn acquire(owner: Arc<StorageOwner>, id: &str) -> Result<Self, StorageError> {
+        owner.reserve(id)?;
         Ok(Self {
-            id: id.to_owned(),
-            leases: leases.clone(),
+            id: id.into(),
+            owner,
         })
     }
 }
-
 impl Drop for Reservation {
     fn drop(&mut self) {
-        self.leases
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.id);
+        self.owner.release(&self.id);
     }
 }
 

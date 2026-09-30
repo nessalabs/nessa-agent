@@ -4,7 +4,10 @@
 use super::*;
 use std::{
     future::{poll_fn, Future},
-    sync::atomic::AtomicBool,
+    sync::{
+        atomic::AtomicBool,
+        mpsc::{Receiver, Sender},
+    },
     task::Poll,
 };
 use tokio::{sync::Notify, task::JoinHandle, time::timeout};
@@ -63,6 +66,8 @@ impl ExecutionAudit for WorkflowAudit {
 }
 struct WorkflowEvents(mpsc::UnboundedReceiver<Option<ExecutionEvent>>);
 struct WorkflowBackend {
+    permission_authority: Mutex<Option<PermissionAuthoritySource>>,
+    authority_gate: Mutex<Option<(Sender<()>, Receiver<()>)>>,
     audit: Arc<WorkflowAudit>,
     output: Mutex<mpsc::UnboundedSender<Option<ExecutionEvent>>>,
     receiver: Mutex<Option<mpsc::UnboundedReceiver<Option<ExecutionEvent>>>>,
@@ -115,6 +120,20 @@ impl ExecutionEventStream for WorkflowEvents {
     }
 }
 impl ProviderSessionBackend for WorkflowBackend {
+    fn permission_authority(
+        &self,
+    ) -> Result<Option<PermissionAuthority>, PermissionAuthorityError> {
+        let gate = self.authority_gate.lock().unwrap().take();
+        if let Some((entered, release)) = gate {
+            entered.send(()).unwrap();
+            release.recv().unwrap();
+        }
+        self.permission_authority
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map_or(Ok(None), PermissionAuthoritySource::read)
+    }
     fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         ProviderOperationCapabilities {
             negotiated: true,
@@ -318,6 +337,8 @@ async fn recover_after_automatic_stop(agent: &Agent) {
 fn workflow_backend() -> Arc<WorkflowBackend> {
     let (output, receiver) = mpsc::unbounded_channel();
     Arc::new(WorkflowBackend {
+        permission_authority: Mutex::new(None),
+        authority_gate: Mutex::new(None),
         audit: Arc::new(WorkflowAudit::default()),
         output: Mutex::new(output),
         receiver: Mutex::new(Some(receiver)),
@@ -572,3 +593,5 @@ mod local_cancellation;
 mod observation_boundary;
 
 mod queue_order;
+
+mod permission_authority;

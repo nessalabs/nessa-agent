@@ -37,9 +37,10 @@ use crate::application::agent_execution::sessions::{
     AttachmentOpenFailureSource, InvocationCancellationEvent, ProviderContext, SessionManager,
     StorageError,
 };
+use crate::domain::agent_execution::permissions::{PermissionAuthorityError, PermissionId};
 use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
 use crate::domain::{
-    agent_execution::executions::ExecutionOutcome,
+    agent_execution::executions::{ExecutionId, ExecutionOutcome},
     effective_capabilities::value_objects::EffectiveCapabilities,
 };
 use std::{
@@ -106,6 +107,45 @@ pub(super) struct Inner {
     pub(super) lifecycle: Arc<SessionLifecycle>,
 }
 impl Agent {
+    /// The invocation currently owned by this process, if one is active.
+    /// This is local activity only; it does not add a persisted observation,
+    /// receipt, or provider outcome to a transcript.
+    pub fn active_execution_id(&self) -> Option<ExecutionId> {
+        self.inner.lifecycle.active()
+    }
+    /// Query a committed review against the exact live invocation's domain owner.
+    /// This does not alter history or reserve an answer. Absent backend authority
+    /// or a changed lifecycle returns false. Acquisition and membership are
+    /// synchronous and never wait behind provider commands or audit delivery.
+    ///
+    /// # Errors
+    /// Refuses foreign handles and reports typed owner/carrier faults.
+    pub fn pending_permission(
+        &self,
+        execution: &ExecutionId,
+        permission: &PermissionId,
+    ) -> Result<bool, PermissionAuthorityError> {
+        let Some((origin, attached)) = self.inner.lifecycle.permission_read_context(execution)
+        else {
+            return Ok(false);
+        };
+        let Some(authority) = attached.session.permission_authority()? else {
+            return Ok(false);
+        };
+        if authority.execution_id() != execution {
+            return Err(PermissionAuthorityError::IdentityMismatch);
+        }
+        let pending = authority.pending(permission);
+        if self
+            .inner
+            .lifecycle
+            .permission_read_context(execution)
+            .is_none_or(|(current, _)| current != origin)
+        {
+            return Ok(false);
+        }
+        pending
+    }
     /// Whether this Agent currently has no running or queued work. This
     /// snapshot does not reserve admission; a host must serialize subsequent
     /// mode changes with its own turn-admission owner.

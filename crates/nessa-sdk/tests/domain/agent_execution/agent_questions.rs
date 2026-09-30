@@ -557,3 +557,45 @@ fn what_an_ask_costs_to_carry_counts_every_text_twice_and_its_framing() {
     assert_eq!(ask.carrying_cost(), expected);
     assert!(MAX_OPEN_ASK_COST >= ask.carrying_cost());
 }
+
+#[test]
+fn ask_collections_compact_spare_capacity_and_account_owned_allocations() {
+    let mut options = Vec::with_capacity(65_536);
+    options.push(AnswerOption::new("yes", "Yes 雪", Some("Exactly one".into())).unwrap());
+    let asked = Question::new(
+        "key",
+        "Prompt",
+        None,
+        AnswerShape::One,
+        options,
+        None,
+        false,
+    )
+    .unwrap();
+    // The immutable field type enforces no retained spare slot capacity.
+    assert_eq!(
+        mem::size_of_val(&asked.options),
+        mem::size_of::<Box<[AnswerOption]>>()
+    );
+    let mut questions = Vec::with_capacity(65_536);
+    questions.push(asked);
+    let ask = AgentQuestion::new("Message", questions).unwrap();
+    assert_eq!(
+        mem::size_of_val(&ask.questions),
+        mem::size_of::<Box<[Question]>>()
+    );
+    assert_eq!(ask.questions().len(), 1);
+    assert_eq!(ask.questions()[0].options().len(), 1);
+    let text = "Message".len()
+        + "key".len()
+        + "Prompt".len()
+        + "yes".len()
+        + "Yes 雪".len()
+        + "Exactly one".len();
+    assert_eq!(ask.payload_bytes(), text);
+    assert_eq!(
+        ask.allocation_bytes(),
+        text + mem::size_of::<Question>() + mem::size_of::<AnswerOption>()
+    );
+    assert_eq!(ask.clone(), ask);
+}

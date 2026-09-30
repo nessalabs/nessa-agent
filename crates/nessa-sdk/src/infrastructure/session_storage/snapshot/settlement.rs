@@ -1,6 +1,6 @@
 //! Explicit provider facts survive storage without decoding diagnostic error shapes.
 use super::{
-    errors::{Outcome, SavedError},
+    errors::{decode_result, Outcome, SavedError},
     tools::corrupt,
 };
 use crate::application::agent_execution::{
@@ -75,14 +75,21 @@ impl From<CleanupReport> for Cleanup {
         }
     }
 }
-impl From<Cleanup> for CleanupReport {
-    fn from(value: Cleanup) -> Self {
-        Self::new(
-            decode_resources(value.resources),
-            value.audit.map_err(Into::into),
+impl TryFrom<Cleanup> for CleanupReport {
+    type Error = StorageError;
+
+    fn try_from(value: Cleanup) -> Result<Self, Self::Error> {
+        Ok(Self::new(
+            decode_resources(value.resources)?,
+            decode_result(value.audit)?,
         )
-        .with_operation_failure(value.operation_failure.map(Into::into))
-        .with_completion_failure(value.completion_failure.map(Into::into))
+        .with_operation_failure(value.operation_failure.map(TryInto::try_into).transpose()?)
+        .with_completion_failure(
+            value
+                .completion_failure
+                .map(TryInto::try_into)
+                .transpose()?,
+        ))
     }
 }
 impl From<ProviderSessionState> for Attachment {
@@ -94,13 +101,15 @@ impl From<ProviderSessionState> for Attachment {
         }
     }
 }
-impl From<Attachment> for ProviderSessionState {
-    fn from(value: Attachment) -> Self {
-        match value {
+impl TryFrom<Attachment> for ProviderSessionState {
+    type Error = StorageError;
+
+    fn try_from(value: Attachment) -> Result<Self, Self::Error> {
+        Ok(match value {
             Attachment::Usable => Self::Usable,
             Attachment::CleanupRequired => Self::CleanupRequired,
-            Attachment::CleanupReported(report) => Self::CleanupReported(report.into()),
-        }
+            Attachment::CleanupReported(report) => Self::CleanupReported(report.try_into()?),
+        })
     }
 }
 impl From<ExecutionReport> for Settlement {
@@ -160,20 +169,20 @@ impl TryFrom<Settlement> for ExecutionReport {
                 failure,
                 attachment,
             } => Self::new(
-                result.map(|result| result.map(Into::into).map_err(Into::into)),
-                failure.map(Into::into),
-                attachment.into(),
+                result.map(decode_result).transpose()?,
+                failure.map(TryInto::try_into).transpose()?,
+                attachment.try_into()?,
             ),
-            Settlement::LocalCancellation(report) => Self::cancelled_locally(report.into()),
+            Settlement::LocalCancellation(report) => Self::cancelled_locally(report.try_into()?),
             Settlement::ProviderFinalized {
                 result,
                 resources,
                 completion_failure,
                 projection,
             } => Self::finalized_provider(
-                result.map(|result| result.map(Into::into).map_err(Into::into)),
-                decode_resources(resources),
-                completion_failure.map(Into::into),
+                result.map(decode_result).transpose()?,
+                decode_resources(resources)?,
+                completion_failure.map(TryInto::try_into).transpose()?,
                 decode_projection(projection)?,
             ),
             Settlement::LocalCancellationFinalized {
@@ -181,8 +190,8 @@ impl TryFrom<Settlement> for ExecutionReport {
                 completion_failure,
                 projection,
             } => Self::finalized_local_cancellation(
-                decode_resources(resources),
-                completion_failure.map(Into::into),
+                decode_resources(resources)?,
+                completion_failure.map(TryInto::try_into).transpose()?,
                 decode_projection(projection)?,
             ),
         })
@@ -204,19 +213,21 @@ impl From<FinalizedFailureComponent> for FinalizedComponent {
         }
     }
 }
-impl From<FinalizedComponent> for FinalizedFailureComponent {
-    fn from(value: FinalizedComponent) -> Self {
-        match value {
-            FinalizedComponent::Operation(error) => Self::Operation(error.into()),
+impl TryFrom<FinalizedComponent> for FinalizedFailureComponent {
+    type Error = StorageError;
+
+    fn try_from(value: FinalizedComponent) -> Result<Self, Self::Error> {
+        Ok(match value {
+            FinalizedComponent::Operation(error) => Self::Operation(error.try_into()?),
             FinalizedComponent::Audit => Self::Audit,
             FinalizedComponent::PermissionDeliveryAndAudit { delivery_error } => {
                 Self::PermissionDeliveryAndAudit {
-                    delivery_error: delivery_error.into(),
+                    delivery_error: delivery_error.try_into()?,
                 }
             }
             FinalizedComponent::OperationOverflow => Self::OperationOverflow,
             FinalizedComponent::AuditOverflow => Self::AuditOverflow,
-        }
+        })
     }
 }
 fn encode_resources(resources: &ResourceCleanup) -> SavedResources {
@@ -231,19 +242,24 @@ fn encode_resources(resources: &ResourceCleanup) -> SavedResources {
         ResourceCleanup::Unconfirmed(error) => SavedResources::Unconfirmed(error.clone().into()),
     }
 }
-fn decode_resources(resources: SavedResources) -> ResourceCleanup {
-    match resources {
+fn decode_resources(resources: SavedResources) -> Result<ResourceCleanup, StorageError> {
+    Ok(match resources {
         SavedResources::Confirmed { forced } => ResourceCleanup::Confirmed(CloseOutcome { forced }),
         SavedResources::ReleasePending { forced, failure } => ResourceCleanup::ReleasePending {
             physical: CloseOutcome { forced },
-            failure: failure.into(),
+            failure: failure.try_into()?,
         },
-        SavedResources::Unconfirmed(error) => ResourceCleanup::Unconfirmed(error.into()),
-    }
+        SavedResources::Unconfirmed(error) => ResourceCleanup::Unconfirmed(error.try_into()?),
+    })
 }
 fn decode_projection(
     projection: Vec<FinalizedComponent>,
 ) -> Result<FinalizedExecutionProjection, StorageError> {
-    FinalizedExecutionProjection::new(projection.into_iter().map(Into::into).collect())
-        .map_err(corrupt)
+    FinalizedExecutionProjection::new(
+        projection
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<_, StorageError>>()?,
+    )
+    .map_err(corrupt)
 }

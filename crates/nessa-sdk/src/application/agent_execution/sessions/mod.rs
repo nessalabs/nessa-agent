@@ -47,16 +47,23 @@ pub(crate) mod attachment;
 mod manager;
 mod message_commit_clock;
 pub(crate) mod records;
+mod retained;
 mod retention;
 // Queue membership is replayed separately from provider/lifecycle scheduling.
 mod queue_validation;
 pub mod storage;
+mod transcript;
+pub use transcript::{
+    CommittedCompleteness, CommittedFreshness, CommittedStatus, CommittedTranscript,
+    CommittedViewState,
+};
 pub(crate) mod validation;
 pub use manager::SessionManager;
 pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource};
 pub use message_commit_clock::{MessageCommitClock, MessageCommitSleep};
 pub use storage::{
-    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
-    QueueHistoryRecord, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
-    SessionStorageLease, StorageError, StorageFuture, SubmissionAcknowledgement,
+    CommittedSession, InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent,
+    ProviderContext, QueueHistoryRecord, SessionChange, SessionSaveGeneration, SessionSnapshot,
+    SessionStorage, SessionStorageLease, StorageError, StorageFuture, StorageShutdownFailure,
+    SubmissionAcknowledgement,
 };
