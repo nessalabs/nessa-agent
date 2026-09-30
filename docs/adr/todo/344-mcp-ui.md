@@ -137,7 +137,7 @@ from their embedded strings and bundles.
 
 | | Claude ACP 0.76.0 | Codex ACP 1.12.0 | Opencode 1.18.31 |
 | --- | --- | --- | --- |
-| Server and tool | `_meta.claudeCode.toolName` (and `title`) is `mcp__<server>__<tool>`, each name with `[^A-Za-z0-9_-]` replaced by `_`; kind `other` (`tools.js:335-340`). A server name may hold `__`, so only a configured prefix says where it ends | `rawInput.{server, tool}` exactly; title `mcp.<server>.<tool>`, kind `execute`, `_meta.is_mcp_tool_call` (`index.js:23035-23045`) | title `<server>_<tool>` after the same replacement, kind `other`, no `_meta`: cannot be split |
+| Server and tool | `_meta.claudeCode.toolName` (and `title`) is `mcp__<server>__<tool>`, each name with `[^A-Za-z0-9_-]` replaced by `_`; kind `other` (`tools.js:335-340`). Only a configured prefix says where the server ends: Nessa's server names hold no `__` but may end in `_` | `rawInput.{server, tool}` exactly; title `mcp.<server>.<tool>`, kind `execute`, `_meta.is_mcp_tool_call` (`index.js:23035-23045`) | title `<server>_<tool>` after the same replacement, kind `other`, no `_meta`: cannot be split |
 | The tool's `_meta` (`ui.resourceUri`) | not passed on; neither the adapter nor the CLI mentions `resourceUri` | codex has `mcpAppResourceUri` on the call; codex-acp does not copy it | not passed on |
 | The result's `_meta` | only in an opt-in `_claude/sdkMessage` notification, not a `session/update` | `rawOutput.result._meta` | dropped |
 | `structuredContent` | replaces the result's text blocks as JSON text: indistinguishable from text | `rawOutput.result.structuredContent` | JSON text only when there is no other content |

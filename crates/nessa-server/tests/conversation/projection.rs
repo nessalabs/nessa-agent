@@ -1,6 +1,6 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 use super::{
-    projection::{clipped, Projection, MAX_TEXT, STRUCTURED_OMITTED},
+    projection::{clipped, Projection, MAX_TEXT},
     ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
     ConversationAttachmentEvidenceFailureCode, ConversationCaller, ConversationCapabilities,
     ConversationDependencies, ConversationLifecycle, ConversationLifecyclePhase,
@@ -1041,8 +1041,9 @@ fn an_mcp_tool_carries_its_identity_and_structured_result_beside_its_text() {
             .with_content(vec![ToolContent::structured(large).unwrap()]),
     )));
     let view = projection.read();
+    // Left out, not cut; the details are what the text said, here nothing.
     assert_eq!(view.tools[0].structured_content, None);
-    assert_eq!(view.tools[0].details, STRUCTURED_OMITTED);
+    assert_eq!(view.tools[0].details, "");
     projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
         tool,
         None,
@@ -1083,7 +1084,6 @@ fn a_structured_result_after_long_text_is_kept_and_the_last_one_reported_wins() 
     let tool = &projection.read().tools[0];
     assert_eq!(tool.structured_content.as_deref(), Some(json));
     assert!(tool.details.ends_with("[Output truncated]"));
-    assert!(!tool.details.contains(STRUCTURED_OMITTED));
 }
 
 #[test]
@@ -1113,15 +1113,14 @@ fn a_view_past_its_budget_gives_up_structured_results_before_any_message() {
     assert_eq!(view.messages.len(), 1);
     assert_eq!(view.messages[0].parts.len(), 4);
     assert_eq!(view.tools.len(), 3);
-    // Oldest first: the earliest tools say theirs was left out; what still
-    // fits is kept.
+    // Oldest first: the earliest tools give theirs up, their details as they
+    // were; what still fits is kept.
     assert_eq!(view.tools[0].structured_content, None);
-    assert!(view.tools[0].details.ends_with(STRUCTURED_OMITTED));
+    assert_eq!(view.tools[0].details, "d".repeat(12_000));
     assert_eq!(
         view.tools[2].structured_content.as_deref(),
         Some(json.as_str())
     );
-    assert!(!view.tools[2].details.contains(STRUCTURED_OMITTED));
 }
 
 #[test]

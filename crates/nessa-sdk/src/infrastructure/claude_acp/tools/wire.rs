@@ -82,14 +82,15 @@ fn enabled_name(name: &str, mcp_prefixes: &[String]) -> bool {
     if name.starts_with(MCP_NAMESPACE) {
         return mcp_prefixes
             .iter()
-            .any(|prefix| name.starts_with(prefix) && name.len() > prefix.len());
+            .any(|prefix| names_tool_of(name, prefix));
     }
     true
 }
 /// The configured MCP server and tool a harness tool name names, or `None`.
 ///
-/// The harness names an MCP tool `mcp__<server>__<tool>`, and a server name may
-/// itself hold `__`, so the name alone does not say where the server ends. The
+/// The harness names an MCP tool `mcp__<server>__<tool>`. A configured server
+/// name cannot hold `__` (`AcpConfig::validate`) but may end in `_`, so the name
+/// alone does not always say where the server ends. The
 /// configured servers do: a name is split at the one configured prefix it
 /// starts with. Where two configured prefixes both fit (`a` and `a_` for
 /// `mcp__a___c`), the call is left without an identity rather than given a
@@ -99,7 +100,7 @@ fn enabled_name(name: &str, mcp_prefixes: &[String]) -> bool {
 fn mcp_tool(name: &str, mcp_prefixes: &[String]) -> Option<McpTool> {
     let mut fitting = mcp_prefixes
         .iter()
-        .filter(|prefix| name.starts_with(prefix.as_str()) && name.len() > prefix.len());
+        .filter(|prefix| names_tool_of(name, prefix));
     let prefix = fitting.next()?;
     if fitting.next().is_some() {
         return None;
@@ -108,6 +109,12 @@ fn mcp_tool(name: &str, mcp_prefixes: &[String]) -> Option<McpTool> {
         .strip_prefix(MCP_NAMESPACE)?
         .strip_suffix(MCP_SEPARATOR)?;
     McpTool::new(server, &name[prefix.len()..]).ok()
+}
+/// Whether `name` names a tool of the server whose harness prefix is `prefix`
+/// (`mcp__<server>__`): it starts with the prefix and names something after it.
+/// Admission and the MCP identity both ask this, so they cannot disagree.
+fn names_tool_of(name: &str, prefix: &str) -> bool {
+    name.starts_with(prefix) && name.len() > prefix.len()
 }
 /// What separates the server from the tool in a harness MCP tool name.
 pub(in crate::infrastructure::claude_acp) const MCP_SEPARATOR: &str = "__";

@@ -27,8 +27,6 @@ pub(super) const MAX_TEXT: usize = 8192;
 const MAX_TOOLS: usize = 16;
 const MAX_PERMISSIONS: usize = 16;
 const MAX_VIEW_BYTES: usize = 60_000;
-/// What a tool's details say when its structured result is not in the view.
-pub(super) const STRUCTURED_OMITTED: &str = "[Structured result omitted: too large for this view]";
 /// The largest single review the view offers, encoded. One review may not take
 /// most of the view's budget from everything else.
 const MAX_REVIEW_BYTES: usize = 16_000;
@@ -824,6 +822,8 @@ impl Projection {
                     // The structured result is read apart from the text, so a
                     // long text cannot push it out; the last one reported is
                     // the result's. Replaced with the content, as details are.
+                    // Past the bound it is left out, never cut: JSON cut short
+                    // is not JSON, and its text is in the details either way.
                     let structured = content.iter().rev().find_map(|item| match item.view() {
                         ToolContentView::Structured(json) => Some(json),
                         _ => None,
@@ -852,13 +852,6 @@ impl Projection {
                             details.push_str("\n[Output truncated]");
                             break;
                         }
-                    }
-                    // Said rather than cut: JSON cut short is not JSON.
-                    if structured.is_some() && tool.structured_content.is_none() {
-                        if !details.is_empty() {
-                            details.push('\n');
-                        }
-                        details.push_str(STRUCTURED_OMITTED);
                     }
                     tool.details = details;
                 }
@@ -1070,19 +1063,17 @@ impl Projection {
         // MAX_OPEN_ASK_COST, which bounds what they take here, and everything
         // else gives way first.
         while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
-            // A structured result repeats what its tool's details say, so it is
-            // the first thing given up, oldest first, and the details say so.
-            // No history is left out by it, so the view is not marked truncated.
+            // A structured result is a second form of what its tool's details
+            // say, so it is the first thing given up, oldest first. Its absence
+            // already means "not given, or too large to carry" (the schema's
+            // `structuredContent`), and no history is left out, so neither the
+            // details nor `truncated` change.
             if let Some(tool) = view
                 .tools
                 .iter_mut()
                 .find(|tool| tool.structured_content.is_some())
             {
                 tool.structured_content = None;
-                if !tool.details.is_empty() {
-                    tool.details.push('\n');
-                }
-                tool.details.push_str(STRUCTURED_OMITTED);
                 continue;
             }
             view.truncated = true;
