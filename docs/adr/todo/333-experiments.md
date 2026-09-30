@@ -14,14 +14,22 @@ experiment appears and on subagents ([329](329-subagents.md)) for its agents.
 - **Date:** 2026-09-30
 - **Status:** proposed
 
-> **Amended by [344](344-mcp-ui.md):** the decisions here about the experiment —
-> its definition, validation, the one formatter, `bestSoFar` — stand, but the view
-> is built as an MCP App in
-> [nessalabs/nessa-extensions](https://github.com/nessalabs/nessa-extensions)
-> (#4–#7 there), not as `src/desktop/experiments/`. Where this record says
-> `ExperimentSource`, the widget host or the swarm adapter, read the extension's
-> own server and the MCP Apps bridge; #334–#336 moved there, and #337 waits on a
-> seam 344 will decide.
+> **Amended by [344](344-mcp-ui.md):** the experiment view is built as an MCP App
+> in [nessalabs/nessa-extensions](https://github.com/nessalabs/nessa-extensions)
+> (#4–#7 there), not as `src/desktop/experiments/`.
+>
+> **Still decided here:** the experiment itself — the definition and `Metric`,
+> runs and the baseline, validation and its rules, the one formatter
+> (`Formatted`, `Change`), `bestSoFar` and the climb, sections following the
+> data, cases and changes, the samples and the scale contract, and the
+> `openFile` table.
+>
+> **Superseded by 344:** everything about living in the desktop app — the
+> `ExperimentSource` port (the extension's own MCP server replaces it), the
+> `Schedule` timer in `src/desktop/model/`, the Settings preview and its hook,
+> the widget places (MCP Apps display modes, through 326's host), the swarm
+> adapter (#337, which waits on a seam), and the work list below (#334–#336
+> moved to nessa-extensions #4, #6 and #7).
 
 ## Context
 

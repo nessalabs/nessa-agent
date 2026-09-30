@@ -27,10 +27,13 @@ MCP Apps works like this:
   back through the host, messages and model context for the conversation,
   display-mode requests (`inline`, `fullscreen`, `pip`), and host context
   (theme, size, locale, safe area).
-- Hosts and servers negotiate it as `capabilities.extensions
-  ["io.modelcontextprotocol/ui"]`; OpenAI adds optional `openai/*` fields.
+- Hosts and servers negotiate it under `capabilities.extensions`, an object
+  keyed by the extension's identifier: `{ "io.modelcontextprotocol/ui": {
+  mimeTypes: ["text/html;profile=mcp-app"] } }`. OpenAI adds optional `openai/*`
+  fields.
 
-Sources: [the MCP extensions spec](https://github.com/openai/mcp-extensions/blob/main/docs/spec.md),
+Sources: [the MCP extensions
+spec](https://github.com/openai/mcp-extensions/blob/main/docs/spec.md),
 [building extensions](https://developers.openai.com/plugins/build/extensions).
 
 Nessa today cannot host one (a survey of `main`, recorded in #345):
@@ -55,18 +58,25 @@ What binds:
 
 ## Decision
 
-**Nessa is an MCP Apps host.** The gateway is an MCP client of the configured
-servers for UI: it lists tools with their `_meta.ui`, and reads `ui://`
-resources (#346). A tool call's identity, `_meta` and result travel from the
-ACP parser to the window's transcript (#347). The gateway offers the window
-`mcp.readResource` and `mcp.callTool` for an app, under a policy — only tools
-whose `_meta.ui.visibility` includes `"app"`, only on the app's own server,
-approval through the existing permission flow for a tool marked
+**Nessa is an MCP Apps host.** An app's `tools/call` and `resources/read` must
+reach the same MCP session that produced its tool's result — a stateful server
+may have handed back a handle only that session knows — so there is **one
+connection per server, and the gateway owns it**. For a configured server, the
+gateway starts it and connects to it, and gives the harness a stdio stand-in (in
+`nessa-mcp`'s place in `session/new`) that forwards the harness's calls over
+that same connection. The agent's calls and the app's calls then travel one
+upstream session. Through it the gateway lists tools with their `_meta.ui` and
+reads `ui://` resources (#346). A tool call's identity, `_meta` and result
+travel from the ACP parser to the window's transcript (#347). The gateway offers
+the window `mcp.readResource` and `mcp.callTool` for an app, under a policy —
+only tools whose `_meta.ui.visibility` includes `"app"`, only on the app's own
+server, approval through the existing permission flow for a tool marked
 `destructiveHint` — with each call audited (#348). The desktop hosts the app as
 an `app`-kind widget (326): a sandbox proxy on a separate origin, a CSP built
 only from `_meta.ui.csp` (no network by default), and the `ui/*` bridge mapped
-onto the widget host (#349). Nessa declares `io.modelcontextprotocol/ui` with
-`text/html;profile=mcp-app`; the `openai/*` fields are optional.
+onto the widget host (#349). Nessa declares `capabilities.extensions: {
+"io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } }`;
+the `openai/*` fields are optional.
 
 **Display modes map onto 326's places:** `inline` is inline; `fullscreen` on
 desktop is a pane beside the conversation, as ChatGPT's desktop draws it; the
@@ -98,7 +108,8 @@ app widgets alike.
 
 ## Consequences
 
-- The gateway gains an MCP client and two app methods, with policy and audit;
+- The gateway gains the one connection to each server — the harness's MCP
+  traffic now passes through it — and two app methods, with policy and audit;
   the SDK and protocol carry tool identity and `_meta`, which also helps any
   tool view in the transcript.
 - A view like experiments becomes a package with its own release, testable in a
