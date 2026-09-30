@@ -4,8 +4,10 @@ use super::{
     SessionChange, SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
 use crate::{
-    application::agent_execution::{executions::ExecutionEvent, permissions::ActionContext},
-    domain::agent_execution::executions::{ExecutionId, QueueMutation},
+    application::agent_execution::{
+        agents::AgentError, executions::ExecutionEvent, permissions::ActionContext,
+    },
+    domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, QueueMutation},
 };
 use std::{collections::HashMap, mem::size_of};
 
@@ -22,14 +24,33 @@ fn actor(value: &ActionContext) -> usize {
         .saturating_add(value.surface_id().len())
         .saturating_add(value.request_id().len())
 }
-fn stop(value: &InvocationCancellationEvent) -> usize {
+pub(super) fn stop(value: &InvocationCancellationEvent) -> usize {
     value.actor.as_ref().map_or(0, actor)
 }
 
 pub(super) fn snapshot(value: &SessionSnapshot) -> usize {
     #[cfg(test)]
     SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(counter.get() + 1));
-    let mut bytes = size_of::<SessionSnapshot>()
+    let mut bytes = snapshot_global(Some(value));
+    for record in &value.invocations {
+        bytes = bytes.saturating_add(invocation(record));
+    }
+    for entry in &value.queue_history {
+        bytes = bytes.saturating_add(queue_entry(entry));
+    }
+    bytes
+}
+
+// Header and outer slots have one lifetime, separate from element payloads.
+pub(super) fn snapshot_global(value: Option<&SessionSnapshot>) -> usize {
+    let Some(value) = value else {
+        return 0;
+    };
+    snapshot_header(value).saturating_add(snapshot_slots(value))
+}
+
+fn snapshot_header(value: &SessionSnapshot) -> usize {
+    size_of::<SessionSnapshot>()
         .saturating_add(value.id.as_str().len())
         .saturating_add(value.provider.name().len())
         .saturating_add(value.provider.model_id().len())
@@ -40,25 +61,18 @@ pub(super) fn snapshot(value: &SessionSnapshot) -> usize {
                 .recorded()
                 .map_or(0, |id| id.as_str().len()),
         )
-        .saturating_add(
-            value
-                .invocations
-                .capacity()
-                .saturating_mul(size_of::<InvocationRecord>()),
-        )
+}
+fn snapshot_slots(value: &SessionSnapshot) -> usize {
+    value
+        .invocations
+        .capacity()
+        .saturating_mul(size_of::<InvocationRecord>())
         .saturating_add(
             value
                 .queue_history
                 .capacity()
                 .saturating_mul(size_of::<QueueHistoryRecord>()),
-        );
-    for record in &value.invocations {
-        bytes = bytes.saturating_add(invocation(record));
-    }
-    for entry in &value.queue_history {
-        bytes = bytes.saturating_add(queue_entry(entry));
-    }
-    bytes
+        )
 }
 
 pub(super) fn invocation(record: &InvocationRecord) -> usize {
@@ -95,21 +109,10 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
             record
                 .scheduling
                 .iter()
-                .map(|edge| {
-                    edge.actor
-                        .as_ref()
-                        .map_or(0, actor)
-                        .saturating_add(edge.target.as_ref().map_or(0, |id| id.as_str().len()))
-                })
+                .map(scheduling_payload)
                 .fold(0usize, usize::saturating_add),
         );
-    let acknowledgment = match &record.acknowledgement {
-        SubmissionAcknowledgement::Pending | SubmissionAcknowledgement::Acknowledged => 0,
-        SubmissionAcknowledgement::Failed { audit, storage } => audit
-            .as_ref()
-            .map_or(0, |error| error.retained_size().unwrap_or(usize::MAX))
-            .saturating_add(storage.as_ref().map_or(0, StorageError::allocation_bytes)),
-    };
+    let acknowledgment = acknowledgement(&record.acknowledgement);
     let bytes = 0usize
         .saturating_add(prompt)
         .saturating_add(events)
@@ -125,13 +128,7 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
                 .as_ref()
                 .map_or(0, |report| report.retained_bytes()),
         )
-        .saturating_add(
-            record
-                .result
-                .as_ref()
-                .and_then(|result| result.as_ref().err())
-                .map_or(0, |error| error.retained_size().unwrap_or(usize::MAX)),
-        );
+        .saturating_add(result_payload(record.result.as_ref()));
     bytes
 }
 
@@ -161,7 +158,7 @@ pub(super) fn queue_entry(entry: &QueueHistoryRecord) -> usize {
     bytes
 }
 
-fn acknowledgement(value: &SubmissionAcknowledgement) -> usize {
+pub(super) fn acknowledgement(value: &SubmissionAcknowledgement) -> usize {
     match value {
         SubmissionAcknowledgement::Pending | SubmissionAcknowledgement::Acknowledged => 0,
         SubmissionAcknowledgement::Failed { audit, storage } => audit
@@ -181,32 +178,13 @@ pub(super) fn touched(
     let Some(snapshot) = snapshot else {
         return 0;
     };
-    let base = snapshot
-        .invocations
-        .capacity()
-        .saturating_mul(size_of::<InvocationRecord>())
-        .saturating_add(
-            snapshot
-                .queue_history
-                .capacity()
-                .saturating_mul(size_of::<QueueHistoryRecord>()),
-        );
+    let base = snapshot_slots(snapshot);
     let id = super::records::affected_execution(change);
     let record = id
         .and_then(|id| positions.get(id))
         .and_then(|index| snapshot.invocations.get(*index));
     base.saturating_add(match change {
-        SessionChange::Opened { .. } => size_of::<SessionSnapshot>()
-            .saturating_add(snapshot.id.as_str().len())
-            .saturating_add(snapshot.provider.name().len())
-            .saturating_add(snapshot.provider.model_id().len())
-            .saturating_add(snapshot.provider.context().len())
-            .saturating_add(
-                snapshot
-                    .provider_context
-                    .recorded()
-                    .map_or(0, |id| id.as_str().len()),
-            ),
+        SessionChange::Opened { .. } => snapshot_header(snapshot),
         SessionChange::InputAccepted(_) => {
             if include_input {
                 record.map_or(0, invocation)
@@ -239,10 +217,9 @@ pub(super) fn touched(
                 .map_or(0, |report| report.retained_bytes())
                 .saturating_add(record.local_cancellation.as_ref().map_or(0, stop))
         }),
-        SessionChange::LocalSettlement { .. } => record
-            .and_then(|record| record.result.as_ref())
-            .and_then(|result| result.as_ref().err())
-            .map_or(0, |error| error.retained_size().unwrap_or(usize::MAX)),
+        SessionChange::LocalSettlement { .. } => {
+            result_payload(record.and_then(|record| record.result.as_ref()))
+        }
         SessionChange::ProviderContext { .. } => snapshot
             .provider_context
             .recorded()
@@ -253,52 +230,25 @@ pub(super) fn touched(
 pub(super) fn append_payload(change: &SessionChange) -> usize {
     match change {
         SessionChange::QueueDecision(entry) => queue_entry(entry),
-        SessionChange::SchedulingTransition { event, .. } => event
-            .actor
-            .as_ref()
-            .map_or(0, actor)
-            .saturating_add(event.target.as_ref().map_or(0, |id| id.as_str().len())),
-        SessionChange::ProviderObservation(event) => event
-            .retained_bytes()
-            .saturating_sub(size_of::<ExecutionEvent>()),
+        SessionChange::SchedulingTransition { event, .. } => scheduling_payload(event),
+        SessionChange::ProviderObservation(event) => observation_payload(event),
         _ => 0,
     }
 }
-pub(super) fn spare_slots(
-    snapshot: Option<&SessionSnapshot>,
-    change: &SessionChange,
-    positions: &HashMap<ExecutionId, usize>,
-) -> usize {
-    let Some(snapshot) = snapshot else {
-        return 0;
-    };
-    let mut bytes = snapshot
-        .invocations
-        .capacity()
-        .saturating_mul(size_of::<InvocationRecord>())
-        .saturating_add(
-            snapshot
-                .queue_history
-                .capacity()
-                .saturating_mul(size_of::<QueueHistoryRecord>()),
-        );
-    // A popped new invocation drops its inner buffers. Other appends leave spare
-    // slots in the same owning vector on rollback, and those slots remain charged.
-    if let Some(record) = super::records::affected_execution(change)
-        .and_then(|id| positions.get(id))
-        .and_then(|index| snapshot.invocations.get(*index))
-    {
-        bytes = bytes.saturating_add(match change {
-            SessionChange::SchedulingTransition { .. } => record
-                .scheduling
-                .capacity()
-                .saturating_mul(size_of::<InvocationSchedulingEvent>()),
-            SessionChange::ProviderObservation(_) => record
-                .events
-                .capacity()
-                .saturating_mul(size_of::<ExecutionEvent>()),
-            _ => 0,
-        });
-    }
-    bytes
+pub(super) fn scheduling_payload(event: &InvocationSchedulingEvent) -> usize {
+    event
+        .actor
+        .as_ref()
+        .map_or(0, actor)
+        .saturating_add(event.target.as_ref().map_or(0, |id| id.as_str().len()))
+}
+pub(super) fn observation_payload(event: &ExecutionEvent) -> usize {
+    event
+        .retained_bytes()
+        .saturating_sub(size_of::<ExecutionEvent>())
+}
+pub(super) fn result_payload(result: Option<&Result<ExecutionOutcome, AgentError>>) -> usize {
+    result
+        .and_then(|result| result.as_ref().err())
+        .map_or(0, |error| error.retained_size().unwrap_or(usize::MAX))
 }

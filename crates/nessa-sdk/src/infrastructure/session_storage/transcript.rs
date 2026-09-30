@@ -339,6 +339,11 @@ impl TranscriptFold {
         )
     }
 
+    #[cfg(test)]
+    pub(super) fn assert_retained_accounting(&self) {
+        self.committed.assert_retained_accounting();
+    }
+
     pub(super) fn retained_bytes(&self) -> usize {
         let scope = [
             &self.scope.receiver(),
@@ -870,11 +875,13 @@ mod tests {
             );
         }
         assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+        fold.committed.assert_retained_accounting();
         assert_eq!(
             fold.snapshot().unwrap().invocations[0].acknowledgement,
             failed
         );
         let restored = TranscriptFold::restore(scope, 3, &checkpoint).unwrap();
+        restored.committed.assert_retained_accounting();
         let SubmissionAcknowledgement::Failed {
             storage: Some(StorageError::ShutdownFailures(causes)),
             ..
@@ -2002,16 +2009,29 @@ mod tests {
     }
 
     fn tool_record(scope: &Scope, name: &str, ordinal: u64, position: u64) -> Vec<Record> {
-        let event = ExecutionEvent::new(
-            ExecutionId::new("output").unwrap(),
-            ExecutionUpdate::Tool(ToolCallUpdate::new(
+        tool_update_record(
+            scope,
+            ToolCallUpdate::new(
                 ToolCallId::new(name).unwrap(),
                 Some(name.into()),
                 None,
                 None,
                 None,
                 None,
-            )),
+            ),
+            ordinal,
+            position,
+        )
+    }
+    fn tool_update_record(
+        scope: &Scope,
+        update: ToolCallUpdate,
+        ordinal: u64,
+        position: u64,
+    ) -> Vec<Record> {
+        let event = ExecutionEvent::new(
+            ExecutionId::new("output").unwrap(),
+            ExecutionUpdate::Tool(update),
         );
         let key = records::FactKey::new(
             records::FactKind::ProviderObservation,
@@ -2149,5 +2169,366 @@ mod tests {
         let restored =
             TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap()).unwrap();
         restored.committed.assert_retained_accounting();
+    }
+    // Independent fixture sum: actual snapshot vector capacities and payload owners,
+    // without retained::snapshot/touched/append_payload or rollback projections.
+    fn assert_growth_snapshot_allocation(fold: &TranscriptFold) {
+        use std::mem::size_of;
+        let snapshot = fold.snapshot().unwrap();
+        let mut actual = size_of::<SessionSnapshot>()
+            + snapshot.id.as_str().len()
+            + snapshot.provider.name().len()
+            + snapshot.provider.model_id().len()
+            + snapshot.provider.context().len()
+            + snapshot
+                .provider_context
+                .recorded()
+                .map_or(0, |id| id.as_str().len())
+            + snapshot.invocations.capacity() * size_of::<InvocationRecord>()
+            + snapshot.queue_history.capacity() * size_of::<QueueHistoryRecord>();
+        assert!(snapshot.queue_history.is_empty());
+        for record in &snapshot.invocations {
+            assert!(record.scheduling.is_empty());
+            assert!(matches!(
+                record.acknowledgement,
+                SubmissionAcknowledgement::Pending
+            ));
+            assert!(
+                record.cancellation.is_none()
+                    && record.local_cancellation.is_none()
+                    && record.provider_report.is_none()
+                    && record.result.is_none()
+            );
+            let message = &record.request.user_message;
+            actual += record.request.execution_id.as_str().len()
+                + record.actor.principal_id().len()
+                + record.actor.surface_id().len()
+                + record.actor.request_id().len()
+                + message.text_str().len()
+                + std::mem::size_of_val(message.images())
+                + std::mem::size_of_val(message.files())
+                + message
+                    .files()
+                    .iter()
+                    .map(|file| file.path().len())
+                    .sum::<usize>()
+                + record.events.capacity() * size_of::<ExecutionEvent>()
+                + record.scheduling.capacity() * size_of::<InvocationSchedulingEvent>();
+            for event in &record.events {
+                actual += event.execution_id().as_str().len();
+                actual += match event.update() {
+                    ExecutionUpdate::Message(chunk) => chunk.payload_bytes(),
+                    ExecutionUpdate::Tool(tool) => tool.id().as_str().len() + tool.payload_bytes(),
+                    _ => panic!("unexpected growth fixture payload"),
+                };
+            }
+        }
+        fold.committed.assert_snapshot_allocation(actual);
+    }
+
+    fn rollback_parent_growth(existing: bool) {
+        for count in [1, 2, 4, 32] {
+            for tools in [false, true] {
+                let scope = scope();
+                let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+                let mut open = opened();
+                let SessionChange::Opened { context, .. } = &mut open else {
+                    unreachable!()
+                };
+                *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+                fold.apply(&records(&scope, 1, &fact(None, open, 1)))
+                    .unwrap();
+                if existing {
+                    fold.apply(&records(
+                        &scope,
+                        2,
+                        &fact(fold.snapshot(), accepted_input("output"), 2),
+                    ))
+                    .unwrap();
+                    fold.apply(&[message_record(&scope, 0, 3, 4096)]).unwrap();
+                }
+                // This retained prefix must not be copied or scanned by rollback.
+                for index in 0..128 {
+                    let position = fold.downloaded() + 1;
+                    fold.apply(&records(
+                        &scope,
+                        position,
+                        &fact(
+                            fold.snapshot(),
+                            accepted_input(&format!("prefix-{index}")),
+                            position,
+                        ),
+                    ))
+                    .unwrap();
+                }
+                fold.observe_source_head(&scope, fold.downloaded()).unwrap();
+                let checkpoint = fold.checkpoint().unwrap();
+                let progress = (fold.applied(), fold.downloaded(), fold.fact_count());
+                let status = fold.status();
+                let published = fold.committed.snapshot_handle().unwrap();
+                let mut suffix = if existing {
+                    Vec::new()
+                } else {
+                    let position = fold.downloaded() + 1;
+                    records(
+                        &scope,
+                        position,
+                        &fact(fold.snapshot(), accepted_input("output"), position),
+                    )
+                };
+                for index in 0..count {
+                    let ordinal = index + usize::from(existing);
+                    let position = fold.downloaded() + suffix.len() as u64 + 1;
+                    if tools {
+                        // Create, omit, and explicitly clear the same tool before
+                        // moving on to another inner owner.
+                        let title = match index % 3 {
+                            0 => Some("t".repeat(1024)),
+                            1 => None,
+                            _ => Some(String::new()),
+                        };
+                        suffix.extend(tool_update_record(
+                            &scope,
+                            ToolCallUpdate::new(
+                                ToolCallId::new(format!("tool-{}", index / 3)).unwrap(),
+                                title,
+                                None,
+                                None,
+                                None,
+                                None,
+                            ),
+                            ordinal as u64,
+                            position,
+                        ));
+                    } else {
+                        suffix.push(message_record(&scope, ordinal, position, 1024));
+                    }
+                }
+                for _ in 0..3 {
+                    for refusal in 0..3 {
+                        MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
+                        VALIDATION_CALLS.with(|counter| counter.set((0, 0)));
+                        SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.set(0));
+                        if refusal == 0 {
+                            let mut guard = fold.transaction();
+                            guard.apply(&suffix).unwrap();
+                        } else {
+                            let mut invalid = suffix.clone();
+                            if refusal == 1 {
+                                invalid.push(suffix.last().unwrap().clone());
+                                assert_eq!(fold.apply(&invalid), Err(TranscriptError::Position));
+                            } else {
+                                let position = fold.downloaded() + invalid.len() as u64 + 1;
+                                invalid.extend(records(
+                                    &scope,
+                                    position,
+                                    &fact(None, opened(), position),
+                                ));
+                                assert!(matches!(
+                                    fold.apply(&invalid),
+                                    Err(TranscriptError::Decision(StorageError::Corrupt(_)))
+                                ));
+                            }
+                        }
+                        // Check bounded work before any full accounting oracle.
+                        assert_eq!(VALIDATION_CALLS.with(|counter| counter.get()).0, 0);
+                        assert_eq!(SNAPSHOT_ACCOUNTING_CALLS.with(|counter| counter.get()), 0);
+                        assert_eq!(
+                            MESSAGE_CLONES.with(|counter| counter.get()),
+                            if tools { (0, 0) } else { (count, count * 1024) }
+                        );
+                        assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+                        assert_eq!(
+                            (fold.applied(), fold.downloaded(), fold.fact_count()),
+                            progress
+                        );
+                        assert_eq!(fold.status(), status);
+                        assert_eq!(fold.snapshot(), Some(published.as_ref()));
+                        assert_growth_snapshot_allocation(&fold);
+                    }
+                }
+                let mut restored =
+                    TranscriptFold::restore(scope.clone(), fold.applied(), &checkpoint).unwrap();
+                {
+                    let mut guard = fold.transaction();
+                    guard.apply(&suffix).unwrap();
+                    guard.commit().unwrap();
+                }
+                restored.apply(&suffix).unwrap();
+                assert_eq!(fold.checkpoint().unwrap(), restored.checkpoint().unwrap());
+                assert_growth_snapshot_allocation(&fold);
+                assert_growth_snapshot_allocation(&restored);
+                let resumed =
+                    TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap())
+                        .unwrap();
+                assert_growth_snapshot_allocation(&resumed);
+                assert_eq!(resumed.snapshot(), fold.snapshot());
+                assert_eq!(published.invocations.len(), 128 + usize::from(existing));
+            }
+        }
+    }
+
+    #[test]
+    fn borrowed_rollback_reconciles_new_parent_inner_allocations() {
+        rollback_parent_growth(false);
+    }
+    #[test]
+    fn borrowed_rollback_reconciles_existing_parent_spare_allocations() {
+        rollback_parent_growth(true);
+    }
+    #[test]
+    fn borrowed_rollback_reconciles_scheduling_stop_report_and_result_payloads() {
+        use crate::application::agent_execution::{
+            providers::{
+                CloseOutcome, ExecutionReport, FinalizedExecutionProjection, ProviderSessionState,
+                ResourceCleanup,
+            },
+            sessions::InvocationCancellationEvent,
+        };
+        let scope = scope();
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let mut open = opened();
+        let SessionChange::Opened { context, .. } = &mut open else {
+            unreachable!()
+        };
+        *context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        fold.apply(&records(&scope, 1, &fact(None, open, 1)))
+            .unwrap();
+        for name in ["queued", "cancel", "report", "settle", "local-report"] {
+            let mut input = accepted_input(name);
+            if name == "queued" {
+                let SessionChange::InputAccepted(record) = &mut input else {
+                    unreachable!()
+                };
+                record.submission = SubmissionMode::Queued;
+                record.scheduling.push(InvocationSchedulingEvent {
+                    stage: InvocationStage::Queued,
+                    kind: InvocationKind::Queued,
+                    cause: SchedulingCause::Submitted,
+                    before: None,
+                    target: None,
+                    actor: Some(record.actor.clone()),
+                });
+            }
+            let position = fold.downloaded() + 1;
+            fold.apply(&records(
+                &scope,
+                position,
+                &fact(fold.snapshot(), input, position),
+            ))
+            .unwrap();
+        }
+        let prior_result = Err(AgentError::Storage(StorageError::Io("prior".repeat(256))));
+        let position = fold.downloaded() + 1;
+        let prior = SessionChange::LocalSettlement {
+            execution_id: ExecutionId::new("settle").unwrap(),
+            before: None,
+            after: prior_result.clone(),
+            local_outcome: None,
+        };
+        fold.apply(&records(
+            &scope,
+            position,
+            &fact(fold.snapshot(), prior, position),
+        ))
+        .unwrap();
+        let actor = ActionContext::new("user", "surface", "cleanup-request").unwrap();
+        let error = || AgentError::Storage(StorageError::Io("failure".repeat(256)));
+        let changes = [
+            SessionChange::SchedulingTransition {
+                execution_id: ExecutionId::new("queued").unwrap(),
+                event: InvocationSchedulingEvent {
+                    stage: InvocationStage::Cancelled,
+                    kind: InvocationKind::Queued,
+                    cause: SchedulingCause::Withdrawn,
+                    before: Some(InvocationStage::Queued),
+                    target: None,
+                    actor: Some(actor.clone()),
+                },
+            },
+            SessionChange::StopDecision {
+                execution_id: ExecutionId::new("cancel").unwrap(),
+                event: InvocationCancellationEvent {
+                    cause: SchedulingCause::SessionClosed,
+                    actor: Some(actor.clone()),
+                },
+            },
+            SessionChange::ProviderReport {
+                execution_id: ExecutionId::new("report").unwrap(),
+                report: ExecutionReport::new(None, Some(error()), ProviderSessionState::Usable),
+                local_stop: None,
+            },
+            SessionChange::ProviderReport {
+                execution_id: ExecutionId::new("local-report").unwrap(),
+                report: ExecutionReport::finalized_local_cancellation(
+                    ResourceCleanup::Confirmed(CloseOutcome { forced: false }),
+                    None,
+                    FinalizedExecutionProjection::new(Vec::new()).unwrap(),
+                ),
+                local_stop: Some(InvocationCancellationEvent {
+                    cause: SchedulingCause::SessionClosed,
+                    actor: Some(actor),
+                }),
+            },
+            SessionChange::LocalSettlement {
+                execution_id: ExecutionId::new("settle").unwrap(),
+                before: Some(prior_result),
+                after: Err(error()),
+                local_outcome: None,
+            },
+            SessionChange::ProviderContext {
+                before: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
+                after: ProviderContext::Recorded(
+                    ExecutionSessionId::new("replacement-remote-context").unwrap(),
+                ),
+            },
+        ];
+        // Fixture construction uses explicit owned Clone, outside measured suffix work.
+        let mut candidate = fold.clone();
+        let mut suffix = Vec::new();
+        for change in changes {
+            let position = candidate.downloaded() + 1;
+            let frames = records(
+                &scope,
+                position,
+                &fact(candidate.snapshot(), change, position),
+            );
+            candidate.apply(&frames).unwrap();
+            suffix.extend(frames);
+        }
+        let checkpoint = fold.checkpoint().unwrap();
+        for _ in 0..3 {
+            {
+                let mut guard = fold.transaction();
+                guard.apply(&suffix).unwrap();
+                guard.committed.assert_retained_accounting();
+            }
+            assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+            fold.committed.assert_retained_accounting();
+            let mut refused = suffix.clone();
+            refused.push(suffix.last().unwrap().clone());
+            assert_eq!(fold.apply(&refused), Err(TranscriptError::Position));
+            assert_eq!(fold.checkpoint().unwrap(), checkpoint);
+            fold.committed.assert_retained_accounting();
+        }
+        fold.apply(&suffix).unwrap();
+        assert_eq!(fold.snapshot(), candidate.snapshot());
+        fold.committed.assert_retained_accounting();
+        let resumed =
+            TranscriptFold::restore(scope, fold.applied(), &fold.checkpoint().unwrap()).unwrap();
+        resumed.committed.assert_retained_accounting();
+        assert_eq!(resumed.snapshot(), fold.snapshot());
+        assert_eq!(
+            fold.snapshot().unwrap().invocations[0]
+                .scheduling
+                .last()
+                .unwrap()
+                .stage,
+            InvocationStage::Cancelled
+        );
+        assert!(matches!(
+            fold.snapshot().unwrap().invocations[3].result,
+            Some(Err(_))
+        ));
     }
 }

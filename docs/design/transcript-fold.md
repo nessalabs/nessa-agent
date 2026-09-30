@@ -20,9 +20,9 @@ store, not authentication of arbitrary checkpoints against an origin.
 Checkpoint encoding streams immutable chunks through the existing semantic codec.
 Token/collection preflight and full state validation enforce the semantic owner's
 bounds without an unrelated aggregate history byte cap.
-Semantic history is not truncated to fit display or checkpoint limits. Staged
-batches share prior immutable semantic state; physical history is not cloned or
-retained after a terminal. Pending physical data is bounded by the physical fact
+Semantic history is not truncated to fit display or checkpoint limits. Borrowed staged
+batches mutate the owned continuation with touched-state undo; physical history is
+not cloned or retained after a terminal. Pending physical data is bounded by the physical fact
 codec and is decoded once after its seal.
 
 Completeness and freshness have one inward owner, `CommittedStatus`. Partial
@@ -67,7 +67,7 @@ or incarnation grants no interaction authority.
 | Checkpoint | Altered scope, cursor, state or allocation overflow | Refuse before publication; checkpoint validation tests. |
 | Newer projection | Older complete read arrives after partial progress | Refuse lower D even when A equals. `committed_partial_progress_cannot_be_replaced_by_an_older_complete_read` |
 | Pending physical body | Stage each page, malformed suffix, shared-tail drop and Complete/Abort | Reuse the sole FrameValidator; immutable Arc piece chain clones its tail in O(1), charges node/control-block/payload allocations, and never copies accumulated prefix while staging. Complete assembles once and invokes the existing semantic decoder once; Abort drops without decoding. Iterative teardown preserves shared tails. `pending_piece_staging_shares_prefix_and_decodes_only_at_seal` and pending buffer operation-count tests. |
-| Cached continuation | Concurrent reads | One per-conversation mutex advances the exact scoped continuation; snapshots share immutable state. |
+| Cached continuation | Concurrent reads | One per-conversation mutex advances the owned scoped continuation; each read materializes a separately owned immutable snapshot. `publication_materializes_independent_immutable_snapshot` |
 | Cache | Eviction target is exceeded | Evict inactive entries; retain fixed-pass progress and account pinned intentional history separately. Never truncate semantic state. |
 | Gateway read | Metadata tombstone commits during title lookup, normal or pending-mode read | Recheck the authoritative metadata after the await and refuse publication. `committed_reads_recheck_tombstone_after_title_lookup` |
 | Incomplete view | Agent capabilities refresh | Queue, steering and interaction controls remain unavailable. `incomplete_committed_view_suppresses_controls_even_after_capability_refresh` |
@@ -81,7 +81,7 @@ or incarnation grants no interaction authority.
 | Storage diagnostic role | Same large plain Io cause appears inside AgentError, acknowledgement storage, or shutdown aggregate | Plain SavedError::Storage leaves consume the existing enclosing AgentError tree byte budget. Failed-ack storage and ShutdownFailures payload entry establish the published4096 text budget; nested children share it without reset and share the same node/depth owner. More-than4096 AgentError text remains exact through codec/fold; the same text in ack/aggregate roles refuses before allocation/publication. |
 | Source joined | Exact key remains valid but sealed or mid-fact physical suffix appended | Observe the actual bounds physical tail through observe_source_head, then construct the result from that same physical observed head. A remains the terminal semantic cursor, fixed captured pass stays unchanged, completeness is independent of freshness, and the next pass makes finite progress. |
 | Final returned ConversationView | Normal title lookup and pending-mode selection/capabilities follow pure projection | Apply the existing encoded display budget once after all service additions and authority filtering, before publication. Pure projection is internal and may be unbounded; preserve access recheck and whole-interaction fallback. Near-cap title regressions exercise both service returns while retaining pending selection. Selection is internal metadata skipped by this serializer; the product wire joins catalog fields afterward. `returned_committed_views_bound_late_titles_and_preserve_pending_selection` |
-| Immutable semantic snapshot retention | Some snapshot versus empty continuation, staging clone and abort | CommittedTranscript counts the full snapshot once plus its two Arc control slots only when Some; staging shares the immutable allocation, abort preserves it. No new logical admission limit. `semantic_snapshot_retention_counts_arc_control_slots_once` |
+| Owned semantic continuation | Borrowed staging, explicit Clone and immutable read publication | CommittedTranscript owns canonical mutable state and counts actual payload and spare allocation. Borrowed rollback reverses touched state; explicit Clone copies and revalidates complete history. Each read materializes a separate immutable snapshot; Arc pointer reuse is not promised. `publication_materializes_independent_immutable_snapshot`, `borrowed_rollback_reconciles_new_parent_inner_allocations` and `borrowed_rollback_reconciles_existing_parent_spare_allocations` |
 | Storage failure allocation | Snapshot acknowledgement versus Agent error wrapper | One StorageError allocation_bytes owner counts String capacity or boxed two-cause payload/text; existing 4096 diagnostic admission meaning stays unchanged; the current codec stores typed read/runtime children. `shutdown_failure_allocation_accounting_agrees_across_wrappers` |
 | Committed interaction | Foreign/local execution identity | Only exact live execution can offer it. `only_the_exact_live_execution_can_offer_a_committed_interaction` |
 | Fixed read target | Writer appends suffix | Finish captured target; a later read captures a new head. |
@@ -102,8 +102,8 @@ committed reads together. It retains at most four outer read-thread handles unti
 joining them. Each outer thread runs outside Tokio's entered context, owns its
 source through source-worker join, and sends only a receipt to the async caller.
 Cancellation drops that receipt; it does not release the admission slot. Cached
-continuations have one exclusive fold owner per exact scope; callers clone only
-its Arc and immutable published snapshot. Shutdown has one shared completion
+continuations have one exclusive fold owner per exact scope; callers clone the cache entry Arc or an already published immutable snapshot handle.
+A new read publication copies the complete semantic snapshot. Shutdown has one shared completion
 covering both read joins and runtime cleanup, including cancelled callers.
 
 | State | Ordering | Decision / regression |
@@ -113,7 +113,7 @@ covering both read joins and runtime cleanup, including cancelled callers.
 | Open storage | Shutdown races writer/read/init admission | One lock closes every admission; prior initialization is awaited before runtime cleanup. `shutdown_closes_all_admission_and_shares_completion` |
 | Closing storage | First shutdown caller cancels; second arrives | Shared owned task completes full cleanup; same outcome for both callers. Same regression. |
 | Read join and runtime cleanup | Both fail | Preserve both diagnostic causes in one immutable boxed shutdown payload, compacting retained allocations; codec retains the same read/runtime fields and outcome meaning. `shutdown_preserves_read_and_runtime_failures` |
-| Cached exact scope | Concurrent reads | Exclusive continuation owner advances once; hot results share immutable state. `independent_committed_read_uses_physical_facts_while_a_writer_exists` |
+| Cached exact scope | Concurrent reads | Exclusive owned continuation advances once; hot results materialize independent immutable snapshots. `independent_committed_read_uses_physical_facts_while_a_writer_exists` |
 
 ### Long history and bounded work
 
@@ -126,7 +126,11 @@ or a typed refusal, the inactive receiver is eligible for whole-entry eviction.
 Other conversations do not wait on its source I/O under a global cache lock.
 Four read owners and 64 receiver entries bound concurrency/count; retained
 intentional history is measured separately from codec-bounded pending work and
-page/decode scratch. No valid history is truncated to fit a cache target.
+page/decode scratch. No valid history is truncated to fit a cache target. Entry charges publish after every accepted or refused
+page while the receiver is exclusively owned. Later head, freshness, join and
+retirement metadata operations allocate no receiver payload.
+Admission observes these published charges; the target is not a hard cap on
+transient in-flight allocations or growing valid history.
 
 A checkpoint is one opaque ordered collection of immutable byte chunks, each
 bounded before retention. A chunk-chain Reader feeds the existing token preflight
@@ -268,7 +272,10 @@ mirrored live pending ledger or invented persisted answer is permitted.
 | State | Ordering | Required decision / evidence |
 | --- | --- | --- |
 | Valid restored continuation | Repeated growing pages or 1 versus 64 complete facts | Actual semantic indices/history/queue/provider state is reused; no prefix cloning, replay or accounting scan per fact/chunk. Work/allocation counters measure suffix separately from full publication. |
-| Valid terminals followed by malformed final frame or decision | Transaction has staged appends and changed small fields, including several global or touched-owner capacity growth steps | Roll back the whole batch, including A/D/fact count/status and correlations; prior checkpoint and held published snapshot remain unchanged. Replace the actual global allocation charge once for the whole rollback and each touched owner's actual charge before/after its undo group; count surviving spare slots once. Four-input public Drop and late Position refusal regressions, 1/2/32-input counterparts, warm repeats, commit/restore/retry, a retained prefix with suffix-work counters, repeated inner-owner growth and queue rollback compare both cached snapshot and derived bytes against their independent current-allocation oracle. |
+| Valid terminals followed by malformed final frame or decision | Transaction has staged appends and changed small fields, including several global or touched-owner capacity growth steps | Roll back the whole batch, including A/D/fact count/status and correlations; prior checkpoint and held published snapshot remain unchanged. Reconcile snapshot header/outer and derived global charge once for the whole rollback; replace each current derived owner before/after its undo group and reverse snapshot payloads at their actual mutation tokens. Count surviving spare slots once. Four-input public Drop and late Position refusal regressions, 1/2/32-input counterparts, warm repeats, commit/restore/retry, a retained prefix with suffix-work counters, repeated inner-owner growth and queue rollback compare both cached snapshot and derived bytes against their independent current-allocation oracle. |
+| New input owns growing inner events, scheduling or tool state | Drop, late Position/Frame refusal or semantic contradiction reverses inner changes before removing the parent | Remove actual current payloads at mutation tokens; preserve existing-parent slots but release remaining inner slots when the new parent is removed. Outer/header charge reconciles once. Independent allocation sums, warm retries, commit/restore and suffix counters cover both lifetimes. `borrowed_rollback_reconciles_new_parent_inner_allocations`, `borrowed_rollback_reconciles_existing_parent_spare_allocations` and existing inner-tool/queue/partial-group regressions. |
+| Physical page changes receiver allocation | Accepted or refused page, then head/source-finish/bounds failure or cleanup | Publish the actual receiver charge after each page outcome before propagating refusal. Later head/source-finish/bounds/cleanup metadata allocate no receiver payload and need no second charge store. Retain typed outcomes, physical source join and cache eligibility; no blanket eviction or policy change. `committed_cache_charge_tracks_refused_and_accepted_page_allocations` and existing source-join/head/retirement regressions. |
+| Existing canonical payload owners | Scheduling, stop, report, result and context changes, then Drop/refusal or commit | Reverse current field payloads and preserved slots without scanning old events; restored diagnostics keep their typed causes and actual charge. `borrowed_rollback_reconciles_scheduling_stop_report_and_result_payloads` and `receiver_guard_replaces_and_restores_typed_failed_acknowledgement`. |
 | Active guard replaces a failed acknowledgement | External commit succeeds; moved old typed diagnostic is released | Commit adds no validation or typed refusal. Existing value destructors can allocate bounded teardown work for retained diagnostic trees; this is separate from semantic staging and full publication. Actual replaced-ack commit and checkpoint restore retain typed read/runtime causes; guard Drop restores the prior failure. |
 | Receiver transaction accepted by SDK | SQL checkpoint/A/effects commit fails or waiter drops | Borrowed guard rolls back unless commit is confirmed; no cloned receiver candidate or second semantic fold. |
 | Canonical state advances | Prior immutable published snapshot is still retained | Publish a separately owned complete snapshot only at the read boundary; old snapshot remains immutable and both allocations are measured. |
@@ -309,14 +316,19 @@ growth in the existing `Vec`/`HashMap` owners. MessageChunk's test-only clone
 counter measures actual copied text bytes; full validation counters measure cold
 prefix replay. Growing-page tests must copy only new message payloads and perform
 no cold prefix validation. Collection capacity can grow or remain after rollback;
-the retained owner charges those actual slots. Rollback removes its current global
-charge once, then reverses each existing flat undo group while replacing that
-owner's actual before/after charge, and finally adds the surviving global charge
-once. The allocation marker precedes every group's mutation tokens, including a
-partially refused change. Empty undo has no effects. Historical per-step after
-sizes are not rollback witnesses: later changes can leave larger global or inner
-owner capacities. Group boundaries consume only the staged suffix; no full-history
-accounting traversal or new capacity ledger is introduced. The standalone allocator fixture
+the retained owner charges those actual slots. Rollback removes its current snapshot
+header/outer and derived global charges once, then reverses existing flat undo
+groups. Derived owner charges use current before/after measurements. Snapshot
+mutation tokens remove or replace the actual current payload they reverse; event
+and scheduling pops retain inner slots, while a later new-input parent removal
+releases those remaining inner allocations. Final header/outer and derived global
+charges reflect surviving owners once. The allocation marker precedes every group's
+mutation tokens, including a partially refused change. Empty undo has no effects.
+Historical per-step snapshot sizes and spare-growth ledgers are not retained.
+Group boundaries consume only the staged suffix; no full-history accounting traversal
+or new capacity ledger is introduced. Explicit owned Clone and immutable read
+publication still cost O(full retained history), separately from suffix work.
+The standalone allocator fixture
 measures all requested allocations separately from full read-publication copies.
 
 Derived allocation helpers charge separately allocated map/vector slots, compact

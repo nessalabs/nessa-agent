@@ -368,9 +368,6 @@ pub(super) fn affected_execution(change: &SessionChange) -> Option<&ExecutionId>
 }
 
 pub(super) struct AllocationUndo {
-    before_snapshot: usize,
-    after_snapshot: usize,
-    spare_growth: usize,
     id: Option<ExecutionId>,
 }
 pub(super) enum ChangeUndo {
@@ -401,17 +398,9 @@ impl continuation::Continuation {
         for change in changes {
             let before_snapshot =
                 super::retained::touched(self.snapshot.as_ref(), change, &self.positions, false);
-            let before_spare =
-                super::retained::spare_slots(self.snapshot.as_ref(), change, &self.positions);
             let id = affected_execution(change).cloned();
             let before_derived = self.derived_touched(id.as_ref());
-            let index = undo.len();
-            undo.push(ChangeUndo::Allocation(AllocationUndo {
-                before_snapshot,
-                after_snapshot: before_snapshot,
-                spare_growth: 0,
-                id,
-            }));
+            undo.push(ChangeUndo::Allocation(AllocationUndo { id }));
             let result = self.stage_change(change, undo);
             let after_snapshot = super::retained::touched(
                 self.snapshot.as_ref(),
@@ -424,8 +413,6 @@ impl continuation::Continuation {
             } else {
                 0
             });
-            let after_spare =
-                super::retained::spare_slots(self.snapshot.as_ref(), change, &self.positions);
             let after_derived = self.derived_touched(affected_execution(change));
             self.snapshot_bytes = self
                 .snapshot_bytes
@@ -435,11 +422,6 @@ impl continuation::Continuation {
                 .derived_bytes
                 .saturating_sub(before_derived)
                 .saturating_add(after_derived);
-            let ChangeUndo::Allocation(accounting) = &mut undo[index] else {
-                unreachable!("allocation undo precedes transition")
-            };
-            accounting.after_snapshot = after_snapshot;
-            accounting.spare_growth = after_spare.saturating_sub(before_spare);
             result?;
         }
         let Self {
@@ -799,6 +781,8 @@ impl continuation::Continuation {
         if undo.is_empty() {
             return;
         }
+        let snapshot_global = super::retained::snapshot_global(self.snapshot.as_ref());
+        self.snapshot_bytes = self.snapshot_bytes.saturating_sub(snapshot_global);
         let global = self.derived_global();
         self.derived_bytes = self.derived_bytes.saturating_sub(global);
         // stage places an allocation marker before its mutation tokens. Reverse
@@ -827,17 +811,14 @@ impl continuation::Continuation {
         assert!(undo.is_empty(), "stage records allocation before mutation");
         // Surviving global spare capacity is reconciled once for the whole batch.
         self.derived_bytes = self.derived_bytes.saturating_add(self.derived_global());
+        self.snapshot_bytes = self
+            .snapshot_bytes
+            .saturating_add(super::retained::snapshot_global(self.snapshot.as_ref()));
     }
 
     fn rollback_change(&mut self, undo: ChangeUndo) {
         match undo {
-            ChangeUndo::Allocation(accounting) => {
-                self.snapshot_bytes = self
-                    .snapshot_bytes
-                    .saturating_sub(accounting.after_snapshot)
-                    .saturating_add(accounting.before_snapshot)
-                    .saturating_add(accounting.spare_growth);
-            }
+            ChangeUndo::Allocation(_) => {}
             ChangeUndo::History(id, history) => {
                 self.histories.insert(id, history);
             }
@@ -850,36 +831,92 @@ impl continuation::Continuation {
                 self.positions.remove(&id);
                 self.histories.remove(&id);
                 self.invocations.pop();
-                self.snapshot.as_mut().expect("open").invocations.pop();
+                let record = self
+                    .snapshot
+                    .as_mut()
+                    .expect("open")
+                    .invocations
+                    .pop()
+                    .expect("new input");
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(super::retained::invocation(&record));
             }
             ChangeUndo::Queue(undo) => {
                 self.queue.restore(undo);
-                self.snapshot.as_mut().expect("open").queue_history.pop();
+                let entry = self
+                    .snapshot
+                    .as_mut()
+                    .expect("open")
+                    .queue_history
+                    .pop()
+                    .expect("queue decision");
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(super::retained::queue_entry(&entry));
             }
             ChangeUndo::Scheduling(index) => {
-                self.snapshot.as_mut().expect("open").invocations[index]
+                let event = self.snapshot.as_mut().expect("open").invocations[index]
                     .scheduling
-                    .pop();
+                    .pop()
+                    .expect("scheduling transition");
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(super::retained::scheduling_payload(&event));
             }
             ChangeUndo::Observation(index, undo) => {
                 self.invocations[index].restore_observation(undo);
-                self.snapshot.as_mut().expect("open").invocations[index]
+                let event = self.snapshot.as_mut().expect("open").invocations[index]
                     .events
-                    .pop();
+                    .pop()
+                    .expect("observation");
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(super::retained::observation_payload(&event));
             }
             ChangeUndo::Receipt(index, receipt) => {
-                self.snapshot.as_mut().expect("open").invocations[index].acknowledgement = receipt
+                let record = &mut self.snapshot.as_mut().expect("open").invocations[index];
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(super::retained::acknowledgement(&record.acknowledgement))
+                    .saturating_add(super::retained::acknowledgement(&receipt));
+                record.acknowledgement = receipt;
             }
             ChangeUndo::Stop(index) => {
-                self.snapshot.as_mut().expect("open").invocations[index].cancellation = None
+                let record = &mut self.snapshot.as_mut().expect("open").invocations[index];
+                self.snapshot_bytes = self.snapshot_bytes.saturating_sub(
+                    record
+                        .cancellation
+                        .as_ref()
+                        .map_or(0, super::retained::stop),
+                );
+                record.cancellation = None;
             }
             ChangeUndo::Report(index) => {
                 let record = &mut self.snapshot.as_mut().expect("open").invocations[index];
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(
+                        record
+                            .provider_report
+                            .as_ref()
+                            .map_or(0, |report| report.retained_bytes()),
+                    )
+                    .saturating_sub(
+                        record
+                            .local_cancellation
+                            .as_ref()
+                            .map_or(0, super::retained::stop),
+                    );
                 record.provider_report = None;
                 record.local_cancellation = None;
             }
             ChangeUndo::Settlement(index, outcome, result) => {
                 let record = &mut self.snapshot.as_mut().expect("open").invocations[index];
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(super::retained::result_payload(record.result.as_ref()))
+                    .saturating_add(super::retained::result_payload(result.as_ref()));
                 record.result = result;
                 record.local_outcome = outcome;
             }

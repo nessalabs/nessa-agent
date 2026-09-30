@@ -59,6 +59,14 @@ pub(super) struct CachedCommittedRead {
     retained_bytes: AtomicUsize,
     lifetime: CacheLifetime,
 }
+impl CachedCommittedRead {
+    fn publish_retained_bytes(&self, receiver: &CommittedReceiver) {
+        self.retained_bytes.store(
+            receiver_retained_bytes(&receiver.fold, &self.scope),
+            Ordering::Release,
+        );
+    }
+}
 struct CommittedReceiver {
     fold: TranscriptFold,
     through: Option<u64>,
@@ -1034,14 +1042,9 @@ impl RecordStorage {
                     if records.is_empty() {
                         break;
                     }
-                    receiver
-                        .fold
-                        .apply(&records)
-                        .map_err(committed_fold_error)?;
-                    entry.retained_bytes.store(
-                        receiver_retained_bytes(&receiver.fold, &entry.scope),
-                        Ordering::Release,
-                    );
+                    let applied = receiver.fold.apply(&records).map_err(committed_fold_error);
+                    entry.publish_retained_bytes(&receiver);
+                    applied?;
                     if receiver.fold.downloaded() >= head {
                         break;
                     }
@@ -3259,5 +3262,170 @@ mod tests {
             "NESSA_DURABLE_TRAFFIC {mode} payload={} protocol={} duplicate={}",
             counters.payload_bytes, counters.protocol_bytes, counters.duplicate_bytes
         );
+    }
+    #[tokio::test]
+    async fn committed_cache_charge_tracks_refused_and_accepted_page_allocations() {
+        for reject in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
+            let session = SessionId::new("conversation").unwrap();
+            let runtime = storage.runtime().await.unwrap().clone();
+            let stream = runtime
+                .create_stream(&StreamId::new(session.as_str()).unwrap())
+                .await
+                .unwrap();
+            append_opening(&runtime, &stream, &session).await;
+            let initial = storage
+                .read_committed(session.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            let entry = storage
+                .committed_views
+                .lock()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
+                .clone();
+            let initial_charge = entry.retained_bytes.load(Ordering::Acquire);
+            let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+                target_event_offset: None,
+                submission: SubmissionMode::Immediate,
+                request: ExecutionRequest {
+                    execution_id: ExecutionId::new("new").unwrap(),
+                    user_message: UserMessage::text_only(PromptText::new("message").unwrap()),
+                    estimated_input_tokens: 1,
+                    reserved_output_tokens: 1,
+                },
+                actor: ActionContext::new("user", "surface", "request").unwrap(),
+                acknowledgement: SubmissionAcknowledgement::Pending,
+                events: Vec::new(),
+                scheduling: Vec::new(),
+                cancellation: None,
+                provider_report: None,
+                local_cancellation: None,
+                local_outcome: None,
+                result: None,
+            }));
+            let key = records::key_for_changes(initial.snapshot(), std::slice::from_ref(&input), 1)
+                .unwrap();
+            let body = super::super::snapshot::encode_semantic_change(&input).unwrap();
+            for frame in stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 2).unwrap()
+            {
+                runtime.append(&stream, frame).await.unwrap();
+            }
+            if reject {
+                let invalid = SessionChange::Opened {
+                    id: session.clone(),
+                    provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+                    context: ProviderContext::Absent,
+                };
+                let key =
+                    records::key_for_changes(initial.snapshot(), std::slice::from_ref(&invalid), 2)
+                        .unwrap();
+                let body = super::super::snapshot::encode_semantic_change(&invalid).unwrap();
+                for frame in
+                    stream_fact::frame_fact(&stream_fact::FramedFact { key, body }, 3).unwrap()
+                {
+                    runtime.append(&stream, frame).await.unwrap();
+                }
+            }
+            let (entered, waiting) = mpsc::channel();
+            let (release, gate) = mpsc::channel();
+            *storage.committed_read_gate.lock().unwrap() = Some(CommittedReadGate {
+                point: CommittedReadPoint::Joined,
+                entered,
+                release: gate,
+            });
+            let reading = tokio::spawn({
+                let storage = storage.clone();
+                let session = session.clone();
+                async move { storage.read_committed(session).await }
+            });
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                tokio::task::spawn_blocking(move || waiting.recv()),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+            // Observe charge before final result publication, while the receiver is
+            // still exclusively owned. A final-only refresh cannot satisfy this.
+            let page_charge = entry.retained_bytes.load(Ordering::Acquire);
+            release.send(()).unwrap();
+            let result = reading.await.unwrap();
+            assert!(page_charge > initial_charge);
+            if reject {
+                assert!(matches!(result, Err(StorageError::Corrupt(_))));
+            } else {
+                assert_eq!(
+                    result
+                        .unwrap()
+                        .unwrap()
+                        .snapshot()
+                        .unwrap()
+                        .invocations
+                        .len(),
+                    1
+                );
+            }
+            {
+                let receiver = entry.receiver.lock().unwrap();
+                assert_eq!(receiver.fold.applied(), if reject { 1 } else { 2 });
+                assert_eq!(receiver.fold.downloaded(), if reject { 1 } else { 2 });
+                // Check cached semantic totals against current allocation owners first.
+                receiver.fold.assert_retained_accounting();
+                // Sum the entry's actual layouts and separate scope/StreamKey copies,
+                // independently of the production receiver_retained_bytes projection.
+                let expected = receiver.fold.retained_bytes()
+                    + std::mem::size_of::<CachedCommittedRead>()
+                    + 2 * std::mem::size_of::<usize>()
+                    + [
+                        entry.scope.receiver(),
+                        entry.scope.origin(),
+                        entry.scope.stream(),
+                        entry.scope.incarnation(),
+                        entry.scope.schema(),
+                        entry.scope.access_epoch(),
+                    ]
+                    .iter()
+                    .map(|id| id.as_str().len())
+                    .sum::<usize>()
+                    + entry.stream.id.as_str().len();
+                assert_eq!(entry.retained_bytes.load(Ordering::Acquire), expected);
+                assert!(expected > initial_charge); // surviving actual slot owners grew.
+                if reject {
+                    assert!(receiver.fold.snapshot().unwrap().invocations.is_empty());
+                    assert!(!entry.lifetime.is_pinned());
+                }
+            }
+            // A repeated failed read reuses warm spare; the valid path remains publishable.
+            let retry = storage.read_committed(session).await;
+            if reject {
+                assert!(matches!(retry, Err(StorageError::Corrupt(_))));
+            } else {
+                assert_eq!(
+                    retry
+                        .unwrap()
+                        .unwrap()
+                        .snapshot()
+                        .unwrap()
+                        .invocations
+                        .len(),
+                    1
+                );
+            }
+            {
+                let receiver = entry.receiver.lock().unwrap();
+                receiver.fold.assert_retained_accounting();
+                assert_eq!(
+                    entry.retained_bytes.load(Ordering::Acquire),
+                    receiver_retained_bytes(&receiver.fold, &entry.scope)
+                );
+            }
+            storage.shutdown().await.unwrap();
+        }
     }
 }
