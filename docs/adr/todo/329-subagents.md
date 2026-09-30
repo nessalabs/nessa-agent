@@ -41,9 +41,11 @@ What binds:
 ## Decision
 
 `src/desktop/subagents/` owns the model, the port, the panel, and the session
-accessory. It depends on the workspace's barrel for the conversation it draws
-— transcript messages and views, the clock, the time labels — which the
-barrel exports for it (#330, #331); never the other way. Counts and plurals ("6 agents", "1 case") are the desktop's, one pure module in `src/desktop/model/` that this vertical and experiments both use.
+accessory. It depends on the workspace's barrel for the conversation it draws —
+transcript messages and views, the clock, the time labels — which the barrel
+exports for it (#330, #331); never the other way. Counts and plurals ("6
+agents", "1 case") are the desktop's, one pure module in `src/desktop/model/`
+that this vertical and experiments both use.
 
 **A subagent** is its identity (`id`, below), a `name`, the `seed` its
 generated avatar is painted from (the same wherever it appears), the `tags` it
@@ -68,11 +70,12 @@ planning, stuck, idle) and the counts by state are the model's.
 judging your regexes"). It is decoration, so a crew reads as a crew; it is
 drawn apart from the state and says nothing about it.
 
-**Identity.** A subagent's id is unique within its conversation by
-construction: composition joins sources (the experiments adapter today, the
-gateway's later) into one `SubagentSource`, each under a key of its own, and
-the join makes every id its source's key, `:`, and the source's own id
-percent-encoded. Two sources cannot produce one id.
+**Identity.** A subagent's id is unique within its conversation by construction:
+composition joins sources (the in-memory sample under `sample` and the
+experiments adapter under `experiments` today, the gateway's later) into one
+`SubagentSource`, each under a key of its own, and the join makes every id its
+source's key, `:`, and the source's own id percent-encoded. Two sources cannot
+produce one id.
 
 **`SubagentSource`** is the port: `forSession(sessionId)`, answering from what
 the source holds now (a view may read it on every render), and `subscribe`.
@@ -80,13 +83,18 @@ It has no `send`: a subagent's conversation is read, not written to, until a
 source can deliver.
 
 **Where it is seen.** The panel is a widget (326), plugin `subagents`, whose id
-is the conversation's session id, in a pane beside the conversation or over
-the panes. It answers `ready` for a conversation the workspace lists — one without subagents shows an empty state — and `missing` for one it does not (removed, or never known). Which subagent it shows is this vertical's state, one
-per conversation (`sessionId → subagentId | null`); the vertical exports
-`useOpenSubagent()` — set it, then open the widget through the host's `openWidget` in the caller's place: from a view in the window, in the window; from anywhere else, in a pane beside the conversation — which is how an experiment's agent opens its subagent. The
-plugin's `SessionAccessory` draws the conversation's subagents as an avatar
-stack in its pane header, the busiest first, and nothing when there are none;
-a click opens the panel.
+is the conversation's session id, in a pane beside the conversation or over the
+panes. It answers `ready` for a conversation the workspace lists (asked through
+a selector the workspace's barrel exports for it, #330) — one without subagents
+shows an empty state — and `missing` for one it does not (removed, or never
+known). Which subagent it shows is this vertical's state, one per conversation
+(`sessionId → subagentId | null`); the vertical exports `useOpenSubagent()` —
+set it, then open the widget through the host's `openWidget` in the caller's
+place: from a view in the window, in the window; from anywhere else, in a pane
+beside the conversation — which is how an experiment's agent opens its subagent.
+The plugin's `SessionAccessory` draws the conversation's subagents as an avatar
+stack in its pane header, the busiest first, and nothing when there are none; a
+click opens the panel.
 
 **One subagent** is drawn as a conversation is — its messages and its live
 activity line through the workspace's transcript views — with no composer.

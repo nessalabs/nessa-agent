@@ -25,12 +25,13 @@ cannot ship:
   experiments and subagents views to build a static table, so the generic host
   depends on every plugin, and a new plugin edits the host.
 - **A widget pane borrows the session-id slot.** A pane showing a widget holds
-  `widget:<plugin>:<id>` where a session id goes (`workspace/model/pane-item.ts`).
-  Every reader of a pane's item — what is showable, on screen, kept as a draft,
-  the header, the drag's card — has to know the string might not be a session;
-  and a session id that began `widget:`, or a widget id with a `:` in it, would
-  collide with another item, which split panes treat as the same pane
-  (`split-panes/model/pane-layout.ts`, `paneShowing`).
+  `widget:<plugin>:<id>` where a session id goes
+  (`workspace/model/pane-item.ts`). Every reader of a pane's item — what is
+  showable, on screen, kept as a draft, the header, the drag's card — has to
+  know the string might not be a session; and a session id that began `widget:`,
+  or a widget id with a `:` in it, would collide with another item, which split
+  panes treat as the same pane (`split-panes/model/pane-layout.ts`,
+  `paneShowing`).
 - **The workspace imports a plugin to draw its header.** The pane header draws
   the conversation's subagents from the subagents vertical, which itself reads
   the workspace's transcript: a cycle.
@@ -90,50 +91,58 @@ What binds:
 | Place | What it is | Opened by | Left by |
 | --- | --- | --- | --- |
 | `inline` | a card in the message the widget part is in | the transcript | — |
-| `pane` | a pane of its own in the split grid, as a chat has | `open("pane")`: beside the pane showing its `origin`, by the workspace's `openBeside` and its rules, or in the focused pane's place when there is none | the pane's close, as any pane; the last pane, as 238 has it, goes back to a new session's home — in its `origin`'s channel, else the focused channel |
-| `window` | the content region's third view, beside the panes and the overview: the widget drawn instead of the panes, which stay beneath it as they were | `open("window")` | exactly as the overview is: Escape or its close, a session chosen, or any change of the panes goes back to the panes; ⌘0 goes to the overview |
+| `pane` | a pane of its own in the split grid, as a chat has | `open("pane")`: beside the pane showing its `origin`, by the workspace's `openBeside` and its rules, or in the focused pane's place when there is none | the pane's close or ⌘W, as any pane; the last pane, as 238 has it, goes back to a new session's home — in its `origin`'s channel, else where a new session goes (`createDraft`: the channel being looked at, else the first) |
+| `window` | the content region's third view, beside the panes and the overview: the widget drawn instead of the panes, which stay beneath it as they were | `open("window")` | exactly as the overview is: Escape, its close or ⌘W, a session chosen, or any change of the panes goes back to the panes; ⌘0 goes to the overview. ⌘W closes the window, never a pane beneath it |
 
-The content view is `panes | agents | { widget }`, one at a time, and the
-window place is its third value: nothing is moved into or out of the grid to
-show a widget over it, so a widget can be in a pane and in the window at once,
-as a session can be in a pane and in the overview's peek. `openWidget` from
-the window replaces the widget shown there. A widget pane moves, resizes and
-closes as any pane does; nothing carries a widget into the grid from outside
-it. A widget whose `origin` is removed stays where it is, without a way back.
+The content view is `panes | agents | { widget }`, one at a time, and the window
+place is its third value: nothing is moved into or out of the grid to show a
+widget over it, so a widget can be in a pane and in the window at once, as a
+session can be in a pane and in the overview's peek. `openWidget` from the
+window replaces the widget shown there. A widget pane moves, resizes and closes
+as any pane does; nothing carries a widget into the grid from outside it. A
+widget with an `origin` offers a way back to it — its breadcrumb's first step —
+which focuses the pane showing that conversation, or opens it beside the
+widget's pane; from the window, it goes back to the panes and does the same. A
+widget whose `origin` is removed stays where it is, without a way back.
 
-**Focus** follows 238: opening a widget in a pane focuses that pane, as
-opening a session does, and the pane's body takes focus for the view to place
-further; opening it in the window moves focus into it; going back to the
-panes returns focus to the focused pane, as leaving the overview does.
+**Focus** follows 238: opening a widget in a pane focuses that pane, as opening
+a session does, and the pane's body takes focus for the view to place further;
+opening it in the window moves focus into it; going back to the panes returns
+focus to the focused pane — its composer when it shows a session, as leaving the
+overview does (238), and its body when it shows a widget; this record amends
+238's rule by that second case, for leaving the overview too.
 
 **Escape**, after 238's owners — a menu or dialog, a carrying drag, the edge
 peek, the open overview — goes to the widget in front: the window's while the
-content view is a widget, else the focused pane's when it shows one. Its view
-has the first refusal (a view with somewhere to step back to — a run it
-opened, a subagent it shows — registers `onEscape` and handles it); then the
-host, which goes back to the panes from the window. A widget in a pane is not
-closed by Escape, as a session pane is not.
+content view is a widget, else a pane's widget, and only while focus is inside
+that pane. A field that handles Escape itself (the session list's search) keeps
+it, and the widget does not hear it. Its view has the first refusal (a view with
+somewhere to step back to — a run it opened, a subagent it shows — registers
+`onEscape` and handles it); then the host, which goes back to the panes from the
+window. A widget in a pane is not closed by Escape, as a session pane is not.
 
 The window's **layout is not persisted** (238), and widgets do not change that.
 
 ### In the workspace
 
 A pane's item is a **tagged union** — `{ kind: "session", sessionId } | { kind:
-"widget", widget: WidgetRef }` — with **one codec** (`workspace/model/pane-item.ts`)
-between it and split panes' key: `s:` then the session id; `w:` then the
-plugin and the id, each percent-encoded, joined by `:`. The encoding is
-one-to-one and canonical over any string (it encodes UTF-16 code units, so a
-lone surrogate encodes too, where `encodeURIComponent` would throw), and two
-items are the same pane exactly when they are equal; a property test holds
-both. The key is a branded type only the codec makes, so no reader can build
-one by hand; reading one back goes through the codec's `decode`, which is the
-only thing the module exports that takes a key. The panes' use cases take the union; what is showable, on
-screen, or kept as a draft is decided per kind.
+"widget", widget: WidgetRef }` — with **one codec**
+(`workspace/model/pane-item.ts`) between it and split panes' key: `s:` then the
+session id; `w:` then the plugin and the id, each percent-encoded, joined by
+`:`. The encoding is one-to-one and canonical over any string (it encodes UTF-16
+code units, so a lone surrogate encodes too, where `encodeURIComponent` would
+throw), and two items are the same pane exactly when they are equal; a property
+test holds both. The key is a branded type only the codec makes, so no reader
+can build one by hand; reading one back goes through the codec's `decode`, which
+is the only thing the module exports that takes a key. The panes' use cases take
+the union; what is showable, on screen, or kept as a draft is decided per kind.
 
 A transcript part `{ kind: "widget", widget: WidgetRef }` is drawn by
-`InlineWidget`. Text search and the overview's peek skip it (it has no text of
-its own); step grouping treats it as a break, as it does code. What produces
-widget parts over the wire is the gateway's, and remaining.
+`InlineWidget`. The overview's peek (`peek.ts`) drops it before it counts a
+message's parts; step grouping treats it as a break, as it does code; the
+readers that take a message's text (`messageText`, the drag's card) already pass
+over a kind they do not know. What produces widget parts over the wire is the
+gateway's, and remaining.
 
 ### What a host draws
 
@@ -154,9 +163,9 @@ Nothing is retried by the host and nothing pretends to be live (gate 7, gate
 The desktop's verticals depend in one direction: **widgets ← workspace ←
 subagents ← experiments**, and subagents and experiments on widgets' contract.
 Widgets imports none of them; the workspace imports widgets' hosts and no
-plugin; subagents imports no experiment. `scripts/architecture/desktop-verticals.mjs`
-refuses an import against that direction, in the forms of import
-`split-panes-boundary.mjs` reads.
+plugin; subagents imports no experiment.
+`scripts/architecture/desktop-verticals.mjs` refuses an import against that
+direction, in the forms of import `split-panes-boundary.mjs` reads.
 
 ## Alternatives considered
 
@@ -185,9 +194,11 @@ refuses an import against that direction, in the forms of import
 - Every workspace rule that reads a pane's item narrows on its kind — a wide,
   mechanical change in #327, paid once.
 - Split panes are unchanged: they still see an opaque item.
-- Watch for plugins that want state shared between their places (a tab, a
-  scroll position): today each view holds its own; if that stops being right,
-  the plugin keeps it, not the host.
+- Watch for plugins that want state shared between their places (a tab, a scroll
+  position): what a plugin shares between its places is the plugin's to keep,
+  never the host's — the subagents panel keeps which subagent it shows per
+  conversation, so the same panel in a pane and in the window shows the same
+  one; an experiment keeps its trail per view.
 - Work: #327 (the pane-item union and codec, the panes' and the content
   view's use cases) and #328 (the registry, the hosts, the widget pane's
   chrome, the transcript part, Escape and focus, the boundary rule, the

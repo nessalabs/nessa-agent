@@ -2,15 +2,14 @@
 
 ## Purpose
 
-A conversation can run an experiment: agents trying changes to a product
-against a metric, keeping what improves it
+A conversation can run an experiment: agents trying changes to a product against
+a metric, keeping what improves it
 ([background](https://claude.dev/blog/automating-eval-design-and-hillclimbing/#eval-design)).
 This record settles how the desktop window shows one — the climb, the areas
-explored, every run, one run in detail — so that the same views serve a
-percent score that should rise, a latency that should fall, or a comparison
-with no areas and no swarm. It builds on widgets ([326](326-widgets.md)) for
-where an experiment appears and on subagents ([329](329-subagents.md)) for its
-agents.
+explored, every run, one run in detail — so that the same views serve a percent
+score that should rise, a latency that should fall, or a comparison with no
+areas and no swarm. It builds on widgets ([326](326-widgets.md)) for where an
+experiment appears and on subagents ([329](329-subagents.md)) for its agents.
 
 - **Date:** 2026-09-30
 - **Status:** proposed
@@ -73,7 +72,7 @@ interface ExperimentDefinition {
     /** Kept: became the new best. Rejected: settled and not kept. Pending: no scores yet. */
     readonly outcome: "kept" | "rejected" | "pending"
   }[]
-  /** Changes within it read as flat. */
+  /** Changes within it read as neutral. */
   readonly noise?: number
   /** A value to draw a line at, with what it is ("best model, max effort"). */
   readonly reference?: { readonly value: number; readonly label: string }
@@ -101,24 +100,47 @@ interface Limit {
 }
 ```
 
-**Runs** carry `number` (the baseline, its own field, is run 0), `parentId` (what it was built
-on, for lineage), `scores` by split id, each `{ mean, interval? }` (the
-half-width of its confidence interval), `measures` by guardrail metric id,
-their `verdict` id, the harness's `reason` for it as text, and optionally
-`areaId`, `agentId`, `cases` and `change`. The **experiment** carries the definition, its baseline and runs, and — from the harness — `championRunId` (`null` while the baseline is still the best) and `bestSoFar`, the ids of the runs that became the best, in the order they did (empty until one does). The window draws the climb from the baseline and `bestSoFar`, and the best version from `championRunId`; it never finds either itself. A baseline still being scored has no scores yet, and the views say so.
+**Runs** carry `number` (the baseline, its own field, is run 0), `parentId`
+(what it was built on, for lineage), `scores` by split id, each `{ mean,
+interval? }` (the half-width of its confidence interval), `measures` by
+guardrail metric id, their `verdict` id, the harness's `reason` for it as text,
+and optionally `areaId`, `agentId`, `cases` and `change`. The **experiment**
+carries the definition, its baseline and runs, and — from the harness —
+`bestSoFar`: the ids of the runs that became the best, in the order they did,
+empty until one does. The best version is its last entry, or the baseline while
+it is empty; there is no second field naming it, so the two cannot disagree. A
+keep the harness withdraws leaves `bestSoFar` in the harness's next word. The
+window draws the climb and the best version from these and never finds either
+itself. A baseline is *scored* once it has a score on the primary split; until
+then the views say it is being scored, and a guardrail limited relative to it
+reads "not measured yet" until the baseline has that measure.
 
 **Validation** is at the source's adapter, where external data is parsed: every
 run's verdict is in the vocabulary, every score's split and every measure's
-metric is defined, `primarySplit` names a split, `championRunId` and `bestSoFar` name runs (not the baseline) that exist and have a score on the primary split, and a scored baseline has a measure for every guardrail limited relative to it. An experiment that fails is not drawn in part: the widget answers `unshowable` — "Can't show this here", 326's table — and the adapter logs what was wrong as a fault, as the workspace's `failureReason` does. What validation returns is a branded `Experiment` that
-only `validateExperiment` makes, so a view cannot be handed one it did not
-check.
+metric is defined, `primarySplit` names a split, and `bestSoFar` names runs —
+not the baseline, none twice — that exist, have a score on the primary split and
+a verdict whose outcome is `kept`, and every kept run is in it. An experiment
+that fails is not drawn in part: the widget answers `unshowable` — "Can't show
+this here", 326's table — and the adapter logs what was wrong as a fault, as the
+workspace's `failureReason` does. What validation returns is a branded
+`Experiment` that only `validateExperiment` makes, so a view cannot be handed
+one it did not check.
 
 **Sections follow the data.** No areas, no exploration map or area cards; no
 agents, no swarm; no `cases` or `change` on a run, no such block in its
 detail; guardrails, a column and a tile each; no `noise`, no band; no
 `reference`, no line; no `budget`, no budget line in the status.
 
-**A metric's numbers are formatted in one place**, `experiments/model/metric.ts`, from a `Metric`: a value with its unit and decimals, the size of a change in `deltaUnit`, and whether a change is good, bad or flat by `better` and `noise`. Values come back as a branded `Formatted` text, and every metric value a component takes is typed `Formatted`, so a component cannot pass a metric value it formatted itself. A change is always drawn with nessa_ui's `Delta`, which owns its sign and is given its size's format and its tone by `metric.ts`; it does not judge the change. Counts are not metric values: they go through the desktop's counts module (329).
+**A metric's numbers are formatted in one place**,
+`experiments/model/metric.ts`, from a `Metric`: a value with its unit and
+decimals, and a change as a branded `Change` — its value, the format of its size
+(called with the absolute value), and its tone, `good`, `bad` or `neutral` by
+`better` and `noise`. Values come back as a branded `Formatted` text; components
+take `Formatted` for metric values and `Change` for changes, and draw a change
+only by handing a `Change` to nessa_ui's `Delta`, which adds the sign and does
+not judge the change. A component therefore holds no raw metric number to format
+itself; a type test holds it. Counts are not metric values: they go through the
+desktop's counts module (329).
 
 **Words are props.** Every heading, subtitle and label a composite draws is a
 prop, its default derived from the definition (the climb is titled by the
@@ -155,14 +177,17 @@ where it was clicked. Nothing is retried.
 
 ### The port, the places, the preview
 
-**`ExperimentSource`**: `get(id)`, `forSession(sessionId)` (a conversation may
-run several), `subscribe`, and `openFile`. An experiment appears as a widget
+**`ExperimentSource`**: `get(id)` answering `{ kind: "ready", experiment } | {
+kind: "unread" } | { kind: "missing" } | { kind: "invalid" }` — which the
+plugin's `useWidget` maps to 326's `ready`, `unread`, `missing` and `unshowable`
+— `forSession(sessionId)` (the ids of the experiments a conversation runs; it
+may run several), `subscribe`, and `openFile`. An experiment appears as a widget
 (326), plugin `experiments`, in all three places — its card inline, a pane
-beside the conversation, over the panes. Navigation — the view, the trail of runs followed,
-scroll and focus on opening one — is one hook, `useExperimentNavigation`,
-which registers 326's `onEscape` while the trail is not empty; the views only
-render. Experiments are offered only when their own preview is on under
-Settings › Advanced › Experimental.
+beside the conversation, over the panes. Navigation — the view, the trail of
+runs followed, scroll and focus on opening one — is one hook,
+`useExperimentNavigation`, which registers 326's `onEscape` while the trail is
+not empty; the views only render. Experiments are offered only when their own
+preview is on under Settings › Advanced › Experimental.
 
 **Samples**, under the preview: the checkout-support hill-climb (percent, up,
 train and test, a cost guardrail relative to the baseline, five areas, a
@@ -207,5 +232,6 @@ plus overscan. WebKit runs the same steps for behaviour, not frames.
   `openFile` from handing off to showing.
 - Work: #334 (the definition and validation, `model/metric.ts`, the model, the
   port, the samples, the preview, the module map in
-  `docs/codebase-structure.md`), #335 (the components), #336 (the composites, the surface, the inline card, navigation,
-  `experiments.mjs`), #337 (the swarm as subagents). Part of #325.
+  `docs/codebase-structure.md`), #335 (the components), #336 (the composites,
+  the surface, the inline card, navigation, `experiments.mjs`), #337 (the swarm
+  as subagents). Part of #325.
