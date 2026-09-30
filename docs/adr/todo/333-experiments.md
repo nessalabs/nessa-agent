@@ -138,35 +138,12 @@ own detail. A baseline is *scored* once it has a score on the primary split;
 until then the views say it is being scored, and a guardrail limited relative to
 it reads "not measured yet" until the baseline has that measure.
 
-**Validation** is at the source's adapter, where external data is parsed:
-
-- **The definition**: split, guardrail and verdict ids each unique;
-  `primarySplit` names a split; every metric's `decimals` an integer from 0 to
-  10; `budget.runs`, when given, a whole number of at least 1; `noise`, when
-  given, at least 0.
-- **Identity**: ids unique across the baseline and runs together, and among
-  areas and among agents; runs' `number`s unique and at least 1.
-- **References**: every run's verdict in the vocabulary; every score's split and
-  every measure's guardrail defined, the baseline's too; a run's `parentId` the
-  baseline or a run with a lower `number`, so lineage cannot loop; `areaId`,
-  `agentId`, an agent's `areaId` and its activity's run, and a note's run (the
-  baseline or a run) resolve.
-- **Settling**: a run's `settledAt` present exactly when its verdict's outcome
-  is not `pending`; a run's `startedAt` at or after the experiment's, and its
-  `settledAt` at or after its own `startedAt`.
-- **Scores**: every score's `interval`, when given, at least 0.
-- **Cases and changes**: every
-  count, and a file's lines added and removed, a whole number of zero or more; a
-  slice's passing counts before and after at most its total, slice names unique
-  within a run; a run's fixed and broken counts together at most its cases'
-  total; the page of moved cases at most 200, its fixed cases at most `fixed`
-  and its broken cases at most `broken`, its ids unique, each case's slice one
-  of the run's; file paths unique within a change.
-- **The best**: `bestSoFar` names runs, none twice, each kept and scored on the
-  primary split, their `settledAt` never decreasing along it, with every kept
-  run in it.
-
-An experiment that fails is not
+**Validation** is at the source's adapter, where external data is parsed, and
+it is the one place the experiment's integrity is checked: the definition is
+coherent, ids are unique and every reference resolves (lineage cannot loop,
+because a run's parent is the baseline or an earlier run), times and counts are
+consistent, and `bestSoFar` names exactly the kept runs in the order they
+became best. #334 lists the rules and tests each one both ways. An experiment that fails is not
 drawn in part: the widget answers `unshowable` — "Can't show this here", 326's
 table — and the adapter logs what was wrong as a fault, as the workspace's
 `failureReason` does. What validation returns is a branded `Experiment` that

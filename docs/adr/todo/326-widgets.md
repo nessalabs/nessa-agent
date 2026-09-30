@@ -129,19 +129,13 @@ still reaches it. Opening a widget in a pane is a pane taking focus; opening one
 in the window moves focus into it; going back to the panes is the focused pane
 taking focus.
 
-**Escape**, after 238's owners — a menu or dialog, a carrying drag, the edge
-peek, the open overview — goes to the widget in front. While the content view is
-a widget, the window covers the content region only, and the session list beside
-it stays in reach; Escape anywhere outside a menu, dialog, carrying drag or
-shown edge peek (each of which keeps its Escape and goes no further) — the
-session list's rows included — goes to the window's widget. In the session
-list's search, an Escape with a query clears it and goes no further; the next,
-with none, goes to the window's widget. Otherwise it is a pane's widget, only
-while focus is inside that pane, so a field elsewhere keeps its Escape. The view
-has the first refusal (a view with somewhere to step back to — a run it opened,
-a subagent it shows — registers `onEscape` and handles it); then the host, which
-goes back to the panes from the window. A widget in a pane is not closed by
-Escape, as a session pane is not.
+**Escape**, after 238's owners (a menu or dialog, a carrying drag, the edge
+peek, the open overview), goes to the widget in front — the window's while it
+shows one, else a pane's while focus is inside that pane. The view has the first
+refusal (`onEscape`, for a view with somewhere to step back to); then the host,
+which goes back to the panes from the window. A widget in a pane is not closed
+by Escape, as a session pane is not. #328 spells out the cases (the session
+list's search, the edge peek) and checks each in `widgets.mjs`.
 
 The window's **layout is not persisted** (238), and widgets do not change that.
 
