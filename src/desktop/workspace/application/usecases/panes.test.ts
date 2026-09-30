@@ -30,7 +30,7 @@ import {
   openWidget,
   resizePanes,
 } from "./panes"
-import { indexLoaded, sessionRemoved } from "./updates"
+import { indexLoaded, sessionRemoved, unreadShown } from "./updates"
 
 const loaded = () =>
   indexLoaded(initialWorkspace, {
@@ -376,6 +376,13 @@ describe("a widget in a pane of its own", () => {
     expect(drawn(state)).toEqual([["a", "c"], [runShown]])
   })
 
+  it("opens beside its origin's pane when another pane is focused", () => {
+    const two = openBeside(loaded(), { sessionId: "c", room: roomy })
+    expect(shownBy(focusedPane(two.panes!))).toBe("c")
+    const state = openWidget(two, { widget: run, origin: "a", room: roomy })
+    expect(drawn(state)).toEqual([["a"], [runShown], ["c"]])
+  })
+
   it("takes its origin's place where nothing fits beside it, as openBeside does", () => {
     const narrow = { width: 500, height: 400, spare: 0 }
     const state = openWidget(loaded(), { widget: run, origin: "a", room: narrow })
@@ -421,6 +428,23 @@ describe("a widget in a pane of its own", () => {
     expect(openWidget(initialWorkspace, { widget: run, room: roomy })).toBe(
       initialWorkspace,
     )
+  })
+
+  it("is never read as the session whose id spells its key", () => {
+    // A listed session named as the prototype's key would have named the widget.
+    const lookalike = "w:experiments:run%003A1"
+    const withIt = {
+      ...loaded(),
+      sessions: {
+        ...loaded().sessions,
+        [lookalike]: summary(lookalike, "desktop", 500, "idle", { unread: true }),
+      },
+    }
+    const state = openWidget(withIt, { widget: run, room: roomy })
+    expect(shownIds(state).has(lookalike)).toBe(false)
+    expect(unreadShown(state)).toEqual([])
+    expect(onScreen(state, lookalike)).toBe(false)
+    expect(focusedChannel(state)).toBeUndefined()
   })
 
   it("is not a session: no channel, no conversation read or kept, no draft", () => {

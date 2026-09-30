@@ -18,7 +18,6 @@ import {
   focusedPane,
   paneByKey,
   paneCount,
-  panesOf,
   type PaneKey,
 } from "../../../split-panes/model/pane-layout"
 import {
@@ -47,11 +46,13 @@ import {
   entry,
   modelForNextTurn,
   focusedChannel,
+  paneIds,
   sessionIn,
   type Answer,
   type Chrome,
   type WorkspaceState,
 } from "../../application/workspace-state"
+import { canClosePane } from "../../application/usecases/panes"
 
 type Root = { workspace: WorkspaceState }
 
@@ -186,10 +187,12 @@ export const selectPaneSession = (state: Root, pane: PaneKey): string | null => 
   return (shown && sessionIn(shown)) ?? null
 }
 
+/** Whether a pane closes (`canClosePane`): what its close button and menu item offer. */
+export const selectPaneClosable = (state: Root, pane: PaneKey): boolean =>
+  canClosePane(state.workspace, pane)
+
 /** The sessions the panes show, in reading order. */
-export const selectShownSessionIds = createSelector([selectPanes], (panes) =>
-  panes ? panesOf(panes).flatMap((pane) => sessionIn(pane) ?? []) : [],
-)
+export const selectShownSessionIds = createSelector([selectPanes], paneIds)
 
 export const selectStatusCounts = createSelector([listed], statusCounts)
 

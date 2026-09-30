@@ -271,8 +271,8 @@ export function paneShowingSession(
   return paneShowingItem(panes, sessionItem(sessionId))
 }
 
-/** The sessions the panes show, drafts among them; a widget's pane shows none. */
-function paneIds(panes: PaneLayout | null): string[] {
+/** The sessions the panes show, in reading order, drafts among them; a widget's pane shows none. */
+export function paneIds(panes: PaneLayout | null): string[] {
   return panes ? panesOf(panes).flatMap((pane) => sessionIn(pane) ?? []) : []
 }
 

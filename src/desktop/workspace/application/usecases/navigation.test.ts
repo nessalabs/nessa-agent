@@ -26,7 +26,7 @@ import {
   toggleSidebar,
 } from "./navigation"
 import { closePane, openBeside, openWidget } from "./panes"
-import { indexLoaded } from "./updates"
+import { indexLoaded, sessionRemoved } from "./updates"
 
 const loaded = () =>
   indexLoaded(initialWorkspace, {
@@ -273,6 +273,21 @@ describe("a widget over the panes: the window place", () => {
   it("is left for the panes by Escape or its close, and by going anywhere else", () => {
     expect(showContent(over(loaded()), { content: "panes" }).content).toBe("panes")
     expect(navigated(over(loaded())).content).toBe("panes")
+  })
+
+  it("stays over the panes when a session they show is removed, as the overview does", () => {
+    const two = openBeside(loaded(), { sessionId: "c", room: roomyGrid })
+    const removed = sessionRemoved(over(two), {
+      sessionId: "c",
+      revision: 9,
+      draftId: "x",
+    })
+    expect(shown(removed)).toEqual(["a"])
+    expect(removed.content).toEqual({ widget: run })
+    // The last pane starts over beneath it, and it stays.
+    const last = sessionRemoved(removed, { sessionId: "a", revision: 9, draftId: "x" })
+    expect(shown(last)).toEqual(["x"])
+    expect(last.content).toEqual({ widget: run })
   })
 
   it("gives way to the overview on ⌘0, and the overview to it", () => {

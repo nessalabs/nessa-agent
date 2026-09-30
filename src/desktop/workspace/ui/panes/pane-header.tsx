@@ -9,7 +9,7 @@ import {
 } from "../../../ui/menu"
 import { closePane } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectSession } from "../../adapters/store/selectors"
+import { selectPaneClosable, selectSession } from "../../adapters/store/selectors"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
 import { AgentTile } from "../chrome/agent-tile"
 import { IconButton } from "../chrome/icon-button"
@@ -64,7 +64,7 @@ export const PaneHeader = memo(function PaneHeader({
   const title = session?.title ?? "New session"
   const shown = titleShown && session !== undefined
   // The last pane closes back to a new session's home; a home itself has nothing to close.
-  const closable = multi || session !== undefined
+  const closable = useWorkspaceSelector((state) => selectPaneClosable(state, pane))
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>

@@ -13,12 +13,7 @@ import {
   type WorkspaceIndex,
   type SessionSummary,
 } from "../../model/workspace-index"
-import {
-  paneCount,
-  panesOf,
-  removePane,
-  singlePane,
-} from "../../../split-panes/model/pane-layout"
+import { paneCount, removePane, singlePane } from "../../../split-panes/model/pane-layout"
 import { paneItemKey, sessionItem } from "../../model/pane-item"
 import { forgotten, remembered, removedAt } from "../../model/retention"
 import { fromSource, knownToSource, supersedes } from "../../model/revision"
@@ -30,8 +25,8 @@ import {
   forgetSession,
   listedSessions,
   modelForNextTurn,
+  paneIds,
   paneShowingSession,
-  sessionIn,
   sessionOf,
   shownIds,
   withPanes,
@@ -390,12 +385,7 @@ export function transcriptRetried(
 
 /** The sessions shown in a pane that are listed, in pane order. */
 function sessionsInPanes(state: WorkspaceState): SessionSummary[] {
-  if (!state.panes) return []
-  return panesOf(state.panes).flatMap((pane) => {
-    const sessionId = sessionIn(pane)
-    const session = sessionId === undefined ? undefined : sessionOf(state, sessionId)
-    return session ? [session] : []
-  })
+  return paneIds(state.panes).flatMap((sessionId) => sessionOf(state, sessionId) ?? [])
 }
 
 /**

@@ -12,8 +12,10 @@ import { isMac } from "../../../adapters/platform"
 import { chordEvent } from "../../../model/keyboard"
 import { ClockProvider } from "../../adapters/dom/clock"
 import {
+  closePane,
   focusPane,
   loadWorkspace,
+  newSession,
   openBeside,
   openWidget,
   showContent,
@@ -336,4 +338,24 @@ describe("a session's row carries its session to the panes by its pane item", ()
         expect(item).toEqual({ kind: "session", sessionId: row })
       await act(async () => root.unmount())
     })
+})
+
+describe("a pane's close is offered where closing it does something", () => {
+  it("offers it on every pane of several, on a last one showing a session or a widget, and not on a last home", async () => {
+    const { store, root } = await render(ThreeColumns)
+    const offered = () =>
+      [...host.querySelectorAll('.workspace-pane-header [aria-label^="Close Pane"]')].map(
+        (button) => !button.hasAttribute("data-reserved"),
+      )
+    expect(offered()).toEqual([true, true])
+    await act(async () => void store.dispatch(closePane()))
+    expect(offered()).toEqual([true])
+    await act(async () => void store.dispatch(newSession()))
+    expect(offered()).toEqual([false])
+    await act(async () =>
+      store.dispatch(openWidget({ widget: { plugin: "p", id: "i" }, place: "pane" })),
+    )
+    expect(offered()).toEqual([true])
+    await act(async () => root.unmount())
+  })
 })

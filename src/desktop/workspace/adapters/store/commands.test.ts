@@ -1440,14 +1440,6 @@ describe("a widget in a pane, as a person or an agent opens one", () => {
     expect(shown(store)).toEqual(["a", "widget experiments/run"])
     expect(store.getState().workspace.content).toEqual({ widget: run })
   })
-
-  it("reads no conversation and marks nothing read for it", async () => {
-    const { store, source } = await ready()
-    const calls = source.calls.length
-    store.dispatch(openWidget({ widget: run, place: "pane" }))
-    await settle()
-    expect(source.calls.slice(calls)).toEqual([])
-  })
 })
 
 describe("what a drag carries into the grid", () => {

@@ -342,21 +342,38 @@ function draftChannel(state: WorkspaceState): string | undefined {
 }
 
 /**
+ * Whether a pane closes: any one of several; the last only when it has
+ * something to go back from — a listed session, or a widget — for a new
+ * session's home is where it would go. The one rule `closePane` follows, and
+ * what a pane's close button and menu item ask before they offer it.
+ */
+export function canClosePane(state: WorkspaceState, pane: PaneKey): boolean {
+  const panes = state.panes
+  const shown = panes && paneByKey(panes, pane)
+  if (!panes || !shown) return false
+  if (paneCount(panes) > 1) return true
+  const item = itemIn(shown)
+  if (item?.kind === "widget") return true
+  return item?.kind === "session" && sessionOf(state, item.sessionId) !== undefined
+}
+
+/**
  * Closes a pane; its neighbour takes the room. The last pane cannot close:
  * showing a conversation, it goes back to a new session's home in the same
  * channel, under `draftId`; showing a widget, to a new session's home where
  * a new session goes (`createDraft`: the channel being looked at, else the
- * first), on the default model; showing a home already, nothing changes.
+ * first), on the default model; showing a home already, nothing changes
+ * (`canClosePane`).
  */
 export function closePane(
   state: WorkspaceState,
   { pane, draftId }: { pane: PaneKey; draftId?: string },
 ): WorkspaceState {
   const panes = state.panes
-  if (!panes || !locate(panes, pane)) return state
+  if (!panes || !canClosePane(state, pane)) return state
   if (paneCount(panes) > 1) return withPanes(state, removePane(panes, pane))
   const shown = paneByKey(panes, pane)
-  const item = shown ? itemIn(shown) : null
+  const item = shown && itemIn(shown)
   if (!item || !draftId) return state
   if (item.kind === "widget") return createDraft(state, { draftId, target: pane })
   const session = sessionOf(state, item.sessionId)

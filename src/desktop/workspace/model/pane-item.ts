@@ -14,9 +14,11 @@
  * key exactly when they are equal — and canonical: `paneItemOf` reads back
  * only a key `paneItemKey` writes (`pane-item.test.ts`).
  *
- * The key is a branded type only `paneItemKey` makes, so no reader builds one
- * by hand; reading one back is `paneItemOf`, the only thing here that takes a
- * key.
+ * The key is a branded type only `paneItemKey` makes; reading one back is
+ * `paneItemOf`, the only thing here that takes a key. Split panes take any
+ * string, so the type alone cannot keep a hand-built one out of a layout:
+ * the workspace's tests read every pane they check through `paneItemOf` and
+ * refuse a key it did not write (`shownBy` in `testing.ts`).
  */
 import { decodeId, encodeId } from "../../model/id-encoding"
 import type { WidgetRef } from "./widget-ref"
