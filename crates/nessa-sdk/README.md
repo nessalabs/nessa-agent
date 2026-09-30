@@ -214,7 +214,15 @@ automatic session storage, hooks, invocation, and UI integration.
   Opencode turned out to need the same two options.
 - `infrastructure/session_storage/`: in-memory test snapshots and private SQLite semantic records,
   exclusive leases, bounded physical framing, explicit JSON evidence mapping,
-  and the Tokio streaming commit clock adapter.
+  and the Tokio streaming commit clock adapter. `terminal_discovery.rs` owns the
+  sixteen-entry process framing/hash cache used by `NessaRecordSource::bounded_head`
+  and `bounded_page`; [`RecordReadStatus::Preparing`](../../docs/design/bounded-terminal-discovery.md)
+  reports unfinished bounded validation. Its real SQLite tests live in
+  `tests/infrastructure/session_storage/terminal_discovery.rs`. The shared physical
+  framing validator lives in `stream_fact.rs`; request admissibility is asked of
+  sync-engine before stream metadata I/O, while the SDK owns physical identity,
+  retention and terminal relationships. Sync identifiers are constructed from
+  borrowed text by their core owner, including its compact retained storage.
 - `infrastructure/`: JSON parsing into application input DTOs, including required
   fields, unknown fields, and read errors. The host owns filesystem selection and
   injects the loaded catalog at composition.

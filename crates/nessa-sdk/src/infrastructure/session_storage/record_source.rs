@@ -1,6 +1,12 @@
 //! Bounded read access to committed physical conversation records.
 
-use super::{record::RecordStorage, stream_fact};
+#![deny(missing_docs)]
+
+use super::{
+    record::RecordStorage,
+    stream_fact,
+    terminal_discovery::{RecordReadStatus, TerminalCache},
+};
 use crate::{
     application::agent_execution::sessions::StorageError,
     domain::agent_execution::sessions::SessionId,
@@ -11,7 +17,7 @@ use event_stream::{
 };
 use nessa_sync::replication::{
     application::{RecordSource, SourceError},
-    domain::{Id, Page, PageRequest, Record, Scope},
+    domain::{validate_page_request, Id, Limits, Page, PageRequest, Record, Scope},
     infrastructure::{MAX_PAGE_PAYLOAD, MAX_PAGE_RECORDS},
 };
 use std::{
@@ -25,6 +31,39 @@ const SCHEMA: &str = "nessa.physical-frame.v1";
 const REMEMBERED_HEADS: usize = 64;
 const SOURCE_QUEUE_CAPACITY: usize = 64;
 
+/// Largest tagged physical frame returned by this source: one tag, the piece
+/// framing header, and a full body piece. The real maximum is exercised by
+/// `head_hides_partial_attempt_until_seal_and_pages_remain_bounded`.
+pub const MAX_PHYSICAL_RECORD_PAYLOAD_BYTES: usize =
+    1 + stream_fact::PIECE_HEADER_BYTES + stream_fact::MAX_PIECE_BYTES;
+
+/// Physical stream identity observed before opening a record worker. This is
+/// a metadata snapshot, not an open source or lease. The host obtains it only
+/// after receiver admission and compares the full scope before source creation.
+/// [`RecordStorage::record_source_expected`] checks the stream key again;
+/// [`StorageError::IdentityMismatch`] reports a reset found during that check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordStreamIdentity {
+    stream: StreamKey,
+    origin: Id,
+}
+
+impl RecordStreamIdentity {
+    /// Build the receiver's exact physical scope from this observed identity.
+    /// `receiver` and `access_epoch` are host-verified sync IDs; this value does
+    /// not itself authorize a read. No I/O or worker construction occurs.
+    pub fn scope(&self, receiver: Id, access_epoch: Id) -> Scope {
+        Scope::new(
+            receiver,
+            self.origin.clone(),
+            Id::new(self.stream.id.as_str()).expect("session ID fits sync identity"),
+            incarnation_id(&self.stream),
+            physical_record_schema(),
+            access_epoch,
+        )
+    }
+}
+
 /// The sync schema for physical Nessa frame payloads. The first payload byte
 /// identifies start (1), piece (2), seal (3), or abort (4); the remaining bytes
 /// are the exact persisted frame. Semantic application uses a separate cursor.
@@ -35,6 +74,14 @@ pub fn physical_record_schema() -> Id {
 enum Command {
     Head(Scope, mpsc::Sender<Result<u64, SourceError>>),
     Page(PageRequest, mpsc::Sender<Result<Page, SourceError>>),
+    BoundedHead(
+        Scope,
+        mpsc::Sender<Result<RecordReadStatus<u64>, SourceError>>,
+    ),
+    BoundedPage(
+        PageRequest,
+        mpsc::Sender<Result<RecordReadStatus<Page>, SourceError>>,
+    ),
     Shutdown,
 }
 
@@ -46,9 +93,7 @@ enum Command {
 #[derive(Clone)]
 pub struct NessaRecordSource {
     worker: Arc<SourceWorker>,
-    origin: Id,
-    stream: Id,
-    incarnation: Id,
+    identity: RecordStreamIdentity,
 }
 
 struct SourceWorker {
@@ -91,9 +136,12 @@ impl NessaRecordSource {
         stream: StreamKey,
         origin: Id,
         handle: Handle,
+        terminal_cache: Arc<TerminalCache>,
     ) -> Result<Self, StorageError> {
-        let stream_id = Id::new(stream.id.as_str()).expect("session ID fits sync identity");
-        let incarnation = incarnation_id(&stream);
+        let identity = RecordStreamIdentity {
+            stream: stream.clone(),
+            origin: origin.clone(),
+        };
         let (sender, receiver) = mpsc::sync_channel(SOURCE_QUEUE_CAPACITY);
         let worker_origin = origin.clone();
         let worker = thread::Builder::new()
@@ -105,6 +153,7 @@ impl NessaRecordSource {
                     origin: worker_origin,
                     head: 0,
                     observed_heads: VecDeque::from([0]),
+                    terminal_cache,
                 };
                 while let Ok(command) = receiver.recv() {
                     match command {
@@ -113,6 +162,12 @@ impl NessaRecordSource {
                         }
                         Command::Page(request, reply) => {
                             let _ = reply.send(handle.block_on(state.page(&request)));
+                        }
+                        Command::BoundedHead(scope, reply) => {
+                            let _ = reply.send(handle.block_on(state.bounded_head(&scope)));
+                        }
+                        Command::BoundedPage(request, reply) => {
+                            let _ = reply.send(handle.block_on(state.bounded_page(&request)));
                         }
                         Command::Shutdown => break,
                     }
@@ -124,10 +179,90 @@ impl NessaRecordSource {
                 sender: Some(sender),
                 thread: Mutex::new(Some(worker)),
             }),
-            origin,
-            stream: stream_id,
-            incarnation,
+            identity,
         })
+    }
+
+    /// Validate at most sixteen returned physical frames / one MiB of accounted
+    /// record bytes. The store can decode one lookahead record before its byte
+    /// limit check: total decoded accounted bytes are at most twice
+    /// [`super::MAX_STORED_RECORD_BYTES`]. These are not physical disk I/O bytes.
+    /// Validation runs against a captured
+    /// tail, then return the actual committed head. `Preparing` resumes shared
+    /// SDK progress on a later call. Cache eviction or restart may repeat work.
+    /// No idle worker is retained by the cache; dropping the final source joins
+    /// this worker when done outside Tokio, as for ordinary source reads.
+    ///
+    /// These methods are synchronous: a host dropping an asynchronous waiter
+    /// retains the physical source and its capacity token until this method and
+    /// final source drop finish. They offer no interruptible storage I/O.
+    ///
+    /// ```no_run
+    /// use nessa_sdk::{
+    ///     domain::agent_execution::sessions::SessionId,
+    ///     infrastructure::session_storage::{RecordStorage, RecordReadStatus},
+    /// };
+    /// use nessa_sync::replication::domain::Id;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // Requires Tokio's rt-multi-thread feature so I/O keeps progressing.
+    /// let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    /// let storage = RecordStorage::new("private-records")?;
+    /// let session = SessionId::new("conversation")?;
+    /// if let Some(identity) = runtime.block_on(storage.record_identity(&session, Id::new("origin").expect("fixed valid origin")))? {
+    ///     // The host checks the identity scope against its authorized receiver.
+    ///     let mut source = runtime.block_on(storage.record_source_expected(&session, &identity))?;
+    ///     let scope = source.scope(Id::new("receiver").expect("fixed valid receiver"), Id::new("epoch-3").expect("fixed valid epoch"));
+    ///     // Outside Tokio: final drop joins the source worker.
+    ///     match source.bounded_head(&scope).map_err(|error| std::io::Error::other(format!("{error:?}")))? {
+    ///         RecordReadStatus::Preparing => { /* reauthorize before retrying */ }
+    ///         RecordReadStatus::Ready(head) => { /* begin a fixed pass at head */ }
+    ///     }
+    /// }
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// # Errors
+    /// Reports reset, pruning, invalid scope, storage, or framing failures using
+    /// sync-engine's source errors. Cancellation abandons interest in the reply;
+    /// physical work continues and its validated progress remains reusable.
+    pub fn bounded_head(&mut self, scope: &Scope) -> Result<RecordReadStatus<u64>, SourceError> {
+        let (reply, result) = mpsc::channel();
+        self.worker
+            .enqueue(Command::BoundedHead(scope.clone(), reply))?;
+        result.recv().map_err(|_| SourceError::Unavailable)?
+    }
+
+    #[cfg(test)]
+    pub(super) fn abandon_bounded_head_answer(&self, scope: Scope) {
+        let (reply, result) = mpsc::channel();
+        drop(result);
+        self.worker
+            .enqueue(Command::BoundedHead(scope, reply))
+            .unwrap();
+    }
+
+    /// Read one fixed-target page after bounded shared terminal discovery.
+    /// An unknown target returns `Preparing` until its immutable prefix has been
+    /// validated; subsequent pages do not scan that prefix again. Physical page
+    /// budgets have the same units and bounds as `RecordSource::page`. Both
+    /// paths ask core `validate_page_request` before stream metadata I/O; scope,
+    /// incarnation, retention and terminal checks remain source-owned. A ready
+    /// call additionally reads one target frame and one request-bounded page;
+    /// their decoded-byte ceilings are one and two runtime record caps,
+    /// respectively, in addition to discovery's two-cap ceiling.
+    ///
+    /// # Errors
+    /// Reports invalid page budgets or a nonterminal target, replaced/pruned
+    /// history, oversized records, or unavailable storage. Drop/cancellation has
+    /// the worker lifetime described by [`Self::bounded_head`].
+    pub fn bounded_page(
+        &mut self,
+        request: &PageRequest,
+    ) -> Result<RecordReadStatus<Page>, SourceError> {
+        let (reply, result) = mpsc::channel();
+        self.worker
+            .enqueue(Command::BoundedPage(request.clone(), reply))?;
+        result.recv().map_err(|_| SourceError::Unavailable)?
     }
 
     /// Builds the exact scope for `receiver` and the current `access_epoch`.
@@ -135,14 +270,7 @@ impl NessaRecordSource {
     /// each read. A reset requires a newly constructed source and explicit
     /// receiver checkpoint handling.
     pub fn scope(&self, receiver: Id, access_epoch: Id) -> Scope {
-        Scope::new(
-            receiver,
-            self.origin.clone(),
-            self.stream.clone(),
-            self.incarnation.clone(),
-            physical_record_schema(),
-            access_epoch,
-        )
+        self.identity.scope(receiver, access_epoch)
     }
 }
 
@@ -166,6 +294,7 @@ struct ReaderState {
     origin: Id,
     head: u64,
     observed_heads: VecDeque<u64>,
+    terminal_cache: Arc<TerminalCache>,
 }
 
 impl ReaderState {
@@ -240,17 +369,15 @@ impl ReaderState {
     }
 
     async fn page(&mut self, request: &PageRequest) -> Result<Page, SourceError> {
+        validate_page_request(
+            request,
+            Limits::new(MAX_PAGE_RECORDS, MAX_PAGE_PAYLOAD, MAX_PAGE_PAYLOAD)
+                .expect("source capacity limits are nonzero"),
+        )
+        .map_err(|_| SourceError::InvalidRequest)?;
         self.check_scope(&request.scope)?;
         let tail = self.check_stream().await?;
-        if request.max_records == 0
-            || request.max_records > MAX_PAGE_RECORDS
-            || request.max_payload_bytes == 0
-            || request.max_payload_bytes > MAX_PAGE_PAYLOAD
-            || request.max_record_bytes == 0
-            || request.max_record_bytes > MAX_PAGE_PAYLOAD
-            || request.after >= request.target
-            || request.target > tail.offset
-        {
+        if request.target > tail.offset {
             return Err(SourceError::InvalidRequest);
         }
         if request.target > self.head {
@@ -260,6 +387,10 @@ impl ReaderState {
         if request.target > self.head || !self.is_terminal(request.target).await? {
             return Err(SourceError::InvalidRequest);
         }
+        self.read_page(request).await
+    }
+
+    async fn read_page(&self, request: &PageRequest) -> Result<Page, SourceError> {
         let after = Cursor::new(self.stream.clone(), request.after);
         let through = Cursor::new(self.stream.clone(), request.target);
         let page = self
@@ -271,7 +402,7 @@ impl ReaderState {
                     max_bytes: request
                         .max_payload_bytes
                         .saturating_add(request.max_records * 1024)
-                        .max(1024 * 1024),
+                        .max(super::MAX_STORED_RECORD_BYTES),
                 },
                 Some(&through),
             )
@@ -317,6 +448,65 @@ impl ReaderState {
         })
     }
 
+    async fn bounded_head(&self, scope: &Scope) -> Result<RecordReadStatus<u64>, SourceError> {
+        self.check_scope(scope)?;
+        let tail = self.check_stream().await?;
+        self.terminal_cache
+            .discover(&self.runtime, &self.stream, tail.offset, None)
+            .await
+    }
+
+    async fn bounded_page(
+        &self,
+        request: &PageRequest,
+    ) -> Result<RecordReadStatus<Page>, SourceError> {
+        validate_page_request(
+            request,
+            Limits::new(MAX_PAGE_RECORDS, MAX_PAGE_PAYLOAD, MAX_PAGE_PAYLOAD)
+                .expect("source capacity limits are nonzero"),
+        )
+        .map_err(|_| SourceError::InvalidRequest)?;
+        self.check_scope(&request.scope)?;
+        let tail = self.check_stream().await?;
+        if request.target > tail.offset {
+            return Err(SourceError::InvalidRequest);
+        }
+        if matches!(
+            self.terminal_cache
+                .discover(
+                    &self.runtime,
+                    &self.stream,
+                    tail.offset,
+                    Some(request.target)
+                )
+                .await?,
+            RecordReadStatus::Preparing
+        ) {
+            return Ok(RecordReadStatus::Preparing);
+        }
+        let page = self
+            .runtime
+            .read_after(
+                &Cursor::new(self.stream.clone(), request.target - 1),
+                PageLimits {
+                    max_records: 1,
+                    max_bytes: super::MAX_STORED_RECORD_BYTES,
+                },
+                Some(&Cursor::new(self.stream.clone(), request.target)),
+            )
+            .await
+            .map_err(source_error)?;
+        let record = page.records.first().ok_or(SourceError::Unavailable)?;
+        if record.cursor.offset != request.target
+            || record.cursor.stream != self.stream
+            || !stream_fact::terminal_in_validated_prefix(&record.event)
+                .map_err(|_| SourceError::Unavailable)?
+        {
+            return Err(SourceError::InvalidRequest);
+        }
+        self.read_page(request).await.map(RecordReadStatus::Ready)
+    }
+
     async fn is_terminal(&self, target: u64) -> Result<bool, SourceError> {
         if self.observed_heads.contains(&target) {
             return Ok(true);
@@ -347,7 +537,7 @@ fn incarnation_id(stream: &StreamKey) -> Id {
         use std::fmt::Write;
         write!(value, "{byte:02x}").expect("writing to a String cannot fail");
     }
-    Id::new(value).expect("the fixed-size incarnation is valid")
+    Id::new(&value).expect("the fixed-size incarnation is valid")
 }
 
 fn frame_payload(record: &StreamRecord) -> Result<Vec<u8>, SourceError> {
@@ -358,7 +548,7 @@ fn frame_payload(record: &StreamRecord) -> Result<Vec<u8>, SourceError> {
     Ok(payload)
 }
 
-fn source_error(error: event_stream::Error) -> SourceError {
+pub(super) fn source_error(error: event_stream::Error) -> SourceError {
     match error {
         event_stream::Error::HistoryUnavailable { .. } => SourceError::Pruned,
         event_stream::Error::InvalidCursor(_) | event_stream::Error::CursorAhead { .. } => {
@@ -379,6 +569,65 @@ fn fact_error(error: stream_fact::FactCommitError) -> SourceError {
 }
 
 impl RecordStorage {
+    /// Read only the physical stream identity for `id`, using the host's stable
+    /// `origin`, without starting a source worker or acquiring a writer lease.
+    /// `None` means no such stream exists. The application authorizes the
+    /// receiver before calling this method and checks the returned exact scope.
+    ///
+    /// # Errors
+    /// Returns a storage error if runtime initialization or identity lookup
+    /// fails. Cancellation of the caller does not authorize a later read.
+    pub async fn record_identity(
+        &self,
+        id: &SessionId,
+        origin: Id,
+    ) -> Result<Option<RecordStreamIdentity>, StorageError> {
+        let runtime = self.runtime().await?;
+        let stream_id =
+            StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
+        Ok(runtime
+            .find_stream(&stream_id)
+            .await
+            .map_err(super::record::store_error)?
+            .map(|stream| RecordStreamIdentity { stream, origin }))
+    }
+
+    /// Open one source worker for `id` only if the current physical stream
+    /// matches `expected`, which the authorized application already checked.
+    /// The source takes no conversation writer lease. Call its synchronous
+    /// methods and drop its final clone on a thread outside Tokio so the
+    /// internal worker is joined before operation completion is published.
+    ///
+    /// # Errors
+    /// Returns [`StorageError::IdentityMismatch`] when the stream was reset,
+    /// deleted, or replaced before this constructor's lookup. Runtime, lookup,
+    /// or thread-start failures retain their typed storage variants. A reset
+    /// after construction is reported by the source's head/page methods.
+    pub async fn record_source_expected(
+        &self,
+        id: &SessionId,
+        expected: &RecordStreamIdentity,
+    ) -> Result<NessaRecordSource, StorageError> {
+        let runtime = self.runtime().await?.clone();
+        let stream_id =
+            StreamId::new(id.as_str()).map_err(|error| StorageError::Corrupt(error.to_string()))?;
+        let current = runtime
+            .find_stream(&stream_id)
+            .await
+            .map_err(super::record::store_error)?;
+        if current.as_ref() != Some(&expected.stream) || expected.stream.id != stream_id {
+            return Err(StorageError::IdentityMismatch);
+        }
+        let handle = Handle::try_current().map_err(|error| StorageError::Io(error.to_string()))?;
+        NessaRecordSource::start(
+            runtime,
+            expected.stream.clone(),
+            expected.origin.clone(),
+            handle,
+            self.terminal_cache.clone(),
+        )
+    }
+
     /// Opens a read source for an existing conversation without acquiring its
     /// writer lease. `origin` is the host's authoritative origin ID. The source
     /// stays bound to the current incarnation; deletion or reset makes later
@@ -403,7 +652,11 @@ impl RecordStorage {
         };
         let handle = Handle::try_current().map_err(|error| StorageError::Io(error.to_string()))?;
         Ok(Some(NessaRecordSource::start(
-            runtime, stream, origin, handle,
+            runtime,
+            stream,
+            origin,
+            handle,
+            self.terminal_cache.clone(),
         )?))
     }
 }
@@ -579,7 +832,23 @@ mod tests {
         assert_eq!(page.records[0].position, 1);
         assert_eq!(page.records[1].position, 2);
         assert_eq!(page.records[1].payload[0], 1);
-        drop(source);
+        let scope = source.scope(id("receiver"), id("epoch"));
+        let maximum_piece = tokio::task::spawn_blocking(move || {
+            let mut source = source;
+            let mut request = request(scope, 2, after, 1);
+            request.max_payload_bytes = MAX_PHYSICAL_RECORD_PAYLOAD_BYTES;
+            request.max_record_bytes = MAX_PHYSICAL_RECORD_PAYLOAD_BYTES;
+            source
+                .page(&request)
+                .unwrap()
+                .records
+                .remove(0)
+                .payload
+                .len()
+        })
+        .await
+        .unwrap();
+        assert_eq!(maximum_piece, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES);
         storage.shutdown().await.unwrap();
     }
 
@@ -605,6 +874,7 @@ mod tests {
             origin: id("origin"),
             head: 0,
             observed_heads: VecDeque::from([0]),
+            terminal_cache: storage.terminal_cache.clone(),
         };
         let captured = reader.check_stream().await.unwrap();
 
@@ -666,6 +936,7 @@ mod tests {
             origin: id("origin"),
             head: 0,
             observed_heads: VecDeque::from([0]),
+            terminal_cache: storage.terminal_cache.clone(),
         };
         let captured = reader.check_stream().await.unwrap();
         for frame in frames.iter().skip(2) {
@@ -677,6 +948,73 @@ mod tests {
             reader.advance_through(&current).await,
             Ok(frames.len() as u64 + 1)
         );
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_page_request_refuses_before_replaced_stream_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+        let runtime = storage.runtime().await.unwrap().clone();
+        let session = SessionId::new("request-before-metadata").unwrap();
+        let stream = runtime
+            .create_stream(&StreamId::new(session.as_str()).unwrap())
+            .await
+            .unwrap();
+        let source = storage
+            .record_source(&session, id("origin"))
+            .await
+            .unwrap()
+            .unwrap();
+        let scope = source.scope(id("receiver"), id("epoch"));
+        runtime
+            .change_lifecycle(LifecycleRequest {
+                operation_id: LifecycleOperationId::new("request-order-reset").unwrap(),
+                expected: stream,
+                action: LifecycleAction::Reset,
+            })
+            .await
+            .unwrap();
+        tokio::task::spawn_blocking(move || {
+            let mut source = source;
+            let valid = request(scope, 0, 1, 1);
+            let mut invalid = Vec::new();
+            let mut range = valid.clone();
+            range.after = range.target;
+            invalid.push(range);
+            let mut count = valid.clone();
+            count.max_records = 0;
+            invalid.push(count);
+            let mut count = valid.clone();
+            count.max_records = MAX_PAGE_RECORDS + 1;
+            invalid.push(count);
+            let mut payload = valid.clone();
+            payload.max_payload_bytes = 0;
+            invalid.push(payload);
+            let mut payload = valid.clone();
+            payload.max_payload_bytes = MAX_PAGE_PAYLOAD + 1;
+            invalid.push(payload);
+            let mut record = valid.clone();
+            record.max_record_bytes = 0;
+            invalid.push(record);
+            let mut record = valid.clone();
+            record.max_record_bytes = MAX_PAGE_PAYLOAD + 1;
+            invalid.push(record);
+            for request in invalid {
+                assert_eq!(source.page(&request), Err(SourceError::InvalidRequest));
+                assert_eq!(
+                    source.bounded_page(&request),
+                    Err(SourceError::InvalidRequest)
+                );
+            }
+            assert_eq!(source.page(&valid), Err(SourceError::IdentityChanged));
+            assert_eq!(
+                source.bounded_page(&valid),
+                Err(SourceError::IdentityChanged)
+            );
+        })
+        .await
+        .unwrap();
         storage.shutdown().await.unwrap();
     }
 
@@ -697,10 +1035,21 @@ mod tests {
         let frames = stream_fact::frame_fact(&fact, 1).unwrap();
         runtime.append(&stream, frames[0].clone()).await.unwrap();
         runtime.append(&stream, frames[1].clone()).await.unwrap();
-        let source = storage
-            .record_source(&session, id("origin"))
+        let observed = storage
+            .record_identity(&session, id("origin"))
             .await
             .unwrap()
+            .unwrap();
+        assert_eq!(
+            observed
+                .scope(id("receiver"), id("epoch"))
+                .stream()
+                .as_str(),
+            session.as_str()
+        );
+        let source = storage
+            .record_source_expected(&session, &observed)
+            .await
             .unwrap();
         let scope = source.scope(id("receiver"), id("epoch"));
         let (source, initial) = tokio::task::spawn_blocking(move || {
@@ -732,6 +1081,10 @@ mod tests {
             })
             .await
             .unwrap();
+        assert!(matches!(
+            storage.record_source_expected(&session, &observed).await,
+            Err(StorageError::IdentityMismatch)
+        ));
         let scope = source.scope(id("receiver"), id("epoch"));
         let result = tokio::task::spawn_blocking(move || {
             let mut source = source;

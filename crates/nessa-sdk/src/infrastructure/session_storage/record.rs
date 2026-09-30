@@ -1,6 +1,8 @@
 //! SQLite-backed semantic conversation records with one writer per identity.
 
-use super::{paths::SessionPaths, record_writer::RecordWriter};
+#![deny(missing_docs)]
+
+use super::{paths::SessionPaths, record_writer::RecordWriter, terminal_discovery::TerminalCache};
 use crate::{
     application::agent_execution::sessions::storage::{
         SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage, SessionStorageLease,
@@ -25,6 +27,10 @@ use std::{
 };
 use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 
+/// Maximum accounted event bytes accepted and decoded by the SDK record runtime.
+/// The count includes payload and the event store envelope, not disk I/O.
+pub const MAX_STORED_RECORD_BYTES: usize = 1024 * 1024;
+
 /// Shared SQLite record storage for all conversations in one server process.
 /// An `Arc` of this adapter shares one runtime and excludes concurrent managers for the same ID.
 pub struct RecordStorage {
@@ -32,6 +38,7 @@ pub struct RecordStorage {
     options: SqliteOptions,
     runtime: OnceCell<Runtime<SqliteStore>>,
     leases: Arc<Mutex<HashSet<String>>>,
+    pub(super) terminal_cache: Arc<TerminalCache>,
     #[cfg(test)]
     lose_reset_reply: Arc<AtomicBool>,
 }
@@ -49,6 +56,7 @@ impl RecordStorage {
             options,
             runtime: OnceCell::new(),
             leases: Arc::new(Mutex::new(HashSet::new())),
+            terminal_cache: Arc::default(),
             #[cfg(test)]
             lose_reset_reply: Arc::new(AtomicBool::new(false)),
         })
@@ -65,7 +73,7 @@ impl RecordStorage {
                 let options = self.options.clone();
                 let config = RuntimeConfig {
                     events: EventConfig {
-                        max_bytes: 1024 * 1024,
+                        max_bytes: MAX_STORED_RECORD_BYTES,
                         minimum_persistence: PersistenceProfile::ProcessRestart,
                     },
                     ..RuntimeConfig::default()

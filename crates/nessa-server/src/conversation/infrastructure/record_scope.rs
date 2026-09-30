@@ -55,7 +55,7 @@ mod tests {
             conversation_id,
             access_epoch: 3,
         };
-        let id = |value: &str| Id::new(value.to_owned()).unwrap();
+        let id = |value: &str| Id::new(value).unwrap();
         let exact = Scope::new(
             id("receiver"),
             id("origin"),
