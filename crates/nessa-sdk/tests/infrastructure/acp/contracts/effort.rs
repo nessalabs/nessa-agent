@@ -686,6 +686,8 @@ async fn a_verified_change_that_cannot_be_recorded_is_in_force_and_retires_the_a
     );
     assert_eq!(stages(&audit), [Requested, Applied]);
     assert_eq!(agent.effort_level(), Some(level("high")));
+    // Retired, not just told so: no turn runs under the unrecorded level.
+    assert!(agent.invoke(prompt("after"), close_action()).await.is_err());
     let _ = agent.close(close_action()).await;
 }
 

@@ -224,10 +224,15 @@ impl Agent {
     ///   the uncertain generation must be retired before another turn. If the
     ///   settlement cannot be recorded either, both are returned, in that
     ///   order, as [`AgentError::MultipleOperationFailures`].
+    /// - [`AgentError::Closed`] with [`ProviderSessionState::CleanupRequired`]
+    ///   when the Agent is closing, or its attachment is replaced, before or
+    ///   while the change is under way.
     /// - [`AgentError::SubmissionUnresolved`] with
-    ///   [`ProviderSessionState::CleanupRequired`] if the change panics: whether
-    ///   it reached the agent is not known. A sink that panics has not
-    ///   recorded, and is reported as [`AgentError::AuditFailure`].
+    ///   [`ProviderSessionState::CleanupRequired`] if the task that owns the
+    ///   change panics or is cancelled (the runtime shutting down): whether it
+    ///   reached the agent is not known. A sink that panics has not recorded,
+    ///   and is reported as [`AgentError::AuditFailure`]; a backend that
+    ///   panics is a failed change.
     /// - The audit sink's error with [`ProviderSessionState::CleanupRequired`]
     ///   when the agent verified the change but it cannot be recorded: the
     ///   level is in force, and no turn may run under it unrecorded.
@@ -243,7 +248,7 @@ impl Agent {
         tokio::spawn(async move { agent.change_effort_level(level, actor).await })
             .await
             .unwrap_or_else(|_| {
-                // The change panicked: whether it reached the agent is not known.
+                // Panicked or cancelled: whether it reached the agent is not known.
                 Err(ProviderOperationFailure::new(
                     AgentError::SubmissionUnresolved,
                     ProviderSessionState::CleanupRequired,
@@ -309,74 +314,68 @@ impl Agent {
             self.effort_level(),
             level.clone(),
         );
-        self.record_effort_change(change.requested())
+        let record = |change: EffortLevelChangeRecord| {
+            self.inner
+                .lifecycle
+                .record_attachment_audit(ExecutionAuditRecord::EffortLevelChanged(change))
+        };
+        record(change.requested())
             .await
             .map_err(|error| ProviderOperationFailure::new(error, ProviderSessionState::Usable))?;
-        let result = match attached.session.set_effort_level(level.clone()).await {
+        // Interruptible by close, and a failure that leaves the connection
+        // uncertain retires this generation, as for any provider control.
+        let sent = self
+            .inner
+            .lifecycle
+            .run_control_observed(&permit, attached.session.set_effort_level(level.clone()))
+            .await;
+        let result = match sent {
             Ok(()) => {
                 *self
                     .inner
                     .live_effort_level
                     .write()
                     .expect("effort level lock") = Some((permit.provider_generation(), level));
-                self.record_effort_change(change.settled(EffortChangeOutcome::Applied))
+                record(change.settled(EffortChangeOutcome::Applied))
                     .await
                     .map_err(|error| {
+                        // In force and unrecorded: no turn may run under it.
+                        self.inner
+                            .lifecycle
+                            .record_control_state(&permit, &ProviderSessionState::CleanupRequired);
                         ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
                     })
             }
             Err(failure) => {
-                // Refused without being sent, the session as it was; anything
-                // else is a change that may or may not have been made.
-                let outcome = if failure.session_state() == &ProviderSessionState::Usable {
+                // The backend's contract: Busy and Unsupported are refusals
+                // made before anything is sent. Anything else may have been.
+                let unsent = matches!(
+                    failure.error(),
+                    AgentError::Busy | AgentError::Unsupported(_)
+                ) && failure.session_state() == &ProviderSessionState::Usable;
+                let outcome = if unsent {
                     EffortChangeOutcome::Refused
                 } else {
                     EffortChangeOutcome::Failed
                 };
-                Err(
-                    match self.record_effort_change(change.settled(outcome)).await {
-                        Ok(()) => failure,
-                        Err(audit) => {
-                            let (error, state) = failure.into_parts();
-                            ProviderOperationFailure::new(
-                                AgentError::MultipleOperationFailures {
-                                    first_error: Box::new(error),
-                                    subsequent_error: Box::new(audit),
-                                },
-                                state,
-                            )
-                        }
-                    },
-                )
+                Err(match record(change.settled(outcome)).await {
+                    Ok(()) => failure,
+                    Err(audit) => {
+                        let (error, state) = failure.into_parts();
+                        ProviderOperationFailure::new(
+                            AgentError::MultipleOperationFailures {
+                                first_error: Box::new(error),
+                                subsequent_error: Box::new(audit),
+                            },
+                            state,
+                        )
+                    }
+                })
             }
         };
         drop(permit);
         drop(scheduler);
         result
-    }
-    /// Deliver one effort change record; a sink that panics has not recorded
-    /// it, and says so as [`AgentError::AuditFailure`].
-    async fn record_effort_change(
-        &self,
-        record: EffortLevelChangeRecord,
-    ) -> Result<(), AgentError> {
-        // A sink may panic making its future as well as polling it.
-        let Ok(mut delivery) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.inner
-                .audit
-                .record(ExecutionAuditRecord::EffortLevelChanged(record))
-        })) else {
-            return Err(AgentError::AuditFailure);
-        };
-        std::future::poll_fn(|context| {
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                delivery.as_mut().poll(context)
-            })) {
-                Ok(poll) => poll,
-                Err(_) => std::task::Poll::Ready(Err(AgentError::AuditFailure)),
-            }
-        })
-        .await
     }
     /// Load and validate saved evidence without opening a provider context.
     ///

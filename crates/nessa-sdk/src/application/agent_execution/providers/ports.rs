@@ -48,6 +48,10 @@ pub trait ProviderSessionBackend: Send + Sync {
     /// ([`ProviderOperationCapabilities::effort_levels`]). A failed or lost
     /// response must not authorize another turn on that generation; a
     /// verified level is selected again on any restored connection.
+    ///
+    /// [`AgentError::Busy`] and [`AgentError::Unsupported`] with
+    /// [`ProviderSessionState::Usable`] mean nothing was sent: the Agent
+    /// audits them as refused. Return them for nothing else.
     fn set_effort_level(
         &self,
         _level: crate::domain::model_metadata::value_objects::EffortLevel,
