@@ -80,8 +80,9 @@ What binds:
 - Views are given only the widget's id and the **host's callbacks**:
   `open(place)`, `close()`, `openWidget(ref, place)` (a plugin opening another
   plugin's widget — an experiment's agent opening the subagents panel; its pane
-  goes beside the pane showing the *caller's* `origin`, which the caller's host
-  holds, since only a plugin's own hook knows its widget's origin), and
+  goes beside the pane showing the *caller's* `origin` — for a
+  `SessionAccessory`, the header's own session — which the caller's host holds,
+  since only a plugin's own hook knows its widget's origin), and
   `onEscape(handler)` (below).
 - Plugins are **registered once, in composition** (`main.tsx`), into a
   `WidgetRegistry` provided to the tree. Two plugins with one id is a

@@ -92,16 +92,20 @@ panes. Its `useWidget` answers, in this order: `off` while the preview is off;
 `missing` for a conversation the workspace does not list once it has read its
 index (removed, or never known), asked through a selector the workspace's barrel
 exports for it (#330); `unread` while the workspace has not read its index or
-the source has not read the conversation; otherwise `ready` — one without
-subagents shows an empty state. Which subagent it shows is this vertical's
-state, one per conversation (`sessionId → subagentId | null`); the vertical
-exports `useOpenSubagent()` — set it, then open the widget through the host's
-`openWidget` in the caller's place: from a view in the window, in the window;
-from anywhere else, in a pane beside the conversation — which is how an
-experiment's agent opens its subagent. The plugin's `SessionAccessory` draws the
-conversation's subagents as an avatar stack in its pane header, in the model's
-order (the busiest first), and nothing when there are none; a click opens the
-panel.
+the source has not read the conversation; otherwise `ready`, titled "Subagents"
+with the conversation as its `origin` — one without subagents shows an empty
+state. Which subagent it shows is this vertical's state, one per conversation
+(`sessionId → subagentId | null`). The joined id is built in one place,
+`joinedSubagentId(sourceKey, sourceId)`, which this vertical exports; each
+source declares its own key (the experiments adapter's is its own constant,
+which composition registers it under), so no other vertical rebuilds the rule.
+The vertical exports `useOpenSubagent()`, taking `{ sessionId, sourceKey,
+sourceId }` — set it, then open the widget through the host's `openWidget` in
+the caller's place: from a view in the window, in the window; from anywhere
+else, in a pane beside the conversation — which is how an experiment's agent
+opens its subagent. The plugin's `SessionAccessory` draws the conversation's
+subagents as an avatar stack in its pane header, in the model's order (the
+busiest first), and nothing when there are none; a click opens the panel.
 
 **One subagent** is drawn as a conversation is — its messages and its live
 activity line through the workspace's transcript views — with no composer.
