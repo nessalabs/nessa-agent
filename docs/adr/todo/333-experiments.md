@@ -141,7 +141,8 @@ that measure.
 
 - **The definition**: split, guardrail and verdict ids each unique;
   `primarySplit` names a split; every metric's `decimals` an integer from 0 to
-  10.
+  10; `budget.runs`, when given, a whole number of at least 1; `noise`, when
+  given, at least 0.
 - **Identity**: ids unique across the baseline and runs together, and among
   areas and among agents; runs' `number`s unique and at least 1.
 - **References**: every run's verdict in the vocabulary; every score's split and
@@ -152,12 +153,14 @@ that measure.
 - **Settling**: a run's `settledAt` present exactly when its verdict's outcome
   is not `pending`; a run's `startedAt` at or after the experiment's, and its
   `settledAt` at or after its own `startedAt`.
-- **Cases and changes**: every count, and a file's lines added and removed, a
-  whole number of zero or more; a slice's passing counts before and after at
-  most its total, slice names unique within a run; a run's fixed and broken
-  counts together at most its cases' total; the page of moved cases at most 200,
-  at most fixed and broken together, its ids unique; file paths unique within a
-  change.
+- **Scores**: every score's `interval`, when given, at least 0.
+- **Cases and changes**: every
+  count, and a file's lines added and removed, a whole number of zero or more; a
+  slice's passing counts before and after at most its total, slice names unique
+  within a run; a run's fixed and broken counts together at most its cases'
+  total; the page of moved cases at most 200, its fixed cases at most `fixed`
+  and its broken cases at most `broken`, its ids unique, each case's slice one
+  of the run's; file paths unique within a change.
 - **The best**: `bestSoFar` names runs, none twice, each kept and scored on the
   primary split, their `settledAt` never decreasing along it, with every kept
   run in it.
@@ -215,7 +218,8 @@ where the run is one of its turns.
 **Cases** are counts: a total, how many a run fixed and broke, and a **slice** —
 a named group of cases, such as a category — each with its total and its passing
 count before and after; plus one page of moved cases from the source (at most
-200); how many moved is fixed and broken together, not a field of its own. **A
+200), each an id, a title, the slice it is in, and whether it was fixed or
+broken; how many moved is fixed and broken together, not a field of its own. **A
 change** is a summary and its files (path, status, lines added and removed),
 drawn as a virtualised tree with search. **`openFile({ experimentId, runId,
 path? })`** hands a file's diff to the person's editor, or with no path the
