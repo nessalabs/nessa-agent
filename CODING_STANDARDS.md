@@ -378,6 +378,21 @@ that their combination describes a possible execution.
   track its result against the current head; a prior-head approval or a human
   reaction is not an automated approval of later changes.
 
+## GitHub updates
+
+When an issue or pull request comment explains behavior whose order matters,
+include a fenced Mermaid `sequenceDiagram` where it makes the explanation easier
+to follow. This includes ownership handoffs, concurrent operations, retries,
+publication and acknowledgement, persistence, and cleanup. Name the actual
+participants and show the meaningful success, refusal, or failure ordering.
+Simple status or check-result updates do not need a diagram.
+
+Keep the diagram consistent with the surrounding evidence. Distinguish observed
+behavior from a proposed correction, and preserve the original head, environment,
+results, and unresolved work when adding a diagram to an existing comment.
+A diagram explains a contract; it does not replace its design table or regression
+evidence.
+
 ## Organization across the repository
 
 These requirements apply to every contributor and every change: Rust and
