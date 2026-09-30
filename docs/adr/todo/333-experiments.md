@@ -214,12 +214,15 @@ status, lines added and removed), drawn as a virtualised tree with search.
 **`openFile({ experimentId, runId, path? })`** hands a file's diff to the
 person's editor, or with no path the run's whole change; it answers `opened`, or
 `refused` with a typed reason shown where it was clicked. One hook,
-`useOpenFile`, owns the table below — the latest request per place and the four
-seconds, on the injected clock — and `ChangeView` takes its state and callbacks
-as props. Nothing is retried, and every call settles (the adapter answers
-`refused`, `unavailable`, when no answer comes in its bound):
+`useOpenFile`, owns the table below — the latest request per target (a file's
+row, or the whole-change control) and the four seconds — and `ChangeView` takes
+its state and callbacks as props. Both it and the adapter's bound run on an
+injected timer, `after(ms, run) → cancel`, which composition provides beside the
+clock's `now` (#334 adds it; the clock port today can only read the time).
+Nothing is retried, and every call settles (the adapter answers `refused`,
+`unavailable`, when no answer comes in its bound):
 
-| At a place | Event | Next | Shown |
+| At a target | Event | Next | Shown |
 | --- | --- | --- | --- |
 | idle | click | asked | nothing new |
 | asked | click again | asked, for the new request | nothing new |
