@@ -287,7 +287,7 @@ impl ResponseClass {
 
 struct QueuedResponse {
     message: WireResponse,
-    _slot: OwnedSemaphorePermit,
+    _slot: Arc<OwnedSemaphorePermit>,
     // For record replies, this remains owned through the final physical send.
     // The read adapter must not return it until its non-entered source thread
     // has finished and joined the SDK worker, including after caller timeout.
@@ -590,6 +590,7 @@ where
             }
             continue;
         };
+        let slot = Arc::new(slot);
         let capacity = if control {
             &state.controls
         } else if record {
@@ -632,7 +633,9 @@ where
                     &request_state,
                     &request_session,
                     frame,
-                    RecordReadLease::new(permit),
+                    // The same socket admission survives both response delivery
+                    // and physical work, even after a delivered read_timeout (R61).
+                    RecordReadLease::new((permit, slot.clone())),
                     read_deadline,
                 )
                 .await;
@@ -2494,7 +2497,7 @@ mod tests {
         let slots = Arc::new(Semaphore::new(3));
         let response = |id: &str, slot: OwnedSemaphorePermit| QueuedResponse {
             message: WireResponse::ordinary(success(id, &json!({}))),
-            _slot: slot,
+            _slot: Arc::new(slot),
             _record_work: None,
         };
         ordinary_send
@@ -2606,7 +2609,7 @@ mod tests {
         record_send
             .send(QueuedRecordResponse::new(QueuedResponse {
                 message: WireResponse::record(record.clone()),
-                _slot: slots.clone().try_acquire_owned().unwrap(),
+                _slot: slots.clone().try_acquire_owned().unwrap().into(),
                 _record_work: Some(RecordReadLease::new(
                     record_capacity.clone().try_acquire_owned().unwrap(),
                 )),
@@ -2620,7 +2623,7 @@ mod tests {
         control_send
             .send(ControlOutput::Response(Box::new(QueuedResponse {
                 message: WireResponse::ordinary(success("control", &json!({}))),
-                _slot: slots.clone().try_acquire_owned().unwrap(),
+                _slot: slots.clone().try_acquire_owned().unwrap().into(),
                 _record_work: None,
             })))
             .await
@@ -2671,7 +2674,10 @@ mod tests {
         let expired = QueuedRecordResponse {
             response: QueuedResponse {
                 message: WireResponse::record("{}".into()),
-                _slot: Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap(),
+                _slot: Arc::new(Semaphore::new(1))
+                    .try_acquire_owned()
+                    .unwrap()
+                    .into(),
                 _record_work: None,
             },
             deadline: Instant::now() - Duration::from_millis(1),
@@ -2700,7 +2706,7 @@ mod tests {
                     } else {
                         WireResponse::record("{\"record\":true}".into())
                     },
-                    _slot: slots.clone().try_acquire_owned().unwrap(),
+                    _slot: slots.clone().try_acquire_owned().unwrap().into(),
                     _record_work: (!refusal)
                         .then(|| RecordReadLease::new(reads.clone().try_acquire_owned().unwrap())),
                 });
@@ -2741,7 +2747,7 @@ mod tests {
         record_send
             .send(QueuedRecordResponse::new(QueuedResponse {
                 message: WireResponse::record("{\"type\":\"res\"}".into()),
-                _slot: slots.clone().try_acquire_owned().unwrap(),
+                _slot: slots.clone().try_acquire_owned().unwrap().into(),
                 _record_work: None,
             }))
             .await
@@ -2750,7 +2756,7 @@ mod tests {
         control_send
             .send(ControlOutput::Response(Box::new(QueuedResponse {
                 message: WireResponse::ordinary(success("control", &json!({}))),
-                _slot: slots.clone().try_acquire_owned().unwrap(),
+                _slot: slots.clone().try_acquire_owned().unwrap().into(),
                 _record_work: None,
             })))
             .await

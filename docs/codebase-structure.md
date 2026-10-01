@@ -470,7 +470,9 @@ joins its worker on a tracked thread before storage shutdown. Composition
 reader deadline/drain and conversation cleanup failures back to the process. The product
 `record_read/` codec validates pages through sync-engine and caps encoded
 replies; `product/socket.rs` reserves independent record capacity and retains
-it through physical send or socket teardown.
+it until both physical source work and delivery/drop have finished. The existing
+one-per-socket permit is shared with that physical lease, so delivering a read
+timeout cannot admit another source while the original worker remains live.
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without

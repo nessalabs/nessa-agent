@@ -1,8 +1,16 @@
 use super::*;
+use crate::conversation::application::{
+    CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadScope,
+    CatalogueReadSource,
+};
 use std::{
     pin::Pin,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Condvar, Mutex,
+    },
     task::{Context, Poll},
+    thread::JoinHandle,
 };
 use tokio::sync::Notify;
 
@@ -20,7 +28,7 @@ impl ReadyLane {
             Self::Control(sender, slots) => sender
                 .try_send(ControlOutput::Response(Box::new(QueuedResponse {
                     message: WireResponse::ordinary(message),
-                    _slot: slots.clone().try_acquire_owned().unwrap(),
+                    _slot: slots.clone().try_acquire_owned().unwrap().into(),
                     _record_work: None,
                 })))
                 .unwrap(),
@@ -28,7 +36,7 @@ impl ReadyLane {
             Self::Ordinary(sender, slots) => sender
                 .try_send(QueuedResponse {
                     message: WireResponse::ordinary(message),
-                    _slot: slots.clone().try_acquire_owned().unwrap(),
+                    _slot: slots.clone().try_acquire_owned().unwrap().into(),
                     _record_work: None,
                 })
                 .unwrap(),
@@ -97,7 +105,7 @@ async fn continuously_ready_lane_releases_all_record_leases(
                     || WireResponse::record("{\"record\":true}".into()),
                     |code| WireResponse::ordinary(failure("record", code)),
                 ),
-                _slot: slots.clone().try_acquire_owned().unwrap(),
+                _slot: slots.clone().try_acquire_owned().unwrap().into(),
                 _record_work: refusal.is_none().then(|| {
                     RecordReadLease::new(Box::new(
                         global_reads.clone().try_acquire_owned().unwrap(),
@@ -204,7 +212,10 @@ async fn arriving_record_interrupts_stalled_priority(close: bool, refusal: Optio
         control_send
             .send(ControlOutput::Response(Box::new(QueuedResponse {
                 message: WireResponse::ordinary(success("control", &json!({}))),
-                _slot: Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap(),
+                _slot: Arc::new(Semaphore::new(1))
+                    .try_acquire_owned()
+                    .unwrap()
+                    .into(),
                 _record_work: None,
             })))
             .await
@@ -225,7 +236,7 @@ async fn arriving_record_interrupts_stalled_priority(close: bool, refusal: Optio
                 || WireResponse::record("{\"record\":true}".into()),
                 |code| WireResponse::ordinary(failure("record", code)),
             ),
-            _slot: record_slots.clone().try_acquire_owned().unwrap(),
+            _slot: record_slots.clone().try_acquire_owned().unwrap().into(),
             _record_work: refusal.is_none().then(|| {
                 RecordReadLease::new(Box::new(global_reads.clone().try_acquire_owned().unwrap()))
             }),
@@ -280,7 +291,7 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
     let global_reads = Arc::new(Semaphore::new(4));
     let response = |id: &str| QueuedResponse {
         message: WireResponse::ordinary(success(id, &json!({}))),
-        _slot: slots.clone().try_acquire_owned().unwrap(),
+        _slot: slots.clone().try_acquire_owned().unwrap().into(),
         _record_work: None,
     };
     control_send
@@ -295,7 +306,7 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
     record_send
         .send(QueuedRecordResponse::new(QueuedResponse {
             message: WireResponse::record(serde_json::to_string(&json!({"id":"record"})).unwrap()),
-            _slot: slots.clone().try_acquire_owned().unwrap(),
+            _slot: slots.clone().try_acquire_owned().unwrap().into(),
             _record_work: Some(RecordReadLease::new(Box::new(
                 global_reads.clone().try_acquire_owned().unwrap(),
             ))),
@@ -815,4 +826,230 @@ async fn periodic_authority_cannot_authorize_deferred_input() {
             "no deferred refusal or health after close"
         );
     }
+}
+
+// Real non-entered threads retain the port's physical lease after cancellation.
+// This fixture tests socket ownership; SDK storage/join adapters have their own tests.
+struct HeldPhysicalRead {
+    calls: AtomicUsize,
+    gate: Arc<(Mutex<bool>, Condvar)>,
+    joins: Mutex<Vec<JoinHandle<()>>>,
+}
+impl HeldPhysicalRead {
+    fn start(&self, lease: RecordReadLease) -> tokio::sync::oneshot::Receiver<()> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let gate = self.gate.clone();
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let join = std::thread::spawn(move || {
+            let (lock, release) = &*gate;
+            let mut open = lock.lock().unwrap();
+            while !*open {
+                open = release.wait(open).unwrap();
+            }
+            drop(open);
+            drop(lease);
+            let _ = send.send(());
+        });
+        self.joins.lock().unwrap().push(join);
+        receive
+    }
+    fn release_and_join(&self) {
+        let (lock, release) = &*self.gate;
+        *lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        release.notify_all();
+        let mut worker_panicked = false;
+        for join in self
+            .joins
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .drain(..)
+        {
+            worker_panicked |= join.join().is_err();
+        }
+        assert!(
+            !worker_panicked || std::thread::panicking(),
+            "physical fixture worker panicked"
+        );
+    }
+}
+impl Drop for HeldPhysicalRead {
+    fn drop(&mut self) {
+        self.release_and_join();
+    }
+}
+impl RecordReadSource for HeldPhysicalRead {
+    fn read<'a>(
+        &'a self,
+        _: ReceiverReadScope,
+        _: RecordReadOperation,
+        lease: RecordReadLease,
+    ) -> RecordReadFuture<'a, RecordReadResponse> {
+        let finished = self.start(lease);
+        Box::pin(async move {
+            finished.await.unwrap();
+            Err(RecordReadError::TemporarilyUnavailable)
+        })
+    }
+}
+impl CatalogueReadSource for HeldPhysicalRead {
+    fn read(
+        &self,
+        _: CatalogueReadScope,
+        _: CatalogueReadOperation,
+        lease: RecordReadLease,
+    ) -> CatalogueReadFuture<'_> {
+        let finished = self.start(lease);
+        Box::pin(async move {
+            finished.await.unwrap();
+            Err(CatalogueReadError::SourceUnavailable)
+        })
+    }
+}
+async fn physical_response(
+    peer: &mut TestPeer,
+    id: &str,
+    method: &str,
+    params: &serde_json::Value,
+) -> serde_json::Value {
+    peer.input
+        .send(Ok(Message::Text(
+            json!({"type":"req","id":id,"method":method,"params":params})
+                .to_string()
+                .into(),
+        )))
+        .unwrap();
+    let Message::Text(text) = timeout(Duration::from_secs(11), peer.output.recv())
+        .await
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("response expected")
+    };
+    serde_json::from_str(&text).unwrap()
+}
+async fn physical_read_timeout_retains_socket_admission(catalogue: bool) {
+    let (state, authority) = fixture(MembershipRole::Member);
+    authority.snapshot.lock().unwrap().credential = Credential::new(
+        CredentialId::new("credential").unwrap(),
+        PrincipalId::new("principal").unwrap(),
+        OrganizationId::new("organization").unwrap(),
+        AudienceId::new("gateway").unwrap(),
+        100,
+        200,
+        vec![Grant::new(
+            Action::new("conversation.read").unwrap(),
+            Resource::new(
+                OrganizationId::new("organization").unwrap(),
+                ResourceId::new("gateway-resource").unwrap(),
+            ),
+        )],
+    )
+    .unwrap();
+    let session = authenticate(&state).await;
+    let repository = Arc::new(conversation_support::MemoryRepository::default());
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    repository.records.lock().unwrap().insert(
+        id.clone(),
+        Conversation::new(
+            id.clone(),
+            OrganizationId::new("organization").unwrap(),
+            PrincipalId::new("principal").unwrap(),
+            "panel".into(),
+            "create".into(),
+            1,
+            AgentId::Claude,
+            ConversationModelId::new("model").unwrap(),
+            ConversationApprovalMode::Ask,
+        )
+        .unwrap(),
+    );
+    let source = Arc::new(HeldPhysicalRead {
+        calls: AtomicUsize::new(0),
+        gate: Arc::new((Mutex::new(false), Condvar::new())),
+        joins: Mutex::new(Vec::new()),
+    });
+    let mut state = state
+        .with_passive_read(Arc::new(RecordBinding), repository)
+        .with_record_source(source.clone())
+        .with_catalogue_source(source.clone());
+    state.settings = SessionSettings::new(
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        Duration::from_secs(120),
+    )
+    .unwrap();
+    let capacity = state.record_reads.clone();
+    let (socket, mut peer) = test_socket(None);
+    let first = tokio::spawn(run_authenticated(socket, state.clone(), session.clone()));
+    let (socket, mut other) = test_socket(None);
+    let second = tokio::spawn(run_authenticated(socket, state, session));
+    let method = if catalogue {
+        "conversation.catalogueHead"
+    } else {
+        "conversation.recordsHead"
+    };
+    let params = if catalogue {
+        json!({"receiverId":"receiver","accessEpoch":"3"})
+    } else {
+        json!({"conversationId":id.to_string(),"receiverId":"receiver","accessEpoch":"3"})
+    };
+    let initial = physical_response(&mut peer, "initial", method, &params).await;
+    let mut retries = Vec::new();
+    let mut capacities = Vec::new();
+    for attempt in 0..4 {
+        retries
+            .push(physical_response(&mut peer, &format!("retry-{attempt}"), method, &params).await);
+        capacities.push(capacity.available_permits());
+    }
+    let competing = physical_response(&mut other, "other", method, &params).await;
+    let calls_while_held = source.calls.load(Ordering::SeqCst);
+    let remaining_while_held = capacity.available_permits();
+    drop(other.input);
+    second.await.unwrap();
+    let after_disconnect = capacity.available_permits();
+    // Cleanup precedes every assertion so the original-code probe cannot hang.
+    source.release_and_join();
+    let later = physical_response(&mut peer, "later", method, &params).await;
+    source.release_and_join();
+    drop(peer.input);
+    first.await.unwrap();
+    assert_eq!(initial["error"]["code"], "read_timeout");
+    assert_eq!(
+        capacities,
+        vec![3; 4],
+        "one socket must retain exactly one physical admission"
+    );
+    for retry in retries {
+        assert_eq!(retry["error"]["code"], "temporarily_unavailable");
+    }
+    assert_eq!(
+        competing["error"]["code"], "read_timeout",
+        "another socket can use remaining capacity"
+    );
+    assert_eq!(calls_while_held, 2);
+    assert_eq!(remaining_while_held, 2);
+    assert_eq!(after_disconnect, 2, "disconnect retains physical ownership");
+    assert_eq!(
+        later["error"]["code"],
+        if catalogue {
+            "source_unavailable"
+        } else {
+            "temporarily_unavailable"
+        }
+    );
+    assert_eq!(
+        source.calls.load(Ordering::SeqCst),
+        3,
+        "later retry reaches source after physical release"
+    );
+    assert_eq!(capacity.available_permits(), 4);
+}
+
+#[tokio::test(start_paused = true)]
+async fn record_physical_read_timeout_retains_socket_admission() {
+    physical_read_timeout_retains_socket_admission(false).await;
+}
+#[tokio::test(start_paused = true)]
+async fn catalogue_physical_read_timeout_retains_socket_admission() {
+    physical_read_timeout_retains_socket_admission(true).await;
 }

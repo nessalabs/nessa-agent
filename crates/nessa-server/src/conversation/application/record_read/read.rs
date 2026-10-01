@@ -41,8 +41,9 @@ pub enum RecordReadValue {
     Page(Page),
 }
 
-/// A single global capacity token that survives caller cancellation once handed
-/// to the source thread. Its type is deliberately opaque to application logic.
+/// Read capacity ownership that survives caller cancellation once handed to the
+/// source thread. The product socket places its global permit and shared socket
+/// slot in this opaque token; application logic does not inspect them.
 pub struct RecordReadLease {
     _token: Box<dyn Send>,
 }
