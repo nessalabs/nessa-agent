@@ -41,7 +41,8 @@ examples.
   — applies to generated code through its generator, not by hand.
 - [Tracking work on the project board](CODING_STANDARDS.md#tracking-work-on-the-project-board)
   — move the issue you are working on as the work moves: In progress when it
-  starts, In review when its PR opens. Applies to work you delegate.
+  starts, In review when its PR opens — and keep the issue's description
+  current. Applies to work you delegate.
 
 ## While you work
 
@@ -72,7 +73,8 @@ examples.
 - [Before handing off](CODING_STANDARDS.md#before-handing-off) — the gate run on
   your own diff before anyone else reviews it.
 - [The review loop](CODING_STANDARDS.md#the-review-loop) — how rounds repeat, in
-  what order findings are fixed, and when the loop ends.
+  what order findings are fixed, when the loop ends, and when rounds stop and
+  the work is handed off.
 - [Local code review gate](CODING_STANDARDS.md#local-code-review-gate) — every
   local review, and every review delegated to a subagent.
 - [Required review brief](CODING_STANDARDS.md#required-review-brief) — what each
