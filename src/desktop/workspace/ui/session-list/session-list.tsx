@@ -22,6 +22,7 @@ import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
 import { useNow } from "../../adapters/dom/clock"
 import { sessionTime } from "../../model/time-labels"
 import { sameWords } from "../../model/transcript"
+import { paneItemKey, sessionItem } from "../../model/pane-item"
 import { AgentTile } from "../chrome/agent-tile"
 import { ColumnHeader } from "../../../ui/column-header"
 import { IconButton } from "../chrome/icon-button"
@@ -190,7 +191,7 @@ const SessionRow = memo(function SessionRow({
           data-open={open || undefined}
           data-unread={session.unread || undefined}
           // Carried by the pointer to a pane (`split-panes/adapters/dom/drag.ts`).
-          data-drag-item={session.id}
+          data-drag-item={paneItemKey(sessionItem(session.id))}
           onClick={(event) => actions.activate(event, session.id)}
           onKeyDown={(event) => {
             if (event.key !== "Enter") return

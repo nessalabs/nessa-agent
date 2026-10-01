@@ -11,9 +11,20 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { isMac } from "../../../adapters/platform"
 import { chordEvent } from "../../../model/keyboard"
 import { ClockProvider } from "../../adapters/dom/clock"
-import { focusPane, loadWorkspace, openBeside } from "../../adapters/store/commands"
+import {
+  closePane,
+  focusPane,
+  loadWorkspace,
+  newSession,
+  openBeside,
+  openWidget,
+  showContent,
+} from "../../adapters/store/commands"
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
-import { settle, testStore } from "../../testing"
+import { settle, shownBy, testStore } from "../../testing"
+import { paneItemOf } from "../../model/pane-item"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../../ui/menu"
+import { PaneMenuItems } from "../panes/pane-menu"
 import { SessionsInSidebar } from "./sessions-in-sidebar"
 import { workspaceShortcuts } from "./shortcuts"
 import { ThreeColumns } from "./three-columns"
@@ -106,7 +117,10 @@ function outcome(store: ReturnType<typeof testStore>) {
     panes: state.panes ? layoutShape(state.panes) : "",
     focused: state.panes?.focused,
     shown: state.panes?.columns.flatMap((column) =>
-      column.panes.map((pane) => (pane.item.startsWith("id-") ? "new" : pane.item)),
+      column.panes.map((pane) => {
+        const shown = shownBy(pane)
+        return shown.startsWith("id-") ? "new" : shown
+      }),
     ),
     sidebar: state.chrome.sidebar,
     content: state.content,
@@ -275,4 +289,109 @@ describe("⌘0 and the sidebar's Agents entry always open the overview, with not
       expect(store.getState().workspace.content).toBe("agents")
       await act(async () => root.unmount())
     })
+})
+
+describe("a widget over the panes keeps the sidebar's choice, and ⌘W closes it alone", () => {
+  const run = { plugin: "experiments", id: "run" }
+  for (const [name, Layout] of [
+    ["three columns", ThreeColumns],
+    ["sessions in the sidebar", SessionsInSidebar],
+  ] as const)
+    it(`in ${name}`, async () => {
+      const { store, root } = await render(Layout)
+      const current = () =>
+        [...host.querySelectorAll('.workspace-sidebar [aria-current="page"]')].map(
+          (row) => row.textContent?.trim(),
+        )
+      const overPanes = current()
+      expect(overPanes).not.toEqual([])
+      await act(async () => store.dispatch(openWidget({ widget: run, place: "window" })))
+      // The channel and the focused session stay chosen beside it.
+      expect(current()).toEqual(overPanes)
+      await act(async () => store.dispatch(showContent({ content: "agents" })))
+      expect(current()).toEqual([expect.stringMatching(/^Agents/)])
+
+      await act(async () => store.dispatch(openWidget({ widget: run, place: "window" })))
+      const panes = store.getState().workspace.panes
+      await act(async () => press("closePane"))
+      expect(store.getState().workspace.content).toBe("panes")
+      expect(store.getState().workspace.panes).toBe(panes)
+
+      await act(async () => store.dispatch(openWidget({ widget: run, place: "window" })))
+      await act(async () => press("showOverview"))
+      expect(store.getState().workspace.content).toBe("agents")
+      await act(async () => root.unmount())
+    })
+})
+
+describe("a session's row carries its session to the panes by its pane item", () => {
+  for (const [name, Layout] of [
+    ["three columns", ThreeColumns],
+    ["sessions in the sidebar", SessionsInSidebar],
+  ] as const)
+    it(`in ${name}`, async () => {
+      const { root } = await render(Layout)
+      const carried = [...host.querySelectorAll("[data-drag-item]")].map((row) => ({
+        row: row.getAttribute("data-session-row"),
+        item: paneItemOf(row.getAttribute("data-drag-item") ?? ""),
+      }))
+      expect(carried.length).toBeGreaterThan(0)
+      for (const { row, item } of carried)
+        expect(item).toEqual({ kind: "session", sessionId: row })
+      await act(async () => root.unmount())
+    })
+})
+
+describe("a pane's close is offered where closing it does something", () => {
+  it("offers it on every pane of several, on a last one showing a session or a widget, and not on a last home", async () => {
+    const { store, root } = await render(ThreeColumns)
+    const offered = () =>
+      [...host.querySelectorAll('.workspace-pane-header [aria-label^="Close Pane"]')].map(
+        (button) => !button.hasAttribute("data-reserved"),
+      )
+    // And the pane's menu offers it alike: shown in a menu that is not modal,
+    // as `pane-picture.test.tsx` shows it, for a modal one loads a second React.
+    const menuOffers = async () => {
+      const menu = document.createElement("div")
+      document.body.append(menu)
+      const menuRoot = createRoot(menu)
+      await act(async () =>
+        menuRoot.render(
+          <Provider store={store}>
+            <DropdownMenu open modal={false}>
+              <DropdownMenuTrigger>…</DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <PaneMenuItems
+                  pane={store.getState().workspace.panes?.focused ?? 0}
+                  sessionId=""
+                  moves={false}
+                  onChooseHeaderPicture={() => {}}
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </Provider>,
+        ),
+      )
+      const item = [...menu.ownerDocument.querySelectorAll('[role="menuitem"]')].find(
+        (each) => each.textContent?.startsWith("Close Pane"),
+      )
+      const enabled = item ? !item.hasAttribute("data-disabled") : null
+      await act(async () => menuRoot.unmount())
+      menu.remove()
+      return enabled
+    }
+    expect(offered()).toEqual([true, true])
+    await act(async () => void store.dispatch(closePane()))
+    expect(offered()).toEqual([true])
+    expect(await menuOffers()).toBe(true)
+    await act(async () => void store.dispatch(newSession()))
+    expect(offered()).toEqual([false])
+    expect(await menuOffers()).toBe(false)
+    await act(async () =>
+      store.dispatch(openWidget({ widget: { plugin: "p", id: "i" }, place: "pane" })),
+    )
+    expect(offered()).toEqual([true])
+    expect(await menuOffers()).toBe(true)
+    await act(async () => root.unmount())
+  })
 })

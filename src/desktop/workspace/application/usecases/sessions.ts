@@ -10,7 +10,6 @@
  */
 import type { Initiator } from "../ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
-import { paneShowing } from "../../../split-panes/model/pane-layout"
 import { knownToSource } from "../../model/revision"
 import type { ModelRef } from "../../model/workspace-index"
 import { startSession } from "../../model/session-lifecycle"
@@ -20,6 +19,7 @@ import {
   entry,
   forgetSession,
   modelForNextTurn,
+  paneShowingSession,
   sessionOf,
   without,
   withSession,
@@ -190,7 +190,7 @@ export function unsentDiscarded(
     return discarded
   const model = modelForNextTurn(discarded, sessionId) ?? session.model
   const unlisted = forgetSession(discarded, sessionId)
-  return discarded.panes && paneShowing(discarded.panes, sessionId)
+  return discarded.panes && paneShowingSession(discarded.panes, sessionId)
     ? {
         ...unlisted,
         drafts: {

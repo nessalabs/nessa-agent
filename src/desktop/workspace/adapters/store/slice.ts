@@ -24,6 +24,7 @@ import type {
   WorkspaceUpdate,
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
+import type { WidgetRef } from "../../model/widget-ref"
 import {
   initialWorkspace,
   type ContentView,
@@ -101,6 +102,14 @@ const workspaceSlice = createSlice({
     equalizePanes: (state) => panes.equalizePanes(state),
     paneClosed: (state, { payload }: Payload<{ pane: PaneKey; draftId?: string }>) =>
       panes.closePane(state, payload),
+    closeInFront: (state, { payload }: Payload<{ draftId?: string }>) =>
+      navigation.closeInFront(state, payload),
+    widgetOpened: (
+      state,
+      {
+        payload,
+      }: Payload<{ widget: WidgetRef; origin?: string; room: PaneRoom | undefined }>,
+    ) => panes.openWidget(state, payload),
     draftCreated: (
       state,
       {
@@ -260,8 +269,9 @@ export function initialWorkspaceFrom({
 
 /**
  * The actions that go somewhere — a session, a channel, a new
- * session, another pane (or the focused one, asked for by name). Each leaves
- * the Agents overview for the panes (`navigated`), whoever dispatched it —
+ * session, a widget's pane, another pane (or the focused one, asked for by
+ * name). Each leaves the Agents overview, or a widget over the panes, for
+ * the panes (`navigated`), whoever dispatched it —
  * the sidebar, the switcher, a key, the overview's own Open, or an agent —
  * even when it finds the window already there: going to a place is going
  * there.
@@ -273,6 +283,7 @@ const goesSomewhere: ReadonlySet<string> = new Set(
     workspaceActions.openedBeside,
     workspaceActions.sessionDropped,
     workspaceActions.draftCreated,
+    workspaceActions.widgetOpened,
     workspaceActions.selectChannel,
     workspaceActions.channelOpened,
   ].map((action) => action.type),
@@ -280,17 +291,18 @@ const goesSomewhere: ReadonlySet<string> = new Set(
 
 /**
  * The actions that change the panes a person asked to change: closing,
- * moving, evening them out, resizing. Each leaves the overview only when it
- * changed them, so no pane changes unseen beneath it; one that changes
- * nothing — a move at the edge, a close of no pane — leaves the view as it
- * is. Fitting the panes to the window is not asked by anyone, and leaves the
- * view as it is.
+ * moving, evening them out, resizing. Each leaves the overview, or a widget
+ * over the panes, only when it changed them, so no pane changes unseen
+ * beneath it; one that changes nothing — a move at the edge, a close of no
+ * pane — leaves the view as it is. Fitting the panes to the window is not
+ * asked by anyone, and leaves the view as it is.
  */
 const changesPanes: ReadonlySet<string> = new Set(
   [
     workspaceActions.paneMoved,
     workspaceActions.paneNudged,
     workspaceActions.paneClosed,
+    workspaceActions.closeInFront,
     workspaceActions.equalizePanes,
     workspaceActions.resizePanes,
   ].map((action) => action.type),

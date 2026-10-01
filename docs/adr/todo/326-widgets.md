@@ -11,7 +11,7 @@ drawn when it cannot be — without the window knowing any plugin, and without
 any plugin reaching into the workspace.
 
 - **Date:** 2026-09-30
-- **Status:** proposed
+- **Status:** accepted
 
 ## Context
 
@@ -163,9 +163,11 @@ desktop's one id encoder (`src/desktop/model/id-encoding.ts`, which the
 subagents join and the swarm's ids use too: it encodes UTF-16 code units, so a
 lone surrogate encodes too, where `encodeURIComponent` would throw), and two
 items are the same pane exactly when they are equal; a property test holds both.
-The key is a branded type only the codec makes, so no reader can build one by
-hand; reading one back goes through the codec's `decode`, which is the only
-thing the module exports that takes a key. The panes' use cases take the union;
+The key is a branded type only the codec makes; reading one back goes through
+the codec's `decode`, which is the only thing the module exports that takes a
+key. Split panes take any string, so the brand cannot keep a hand-built one
+out of their calls; the workspace hands them only what the codec writes, and
+its tests read every pane through `decode`, refusing a key it did not write. The panes' use cases take the union;
 what is showable, on screen, or kept as a draft is decided per kind.
 
 A transcript part `{ kind: "widget", widget: WidgetRef }` is drawn by

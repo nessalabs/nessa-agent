@@ -68,6 +68,8 @@ function signature(store: DesktopStore): {
   const panesShown = content === "panes"
   if (!panes) return { pane: "", rest: "", panesShown }
   const pane = focusedPane(panes)
+  // What it shows by its key alone: two keys are equal exactly when their
+  // items are (`model/pane-item.ts`), so nothing here reads what it names.
   return {
     pane: String(pane.key),
     rest: `${pane.item}:${panes.columns.map((column) => column.panes.length).join(",")}`,
