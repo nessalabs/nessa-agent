@@ -38,6 +38,7 @@ impl SessionStorageLease for CancellationPanicLease {
                     .last()
                     .is_some_and(|last| last.stage == InvocationStage::Cancelled)
         });
+        #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
         let panic = cancelling
             && self
                 .remaining
