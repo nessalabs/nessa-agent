@@ -71,7 +71,8 @@ export function useWidgetEscape({
 }): void {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return
+      // An Escape that ends a composition is the field's.
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return
       const scope = root.current
       if (!scope || scope.closest("[inert]") || inModal(event.target)) return
       const { content } = store.getState().workspace

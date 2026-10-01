@@ -3,6 +3,7 @@ import { discardUnsent, resendMessage } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
 import { useInlineWidgetHost } from "../../adapters/store/widget-hosts"
 import { InlineWidget, type WidgetRef } from "../../../widgets"
+import { paneItemKey, widgetItem } from "../../model/pane-item"
 import { groupSteps, type Message as MessageValue } from "../../model/transcript"
 import { RichText } from "./rich-text"
 import { ToolSteps } from "./tool-steps"
@@ -74,7 +75,12 @@ export const Message = memo(function Message({
             )
           if (group.kind === "widget")
             return (
-              <MessageWidget key={index} sessionId={sessionId} widget={group.widget} />
+              // By place and widget: another widget at this place is a card of its own.
+              <MessageWidget
+                key={`${index} ${paneItemKey(widgetItem(group.widget))}`}
+                sessionId={sessionId}
+                widget={group.widget}
+              />
             )
           if (group.kind === "list")
             return (

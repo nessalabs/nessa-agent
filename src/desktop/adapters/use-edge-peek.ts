@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { inModal } from "./modal"
 import {
   edgePeekHidden,
@@ -61,19 +61,23 @@ export function useEdgePeek(enabled: boolean, docked: boolean) {
   }, [enabled, docked, send])
 
   // A shown reveal, not handing off to the docked sidebar, takes Escape and
-  // keeps it, after a menu or a dialog's own: heard first (capture) and
-  // marked handled, so whatever else answers Escape — the overview, a widget
-  // (ADR 326) — leaves it be. Read as rendered, by one listener for the
-  // hook's life: the reveal is on the page from its commit, so its Escape is
-  // too, not an effect later.
+  // nothing else does — but a menu or a dialog, whose Escape is its own: it
+  // is heard first (capture), marked handled and stopped, so the overview, a
+  // widget (ADR 326) or a field's own Escape never answers the same press.
+  // One listener for the hook's life, reading what was last committed: the
+  // reveal is on the page from its commit, so its Escape is too, not an
+  // effect later.
   const ownsEscape = state.shown && state.pending !== "handoff"
   const owns = useRef(ownsEscape)
-  owns.current = ownsEscape
+  useLayoutEffect(() => {
+    owns.current = ownsEscape
+  }, [ownsEscape])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || !owns.current || event.defaultPrevented) return
       if (inModal(event.target)) return
       event.preventDefault()
+      event.stopPropagation()
       send("dismiss")
     }
     window.addEventListener("keydown", onKeyDown, true)

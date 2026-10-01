@@ -101,6 +101,21 @@ it("leaves an Escape already handled, and one under Settings, alone", async () =
   expect(under.getState().workspace.content).toEqual({ widget: sampleWidgets.trail })
 })
 
+it("leaves an Escape that ends a composition to its field", async () => {
+  const store = await page()
+  await act(async () =>
+    host.querySelector("button")?.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+        isComposing: true,
+      }),
+    ),
+  )
+  expect(store.getState().workspace.content).toEqual({ widget: sampleWidgets.trail })
+})
+
 it("leaves the open overview's Escape to it", async () => {
   const store = await page()
   store.dispatch(showContent({ content: "agents" }))

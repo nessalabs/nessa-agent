@@ -3,6 +3,7 @@ import { shallowEqual } from "react-redux"
 import { SplitPanes, type ShownPane, type SplitPanesSource } from "../../../split-panes"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectFailure, selectPaneWidget } from "../../adapters/store/selectors"
+import { paneItemKey, widgetItem } from "../../model/pane-item"
 import { EmptyWorkspace } from "./empty-state"
 import { Pane } from "./pane"
 import { WidgetPane } from "./widget-pane"
@@ -32,14 +33,24 @@ export const PaneGrid = memo(function PaneGrid({ source }: { source: SplitPanesS
   )
 })
 
-/** A pane, by what it shows: a session, or a widget. */
+/**
+ * A pane, by what it shows: a session, or a widget — each widget under its
+ * own key, so another shown in the same pane is drawn afresh, its view, its
+ * steps back and the caret in it never the last one's.
+ */
 const ShownPaneOf = memo(function ShownPaneOf({ placement, frame, multi }: ShownPane) {
   const widget = useWorkspaceSelector(
     (state) => selectPaneWidget(state, placement.key),
     shallowEqual,
   )
   return widget ? (
-    <WidgetPane pane={placement.key} widget={widget} frame={frame} multi={multi} />
+    <WidgetPane
+      key={paneItemKey(widgetItem(widget))}
+      pane={placement.key}
+      widget={widget}
+      frame={frame}
+      multi={multi}
+    />
   ) : (
     <Pane placement={placement} frame={frame} multi={multi} />
   )

@@ -22,6 +22,7 @@ import {
 } from "../../../widgets"
 import { ClockProvider } from "../../adapters/dom/clock"
 import {
+  closePane,
   focusPane,
   loadWorkspace,
   openBeside,
@@ -375,16 +376,56 @@ describe("the window", () => {
     menu.remove()
   })
 
-  it("replaces its widget with another opened there, whose body takes the caret", async () => {
+  it("replaces its widget with another opened there, drawn afresh: no step back of the last one's, the caret in its body", async () => {
     const store = await render()
     await openWindow(store)
-    await act(
-      async () =>
-        void store.dispatch(openWidget({ widget: sampleWidgets.notes, place: "window" })),
-    )
-    await frames()
+    await click(theWindow().querySelector('[data-sample-step="2"]'))
+    const show = async (widget: WidgetRef) => {
+      await act(async () => void store.dispatch(openWidget({ widget, place: "window" })))
+      await frames()
+    }
+    await show(sampleWidgets.notes)
     expect(content(store)).toEqual({ widget: sampleWidgets.notes })
-    expect(windowShown()?.querySelector('[data-sample-view="notes"]')).not.toBeNull()
+    expect(theWindow().querySelector('[data-sample-view="notes"]')).not.toBeNull()
     expect(caret()).toBe(bodyOf(windowShown()))
+    await show(sampleWidgets.trail)
+    expect(theWindow().querySelector("[data-sample-detail]")).toBeNull()
+    // No step back left over: the first Escape is the host's.
+    await escape()
+    expect(content(store)).toBe("panes")
+  })
+})
+
+describe("a widget pane showing another widget in its place", () => {
+  it("draws it afresh: no view state, no step back of the last one's", async () => {
+    const store = await render()
+    await openTrailBeside(store)
+    // The conversation closed, the trail's pane is the focused pane's place.
+    await act(async () => void store.dispatch(closePane({ pane: firstPane(store) })))
+    await frames()
+    expect(shown(store)).toEqual(["widget sample/trail"])
+    const pane = paneOf(sampleWidgets.trail)
+    await click(pane.querySelector('[data-sample-step="2"]'))
+    const show = async (widget: WidgetRef) => {
+      await act(
+        async () =>
+          void store.dispatch(openWidget({ widget, place: "pane", origin: "a" })),
+      )
+      await frames()
+    }
+    await show(sampleWidgets.notes)
+    expect(shown(store)).toEqual(["widget sample/notes"])
+    // Escape in the notes is no one's: the trail's step back went with it.
+    const body = bodyOf(paneOf(sampleWidgets.notes))
+    body?.focus()
+    const event = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    })
+    await act(async () => void body?.dispatchEvent(event))
+    expect(event.defaultPrevented).toBe(false)
+    await show(sampleWidgets.trail)
+    expect(paneOf(sampleWidgets.trail).querySelector("[data-sample-detail]")).toBeNull()
   })
 })

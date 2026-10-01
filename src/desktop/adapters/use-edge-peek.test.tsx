@@ -136,19 +136,26 @@ it("takes the window's blur as the release", async () => {
   expect(peek.shown).toBe(false)
 })
 
-it("takes Escape while shown, first and marked handled, so nothing after it answers it", async () => {
+it("takes Escape while shown, first, handled and stopped, so nothing after it answers it", async () => {
   const later = vi.fn((event: KeyboardEvent) => event.defaultPrevented)
+  const field = vi.fn()
   window.addEventListener("keydown", later)
+  document.body.addEventListener("keydown", field)
   act(() => peek.enter(free))
   await wait(200)
   expect(peek.shown).toBe(true)
-  act(() => void document.body.dispatchEvent(escapeKey()))
+  const event = escapeKey()
+  act(() => void document.body.dispatchEvent(event))
   expect(peek.shown).toBe(false)
-  expect(later).toHaveReturnedWith(true)
+  expect(event.defaultPrevented).toBe(true)
+  expect(field).not.toHaveBeenCalled()
+  expect(later).not.toHaveBeenCalled()
   // Hidden, it leaves Escape alone.
   act(() => void document.body.dispatchEvent(escapeKey()))
+  expect(field).toHaveBeenCalledTimes(1)
   expect(later).toHaveLastReturnedWith(false)
   window.removeEventListener("keydown", later)
+  document.body.removeEventListener("keydown", field)
 })
 
 it("leaves Escape to a menu or dialog open over it, staying shown", async () => {
@@ -172,14 +179,14 @@ function escapeKey() {
 
 it("is heard before a listener that was there first, so where it mounts does not matter", async () => {
   act(() => root.unmount())
-  const earlier = vi.fn((event: KeyboardEvent) => event.defaultPrevented)
+  const earlier = vi.fn()
   window.addEventListener("keydown", earlier)
   root = createRoot(document.createElement("div"))
   act(() => root.render(<Peek />))
   act(() => peek.enter(free))
   await wait(200)
   act(() => void document.body.dispatchEvent(escapeKey()))
-  expect(earlier).toHaveReturnedWith(true)
+  expect(earlier).not.toHaveBeenCalled()
   expect(peek.shown).toBe(false)
   window.removeEventListener("keydown", earlier)
 })
