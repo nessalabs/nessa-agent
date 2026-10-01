@@ -1,0 +1,78 @@
+# Build the macOS desktop host for a snapshot of someone's working tree, so a
+# laptop can run it without compiling Rust (#358).
+#
+# scripts/remote/macos-app.sh commits the tree as it is on disk — uncommitted and
+# untracked files included, the branch and index untouched — force-pushes that
+# commit to ci/scratch/<login>, and downloads what this uploads. The binary is
+# the debug host without `custom-protocol`, the same one `tauri dev` runs: it
+# loads its page from the dev server on 127.0.0.1:1420 rather than embedding
+# one, so UI edits reach it through Vite and only host changes need this build.
+#
+# Never runs on pull requests or main; local-auth.yml is the gate.
+name: macOS dev app
+run-name: macOS dev app ${{ github.sha }}
+on:
+  push:
+    branches: ["ci/scratch/**"]
+
+permissions:
+  contents: read
+
+# A newer snapshot from the same person supersedes the one still building.
+concurrency:
+  group: macos-dev-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build nessa-app (debug, aarch64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Saved from every scratch branch: each person's branch is long-lived and
+      # only ever rebuilt by them, so its cache is what keeps a rebuild short.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-dev-app
+      # nessa-app's build.rs needs a dist/ whose recorded stage matches the
+      # host's; the page itself comes from the dev server.
+      - name: Build
+        env:
+          NESSA_STAGE: dev
+        run: |
+          mkdir -p dist
+          echo '<html></html>' > dist/index.html
+          echo '{"stage":"dev"}' > dist/nessa-stage.json
+          cargo build -p nessa-app --no-default-features
+      # What this binary was built from, so a laptop can tell whether its tree
+      # would build the same thing: Cargo's dep-info (every workspace source,
+      # include_* target, and build-script input it tracks), plus the manifests
+      # and lockfile that dep-info does not name. Registry crates are pinned by
+      # Cargo.lock and left out.
+      - name: List inputs
+        run: |
+          python3 - <<'EOF'
+          import os, subprocess
+          root = os.getcwd()
+          text = open("target/debug/nessa-app.d").read().replace("\\\n", " ")
+          deps = text.split(":", 1)[1].replace("\\ ", "\0").split()
+          inputs = set()
+          for dep in deps:
+              path = os.path.normpath(dep.replace("\0", " "))
+              if path.startswith(root + os.sep):
+                  inputs.add(os.path.relpath(path, root))
+          tracked = subprocess.run(["git", "ls-files"], capture_output=True, text=True, check=True).stdout.split("\n")
+          inputs.update(p for p in tracked if os.path.basename(p) in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs"))
+          inputs.update(p for p in tracked if p.startswith(".cargo/"))
+          open("target/debug/inputs.txt", "w").write("\n".join(sorted(inputs)) + "\n")
+          EOF
+      # tar keeps the executable bit and the linker's ad-hoc signature, which an
+      # Apple Silicon Mac needs to run it.
+      - name: Package
+        run: tar -C target/debug -czf nessa-app.tar.gz nessa-app inputs.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nessa-app
+          path: nessa-app.tar.gz
+          retention-days: 7

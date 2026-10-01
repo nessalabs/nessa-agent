@@ -9,6 +9,9 @@
 #   just release prod fast  testing-shaped prod release (macOS .app / Linux .deb / Windows nsis)
 #   just release  shipping prod bundle (macOS .dmg / Linux .deb / Windows nsis)
 #   just release dev  shipping bundle whose UI and host both use dev
+#   just test     Rust workspace tests (cargo-nextest)
+#   just remote <recipe> [args]  any recipe on the Linux build sandbox; files stay here
+#   just start-remote  desktop app here; gateway + UI on the sandbox, host binary from CI
 
 #   just worktree create <name>  feature checkout with isolated build output
 #   just worktree isolate        migrate this checkout from the old shared target
@@ -177,6 +180,25 @@ release stage="prod" mode="shipping":
 [positional-arguments]
 release stage="prod" mode="shipping":
     {{if mode == "fast" { "set CARGO_PROFILE_RELEASE_LTO=false&& set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16&& set CARGO_PROFILE_RELEASE_OPT_LEVEL=1&& set CARGO_PROFILE_RELEASE_STRIP=false&& " } else if mode == "shipping" { "" } else { error("Use just release [stage] or just release [stage] fast") }}}node scripts/desktop/build.mjs --stage "%1" {{if mode == "fast" { fast-bundles } else { release-bundles }}}
+
+# Rust workspace tests. Arguments go to nextest: `just test -p nessa-server`.
+[positional-arguments]
+test *args:
+    cargo nextest run --workspace "$@"
+
+# This checkout syncs there on save, Cargo's build output stays there, and the
+# browser UI is forwarded to 127.0.0.1:1420. See scripts/remote/boat.sh.
+# Run any recipe on the Linux build sandbox: `just remote test`, `just remote web`.
+[unix]
+[positional-arguments]
+remote +args:
+    bash scripts/remote/boat.sh exec --port 1420 just "$@"
+
+# The host binary is CI's build of this working tree (scripts/remote/macos-app.sh).
+# Desktop app on this Mac with nothing compiled here: gateway and UI on the sandbox.
+[macos]
+start-remote:
+    bash scripts/remote/start.sh
 
 # Manage feature worktrees: create <name>, isolate, list, remove <name>, or clean (requires Bash).
 [unix]

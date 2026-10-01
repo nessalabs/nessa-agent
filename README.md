@@ -133,6 +133,11 @@ named stage as its first argument, such as `just release alpha`. `pnpm app`
 resolves one dev stage for Vite and the host. The window controls no-op in the browser
 (see [src/host/window.ts](src/host/window.ts)).
 
+To keep compilation off the laptop, `just remote <recipe>` runs any recipe on a
+Linux build sandbox and `just start-remote` runs the desktop app here against
+it, with a host binary built by CI; see
+[building off the laptop](docs/guides/remote-builds.md).
+
 Install `just` with the platform's package manager (`apt install just`,
 `brew install just`, `winget install --id Casey.Just --exact`).
 
