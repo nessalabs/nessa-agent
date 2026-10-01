@@ -1,6 +1,7 @@
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
+    panic::{self, AssertUnwindSafe},
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
 };
@@ -69,7 +70,7 @@ impl ReadWorkers {
         state.closed = true;
     }
     pub(in crate::conversation::infrastructure) async fn run<T: Send + 'static>(
-        &self,
+        self: &Arc<Self>,
         name: &str,
         read: impl FnOnce() -> T + Send + 'static,
     ) -> Result<T, ReadWorkerError> {
@@ -78,10 +79,19 @@ impl ReadWorkers {
             let mut state = self.state.lock().unwrap();
             state.admit()?;
             state.reap_finished()?;
+            let owner = self.clone();
             let join = thread::Builder::new()
                 .name(name.into())
                 .spawn(move || {
-                    let _ = answer.send(read());
+                    // A cancelled caller cannot observe sender loss, and dropping
+                    // an undeliverable result can also unwind. Keep both in the owner.
+                    let result = panic::catch_unwind(AssertUnwindSafe(move || {
+                        let _ = answer.send(read());
+                    }));
+                    if let Err(failure) = result {
+                        owner.worker_panicked();
+                        panic::resume_unwind(failure);
+                    }
                 })
                 .map_err(|_| ReadWorkerError::Unavailable)?;
             state.joins.push(join);

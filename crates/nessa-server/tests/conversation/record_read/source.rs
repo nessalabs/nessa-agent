@@ -505,3 +505,62 @@ async fn reported_worker_panic_fences_reads_and_retains_other_work() {
         Err(ReadWorkerError::WorkerPanicked)
     );
 }
+
+async fn cancelled_read_panic_fences_without_reaping(result_panics: bool) {
+    struct ReadResult(bool);
+    impl Drop for ReadResult {
+        fn drop(&mut self) {
+            assert!(!self.0, "undeliverable read result cleanup failed");
+        }
+    }
+    let workers = ReadWorkers::new();
+    let gate = Arc::new(TestReadGate {
+        entered: Notify::new(),
+        panic_after_release: !result_panics,
+        open: Mutex::new(false),
+        released: Condvar::new(),
+    });
+    let read = {
+        let workers = workers.clone();
+        let gate = gate.clone();
+        tokio::spawn(async move {
+            workers
+                .run("cancelled-panic-read", move || {
+                    gate.wait();
+                    ReadResult(result_panics)
+                })
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), gate.entered.notified())
+        .await
+        .unwrap();
+    read.abort();
+    assert!(matches!(read.await, Err(error) if error.is_cancelled()));
+    gate.release();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !workers.state.lock().unwrap().joins[0].is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    // Neither the cancelled observer nor a later run has persisted/reaped the fault.
+    let admission = workers.admit();
+    let shutdown = workers.shutdown().await;
+    assert_eq!(admission, Err(ReadWorkerError::WorkerPanicked));
+    assert_eq!(shutdown, Err(ReadWorkerError::WorkerPanicked));
+    assert_eq!(
+        workers.shutdown().await,
+        Err(ReadWorkerError::WorkerPanicked)
+    );
+}
+
+#[tokio::test]
+async fn cancelled_read_waiter_panic_fences_without_reaping() {
+    cancelled_read_panic_fences_without_reaping(false).await;
+}
+#[tokio::test]
+async fn cancelled_read_result_drop_panic_fences_without_reaping() {
+    cancelled_read_panic_fences_without_reaping(true).await;
+}
