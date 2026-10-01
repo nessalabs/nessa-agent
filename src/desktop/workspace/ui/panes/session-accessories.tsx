@@ -16,14 +16,11 @@ export const SessionAccessories = memo(function SessionAccessories({
 }) {
   const plugins = useNativePlugins()
   const openWidget = useAccessoryOpen(sessionId)
-  if (!plugins.some((plugin) => plugin.SessionAccessory)) return null
-  return (
-    <div className="workspace-pane-accessories">
-      {plugins.map(({ id, SessionAccessory }) =>
-        SessionAccessory ? (
-          <SessionAccessory key={id} sessionId={sessionId} openWidget={openWidget} />
-        ) : null,
-      )}
-    </div>
+  // No box of its own: an accessory with nothing to draw for this session
+  // leaves the header exactly as it was.
+  return plugins.map(({ id, SessionAccessory }) =>
+    SessionAccessory ? (
+      <SessionAccessory key={id} sessionId={sessionId} openWidget={openWidget} />
+    ) : null,
   )
 })

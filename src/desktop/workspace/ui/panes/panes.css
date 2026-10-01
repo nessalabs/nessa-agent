@@ -353,11 +353,3 @@ html:not(.dark) .workspace-widget-window {
   min-width: 0;
   font-size: var(--desktop-text-body);
 }
-
-/* What widget plugins draw for the session (`session-accessories.tsx`), before the pane's actions. */
-.workspace-pane-accessories {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 2px;
-}
