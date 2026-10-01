@@ -22,8 +22,8 @@ use nessa_auth::{
     application::{
         authorization::AuthorizeAction,
         ports::{
-            AccessReader, AccessSnapshot, Clock, CredentialEvidence, CredentialVerifier,
-            PortFuture, VerifiedCredential,
+            AccessError, AccessReader, AccessSnapshot, Clock, CredentialEvidence,
+            CredentialVerifier, PortFuture, VerifiedCredential,
         },
         session::AuthenticateSession,
     },
@@ -292,6 +292,74 @@ struct Access(Mutex<AccessSnapshot>);
 impl AccessReader for Access {
     fn read<'a>(&'a self, _: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
         Box::pin(async { Ok(self.0.lock().unwrap().clone()) })
+    }
+}
+
+struct FailingAccess(AccessError);
+impl AccessReader for FailingAccess {
+    fn read<'a>(&'a self, _: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+        Box::pin(async { Err(self.0) })
+    }
+}
+
+#[tokio::test]
+async fn passive_admission_preserves_unverifiable_authority_failures() {
+    let access = access();
+    let clock = FixedClock;
+    let policy = CedarPolicyEvaluator::new().unwrap();
+    let session = AuthenticateSession {
+        verifier: &access,
+        access: &access,
+        clock: &clock,
+    }
+    .execute(
+        &CredentialEvidence::new(b"secret".to_vec()).unwrap(),
+        &AudienceId::new("gateway").unwrap(),
+    )
+    .await
+    .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let conversations = LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap();
+    let gateway = Resource::new(
+        OrganizationId::new("org").unwrap(),
+        ResourceId::new("gateway").unwrap(),
+    );
+    let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
+    for (error, expected) in [
+        (AccessError::StaleRevision, ReadRefusal::Unverifiable),
+        (AccessError::Unavailable, ReadRefusal::Unverifiable),
+        (AccessError::Unsupported, ReadRefusal::Unverifiable),
+        (AccessError::InvalidCredential, ReadRefusal::Unauthorized),
+        (AccessError::CredentialRevoked, ReadRefusal::Unauthorized),
+        (AccessError::CredentialExpired, ReadRefusal::Unauthorized),
+        (AccessError::InactiveMembership, ReadRefusal::Unauthorized),
+        (AccessError::IdentityMismatch, ReadRefusal::Unauthorized),
+    ] {
+        let failing = FailingAccess(error);
+        let admit = AdmitPassiveRead {
+            authorization: AuthorizeAction {
+                access: &failing,
+                clock: &clock,
+                policy: &policy,
+            },
+            gateway: &gateway,
+            receivers: &bindings,
+            conversations: &conversations,
+        };
+        let calls = AtomicUsize::new(0);
+        assert_eq!(
+            admit
+                .catalogue_with(&session, "receiver", 7, |_| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    async { Ok::<(), ()>(()) }
+                })
+                .await,
+            Err(expected),
+            "{error:?}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }
 impl CredentialVerifier for Access {

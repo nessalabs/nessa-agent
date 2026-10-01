@@ -316,6 +316,85 @@ fn authorizer_calls_actual_head_each_time_and_returns_changed_actual_scope() {
 }
 
 #[test]
+fn passive_authorizer_preserves_temporary_and_permanent_access_meaning() {
+    use crate::product_contract::generated::CatalogueReadErrorCode;
+    for catalogue in [false, true] {
+        for (record_code, catalogue_code, expected) in [
+            (
+                RecordReadErrorCode::Unverifiable,
+                CatalogueReadErrorCode::Unverifiable,
+                Access::Unverifiable,
+            ),
+            (
+                RecordReadErrorCode::Unauthorized,
+                CatalogueReadErrorCode::Unauthorized,
+                Access::Denied,
+            ),
+            (
+                RecordReadErrorCode::Forbidden,
+                CatalogueReadErrorCode::Forbidden,
+                Access::Denied,
+            ),
+        ] {
+            assert_eq!(record_code.as_str(), catalogue_code.as_str());
+            let code = record_code.as_str();
+            let scope = Scope::new(
+                Id::new("receiver").unwrap(),
+                Id::new("gateway").unwrap(),
+                Id::new("8e024fc9-0c9d-4952-8427-bcb2b3b07f8f").unwrap(),
+                Id::new("incarnation").unwrap(),
+                nessa_sdk::infrastructure::session_storage::physical_record_schema(),
+                Id::new("epoch-3").unwrap(),
+            );
+            let (endpoint, peer) = peer(move |socket| {
+                let read = request(socket);
+                assert_eq!(
+                    read.method,
+                    if catalogue {
+                        product_method::CONVERSATION_CATALOGUE_HEAD
+                    } else {
+                        product_method::CONVERSATION_RECORDS_HEAD
+                    }
+                );
+                send(
+                    socket,
+                    OutgoingMessage::Response(ResponseFrame::failure(&read.id, code, "refused")),
+                );
+            });
+            let connection = GatewayConnection::new(connect(&endpoint));
+            let mut authorizer = if catalogue {
+                connection
+                    .catalogue(Id::new("receiver").unwrap(), 3)
+                    .authorizer()
+            } else {
+                connection
+                    .records(
+                        Id::new("receiver").unwrap(),
+                        3,
+                        ConversationId::new(scope.stream().as_str()).unwrap(),
+                    )
+                    .authorizer()
+            };
+            connection.begin().unwrap();
+            let actual = authorizer.authorize(&scope);
+            let outcome = connection.finish().unwrap();
+            drop(authorizer);
+            drop(connection);
+            peer.join().unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(
+                outcome.failure,
+                Some(if catalogue {
+                    GatewayError::Catalogue(catalogue_code)
+                } else {
+                    GatewayError::Record(record_code)
+                })
+            );
+        }
+    }
+}
+
+#[test]
 fn driver_panic_and_returned_value_have_owned_outcomes_and_physical_peer_close() {
     let (endpoint, peer) = peer(|socket| {
         assert!(socket.read().is_err());

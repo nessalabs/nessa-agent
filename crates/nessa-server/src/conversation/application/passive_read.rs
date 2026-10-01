@@ -33,6 +33,21 @@ pub enum ReadRefusal {
     Unverifiable,
 }
 
+impl From<AccessError> for ReadRefusal {
+    fn from(error: AccessError) -> Self {
+        match error {
+            AccessError::Unavailable | AccessError::StaleRevision | AccessError::Unsupported => {
+                Self::Unverifiable
+            }
+            AccessError::InvalidCredential
+            | AccessError::CredentialRevoked
+            | AccessError::CredentialExpired
+            | AccessError::InactiveMembership
+            | AccessError::IdentityMismatch => Self::Unauthorized,
+        }
+    }
+}
+
 /// Exact receiver and ownership portion of a source scope. The physical source
 /// contributes its own origin, stream, incarnation and schema after admission.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,10 +173,7 @@ impl AdmitPassiveRead<'_> {
         {
             Ok(Decision::Allow) => {}
             Ok(Decision::Deny) => return Err(ReadRefusal::Forbidden),
-            Err(AccessError::Unavailable | AccessError::Unsupported) => {
-                return Err(ReadRefusal::Unverifiable)
-            }
-            Err(_) => return Err(ReadRefusal::Unauthorized),
+            Err(error) => return Err(error.into()),
         }
         let binding = self
             .receivers

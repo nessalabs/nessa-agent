@@ -9,10 +9,10 @@ use crate::browser_session::{
     application::{invalidation_reason, BrowserSessionVerifier, ReadBrowserSession},
     domain::value_objects::RemovalReason,
 };
-use crate::conversation::application::RecordReadLease;
+use crate::conversation::application::{ReadRefusal, RecordReadLease};
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
-use crate::product_contract::generated::SessionCloseReason;
+use crate::product_contract::generated::{RecordReadErrorCode, SessionCloseReason};
 use crate::protocol::{
     health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
     ResponseFrame, MAX_PAYLOAD_BYTES,
@@ -583,12 +583,7 @@ async fn dispatch_passive_read(
     let reading = async move {
         let (current, _) = match current_identity_inner(state, session).await {
             Ok(current) => current,
-            Err(_) => {
-                return (
-                    WireResponse::ordinary(failure(&frame.id, "unauthorized")),
-                    None,
-                )
-            }
+            Err(error) => return (passive_access_failure(&frame.id, error), None),
         };
         if frame.kind != "req" || frame.id.is_empty() || frame.id.len() > 256 {
             return (
@@ -596,14 +591,8 @@ async fn dispatch_passive_read(
                 None,
             );
         }
-        if ensure_browser_session_present(state, &current)
-            .await
-            .is_err()
-        {
-            return (
-                WireResponse::ordinary(failure(&frame.id, "unauthorized")),
-                None,
-            );
+        if let Err(error) = ensure_browser_session_present(state, &current).await {
+            return (passive_access_failure(&frame.id, error), None);
         }
         let request_id = frame.id.clone();
         let result = if matches!(
@@ -632,6 +621,15 @@ async fn dispatch_passive_read(
             None,
         )
     })
+}
+
+fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse {
+    let code = if ReadRefusal::from(error) == ReadRefusal::Unverifiable {
+        RecordReadErrorCode::Unverifiable
+    } else {
+        RecordReadErrorCode::Unauthorized
+    };
+    WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
 async fn dispatch(
@@ -1827,6 +1825,92 @@ mod tests {
         }
     }
 
+    struct RecoveringRecordAuthority {
+        authority: Arc<Authority>,
+        first_failure: AccessError,
+        reads: AtomicU64,
+    }
+    impl AccessReader for RecoveringRecordAuthority {
+        fn read<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+            Box::pin(async move {
+                if self.reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(self.first_failure)
+                } else {
+                    self.authority.read(id).await
+                }
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn passive_socket_preserves_retryable_authority_failures() {
+        for (error, expected) in [
+            (AccessError::Unavailable, "unverifiable"),
+            (AccessError::StaleRevision, "unverifiable"),
+            (AccessError::InvalidCredential, "unauthorized"),
+            (AccessError::CredentialRevoked, "unauthorized"),
+            (AccessError::CredentialExpired, "unauthorized"),
+            (AccessError::InactiveMembership, "unauthorized"),
+            (AccessError::IdentityMismatch, "unauthorized"),
+            (AccessError::Unsupported, "unverifiable"),
+        ] {
+            for method in [
+                "conversation.recordsHead",
+                "conversation.recordsPage",
+                "conversation.catalogueHead",
+                "conversation.catalogueManifest",
+                "conversation.catalogueResolve",
+            ] {
+                let (mut state, authority) = fixture(MembershipRole::Member);
+                let session = authenticate(&state).await;
+                state.access = Arc::new(RecoveringRecordAuthority {
+                    authority,
+                    first_failure: error,
+                    reads: AtomicU64::new(0),
+                });
+                state.record_source = Some(Arc::new(UnreachableRecordSource));
+                state.settings = SessionSettings::new(
+                    Duration::from_secs(20),
+                    Duration::from_secs(5),
+                    Duration::from_secs(30),
+                )
+                .unwrap();
+                let permits = state.record_reads.clone();
+                let available = permits.available_permits();
+                let (socket, mut peer) = test_socket(None);
+                let task = tokio::spawn(run_authenticated(socket, state, session));
+                let mut responses = Vec::new();
+                for id in ["outage", "recovered"] {
+                    peer.input
+                        .send(Ok(Message::Text(
+                            json!({"type":"req", "id":id, "method":method, "params":{}})
+                                .to_string()
+                                .into(),
+                        )))
+                        .unwrap();
+                    responses.push(timeout(Duration::from_secs(1), peer.output.recv()).await);
+                }
+                drop(peer.input);
+                timeout(Duration::from_secs(1), task)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                for (received, id, code) in [
+                    (responses.remove(0), "outage", expected),
+                    (responses.remove(0), "recovered", "invalid_request"),
+                ] {
+                    let Message::Text(text) = received.unwrap().unwrap() else {
+                        panic!("correlated read refusal expected")
+                    };
+                    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    assert_eq!(value["id"], id);
+                    assert_eq!(value["error"]["code"], code, "{error:?}, {method}");
+                }
+                assert_eq!(permits.available_permits(), available);
+            }
+        }
+    }
+
     struct CountingRecordAuthority {
         authority: Arc<Authority>,
         reads: AtomicU64,
@@ -2937,6 +3021,124 @@ mod tests {
             _: CredentialId,
         ) -> PortFuture<'a, BrowserSessionState> {
             Box::pin(async { Err(AccessError::Unsupported) })
+        }
+    }
+
+    struct FailingPresenceStore {
+        inner: PresenceStore,
+        reads: AtomicU64,
+        fail_at: u64,
+        error: AccessError,
+    }
+    impl SessionStore for FailingPresenceStore {
+        fn insert<'a>(
+            &'a self,
+            id: String,
+            session: BrowserSessionState,
+            prior: Option<String>,
+            now: u64,
+        ) -> PortFuture<'a, Option<(String, BrowserSessionState)>> {
+            self.inner.insert(id, session, prior, now)
+        }
+        fn get<'a>(&'a self, id: String) -> PortFuture<'a, Option<BrowserSessionState>> {
+            if self.reads.fetch_add(1, Ordering::SeqCst) + 1 == self.fail_at {
+                Box::pin(async { Err(self.error) })
+            } else {
+                self.inner.get(id)
+            }
+        }
+        fn remove<'a>(
+            &'a self,
+            id: String,
+            now: u64,
+            reason: RemovalReason,
+            actor: Option<CredentialId>,
+        ) -> PortFuture<'a, ()> {
+            self.inner.remove(id, now, reason, actor)
+        }
+        fn abandon_login<'a>(
+            &'a self,
+            id: String,
+            prior: Option<(String, BrowserSessionState)>,
+            now: u64,
+        ) -> PortFuture<'a, ()> {
+            self.inner.abandon_login(id, prior, now)
+        }
+        fn renew<'a>(
+            &'a self,
+            id: String,
+            now: u64,
+            credential: CredentialId,
+        ) -> PortFuture<'a, BrowserSessionState> {
+            self.inner.renew(id, now, credential)
+        }
+    }
+
+    #[tokio::test]
+    async fn passive_browser_presence_preserves_retryable_store_failures() {
+        for error in [
+            AccessError::Unavailable,
+            AccessError::StaleRevision,
+            AccessError::Unsupported,
+        ] {
+            // Current identity reads twice; the third read rechecks presence.
+            for fail_at in [3, 1] {
+                for method in [
+                    "conversation.recordsHead",
+                    "conversation.recordsPage",
+                    "conversation.catalogueHead",
+                    "conversation.catalogueManifest",
+                    "conversation.catalogueResolve",
+                ] {
+                    let (mut state, _) = fixture(MembershipRole::Member);
+                    let session = authenticate(&state).await;
+                    let present = Arc::new(AtomicBool::new(true));
+                    let origin = "https://127.0.0.1:1443";
+                    let store = Arc::new(FailingPresenceStore {
+                        inner: PresenceStore {
+                            present: present.clone(),
+                            session: BrowserSessionState::new(
+                                session.context().credential_id().clone(),
+                                BrowserSessionOrigin::new(origin.to_owned()).unwrap(),
+                                100,
+                            )
+                            .unwrap(),
+                        },
+                        reads: AtomicU64::new(0),
+                        fail_at,
+                        error,
+                    });
+                    state.browser_sessions = Some(store.clone());
+                    state.browser_session_id = Some("a".repeat(64));
+                    state.browser_session_origin = Some(origin.to_owned());
+                    state.record_source = Some(Arc::new(UnreachableRecordSource));
+                    let permits = Arc::new(Semaphore::new(1));
+                    let (response, lease) = dispatch_passive_read(
+                        &state,
+                        &session,
+                        request("browser-outage", method),
+                        RecordReadLease::new(permits.clone().try_acquire_owned().unwrap()),
+                        Instant::now() + Duration::from_secs(10),
+                    )
+                    .await;
+                    let WireResponse::Ordinary(message) = response else {
+                        panic!("ordinary refusal expected")
+                    };
+                    let OutgoingMessage::Response(response) = *message else {
+                        panic!("correlated refusal expected")
+                    };
+                    assert_eq!(response.id, "browser-outage");
+                    assert_eq!(
+                        response.error.unwrap().code,
+                        "unverifiable",
+                        "{error:?}, browser read {fail_at}, {method}"
+                    );
+                    assert_eq!(store.reads.load(Ordering::SeqCst), fail_at);
+                    assert!(present.load(Ordering::SeqCst));
+                    assert!(lease.is_none());
+                    assert_eq!(permits.available_permits(), 1);
+                }
+            }
         }
     }
 
