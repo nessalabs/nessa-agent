@@ -482,3 +482,111 @@ fn a_call_cannot_change_between_reviewable_and_declined_under_one_identity() {
     .unwrap();
     assert_eq!(names.get("b"), Some(&ObservedTool::Declined));
 }
+
+/// A frame of the shape the pinned adapter (0.76.0, `tools.js:335-340`) sends
+/// for an MCP tool, as recorded live in `fixtures/mcp_live_frames.json`: the
+/// harness name as the title and in `_meta`, kind `other`, empty input and no
+/// content until completion.
+fn mcp_frame(id: &str, name: &str) -> Value {
+    json!({"sessionUpdate":"tool_call","toolCallId":id,"title":name,"kind":"other",
+        "status":"pending","rawInput":{},"content":[],
+        "_meta":{"claudeCode":{"toolName":name}}})
+}
+
+#[test]
+fn an_mcp_call_names_its_configured_server_and_tool() {
+    let configured = vec!["mcp__nessa__".to_owned(), "mcp__charts-app__".to_owned()];
+    let mut names = HashMap::new();
+    for (name, server, tool) in [
+        ("mcp__nessa__shell", "nessa", "shell"),
+        ("mcp__charts-app__show__v2", "charts-app", "show__v2"),
+    ] {
+        let update = super::tool_call(&mcp_frame(name, name), &mut names, &configured).unwrap();
+        let identity = update.mcp_tool().expect(name);
+        assert_eq!((identity.server(), identity.tool()), (server, tool));
+        assert_eq!(reviewable(&names, name).as_deref(), Some(name));
+    }
+    // The completion repeats the name, and the text result stays as it was.
+    let done = json!({"toolCallId":"mcp__nessa__shell","status":"completed",
+        "content":[{"type":"content","content":{"type":"text","text":"{\"ok\":true}"}}],
+        "_meta":{"claudeCode":{"toolName":"mcp__nessa__shell"}}});
+    let update = super::tool_call(&done, &mut names, &configured).unwrap();
+    assert_eq!(update.mcp_tool().unwrap().server(), "nessa");
+    assert_eq!(
+        update.content(),
+        &Some(vec![ToolContent::text("{\"ok\":true}")])
+    );
+}
+
+#[test]
+fn a_call_is_left_without_an_mcp_identity_where_none_can_be_named_exactly() {
+    let mut names = HashMap::new();
+    // Built-in tools, a frame naming nothing, an unconfigured server, and a
+    // name two configured servers both fit.
+    // Configured names cannot hold `__` (`AcpConfig::validate`), but one may
+    // end in `_`: `a` and `a_` both fit `mcp__a___c`.
+    let ambiguous = vec!["mcp__a__".to_owned(), "mcp__a___".to_owned()];
+    for (frame, prefixes) in [
+        (mcp_frame("read", "Read"), vec!["mcp__nessa__".to_owned()]),
+        (
+            json!({"toolCallId":"bare","title":"mcp__nessa__shell"}),
+            vec!["mcp__nessa__".to_owned()],
+        ),
+        (
+            mcp_frame("other", "mcp__other__shell"),
+            vec!["mcp__nessa__".to_owned()],
+        ),
+        (mcp_frame("both", "mcp__a___c"), ambiguous),
+    ] {
+        let update = super::tool_call(&frame, &mut names, &prefixes).unwrap();
+        assert_eq!(update.mcp_tool(), None, "{frame}");
+    }
+    // The ambiguous call is still reviewable; only its identity is withheld.
+    assert_eq!(reviewable(&names, "both").as_deref(), Some("mcp__a___c"));
+}
+
+/// Every frame the Claude adapter 0.76.0 sent for five real MCP calls and the
+/// tool search before one, recorded through the gateway against
+/// `scripts/mcp-test-server` (see the fixture's `recorded`).
+#[test]
+fn recorded_claude_mcp_calls_name_their_server_and_keep_their_text() {
+    use crate::domain::agent_execution::tools::ToolStatus;
+    let recorded: Value =
+        serde_json::from_str(include_str!("fixtures/mcp_live_frames.json")).unwrap();
+    let configured = vec!["mcp__mcptest__".to_owned()];
+    let mut names = HashMap::new();
+    let mut last = HashMap::new();
+    for (name, frames) in recorded["calls"].as_object().unwrap() {
+        for frame in frames.as_array().unwrap() {
+            let update = super::tool_call(frame, &mut names, &configured).unwrap();
+            // Every frame names the tool, so every frame carries the same identity.
+            let identity = update.mcp_tool().map(|tool| (tool.server(), tool.tool()));
+            match name.strip_prefix("mcp__mcptest__") {
+                Some(tool) => assert_eq!(identity, Some(("mcptest", tool)), "{name}"),
+                None => assert_eq!(identity, None, "{name}"),
+            }
+            last.insert(name.clone(), update);
+        }
+    }
+    // The dotted `rows.get` arrives in the harness's spelling.
+    assert!(last.contains_key("mcp__mcptest__rows_get"));
+    // The CLI replaces an MCP result's text with its structured result's JSON:
+    // it reaches Nessa as text, indistinguishable from any other text.
+    assert_eq!(
+        last["mcp__mcptest__report_rows"].content(),
+        &Some(vec![ToolContent::text(
+            r#"{"rows":[{"id":1,"name":"alpha","value":10},{"id":2,"name":"beta","value":20}],"total":30}"#
+        )])
+    );
+    assert_eq!(
+        last["mcp__mcptest__link_resources"]
+            .content()
+            .as_ref()
+            .unwrap()[1],
+        ToolContent::text("[Resource link: rows.csv] file:///nessa-test/rows.csv")
+    );
+    assert_eq!(
+        last["mcp__mcptest__always_fails"].status(),
+        &Some(ToolStatus::Failed)
+    );
+}

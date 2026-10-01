@@ -35,7 +35,7 @@ import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortc
 import { useFitOnResize } from "../../adapters/dom/window-width"
 import {
   canOpenBeside,
-  closePane,
+  closeInFront,
   fitToWindow,
   focusPane,
   newSession,
@@ -197,7 +197,8 @@ function useWorkspaceKeys(
         dispatch(newSession({ beside: "bottom" }))
         return
       case "closePane":
-        dispatch(closePane())
+        // What is in front: a widget over the panes, else the focused pane.
+        dispatch(closeInFront())
         return
       case "focusPane1":
       case "focusPane2":

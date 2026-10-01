@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { panesOf, paneShowing } from "../../../split-panes/model/pane-layout"
 import { retention } from "../../model/retention"
 import { emptyTranscript, type Transcript } from "../../model/transcript"
-import { astra, roomyGrid as roomy, summary, testIndex } from "../../testing"
+import { astra, roomyGrid as roomy, shownIn, summary, testIndex } from "../../testing"
 import {
   initialWorkspace,
   modelForNextTurn,
+  paneShowingSession,
   type WorkspaceState,
 } from "../workspace-state"
 import { closePane, createDraft, openBeside } from "./panes"
@@ -30,7 +30,7 @@ const loaded = () =>
     read: "r",
   })
 
-const shown = (state: WorkspaceState) => panesOf(state.panes!).map((pane) => pane.item)
+const shown = (state: WorkspaceState) => shownIn(state.panes)
 
 const transcript = (
   sessionId: string,
@@ -232,7 +232,9 @@ describe("what goes with a session", () => {
     const two = openBeside(state, { sessionId: "c", room: roomy })
     const failed = transcriptFailed(two, { sessionId: "c", reason: "unavailable" })
     expect(failed.transcriptFailures.c).toBeDefined()
-    const closed = closePane(failed, { pane: paneShowing(failed.panes!, "c")!.key })
+    const closed = closePane(failed, {
+      pane: paneShowingSession(failed.panes!, "c")!.key,
+    })
     expect(closed.transcriptFailures).toEqual({})
   })
 
@@ -295,13 +297,13 @@ describe("what goes with a session", () => {
   it("closes the pane showing a removed session, and starts the last over under the id given", () => {
     const two = openBeside(loaded(), { sessionId: "c", room: roomy })
     const closed = sessionRemoved(two, { sessionId: "c", revision: 3, draftId: "x" })
-    expect(panesOf(closed.panes!).map((pane) => pane.item)).toEqual(["a"])
+    expect(shownIn(closed.panes)).toEqual(["a"])
     const last = sessionRemoved(loaded(), {
       sessionId: "a",
       revision: 3,
       draftId: "fresh",
     })
-    expect(panesOf(last.panes!).map((pane) => pane.item)).toEqual(["fresh"])
+    expect(shownIn(last.panes)).toEqual(["fresh"])
     expect(last.drafts.fresh.channelId).toBe("desktop")
     const chosen = sessionRemoved(
       { ...loaded(), chosenModels: { a: astra } },

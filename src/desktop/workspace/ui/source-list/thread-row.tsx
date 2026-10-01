@@ -2,11 +2,12 @@ import { memo } from "react"
 import { shallowEqual } from "react-redux"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
-  selectContentView,
   selectFocusedSessionId,
+  selectOverviewOpen,
   selectSession,
   selectShownSessionIds,
 } from "../../adapters/store/selectors"
+import { paneItemKey, sessionItem } from "../../model/pane-item"
 import { useNow } from "../../adapters/dom/clock"
 import { isMac } from "../../../adapters/platform"
 import { commandLabel } from "../../../model/keyboard"
@@ -35,10 +36,9 @@ export const ThreadRow = memo(function ThreadRow({
   const { open, focused } = useWorkspaceSelector(
     (state) => ({
       open: selectShownSessionIds(state).includes(sessionId),
-      // The focused pane's, while the panes are shown rather than the Agents overview.
-      focused:
-        selectFocusedSessionId(state) === sessionId &&
-        selectContentView(state) === "panes",
+      // The focused pane's, beside the panes or a widget over them: only the
+      // Agents overview takes the sidebar's choice for itself.
+      focused: selectFocusedSessionId(state) === sessionId && !selectOverviewOpen(state),
     }),
     shallowEqual,
   )
@@ -59,7 +59,7 @@ export const ThreadRow = memo(function ThreadRow({
             data-unread={(kind === "branch" && session.unread) || undefined}
             aria-current={focused ? "page" : undefined}
             // Carried by the pointer to a pane (`split-panes/adapters/dom/drag.ts`).
-            data-drag-item={session.id}
+            data-drag-item={paneItemKey(sessionItem(session.id))}
             onClick={(event) => actions.activate(event, session.id)}
             {...tooltip(
               kind === "branch" && actions.besideKey.on

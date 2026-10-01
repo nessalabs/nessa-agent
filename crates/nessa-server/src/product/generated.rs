@@ -512,6 +512,16 @@ pub struct ConversationTool {
     pub status: String,
     pub details: String,
     pub input: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<ConversationMcpTool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationMcpTool {
+    pub server: String,
+    pub tool: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

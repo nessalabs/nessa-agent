@@ -20,7 +20,7 @@ import {
 import { workspaceActions } from "../../adapters/store/slice"
 import { ClockProvider } from "../../adapters/dom/clock"
 import { emptyTranscript } from "../../model/transcript"
-import { fakeSource, settle, summary, testStore } from "../../testing"
+import { fakeSource, settle, shownBy, summary, testStore } from "../../testing"
 import { Pane } from "./pane"
 
 /**
@@ -175,7 +175,7 @@ describe("a pane renders for its own session only", () => {
     await act(async () => {
       if (target) store.dispatch(focusPane({ pane: target.key }))
     })
-    expect(rendered()).toEqual([target?.item, was].sort())
+    expect(rendered()).toEqual([target && shownBy(target), was].sort())
     // The two panes render their headers; what they show is handed nothing new.
     expect([...contentRenders.keys()]).toEqual([])
   })

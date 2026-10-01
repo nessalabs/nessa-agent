@@ -269,15 +269,17 @@ bounded physical cancellation of uninterruptible storage I/O. Shutdown drains
 and joins the tracked threads before dropping the storage runtime; if the
 shutdown deadline expires it reports retained read work and keeps its owner and
 runtime alive until completion or process termination. A disk that never returns
-therefore leaves shutdown retained indefinitely; a deadline reports failure without
+therefore leaves shutdown retained indefinitely. The shutdown signal completes
+Axum's admission callback independently of this drain, so its listener closes
+while the joined cleanup owner retains the runtime. A deadline reports failure without
 claiming that storage can safely close. A panicked outer worker is a typed fault,
 not an ordinary transient source failure. Completed-worker reaping retains that
 fault and fences subsequent reads; final shutdown joins every remaining handle.
 The process outcome preserves reader, deadline and conversation cleanup causes
-through `ShutdownFailure`, including combined failures. `record_cleanup` is the
+through `ShutdownFailure`, including combined failures. `passive_cleanup` is the
 single composition ordering and report owner: it publishes reader-pending,
 deadline-with-drain-pending, and confirmed-reader/conversation-pending evidence
-before its next await. Interrupted callbacks preserve those known facts while
+before its next await. Interrupted cleanup owners preserve those known facts while
 leaving the remaining completion explicitly unreported. Final aggregation
 consumes the pending reader evidence and conversation result in one synchronous
 publication. The bounded response and
@@ -372,10 +374,10 @@ refusals. Amend this table before adding a newly discovered ordering.
 | R31 | Reader succeeds/fails or misses deadline, conversation cleanup succeeds/fails | Always attempt conversation cleanup after confirmed physical drain; aggregate only failures, retaining both owners and deadline plus eventual panic when present. `shutdown_owner_outcomes_preserve_each_independent_failure` and `reader_deadline_retains_completion_and_does_not_start_storage_cleanup_early` |
 | R32 | Reader completion and deadline are both ready on first poll | Polling the already-ready reader confirms its outcome without inventing a deadline failure. `ready_reader_completion_at_zero_deadline_is_not_labeled_timeout` |
 | R33 | Reader misses deadline but later drain and conversation cleanup succeed | Preserve the elapsed deadline with `completion: Ok(())`; confirmed later cleanup does not erase the earlier failure. `reader_deadline_preserves_successful_drain_and_conversation_cleanup` |
-| R34 | Whole cleanup callback cancelled before reader outcome | `Unreported` means neither reader nor conversation completion is known; do not invent successful cleanup. `cancelled_cleanup_before_reader_outcome_does_not_invent_confirmation` |
-| R35 | Callback cancelled after a reader fault while conversation cleanup waits | Keep confirmed physical drain and typed reader failure in `ConversationsPending`; process error retains it with conversation completion explicitly unreported. `cancelled_cleanup_after_reader_outcome_preserves_known_success_or_failure` |
-| R36 | Callback cancelled after reader success while conversation cleanup waits | Preserve known reader success without inventing conversation success or a reader fault. `cancelled_cleanup_after_reader_outcome_preserves_known_success_or_failure` |
-| R37 | Callback cancelled after reader deadline while physical drain is pending | Preserve elapsed deadline with physical drain unreported and conversations not started; no fabricated eventual completion. `cancelled_cleanup_after_reader_deadline_retains_unknown_physical_completion` |
+| R34 | Whole cleanup owner cancelled before reader outcome | `Unreported` means neither reader nor conversation completion is known; do not invent successful cleanup. `cancelled_cleanup_before_reader_outcome_does_not_invent_confirmation` |
+| R35 | Cleanup owner cancelled after a reader fault while conversation cleanup waits | Keep confirmed physical drain and typed reader failure in `ConversationsPending`; process error retains it with conversation completion explicitly unreported. `cancelled_cleanup_after_reader_outcome_preserves_known_success_or_failure` |
+| R36 | Cleanup owner cancelled after reader success while conversation cleanup waits | Preserve known reader success without inventing conversation success or a reader fault. `cancelled_cleanup_after_reader_outcome_preserves_known_success_or_failure` |
+| R37 | Cleanup owner cancelled after reader deadline while physical drain is pending | Preserve elapsed deadline with physical drain unreported and conversations not started; no fabricated eventual completion. `cancelled_cleanup_after_reader_deadline_retains_unknown_physical_completion` |
 | R38 | First head has no physical identity; valid authenticated selector | Return SDK-owned full scope and actual committed head; receiver stores the scope for pages. No configured product origin/schema preflight. |
 | R39 | Denied selector, missing/deleted conversation, or stale binding | Preserve admission refusal; metadata and source spy counts remain zero. |
 | R40 | Reset between metadata observation and expected source open | SDK refuses identity change; no replacement scope or head is published. |
@@ -390,6 +392,7 @@ refusals. Amend this table before adding a newly discovered ordering.
 | R49 | Shutdown arrives after read admission while identity lookup has not completed; read and shutdown waiters are cancelled | The existing read worker owns the identity lookup and subsequent source operation under one registration. Shutdown fences new reads and waits for that worker; cancelled waiters retain the read lease until the worker finishes. `shutdown_waits_for_identity_work_after_both_waiters_cancel` controls the identity boundary with real SDK storage. |
 | R50 | A passive read refusal (source_preparing, read_timeout or temporarily_unavailable) waits in the record lane under continuously ready higher-priority traffic | Record queue ownership supplies the same absolute deadline for success and refusal payloads. Expiry ends the writer and releases the record slot without fabricating a read lease. `queued_record_refusals_expire_under_continuously_ready_priority` covers each refusal under control, refusal and ordinary traffic; `arriving_record_refusals_interrupt_stalled_priority` covers arrival during a stalled send or close. |
 | R51 | Worker panics with a waiting or cancelled caller; another read or shutdown immediately follows | The tracked thread records the typed panic independently of its caller, then resumes unwinding so physical join evidence is preserved. An observing caller also fences before returning sender loss. Further reads refuse without executing their closure; shutdown retains the panic and waits for physical thread teardown. `reported_worker_panic_fences_reads_and_retains_other_work` checks admission immediately after the reported panic without waiting for `is_finished`, while another tracked physical worker is held; `cancelled_read_waiter_panic_fences_without_reaping` covers caller loss before read panic; `cancelled_read_result_drop_panic_fences_without_reaping` covers cleanup panic in an undeliverable result. |
+| R52 | Process shutdown arrives while a passive reader is blocked | Stop Axum connection admission as soon as the signal arrives. A separate joined cleanup owner retains reader drains and their report before conversation/storage cleanup; the process cannot report completion while the drain is pending. `shutdown_stops_connection_admission_before_a_blocked_reader_drains` uses a real TCP listener and held reader future. The cleanup task result is joined and carried to process composition even if the task panics after publishing its report; `cleanup_owner_panic_is_returned_to_process_composition`. |
 
 
 

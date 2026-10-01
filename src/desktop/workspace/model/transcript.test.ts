@@ -7,10 +7,12 @@ import {
   sameWords,
   titleFrom,
   titleLength,
+  toolWidget,
   unconfirmed,
   type Message,
   type Part,
 } from "./transcript"
+import { sameWidget } from "./widget-ref"
 
 describe("an agent message's parts", () => {
   it("gathers consecutive steps into one group, keeping everything else in order", () => {
@@ -54,6 +56,48 @@ describe("an agent message's parts", () => {
         ],
       }),
     ).toBe("Here: one two")
+  })
+
+  it("passes over a widget when reading a message's text, and ends a group of steps at one", () => {
+    const widget: Part = { kind: "widget", widget: { plugin: "mcp:charts", id: "call" } }
+    const parts: Part[] = [
+      { kind: "step", step: "run", label: "Ran", detail: "chart" },
+      widget,
+      { kind: "step", step: "read", label: "Read" },
+      { kind: "text", text: "Here it is." },
+    ]
+    expect(groupSteps(parts)).toEqual([[parts[0]], widget, [parts[2]], parts[3]])
+    expect(messageText({ id: "m", role: "agent", at: 0, parts })).toBe("Here it is.")
+  })
+})
+
+describe("a tool call's widget", () => {
+  const call = { executionId: "run", toolId: "call-1" }
+  const ui = { server: "charts", tool: "show", resourceUri: "ui://charts/view.html" }
+
+  it("is the MCP server's app drawing that call, when the tool declared a UI", () => {
+    expect(toolWidget({ ...call, mcp: ui })).toEqual({
+      kind: "widget",
+      widget: { plugin: "mcp:charts", id: JSON.stringify(["run", "call-1"]) },
+    })
+  })
+
+  it("is none for a tool without UI, an MCP tool without one, or a harness that did not say", () => {
+    expect(toolWidget(call)).toBeNull()
+    expect(toolWidget({ ...call, mcp: { server: "charts", tool: "show" } })).toBeNull()
+    expect(toolWidget({ ...call, mcp: { ...ui, resourceUri: "" } })).toBeNull()
+  })
+
+  it("names each call apart, however its identities are spelt", () => {
+    const one = toolWidget({ executionId: "a:b", toolId: "c", mcp: ui })!
+    const other = toolWidget({ executionId: "a", toolId: "b:c", mcp: ui })!
+    expect(sameWidget(one.widget, other.widget)).toBe(false)
+    expect(
+      sameWidget(
+        one.widget,
+        toolWidget({ executionId: "a:b", toolId: "c", mcp: ui })!.widget,
+      ),
+    ).toBe(true)
   })
 })
 

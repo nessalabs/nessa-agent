@@ -67,7 +67,7 @@ impl PassiveReaderShutdownFailure {
 /// Cleanup failures retain each reader's operation and cause.
 #[derive(Debug)]
 pub enum ShutdownFailure {
-    /// Callback ended while physical drain remained unknown. Conversation cleanup had not started.
+    /// Cleanup owner ended while physical drain remained unknown. Conversation cleanup had not started.
     ReadersUnreported { outcomes: PassiveReaderOutcomes },
     /// Both readers drained; conversation cleanup remains unknown.
     ConversationsUnreported {

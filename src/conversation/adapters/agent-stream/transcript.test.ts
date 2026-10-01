@@ -275,3 +275,20 @@ it("preserves provider message boundaries, steering positions and exact chunk wh
     result.events,
   )
 })
+it("carries an MCP tool's structured result beside its text, and none where it has none", () => {
+  const result = (extra: Partial<typeof tool>) =>
+    [
+      ...agentTranscript("chat", turns, [{ ...tool, ...extra }]).resultByCallId.values(),
+    ][0]
+  expect(
+    result({
+      mcp: { server: "charts", tool: "show" },
+      structuredContent: '{"rows":[1,2]}',
+    }),
+  ).toMatchObject({ text: tool.details, structured: { rows: [1, 2] } })
+  expect(result({})?.structured).toBeNull()
+  expect(result({ structuredContent: "not json" })).toMatchObject({
+    text: tool.details,
+    structured: null,
+  })
+})

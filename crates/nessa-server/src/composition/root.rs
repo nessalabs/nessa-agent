@@ -14,7 +14,7 @@ use crate::{
     },
     env::UptimeBackend,
 };
-use axum::Extension;
+use axum::{serve::Listener, Extension, Router};
 use nessa_gateway_endpoint::{
     application::PublishGatewayEndpoint,
     domain::{
@@ -23,11 +23,13 @@ use nessa_gateway_endpoint::{
     infrastructure::FileEndpointPublication,
 };
 use std::future::Future;
-use std::io::Write;
+use std::io::{Error, Write};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
+use tokio::{net::TcpStream, task::JoinError};
 use uuid::Uuid;
 
 pub struct CompositionRoot;
@@ -291,19 +293,17 @@ impl CompositionRoot {
                 }
             });
         }
-        // Axum's graceful-shutdown callback has nowhere to return a failure, and
-        // the process exiting zero would report cleanup this never confirmed.
-        // The outcome is carried back out of the callback instead of logged away.
-        //
-        // The slot is armed before shutdown is awaited and cleared only by a
-        // confirmed stop, so a callback that panics partway leaves it armed:
-        // never hearing back is its own fact, and it is not confirmation.
-        let report: Arc<Mutex<ShutdownReport>> = Arc::new(Mutex::new(ShutdownReport::Confirmed));
+        // Admission stops independently of physical reader drain. The process
+        // joins the cleanup owner and carries its retained report into its exit.
+        // A panic before publication leaves the report unconfirmed.
+        let report: Arc<Mutex<ShutdownReport>> = Arc::new(Mutex::new(ShutdownReport::Unreported));
         let slot = report.clone();
-        let served = axum::serve(listener, router)
-            .with_graceful_shutdown(async move {
-                shutdown_signal().await;
-                let Some(service) = conversations else { return };
+        let (served, cleanup) =
+            serve_with_cleanup(listener, router, shutdown_signal(), async move {
+                let Some(service) = conversations else {
+                    record_shutdown(&slot, ShutdownReport::Confirmed);
+                    return;
+                };
                 passive_cleanup(
                     &slot,
                     async {
@@ -324,8 +324,34 @@ impl CompositionRoot {
                 .await;
             })
             .await;
-        serve_outcome(served, &report)
+        let cleanup = cleanup.map_err(|error| {
+            tracing::error!(%error, "gateway cleanup owner failed");
+            RunError::Shutdown(None)
+        });
+        serve_outcome(served, &report)?;
+        cleanup
     }
+}
+
+/// Signal Axum before waiting for cleanup; retain and join the cleanup task.
+async fn serve_with_cleanup(
+    listener: impl Listener<Io = TcpStream, Addr = SocketAddr>,
+    router: Router,
+    signal: impl Future<Output = ()> + Send + 'static,
+    cleanup: impl Future<Output = ()> + Send + 'static,
+) -> (Result<(), Error>, Result<(), JoinError>) {
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let cleanup = tokio::spawn(async move {
+        signal.await;
+        let _ = stop.send(());
+        cleanup.await;
+    });
+    let served = axum::serve(listener, router)
+        .with_graceful_shutdown(async move {
+            let _ = stopped.await;
+        })
+        .await;
+    (served, cleanup.await)
 }
 
 /// This process's result, from serving and from what shutdown reported.
@@ -343,7 +369,7 @@ fn serve_outcome(
     unconfirmed
 }
 
-/// What the one graceful-shutdown callback has established so far.
+/// What the joined cleanup owner has established so far.
 #[derive(Debug)]
 enum ShutdownReport {
     /// All owners confirmed cleanup, or no cleanup began.
@@ -532,6 +558,129 @@ mod tests {
         sync::atomic::{AtomicBool, Ordering},
         task::Poll,
     };
+    use tokio::{
+        net::TcpListener,
+        sync::{
+            oneshot::{self, Sender},
+            Notify,
+        },
+    };
+
+    #[tokio::test]
+    async fn shutdown_stops_connection_admission_before_a_blocked_reader_drains() {
+        struct ObservedListener {
+            inner: Option<TcpListener>,
+            closed: Option<Sender<()>>,
+        }
+        impl Listener for ObservedListener {
+            type Io = TcpStream;
+            type Addr = SocketAddr;
+            async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+                Listener::accept(self.inner.as_mut().unwrap()).await
+            }
+            fn local_addr(&self) -> std::io::Result<Self::Addr> {
+                self.inner.as_ref().unwrap().local_addr()
+            }
+        }
+        impl Drop for ObservedListener {
+            fn drop(&mut self) {
+                drop(self.inner.take());
+                let _ = self.closed.take().unwrap().send(());
+            }
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (closed, stop) = oneshot::channel();
+        let listener = ObservedListener {
+            inner: Some(listener),
+            closed: Some(closed),
+        };
+        let router = Router::new().route("/health", axum::routing::get(|| async { "ready" }));
+        let report = Arc::new(Mutex::new(ShutdownReport::Confirmed));
+        let slot = report.clone();
+        let (signal, shutdown) = oneshot::channel();
+        let (release, reader) = oneshot::channel();
+        let entered = Arc::new(Notify::new());
+        let started = entered.clone();
+        let conversations = Arc::new(AtomicBool::new(false));
+        let cleaned = conversations.clone();
+        let task = tokio::spawn(serve_with_cleanup(
+            listener,
+            router,
+            async move {
+                shutdown.await.unwrap();
+            },
+            async move {
+                passive_cleanup(
+                    &slot,
+                    async {
+                        started.notify_one();
+                        reader.await.unwrap();
+                        Ok(())
+                    },
+                    async { Ok(()) },
+                    async {
+                        cleaned.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
+                    Duration::from_secs(30),
+                )
+                .await;
+            },
+        ));
+        // Prove the same listener admits before the shutdown signal.
+        drop(TcpStream::connect(address).await.unwrap());
+        signal.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), entered.notified())
+            .await
+            .unwrap();
+        let admission_stopped = tokio::time::timeout(Duration::from_secs(2), stop)
+            .await
+            .is_ok();
+        let prematurely_finished = task.is_finished();
+        let conversations_started = conversations.load(Ordering::SeqCst);
+        release.send(()).unwrap();
+        let (served, cleanup) = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        served.unwrap();
+        cleanup.unwrap();
+        assert!(
+            admission_stopped,
+            "listener remained open while reader cleanup was blocked"
+        );
+        assert!(!prematurely_finished);
+        assert!(!conversations_started);
+        assert!(conversations.load(Ordering::SeqCst));
+        assert!(shutdown_result(&report).is_ok());
+    }
+
+    #[tokio::test]
+    async fn cleanup_owner_panic_is_returned_to_process_composition() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let report = Arc::new(Mutex::new(ShutdownReport::Unreported));
+        let slot = report.clone();
+        let (served, cleanup) = tokio::time::timeout(
+            Duration::from_secs(2),
+            serve_with_cleanup(listener, Router::new(), async {}, async move {
+                passive_cleanup(
+                    &slot,
+                    async { Ok(()) },
+                    async { Ok(()) },
+                    async { Ok(()) },
+                    Duration::from_secs(30),
+                )
+                .await;
+                panic!("unexpected cleanup fault after publication");
+            }),
+        )
+        .await
+        .unwrap();
+        served.unwrap();
+        assert!(shutdown_result(&report).is_ok());
+        assert!(cleanup.unwrap_err().is_panic());
+    }
 
     #[tokio::test]
     async fn shutdown_owner_outcomes_preserve_each_independent_failure() {
@@ -595,7 +744,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn gated_second_reader_retains_first_fault_deadline_and_eventual_both_causes() {
-        let (release, waiting) = tokio::sync::oneshot::channel();
+        let (release, waiting) = oneshot::channel();
         let report = Arc::new(Mutex::new(ShutdownReport::Confirmed));
         let output = report.clone();
         let cleaned = Arc::new(AtomicBool::new(false));
@@ -783,7 +932,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn cancelled_conversation_after_deadline_retains_both_reader_results() {
         let report = Mutex::new(ShutdownReport::Confirmed);
-        let (release, waiting) = tokio::sync::oneshot::channel();
+        let (release, waiting) = oneshot::channel();
         {
             let stop = passive_cleanup(
                 &report,
@@ -975,7 +1124,7 @@ mod tests {
 
     #[test]
     fn a_shutdown_that_never_reported_is_not_treated_as_confirmed() {
-        // Armed before the await and never cleared: the callback did not finish.
+        // Armed before the await and never cleared: the cleanup owner did not finish.
         let unreported = Mutex::new(ShutdownReport::Unreported);
         let error = shutdown_result(&unreported).unwrap_err();
         assert!(matches!(error, RunError::Shutdown(None)));

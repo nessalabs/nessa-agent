@@ -123,3 +123,48 @@ app widgets alike.
   directory; the `openai/*` extensions Nessa chooses to support.
 - Work: #346, #347, #348, #349 in nessa-agent; nessa-extensions #1–#7. Part of
   #345.
+
+## What each harness passes through ACP
+
+A spike for #347, first read from the pinned harnesses' bundled code and then
+**observed** in live turns: a real gateway, the real harness, a real model, and
+the test MCP server `scripts/mcp-test-server/` configured as `mcptest`, with
+every ACP frame and every MCP frame recorded (`live-check.mjs`, 2026-10-01).
+Claude ran `@agentclientprotocol/claude-agent-acp` 0.76.0 on `claude-sonnet-5`;
+Codex ran `@agentclientprotocol/codex-acp` 1.12.0 (codex 0.154.0) on
+`gpt-5.6-terra`. Opencode 1.18.31 could not be run: the gateway refuses it
+without an OpenCode credential, and this machine has none, so its column is
+still read from its compiled bundle. The recorded frames are the SDK parser
+tests' fixtures (`tests/infrastructure/{claude_acp,codex_acp}/tools/fixtures/`).
+
+| | Claude ACP 0.76.0 (observed) | Codex ACP 1.12.0 (observed) | Opencode 1.18.31 (from bundled code) |
+| --- | --- | --- | --- |
+| Server and tool | `_meta.claudeCode.toolName` is `mcp__<server>__<tool>` on every frame, and `title` on the announcement and the frames that restate input, each name with `[^A-Za-z0-9_-]` replaced by `_`: `rows.get` arrives as `rows_get`; kind `other`. Only a configured prefix says where the server ends: Nessa's server names hold no `__` but may end in `_`. In the run, each MCP call was preceded by a `ToolSearch` call that loaded its schema (the fixture keeps the first) | `rawInput.{server, tool}` exactly (`rows.get` kept); title `mcp.<server>.<tool>`, kind `execute`; `_meta.is_mcp_tool_call` on the announcement only, which is `in_progress`; a bare `{status: in_progress}` update follows; the completion repeats `rawInput` without the marker | title `<server>_<tool>` after the same replacement, kind `other`, no `_meta`: cannot be split |
+| The tool's `_meta` (`ui.resourceUri`) | **not passed on**: no `ui://` or `resourceUri` in any frame | **not passed on**: no `ui://` or `resourceUri` in any frame | not passed on |
+| The result's `_meta` | not in any `session/update` | `rawOutput.result._meta` (`null` when the result has none) | dropped |
+| `structuredContent` | replaces the result's text as JSON text, in `content`, `rawOutput`, and a separate update's `_meta.claudeCode.toolResponse`: indistinguishable from text | `rawOutput.result.structuredContent`, verbatim (`null` when absent) | JSON text only when there is no other content |
+| resource, resource_link | turned into text: `[Resource link: <name>] <uri>`, `[Resource from <server> at <uri>] <text>`; never an ACP `resource` or `resource_link` block | verbatim inside `rawOutput.result.content`; no ACP content at all for an MCP call | resource text becomes text; links dropped |
+| `isError` | the call ends `failed`; `rawOutput` is the error text | the call ends `failed`; `rawOutput.result` has no `isError` field | — |
+| `rawOutput` | the result text (a string), or the text blocks | `{result: {content, structuredContent, _meta} \| null, error: {message} \| null}` | `{output, metadata?, attachments?}` |
+
+Seen once, not explained: in two of three Codex runs the model answered that
+the `mcptest` tools were not available, though codex had started the server;
+the third run, with the server's traffic recorded, called all five. Codex run
+directly (`codex exec`) behaved the same way once. Unverified: Opencode, live.
+
+What #347 builds on it: the SDK carries an MCP call's server and tool
+(`McpTool`) from Claude, split at the one configured prefix that fits (its tool
+name in the harness's replaced spelling), and from Codex's `rawInput` exactly,
+and names none for Opencode; it carries a Codex MCP result
+— its text blocks, and its `structuredContent` bounded as a structured result —
+where before a finished Codex MCP call showed nothing. Only Codex's announcement
+carries the MCP marker; its completion, which carries the result, does not
+(`index.js:25123-25130`), so the adapter remembers the marking per call. Both reach the window on
+`ConversationTool` (`mcp`, `structuredContent`).
+
+What it does not: **no harness passes the tool's UI resource through ACP**, so a
+tool's `_meta.ui.resourceUri` comes from the server itself, over the gateway's
+own connection (#346) — the connection this record already decides the gateway
+owns. Until then no call is known to have UI, and the desktop's widget part
+(`toolWidget` in `workspace/model/transcript.ts`) is never produced; a call's
+text result is shown as before.

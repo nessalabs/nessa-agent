@@ -11,7 +11,6 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::{
     executions::ExecutionId, permissions::PermissionId, sessions::ExecutionSessionId,
-    tools::ToolCallUpdate,
 };
 use intervals::{IntervalUndo, Intervals};
 use std::{collections::HashMap, mem::size_of};
@@ -69,14 +68,7 @@ impl Witness {
                 options,
             } => {
                 ExecutionController::validate_tool_payload(observation.payload_bytes())?;
-                let update = ToolCallUpdate::new(
-                    tool_id.clone(),
-                    observation.title().clone(),
-                    *observation.kind(),
-                    *observation.status(),
-                    observation.locations().clone(),
-                    observation.content().clone(),
-                );
+                let update = observation.as_update(tool_id.clone());
                 let (cost, controller) = self.controller.retain_historical_review(
                     event.execution_id(),
                     id.clone(),
@@ -151,7 +143,7 @@ mod tests {
             PermissionRequest, PermissionScope,
         },
         sessions::ExecutionSession,
-        tools::{ToolCallId, ToolObservation},
+        tools::{ToolCallId, ToolCallUpdate, ToolObservation},
     };
     fn execution() -> ExecutionId {
         ExecutionId::new("execution").unwrap()

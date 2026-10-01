@@ -7,6 +7,7 @@ use super::{
     ConversationDependencies, ConversationLifecycle, ConversationLifecyclePhase,
     ConversationLimits, ConversationMessageStatus, ConversationService, PermissionDenialSupport,
     ProviderSessionErasers, RequestedConversation, SubmissionMode, SubmittedMessage,
+    MAX_STRUCTURED_CONTENT_BYTES,
 };
 use crate::{
     conversation::domain::ConversationId,
@@ -52,7 +53,7 @@ use nessa_sdk::{
             AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId, MAX_OPEN_ASK_COST,
         },
         sessions::{ExecutionSessionId, ProviderContext, SessionId},
-        tools::{ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
+        tools::{McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
     },
 };
 use std::{sync::Arc, time::Duration};
@@ -647,6 +648,176 @@ async fn protocol_failure_after_partial_tool_preserves_observation_across_termin
         true,
     )
     .await;
+}
+
+fn committed_tool_view(events: &[ExecutionEvent]) -> super::ConversationView {
+    let snapshot = completed_snapshot("execution", events.to_vec());
+    let capabilities = projection().read().capabilities;
+    bound_view(Projection::new("conversation".into(), capabilities, Some(&snapshot)).read())
+}
+
+#[test]
+fn an_mcp_tool_carries_its_identity_and_structured_result_beside_its_text() {
+    let mut events = Vec::new();
+    let tool = ToolCallId::new("chart").unwrap();
+    let json = r#"{"rows":[1,2]}"#;
+    events.push(event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            tool.clone(),
+            Some("mcp.charts.show".into()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
+    )));
+    // A later update naming nothing keeps the identity.
+    events.push(event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            tool.clone(),
+            None,
+            None,
+            Some(ToolStatus::Completed),
+            None,
+            None,
+        )
+        .with_content(vec![
+            ToolContent::text("Two rows."),
+            ToolContent::structured(json).unwrap(),
+        ]),
+    )));
+    let view = committed_tool_view(&events);
+    let mcp = view.tools[0].mcp.as_ref().unwrap();
+    assert_eq!((mcp.server.as_str(), mcp.tool.as_str()), ("charts", "show"));
+    assert_eq!(view.tools[0].structured_content.as_deref(), Some(json));
+    assert_eq!(view.tools[0].details, "Two rows.");
+    let wire = serde_json::to_value(&view.tools[0]).unwrap();
+    assert_eq!(
+        wire["mcp"],
+        serde_json::json!({"server":"charts","tool":"show"})
+    );
+    assert_eq!(wire["structuredContent"], json);
+
+    // Past the view's bound it is said, not cut; content replaced without one
+    // no longer has one.
+    let large = format!("\"{}\"", "a".repeat(MAX_STRUCTURED_CONTENT_BYTES));
+    events.push(event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(tool.clone(), None, None, None, None, None)
+            .with_content(vec![ToolContent::structured(large).unwrap()]),
+    )));
+    let view = committed_tool_view(&events);
+    // Left out, not cut; the details are what the text said, here nothing.
+    assert_eq!(view.tools[0].structured_content, None);
+    assert_eq!(view.tools[0].details, "");
+    events.push(event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+        tool,
+        None,
+        None,
+        None,
+        None,
+        Some(vec![ToolContent::structured(json).unwrap()]),
+    ))));
+    events.push(event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+        ToolCallId::new("chart").unwrap(),
+        None,
+        None,
+        None,
+        None,
+        Some(vec![ToolContent::text("plain")]),
+    ))));
+    assert_eq!(
+        committed_tool_view(&events).tools[0].structured_content,
+        None
+    );
+}
+
+#[test]
+fn a_structured_result_after_long_text_is_kept_and_the_last_one_reported_wins() {
+    let mut events = Vec::new();
+    let json = r#"{"rows":2}"#;
+    events.push(event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+        ToolCallId::new("chart").unwrap(),
+        None,
+        None,
+        None,
+        None,
+        Some(vec![
+            ToolContent::text("a".repeat(12_000)),
+            ToolContent::text("b".repeat(12_000)),
+            ToolContent::structured(format!("\"{}\"", "c".repeat(MAX_STRUCTURED_CONTENT_BYTES)))
+                .unwrap(),
+            ToolContent::structured(json).unwrap(),
+        ]),
+    ))));
+    let view = committed_tool_view(&events);
+    let tool = &view.tools[0];
+    assert_eq!(tool.structured_content.as_deref(), Some(json));
+    assert!(tool.details.ends_with("[Output truncated]"));
+}
+
+#[test]
+fn a_view_past_its_budget_gives_up_structured_results_before_any_message() {
+    let mut events = Vec::new();
+    events.push(event(ExecutionUpdate::Message(MessageChunk::text(
+        "Charted.",
+    ))));
+    let json = format!("\"{}\"", "s".repeat(MAX_STRUCTURED_CONTENT_BYTES - 2));
+    for index in 0..3 {
+        events.push(event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+            ToolCallId::new(format!("chart-{index}")).unwrap(),
+            None,
+            None,
+            None,
+            None,
+            Some(vec![
+                ToolContent::text("d".repeat(12_000)),
+                ToolContent::structured(json.clone()).unwrap(),
+            ]),
+        ))));
+    }
+    let view = committed_tool_view(&events);
+    assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
+    // Nothing of the history was left out, so the view does not say it was.
+    assert!(!view.truncated);
+    assert_eq!(view.messages.len(), 1);
+    assert_eq!(view.messages[0].parts.len(), 4);
+    assert_eq!(view.tools.len(), 3);
+    // Oldest first: the earliest tools give theirs up, their details as they
+    // were; what still fits is kept.
+    assert_eq!(view.tools[0].structured_content, None);
+    assert_eq!(view.tools[0].details, "d".repeat(12_000));
+    assert_eq!(
+        view.tools[2].structured_content.as_deref(),
+        Some(json.as_str())
+    );
+}
+
+#[test]
+fn a_tool_without_an_mcp_identity_is_written_as_before() {
+    let events = vec![event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+        ToolCallId::new("shell").unwrap(),
+        Some("Shell".into()),
+        None,
+        None,
+        None,
+        Some(vec![ToolContent::text("out")]),
+    )))];
+    let wire = serde_json::to_value(&committed_tool_view(&events).tools[0]).unwrap();
+    let mut keys: Vec<_> = wire.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "details",
+            "executionId",
+            "input",
+            "kind",
+            "status",
+            "title",
+            "toolId"
+        ]
+    );
 }
 
 fn asked(execution: &str, question: &str) -> ExecutionEvent {

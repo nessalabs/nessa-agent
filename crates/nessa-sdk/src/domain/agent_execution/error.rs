@@ -23,6 +23,15 @@ pub enum ExecutionError {
     },
     /// A path description is empty or contains a NUL byte.
     InvalidPath,
+    /// An MCP server or tool name holds whitespace or a control character, so
+    /// it cannot be shown on one line or compared as the name it was given as.
+    /// Identifies which of the two.
+    InvalidMcpToolName(&'static str),
+    /// A structured tool result is not one JSON value.
+    InvalidStructuredResult,
+    /// An update names a different MCP server or tool than the one already
+    /// observed for this tool call. The first identity stands.
+    DifferentMcpTool,
     /// A linked file's path does not start at the root. Only an absolute path
     /// names a file, because the agent's working directory is not the caller's.
     RelativeFilePath,

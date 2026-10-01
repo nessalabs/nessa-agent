@@ -1,0 +1,419 @@
+{
+ "recorded": "Live run through the Nessa gateway (scripts/mcp-test-server/live-check.mjs claude), 2026-10-01 UTC: @agentclientprotocol/claude-agent-acp 0.76.0 on claude-sonnet-5, MCP server scripts/mcp-test-server/server.mjs configured as \"mcptest\". Frames are the session/update tool updates exactly as the harness sent them, grouped by tool.",
+ "calls": {
+  "ToolSearch": [
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "ToolSearch"
+     }
+    },
+    "toolCallId": "toolu_01WJonyGGTaKk8AioLrRFspG",
+    "sessionUpdate": "tool_call",
+    "rawInput": {},
+    "status": "pending",
+    "title": "ToolSearch",
+    "kind": "other",
+    "content": []
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "ToolSearch"
+     }
+    },
+    "toolCallId": "toolu_01WJonyGGTaKk8AioLrRFspG",
+    "sessionUpdate": "tool_call_update",
+    "rawInput": {
+     "query": "select:mcp__mcptest__report_rows"
+    },
+    "title": "ToolSearch",
+    "kind": "other"
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "ToolSearch"
+     }
+    },
+    "toolCallId": "toolu_01WJonyGGTaKk8AioLrRFspG",
+    "sessionUpdate": "tool_call_update",
+    "rawInput": {
+     "query": "select:mcp__mcptest__report_rows",
+     "max_results": 1
+    },
+    "title": "ToolSearch",
+    "kind": "other",
+    "content": []
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolResponse": {
+       "matches": [
+        "mcp__mcptest__report_rows"
+       ],
+       "query": "select:mcp__mcptest__report_rows",
+       "total_deferred_tools": 12
+      },
+      "toolName": "ToolSearch"
+     }
+    },
+    "toolCallId": "toolu_01WJonyGGTaKk8AioLrRFspG",
+    "sessionUpdate": "tool_call_update"
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "ToolSearch"
+     }
+    },
+    "toolCallId": "toolu_01WJonyGGTaKk8AioLrRFspG",
+    "sessionUpdate": "tool_call_update",
+    "status": "completed",
+    "rawOutput": [
+     {
+      "type": "tool_reference",
+      "tool_name": "mcp__mcptest__report_rows"
+     }
+    ],
+    "content": [
+     {
+      "type": "content",
+      "content": {
+       "type": "text",
+       "text": "Tool: mcp__mcptest__report_rows"
+      }
+     }
+    ]
+   }
+  ],
+  "mcp__mcptest__report_rows": [
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__report_rows"
+     }
+    },
+    "toolCallId": "toolu_01BGMeoVQ9c4EZds3Fzywdcb",
+    "sessionUpdate": "tool_call",
+    "rawInput": {},
+    "status": "pending",
+    "title": "mcp__mcptest__report_rows",
+    "kind": "other",
+    "content": []
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__report_rows"
+     }
+    },
+    "toolCallId": "toolu_01BGMeoVQ9c4EZds3Fzywdcb",
+    "sessionUpdate": "tool_call_update",
+    "rawInput": {},
+    "title": "mcp__mcptest__report_rows",
+    "kind": "other",
+    "content": []
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolResponse": "{\"rows\":[{\"id\":1,\"name\":\"alpha\",\"value\":10},{\"id\":2,\"name\":\"beta\",\"value\":20}],\"total\":30}",
+      "toolName": "mcp__mcptest__report_rows"
+     }
+    },
+    "toolCallId": "toolu_01BGMeoVQ9c4EZds3Fzywdcb",
+    "sessionUpdate": "tool_call_update"
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__report_rows"
+     }
+    },
+    "toolCallId": "toolu_01BGMeoVQ9c4EZds3Fzywdcb",
+    "sessionUpdate": "tool_call_update",
+    "status": "completed",
+    "rawOutput": "{\"rows\":[{\"id\":1,\"name\":\"alpha\",\"value\":10},{\"id\":2,\"name\":\"beta\",\"value\":20}],\"total\":30}",
+    "content": [
+     {
+      "type": "content",
+      "content": {
+       "type": "text",
+       "text": "{\"rows\":[{\"id\":1,\"name\":\"alpha\",\"value\":10},{\"id\":2,\"name\":\"beta\",\"value\":20}],\"total\":30}"
+      }
+     }
+    ]
+   }
+  ],
+  "mcp__mcptest__link_resources": [
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__link_resources"
+     }
+    },
+    "toolCallId": "toolu_01Jz3j2TyNGoE85dHnYSkpVQ",
+    "sessionUpdate": "tool_call",
+    "rawInput": {},
+    "status": "pending",
+    "title": "mcp__mcptest__link_resources",
+    "kind": "other",
+    "content": []
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__link_resources"
+     }
+    },
+    "toolCallId": "toolu_01Jz3j2TyNGoE85dHnYSkpVQ",
+    "sessionUpdate": "tool_call_update",
+    "rawInput": {},
+    "title": "mcp__mcptest__link_resources",
+    "kind": "other",
+    "content": []
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolResponse": [
+       {
+        "type": "text",
+        "text": "One link and one embedded resource follow."
+       },
+       {
+        "type": "text",
+        "text": "[Resource link: rows.csv] file:///nessa-test/rows.csv"
+       },
+       {
+        "type": "text",
+        "text": "[Resource from mcptest at file:///nessa-test/notes.txt] Embedded note from nessa-test."
+       }
+      ],
+      "toolName": "mcp__mcptest__link_resources"
+     }
+    },
+    "toolCallId": "toolu_01Jz3j2TyNGoE85dHnYSkpVQ",
+    "sessionUpdate": "tool_call_update"
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__link_resources"
+     }
+    },
+    "toolCallId": "toolu_01Jz3j2TyNGoE85dHnYSkpVQ",
+    "sessionUpdate": "tool_call_update",
+    "status": "completed",
+    "rawOutput": [
+     {
+      "type": "text",
+      "text": "One link and one embedded resource follow."
+     },
+     {
+      "type": "text",
+      "text": "[Resource link: rows.csv] file:///nessa-test/rows.csv"
+     },
+     {
+      "type": "text",
+      "text": "[Resource from mcptest at file:///nessa-test/notes.txt] Embedded note from nessa-test."
+     }
+    ],
+    "content": [
+     {
+      "type": "content",
+      "content": {
+       "type": "text",
+       "text": "One link and one embedded resource follow."
+      }
+     },
+     {
+      "type": "content",
+      "content": {
+       "type": "text",
+       "text": "[Resource link: rows.csv] file:///nessa-test/rows.csv"
+      }
+     },
+     {
+      "type": "content",
+      "content": {
+       "type": "text",
+       "text": "[Resource from mcptest at file:///nessa-test/notes.txt] Embedded note from nessa-test."
+      }
+     }
+    ]
+   }
+  ],
+  "mcp__mcptest__rows_get": [
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__rows_get"
+     }
+    },
+    "toolCallId": "toolu_01Rh4fxVFM6SucUJGvrC8Zr5",
+    "sessionUpdate": "tool_call",
+    "rawInput": {},
+    "status": "pending",
+    "title": "mcp__mcptest__rows_get",
+    "kind": "other",
+    "content": []
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__rows_get"
+     }
+    },
+    "toolCallId": "toolu_01Rh4fxVFM6SucUJGvrC8Zr5",
+    "sessionUpdate": "tool_call_update",
+    "rawInput": {
+     "id": 2
+    },
+    "title": "mcp__mcptest__rows_get",
+    "kind": "other",
+    "content": []
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolResponse": "{\"id\":2,\"name\":\"beta\",\"value\":20}",
+      "toolName": "mcp__mcptest__rows_get"
+     }
+    },
+    "toolCallId": "toolu_01Rh4fxVFM6SucUJGvrC8Zr5",
+    "sessionUpdate": "tool_call_update"
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__rows_get"
+     }
+    },
+    "toolCallId": "toolu_01Rh4fxVFM6SucUJGvrC8Zr5",
+    "sessionUpdate": "tool_call_update",
+    "status": "completed",
+    "rawOutput": "{\"id\":2,\"name\":\"beta\",\"value\":20}",
+    "content": [
+     {
+      "type": "content",
+      "content": {
+       "type": "text",
+       "text": "{\"id\":2,\"name\":\"beta\",\"value\":20}"
+      }
+     }
+    ]
+   }
+  ],
+  "mcp__mcptest__always_fails": [
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__always_fails"
+     }
+    },
+    "toolCallId": "toolu_01BgGqBRozGpM97xNcgLWGo5",
+    "sessionUpdate": "tool_call",
+    "rawInput": {},
+    "status": "pending",
+    "title": "mcp__mcptest__always_fails",
+    "kind": "other",
+    "content": []
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__always_fails"
+     }
+    },
+    "toolCallId": "toolu_01BgGqBRozGpM97xNcgLWGo5",
+    "sessionUpdate": "tool_call_update",
+    "rawInput": {},
+    "title": "mcp__mcptest__always_fails",
+    "kind": "other",
+    "content": []
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__always_fails"
+     }
+    },
+    "toolCallId": "toolu_01BgGqBRozGpM97xNcgLWGo5",
+    "sessionUpdate": "tool_call_update",
+    "status": "failed",
+    "rawOutput": "This tool always fails, on purpose.",
+    "content": [
+     {
+      "type": "content",
+      "content": {
+       "type": "text",
+       "text": "```\nThis tool always fails, on purpose.\n```"
+      }
+     }
+    ]
+   }
+  ],
+  "mcp__mcptest__show_chart": [
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__show_chart"
+     }
+    },
+    "toolCallId": "toolu_01K5Fgg2FaFnWbnXxJ2cDxEm",
+    "sessionUpdate": "tool_call",
+    "rawInput": {},
+    "status": "pending",
+    "title": "mcp__mcptest__show_chart",
+    "kind": "other",
+    "content": []
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__show_chart"
+     }
+    },
+    "toolCallId": "toolu_01K5Fgg2FaFnWbnXxJ2cDxEm",
+    "sessionUpdate": "tool_call_update",
+    "rawInput": {},
+    "title": "mcp__mcptest__show_chart",
+    "kind": "other",
+    "content": []
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolResponse": "{\"series\":[{\"name\":\"alpha\",\"value\":10},{\"name\":\"beta\",\"value\":20}]}",
+      "toolName": "mcp__mcptest__show_chart"
+     }
+    },
+    "toolCallId": "toolu_01K5Fgg2FaFnWbnXxJ2cDxEm",
+    "sessionUpdate": "tool_call_update"
+   },
+   {
+    "_meta": {
+     "claudeCode": {
+      "toolName": "mcp__mcptest__show_chart"
+     }
+    },
+    "toolCallId": "toolu_01K5Fgg2FaFnWbnXxJ2cDxEm",
+    "sessionUpdate": "tool_call_update",
+    "status": "completed",
+    "rawOutput": "{\"series\":[{\"name\":\"alpha\",\"value\":10},{\"name\":\"beta\",\"value\":20}]}",
+    "content": [
+     {
+      "type": "content",
+      "content": {
+       "type": "text",
+       "text": "{\"series\":[{\"name\":\"alpha\",\"value\":10},{\"name\":\"beta\",\"value\":20}]}"
+      }
+     }
+    ]
+   }
+  ]
+ }
+}

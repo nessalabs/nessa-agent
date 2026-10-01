@@ -1,9 +1,10 @@
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationAsked,
     ConversationCapabilities, ConversationLifecycle, ConversationLifecyclePhase,
-    ConversationMessage, ConversationMessageStatus, ConversationPart, ConversationPending,
-    ConversationPendingMode, ConversationPermission, ConversationPermissionOption,
-    ConversationQuestion, ConversationTool, ConversationTranscriptState, ConversationView,
+    ConversationMcpTool, ConversationMessage, ConversationMessageStatus, ConversationPart,
+    ConversationPending, ConversationPendingMode, ConversationPermission,
+    ConversationPermissionOption, ConversationQuestion, ConversationTool,
+    ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use crate::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
@@ -752,6 +753,8 @@ impl Projection {
                         title: "Tool".into(),
                         kind: String::new(),
                         status: "pending".into(),
+                        mcp: None,
+                        structured_content: None,
                     });
                     self.view.tools.last_mut().unwrap()
                 };
@@ -776,10 +779,29 @@ impl Projection {
                     }
                     .into();
                 }
+                if let Some(mcp) = update.mcp_tool() {
+                    tool.mcp = Some(ConversationMcpTool {
+                        server: mcp.server().into(),
+                        tool: mcp.tool().into(),
+                    });
+                }
                 if let Some(content) = update.content() {
+                    // The structured result is read apart from the text, so a
+                    // long text cannot push it out; the last one reported is
+                    // the result's. Replaced with the content, as details are.
+                    // Past the bound it is left out, never cut: JSON cut short
+                    // is not JSON, and its text is in the details either way.
+                    let structured = content.iter().rev().find_map(|item| match item.view() {
+                        ToolContentView::Structured(json) => Some(json),
+                        _ => None,
+                    });
+                    tool.structured_content = structured
+                        .filter(|json| json.len() <= MAX_STRUCTURED_CONTENT_BYTES)
+                        .map(str::to_owned);
                     let mut details = String::new();
                     for item in content {
                         let text = match item.view() {
+                            ToolContentView::Structured(_) => continue,
                             ToolContentView::Text(text) => clipped(text, 16384),
                             ToolContentView::Diff { path, old, new } => format!(
                                 "File: {}\nBefore:\n{}\nAfter:\n{}",
@@ -914,6 +936,16 @@ pub(super) fn bound_view(mut view: ConversationView) -> ConversationView {
     // retain other valid histories, so the encoded display owner gives up
     // whole interactions with an explicit notice rather than cutting choices.
     while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
+        // The structured result is optional display data. Preserve the history
+        // and its text before giving up a message or interaction.
+        if let Some(tool) = view
+            .tools
+            .iter_mut()
+            .find(|tool| tool.structured_content.is_some())
+        {
+            tool.structured_content = None;
+            continue;
+        }
         view.truncated = true;
         if view.messages.len() > 1 {
             view.messages.remove(0);

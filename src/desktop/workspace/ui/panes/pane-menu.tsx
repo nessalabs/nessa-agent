@@ -10,7 +10,11 @@ import {
   revealSession,
 } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectPaneCount, selectSession } from "../../adapters/store/selectors"
+import {
+  selectPaneClosable,
+  selectPaneCount,
+  selectSession,
+} from "../../adapters/store/selectors"
 import type { Direction, PaneKey } from "../../../split-panes/model/pane-layout"
 import { useHeaderImage } from "../../../adapters/header-image"
 import { MenuItem, MenuSeparator, MenuShortcut } from "../../../ui/menu"
@@ -53,7 +57,7 @@ export function PaneMenuItems({
     (state) => selectSession(state, sessionId) !== undefined,
   )
   const multi = count > 1
-  const closable = multi || listed
+  const closable = useWorkspaceSelector((state) => selectPaneClosable(state, pane))
   const shortcut = (command: ShortcutCommand): ReactNode => {
     const label = frame.shortcut(command)
     return label ? <MenuShortcut>{label}</MenuShortcut> : null
