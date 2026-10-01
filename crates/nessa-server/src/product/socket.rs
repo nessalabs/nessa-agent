@@ -33,7 +33,12 @@ use nessa_auth::{
     domain::{Action, CredentialId},
 };
 use serde_json::json;
-use std::{sync::Arc, time::Duration};
+use std::{
+    future::{poll_fn, Future},
+    sync::Arc,
+    task::Poll,
+    time::Duration,
+};
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{interval, timeout, timeout_at, Instant, MissedTickBehavior};
 use uuid::Uuid;
@@ -391,6 +396,24 @@ async fn wait_for_record_deadline(deadline: Option<Instant>) {
     }
 }
 
+// Tokio polls the inner future before its timer. Gate each continuation before
+// it can admit source work or emit a frame, then reject completion at expiry.
+async fn within_deadline<F: Future>(deadline: Instant, work: F) -> Option<F::Output> {
+    tokio::pin!(work);
+    let guarded = poll_fn(|context| {
+        if Instant::now() >= deadline {
+            Poll::Ready(None)
+        } else {
+            work.as_mut().poll(context).map(Some)
+        }
+    });
+    timeout_at(deadline, guarded)
+        .await
+        .ok()
+        .flatten()
+        .filter(|_| Instant::now() < deadline)
+}
+
 async fn run_authenticated<S>(socket: S, state: ProductRouteState, session: AuthenticatedSession)
 where
     S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin + Send + 'static,
@@ -602,16 +625,7 @@ async fn dispatch_passive_read(
             Err(code) => (WireResponse::ordinary(failure(&request_id, code)), None),
         }
     };
-    // Tokio polls a ready inner future before its timer. Exclude expired
-    // admission before that poll and a result completing at the deadline.
-    let result = if Instant::now() >= deadline {
-        None
-    } else {
-        timeout_at(deadline, reading)
-            .await
-            .ok()
-            .filter(|_| Instant::now() < deadline)
-    };
+    let result = within_deadline(deadline, reading).await;
     result.unwrap_or_else(|| {
         (
             WireResponse::ordinary(failure(&request_id, "read_timeout")),
@@ -1136,9 +1150,9 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         _slot,
         _record_work,
     } = response;
-    timeout_at(deadline, send_queued(write_timeout, socket, message))
+    within_deadline(deadline, send_queued(write_timeout, socket, message))
         .await
-        .map_err(|_| ())?
+        .ok_or(())?
 }
 
 fn close_reason(error: AccessError) -> SessionCloseReason {
@@ -1178,10 +1192,49 @@ async fn close_session<S: Sink<Message> + Unpin>(
 mod tests {
     use super::super::state::SessionSettings;
     use super::*;
+    use crate::agents::domain::AgentId;
     use crate::conversation::application::{
-        ReceiverReadScope, RecordReadFuture, RecordReadOperation, RecordReadResponse,
-        RecordReadSource,
+        ReadRefusal, ReceiverAuthority, ReceiverBinding, ReceiverReadScope, RecordReadError,
+        RecordReadFuture, RecordReadOperation, RecordReadResponse, RecordReadSource,
     };
+    use crate::conversation::domain::{
+        Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
+    };
+    use std::future::Future;
+    use std::pin::Pin;
+
+    struct RecordBinding;
+    impl ReceiverAuthority for RecordBinding {
+        fn resolve<'a>(
+            &'a self,
+            _: &'a CredentialId,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Ok(Some(ReceiverBinding {
+                    receiver_id: "receiver".into(),
+                    credential_id: CredentialId::new("credential").unwrap(),
+                    organization_id: OrganizationId::new("organization").unwrap(),
+                    owner_id: PrincipalId::new("principal").unwrap(),
+                    access_epoch: 3,
+                    active: true,
+                }))
+            })
+        }
+    }
+
+    struct RecordAdmissionSpy(AtomicU64);
+    impl RecordReadSource for RecordAdmissionSpy {
+        fn read<'a>(
+            &'a self,
+            _: ReceiverReadScope,
+            _: RecordReadOperation,
+            _: RecordReadLease,
+        ) -> RecordReadFuture<'a, RecordReadResponse> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(RecordReadError::TemporarilyUnavailable) })
+        }
+    }
     mod writer {
         include!("../../tests/product/socket/writer.rs");
     }
@@ -1533,12 +1586,8 @@ mod tests {
 
     #[tokio::test]
     async fn admitted_record_route_uses_owner_scope_and_real_physical_source() {
-        use crate::agents::domain::AgentId;
         use crate::conversation::{
-            application::{
-                ConversationRepository, ReadRefusal, ReceiverAuthority, ReceiverBinding,
-            },
-            domain::{Conversation, ConversationApprovalMode, ConversationId, ConversationModelId},
+            application::ConversationRepository,
             infrastructure::{LocalConversationStore, NessaRecordReadSource},
         };
         use nessa_sdk::{
@@ -1553,28 +1602,6 @@ mod tests {
             infrastructure::session_storage::{RecordStorage, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES},
         };
         use nessa_sync::replication::domain::Id;
-        use std::{future::Future, pin::Pin};
-
-        struct Binding;
-        impl ReceiverAuthority for Binding {
-            fn resolve<'a>(
-                &'a self,
-                _: &'a CredentialId,
-            ) -> Pin<
-                Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>,
-            > {
-                Box::pin(async {
-                    Ok(Some(ReceiverBinding {
-                        receiver_id: "receiver".into(),
-                        credential_id: CredentialId::new("credential").unwrap(),
-                        organization_id: OrganizationId::new("organization").unwrap(),
-                        owner_id: PrincipalId::new("principal").unwrap(),
-                        access_epoch: 3,
-                        active: true,
-                    }))
-                })
-            }
-        }
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -1663,7 +1690,7 @@ mod tests {
             tokio::runtime::Handle::current(),
         ));
         let state = state
-            .with_passive_read(Arc::new(Binding), conversations)
+            .with_passive_read(Arc::new(RecordBinding), conversations)
             .with_record_source(source.clone());
         let session = authenticate(&state).await;
         let mut head_frame = request("head", "conversation.recordsHead");
@@ -1803,14 +1830,14 @@ mod tests {
     struct CountingRecordAuthority {
         authority: Arc<Authority>,
         reads: AtomicU64,
-        delay: Duration,
+        first_read_delay: Duration,
     }
     impl AccessReader for CountingRecordAuthority {
         fn read<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
             Box::pin(async move {
-                self.reads.fetch_add(1, Ordering::SeqCst);
-                if !self.delay.is_zero() {
-                    tokio::time::sleep(self.delay).await;
+                let read = self.reads.fetch_add(1, Ordering::SeqCst);
+                if read == 0 && !self.first_read_delay.is_zero() {
+                    tokio::time::sleep(self.first_read_delay).await;
                 }
                 self.authority.read(id).await
             })
@@ -1931,7 +1958,7 @@ mod tests {
                 let authority = Arc::new(CountingRecordAuthority {
                     authority,
                     reads: AtomicU64::new(0),
-                    delay: Duration::ZERO,
+                    first_read_delay: Duration::ZERO,
                 });
                 state.access = authority.clone();
                 state.record_source = Some(Arc::new(UnreachableRecordSource));
@@ -1969,7 +1996,7 @@ mod tests {
         let authority = Arc::new(CountingRecordAuthority {
             authority,
             reads: AtomicU64::new(0),
-            delay: Duration::from_secs(10),
+            first_read_delay: Duration::from_secs(10),
         });
         state.access = authority.clone();
         state.record_source = Some(Arc::new(UnreachableRecordSource));
@@ -1996,6 +2023,94 @@ mod tests {
         assert_eq!(authority.reads.load(Ordering::SeqCst), 1);
         assert!(lease.is_none());
         assert_eq!(permits.available_permits(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn authority_ready_at_read_deadline_does_not_admit_source_work() {
+        for delay in [0, 9, 10, 11] {
+            let (state, authority) = fixture(MembershipRole::Member);
+            authority.snapshot.lock().unwrap().credential = Credential::new(
+                CredentialId::new("credential").unwrap(),
+                PrincipalId::new("principal").unwrap(),
+                OrganizationId::new("organization").unwrap(),
+                AudienceId::new("gateway").unwrap(),
+                100,
+                200,
+                vec![Grant::new(
+                    Action::new("conversation.read").unwrap(),
+                    Resource::new(
+                        OrganizationId::new("organization").unwrap(),
+                        ResourceId::new("gateway-resource").unwrap(),
+                    ),
+                )],
+            )
+            .unwrap();
+            let session = authenticate(&state).await;
+            let authority = Arc::new(CountingRecordAuthority {
+                authority,
+                reads: AtomicU64::new(0),
+                first_read_delay: Duration::from_secs(delay),
+            });
+            let repository = Arc::new(conversation_support::MemoryRepository::default());
+            let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+            repository.records.lock().unwrap().insert(
+                id.clone(),
+                Conversation::new(
+                    id.clone(),
+                    OrganizationId::new("organization").unwrap(),
+                    PrincipalId::new("principal").unwrap(),
+                    "panel".into(),
+                    "create".into(),
+                    1,
+                    AgentId::Claude,
+                    ConversationModelId::new("model").unwrap(),
+                    ConversationApprovalMode::Ask,
+                )
+                .unwrap(),
+            );
+            let source = Arc::new(RecordAdmissionSpy(AtomicU64::new(0)));
+            let mut state = state
+                .with_passive_read(Arc::new(RecordBinding), repository)
+                .with_record_source(source.clone());
+            state.access = authority;
+            let permits = Arc::new(Semaphore::new(1));
+            let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
+            let mut frame = request("admission", "conversation.recordsHead");
+            frame.params =
+                json!({"conversationId":id.to_string(),"accessEpoch":"3","receiverId":"receiver"});
+            let start = Instant::now();
+            let (response, lease) = dispatch_passive_read(
+                &state,
+                &session,
+                frame,
+                lease,
+                start + Duration::from_secs(10),
+            )
+            .await;
+            let WireResponse::Ordinary(message) = response else {
+                panic!("ordinary refusal expected")
+            };
+            let OutgoingMessage::Response(response) = *message else {
+                panic!("correlated refusal expected")
+            };
+            assert_eq!(response.id, "admission");
+            assert_eq!(
+                response.error.unwrap().code,
+                if delay < 10 {
+                    "temporarily_unavailable"
+                } else {
+                    "read_timeout"
+                }
+            );
+            assert_eq!(
+                source.0.load(Ordering::SeqCst),
+                u64::from(delay < 10),
+                "authority delay {delay}"
+            );
+            assert_eq!(Instant::now() - start, Duration::from_secs(delay.min(10)));
+            assert!(lease.is_none());
+            assert_eq!(permits.available_permits(), 1);
+        }
     }
 
     struct MustNotRun;
@@ -2408,8 +2523,41 @@ mod tests {
         .await
         .expect("expired response settles")
         .is_err());
-        assert!(stalled_peer.writing.try_recv().is_ok());
+        assert!(stalled_peer.writing.try_recv().is_err());
         assert!(stalled_peer.output.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ready_record_send_refuses_expired_frames_before_sink_effects() {
+        for refusal in [false, true] {
+            for elapsed in [29, 30, 31] {
+                let (mut socket, mut peer) = test_socket(None);
+                let slots = Arc::new(Semaphore::new(1));
+                let reads = Arc::new(Semaphore::new(1));
+                let response = QueuedRecordResponse::new(QueuedResponse {
+                    message: if refusal {
+                        WireResponse::ordinary(failure("refusal", "read_timeout"))
+                    } else {
+                        WireResponse::record("{\"record\":true}".into())
+                    },
+                    _slot: slots.clone().try_acquire_owned().unwrap(),
+                    _record_work: (!refusal)
+                        .then(|| RecordReadLease::new(reads.clone().try_acquire_owned().unwrap())),
+                });
+                let sending = send_record_queued(Duration::from_secs(5), &mut socket, response);
+                tokio::time::advance(Duration::from_secs(elapsed)).await;
+                let result = sending.await;
+                assert_eq!(
+                    result.is_ok(),
+                    elapsed < 30,
+                    "refusal {refusal}, elapsed {elapsed}"
+                );
+                assert_eq!(peer.writing.try_recv().is_ok(), elapsed < 30);
+                assert_eq!(peer.output.try_recv().is_ok(), elapsed < 30);
+                assert_eq!(slots.available_permits(), 1);
+                assert_eq!(reads.available_permits(), 1);
+            }
+        }
     }
 
     #[tokio::test(start_paused = true)]
