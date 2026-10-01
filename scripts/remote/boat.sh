@@ -124,6 +124,28 @@ remote_env() {
     && { [ -f dist/nessa-stage.json ] || echo \"{\\\"stage\\\":\\\"\$NESSA_STAGE\\\"}\" > dist/nessa-stage.json; }"
 }
 
+# A command that keeps the builder busy holds a lease, a file named by its pid,
+# for as long as it runs. When the last lease is released the builder stops,
+# so nothing bills between sessions; a stopped builder resumes with its disk,
+# and Cargo's cache, intact. NESSA_BOAT_KEEP=1 leaves it running.
+leases="$state_dir/boat-leases"
+
+take_lease() { mkdir -p "$leases" && : > "$leases/$$"; }
+
+release_lease() {
+  local lease
+  rm -f "$leases/$$"
+  for lease in "$leases"/*; do
+    [[ -e "$lease" ]] || continue
+    kill -0 "$(basename "$lease")" 2>/dev/null && return
+    rm -f "$lease" # its command ended without releasing it
+  done
+  [[ -n "${NESSA_BOAT_KEEP:-}" ]] && return
+  log "last session ended; stopping builder $1"
+  ssh "${ssh_opts[@]}" -O exit boat 2>/dev/null || true
+  boat stop "$1" >/dev/null || log "could not stop $1; run: bash scripts/remote/boat.sh stop"
+}
+
 command="${1:-}"
 shift || true
 case "$command" in
@@ -140,13 +162,32 @@ case "$command" in
   *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac
 
+leased=""
+case "$command" in
+  exec | shell) leased=1 ;;
+  sync) [[ "${1:-}" == --watch ]] && leased=1 ;;
+esac
+# Taken before the builder is resumed, so a session ending meanwhile sees it.
+[[ -n "$leased" ]] && take_lease
+
+id=""
+syncer=""
+ports=()
+finish() {
+  [[ -n "$syncer" ]] && kill "$syncer" 2>/dev/null
+  for port in ${ports[@]+"${ports[@]}"}; do forward cancel "$port" || true; done
+  [[ -n "$leased" && -n "$id" ]] && release_lease "$id"
+  return 0
+}
+trap finish EXIT
+trap 'exit 130' INT TERM HUP
+
 id="$(ensure_builder)"
 boat extend "$id" --hours 2 >/dev/null
 connect "$id"
 
 case "$command" in
   exec)
-    ports=()
     while [[ "${1:-}" == --port ]]; do ports+=("$2"); shift 2; done
     prepare
     for port in ${ports[@]+"${ports[@]}"}; do
@@ -159,7 +200,6 @@ case "$command" in
     # Sync on save for as long as the command runs.
     watch &
     syncer=$!
-    trap 'kill $syncer 2>/dev/null; for p in ${ports[@]+"${ports[@]}"}; do forward cancel "$p" || true; done' EXIT
     run -tt "$(remote_env) && bash scripts/remote/run.sh $(printf '%q ' "$@")" ;;
   sync)
     prepare

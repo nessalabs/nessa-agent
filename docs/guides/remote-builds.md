@@ -38,11 +38,13 @@ Other entry points:
 ```sh
 bash scripts/remote/boat.sh shell     # a shell in this checkout's remote copy
 bash scripts/remote/boat.sh proxy     # SOCKS on :1080 to reach any sandbox port
-bash scripts/remote/boat.sh stop      # snapshot and stop the builder
+bash scripts/remote/boat.sh stop      # stop the builder now
 ```
 
-The builder runs on Boat credit while it is up. Stop it when you are done; the
-next `just remote` resumes it warm.
+The builder runs on Boat credit while it is up, so it stops itself: each
+running `exec`, `shell`, or `sync --watch` holds a lease, and when the last one
+ends the builder is stopped. Its disk, and Cargo's cache, survive, and the next
+`just remote` resumes it warm. Set `NESSA_BOAT_KEEP=1` to leave it running.
 
 ## `just start-remote`
 
