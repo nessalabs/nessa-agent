@@ -477,12 +477,17 @@ where
                         continue;
                     },
                 };
-                if let Some(error) = current_session_error(&state, &session).await {
-                    let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
-                    break;
-                }
                 let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.archive" | "conversation.unarchive" | "conversation.answer" | "conversation.answerQuestion" | "conversation.cancel" | "conversation.remove" | "conversation.reorder");
                 let record = matches!(frame.method.as_str(), "conversation.recordsHead" | "conversation.recordsPage" | "conversation.catalogueHead" | "conversation.catalogueManifest" | "conversation.catalogueResolve");
+                let read_deadline = Instant::now() + Duration::from_secs(10);
+                // Passive authority refresh belongs inside the read deadline,
+                // rather than a second, independently timed socket precheck.
+                if !record {
+                    if let Some(error) = current_session_error(&state, &session).await {
+                        let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
+                        break;
+                    }
+                }
                 let class = if control { ResponseClass::Control } else if record { ResponseClass::Record } else { ResponseClass::Ordinary };
                 let slots = if control { &control_slots } else if record { &record_slots } else { &ordinary_slots };
                 let Ok(slot) = slots.clone().try_acquire_owned() else {
@@ -522,6 +527,7 @@ where
                             &request_session,
                             frame,
                             RecordReadLease::new(permit),
+                            read_deadline,
                         )
                         .await;
                         (message, class, slot, record_work)
@@ -548,9 +554,10 @@ async fn dispatch_passive_read(
     session: &AuthenticatedSession,
     frame: RequestFrame,
     lease: RecordReadLease,
+    deadline: Instant,
 ) -> (WireResponse, Option<RecordReadLease>) {
     let request_id = frame.id.clone();
-    let result = tokio::time::timeout(Duration::from_secs(10), async move {
+    let result = timeout_at(deadline, async move {
         let (current, _) = match current_identity_inner(state, session).await {
             Ok(current) => current,
             Err(_) => {
@@ -1160,6 +1167,7 @@ async fn close_session<S: Sink<Message> + Unpin>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::state::SessionSettings;
     use super::*;
     use crate::conversation::application::{
         ReceiverReadScope, RecordReadFuture, RecordReadOperation, RecordReadResponse,
@@ -1653,8 +1661,14 @@ mod tests {
         head_frame.params = serde_json::json!({
             "conversationId": id.to_string(), "accessEpoch": "3", "receiverId": "receiver",
         });
-        let (head_wire, lease) =
-            dispatch_passive_read(&state, &session, head_frame, RecordReadLease::new(())).await;
+        let (head_wire, lease) = dispatch_passive_read(
+            &state,
+            &session,
+            head_frame,
+            RecordReadLease::new(()),
+            Instant::now() + Duration::from_secs(10),
+        )
+        .await;
         let WireResponse::Record { text, .. } = head_wire else {
             panic!("record reply expected")
         };
@@ -1671,8 +1685,14 @@ mod tests {
                 "maxRecordBytes": MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
             },
         });
-        let (page_wire, lease) =
-            dispatch_passive_read(&state, &session, page_frame, RecordReadLease::new(())).await;
+        let (page_wire, lease) = dispatch_passive_read(
+            &state,
+            &session,
+            page_frame,
+            RecordReadLease::new(()),
+            Instant::now() + Duration::from_secs(10),
+        )
+        .await;
         let WireResponse::Record { text, .. } = page_wire else {
             panic!("record reply expected")
         };
@@ -1688,8 +1708,14 @@ mod tests {
             "conversationId": id.to_string(), "accessEpoch": "3",
             "receiverId": "wrong",
         });
-        let (failure, _) =
-            dispatch_passive_read(&state, &session, wrong, RecordReadLease::new(())).await;
+        let (failure, _) = dispatch_passive_read(
+            &state,
+            &session,
+            wrong,
+            RecordReadLease::new(()),
+            Instant::now() + Duration::from_secs(10),
+        )
+        .await;
         let WireResponse::Ordinary(message) = failure else {
             panic!("ordinary refusal expected")
         };
@@ -1779,30 +1805,85 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn record_phase_deadline_includes_current_authority_before_source_admission() {
-        let (mut state, _) = fixture(MembershipRole::Member);
-        let session = authenticate(&state).await;
-        state.access = Arc::new(PendingRecordAuthority);
-        state.record_source = Some(Arc::new(UnreachableRecordSource));
-        let permits = Arc::new(Semaphore::new(1));
-        let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
-        let start = Instant::now();
-        let (response, lease) = dispatch_passive_read(
-            &state,
-            &session,
-            request("deadline", "conversation.recordsHead"),
-            lease,
-        )
-        .await;
-        assert_eq!(Instant::now() - start, Duration::from_secs(10));
-        assert!(lease.is_none());
-        assert_eq!(permits.available_permits(), 1);
-        let WireResponse::Ordinary(message) = response else {
-            panic!("ordinary refusal expected")
-        };
-        let OutgoingMessage::Response(response) = *message else {
-            panic!("timeout refusal expected")
-        };
-        assert_eq!(response.error.unwrap().code, "read_timeout");
+        for before_dispatch in [Duration::ZERO, Duration::from_secs(9)] {
+            let (mut state, _) = fixture(MembershipRole::Member);
+            let session = authenticate(&state).await;
+            state.access = Arc::new(PendingRecordAuthority);
+            state.record_source = Some(Arc::new(UnreachableRecordSource));
+            let permits = Arc::new(Semaphore::new(1));
+            let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
+            let start = Instant::now();
+            tokio::time::advance(before_dispatch).await;
+            let (response, lease) = dispatch_passive_read(
+                &state,
+                &session,
+                request("deadline", "conversation.recordsHead"),
+                lease,
+                start + Duration::from_secs(10),
+            )
+            .await;
+            assert_eq!(Instant::now() - start, Duration::from_secs(10));
+            assert!(lease.is_none());
+            assert_eq!(permits.available_permits(), 1);
+            let WireResponse::Ordinary(message) = response else {
+                panic!("ordinary refusal expected")
+            };
+            let OutgoingMessage::Response(response) = *message else {
+                panic!("timeout refusal expected")
+            };
+            assert_eq!(response.error.unwrap().code, "read_timeout");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn socket_passive_read_uses_one_deadline_for_slow_authority() {
+        for method in [
+            "conversation.recordsHead",
+            "conversation.recordsPage",
+            "conversation.catalogueHead",
+            "conversation.catalogueManifest",
+            "conversation.catalogueResolve",
+        ] {
+            let (mut state, _) = fixture(MembershipRole::Member);
+            let session = authenticate(&state).await;
+            state.access = Arc::new(PendingRecordAuthority);
+            state.record_source = Some(Arc::new(UnreachableRecordSource));
+            // Isolate frame admission from the separate periodic socket check.
+            state.settings = SessionSettings::new(
+                Duration::from_secs(20),
+                Duration::from_secs(5),
+                Duration::from_secs(30),
+            )
+            .unwrap();
+            let permits = state.record_reads.clone();
+            let available = permits.available_permits();
+            let (socket, mut peer) = test_socket(None);
+            let start = Instant::now();
+            let task = tokio::spawn(run_authenticated(socket, state, session));
+            peer.input
+                .send(Ok(Message::Text(
+                    json!({
+                        "type": "req", "id": "deadline", "method": method, "params": {}
+                    })
+                    .to_string()
+                    .into(),
+                )))
+                .unwrap();
+            let result = timeout(Duration::from_secs(11), peer.output.recv()).await;
+            task.abort();
+            let _ = task.await;
+            let Message::Text(text) = result
+                .expect("passive refusal must arrive within its read budget")
+                .expect("socket must return a refusal")
+            else {
+                panic!("correlated read refusal expected")
+            };
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["id"], "deadline");
+            assert_eq!(value["error"]["code"], "read_timeout");
+            assert_eq!(Instant::now() - start, Duration::from_secs(10));
+            assert_eq!(permits.available_permits(), available);
+        }
     }
 
     struct MustNotRun;
