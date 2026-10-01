@@ -22,6 +22,7 @@ This skill is how to use them; it restates neither.
 | drag and drop, `drop.ts`, `drag.ts`, pane headers | `drag.mjs` |
 | keys, `focus.ts`, panes being added/closed/focused, dialogs, the overview | `focus.mjs` |
 | widths: approval card, composer (its thinking control too), column titles, Settings sidebar | `responsive.mjs --shots <dir>` |
+| `index.html`'s load fallback, the panel's stage and window size | `load-fallback.mjs` |
 | motion, FLIP, rendering, selectors, anything on the budget's list, or a perf claim | `perf-budget.mjs` (production build) |
 | a UI branch before hand-off | `run-all.mjs` (all of the above) |
 

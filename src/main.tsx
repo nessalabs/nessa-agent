@@ -19,9 +19,11 @@ import {
   hostStartup,
   quitNessa,
   restartNessa,
+  windowSize,
   windowSurface,
 } from "./host"
 import { StartupRefused } from "./startup"
+import { publishWindowSize } from "./panel/adapters/panel-frame"
 
 import { environmentFromVite } from "./env/vite"
 import { installDevConsoleForwarding } from "./diagnostics/dev-console"
@@ -54,6 +56,11 @@ const panel = (
 )
 
 const root = createRoot(container)
+
+// The load fallback in index.html stays on screen until hostStartup answers;
+// with the window's size it centres in the panel instead of its corner box.
+if (windowSurface() === "panel")
+  void windowSize().then(publishWindowSize, () => undefined)
 
 // Asked before anything is mounted (ADR 221): a host that could not put itself
 // together answers nothing else, so the panel below would only fail in pieces.
