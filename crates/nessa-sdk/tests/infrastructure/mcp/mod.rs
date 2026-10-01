@@ -55,7 +55,13 @@ struct Harness {
 impl Harness {
     /// Serve `session` to a new harness, in the background.
     fn attach(session: McpSession) -> Self {
-        let (harness, served) = tokio::io::duplex(64 * 1024);
+        Self::attach_with_buffer(session, 64 * 1024)
+    }
+    /// As [`Self::attach`], with `bytes` of room between the stand-in and
+    /// the harness: a small one makes the stand-in wait on a harness that
+    /// does not read.
+    fn attach_with_buffer(session: McpSession, bytes: usize) -> Self {
+        let (harness, served) = tokio::io::duplex(bytes);
         let (input, output) = tokio::io::split(served);
         tokio::spawn(session.serve(input, output));
         let (read, write) = tokio::io::split(harness);

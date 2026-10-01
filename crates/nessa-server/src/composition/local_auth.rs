@@ -374,13 +374,16 @@ async fn conversations(
         .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?;
     let mut agents = agents.clone();
     let mcp = match std::env::current_exe() {
-        Ok(gateway) => super::mcp_servers::compose(
-            &mut agents,
-            // SAFETY: getuid has no preconditions and cannot fail.
-            &super::mcp_servers::relay_socket(namespace, unsafe { libc::getuid() }),
-            &gateway,
-            super::mcp_servers::server_environment(|key| std::env::var_os(key)),
-        )?,
+        Ok(gateway) => {
+            super::mcp_servers::compose(
+                &mut agents,
+                // SAFETY: getuid has no preconditions and cannot fail.
+                &super::mcp_servers::relay_socket(namespace, unsafe { libc::getuid() }),
+                &gateway,
+                super::mcp_servers::server_environment(|key| std::env::var_os(key)),
+            )
+            .await?
+        }
         Err(error) => {
             tracing::error!(%error, "MCP servers are off this run: this executable's path is unknown");
             agents.mcp_servers.clear();

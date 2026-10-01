@@ -448,7 +448,15 @@ async fn past_the_in_flight_bound_a_call_is_busy_and_nothing_is_sent() {
         buffer.extend_from_slice(&chunk[..read]);
         sent = buffer.iter().filter(|byte| **byte == b'\n').count();
     }
-    assert_eq!(connection.call("one-more", None).await, Err(McpError::Busy));
+    // Refused at once, not admitted to wait.
+    let one_more = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        connection.call("one-more", None),
+    );
+    assert_eq!(
+        one_more.await.expect("refused at once"),
+        Err(McpError::Busy)
+    );
     connection.close(McpError::Stopped);
     for call in waiting {
         assert_eq!(call.await.unwrap(), Err(McpError::Stopped));

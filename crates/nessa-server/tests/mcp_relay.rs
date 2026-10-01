@@ -37,7 +37,7 @@ fn fixture(args: &[&str]) -> StdioMcpServer {
 }
 
 /// A relay socket in `directory` serving `server`, until the runtime ends.
-fn serve(directory: &Path, server: &StdioMcpServer) -> PathBuf {
+async fn serve(directory: &Path, server: &StdioMcpServer) -> PathBuf {
     // In a directory of its own, created private by `bind`, as the gateway's is.
     let socket = directory.join("relay").join("relay.sock");
     let servers = McpServers::new(
@@ -53,7 +53,7 @@ fn serve(directory: &Path, server: &StdioMcpServer) -> PathBuf {
         server.name.clone(),
         configuration_digest(&server.command, &server.args),
     )]);
-    let listener = bind(&socket).unwrap();
+    let listener = bind(&socket).await.unwrap();
     tokio::spawn(Arc::new(Relay::new(servers, configured)).listen(listener));
     socket
 }
@@ -120,7 +120,7 @@ async fn gone(pid: i64) {
 async fn a_relay_killed_outright_ends_its_server_and_everything_it_started() {
     let directory = tempfile::tempdir().unwrap();
     let server = fixture(&["--child"]);
-    let socket = serve(directory.path(), &server);
+    let socket = serve(directory.path(), &server).await;
     let relay = RelayProcess::start(&socket, &server);
     let (mut relay, place) = relay.call(1, "where").await;
     let pid = place["result"]["structuredContent"]["pid"]
@@ -141,7 +141,7 @@ async fn a_relay_killed_outright_ends_its_server_and_everything_it_started() {
 async fn a_relay_whose_server_ends_exits_though_its_stdin_stays_open() {
     let directory = tempfile::tempdir().unwrap();
     let server = fixture(&[]);
-    let socket = serve(directory.path(), &server);
+    let socket = serve(directory.path(), &server).await;
     let relay = RelayProcess::start(&socket, &server);
     let (relay, _) = relay.call(1, "where").await;
     let RelayProcess {
@@ -177,7 +177,7 @@ async fn a_relay_whose_server_ends_exits_though_its_stdin_stays_open() {
 async fn a_relay_refused_exits_with_a_failure() {
     let directory = tempfile::tempdir().unwrap();
     let server = fixture(&[]);
-    let socket = serve(directory.path(), &server);
+    let socket = serve(directory.path(), &server).await;
     let stale = StdioMcpServer {
         args: vec!["/old.py".into()],
         ..server

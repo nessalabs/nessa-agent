@@ -22,9 +22,12 @@ gateway  conversation view ◀── tool UI lookup ── the open sessions' to
 Arrows are calls and bytes, not ownership. Each stand-in — one harness
 session's MCP client for one server — gets a session of its own: its own
 server process and the one connection to it, opened when the stand-in says
-hello and closed when the stand-in ends. Two conversations never share a
+hello and closed when the stand-in ends. Two harness sessions never share a
 server process, so neither blocks, sees, or outlives the other's, and Nessa's
-own `nessa` shell server runs per session as it did. The SDK
+own `nessa` shell server runs per session as it did. That two conversations
+never share one rests on each harness starting a stand-in per session, which
+Claude's and Codex's do (observed live); nothing here can check it until #348
+keys sessions by conversation. The SDK
 (`crates/nessa-sdk/src/infrastructure/mcp/`) owns the protocol: the
 handshake, `tools/list` with each tool's `_meta.ui`, `resources/read` of an
 MCP App resource, forwarding a stand-in's traffic, and each session's
@@ -55,12 +58,18 @@ each session by its conversation before any `mcp.callTool` or
   refused (`-32601`): their updates are not routed back. Every other request
   is forwarded with a fresh upstream id and answered with the harness's own
   id, verbatim — except that a `tools/list` answer leaves out a tool whose
-  `_meta.ui.visibility` excludes `model`, and a `tools/call` naming a tool
-  the latest list this stand-in forwarded left out is refused (`-32602`):
-  having declared MCP Apps, the host keeps an app's own tools from the model.
+  `_meta.ui.visibility` does not include `model` (a `visibility` that is not
+  an array of strings counts as leaving it out), and a `tools/call` naming a
+  tool hidden so is refused (`-32602`) — hidden by the session's own latest
+  list, or by the latest list this stand-in forwarded, by the order they were
+  asked in: having declared MCP Apps, the host keeps an app's own tools from
+  the model. The harness's `initialize` is answered with the protocol version
+  the upstream negotiated, whatever the harness asked for, as a server that
+  speaks one version answers.
   `notifications/cancelled` for a forwarded request cancels it upstream. A
-  server's `*/list_changed` notifications are passed on; its other
-  notifications (progress, logging) are not. A server's own requests are
+  server's `*/list_changed` notifications are passed on — when a stand-in
+  falls too far behind to have them all, it is sent all three, which are
+  idempotent; its other notifications (progress, logging) are not. A server's own requests are
   answered by the gateway: `ping` with `{}`, anything else with `-32601`,
   since the gateway declared none of them.
 - **Tool UI.** `tools/list` (paged by `nextCursor`) gives each tool's
@@ -81,7 +90,11 @@ each session by its conversation before any `mcp.callTool` or
   spelling; two candidates give none). It is filled only when at least one
   open session has listed its tools and every one that has agrees on that
   tool's UI; otherwise none is attached — which session the call went through
-  is not known until #348 — and a disagreement is logged. The view's revision
+  is not known until #348 — and a disagreement is logged once per server and
+  tool. A call's widget therefore depends on its server having an open
+  session: after its conversation's harness session ends, or the gateway
+  restarts, a past call shows no widget until a session of that server lists
+  its tools again (#348 reads the conversation's own session). The view's revision
   takes the filled URIs into account, so a window holding the same revision
   holds the same URIs. The desktop maps a gateway tool to a `widget` part with
   `toolWidget`.
@@ -134,7 +147,7 @@ of its own) and the one connection to it.
 | Open | the stand-in ends: the harness closes, its socket breaks, the relay is killed, a frame that is not JSON or is past the bound | Closed | calls waiting end `Closed`, unanswered (closing the server's stdin ends them; no `notifications/cancelled` is sent first); 2 s; the process group killed |
 | Open | process exits, stdout closes, oversize or non-JSON frame | Gone | calls waiting end (`ServerGone`, `TooLarge`, `Malformed`); the stand-in is closed, and its relay exits; the process group killed |
 | Open | gateway stops | Closed | as the stand-in ending, with `Stopped` |
-| Open | the last handle to it is dropped without closing | — | the process group killed |
+| Open | the last handle to it is dropped without closing | — | the process group killed at once, even while its background list waits on the server |
 
 Nothing restarts a session. A harness whose server ended starts it again the
 way it would have when it owned the process — usually with a new session of
@@ -164,8 +177,9 @@ its own, and so a new stand-in.
 | Opening | opening fails | Closed | refused `unavailable` with the typed reason; the relay exits 1, so the harness sees its server fail to start |
 | Serving | harness `initialize` | Serving | answered from the upstream's `initialize` result, less `resources.subscribe` |
 | Serving | harness request | Serving | forwarded; the answer comes back with the harness's id |
-| Serving | `tools/list` answer | Serving | forwarded without the tools whose visibility excludes the model; the tools the latest list showed are callable again |
-| Serving | `tools/call` for a tool the latest list left out | Serving | refused `-32602`, nothing forwarded |
+| Serving | `tools/list` answer | Serving | forwarded without the tools whose visibility excludes the model; of two lists answered out of order, the one asked later decides |
+| Serving | `tools/call` for a tool the session's latest list, or the stand-in's, hid | Serving | refused `-32602`, nothing forwarded |
+| Serving | the stand-in falls behind the server's change notices | Serving | sent all three `*/list_changed` notices |
 | Serving | `resources/subscribe`, `resources/unsubscribe` | Serving | refused `-32601`, nothing forwarded |
 | Serving | a request reusing the id of one still waiting | Serving | refused `-32600`, nothing forwarded |
 | Serving | harness `notifications/cancelled` for a forwarded request | Serving | that request is dropped; upstream `notifications/cancelled` |
@@ -173,9 +187,11 @@ its own, and so a new stand-in.
 | Serving | harness closes, or its socket breaks | Closed | the session is closed (above) |
 | Serving | session ends | Closed | the socket is closed, and the `mcp-relay` process exits at once, its stdin unread: the harness sees its server end, as when it owned the process |
 
-The relay socket: a socket at the path that a gateway still listens on fails
-the bind, and MCP servers are off for that run; a socket nothing listens on is
-replaced.
+The relay socket: a socket at the path that a gateway still answers on —
+or one whose probe does not answer within a second, or fails other than by
+refusing the connection — fails the bind, and MCP servers are off for that
+run; a socket nothing listens on is replaced. A gateway executable or socket
+path that is not UTF-8 also leaves MCP servers off.
 
 ## What one connection per harness session means
 
@@ -189,7 +205,8 @@ replaced.
 - **Restarts.** A gateway restart ends every session with the agents. A
   restored conversation's harness opens new sessions through its stand-ins; a
   handle an old session gave out is unknown to the new one, and the server says
-  so — as it did when the harness owned the process.
+  so — as it did when the harness owned the process. Its past calls show no
+  widget until a session of their server has listed its tools.
 - **A server that exits** ends its session and its stand-in, and the relay
   exits, so its harness sees its server end, as when it owned the process.
   Other conversations' sessions of the same server are untouched.

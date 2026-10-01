@@ -302,3 +302,30 @@ async fn of_two_lists_finishing_out_of_order_the_one_asked_later_is_kept() {
         "ui://fixture/later.html"
     );
 }
+
+#[tokio::test]
+async fn a_session_dropped_while_its_list_waits_is_closed_at_once() {
+    let (servers, launcher, _) = servers(silent("tools/list"));
+    let session = servers.open("fixture").await.unwrap();
+    // The background list waits on the server, holding the session.
+    launcher.server(0).arrived("tools/list", 1).await;
+    drop(session);
+    launcher.server(0).stopped().await;
+    assert_eq!(servers.tool_ui(&chart_call()), None);
+}
+
+#[tokio::test]
+async fn a_disagreement_is_logged_once_however_often_it_is_read() {
+    let (servers, launcher, _) = servers(Behaviour::default());
+    let first = servers.open("fixture").await.unwrap();
+    let second = servers.open("fixture").await.unwrap();
+    first.list_tools().await.unwrap();
+    launcher
+        .server(1)
+        .set_pages(vec![vec![json!({ "name": "show_chart" })]]);
+    second.list_tools().await.unwrap();
+    for _ in 0..10 {
+        assert_eq!(servers.tool_ui(&chart_call()), None);
+    }
+    assert_eq!(servers.disagreements_logged(), 1);
+}

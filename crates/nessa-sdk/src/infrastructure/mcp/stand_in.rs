@@ -10,15 +10,18 @@
 //!
 //! Arrows are frames. The stand-in ends when the harness closes, its input
 //! breaks, it sends a frame that is not JSON or is past the bound, or the
-//! connection ends; its calls still waiting are dropped then, which cancels
-//! each upstream.
+//! connection ends. Its calls still waiting are dropped then, unanswered; the
+//! session closing after it ends them upstream by closing the server's stdin.
 use super::connection::{Connection, Reply};
 use super::framing::{self, Frames, MAX_FRAME_BYTES};
 use super::{wire, McpError};
 use serde_json::{json, Value};
 use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -27,16 +30,75 @@ use tokio::{
 };
 
 /// What a finished call hands back: the harness's key and id for it, the
-/// server's reply, and what a `tools/list` answer said of each tool's
-/// visibility to the model.
-type Finished = (String, Value, Result<Reply, McpError>, Vec<(String, bool)>);
+/// server's reply, and, for a `tools/list`, the order it was asked in and
+/// which of the tools its answer named it hid from the model.
+type Finished = (
+    String,
+    Value,
+    Result<Reply, McpError>,
+    Option<(u64, Vec<(String, bool)>)>,
+);
+
+/// What a stand-in sends a harness that fell too far behind the server's
+/// change notices to have them all: all three, which are idempotent.
+const CHANGES: [&str; 3] = [
+    "notifications/tools/list_changed",
+    "notifications/resources/list_changed",
+    "notifications/prompts/list_changed",
+];
+
+/// The most tool names a session remembers the visibility of. Past it, only
+/// the names the latest list gave are kept.
+const MAX_REMEMBERED_TOOLS: usize = 4096;
+
+/// Which of a session's tools the model may not see, as the list asked latest
+/// that named each tool said — whether the session listed it for itself or a
+/// stand-in forwarded the list. Lists are numbered as they are asked, so one
+/// answered late cannot undo a later one.
+#[derive(Default)]
+pub(crate) struct Visibility {
+    asked: AtomicU64,
+    /// By name: the number of the list that said it, and whether it hid it.
+    tools: Mutex<HashMap<String, (u64, bool)>>,
+}
+impl Visibility {
+    /// The number of a list about to be asked.
+    pub(crate) fn ask(&self) -> u64 {
+        self.asked.fetch_add(1, Ordering::Relaxed) + 1
+    }
+    /// What list `order` said of each tool it named: hidden or not.
+    pub(crate) fn listed(&self, order: u64, tools: impl IntoIterator<Item = (String, bool)>) {
+        let mut known = self.tools.lock().expect("visibility");
+        for (name, hidden) in tools {
+            let entry = known.entry(name).or_insert((order, hidden));
+            if entry.0 <= order {
+                *entry = (order, hidden);
+            }
+        }
+        if known.len() > MAX_REMEMBERED_TOOLS {
+            known.retain(|_, (said, _)| *said == order);
+        }
+    }
+    /// Whether the latest list naming `name` hid it from the model. A tool no
+    /// list has named is not hidden: the server decides about it.
+    pub(crate) fn hidden(&self, name: &str) -> bool {
+        self.tools
+            .lock()
+            .expect("visibility")
+            .get(name)
+            .is_some_and(|(_, hidden)| *hidden)
+    }
+}
 
 /// Serve one harness's side of `connection` over `input` and `output` until
 /// either ends. `initialized` is the upstream's answer to the client's own
 /// `initialize`; the harness gets it, without `resources.subscribe`.
+/// `visibility` is the session's: what its lists, and this stand-in's, said
+/// the model may not see.
 pub(crate) async fn serve(
     connection: Arc<Connection>,
     initialized: Arc<Value>,
+    visibility: Arc<Visibility>,
     input: impl AsyncRead + Unpin,
     mut output: impl AsyncWrite + Unpin,
 ) {
@@ -49,8 +111,6 @@ pub(crate) async fn serve(
     // the task answering it, so an id reused after a cancellation is not
     // answered with the cancelled call's reply.
     let mut waiting: HashMap<String, AbortHandle> = HashMap::new();
-    // Tools a list this stand-in forwarded left out: the model may not call them.
-    let mut hidden: HashSet<String> = HashSet::new();
     loop {
         let frame = tokio::select! {
             _ = &mut ended => return,
@@ -62,13 +122,8 @@ pub(crate) async fn serve(
                         continue;
                     }
                     waiting.remove(&key);
-                    // The latest list a tool was in says whether it is hidden.
-                    for (name, visible) in listed {
-                        if visible {
-                            hidden.remove(&name);
-                        } else {
-                            hidden.insert(name);
-                        }
+                    if let Some((order, listed)) = listed {
+                        visibility.listed(order, listed);
                     }
                     if !send(&mut output, &answer(&id, reply)).await {
                         return;
@@ -79,7 +134,15 @@ pub(crate) async fn serve(
             notice = notices.recv() => {
                 match notice {
                     Ok(notice) if !send(&mut output, &notice).await => return,
-                    Ok(_) | Err(RecvError::Lagged(_)) => {}
+                    Ok(_) => {}
+                    Err(RecvError::Lagged(_)) => {
+                        for method in CHANGES {
+                            let notice = json!({ "jsonrpc": "2.0", "method": method });
+                            if !send(&mut output, &notice).await {
+                                return;
+                            }
+                        }
+                    }
                     Err(RecvError::Closed) => return,
                 }
                 continue;
@@ -106,7 +169,7 @@ pub(crate) async fn serve(
                 if message
                     .pointer("/params/name")
                     .and_then(Value::as_str)
-                    .is_some_and(|name| hidden.contains(name)) =>
+                    .is_some_and(|name| visibility.hidden(name)) =>
             {
                 Some(failure(
                     id,
@@ -133,16 +196,17 @@ pub(crate) async fn serve(
                 let connection = connection.clone();
                 let method = method.to_owned();
                 let params = message.get("params").cloned();
+                let order = (method == "tools/list").then(|| visibility.ask());
                 let call = calls.spawn({
                     let key = key.clone();
                     async move {
                         let reply = connection.call(&method, params).await;
-                        let (reply, listed) = match reply {
-                            Ok(Ok(result)) if method == "tools/list" => {
+                        let (reply, listed) = match (reply, order) {
+                            (Ok(Ok(result)), Some(order)) => {
                                 let (result, listed) = for_model(result);
-                                (Ok(Ok(result)), listed)
+                                (Ok(Ok(result)), Some((order, listed)))
                             }
-                            other => (other, Vec::new()),
+                            (other, _) => (other, None),
                         };
                         (key, id, reply, listed)
                     }
@@ -182,14 +246,15 @@ fn for_harness(initialized: &Value) -> Value {
 }
 
 /// A `tools/list` result without the tools the model may not see
-/// ([`wire::model_may_see`]), and each listed tool's name with whether it may.
+/// ([`wire::model_may_see`]), and each listed tool's name with whether it is
+/// hidden.
 fn for_model(mut result: Value) -> (Value, Vec<(String, bool)>) {
     let mut listed = Vec::new();
     if let Some(tools) = result.get_mut("tools").and_then(Value::as_array_mut) {
         tools.retain(|tool| {
             let visible = wire::model_may_see(tool);
             if let Some(name) = tool.get("name").and_then(Value::as_str) {
-                listed.push((name.to_owned(), visible));
+                listed.push((name.to_owned(), !visible));
             }
             visible
         });

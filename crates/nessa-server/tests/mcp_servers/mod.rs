@@ -374,15 +374,15 @@ async fn a_relay_socket_a_gateway_still_serves_is_not_taken_over() {
     use super::infrastructure::bind;
     let directory = tempfile::tempdir().unwrap();
     let socket = directory.path().join("relay").join("relay.sock");
-    let serving = bind(&socket).unwrap();
-    let refused = bind(&socket).unwrap_err();
+    let serving = bind(&socket).await.unwrap();
+    let refused = bind(&socket).await.unwrap_err();
     assert_eq!(refused.kind(), std::io::ErrorKind::AddrInUse);
     // Once nothing listens, the socket left behind is replaced.
     drop(serving);
     // A child another test forks at that moment holds the listener until it
     // execs, so the socket may answer for an instant after the drop.
     let started = std::time::Instant::now();
-    while let Err(error) = bind(&socket) {
+    while let Err(error) = bind(&socket).await {
         assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse, "{error:?}");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(2),

@@ -82,6 +82,17 @@ fn the_relay_socket_is_short_per_user_and_the_same_for_one_namespace() {
 
 #[cfg(unix)]
 #[test]
+fn a_gateway_path_that_is_not_utf8_has_no_stand_ins() {
+    use std::os::unix::ffi::OsStrExt;
+    let gateway = PathBuf::from(std::ffi::OsStr::from_bytes(b"/app/\xff/nessa"));
+    assert_eq!(
+        stand_ins(&[server("s", &[])], &gateway, Path::new("/tmp/s.sock")),
+        None
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_socket_path_that_is_not_utf8_has_no_stand_ins() {
     use std::os::unix::ffi::OsStrExt;
     let socket = PathBuf::from(std::ffi::OsStr::from_bytes(b"/data/\xff/relay.sock"));
@@ -132,6 +143,7 @@ async fn no_configured_server_composes_nothing() {
         Path::new("/nessa"),
         BTreeMap::new(),
     )
+    .await
     .unwrap();
     assert!(composed.is_none());
     assert!(config.mcp_servers.is_empty());
@@ -146,6 +158,7 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
     let configured = server("mcptest", &["/s.mjs"]);
     let mut config = agents(vec![configured.clone()]);
     let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
+        .await
         .unwrap()
         .expect("composed");
     assert_eq!(composed.servers.names().collect::<Vec<_>>(), ["mcptest"]);
@@ -162,6 +175,7 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
     let mut again = agents(vec![configured]);
     assert!(
         compose(&mut again, &socket, Path::new("/nessa"), BTreeMap::new())
+            .await
             .unwrap()
             .is_some()
     );
@@ -176,7 +190,9 @@ async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
     std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
     std::fs::write(&socket, b"not a socket").unwrap();
     let mut config = agents(vec![server("mcptest", &[])]);
-    let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new()).unwrap();
+    let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
+        .await
+        .unwrap();
     assert!(composed.is_none());
     // Off, not handed over directly.
     assert!(config.mcp_servers.is_empty());
@@ -186,6 +202,7 @@ async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
     let mut config = agents(vec![server("mcptest", &[])]);
     assert!(
         compose(&mut config, &deep, Path::new("/nessa"), BTreeMap::new())
+            .await
             .unwrap()
             .is_none()
     );
@@ -201,7 +218,8 @@ async fn servers_that_cannot_be_launched_as_configured_are_an_agent_error() {
             &std::env::temp_dir(),
             Path::new("/nessa"),
             BTreeMap::new()
-        ),
+        )
+        .await,
         Err(crate::core::RunError::Agent(_))
     ));
 }

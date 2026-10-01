@@ -284,3 +284,98 @@ async fn an_answer_too_large_for_a_frame_is_an_error_for_its_id() {
     assert_eq!(answer["id"], json!(id));
     assert_eq!(answer["error"]["code"], -32603);
 }
+
+#[tokio::test]
+async fn a_tool_the_sessions_list_hid_is_refused_before_the_harness_lists_any() {
+    let behaviour = Behaviour {
+        pages: vec![vec![
+            // An app's own tool with no UI resource of its own.
+            json!({ "name": "helper", "_meta": { "ui": { "visibility": ["app"] } } }),
+            // A visibility that cannot be read: kept from the model.
+            json!({ "name": "odd", "_meta": { "ui": { "visibility": "app" } } }),
+            json!({ "name": "odder", "_meta": { "ui": { "visibility": ["app", 1] } } }),
+            json!({ "name": "echo" }),
+        ]],
+        ..Behaviour::default()
+    };
+    let (session, _, launcher, _) = session(behaviour).await;
+    session.list_tools().await.unwrap();
+    let mut harness = Harness::attach(session);
+    for (id, name) in [(1, "helper"), (2, "odd"), (3, "odder")] {
+        harness
+            .send(json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": name } }))
+            .await;
+        let refused = harness.next().await.unwrap();
+        assert_eq!(
+            (refused["id"].clone(), refused["error"]["code"].clone()),
+            (json!(id), json!(-32602)),
+            "{name}"
+        );
+    }
+    assert!(launcher.server(0).with_method("tools/call").is_empty());
+    harness
+        .send(json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "echo" } }))
+        .await;
+    assert!(harness.next().await.unwrap().get("result").is_some());
+}
+
+#[tokio::test]
+async fn of_two_lists_answered_out_of_order_the_one_asked_later_decides() {
+    let (session, _, launcher, _) = session(silent("tools/list")).await;
+    let server = launcher.server(0);
+    // The session's own list stays unanswered: it hides nothing.
+    server.arrived("tools/list", 1).await;
+    let mut harness = Harness::attach(session);
+    harness
+        .send(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }))
+        .await;
+    server.arrived("tools/list", 2).await;
+    harness
+        .send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
+        .await;
+    server.arrived("tools/list", 3).await;
+    let asked = server.with_method("tools/list");
+    let answer = |id: &serde_json::Value, visibility: &str| {
+        json!({ "jsonrpc": "2.0", "id": id, "result": { "tools": [
+            { "name": "refresh", "_meta": { "ui": { "visibility": [visibility] } } } ] } })
+    };
+    // Asked later, answered first: the model may see it.
+    server.send(answer(&asked[2]["id"], "model"));
+    assert_eq!(harness.next().await.unwrap()["id"], 2);
+    // Asked earlier, answered later: it would hide it, and does not decide.
+    server.send(answer(&asked[1]["id"], "app"));
+    assert_eq!(harness.next().await.unwrap()["id"], 1);
+    harness
+        .send(json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "refresh" } }))
+        .await;
+    // Forwarded: the fixture has no such tool, and says so.
+    assert_eq!(
+        harness.next().await.unwrap()["error"]["message"],
+        "unknown tool"
+    );
+}
+
+#[tokio::test]
+async fn a_stand_in_that_falls_behind_the_change_notices_gets_all_three() {
+    let (session, _, launcher, _) = session(Behaviour::default()).await;
+    // Less room than one notice: the stand-in waits on the harness.
+    let mut harness = Harness::attach_with_buffer(session, 16);
+    // Serving, and so listening for notices, once it answers a ping.
+    harness
+        .send(json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }))
+        .await;
+    assert_eq!(harness.next().await.unwrap()["id"], 1);
+    let server = launcher.server(0);
+    for _ in 0..40 {
+        server.send(json!({ "jsonrpc": "2.0", "method": "notifications/resources/list_changed" }));
+    }
+    // Let the server's notices outrun what a stand-in holds for it.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let mut seen = std::collections::BTreeSet::new();
+    while seen.len() < 3 {
+        let notice = harness.next().await.expect("the stand-in keeps serving");
+        seen.insert(notice["method"].as_str().unwrap().to_owned());
+    }
+    assert!(seen.contains("notifications/tools/list_changed"));
+    assert!(seen.contains("notifications/prompts/list_changed"));
+}

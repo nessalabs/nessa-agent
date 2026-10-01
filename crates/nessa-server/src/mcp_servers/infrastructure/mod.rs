@@ -4,7 +4,7 @@ mod relay;
 mod relay_command;
 mod tool_uis;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) use relay::said;
 
 #[cfg(unix)]

@@ -170,11 +170,16 @@ pub(crate) fn said(message: &str) -> String {
         .collect()
 }
 
-/// Bind the relay socket at `socket`, in a private directory of its own. A
-/// socket an earlier run left there, which nothing listens on, is replaced;
-/// one a gateway still listens on, or anything else there, fails the bind.
+/// How long the probe of a socket left at the path may take to be answered.
 #[cfg(unix)]
-pub fn bind(socket: &std::path::Path) -> io::Result<tokio::net::UnixListener> {
+const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Bind the relay socket at `socket`, in a private directory of its own. A
+/// socket an earlier run left there, which refuses a connection, is replaced;
+/// one a gateway still answers on, one whose probe fails otherwise or takes
+/// longer than a second, or anything else there, fails the bind.
+#[cfg(unix)]
+pub async fn bind(socket: &std::path::Path) -> io::Result<tokio::net::UnixListener> {
     use std::os::unix::fs::FileTypeExt;
     let directory = socket
         .parent()
@@ -182,13 +187,20 @@ pub fn bind(socket: &std::path::Path) -> io::Result<tokio::net::UnixListener> {
     nessa_local_storage::create_directory(directory)?;
     match std::fs::symlink_metadata(socket) {
         Ok(found) if found.file_type().is_socket() => {
-            if std::os::unix::net::UnixStream::connect(socket).is_ok() {
-                return Err(io::Error::new(
-                    io::ErrorKind::AddrInUse,
-                    "another gateway is serving this relay socket",
-                ));
+            let probe =
+                tokio::time::timeout(PROBE_TIMEOUT, tokio::net::UnixStream::connect(socket)).await;
+            match probe {
+                Ok(Err(error)) if error.kind() == io::ErrorKind::ConnectionRefused => {
+                    std::fs::remove_file(socket)?;
+                }
+                Ok(Err(error)) => return Err(error),
+                Ok(Ok(_)) | Err(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AddrInUse,
+                        "another gateway is serving this relay socket",
+                    ))
+                }
             }
-            std::fs::remove_file(socket)?;
         }
         Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "not a socket")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}

@@ -2,7 +2,7 @@
 //! harness session (ADR 344): it lists tools with their MCP Apps UI, reads
 //! `ui://` resources, and serves the stand-in that forwards a harness's
 //! traffic over that same connection, so an agent and its app share one
-//! upstream session and no two conversations share one.
+//! upstream session and no two harness sessions share one.
 //!
 //! ```text
 //! McpServers ──open──▶ McpSession: server process ─ Connection

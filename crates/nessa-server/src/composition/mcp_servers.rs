@@ -77,12 +77,14 @@ pub(super) fn server_environment(
 }
 
 /// The stand-in for each server in `servers`, run by `gateway` over `socket`;
-/// `None` when the socket's path is not UTF-8, which an argument must be.
+/// `None` when the gateway's or the socket's path is not UTF-8: a stand-in's
+/// command and arguments must be (`StdioMcpServer::all_valid`).
 pub(super) fn stand_ins(
     servers: &[StdioMcpServer],
     gateway: &Path,
     socket: &Path,
 ) -> Option<Vec<StdioMcpServer>> {
+    gateway.to_str()?;
     let socket = socket.to_str()?;
     Some(
         servers
@@ -109,7 +111,7 @@ pub(super) fn stand_ins(
 ///
 /// [`RunError::Agent`] when the configured servers could not all be launched
 /// as configured.
-pub(super) fn compose(
+pub(super) async fn compose(
     agents: &mut AgentsConfig,
     socket: &Path,
     gateway: &Path,
@@ -130,10 +132,10 @@ pub(super) fn compose(
     let servers = McpServers::new(launches, Arc::new(RuntimeClock::new()))
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let Some(stand_ins) = stand_ins(&configured, gateway, socket) else {
-        tracing::error!(socket = %socket.display(), "MCP servers are off this run: the relay socket's path is not UTF-8");
+        tracing::error!(socket = %socket.display(), gateway = %gateway.display(), "MCP servers are off this run: the gateway's or the relay socket's path is not UTF-8");
         return Ok(None);
     };
-    let listener = match bind(socket) {
+    let listener = match bind(socket).await {
         Ok(listener) => listener,
         Err(error) => {
             tracing::error!(socket = %socket.display(), %error, "MCP servers are off this run: the relay socket could not be bound");

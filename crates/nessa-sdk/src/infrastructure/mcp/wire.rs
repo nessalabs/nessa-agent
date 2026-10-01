@@ -40,13 +40,19 @@ pub(crate) fn initialized(result: &Value) -> Result<(), McpError> {
     Ok(())
 }
 
-/// One `tools/list` page from `server`: its tools, and the cursor of the next
-/// page when there is one. A tool whose name cannot be an [`McpTool`] is left
-/// out; one whose `_meta.ui` cannot be read is kept without a UI.
-pub(crate) fn tools_page(
-    server: &str,
-    result: &Value,
-) -> Result<(Vec<ListedTool>, Option<String>), McpError> {
+/// One `tools/list` page from `server`.
+pub(crate) struct ToolsPage {
+    /// Its tools. A tool whose name cannot be an [`McpTool`] is left out; one
+    /// whose `_meta.ui` cannot be read is kept without a UI.
+    pub(crate) tools: Vec<ListedTool>,
+    /// Each named tool on it, with whether the model may not see it
+    /// ([`model_may_see`]).
+    pub(crate) hidden: Vec<(String, bool)>,
+    /// The cursor of the next page, when there is one.
+    pub(crate) next: Option<String>,
+}
+
+pub(crate) fn tools_page(server: &str, result: &Value) -> Result<ToolsPage, McpError> {
     let tools = result
         .get("tools")
         .and_then(Value::as_array)
@@ -71,28 +77,41 @@ pub(crate) fn tools_page(
             ))
         })
         .collect();
-    Ok((listed, next))
+    let hidden = tools
+        .iter()
+        .filter_map(|tool| Some((tool.get("name")?.as_str()?.to_owned(), !model_may_see(tool))))
+        .collect();
+    Ok(ToolsPage {
+        tools: listed,
+        hidden,
+        next,
+    })
 }
 
 /// Whether the model may see and call `tool`, a tool as `tools/list` gives it:
-/// unless its UI says its visibility leaves the model out. A tool without a
-/// UI, or whose UI cannot be read, is the model's as any tool is.
+/// when its `_meta.ui.visibility` says so, or says nothing. One that cannot be
+/// read leaves the model out: an app's own tool is never shown by mistake.
 pub(crate) fn model_may_see(tool: &Value) -> bool {
-    tool_ui(tool.pointer("/_meta/ui")).is_none_or(|ui| ui.visibility().model())
+    visibility(tool.pointer("/_meta/ui/visibility")).is_some_and(UiVisibility::model)
+}
+
+/// `_meta.ui.visibility`: absent is both; an array of strings names who;
+/// anything else cannot be read.
+fn visibility(declared: Option<&Value>) -> Option<UiVisibility> {
+    match declared {
+        None => Some(UiVisibility::BOTH),
+        Some(Value::Array(who)) if who.iter().all(Value::is_string) => {
+            let says = |name: &str| who.iter().any(|each| each.as_str() == Some(name));
+            Some(UiVisibility::new(says("model"), says("app")))
+        }
+        Some(_) => None,
+    }
 }
 
 fn tool_ui(declared: Option<&Value>) -> Option<ToolUi> {
     let declared = declared?;
     let uri = UiResourceUri::new(declared.get("resourceUri")?.as_str()?).ok()?;
-    let visibility = match declared.get("visibility") {
-        None => UiVisibility::BOTH,
-        Some(Value::Array(who)) => {
-            let says = |name: &str| who.iter().any(|each| each.as_str() == Some(name));
-            UiVisibility::new(says("model"), says("app"))
-        }
-        Some(_) => return None,
-    };
-    Some(ToolUi::new(uri, visibility))
+    Some(ToolUi::new(uri, visibility(declared.get("visibility"))?))
 }
 
 /// The MCP App at `requested`, from a `resources/read` answer: the one content
