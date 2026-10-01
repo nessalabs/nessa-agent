@@ -408,6 +408,26 @@ async fn a_relay_socket_a_gateway_holds_is_not_taken_over() {
 }
 
 #[tokio::test]
+async fn the_relay_lock_is_the_sockets_name_private_and_never_followed() {
+    use super::infrastructure::bind;
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("relay").join("relay.sock");
+    let bound = bind(&socket).await.unwrap();
+    let lock = std::fs::symlink_metadata(socket.parent().unwrap().join("relay.sock.lock")).unwrap();
+    assert!(lock.is_file());
+    assert_eq!(lock.permissions().mode() & 0o777, 0o600);
+    drop(bound);
+    // A link where the lock goes is refused, not followed: nothing is bound.
+    let other = directory.path().join("relay").join("other.sock");
+    let target = directory.path().join("elsewhere");
+    std::os::unix::fs::symlink(&target, socket.parent().unwrap().join("other.sock.lock")).unwrap();
+    assert!(bind(&other).await.is_err());
+    assert!(std::fs::symlink_metadata(&target).is_err());
+    assert!(std::fs::symlink_metadata(&other).is_err());
+}
+
+#[tokio::test]
 async fn a_socket_an_earlier_run_left_is_replaced() {
     use super::infrastructure::bind;
     let directory = tempfile::tempdir().unwrap();

@@ -117,7 +117,7 @@ each session by its conversation before any `mcp.callTool` or
 | Closing a session | stdin closed, 2 s, then the process group killed | — |
 | A refusal's message | 512 characters, control characters as spaces | — |
 | Change notices held for a stand-in or a session's list | 16 | the stand-in is sent all three `*/list_changed`; the list is read again |
-| Tool names whose visibility a session remembers | 4096 | earlier lists' names are forgotten, then all if one list alone passes it, and a name not remembered is hidden; tools paged past it are callable only from the latest pages |
+| Tool names whose visibility a session remembers | 4096 | only the names the list asked latest gave are kept (a list answered late cannot evict a later one's), then none if that list alone passes it, and a name not remembered is hidden; tools paged past it are callable only from the latest pages |
 | Disagreements remembered as logged | 1024 | none more is logged |
 | Open sessions | not bounded here | each is a harness's stand-in, started by a process of the gateway's own user |
 

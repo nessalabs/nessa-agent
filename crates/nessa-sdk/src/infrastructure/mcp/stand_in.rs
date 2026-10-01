@@ -47,10 +47,10 @@ const CHANGES: [&str; 3] = [
     "notifications/prompts/list_changed",
 ];
 
-/// The most tool names a session remembers the visibility of. Past it, the
-/// names lists asked earlier gave are forgotten — and if that is not enough,
-/// all are — and a name not remembered is taken as hidden: past the bound the
-/// rule fails closed.
+/// The most tool names a session remembers the visibility of. Past it, only
+/// the names the list asked latest gave are kept — and if that is still too
+/// many, none are — and a name not remembered is taken as hidden: past the
+/// bound the rule fails closed.
 pub(crate) const MAX_REMEMBERED_TOOLS: usize = 4096;
 
 /// Which of a session's tools the model may not see, as the list asked latest
@@ -93,9 +93,11 @@ impl Visibility {
             }
         }
         if known.tools.len() > MAX_REMEMBERED_TOOLS {
-            // Keep what this list and any asked later said; forget the rest,
-            // and all of it if that is still too much.
-            known.tools.retain(|_, (said, _)| *said >= order);
+            // Keep what the list asked latest said — which may not be this
+            // one, if this one was answered late — forget the rest, and all
+            // of it if that is still too much.
+            let latest = known.tools.values().map(|(said, _)| *said).max();
+            known.tools.retain(|_, (said, _)| Some(*said) == latest);
             if known.tools.len() > MAX_REMEMBERED_TOOLS {
                 known.tools.clear();
             }
@@ -229,7 +231,7 @@ pub(crate) async fn serve(
                         let (reply, listed) = match (reply, order) {
                             (Ok(Ok(result)), Some(order)) => {
                                 let (result, listed) = for_model(result);
-                                (Ok(Ok(result)), Some((order, listed)))
+                                (Ok(Ok(result)), listed.map(|listed| (order, listed)))
                             }
                             (other, _) => (other, None),
                         };
@@ -272,19 +274,20 @@ fn for_harness(initialized: &Value) -> Value {
 
 /// A `tools/list` result without the tools the model may not see
 /// ([`wire::model_may_see`]), and each listed tool's name with whether it is
-/// hidden.
-fn for_model(mut result: Value) -> (Value, Vec<(String, bool)>) {
+/// hidden — none for a result with no tools array, which says nothing.
+fn for_model(mut result: Value) -> (Value, Option<Vec<(String, bool)>>) {
+    let Some(tools) = result.get_mut("tools").and_then(Value::as_array_mut) else {
+        return (result, None);
+    };
     let mut listed = Vec::new();
-    if let Some(tools) = result.get_mut("tools").and_then(Value::as_array_mut) {
-        tools.retain(|tool| {
-            let visible = wire::model_may_see(tool);
-            if let Some(name) = tool.get("name").and_then(Value::as_str) {
-                listed.push((name.to_owned(), !visible));
-            }
-            visible
-        });
-    }
-    (result, listed)
+    tools.retain(|tool| {
+        let visible = wire::model_may_see(tool);
+        if let Some(name) = tool.get("name").and_then(Value::as_str) {
+            listed.push((name.to_owned(), !visible));
+        }
+        visible
+    });
+    (result, Some(listed))
 }
 
 /// The harness's answer under its own `id`. One that would not fit a frame

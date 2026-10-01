@@ -80,7 +80,6 @@ fn the_relay_socket_is_short_per_user_and_the_same_for_one_namespace() {
     assert!(relay_socket(&deep, u32::MAX).as_os_str().len() < 104);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_gateway_path_that_is_not_utf8_has_no_stand_ins() {
     use std::os::unix::ffi::OsStrExt;
@@ -91,7 +90,6 @@ fn a_gateway_path_that_is_not_utf8_has_no_stand_ins() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn a_socket_path_that_is_not_utf8_has_no_stand_ins() {
     use std::os::unix::ffi::OsStrExt;
@@ -149,7 +147,6 @@ async fn no_configured_server_composes_nothing() {
     assert!(config.mcp_servers.is_empty());
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
     use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -188,14 +185,20 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
     }
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
     let namespace = tempfile::tempdir().unwrap();
     // Something that is not a socket where the socket goes is left alone.
     let socket = namespace.path().join("mcp").join("relay.sock");
-    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    nessa_local_storage::create_directory(socket.parent().unwrap()).unwrap();
     std::fs::write(&socket, b"not a socket").unwrap();
+    assert_eq!(
+        crate::mcp_servers::infrastructure::bind(&socket)
+            .await
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
     let mut config = agents(vec![server("mcptest", &[])]);
     let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
         .await

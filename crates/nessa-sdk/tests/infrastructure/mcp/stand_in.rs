@@ -294,6 +294,8 @@ async fn a_tool_the_sessions_list_hid_is_refused_before_the_harness_lists_any() 
             // A visibility that cannot be read: kept from the model.
             json!({ "name": "odd", "_meta": { "ui": { "visibility": "app" } } }),
             json!({ "name": "odder", "_meta": { "ui": { "visibility": ["app", 1] } } }),
+            // Unreadable even though it names the model.
+            json!({ "name": "oddest", "_meta": { "ui": { "visibility": ["model", 1] } } }),
             json!({ "name": "echo" }),
         ]],
         ..Behaviour::default()
@@ -301,7 +303,7 @@ async fn a_tool_the_sessions_list_hid_is_refused_before_the_harness_lists_any() 
     let (session, _, launcher, _) = session(behaviour).await;
     session.list_tools().await.unwrap();
     let mut harness = Harness::attach(session);
-    for (id, name) in [(1, "helper"), (2, "odd"), (3, "odder")] {
+    for (id, name) in [(1, "helper"), (2, "odd"), (3, "odder"), (5, "oddest")] {
         harness
             .send(json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": name } }))
             .await;
@@ -420,6 +422,15 @@ fn the_visibility_record_fails_closed_before_any_list_and_past_its_bound() {
     assert!(!past.hidden("b1"));
     assert!(past.hidden("a1"), "forgotten past the bound, so hidden");
     assert!(past.hidden("unlisted"));
+    // The same lists, the earlier answered late: the later list's names
+    // still stand, and the late one's are what is forgotten.
+    let late = Visibility::default();
+    let earlier = late.ask();
+    let later = late.ask();
+    late.listed(later, names("b", 200));
+    late.listed(earlier, names("a", MAX_REMEMBERED_TOOLS - 100));
+    assert!(!late.hidden("b1"), "a late answer undid a later list");
+    assert!(late.hidden("a1") && late.hidden("unlisted"));
     // One list past the bound alone: all is forgotten.
     let flood = Visibility::default();
     let order = flood.ask();
@@ -440,4 +451,23 @@ async fn a_call_before_any_list_has_been_read_is_refused() {
         (json!(1), json!(-32602))
     );
     assert!(launcher.server(0).with_method("tools/call").is_empty());
+    // A list answered without a tools array says nothing: still refused.
+    harness
+        .send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))
+        .await;
+    let server = launcher.server(0);
+    // The session's own list, asked at open, and the harness's: both so.
+    server.arrived("tools/list", 2).await;
+    for asked in server.with_method("tools/list") {
+        server.send(json!({ "jsonrpc": "2.0", "id": asked["id"], "result": {} }));
+    }
+    assert_eq!(harness.next().await.unwrap()["id"], json!(2));
+    harness
+        .send(json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "echo" } }))
+        .await;
+    assert_eq!(
+        harness.next().await.unwrap()["error"]["code"],
+        json!(-32602)
+    );
+    assert!(server.with_method("tools/call").is_empty());
 }

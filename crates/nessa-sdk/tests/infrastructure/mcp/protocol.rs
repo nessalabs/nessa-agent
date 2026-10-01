@@ -144,6 +144,20 @@ async fn a_list_past_its_bounds_or_of_the_wrong_shape_is_refused_and_not_kept() 
         session.list_tools().await,
         Err(McpError::TooLarge("tools/list"))
     );
+    // Names no tool identity can take still count: they are remembered as
+    // the stand-in's visibility record, so past the bound the list is refused.
+    let unnamed = (0..=MAX_TOOLS)
+        .map(|n| json!({ "name": format!("t {n}") }))
+        .collect::<Vec<_>>();
+    let (session, _, _, _) = super::session(Behaviour {
+        pages: vec![unnamed],
+        ..Behaviour::default()
+    })
+    .await;
+    assert_eq!(
+        session.list_tools().await,
+        Err(McpError::TooLarge("tools/list"))
+    );
     let (session, _, _, _) = super::session(Behaviour {
         pages: vec![many(1); MAX_TOOL_PAGES + 1],
         ..Behaviour::default()

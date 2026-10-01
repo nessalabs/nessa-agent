@@ -187,6 +187,14 @@ pub struct BoundRelay {
 /// holds it, the bind fails with `AddrInUse` and nothing is touched; once
 /// none does, a socket an earlier run left behind is replaced. Anything at
 /// the path that is not a socket fails the bind.
+/// `<socket>.lock`: the lock beside the relay socket, named after all of it.
+#[cfg(unix)]
+pub(crate) fn lock_path(socket: &std::path::Path) -> std::path::PathBuf {
+    let mut name = socket.as_os_str().to_owned();
+    name.push(".lock");
+    name.into()
+}
+
 #[cfg(unix)]
 pub async fn bind(socket: &std::path::Path) -> io::Result<BoundRelay> {
     use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
@@ -201,7 +209,7 @@ pub async fn bind(socket: &std::path::Path) -> io::Result<BoundRelay> {
         .write(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(socket.with_extension("lock"))?;
+        .open(lock_path(socket))?;
     // SAFETY: flock has no memory preconditions; the descriptor is open.
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err(io::Error::new(
