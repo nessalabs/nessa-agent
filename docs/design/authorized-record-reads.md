@@ -1,14 +1,16 @@
 # Authorized bounded record reads — issue 296
 
-Status: proposed implementation design, 2026-09-29. No production behavior is
-changed by this document. Tracks [#296](https://github.com/nessalabs/nessa-agent/issues/296)
-under [#260](https://github.com/nessalabs/nessa-agent/issues/260).
+Status: implemented in [PR #354](https://github.com/nessalabs/nessa-agent/pull/354),
+with final review and merge gates tracked there. Tracks
+[#296](https://github.com/nessalabs/nessa-agent/issues/296) under
+[#260](https://github.com/nessalabs/nessa-agent/issues/260).
 
-Baseline: main `2a143d7` includes #276's committed physical source. Authorization
-is the separate [#300](https://github.com/nessalabs/nessa-agent/pull/300) change for
-#295; reviewed initially at `14e3708adb169840a99b96dc1073b77b3093e278` and its exact-scope
-owner rechecked at `16de9c065ade78518747714715ec39a760e1a7ba`, not copied into
-this branch. Implementation starts after that contract lands and checks any drift.
+Historical design baseline (2026-09-29): main `2a143d7` included #276's
+committed physical source. The separate authorization
+[#300](https://github.com/nessalabs/nessa-agent/pull/300) change for #295 was
+initially reviewed at `14e3708adb169840a99b96dc1073b77b3093e278`, with its exact-scope
+owner rechecked at `16de9c065ade78518747714715ec39a760e1a7ba`. That authorization
+is now merged and the transport consumes its existing admission owner.
 The upstream [sync ADR](https://github.com/nessalabs/sync-engine/blob/1044e56f2fc1eaa2e165b98d31041c0541d5a273/docs/adr/1-reusable-local-first-sync-engine.md)
 owns generic replication; [semantic record writer](semantic-record-writer.md)
 owns physical framing. This document owns the product transport integration.
@@ -447,9 +449,11 @@ Implement vertical steps with Sol medium, after coordinator review of this plan:
 
 Change each added load-bearing rule in a revert probe and show its enforcing test
 fails before restoring the reviewed tree. Record supported platform and feature
-checks; do not infer them from an isolated crate run. The present documentation
-commit runs Markdown/link and architecture checks only: the matrix above is
-future acceptance work, not claimed implementation evidence.
+checks; do not infer them from an isolated crate run. The original design-only
+commit ran Markdown/link and architecture checks; it did not establish the
+acceptance matrix. Current implementation and regression results are attributed
+to their exact source and environment in PR #354. The matrix remains the required
+evidence rather than a declaration that final acceptance or merge has completed.
 
 ### Raw incoming read evidence (issue 261 correction)
 

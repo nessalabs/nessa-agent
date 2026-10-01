@@ -1,6 +1,7 @@
 //! Bounded synchronous sync-engine reads over the authenticated metadata port.
-//! #260 will supply the network boundary; this adapter accepts only a scope and
-//! caller already chosen by the host, and never opens a writer or provider.
+//! Product catalogue dispatch supplies the authenticated network boundary.
+//! This adapter accepts only a scope and caller already chosen by the host,
+//! and never opens a writer or provider.
 
 use crate::conversation::{
     application::{

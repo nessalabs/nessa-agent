@@ -58,7 +58,7 @@ explicit epoch reset retaining deletion evidence while live absence is unknown.
 
 ## Authenticated product transport (#297)
 
-The proposed transport adds `conversation.catalogueHead`,
+The implemented transport exposes `conversation.catalogueHead`,
 `conversation.catalogueManifest`, and `conversation.catalogueResolve` to `/session`.
 Head accepts the bound receiver and current access epoch, authorizes them first,
 and then discovers the metadata incarnation. Manifest and resolve carry the exact

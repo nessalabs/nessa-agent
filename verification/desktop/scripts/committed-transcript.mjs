@@ -3,7 +3,7 @@
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { css } from "./lib/selectors.mjs"
+import { committedRoles, css } from "./lib/selectors.mjs"
 
 await main(
   {
@@ -26,21 +26,21 @@ await main(
         })
         const { page } = opened
         try {
-          for (const [label, state, authority, expectedNotices, expectedActions] of [
-            ["complete", "complete", true, 0, 2],
-            ["partial", "partial", true, 1, 0],
-            ["stale", "stale", true, 1, 0],
-            ["unknown", "unknown", true, 1, 0],
-            ["not_loaded", "not_loaded", true, 1, 0],
-            ["complete_empty", "complete_empty", true, 0, 0],
-            ["complete without live attachment", "complete", false, 0, 0],
-            ["complete", "complete", true, 0, 2],
+          for (const [state, authority, expectedNotices, expectedActions] of [
+            ["complete", true, 0, 2],
+            ["partial", true, 1, 0],
+            ["stale", true, 1, 0],
+            ["unknown", true, 1, 0],
+            ["not_loaded", true, 1, 0],
+            ["complete_empty", true, 0, 0],
+            ["complete", false, 0, 0],
+            ["complete", true, 0, 2],
           ]) {
             await attempt(
               rep,
               { engine, width, name: `${state}:${authority}` },
               async () => {
-                await page.getByRole("button", { name: label, exact: true }).click()
+                await page.getByRole(...committedRoles.state(state, authority)).click()
                 await page.waitForFunction(
                   ([selector, name]) =>
                     document.querySelector(selector)?.dataset.case === name,
@@ -83,20 +83,13 @@ await main(
               rep,
               { engine, width, name: `questions:${limited}` },
               async () => {
-                await page
-                  .getByRole("button", {
-                    name: limited ? "questions with display limit" : "questions",
-                    exact: true,
-                  })
-                  .click()
+                await page.getByRole(...committedRoles.questions(limited)).click()
                 await page.waitForFunction(
                   ([selector, name]) =>
                     document.querySelector(selector)?.dataset.case === name,
                   [css.committedFixture, `questions:${limited}`],
                 )
-                const inputs = page.locator(
-                  `${css.committedQuestions} input[type="radio"]`,
-                )
+                const inputs = page.locator(css.committedQuestionInputs)
                 if (step === 0) await inputs.nth(1).check()
                 const selected = await inputs.evaluateAll((nodes) =>
                   nodes.map((node) => node.checked),
@@ -144,10 +137,7 @@ await main(
               { engine, width, name: `tab-history:${state}:${truncated}` },
               async () => {
                 await page
-                  .getByRole("button", {
-                    name: `tabs:${state}${truncated ? ":truncated" : ""}`,
-                    exact: true,
-                  })
+                  .getByRole(...committedRoles.tabHistory(state, truncated))
                   .click()
                 await page.waitForFunction(
                   ([selector, name]) =>
@@ -157,9 +147,7 @@ await main(
                 const saved = await page
                   .locator(css.historyTabConsumer)
                   .getAttribute("data-saved-count")
-                await page
-                  .getByRole("button", { name: "Close history tab", exact: true })
-                  .click()
+                await page.getByRole(...committedRoles.closeHistory).click()
                 await page.waitForFunction(
                   (selector) =>
                     document.querySelector(selector)?.dataset.originalTabPresent ===
