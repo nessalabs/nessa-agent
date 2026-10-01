@@ -665,3 +665,116 @@ fn cancellation_and_deadline_overflow_before_callback_close_without_entering_dri
         peer.join().unwrap();
     }
 }
+
+#[test]
+fn catalogue_resolve_preserves_oversized_entry_and_transport_cause() {
+    use crate::product::catalogue_read::wire::wire_descriptor;
+    use crate::product_contract::generated::CatalogueReadErrorCode;
+    use nessa_sync::replication::catalogue::{
+        CataloguePass, CatalogueSource, CatalogueSourceError, EntryKey, ManifestEntry,
+        ManifestRequest,
+    };
+    for (code, expected) in [
+        (
+            CatalogueReadErrorCode::OversizedEntry,
+            CatalogueSourceError::OversizedEntry,
+        ),
+        (
+            CatalogueReadErrorCode::SourceUnavailable,
+            CatalogueSourceError::Unavailable,
+        ),
+    ] {
+        let scope = Scope::new(
+            Id::new("receiver").unwrap(),
+            Id::new("gateway").unwrap(),
+            conversation_catalogue_stream(
+                &OrganizationId::new("org").unwrap(),
+                &PrincipalId::new("owner").unwrap(),
+            ),
+            Id::new("incarnation").unwrap(),
+            conversation_catalogue_schema(),
+            Id::new("epoch-3").unwrap(),
+        );
+        let descriptor = ManifestEntry {
+            key: EntryKey {
+                creation: 1,
+                id: Id::new("conversation").unwrap(),
+            },
+            revision: 1,
+            deleted: false,
+        };
+        let actual = scope.clone();
+        let (endpoint, peer) = peer(move |socket| {
+            let head = request(socket);
+            assert_eq!(head.method, product_method::CONVERSATION_CATALOGUE_HEAD);
+            send(
+                socket,
+                OutgoingMessage::Response(
+                    ResponseFrame::success(
+                        &head.id,
+                        &json!({"scope": wire_scope(&actual), "head":"1"}),
+                    )
+                    .unwrap(),
+                ),
+            );
+            let manifest = request(socket);
+            assert_eq!(
+                manifest.method,
+                product_method::CONVERSATION_CATALOGUE_MANIFEST
+            );
+            let page = json!({
+                "request": manifest.params["request"],
+                "entries": [wire_descriptor(&descriptor)],
+                "hasMore": false,
+            });
+            send(
+                socket,
+                OutgoingMessage::Response(ResponseFrame::success(&manifest.id, &page).unwrap()),
+            );
+            let resolve = request(socket);
+            assert_eq!(
+                resolve.method,
+                product_method::CONVERSATION_CATALOGUE_RESOLVE
+            );
+            assert_eq!(resolve.params["maxPayloadBytes"], 1);
+            send(
+                socket,
+                OutgoingMessage::Response(ResponseFrame::failure(
+                    &resolve.id,
+                    code.as_str(),
+                    "typed source refusal",
+                )),
+            );
+            assert!(socket.read().is_err());
+        });
+        let connection = GatewayConnection::new(connect(&endpoint));
+        let mut source = connection.catalogue(Id::new("receiver").unwrap(), 3);
+        let discovery = connection.run(|| source.discover()).unwrap();
+        assert_eq!(discovery.result.unwrap().unwrap(), (scope.clone(), 1));
+        let pass = CataloguePass {
+            scope,
+            completed: 0,
+            boundary: 1,
+            cursor: None,
+            generation: 1,
+        };
+        let manifest = connection
+            .run(|| {
+                source.manifest(&ManifestRequest {
+                    pass: pass.clone(),
+                    max_entries: 1,
+                })
+            })
+            .unwrap();
+        let manifest = manifest.result.unwrap().unwrap();
+        let resolve = connection
+            .run(|| source.resolve(&pass, &manifest.entries[0].key.id, 1))
+            .unwrap();
+        assert_eq!(resolve.result.unwrap(), Err(expected));
+        assert_eq!(resolve.outcome.failure, Some(GatewayError::Catalogue(code)));
+        assert!(matches!(connection.begin(), Err(GatewayError::Transport)));
+        drop(source);
+        drop(connection);
+        peer.join().unwrap();
+    }
+}

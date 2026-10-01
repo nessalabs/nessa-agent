@@ -364,6 +364,9 @@ fn catalogue_error(error: GatewayError) -> CatalogueSourceError {
         | GatewayError::Catalogue(CatalogueReadErrorCode::IdentityChanged) => {
             CatalogueSourceError::IdentityChanged
         }
+        GatewayError::Catalogue(CatalogueReadErrorCode::OversizedEntry) => {
+            CatalogueSourceError::OversizedEntry
+        }
         GatewayError::InvalidRequest
         | GatewayError::Catalogue(CatalogueReadErrorCode::InvalidRequest) => {
             CatalogueSourceError::InvalidRequest

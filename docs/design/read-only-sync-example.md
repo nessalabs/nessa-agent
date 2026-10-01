@@ -219,6 +219,7 @@ confirmed cache effects.
 | O6 | Stdout fails after confirmed commit; command is repeated or offline state is reopened | Report output failure without repeating effects; reopening sees original confirmed D/A/data and exact-repeat semantics. `online_process_restarts_reuse_actual_binding` |
 | O7 | Client and gateway restart | Reopen the same credential, membership, receiver authority and source/cache stores; resolve current canonical endpoint publication and retain the issued receiver/profile. No new issue/pair/epoch. `online_process_restarts_reuse_actual_binding` |
 | O8 | Source appends after finite pass capture | Finish original target and report original head/time; no retarget or extra head observation. Existing D4a driver regression plus `online_source_append_does_not_retarget_captured_pass`. |
+| O9 | Authenticated catalogue resolve refuses an entry exceeding the supplied remaining payload budget | Preserve core OversizedEntry separately from transient Unavailable and retain the exact gateway refusal cause; the connection closes without an implicit retry. `catalogue_resolve_preserves_oversized_entry_and_transport_cause` exercises the real session facade and correlated wire response. |
 
 ## Transaction and resource policy
 
