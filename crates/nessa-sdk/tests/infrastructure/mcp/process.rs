@@ -223,6 +223,17 @@ async fn a_stand_in_that_ends_stops_its_server_and_everything_it_started() {
 }
 
 #[tokio::test]
+async fn a_closed_session_has_no_server_process_left_once_close_returns() {
+    let (servers, _) = process(&["--ignore-eof"]);
+    let session = listed(&servers).await;
+    let pid = i64::from(session.process_id().unwrap());
+    // It ignores its closed stdin: killed after the grace, and reaped before
+    // close returns, so nothing of it is left — not even an exit status.
+    session.close().await;
+    assert!(!alive(pid), "process {pid} is left after close returned");
+}
+
+#[tokio::test]
 async fn a_session_dropped_without_closing_kills_its_process_group() {
     let (servers, _) = process(&["--ignore-eof", "--child"]);
     let session = servers.open("fixture").await.unwrap();

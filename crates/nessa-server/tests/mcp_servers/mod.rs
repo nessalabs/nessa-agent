@@ -71,6 +71,9 @@ fn the_digest_changes_with_the_command_and_each_argument_and_their_boundaries() 
     // Where one argument ends is part of it: ["ab"] is not ["a", "b"].
     let joined = configuration_digest(&base.command, &["ab".into()]);
     let split = configuration_digest(&base.command, &["a".into(), "b".into()]);
+    // And with as many arguments either way: ["ab", "c"] is not ["a", "bc"].
+    let left = configuration_digest(&base.command, &["ab".into(), "c".into()]);
+    let right = configuration_digest(&base.command, &["a".into(), "bc".into()]);
     let none = configuration_digest(&base.command, &[]);
     let empty = configuration_digest(&base.command, &[String::new()]);
     let all = [
@@ -79,6 +82,8 @@ fn the_digest_changes_with_the_command_and_each_argument_and_their_boundaries() 
         &other_args,
         &joined,
         &split,
+        &left,
+        &right,
         &none,
         &empty,
     ];
@@ -188,6 +193,12 @@ async fn a_hello_that_is_not_one_bounded_json_line_is_closed_without_an_answer()
         b"not json\n".to_vec(),
         b"{\"server\":\"fixture\",\"configuration\":\"x\",\"extra\":1}\n".to_vec(),
         vec![b' '; MAX_HELLO_BYTES + 1],
+        // A hello that would be read, but only past the bound.
+        [
+            vec![b' '; MAX_HELLO_BYTES],
+            b"{\"server\":\"fixture\",\"configuration\":\"x\"}\n".to_vec(),
+        ]
+        .concat(),
     ] {
         let (mut read, mut write) = connect(&relay);
         write.write_all(&bytes).await.unwrap();

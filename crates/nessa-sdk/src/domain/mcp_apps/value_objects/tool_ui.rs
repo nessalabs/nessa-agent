@@ -22,7 +22,9 @@ impl UiResourceUri {
     /// [`MAX_UI_URI_BYTES`], and [`McpAppError::InvalidValue`] for whitespace
     /// or a control character.
     pub fn new(uri: impl Into<String>) -> Result<Self, McpAppError> {
-        let uri = uri.into();
+        Self::checked(uri.into())
+    }
+    fn checked(uri: String) -> Result<Self, McpAppError> {
         if uri.len() > MAX_UI_URI_BYTES {
             return Err(McpAppError::ValueTooLong {
                 field: "UI resource URI",
