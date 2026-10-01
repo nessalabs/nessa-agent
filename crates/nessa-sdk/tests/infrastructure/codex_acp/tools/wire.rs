@@ -2,7 +2,8 @@
 //! carried, and a permission request is never reviewed without naming its tool.
 use super::*;
 use crate::domain::agent_execution::tools::{
-    FilePath, ToolContent, ToolContentView, ToolKind, ToolObservation, MAX_STRUCTURED_RESULT_BYTES,
+    FilePath, ToolContent, ToolContentView, ToolKind, ToolObservation, ToolStatus,
+    MAX_STRUCTURED_RESULT_BYTES,
 };
 use serde_json::json;
 
@@ -485,10 +486,11 @@ fn rejected_observations_do_not_retain_input_or_charge_its_budget() {
 }
 
 /// The announcement codex-acp 1.12.0 sends for an MCP call
-/// (`index.js:23035-23045`): dotted title, `execute`, exact names in
-/// `rawInput`, and the MCP marker in `_meta`.
+/// (`index.js:23035-23045`, and as recorded live in `fixtures/mcp_live_frames.json`):
+/// dotted title, `execute`, `in_progress`, exact names in `rawInput`, and the
+/// MCP marker in `_meta`.
 fn mcp_call(id: &str) -> Value {
-    json!({"toolCallId":id,"title":"mcp.charts.app.show","kind":"execute","status":"pending",
+    json!({"sessionUpdate":"tool_call","toolCallId":id,"title":"mcp.charts.app.show","kind":"execute","status":"in_progress",
         "rawInput":{"server":"charts.app","tool":"show","arguments":{"n":2}},
         "_meta":{"is_mcp_tool_call":true}})
 }
@@ -668,4 +670,65 @@ fn a_malformed_mcp_result_refuses_the_frame_before_anything_is_retained() {
         );
         assert!(tools.entries.is_empty());
     }
+}
+
+/// Every frame codex-acp 1.12.0 sent for five real MCP calls, recorded through
+/// the gateway against `scripts/mcp-test-server` (see the fixture's `recorded`).
+#[test]
+fn recorded_codex_mcp_calls_carry_identity_text_and_structured_results() {
+    let recorded: Value =
+        serde_json::from_str(include_str!("fixtures/mcp_live_frames.json")).unwrap();
+    let mut tools = ObservedTools::default();
+    let mut last = HashMap::new();
+    for (tool, frames) in recorded["calls"].as_object().unwrap() {
+        let mut named = Vec::new();
+        for frame in frames.as_array().unwrap() {
+            let update = tool_call(frame, &mut tools).unwrap();
+            if let Some(identity) = update.mcp_tool() {
+                named.push((identity.server().to_owned(), identity.tool().to_owned()));
+            }
+            last.insert(tool.clone(), update);
+        }
+        // Named exactly, and the same on every frame that names it.
+        assert!(!named.is_empty(), "{tool}");
+        assert!(
+            named
+                .iter()
+                .all(|pair| pair == &("mcptest".to_owned(), tool.clone())),
+            "{tool}: {named:?}"
+        );
+    }
+    let content = |tool: &str| last[tool].content().clone().unwrap();
+    assert_eq!(
+        content("report_rows"),
+        vec![
+            text("Two rows: alpha (10), beta (20)."),
+            ToolContent::structured(
+                r#"{"rows":[{"id":1,"name":"alpha","value":10},{"id":2,"name":"beta","value":20}],"total":30}"#
+            )
+            .unwrap(),
+        ]
+    );
+    assert_eq!(
+        content("link_resources"),
+        vec![
+            text("One link and one embedded resource follow."),
+            text("file:///nessa-test/rows.csv"),
+            text("Embedded note from nessa-test."),
+        ]
+    );
+    assert_eq!(
+        content("rows.get"),
+        vec![
+            text("Row 2: beta"),
+            ToolContent::structured(r#"{"id":2,"name":"beta","value":20}"#).unwrap(),
+        ]
+    );
+    // Codex reports an MCP error result as a failed call, its text kept.
+    assert_eq!(last["always_fails"].status(), &Some(ToolStatus::Failed));
+    assert_eq!(
+        content("always_fails"),
+        vec![text("This tool always fails, on purpose.")]
+    );
+    assert_eq!(content("show_chart")[0], text("Chart of two rows."));
 }

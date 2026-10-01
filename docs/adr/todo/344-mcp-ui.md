@@ -126,28 +126,31 @@ app widgets alike.
 
 ## What each harness passes through ACP
 
-A spike for #347, read from the pinned harnesses installed with the app —
-`@agentclientprotocol/claude-agent-acp` 0.76.0 (and the Claude Code CLI it
-drives, 0.3.257), `@agentclientprotocol/codex-acp` 1.12.0 (over codex
-0.154.0), and Opencode 1.18.31 — not from a recorded turn: the repository's
-MCP frames are hand-written, and none was run against a live server with UI.
-Claude's adapter and codex-acp are readable JavaScript and are cited by line;
-the Claude CLI, codex and Opencode are compiled, and what is said of them comes
-from their embedded strings and bundles.
+A spike for #347, first read from the pinned harnesses' bundled code and then
+**observed** in live turns: a real gateway, the real harness, a real model, and
+the test MCP server `scripts/mcp-test-server/` configured as `mcptest`, with
+every ACP frame and every MCP frame recorded (`live-check.mjs`, 2026-10-01).
+Claude ran `@agentclientprotocol/claude-agent-acp` 0.76.0 on `claude-sonnet-5`;
+Codex ran `@agentclientprotocol/codex-acp` 1.12.0 (codex 0.154.0) on
+`gpt-5.6-terra`. Opencode 1.18.31 could not be run: the gateway refuses it
+without an OpenCode credential, and this machine has none, so its column is
+still read from its compiled bundle. The recorded frames are the SDK parser
+tests' fixtures (`tests/infrastructure/{claude_acp,codex_acp}/tools/fixtures/`).
 
-| | Claude ACP 0.76.0 | Codex ACP 1.12.0 | Opencode 1.18.31 |
+| | Claude ACP 0.76.0 (observed) | Codex ACP 1.12.0 (observed) | Opencode 1.18.31 (from bundled code) |
 | --- | --- | --- | --- |
-| Server and tool | `_meta.claudeCode.toolName` (and `title`) is `mcp__<server>__<tool>`, each name with `[^A-Za-z0-9_-]` replaced by `_`; kind `other` (`tools.js:335-340`). Only a configured prefix says where the server ends: Nessa's server names hold no `__` but may end in `_` | `rawInput.{server, tool}` exactly; title `mcp.<server>.<tool>`, kind `execute`, `_meta.is_mcp_tool_call` (`index.js:23035-23045`) | title `<server>_<tool>` after the same replacement, kind `other`, no `_meta`: cannot be split |
-| The tool's `_meta` (`ui.resourceUri`) | not passed on; neither the adapter nor the CLI mentions `resourceUri` | codex has `mcpAppResourceUri` on the call; codex-acp does not copy it | not passed on |
-| The result's `_meta` | only in an opt-in `_claude/sdkMessage` notification, not a `session/update` | `rawOutput.result._meta` | dropped |
-| `structuredContent` | replaces the result's text blocks as JSON text: indistinguishable from text | `rawOutput.result.structuredContent` | JSON text only when there is no other content |
-| resource, resource_link | turned into text by the CLI; never an ACP `resource` or `resource_link` block | only inside `rawOutput.result.content`; no ACP content at all for an MCP call | resource text becomes text; links dropped |
-| `rawOutput` | the Anthropic `tool_result` content | `{result: {content, structuredContent, _meta} \| null, error: {message} \| null}` (`index.js:23151-23159`) | `{output, metadata?, attachments?}` |
+| Server and tool | `_meta.claudeCode.toolName` and `title` are `mcp__<server>__<tool>` on every frame, each name with `[^A-Za-z0-9_-]` replaced by `_`: `rows.get` arrives as `rows_get`; kind `other`. Only a configured prefix says where the server ends: Nessa's server names hold no `__` but may end in `_`. Each MCP call is preceded by a `ToolSearch` call that loads its schema | `rawInput.{server, tool}` exactly (`rows.get` kept); title `mcp.<server>.<tool>`, kind `execute`; `_meta.is_mcp_tool_call` on the announcement only, which is `in_progress`; a bare `{status: in_progress}` update follows; the completion repeats `rawInput` without the marker | title `<server>_<tool>` after the same replacement, kind `other`, no `_meta`: cannot be split |
+| The tool's `_meta` (`ui.resourceUri`) | **not passed on**: no `ui://` or `resourceUri` in any frame | **not passed on**: no `ui://` or `resourceUri` in any frame | not passed on |
+| The result's `_meta` | not in any `session/update` | `rawOutput.result._meta` (`null` when the result has none) | dropped |
+| `structuredContent` | replaces the result's text as JSON text, in `content`, `rawOutput`, and a separate update's `_meta.claudeCode.toolResponse`: indistinguishable from text | `rawOutput.result.structuredContent`, verbatim (`null` when absent) | JSON text only when there is no other content |
+| resource, resource_link | turned into text: `[Resource link: <name>] <uri>`, `[Resource from <server> at <uri>] <text>`; never an ACP `resource` or `resource_link` block | verbatim inside `rawOutput.result.content`; no ACP content at all for an MCP call | resource text becomes text; links dropped |
+| `isError` | the call ends `failed`; `rawOutput` is the error text | the call ends `failed`; `rawOutput.result` has no `isError` field | — |
+| `rawOutput` | the result text (a string), or the text blocks | `{result: {content, structuredContent, _meta} \| null, error: {message} \| null}` | `{output, metadata?, attachments?}` |
 
-Unverified: whether codex keeps an MCP result's blocks verbatim in
-`rawOutput.result.content` (codex's source was not available, only its strings);
-what a Claude PostToolUse hook's `tool_response` holds for an MCP tool;
-Opencode's readable source.
+Seen once, not explained: in two of three Codex runs the model answered that
+the `mcptest` tools were not available, though codex had started the server;
+the third run, with the server's traffic recorded, called all five. Codex run
+directly (`codex exec`) behaved the same way once. Unverified: Opencode, live.
 
 What #347 builds on it: the SDK carries an MCP call's server and tool
 (`McpTool`) from Claude, split at the one configured prefix that fits (its tool

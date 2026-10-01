@@ -562,6 +562,12 @@ live under their feature name with domain, application and infrastructure owners
 All additional Nessa tools use this MCP boundary. See the
 [server guide](../crates/nessa-mcp/README.md).
 
+`scripts/mcp-test-server/` is developer tooling, not a Nessa tool: a
+dependency-free stdio MCP server whose tools return structured results, resource
+blocks, a dotted name, an error, and an MCP Apps UI resource, and a live check
+that runs it under a real gateway and agent and records every ACP and MCP frame.
+See [its README](../scripts/mcp-test-server/README.md).
+
 `src/conversation/adapters/agent-stream/` maps replacement gateway projections to
 Nessa UI AgentEvent/TranscriptBuilder. `ui/agent-transcript-view.ts` derives one
 turn-level activity row from the shared Transcript; `ui/turn-activity.tsx` opens
