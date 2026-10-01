@@ -3,6 +3,7 @@ import { generatedStrings } from "../../model/testing"
 import {
   paneItemKey,
   paneItemOf,
+  roomProbeKey,
   sessionItem,
   widgetItem,
   type PaneItem,
@@ -88,5 +89,16 @@ describe("a pane item's key", () => {
       "w:a b:c",
     ])
       expect(paneItemOf(stray), stray).toBeNull()
+  })
+
+  it("never equals the room probe's key, whatever the item", () => {
+    expect(paneItemOf(roomProbeKey)).toBeNull()
+    for (const item of [
+      sessionItem("?"),
+      sessionItem(""),
+      widgetItem({ plugin: "", id: "beside" }),
+      widgetItem({ plugin: "?", id: "?" }),
+    ])
+      expect(paneItemKey(item)).not.toBe(roomProbeKey)
   })
 })

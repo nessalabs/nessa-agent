@@ -54,6 +54,13 @@ export function paneItemKey(item: PaneItem): PaneItemKey {
 }
 
 /**
+ * A key no item has: neither prefix, so `paneItemKey` never writes it and no
+ * pane can hold it. What asks only whether the room fits one more pane uses
+ * it, so a real item with any plugin and id can never answer for the room.
+ */
+export const roomProbeKey = "?" as PaneItemKey
+
+/**
  * The item a pane's key names, or `null` for a string `paneItemKey` did not
  * write — which no pane holds, but a drag may carry from outside the grid.
  */

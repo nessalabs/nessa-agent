@@ -360,6 +360,19 @@ describe("a drop commits what its drag previewed", () => {
   })
 })
 
+describe("what a split promises, whatever the panes show", () => {
+  it("offers beside when the room fits, even beside a widget whose key a probe could have shared", () => {
+    // A widget of no plugin and id "beside" was the probe's own key once, and
+    // a pane showing it made the room look full.
+    const state = openWidget(loaded(), {
+      widget: { plugin: "", id: "beside" },
+      origin: "a",
+      room: roomy,
+    })
+    expect(canOpenBeside(state, { side: "bottom", room: roomy })).toBe(true)
+  })
+})
+
 describe("a widget in a pane of its own", () => {
   const run = { plugin: "experiments", id: "run:1" }
   const runShown = "widget experiments/run:1"

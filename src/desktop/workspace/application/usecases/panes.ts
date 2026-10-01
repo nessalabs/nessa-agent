@@ -36,6 +36,7 @@ import {
 } from "../../../split-panes/model/pane-sizing"
 import {
   paneItemKey,
+  roomProbeKey,
   sessionItem,
   widgetItem,
   type PaneItem,
@@ -255,10 +256,9 @@ export function canOpenBeside(
   const panes = state.panes
   if (!panes) return false
   const beside = target ?? panes.focused
-  // A stand-in no pane is expected to show — a widget of no plugin — so only the room decides.
-  const probe = paneItemKey(widgetItem({ plugin: "", id: "beside" }))
+  // A key no pane can hold, so only the room decides.
   const sides: readonly Side[] = side ? [side] : ["right", "bottom"]
-  return sides.some((each) => besideIn(panes, beside, each, probe, room) !== null)
+  return sides.some((each) => besideIn(panes, beside, each, roomProbeKey, room) !== null)
 }
 
 /**
