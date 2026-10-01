@@ -157,7 +157,7 @@ await main(
   {
     name: "load-fallback",
     summary: "the load fallback sits inside, and centred in, the visible window",
-    defaults: { layout: "columns" },
+    defaults: { engine: "chromium,webkit" },
   },
   async ({ options, rep, url }) => {
     const origin = new URL(url).origin
@@ -186,8 +186,35 @@ await main(
                 try {
                   await context.addInitScript(fakeHost, scenario.host)
                   const page = await context.newPage()
-                  // Hold the frontend back so the fallback is what stays.
-                  await page.route(css.frontendEntry, (route) => route.abort())
+                  const errors = []
+                  const held = new Set()
+                  const heldUrls = new Set()
+                  page.on("pageerror", (error) =>
+                    errors.push(`pageerror: ${error.message.split("\n")[0]}`),
+                  )
+                  page.on("console", (message) => {
+                    if (message.type() !== "error") return
+                    // Chromium reports each held-back script once more, as a
+                    // failed resource at that script's URL.
+                    if (heldUrls.has(message.location()?.url ?? "")) return
+                    errors.push(`console.error: ${message.text().slice(0, 300)}`)
+                  })
+                  // Hold the frontend back so the fallback is what stays: every
+                  // script the page loads, whether dev's /src/main.tsx or a
+                  // production build's hashed entry. The bootstrap is inline.
+                  await page.route("**/*", (route) => {
+                    if (route.request().resourceType() !== "script")
+                      return route.continue()
+                    held.add(route.request())
+                    heldUrls.add(route.request().url())
+                    return route.abort()
+                  })
+                  page.on("requestfailed", (request) => {
+                    if (held.has(request) || /favicon\.ico/.test(request.url())) return
+                    errors.push(
+                      `requestfailed: ${request.url()} ${request.failure()?.errorText ?? ""}`,
+                    )
+                  })
                   const search = scenario.surface === "setup" ? "?surface=setup" : ""
                   await page.goto(`${origin}/index.html${search}`)
                   await page.waitForSelector(css.loadMark)
@@ -195,6 +222,9 @@ await main(
                   await page.evaluate(() => new Promise(requestAnimationFrame))
                   const m = await measure(page)
                   const result = check(scenario, m)
+                  if (held.size === 0)
+                    result.failures.push("no frontend script was held back")
+                  result.failures.push(...errors)
                   if (motion === "reduce" && m.animations !== 0)
                     result.failures.push(
                       `${m.animations} animations run with reduced motion`,

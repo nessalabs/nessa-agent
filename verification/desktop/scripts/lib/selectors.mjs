@@ -23,7 +23,6 @@ export const css = {
   loadMessage: "[data-nessa-load-message]",
   loadMark: "[data-nessa-load-mark]",
   loadTitle: "[data-nessa-load-title]",
-  frontendEntry: /\/src\/main\.tsx/,
 
   // Panes (data-pane-key is the pane's identity; data-pane-focused marks the focused one)
   pane: "[data-pane-key]",
