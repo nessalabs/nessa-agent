@@ -6,8 +6,7 @@ test("the embedded document explains a frontend that never replaces it", () => {
   const document = readFileSync("index.html", "utf8")
 
   assert.match(document, /data-nessa-load-fallback/)
-  assert.match(document, /Loading Nessa/)
-  assert.match(document, /If this stays on screen/)
+  assert.match(document, /data-nessa-load-title>Loading</)
 })
 
 test("only an embedded debug host automatically reveals the completed panel", () => {

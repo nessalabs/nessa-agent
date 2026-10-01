@@ -44,63 +44,25 @@ describe("embedded load fallback", () => {
     },
   )
 
-  it("stays painted inside a bottom-right clipped panel", () => {
-    const { fallback, message } = load("")
+  it.each(["", "?surface=panel", "?other=value&surface=setup", "?surface=main"])(
+    "centers %s in its viewport",
+    (search) => {
+      const { fallback, message } = load(search)
+      const fallbackStyle = getComputedStyle(fallback)
+      const messageStyle = getComputedStyle(message)
 
-    const fallbackStyle = getComputedStyle(fallback)
-    const messageStyle = getComputedStyle(message)
-    expect(fallback.getAttribute("style")).toBeNull()
-    expect(message.getAttribute("style")).toBeNull()
-    expect(fallbackStyle.position).toBe("fixed")
-    expect(fallbackStyle.inset).toBe("0px")
-    expect(messageStyle.position).toBe("fixed")
-    expect(messageStyle.right).toBe("0px")
-    expect(messageStyle.bottom).toBe("0px")
-    expect(messageStyle.maxWidth).toBe(`${innerWidth}px`)
-    expect(messageStyle.maxHeight).toBe(`${innerHeight}px`)
-    expect(messageStyle.overflowWrap).toBe("anywhere")
-
-    const messageWidth = Number.parseFloat(messageStyle.width)
-    const messageHeight = Number.parseFloat(messageStyle.height)
-    expect(messageWidth).toBeLessThanOrEqual(320)
-    expect(messageHeight).toBeLessThanOrEqual(320)
-
-    // macOS gives WebKit an oversized stage while clipping its bottom-right
-    // to the configured panel. Apply the computed box to that actual geometry.
-    const stage = { width: 1440, height: 900 }
-    const panel = { width: 400, height: 320 }
-    const clip = {
-      left: stage.width - panel.width,
-      top: stage.height - panel.height,
-      right: stage.width,
-      bottom: stage.height,
-    }
-    const box = {
-      left: stage.width - messageWidth,
-      top: stage.height - messageHeight,
-      right: stage.width,
-      bottom: stage.height,
-    }
-    expect(box.left).toBeGreaterThanOrEqual(clip.left)
-    expect(box.top).toBeGreaterThanOrEqual(clip.top)
-    expect(box.right).toBeLessThanOrEqual(clip.right)
-    expect(box.bottom).toBeLessThanOrEqual(clip.bottom)
-  })
-
-  it("centers setup in its ordinary viewport", () => {
-    const { fallback, message } = load("?other=value&surface=setup")
-    const fallbackStyle = getComputedStyle(fallback)
-    const messageStyle = getComputedStyle(message)
-
-    expect(document.documentElement.dataset.nessaSurface).toBe("setup")
-    expect(fallbackStyle.inset).toBe("0px")
-    expect(messageStyle.position).toBe("fixed")
-    expect(messageStyle.inset).toBe("0px")
-    expect(messageStyle.width).toBe("auto")
-    expect(messageStyle.height).toBe("auto")
-    expect(messageStyle.display).toBe("grid")
-    expect(messageStyle.placeContent).toBe("center")
-    expect(messageStyle.maxWidth).toBe(`${innerWidth}px`)
-    expect(messageStyle.maxHeight).toBe(`${innerHeight}px`)
-  })
+      expect(fallback.getAttribute("style")).toBeNull()
+      expect(message.getAttribute("style")).toBeNull()
+      expect(message.textContent?.trim()).toBe("Loading")
+      expect(fallbackStyle.inset).toBe("0px")
+      expect(messageStyle.position).toBe("fixed")
+      expect(messageStyle.inset).toBe("0px")
+      expect(messageStyle.width).toBe("auto")
+      expect(messageStyle.height).toBe("auto")
+      expect(messageStyle.display).toBe("grid")
+      expect(messageStyle.placeContent).toBe("center")
+      expect(messageStyle.maxWidth).toBe(`${innerWidth}px`)
+      expect(messageStyle.maxHeight).toBe(`${innerHeight}px`)
+    },
+  )
 })
