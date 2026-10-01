@@ -265,7 +265,7 @@ struct QueuedResponse {
 
 enum WireResponse {
     Ordinary(Box<OutgoingMessage>),
-    Record { text: String, deadline: Instant },
+    Record { text: String },
 }
 
 const RECORD_SEND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -275,8 +275,19 @@ impl WireResponse {
         Self::Ordinary(Box::new(message))
     }
     fn record(text: String) -> Self {
-        Self::Record {
-            text,
+        Self::Record { text }
+    }
+}
+
+// The lane owns its lifetime, including ordinary wire refusals of passive reads.
+struct QueuedRecordResponse {
+    response: QueuedResponse,
+    deadline: Instant,
+}
+impl QueuedRecordResponse {
+    fn new(response: QueuedResponse) -> Self {
+        Self {
+            response,
             deadline: Instant::now() + RECORD_SEND_TIMEOUT,
         }
     }
@@ -288,6 +299,7 @@ enum ControlOutput {
 }
 
 enum WriterResponse {
+    Record(Box<QueuedRecordResponse>),
     Queued(Box<QueuedResponse>),
     Refusal(Box<OutgoingMessage>),
 }
@@ -297,14 +309,14 @@ async fn write_authenticated<S>(
     mut controls: mpsc::Receiver<ControlOutput>,
     mut refusals: mpsc::Receiver<OutgoingMessage>,
     mut ordinary: mpsc::Receiver<QueuedResponse>,
-    mut records: mpsc::Receiver<QueuedResponse>,
+    mut records: mpsc::Receiver<QueuedRecordResponse>,
     write_timeout: Duration,
 ) where
     S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin,
 {
     // Moving the record out of its lane observes its original deadline, not a
     // physical-send priority change. Its slot still bounds queue + local state.
-    let mut pending_record: Option<QueuedResponse> = None;
+    let mut pending_record: Option<QueuedRecordResponse> = None;
     loop {
         let deadline = queued_record_deadline(&pending_record);
         let next = tokio::select! {
@@ -321,11 +333,16 @@ async fn write_authenticated<S>(
             Some(response) = refusals.recv() => Some(Ok(WriterResponse::Refusal(Box::new(response)))),
             Some(response) = ordinary.recv() => Some(Ok(WriterResponse::Queued(Box::new(response)))),
             () = std::future::ready(()), if pending_record.is_some() =>
-                Some(Ok(WriterResponse::Queued(Box::new(pending_record.take().expect("pending record selected"))))),
+                Some(Ok(WriterResponse::Record(Box::new(pending_record.take().expect("pending record selected"))))),
             else => None,
         };
         let writing = async {
             match next {
+                Some(Ok(WriterResponse::Record(response))) => {
+                    send_record_queued(write_timeout, &mut sink, *response)
+                        .await
+                        .is_ok()
+                }
                 Some(Ok(WriterResponse::Queued(response))) => {
                     let QueuedResponse {
                         message,
@@ -363,11 +380,8 @@ async fn write_authenticated<S>(
     }
 }
 
-fn queued_record_deadline(response: &Option<QueuedResponse>) -> Option<Instant> {
-    match response.as_ref().map(|response| &response.message) {
-        Some(WireResponse::Record { deadline, .. }) => Some(*deadline),
-        Some(WireResponse::Ordinary(_)) | None => None,
-    }
+fn queued_record_deadline(response: &Option<QueuedRecordResponse>) -> Option<Instant> {
+    response.as_ref().map(|response| response.deadline)
 }
 
 async fn wait_for_record_deadline(deadline: Option<Instant>) {
@@ -430,7 +444,7 @@ where
                 let sent = match class {
                     ResponseClass::Control => control_send.try_send(ControlOutput::Response(Box::new(queued))).is_ok(),
                     ResponseClass::Ordinary => ordinary_send.try_send(queued).is_ok(),
-                    ResponseClass::Record => record_send.try_send(queued).is_ok(),
+                    ResponseClass::Record => record_send.try_send(QueuedRecordResponse::new(queued)).is_ok(),
                 };
                 if !sent { break; }
             }
@@ -492,7 +506,7 @@ where
                     let sent = if control {
                         control_send.try_send(ControlOutput::Response(Box::new(queued))).is_ok()
                     } else if record {
-                        record_send.try_send(queued).is_ok()
+                        record_send.try_send(QueuedRecordResponse::new(queued)).is_ok()
                     } else {
                         ordinary_send.try_send(queued).is_ok()
                     };
@@ -1083,16 +1097,32 @@ async fn send_queued<S: Sink<Message> + Unpin>(
 ) -> Result<(), ()> {
     match message {
         WireResponse::Ordinary(message) => send(write_timeout, socket, *message).await,
-        WireResponse::Record { text, deadline } => {
+        WireResponse::Record { text } => {
             if text.len() > MAX_RECORD_RESPONSE_BYTES {
                 return Err(());
             }
-            timeout_at(deadline, socket.send(Message::Text(text.into())))
+            socket
+                .send(Message::Text(text.into()))
                 .await
-                .map_err(|_| ())?
                 .map_err(|_| ())
         }
     }
+}
+
+async fn send_record_queued<S: Sink<Message> + Unpin>(
+    write_timeout: Duration,
+    socket: &mut S,
+    response: QueuedRecordResponse,
+) -> Result<(), ()> {
+    let QueuedRecordResponse { response, deadline } = response;
+    let QueuedResponse {
+        message,
+        _slot,
+        _record_work,
+    } = response;
+    timeout_at(deadline, send_queued(write_timeout, socket, message))
+        .await
+        .map_err(|_| ())?
 }
 
 fn close_reason(error: AccessError) -> SessionCloseReason {
@@ -2106,13 +2136,13 @@ mod tests {
             Duration::from_secs(1),
         ));
         record_send
-            .send(QueuedResponse {
+            .send(QueuedRecordResponse::new(QueuedResponse {
                 message: WireResponse::record(record.clone()),
                 _slot: slots.clone().try_acquire_owned().unwrap(),
                 _record_work: Some(RecordReadLease::new(
                     record_capacity.clone().try_acquire_owned().unwrap(),
                 )),
-            })
+            }))
             .await
             .unwrap();
         timeout(Duration::from_secs(1), peer.writing.recv())
@@ -2170,13 +2200,17 @@ mod tests {
 
         let (_release, gate) = tokio::sync::oneshot::channel();
         let (mut stalled, mut stalled_peer) = test_socket(Some(gate));
-        let expired = WireResponse::Record {
-            text: "{}".into(),
+        let expired = QueuedRecordResponse {
+            response: QueuedResponse {
+                message: WireResponse::record("{}".into()),
+                _slot: Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap(),
+                _record_work: None,
+            },
             deadline: Instant::now() - Duration::from_millis(1),
         };
         assert!(timeout(
             Duration::from_secs(1),
-            send_queued(Duration::from_secs(30), &mut stalled, expired)
+            send_record_queued(Duration::from_secs(30), &mut stalled, expired)
         )
         .await
         .expect("expired response settles")
@@ -2204,11 +2238,11 @@ mod tests {
             Duration::from_secs(5),
         ));
         record_send
-            .send(QueuedResponse {
+            .send(QueuedRecordResponse::new(QueuedResponse {
                 message: WireResponse::record("{\"type\":\"res\"}".into()),
                 _slot: slots.clone().try_acquire_owned().unwrap(),
                 _record_work: None,
-            })
+            }))
             .await
             .unwrap();
         peer.writing.recv().await.unwrap();

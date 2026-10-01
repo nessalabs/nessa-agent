@@ -76,7 +76,10 @@ enum PriorityLane {
     Refusal,
     Ordinary,
 }
-async fn continuously_ready_lane_releases_all_record_leases(lane: PriorityLane) {
+async fn continuously_ready_lane_releases_all_record_leases(
+    lane: PriorityLane,
+    refusal: Option<&str>,
+) {
     let global_reads = Arc::new(Semaphore::new(4));
     let records_written = Arc::new(AtomicUsize::new(0));
     let mut writers = Vec::new();
@@ -89,13 +92,18 @@ async fn continuously_ready_lane_releases_all_record_leases(lane: PriorityLane) 
         let (record_send, records) = mpsc::channel(1);
         let slots = Arc::new(Semaphore::new(1));
         record_send
-            .send(QueuedResponse {
-                message: WireResponse::record("{\"record\":true}".into()),
+            .send(QueuedRecordResponse::new(QueuedResponse {
+                message: refusal.map_or_else(
+                    || WireResponse::record("{\"record\":true}".into()),
+                    |code| WireResponse::ordinary(failure("record", code)),
+                ),
                 _slot: slots.clone().try_acquire_owned().unwrap(),
-                _record_work: Some(RecordReadLease::new(Box::new(
-                    global_reads.clone().try_acquire_owned().unwrap(),
-                ))),
-            })
+                _record_work: refusal.is_none().then(|| {
+                    RecordReadLease::new(Box::new(
+                        global_reads.clone().try_acquire_owned().unwrap(),
+                    ))
+                }),
+            }))
             .await
             .unwrap();
         let priority_slots = Arc::new(Semaphore::new(2));
@@ -128,7 +136,10 @@ async fn continuously_ready_lane_releases_all_record_leases(lane: PriorityLane) 
         record_slots.push(slots);
         senders.push((control_send, refusal_send, ordinary_send, record_send));
     }
-    assert_eq!(global_reads.available_permits(), 0);
+    assert_eq!(
+        global_reads.available_permits(),
+        if refusal.is_some() { 4 } else { 0 }
+    );
     tokio::time::advance(RECORD_SEND_TIMEOUT + Duration::from_millis(1)).await;
     for _ in 0..16 {
         tokio::task::yield_now().await;
@@ -163,18 +174,18 @@ async fn continuously_ready_lane_releases_all_record_leases(lane: PriorityLane) 
 
 #[tokio::test(start_paused = true)]
 async fn queued_record_deadline_survives_continuously_ready_controls() {
-    continuously_ready_lane_releases_all_record_leases(PriorityLane::Control).await;
+    continuously_ready_lane_releases_all_record_leases(PriorityLane::Control, None).await;
 }
 #[tokio::test(start_paused = true)]
 async fn queued_record_deadline_survives_continuously_ready_refusals() {
-    continuously_ready_lane_releases_all_record_leases(PriorityLane::Refusal).await;
+    continuously_ready_lane_releases_all_record_leases(PriorityLane::Refusal, None).await;
 }
 #[tokio::test(start_paused = true)]
 async fn queued_record_deadline_survives_continuously_ready_ordinary() {
-    continuously_ready_lane_releases_all_record_leases(PriorityLane::Ordinary).await;
+    continuously_ready_lane_releases_all_record_leases(PriorityLane::Ordinary, None).await;
 }
 
-async fn arriving_record_interrupts_stalled_priority(close: bool) {
+async fn arriving_record_interrupts_stalled_priority(close: bool, refusal: Option<&str>) {
     let (_release, gate) = tokio::sync::oneshot::channel();
     let (socket, mut peer) = test_socket(Some(gate));
     let (sink, _incoming) = socket.split();
@@ -209,18 +220,24 @@ async fn arriving_record_interrupts_stalled_priority(close: bool) {
     ));
     peer.writing.recv().await.unwrap();
     record_send
-        .send(QueuedResponse {
-            message: WireResponse::record("{\"record\":true}".into()),
+        .send(QueuedRecordResponse::new(QueuedResponse {
+            message: refusal.map_or_else(
+                || WireResponse::record("{\"record\":true}".into()),
+                |code| WireResponse::ordinary(failure("record", code)),
+            ),
             _slot: record_slots.clone().try_acquire_owned().unwrap(),
-            _record_work: Some(RecordReadLease::new(Box::new(
-                global_reads.clone().try_acquire_owned().unwrap(),
-            ))),
-        })
+            _record_work: refusal.is_none().then(|| {
+                RecordReadLease::new(Box::new(global_reads.clone().try_acquire_owned().unwrap()))
+            }),
+        }))
         .await
         .unwrap();
     tokio::task::yield_now().await;
     assert_eq!(record_slots.available_permits(), 0);
-    assert_eq!(global_reads.available_permits(), 3);
+    assert_eq!(
+        global_reads.available_permits(),
+        if refusal.is_some() { 4 } else { 3 }
+    );
     tokio::time::advance(RECORD_SEND_TIMEOUT + Duration::from_millis(1)).await;
     for _ in 0..16 {
         tokio::task::yield_now().await;
@@ -244,11 +261,11 @@ async fn arriving_record_interrupts_stalled_priority(close: bool) {
 }
 #[tokio::test(start_paused = true)]
 async fn queued_record_arrival_deadline_interrupts_stalled_control() {
-    arriving_record_interrupts_stalled_priority(false).await;
+    arriving_record_interrupts_stalled_priority(false, None).await;
 }
 #[tokio::test(start_paused = true)]
 async fn queued_record_arrival_deadline_interrupts_stalled_close() {
-    arriving_record_interrupts_stalled_priority(true).await;
+    arriving_record_interrupts_stalled_priority(true, None).await;
 }
 
 #[tokio::test]
@@ -276,13 +293,13 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
         .unwrap();
     ordinary_send.send(response("ordinary")).await.unwrap();
     record_send
-        .send(QueuedResponse {
+        .send(QueuedRecordResponse::new(QueuedResponse {
             message: WireResponse::record(serde_json::to_string(&json!({"id":"record"})).unwrap()),
             _slot: slots.clone().try_acquire_owned().unwrap(),
             _record_work: Some(RecordReadLease::new(Box::new(
                 global_reads.clone().try_acquire_owned().unwrap(),
             ))),
-        })
+        }))
         .await
         .unwrap();
     drop((control_send, refusal_send, ordinary_send, record_send));
@@ -306,4 +323,34 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
     writer.await.unwrap();
     assert_eq!(slots.available_permits(), 3);
     assert_eq!(global_reads.available_permits(), 4);
+}
+
+#[tokio::test(start_paused = true)]
+async fn queued_record_refusals_expire_under_continuously_ready_priority() {
+    for code in [
+        "source_preparing",
+        "read_timeout",
+        "temporarily_unavailable",
+    ] {
+        for lane in [
+            PriorityLane::Control,
+            PriorityLane::Refusal,
+            PriorityLane::Ordinary,
+        ] {
+            continuously_ready_lane_releases_all_record_leases(lane, Some(code)).await;
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn arriving_record_refusals_interrupt_stalled_priority() {
+    for code in [
+        "source_preparing",
+        "read_timeout",
+        "temporarily_unavailable",
+    ] {
+        for close in [false, true] {
+            arriving_record_interrupts_stalled_priority(close, Some(code)).await;
+        }
+    }
 }
