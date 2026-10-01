@@ -1,7 +1,8 @@
 # 173. Download native agent runtimes on demand
 
 - **Issue:** [173](https://github.com/nessalabs/nessa-agent/issues/173)
-- **Decision:** implemented; local macOS arm64 verification complete
+- **Date:** 2026-09-27
+- **Status:** accepted
 - **Scope confirmed:** 2026-09-27. Download native runtimes; keep Node and the
   JavaScript adapters and their required dependencies bundled.
 

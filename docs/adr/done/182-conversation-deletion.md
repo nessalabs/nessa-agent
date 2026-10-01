@@ -7,8 +7,7 @@ the panel's Messages list — and settle what "for good" erases, what it keeps,
 and what Nessa cannot reach.
 
 - **Date:** 2026-09-24
-- **Status:** proposed — implemented on the branch that adds the Messages list
-  ([#181](https://github.com/nessalabs/nessa-agent/issues/181)), pending review.
+- **Status:** accepted
 - **Issue:** [#182](https://github.com/nessalabs/nessa-agent/issues/182)
 
 ## Two different requests

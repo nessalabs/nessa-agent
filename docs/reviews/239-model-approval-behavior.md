@@ -1,7 +1,7 @@
 # Additional model approval behavior
 
 Follow-up to [issue #239](https://github.com/nessalabs/nessa-agent/issues/239)
-and [ADR 231](../adr/todo/231-model-and-approval-per-conversation.md).
+and [ADR 231](../adr/done/231-model-and-approval-per-conversation.md).
 
 The opt-in `live_presets` SDK contract probe uses the production Claude/Codex
 bindings. The elevation matrix opens in Ask, applies a candidate preset through
