@@ -270,6 +270,17 @@ describe("the session's header", () => {
     await click(accessory)
     expect(shown(store)).toEqual(["a", "widget sample/notes"])
   })
+
+  it("adds nothing to the header of a session a plugin has nothing for", async () => {
+    const store = await render()
+    await act(async () => void store.dispatch(openSession({ sessionId: "b" })))
+    await frames()
+    const header = present(host.querySelector("[data-pane-focused] header"), "header")
+    // Straight from the spacer to the pane's actions, as with no plugin at all.
+    expect(header.querySelector(".workspace-spacer")?.nextElementSibling?.className).toBe(
+      "workspace-pane-actions",
+    )
+  })
 })
 
 describe("the window", () => {

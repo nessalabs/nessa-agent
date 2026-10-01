@@ -300,7 +300,7 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
  * of reach, so a pane command measures the room they really have and coming
  * back lays nothing out again. The session list beside it stays in reach.
  */
-.workspace-chat {
+.workspace[data-content="widget"] .workspace-chat {
   position: relative;
 }
 
