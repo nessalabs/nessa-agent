@@ -34,6 +34,9 @@ describe("peekOf", () => {
     const asked = message("user", 2, text("Again."))
     const words = message("agent", 3, text("Done."))
     expect(peekOf(conversation(asked, only, words)).since).toEqual([words])
+    // A reply with no parts yet — just begun streaming — is kept as it always was.
+    const begun = message("agent", 4)
+    expect(peekOf(conversation(asked, begun)).since).toEqual([begun])
   })
 
   it("tells the turn from the person's latest message, then everything the agent did since, in order", () => {
