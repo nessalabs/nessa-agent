@@ -272,21 +272,23 @@ test("the recorder exits with the agent's status when the agent stops reading it
         "-e",
         'process.stdout.write("{\\"bye\\":1}\\n");setTimeout(()=>process.exit(5),200)',
       ],
-      { input: '{"x":1}\n'.repeat(2_000_000), encoding: "utf8" },
+      { input: '{"x":1}\n'.repeat(200_000), encoding: "utf8" },
     )
     assert.equal(run.status, 5)
     assert.equal(run.stdout, '{"bye":1}\n')
+    const logged = parseRecording(readFileSync(log, "utf8"))
     assert.ok(
-      parseRecording(readFileSync(log, "utf8")).some(
-        (each) => each.direction === "from-agent" && each.frame?.bye === 1,
-      ),
+      logged.some((each) => each.direction === "from-agent" && each.frame?.bye === 1),
     )
+    // Only what could reach the agent is logged as sent to it: a pipe's worth,
+    // not the 200,000 frames offered.
+    assert.ok(logged.filter((each) => each.direction === "to-agent").length < 50_000)
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }
 })
 
-test("a signal ends the recorder once the agent has exited, though its output is still held open", async () => {
+test("a signal ends the recorder, and the agent then sees its input close", async () => {
   const { spawn } = await import("node:child_process")
   const { once } = await import("node:events")
   const { mkdtempSync, rmSync } = await import("node:fs")
@@ -294,22 +296,28 @@ test("a signal ends the recorder once the agent has exited, though its output is
   const { join } = await import("node:path")
   const { fileURLToPath } = await import("node:url")
   const directory = mkdtempSync(join(tmpdir(), "acp-recorder-"))
+  const marker = join(directory, "agent-saw-eof")
   try {
     const recorder = fileURLToPath(new URL("./acp-recorder.mjs", import.meta.url))
-    // The agent exits 4, leaving a background process holding its stdout.
+    const agent =
+      'process.stdout.write("ready\\n");process.stdin.resume();' +
+      `process.stdin.on("end",()=>{require("fs").writeFileSync(${JSON.stringify(marker)},"");process.exit(0)})`
     const run = spawn(process.execPath, [
       recorder,
       join(directory, "log.jsonl"),
-      "/bin/sh",
-      "-c",
-      "sleep 30 & exit 4",
+      process.execPath,
+      "-e",
+      agent,
     ])
-    await new Promise((done) => setTimeout(done, 500))
-    const started = Date.now()
+    run.stdout.setEncoding("utf8")
+    await once(run.stdout, "data")
     run.kill("SIGTERM")
-    const [code] = await once(run, "exit")
-    assert.equal(code, 4)
-    assert.ok(Date.now() - started < 5000)
+    const [, signal] = await once(run, "exit")
+    assert.equal(signal, "SIGTERM")
+    const { existsSync } = await import("node:fs")
+    for (let i = 0; i < 100 && !existsSync(marker); i += 1)
+      await new Promise((done) => setTimeout(done, 20))
+    assert.ok(existsSync(marker))
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }

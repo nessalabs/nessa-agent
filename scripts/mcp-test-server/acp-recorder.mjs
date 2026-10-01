@@ -9,9 +9,11 @@
  * Each log line is `{"direction":"to-agent"|"from-agent","frame":<json>}`;
  * a line that is not JSON is kept as `"text"`, and a last line without a
  * newline is logged when its stream ends. Standard error passes through
- * unrecorded. The recorder exits with the agent's status (128 + the signal
- * number when it was signalled, as a shell reports it), ends the agent's input
- * when its own closes, and passes on the signals it receives.
+ * unrecorded. It supervises nothing: it exits with the agent's status (128 +
+ * the signal number when the agent was signalled, as a shell reports it) once
+ * the agent's output has been delivered, and a signal sent to it ends it as it
+ * would any process — the agent then sees its input close. Input is logged
+ * only while the agent can still receive it.
  *
  * What is recorded is the protocol stream, which carries prompts, tool
  * arguments and results — never credentials, which the gateway hands the
@@ -70,10 +72,16 @@ function main([log, command, ...args]) {
   }
   const child = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"] })
   child.on("error", fail)
+  // Stop reading (and logging) input the agent can no longer receive.
+  const release = () => {
+    process.stdin.unpipe(child.stdin)
+    process.stdin.destroy()
+  }
   // An agent that stops reading its input is the agent's business, as it
   // would be without the recorder: its own status still decides the exit.
   child.stdin.on("error", (error) => {
     if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") fail(error)
+    release()
   })
   process.stdout.on("error", fail)
   const toAgent = direction(log, "to-agent")
@@ -86,23 +94,12 @@ function main([log, command, ...args]) {
   child.stdout.on("data", (chunk) => fromAgent.take(chunk))
   child.stdout.on("end", () => fromAgent.end())
   child.stdout.pipe(process.stdout)
-  // Passed on while the agent runs; once it has exited, a signal ends the
-  // recorder as it would have ended the agent, even if something the agent
-  // started still holds its output open.
-  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"])
-    process.on(signal, () => {
-      if (child.exitCode === null && child.signalCode === null) child.kill(signal)
-      else process.exit(process.exitCode ?? 128 + osConstants.signals[signal])
-    })
   // The agent's status, or 128 + the signal. Not `process.exit`, which would
   // drop output still queued for a slow reader: stop reading input and let
   // the process end once everything written has been delivered.
   child.on("exit", (code, signal) => {
     process.exitCode = code ?? 128 + (signal ? (osConstants.signals[signal] ?? 0) : 0)
-  })
-  child.on("close", () => {
-    process.stdin.unpipe(child.stdin)
-    process.stdin.destroy()
+    release()
   })
 }
 
