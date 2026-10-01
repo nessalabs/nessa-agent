@@ -85,7 +85,14 @@ impl ClaudeProfile {
         self.mcp_prefixes = config
             .mcp_servers
             .iter()
-            .map(|server| format!("{}{}__", wire::MCP_NAMESPACE, server.name))
+            .map(|server| {
+                format!(
+                    "{}{}{}",
+                    wire::MCP_NAMESPACE,
+                    server.name,
+                    wire::MCP_SEPARATOR
+                )
+            })
             .collect();
         self
     }

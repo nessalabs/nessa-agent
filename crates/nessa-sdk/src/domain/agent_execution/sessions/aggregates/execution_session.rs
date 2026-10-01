@@ -246,7 +246,8 @@ impl ExecutionSession {
         Ok(SessionClosureResult::new(closure, permissions))
     }
     /// Apply `update` within the matching active execution, creating a first-seen tool.
-    /// `SessionClosed` or `DifferentExecution` leaves observations unchanged; closing
+    /// `SessionClosed`, `DifferentExecution`, or `DifferentMcpTool` (an update naming
+    /// another MCP server or tool than the call's first) leaves observations unchanged; closing
     /// freezes retained tools until finish releases them. No provider effect occurs here.
     pub fn observe_tool(
         &mut self,
@@ -270,10 +271,9 @@ impl ExecutionSession {
             .expect("checked active execution");
         let id = update.id().clone();
         let previous = if let Some(tool) = active.tools.get_mut(&id) {
-            Some(
-                tool.apply_reversible(execution, update)
-                    .expect("session selects the tool by identity within its execution"),
-            )
+            // The session selected the tool by its identity within this
+            // execution, so only a conflicting MCP identity can refuse here.
+            Some(tool.apply_reversible(execution, update)?)
         } else {
             active.tools.insert(
                 update.id().clone(),

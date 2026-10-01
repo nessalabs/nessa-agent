@@ -1,10 +1,10 @@
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationAsked,
     ConversationAttachment, ConversationCapabilities, ConversationLifecycle,
-    ConversationLifecyclePhase, ConversationLinkedFile, ConversationMessage,
+    ConversationLifecyclePhase, ConversationLinkedFile, ConversationMcpTool, ConversationMessage,
     ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
     ConversationPermission, ConversationPermissionOption, ConversationQuestion, ConversationTool,
-    ConversationView,
+    ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -786,6 +786,8 @@ impl Projection {
                         title: "Tool".into(),
                         kind: String::new(),
                         status: "pending".into(),
+                        mcp: None,
+                        structured_content: None,
                     });
                     self.view.tools.last_mut().unwrap()
                 };
@@ -810,10 +812,29 @@ impl Projection {
                     }
                     .into();
                 }
+                if let Some(mcp) = update.mcp_tool() {
+                    tool.mcp = Some(ConversationMcpTool {
+                        server: mcp.server().into(),
+                        tool: mcp.tool().into(),
+                    });
+                }
                 if let Some(content) = update.content() {
+                    // The structured result is read apart from the text, so a
+                    // long text cannot push it out; the last one reported is
+                    // the result's. Replaced with the content, as details are.
+                    // Past the bound it is left out, never cut: JSON cut short
+                    // is not JSON, and its text is in the details either way.
+                    let structured = content.iter().rev().find_map(|item| match item.view() {
+                        ToolContentView::Structured(json) => Some(json),
+                        _ => None,
+                    });
+                    tool.structured_content = structured
+                        .filter(|json| json.len() <= MAX_STRUCTURED_CONTENT_BYTES)
+                        .map(str::to_owned);
                     let mut details = String::new();
                     for item in content {
                         let text = match item.view() {
+                            ToolContentView::Structured(_) => continue,
                             ToolContentView::Text(text) => clipped(text, 16384),
                             ToolContentView::Diff { path, old, new } => format!(
                                 "File: {}\nBefore:\n{}\nAfter:\n{}",
@@ -1042,6 +1063,19 @@ impl Projection {
         // MAX_OPEN_ASK_COST, which bounds what they take here, and everything
         // else gives way first.
         while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
+            // A structured result is a second form of what its tool's details
+            // say, so it is the first thing given up, oldest first. Its absence
+            // already means "not given, or too large to carry" (the schema's
+            // `structuredContent`), and no history is left out, so neither the
+            // details nor `truncated` change.
+            if let Some(tool) = view
+                .tools
+                .iter_mut()
+                .find(|tool| tool.structured_content.is_some())
+            {
+                tool.structured_content = None;
+                continue;
+            }
             view.truncated = true;
             if view.messages.len() > 1 {
                 view.messages.remove(0);

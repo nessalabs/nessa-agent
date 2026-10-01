@@ -261,7 +261,10 @@ not reading the session, which stays unread.
 - `model/` is pure: the index's types (`workspace-index.ts`); how a
   window fits the side columns (`window-fit.ts`); why the source refused
   (`failure.ts`); what is kept of what no pane shows (`retention.ts`); a session's conversation, its messages and steps
-  (`transcript.ts`); the revision rule every replacement follows
+  (`transcript.ts`), including the widget part a plugin draws in a message and
+  `toolWidget`, the rule that gives a tool call with a declared UI one — nothing
+  draws it yet; a widget by reference (`widget-ref.ts`, until the widgets
+  vertical of ADR 326 owns it); the revision rule every replacement follows
   (`revision.ts`); session grouping, search and time labels; and the new
   session's lifecycle, a draft never listed and let go once no pane shows it,
   and a session the source never began going back to it when its last

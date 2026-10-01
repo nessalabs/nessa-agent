@@ -1,0 +1,277 @@
+{
+ "recorded": "Live run through the Nessa gateway (scripts/mcp-test-server/live-check.mjs codex), 2026-10-01 UTC: @agentclientprotocol/codex-acp 1.12.0 (codex 0.154.0) on gpt-5.6-terra, MCP server scripts/mcp-test-server/server.mjs configured as \"mcptest\". Frames are the session/update tool updates exactly as the harness sent them, grouped by tool.",
+ "calls": {
+  "report_rows": [
+   {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "exec-392c87f4-5181-4164-b240-2ede1897a40d",
+    "kind": "execute",
+    "title": "mcp.mcptest.report_rows",
+    "status": "in_progress",
+    "rawInput": {
+     "server": "mcptest",
+     "tool": "report_rows",
+     "arguments": {}
+    },
+    "_meta": {
+     "is_mcp_tool_call": true
+    }
+   },
+   {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "exec-392c87f4-5181-4164-b240-2ede1897a40d",
+    "status": "in_progress"
+   },
+   {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "exec-392c87f4-5181-4164-b240-2ede1897a40d",
+    "status": "completed",
+    "rawInput": {
+     "server": "mcptest",
+     "tool": "report_rows",
+     "arguments": {}
+    },
+    "rawOutput": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "Two rows: alpha (10), beta (20)."
+       }
+      ],
+      "structuredContent": {
+       "rows": [
+        {
+         "id": 1,
+         "name": "alpha",
+         "value": 10
+        },
+        {
+         "id": 2,
+         "name": "beta",
+         "value": 20
+        }
+       ],
+       "total": 30
+      },
+      "_meta": null
+     },
+     "error": null
+    }
+   }
+  ],
+  "link_resources": [
+   {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "exec-c088ebf1-8c49-4db4-97a1-301de34381c5",
+    "kind": "execute",
+    "title": "mcp.mcptest.link_resources",
+    "status": "in_progress",
+    "rawInput": {
+     "server": "mcptest",
+     "tool": "link_resources",
+     "arguments": {}
+    },
+    "_meta": {
+     "is_mcp_tool_call": true
+    }
+   },
+   {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "exec-c088ebf1-8c49-4db4-97a1-301de34381c5",
+    "status": "in_progress"
+   },
+   {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "exec-c088ebf1-8c49-4db4-97a1-301de34381c5",
+    "status": "completed",
+    "rawInput": {
+     "server": "mcptest",
+     "tool": "link_resources",
+     "arguments": {}
+    },
+    "rawOutput": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "One link and one embedded resource follow."
+       },
+       {
+        "type": "resource_link",
+        "uri": "file:///nessa-test/rows.csv",
+        "name": "rows.csv",
+        "mimeType": "text/csv"
+       },
+       {
+        "type": "resource",
+        "resource": {
+         "uri": "file:///nessa-test/notes.txt",
+         "mimeType": "text/plain",
+         "text": "Embedded note from nessa-test."
+        }
+       }
+      ],
+      "structuredContent": null,
+      "_meta": null
+     },
+     "error": null
+    }
+   }
+  ],
+  "rows.get": [
+   {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "exec-d13c90e5-65be-474d-940a-da467623b6c8",
+    "kind": "execute",
+    "title": "mcp.mcptest.rows.get",
+    "status": "in_progress",
+    "rawInput": {
+     "server": "mcptest",
+     "tool": "rows.get",
+     "arguments": {
+      "id": 2
+     }
+    },
+    "_meta": {
+     "is_mcp_tool_call": true
+    }
+   },
+   {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "exec-d13c90e5-65be-474d-940a-da467623b6c8",
+    "status": "in_progress"
+   },
+   {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "exec-d13c90e5-65be-474d-940a-da467623b6c8",
+    "status": "completed",
+    "rawInput": {
+     "server": "mcptest",
+     "tool": "rows.get",
+     "arguments": {
+      "id": 2
+     }
+    },
+    "rawOutput": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "Row 2: beta"
+       }
+      ],
+      "structuredContent": {
+       "id": 2,
+       "name": "beta",
+       "value": 20
+      },
+      "_meta": null
+     },
+     "error": null
+    }
+   }
+  ],
+  "always_fails": [
+   {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "exec-748f314b-ae02-444e-b144-14ff025dd3e9",
+    "kind": "execute",
+    "title": "mcp.mcptest.always_fails",
+    "status": "in_progress",
+    "rawInput": {
+     "server": "mcptest",
+     "tool": "always_fails",
+     "arguments": {}
+    },
+    "_meta": {
+     "is_mcp_tool_call": true
+    }
+   },
+   {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "exec-748f314b-ae02-444e-b144-14ff025dd3e9",
+    "status": "in_progress"
+   },
+   {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "exec-748f314b-ae02-444e-b144-14ff025dd3e9",
+    "status": "failed",
+    "rawInput": {
+     "server": "mcptest",
+     "tool": "always_fails",
+     "arguments": {}
+    },
+    "rawOutput": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "This tool always fails, on purpose."
+       }
+      ],
+      "structuredContent": null,
+      "_meta": null
+     },
+     "error": null
+    }
+   }
+  ],
+  "show_chart": [
+   {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "exec-85c4bb85-4953-44e3-b917-82a56c81d6f8",
+    "kind": "execute",
+    "title": "mcp.mcptest.show_chart",
+    "status": "in_progress",
+    "rawInput": {
+     "server": "mcptest",
+     "tool": "show_chart",
+     "arguments": {}
+    },
+    "_meta": {
+     "is_mcp_tool_call": true
+    }
+   },
+   {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "exec-85c4bb85-4953-44e3-b917-82a56c81d6f8",
+    "status": "in_progress"
+   },
+   {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "exec-85c4bb85-4953-44e3-b917-82a56c81d6f8",
+    "status": "completed",
+    "rawInput": {
+     "server": "mcptest",
+     "tool": "show_chart",
+     "arguments": {}
+    },
+    "rawOutput": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "Chart of two rows."
+       }
+      ],
+      "structuredContent": {
+       "series": [
+        {
+         "name": "alpha",
+         "value": 10
+        },
+        {
+         "name": "beta",
+         "value": 20
+        }
+       ]
+      },
+      "_meta": null
+     },
+     "error": null
+    }
+   }
+  ]
+ }
+}

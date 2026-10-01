@@ -1,6 +1,6 @@
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::tools::ToolReviewInput;
-use crate::domain::agent_execution::tools::ToolCallUpdate;
+use crate::domain::agent_execution::tools::{McpTool, ToolCallUpdate};
 use crate::infrastructure::acp::fields::identifier;
 use crate::infrastructure::acp::tools::wire::{path, tool_call as acp_tool_call};
 use crate::infrastructure::json_rpc::protocol;
@@ -82,10 +82,42 @@ fn enabled_name(name: &str, mcp_prefixes: &[String]) -> bool {
     if name.starts_with(MCP_NAMESPACE) {
         return mcp_prefixes
             .iter()
-            .any(|prefix| name.starts_with(prefix) && name.len() > prefix.len());
+            .any(|prefix| names_tool_of(name, prefix));
     }
     true
 }
+/// The configured MCP server and tool a harness tool name names, or `None`.
+///
+/// The harness names an MCP tool `mcp__<server>__<tool>`. A configured server
+/// name cannot hold `__` (`AcpConfig::validate`) but may end in `_`, so the name
+/// alone does not always say where the server ends. The
+/// configured servers do: a name is split at the one configured prefix it
+/// starts with. Where two configured prefixes both fit (`a` and `a_` for
+/// `mcp__a___c`), the call is left without an identity rather than given a
+/// guessed one — its tool row and text result are unchanged. The tool part is
+/// the harness's spelling, in which every character outside `[A-Za-z0-9_-]`
+/// has become `_`.
+fn mcp_tool(name: &str, mcp_prefixes: &[String]) -> Option<McpTool> {
+    let mut fitting = mcp_prefixes
+        .iter()
+        .filter(|prefix| names_tool_of(name, prefix));
+    let prefix = fitting.next()?;
+    if fitting.next().is_some() {
+        return None;
+    }
+    let server = prefix
+        .strip_prefix(MCP_NAMESPACE)?
+        .strip_suffix(MCP_SEPARATOR)?;
+    McpTool::new(server, &name[prefix.len()..]).ok()
+}
+/// Whether `name` names a tool of the server whose harness prefix is `prefix`
+/// (`mcp__<server>__`): it starts with the prefix and names something after it.
+/// Admission and the MCP identity both ask this, so they cannot disagree.
+fn names_tool_of(name: &str, prefix: &str) -> bool {
+    name.starts_with(prefix) && name.len() > prefix.len()
+}
+/// What separates the server from the tool in a harness MCP tool name.
+pub(in crate::infrastructure::claude_acp) const MCP_SEPARATOR: &str = "__";
 /// What this binding knows about one tool call it has observed.
 ///
 /// A call it will not put to a host is still a call the agent made, and the
@@ -108,7 +140,7 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
     mcp_prefixes: &[String],
 ) -> Result<ToolCallUpdate, AgentError> {
     // Validate the complete representation before retaining provider name state.
-    let update = acp_tool_call(value)?;
+    let mut update = acp_tool_call(value)?;
     let id = identifier(value, "toolCallId")?.to_owned();
     if let Some(name) = value
         .pointer("/_meta/claudeCode/toolName")
@@ -119,6 +151,9 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
         // incoming frame size. Which names are admitted at all is
         // `enabled_name`'s account, not a second one here.
         let observed = if enabled_name(name, mcp_prefixes) {
+            if let Some(tool) = mcp_tool(name, mcp_prefixes) {
+                update = update.with_mcp_tool(tool);
+            }
             ObservedTool::Reviewable(name.to_owned())
         } else {
             ObservedTool::Declined

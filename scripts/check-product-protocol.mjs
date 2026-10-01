@@ -121,6 +121,37 @@ for (const invalid of [
 }
 if (!validateView({ ...view, title: null }))
   throw new Error("Product conversation view rejects a null title")
+// A tool's MCP identity and structured result: optional, bounded, and closed.
+const validateTool = ajv.getSchema(`${schema.$id}#/$defs/ConversationTool`)
+const tool = {
+  executionId: "run",
+  toolId: "call",
+  title: "mcp.charts.show",
+  kind: "execute",
+  status: "completed",
+  details: "Two rows.",
+  input: "",
+}
+const mcpName = "😀".repeat(32)
+for (const valid of [
+  tool,
+  { ...tool, mcp: { server: mcpName, tool: mcpName } },
+  { ...tool, structuredContent: "😀".repeat(4096) },
+]) {
+  if (!validateTool(valid))
+    throw new Error("Product conversation tool rejects a bounded MCP result")
+}
+for (const invalid of [
+  { ...tool, mcp: { server: "", tool: "show" } },
+  { ...tool, mcp: { server: "charts" } },
+  { ...tool, mcp: { server: `${mcpName}a`, tool: "show" } },
+  { ...tool, mcp: { server: "charts", tool: "show", resourceUri: "ui://x" } },
+  { ...tool, structuredContent: `${"😀".repeat(4096)}a` },
+  { ...tool, structuredContent: { rows: 2 } },
+]) {
+  if (validateTool(invalid))
+    throw new Error("Product conversation tool accepts an out-of-bounds MCP result")
+}
 const validateListParams = ajv.getSchema(`${schema.$id}#/$defs/ConversationListParams`)
 for (const invalid of [{ archived: "yes" }, { archived: true, cursor: "x" }]) {
   if (validateListParams(invalid))

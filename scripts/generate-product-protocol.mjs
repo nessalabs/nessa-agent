@@ -147,6 +147,12 @@ const bounds = {
     schema.$defs.ConversationSummary.properties.preview["x-utf8MaxBytes"],
   maxListedConversations:
     schema.$defs.ConversationListResult.properties.conversations.maxItems,
+  maxToolStructuredContentBytes:
+    schema.$defs.ConversationTool.properties.structuredContent["x-utf8MaxBytes"],
+  maxMcpNameBytes: agreeing("MCP server and tool name bytes", [
+    schema.$defs.ConversationMcpTool.properties.server["x-utf8MaxBytes"],
+    schema.$defs.ConversationMcpTool.properties.tool["x-utf8MaxBytes"],
+  ]),
 }
 for (const name of [
   "minAgentInstallRequestIdCharacters",

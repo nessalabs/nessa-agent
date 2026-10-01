@@ -919,3 +919,54 @@ async fn a_refused_reorder_retains_no_mutation_and_never_changes_the_live_queue(
         .queue_history
         .is_empty());
 }
+
+/// A restored history whose tool call names one MCP server and then another
+/// is refused as corrupt: the call's identity is named once. Naming the same
+/// one again, or none, is a valid history.
+#[test]
+fn a_restored_tool_call_that_changes_its_mcp_identity_is_corrupt() {
+    use crate::domain::agent_execution::{
+        sessions::{ProviderContext, SessionId},
+        tools::{McpTool, ToolCallId, ToolCallUpdate},
+    };
+    let snapshot = |second: Option<McpTool>| {
+        let mut record = invocation("one", true);
+        let id = record.request.execution_id.clone();
+        let tool =
+            || ToolCallUpdate::new(ToolCallId::new("t").unwrap(), None, None, None, None, None);
+        let first = tool().with_mcp_tool(McpTool::new("charts", "show").unwrap());
+        let second = match second {
+            Some(mcp) => tool().with_mcp_tool(mcp),
+            None => tool(),
+        };
+        record.events.splice(
+            0..0,
+            [first, second]
+                .map(|update| ExecutionEvent::new(id.clone(), ExecutionUpdate::Tool(update))),
+        );
+        SessionSnapshot {
+            id: SessionId::new("session").unwrap(),
+            provider: ProviderIdentity::new("provider", "model", "").unwrap(),
+            provider_context: ProviderContext::Recorded(
+                ExecutionSessionId::new("provider").unwrap(),
+            ),
+            invocations: vec![record],
+            queue_history: Vec::new(),
+        }
+    };
+    for kept in [None, Some(McpTool::new("charts", "show").unwrap())] {
+        assert!(
+            crate::application::agent_execution::sessions::validation::validate(&snapshot(kept))
+                .is_ok()
+        );
+    }
+    for changed in [
+        McpTool::new("other", "show").unwrap(),
+        McpTool::new("charts", "hide").unwrap(),
+    ] {
+        assert!(matches!(
+            crate::application::agent_execution::sessions::validation::validate(&snapshot(Some(changed))),
+            Err(StorageError::Corrupt(message)) if message.contains("DifferentMcpTool")
+        ));
+    }
+}

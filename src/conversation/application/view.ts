@@ -79,6 +79,10 @@ export type ConversationView = {
     status: string
     input: string
     details: string
+    /** The MCP server and tool the call went to, when the harness named them. */
+    mcp?: { server: string; tool: string }
+    /** The call's structured result as JSON text; its text stays in `details`. */
+    structuredContent?: string
   }[]
   capabilities: ConversationCapabilities
   lifecycle: {

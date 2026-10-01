@@ -294,3 +294,245 @@ fn tool_content_is_compact_exact_and_distinguishes_unknown_from_empty_prior_text
         std::mem::size_of::<ToolContent>() + 8192 + 2 + 3
     );
 }
+
+#[test]
+fn mcp_tool_names_are_bounded_single_line_and_kept_exactly() {
+    let tool = McpTool::new("nessa-apps", "show_chart.v2").unwrap();
+    assert_eq!(
+        (tool.server(), tool.tool()),
+        ("nessa-apps", "show_chart.v2")
+    );
+    assert_eq!(
+        tool.payload_bytes(),
+        "nessa-apps".len() + "show_chart.v2".len()
+    );
+    let longest = "é".repeat(MAX_MCP_NAME_BYTES / 2);
+    let kept = McpTool::new(longest.clone(), longest.clone()).unwrap();
+    assert_eq!(
+        (kept.server(), kept.tool()),
+        (longest.as_str(), longest.as_str())
+    );
+    let too_long = format!("{longest}x");
+    for (server, tool, expected) in [
+        ("", "tool", ExecutionError::EmptyValue("MCP server name")),
+        ("server", "", ExecutionError::EmptyValue("MCP tool name")),
+        (
+            too_long.as_str(),
+            "tool",
+            ExecutionError::ValueTooLong {
+                field: "MCP server name",
+                max_bytes: MAX_MCP_NAME_BYTES,
+            },
+        ),
+        (
+            "server",
+            too_long.as_str(),
+            ExecutionError::ValueTooLong {
+                field: "MCP tool name",
+                max_bytes: MAX_MCP_NAME_BYTES,
+            },
+        ),
+        (
+            "two words",
+            "tool",
+            ExecutionError::InvalidMcpToolName("MCP server name"),
+        ),
+        (
+            "server",
+            "a\nb",
+            ExecutionError::InvalidMcpToolName("MCP tool name"),
+        ),
+        (
+            "server",
+            "a\u{7}",
+            ExecutionError::InvalidMcpToolName("MCP tool name"),
+        ),
+    ] {
+        assert_eq!(McpTool::new(server, tool), Err(expected));
+    }
+}
+
+#[test]
+fn an_mcp_identity_is_observed_once_carried_through_sparse_updates_and_counted() {
+    let execution = ExecutionId::new("execution").unwrap();
+    let id = ToolCallId::new("tool").unwrap();
+    let mcp = McpTool::new("charts", "show").unwrap();
+    let named = update("tool").with_mcp_tool(mcp.clone());
+    assert_eq!(named.mcp_tool(), Some(&mcp));
+    assert_eq!(update("tool").mcp_tool(), None);
+    // The names, and the box that holds them apart from the observation.
+    let retained = std::mem::size_of::<McpTool>() + mcp.payload_bytes();
+    assert_eq!(named.payload_bytes(), retained);
+    let mut session = session(&execution);
+    session.observe_tool(&execution, named).unwrap();
+    // A later update that names nothing keeps what was observed.
+    let status = ToolCallUpdate::new(
+        id.clone(),
+        None,
+        None,
+        Some(ToolStatus::Completed),
+        None,
+        None,
+    );
+    let tool = session.tool(&id).unwrap();
+    assert_eq!(tool.payload_bytes_after(&status), tool.payload_bytes());
+    session.observe_tool(&execution, status).unwrap();
+    let tool = session.tool(&id).unwrap();
+    assert_eq!(tool.observation().mcp_tool(), Some(&mcp));
+    assert_eq!(
+        tool.payload_bytes(),
+        execution.as_str().len() + id.as_str().len() + retained
+    );
+    // A tool no update named stays without one.
+    session.observe_tool(&execution, update("plain")).unwrap();
+    let plain = session.tool(&ToolCallId::new("plain").unwrap()).unwrap();
+    assert_eq!(plain.observation().mcp_tool(), None);
+}
+
+#[test]
+fn a_structured_result_is_bounded_exact_json_text_beside_the_result_text() {
+    let json = r#"{"rows":[1,2],"label":"é"}"#;
+    let structured = ToolContent::structured(json).unwrap();
+    assert_eq!(structured.view(), ToolContentView::Structured(json));
+    assert_eq!(structured.payload_bytes(), json.len());
+    assert_ne!(structured, ToolContent::text(json));
+    // A JSON string exactly at the bound, and one byte past it.
+    let exact = format!("\"{}\"", "a".repeat(MAX_STRUCTURED_RESULT_BYTES - 2));
+    assert!(ToolContent::structured(exact.clone()).is_ok());
+    assert_eq!(
+        ToolContent::structured(format!("{exact} ")),
+        Err(ExecutionError::ValueTooLong {
+            field: "structured tool result",
+            max_bytes: MAX_STRUCTURED_RESULT_BYTES,
+        })
+    );
+    let replaced =
+        update("tool").with_content(vec![ToolContent::text("rows: 2"), structured.clone()]);
+    assert_eq!(
+        replaced.content(),
+        &Some(vec![ToolContent::text("rows: 2"), structured])
+    );
+}
+
+#[test]
+fn a_live_tool_call_keeps_its_first_mcp_identity_and_refuses_another() {
+    let execution = ExecutionId::new("execution").unwrap();
+    let id = ToolCallId::new("tool").unwrap();
+    let first = McpTool::new("charts", "show").unwrap();
+    let mut session = session(&execution);
+    session
+        .observe_tool(&execution, update("tool").with_mcp_tool(first.clone()))
+        .unwrap();
+    let before = session.tool(&id).unwrap().observation().clone();
+    for other in [
+        McpTool::new("other", "show").unwrap(),
+        McpTool::new("charts", "hide").unwrap(),
+    ] {
+        let conflicting = ToolCallUpdate::new(
+            id.clone(),
+            Some("changed".into()),
+            None,
+            Some(ToolStatus::Completed),
+            None,
+            None,
+        )
+        .with_mcp_tool(other);
+        assert_eq!(
+            session.observe_tool(&execution, conflicting),
+            Err(ExecutionError::DifferentMcpTool)
+        );
+        // Refused whole: nothing of the update was applied.
+        assert_eq!(session.tool(&id).unwrap().observation(), &before);
+    }
+    // The same identity again, or none, is accepted.
+    session
+        .observe_tool(&execution, update("tool").with_mcp_tool(first.clone()))
+        .unwrap();
+    session.observe_tool(&execution, update("tool")).unwrap();
+    assert_eq!(
+        session.tool(&id).unwrap().observation().mcp_tool(),
+        Some(&first)
+    );
+}
+
+#[test]
+fn a_structured_result_must_be_one_json_value() {
+    for valid in [
+        "{}",
+        "[]",
+        " {\"a\": [1, -2.5e+3, true, false, null, \"\\u00e9\\n\", {}]} ",
+        "\"text\"",
+        "0",
+        "-0.0E-1",
+        "null",
+        "[[[[]]]]",
+        "{\"a\":{\"b\":[{}]}}",
+        "[ ]",
+        "{ }",
+        "{ \"a\" : 1 , \"b\" : [ 2 ] }",
+        "\"\\\" \\\\ \\/ \\b \\f \\r \\t \\uABcd\"",
+        "1E+2",
+        "10.25",
+    ] {
+        assert!(ToolContent::structured(valid).is_ok(), "{valid}");
+    }
+    for invalid in [
+        "",
+        " ",
+        "{",
+        "}",
+        "[1,]",
+        "[,1]",
+        "{\"a\":}",
+        "{\"a\" 1}",
+        "{\"a\":1,}",
+        "{,}",
+        "{1:2}",
+        "[1 2]",
+        "{} {}",
+        "01",
+        "1.",
+        ".1",
+        "1e",
+        "-",
+        "+1",
+        "tru",
+        "nul",
+        "\"open",
+        "\"bad \\x escape\"",
+        "\"\\u12\"",
+        "\"tab\tinside\"",
+        "NaN",
+        "[1]]",
+        "{\"a\":1}}",
+        "not json",
+        "\"\\u00\"",
+        "\"\\u",
+        "\"\\uZZZZ\"",
+        "\"\\",
+        "-a",
+        "1e+",
+        "1.e1",
+        "[1}",
+        "{\"a\":1]",
+        "{\"a\"",
+        "{\"a\":1 \"b\":2}",
+        "{\"a\":[}",
+        "[{]",
+        "{\"a\":1,\"b\"}",
+    ] {
+        assert_eq!(
+            ToolContent::structured(invalid),
+            Err(ExecutionError::InvalidStructuredResult),
+            "{invalid:?}"
+        );
+    }
+    // Deep nesting is checked without recursion.
+    let deep = format!("{}{}", "[".repeat(30_000), "]".repeat(30_000));
+    assert!(ToolContent::structured(deep).is_ok());
+    let unbalanced = format!("{}{}", "[".repeat(30_000), "]".repeat(29_999));
+    assert_eq!(
+        ToolContent::structured(unbalanced),
+        Err(ExecutionError::InvalidStructuredResult)
+    );
+}

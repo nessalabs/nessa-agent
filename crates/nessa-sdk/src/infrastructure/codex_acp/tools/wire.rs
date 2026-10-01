@@ -1,8 +1,12 @@
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::tools::ToolReviewInput;
-use crate::domain::agent_execution::tools::ToolCallUpdate;
+use crate::domain::agent_execution::tools::{
+    McpTool, ToolCallUpdate, ToolContent, MAX_STRUCTURED_RESULT_BYTES,
+};
 use crate::infrastructure::acp::fields::{identifier, string};
-use crate::infrastructure::acp::tools::wire::tool_call as acp_tool_call;
+use crate::infrastructure::acp::tools::wire::{
+    tool_call as acp_tool_call, UNSUPPORTED_TOOL_CONTENT,
+};
 use crate::infrastructure::json_rpc::protocol;
 use serde_json::{json, Value};
 use std::borrow::Cow;
@@ -56,6 +60,10 @@ pub(in crate::infrastructure::codex_acp) struct ObservedTool {
     output: String,
     /// Original action input, needed by sparse MCP approval requests.
     input: Option<Box<str>>,
+    /// Whether a frame for this call carried Codex's MCP marker. Only the
+    /// announcement does; the completion that carries the result does not
+    /// (codex-acp 1.12.0 `index.js:25123-25130`), so it is remembered here.
+    mcp: bool,
 }
 
 /// Execution-scoped provider observations and their retained input accounting.
@@ -308,6 +316,135 @@ fn normalize<'a>(
     Ok((Cow::Owned(frame), accumulated))
 }
 
+/// Whether Codex marked this frame as an MCP tool call (`_meta.is_mcp_tool_call`).
+/// A call is an MCP call when any of its frames was: see [`ObservedTool::mcp`].
+fn is_mcp_call(value: &Value) -> bool {
+    value.pointer("/_meta/is_mcp_tool_call") == Some(&Value::Bool(true))
+}
+
+/// The MCP server and tool an MCP call frame names, from `rawInput`.
+///
+/// Codex puts them there exactly (`{server, tool, arguments}`); its title
+/// joins them with dots, which a server or tool name may also hold, so it is
+/// never split. A frame without them, or with names the domain will not keep,
+/// leaves the call without an identity rather than refusing it: the call and
+/// its result are still shown.
+fn mcp_tool(value: &Value, mcp: bool) -> Option<McpTool> {
+    if !mcp {
+        return None;
+    }
+    let input = value.get("rawInput")?;
+    let server = input.get("server")?.as_str()?;
+    let tool = input.get("tool")?.as_str()?;
+    McpTool::new(server, tool).ok()
+}
+
+/// The text a structured result past the domain's bound
+/// ([`MAX_STRUCTURED_RESULT_BYTES`]) is replaced by: said, not silently dropped.
+pub(in crate::infrastructure::codex_acp) const STRUCTURED_RESULT_OMITTED: &str =
+    "[structured tool result omitted: too large]";
+
+/// One MCP content block from a Codex MCP result, as observed content.
+///
+/// Text is kept as text; a resource link as its URI, which is the whole of
+/// what it said; an embedded resource as its text. A block Nessa cannot show —
+/// an image, audio, a binary resource, a type it does not know — becomes the
+/// shared placeholder, so the result says something was there.
+fn mcp_block(block: &Value) -> Result<ToolContent, AgentError> {
+    let kind = block
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| protocol("invalid MCP result content type"))?;
+    Ok(match kind {
+        "text" => ToolContent::text(exact_text(block, "text")?),
+        "resource_link" => ToolContent::text(string(block, "uri")?),
+        "resource" => match block
+            .get("resource")
+            .ok_or_else(|| protocol("missing MCP resource"))?
+            .get("text")
+        {
+            Some(Value::String(text)) => ToolContent::text(text.as_str()),
+            None | Some(Value::Null) => ToolContent::text(UNSUPPORTED_TOOL_CONTENT),
+            Some(_) => return Err(protocol("invalid MCP resource text")),
+        },
+        _ => ToolContent::text(UNSUPPORTED_TOOL_CONTENT),
+    })
+}
+
+/// The string at `field`, exactly, empty included: an MCP tool may return
+/// empty text, and that is a result, not a malformed frame.
+fn exact_text<'a>(value: &'a Value, field: &str) -> Result<&'a str, AgentError> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| protocol("invalid MCP result text"))
+}
+
+/// A structured result's JSON text, or `None` when it would be longer than the
+/// domain keeps ([`MAX_STRUCTURED_RESULT_BYTES`]). Counted before it is
+/// written out, so a result of any size costs no more than the bound.
+fn structured_json(structured: &Value) -> Result<Option<String>, AgentError> {
+    let mut size = InputSize {
+        remaining: MAX_STRUCTURED_RESULT_BYTES,
+    };
+    if serde_json::to_writer(&mut size, structured).is_err() {
+        return Ok(None);
+    }
+    serde_json::to_string(structured)
+        .map(Some)
+        .map_err(|_| protocol("invalid MCP structured result"))
+}
+
+/// What a completed Codex MCP call returned, as observed content: its content
+/// blocks, then its structured result, or its error.
+///
+/// Codex sends an MCP result nowhere but `rawOutput` —
+/// `{result: {content, structuredContent, _meta} | null, error: {message} |
+/// null}` — and no ACP content at all, so without this a finished MCP call
+/// showed nothing. `None` for a frame that is not an MCP call or carries no
+/// output yet, which leaves the observed content as it was. The result's
+/// `_meta` is not kept: nothing reads it yet.
+fn mcp_result(value: &Value, mcp: bool) -> Result<Option<Vec<ToolContent>>, AgentError> {
+    if !mcp {
+        return Ok(None);
+    }
+    let output = match value.get("rawOutput") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(output) if output.is_object() => output,
+        Some(_) => return Err(protocol("invalid MCP tool output")),
+    };
+    let mut content = Vec::new();
+    match output.get("result") {
+        None | Some(Value::Null) => {}
+        Some(result) if result.is_object() => {
+            match result.get("content") {
+                None | Some(Value::Null) => {}
+                Some(Value::Array(blocks)) => {
+                    for block in blocks {
+                        content.push(mcp_block(block)?);
+                    }
+                }
+                Some(_) => return Err(protocol("invalid MCP result content")),
+            }
+            match result.get("structuredContent") {
+                None | Some(Value::Null) => {}
+                // Past the domain's bound it is said, not kept.
+                Some(structured) => content.push(match structured_json(structured)? {
+                    Some(json) => ToolContent::structured(json)
+                        .map_err(|error| protocol(&error.to_string()))?,
+                    None => ToolContent::text(STRUCTURED_RESULT_OMITTED),
+                }),
+            }
+        }
+        Some(_) => return Err(protocol("invalid MCP result")),
+    }
+    match output.get("error") {
+        None | Some(Value::Null) => {}
+        Some(error) => content.push(ToolContent::text(exact_text(error, "message")?)),
+    }
+    Ok(Some(content))
+}
+
 pub(in crate::infrastructure::codex_acp) fn tool_call(
     value: &Value,
     tools: &mut ObservedTools,
@@ -328,7 +465,18 @@ pub(in crate::infrastructure::codex_acp) fn tool_call(
         .map_or("", |tool| tool.output.as_str());
     let (frame, accumulated) = normalize(value, streamed)?;
     // Validate the complete representation before retaining provider identity.
-    let update = acp_tool_call(frame.as_ref())?;
+    let mut update = acp_tool_call(frame.as_ref())?;
+    let mcp = is_mcp_call(value) || tools.entries.get(&id).is_some_and(|tool| tool.mcp);
+    if let Some(result) = mcp_result(value, mcp)? {
+        // After whatever ACP content the frame carried, which Codex leaves empty
+        // for an MCP call today.
+        let mut content = update.content().clone().unwrap_or_default();
+        content.extend(result);
+        update = update.with_content(content);
+    }
+    if let Some(tool) = mcp_tool(value, mcp) {
+        update = update.with_mcp_tool(tool);
+    }
     let name = declared_name(value)?;
     let kind = value.get("kind").and_then(Value::as_str);
     match tools.entries.get_mut(&id) {
@@ -343,6 +491,7 @@ pub(in crate::infrastructure::codex_acp) fn tool_call(
             if tool.kind.is_none() {
                 tool.kind = kind.map(str::to_owned);
             }
+            tool.mcp = mcp;
             if let Some(input) = input {
                 tool.input = Some(input);
             }
@@ -358,6 +507,7 @@ pub(in crate::infrastructure::codex_acp) fn tool_call(
                     kind: kind.map(str::to_owned),
                     output: accumulated.unwrap_or_default(),
                     input,
+                    mcp,
                 },
             );
         }

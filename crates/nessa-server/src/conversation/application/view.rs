@@ -231,6 +231,22 @@ pub struct ConversationTool {
     /// What the call does, as the provider categorised it. Empty until it says.
     pub kind: String,
     pub status: String,
+    /// The MCP server and tool the call went to, once the harness named them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<ConversationMcpTool>,
+    /// The call's structured result as JSON text, when it was reported and fits
+    /// in [`MAX_STRUCTURED_CONTENT_BYTES`]; its text stays in `details`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<String>,
+}
+/// The most bytes of a tool's structured result a view carries. The schema
+/// states it again; `tests/conversation/agreement.rs` holds the two together.
+pub const MAX_STRUCTURED_CONTENT_BYTES: usize = 16384;
+/// An MCP tool's identity, copied from the SDK's validated `McpTool`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ConversationMcpTool {
+    pub server: String,
+    pub tool: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

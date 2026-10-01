@@ -328,7 +328,10 @@ test("the frontend job owns top-level script tests and their just dependency", (
   const gateway = workflow.slice(gatewayStart, releaseStart)
   const frontend = workflow.slice(frontendStart, localAuthStart)
 
-  assert.equal(root.scripts["scripts:test"], "node --test scripts/*.test.mjs")
+  assert.equal(
+    root.scripts["scripts:test"],
+    "node --test scripts/*.test.mjs scripts/mcp-test-server/*.test.mjs",
+  )
   assert.ok(root.scripts["frontend:check"].includes("pnpm scripts:test"))
   assert.doesNotMatch(workflow, /run: node --test scripts\/\*\.test\.mjs/)
   assert.doesNotMatch(gateway, /node --test scripts\/\*\.test\.mjs/)

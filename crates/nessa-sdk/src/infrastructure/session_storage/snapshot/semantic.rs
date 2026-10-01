@@ -390,6 +390,90 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_observation_keeps_its_mcp_identity_and_structured_result_through_storage() {
+        use crate::domain::agent_execution::tools::{
+            McpTool, ToolCallId, ToolCallUpdate, ToolContent, MAX_MCP_NAME_BYTES,
+        };
+        let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let tool = |update| {
+            ExecutionEvent::new(
+                ExecutionId::new("one").unwrap(),
+                ExecutionUpdate::Tool(update),
+            )
+        };
+        let round_trip = |event: &ExecutionEvent| {
+            let bytes = encode_change(&SessionChange::ProviderObservation(event.clone())).unwrap();
+            let decoded = decode_change(&bytes, &context).unwrap();
+            assert!(matches!(decoded, SessionChange::ProviderObservation(next) if next == *event));
+            String::from_utf8(bytes).unwrap()
+        };
+        let bare =
+            || ToolCallUpdate::new(ToolCallId::new("t").unwrap(), None, None, None, None, None);
+        let named = tool(
+            bare()
+                .with_content(vec![
+                    ToolContent::text("rows: 2"),
+                    ToolContent::structured(r#"{"rows":2}"#).unwrap(),
+                ])
+                .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
+        );
+        let text = round_trip(&named);
+        // A tool no update named is written as before, without the field.
+        assert!(!round_trip(&tool(bare())).contains("mcp_tool"));
+        // A saved identity or result the domain would refuse is corrupt, and a
+        // name past its bound is refused before it is decoded.
+        // Which refuses is part of the rule: past its bound, or with a field
+        // the record does not have, before anything is decoded; a name the
+        // domain will not keep, when it is constructed.
+        for (to, refusal) in [
+            (r#""server":"two words""#.to_owned(), "InvalidMcpToolName"),
+            (
+                format!(r#""server":"{}""#, "s".repeat(MAX_MCP_NAME_BYTES + 1)),
+                "exceeds decoded string limit",
+            ),
+            (
+                r#""server":"charts","ui":"x""#.to_owned(),
+                "unknown field for its schema",
+            ),
+        ] {
+            let corrupt = text.replacen(r#""server":"charts""#, &to, 1);
+            assert_ne!(corrupt, text);
+            match decode_change(corrupt.as_bytes(), &context) {
+                Err(StorageError::Corrupt(message)) => {
+                    assert!(message.contains(refusal), "{to}: {message}")
+                }
+                other => panic!("{to}: {other:?}"),
+            }
+        }
+        // A saved structured result that is not JSON is refused on restore by
+        // the domain's constructor, not carried on as a structured value.
+        let not_json = text.replacen(r#"{\"rows\":2}"#, "not json", 1);
+        assert_ne!(not_json, text);
+        match decode_change(not_json.as_bytes(), &context) {
+            Err(StorageError::Corrupt(message)) => {
+                assert!(message.contains("InvalidStructuredResult"), "{message}")
+            }
+            other => panic!("{other:?}"),
+        }
+        let oversize = text.replacen(
+            r#"{\"rows\":2}"#,
+            &"a".repeat(crate::domain::agent_execution::tools::MAX_STRUCTURED_RESULT_BYTES + 1),
+            1,
+        );
+        assert_ne!(oversize, text);
+        // Refused at its bound before it is decoded, not after.
+        match decode_change(oversize.as_bytes(), &context) {
+            Err(StorageError::Corrupt(message)) => {
+                assert!(
+                    message.contains("exceeds decoded string limit"),
+                    "{message}"
+                )
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
     fn semantic_observation_refuses_an_empty_message_identity() {
         let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
         let event = ExecutionEvent::new(

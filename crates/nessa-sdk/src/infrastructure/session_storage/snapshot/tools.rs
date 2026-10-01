@@ -15,6 +15,15 @@ pub(super) struct Tool {
     status: Option<Status>,
     locations: Option<Vec<Location>>,
     content: Option<Vec<Content>>,
+    /// Absent in a record of a tool no update named an MCP identity for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp_tool: Option<Mcp>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Mcp {
+    server: String,
+    tool: String,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,6 +35,7 @@ struct Location {
 #[serde(deny_unknown_fields)]
 enum Content {
     Text(String),
+    Structured(String),
     Diff {
         path: String,
         old: Option<String>,
@@ -62,6 +72,7 @@ impl From<&ToolCallUpdate> for Tool {
             value.status(),
             value.locations(),
             value.content(),
+            value.mcp_tool(),
         )
     }
 }
@@ -74,6 +85,7 @@ impl Tool {
             value.status(),
             value.locations(),
             value.content(),
+            value.mcp_tool(),
         )
     }
     fn fields(
@@ -83,6 +95,7 @@ impl Tool {
         status: &Option<ToolStatus>,
         locations: &Option<Vec<FileLocation>>,
         content: &Option<Vec<ToolContent>>,
+        mcp_tool: Option<&McpTool>,
     ) -> Self {
         Self {
             id: id.as_str().into(),
@@ -119,6 +132,7 @@ impl Tool {
                     .iter()
                     .map(|value| match value.view() {
                         ToolContentView::Text(text) => Content::Text(text.into()),
+                        ToolContentView::Structured(json) => Content::Structured(json.into()),
                         ToolContentView::Diff { path, old, new } => Content::Diff {
                             path: path.as_str().into(),
                             old: old.map(str::to_owned),
@@ -127,11 +141,19 @@ impl Tool {
                     })
                     .collect()
             }),
+            mcp_tool: mcp_tool.map(|value| Mcp {
+                server: value.server().into(),
+                tool: value.tool().into(),
+            }),
         }
     }
     pub(super) fn decode(self) -> Result<ToolCallUpdate, StorageError> {
         validate_observation_id(&self.id).map_err(corrupt)?;
-        Ok(ToolCallUpdate::new(
+        let mcp_tool = self
+            .mcp_tool
+            .map(|value| McpTool::new(value.server, value.tool).map_err(corrupt))
+            .transpose()?;
+        let update = ToolCallUpdate::new(
             ToolCallId::new(self.id).map_err(corrupt)?,
             self.title,
             self.kind.map(|kind| match kind {
@@ -172,6 +194,9 @@ impl Tool {
                         .map(|value| {
                             Ok(match value {
                                 Content::Text(text) => ToolContent::text(text),
+                                Content::Structured(json) => {
+                                    ToolContent::structured(json).map_err(corrupt)?
+                                }
                                 Content::Diff { path, old, new } => ToolContent::diff(
                                     FilePath::new(path).map_err(corrupt)?,
                                     old,
@@ -182,7 +207,11 @@ impl Tool {
                         .collect::<Result<_, StorageError>>()
                 })
                 .transpose()?,
-        ))
+        );
+        Ok(match mcp_tool {
+            Some(mcp_tool) => update.with_mcp_tool(mcp_tool),
+            None => update,
+        })
     }
     pub(super) fn decode_observation(self) -> Result<(ToolCallId, ToolObservation), StorageError> {
         let update = self.decode()?;
