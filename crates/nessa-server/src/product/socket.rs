@@ -35,6 +35,7 @@ use nessa_auth::{
 use serde_json::json;
 use std::{
     future::{poll_fn, Future},
+    pin::Pin,
     sync::Arc,
     task::Poll,
     time::Duration,
@@ -259,6 +260,27 @@ enum ResponseClass {
     Record,
 }
 
+impl ResponseClass {
+    fn for_method(method: &str) -> Self {
+        match method {
+            "conversation.close"
+            | "conversation.archive"
+            | "conversation.unarchive"
+            | "conversation.answer"
+            | "conversation.answerQuestion"
+            | "conversation.cancel"
+            | "conversation.remove"
+            | "conversation.reorder" => Self::Control,
+            "conversation.recordsHead"
+            | "conversation.recordsPage"
+            | "conversation.catalogueHead"
+            | "conversation.catalogueManifest"
+            | "conversation.catalogueResolve" => Self::Record,
+            _ => Self::Ordinary,
+        }
+    }
+}
+
 struct QueuedResponse {
     message: WireResponse,
     _slot: OwnedSemaphorePermit,
@@ -414,6 +436,13 @@ async fn within_deadline<F: Future>(deadline: Instant, work: F) -> Option<F::Out
         .filter(|_| Instant::now() < deadline)
 }
 
+enum AuthenticatedInput {
+    Request(RequestFrame),
+    Refusal(OutgoingMessage),
+}
+
+type AuthorityCheck<'a> = Pin<Box<dyn Future<Output = Option<AccessError>> + Send + 'a>>;
+
 async fn run_authenticated<S>(socket: S, state: ProductRouteState, session: AuthenticatedSession)
 where
     S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin + Send + 'static,
@@ -455,8 +484,13 @@ where
     // sink does not stop this owner from receiving or dispatching controls.
     let mut requests = FuturesUnordered::new();
     let mut writer_finished = false;
+    let mut refresh: Option<AuthorityCheck<'_>> = None;
+    let mut input_check: Option<AuthorityCheck<'_>> = None;
+    let mut pending_input: Option<AuthenticatedInput> = None;
     loop {
-        tokio::select! {
+        // Authority checks suspend only their own admission. Request completion,
+        // delivery teardown and expiry retain independently polled owners (R60).
+        let admitted = tokio::select! {
             _ = &mut writer => {
                 writer_finished = true;
                 break;
@@ -470,18 +504,39 @@ where
                     ResponseClass::Record => record_send.try_send(QueuedRecordResponse::new(queued)).is_ok(),
                 };
                 if !sent { break; }
+                None
             }
             _ = &mut expiry => {
                 let _ = control_send.try_send(ControlOutput::Close(SessionCloseReason::CredentialExpired));
                 break;
             }
-            _ = current_state.tick() => {
-                if let Some(error) = current_session_error(&state, &session).await {
+            error = async { refresh.as_mut().expect("refresh selected while pending").await }, if refresh.is_some() => {
+                refresh = None;
+                if let Some(error) = error {
                     let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
                     break;
                 }
+                None
             }
-            message = incoming.next() => {
+            _ = current_state.tick(), if refresh.is_none() => {
+                refresh = Some(Box::pin(current_session_error(&state, &session)));
+                None
+            }
+            error = async { input_check.as_mut().expect("input check selected while pending").await }, if input_check.is_some() => {
+                input_check = None;
+                if let Some(error) = error {
+                    let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
+                    break;
+                }
+                match pending_input.take().expect("input check owns one input") {
+                    AuthenticatedInput::Request(frame) => Some((frame, Instant::now())),
+                    AuthenticatedInput::Refusal(response) => {
+                        if refusal_send.try_send(response).is_err() { break; }
+                        None
+                    }
+                }
+            }
+            message = incoming.next(), if pending_input.is_none() => {
                 let Some(Ok(message)) = message else { break };
                 let Message::Text(text) = message else {
                     if matches!(message, Message::Close(_)) { break; }
@@ -492,76 +547,100 @@ where
                     Ok(frame) => frame,
                     Err(_) => {
                         let Some(response) = correlatable_invalid_request(&text) else { continue };
-                        if let Some(error) = current_session_error(&state, &session).await {
-                            let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
-                            break;
-                        }
-                        if refusal_send.try_send(response).is_err() { break; }
+                        pending_input = Some(AuthenticatedInput::Refusal(response));
+                        input_check = Some(Box::pin(current_session_error(&state, &session)));
                         continue;
                     },
                 };
-                let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.archive" | "conversation.unarchive" | "conversation.answer" | "conversation.answerQuestion" | "conversation.cancel" | "conversation.remove" | "conversation.reorder");
-                let record = matches!(frame.method.as_str(), "conversation.recordsHead" | "conversation.recordsPage" | "conversation.catalogueHead" | "conversation.catalogueManifest" | "conversation.catalogueResolve");
-                let read_deadline = Instant::now() + Duration::from_secs(10);
-                // Passive authority refresh belongs inside the read deadline,
-                // rather than a second, independently timed socket precheck.
-                if !record {
-                    if let Some(error) = current_session_error(&state, &session).await {
-                        let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
-                        break;
-                    }
-                }
-                let class = if control { ResponseClass::Control } else if record { ResponseClass::Record } else { ResponseClass::Ordinary };
-                let slots = if control { &control_slots } else if record { &record_slots } else { &ordinary_slots };
-                let Ok(slot) = slots.clone().try_acquire_owned() else {
-                    if refusal_send.try_send(failure(&frame.id, "temporarily_unavailable")).is_err() { break; }
-                    continue;
-                };
-                let capacity = if control {
-                    &state.controls
-                } else if record {
-                    &state.record_reads
-                } else if frame.method == "conversation.delete" {
-                    &state.deletions
-                } else if frame.method == "attachment.begin" {
-                    &state.upload_begins
+                let record = matches!(ResponseClass::for_method(&frame.method), ResponseClass::Record);
+                if record {
+                    Some((frame, Instant::now()))
                 } else {
-                    &state.requests
-                };
-                let Ok(permit) = capacity.clone().try_acquire_owned() else {
-                    let response = failure(&frame.id, "temporarily_unavailable");
-                    let queued = QueuedResponse { message: WireResponse::ordinary(response), _slot: slot, _record_work: None };
-                    let sent = if control {
-                        control_send.try_send(ControlOutput::Response(Box::new(queued))).is_ok()
-                    } else if record {
-                        record_send.try_send(QueuedRecordResponse::new(queued)).is_ok()
-                    } else {
-                        ordinary_send.try_send(queued).is_ok()
-                    };
-                    if !sent { break; }
-                    continue;
-                };
-                let request_state = state.clone();
-                let request_session = session.clone();
-                requests.push(tokio::spawn(async move {
-                    if matches!(class, ResponseClass::Record) {
-                        let (message, record_work) = dispatch_passive_read(
-                            &request_state,
-                            &request_session,
-                            frame,
-                            RecordReadLease::new(permit),
-                            read_deadline,
-                        )
-                        .await;
-                        (message, class, slot, record_work)
-                    } else {
-                        let _permit = permit;
-                        let message = dispatch(&request_state, &request_session, frame).await;
-                        (WireResponse::ordinary(message), class, slot, None)
-                    }
-                }));
+                    // Every deferred input asks current authority independently;
+                    // periodic refresh cannot authorize an input. Later inputs
+                    // wait behind this one without accumulating another queue.
+                    pending_input = Some(AuthenticatedInput::Request(frame));
+                    input_check = Some(Box::pin(current_session_error(&state, &session)));
+                    None
+                }
             }
-        }
+        };
+        let Some((frame, received_at)) = admitted else {
+            continue;
+        };
+        let read_deadline = received_at + Duration::from_secs(10);
+        let class = ResponseClass::for_method(&frame.method);
+        let control = matches!(class, ResponseClass::Control);
+        let record = matches!(class, ResponseClass::Record);
+        let slots = if control {
+            &control_slots
+        } else if record {
+            &record_slots
+        } else {
+            &ordinary_slots
+        };
+        let Ok(slot) = slots.clone().try_acquire_owned() else {
+            if refusal_send
+                .try_send(failure(&frame.id, "temporarily_unavailable"))
+                .is_err()
+            {
+                break;
+            }
+            continue;
+        };
+        let capacity = if control {
+            &state.controls
+        } else if record {
+            &state.record_reads
+        } else if frame.method == "conversation.delete" {
+            &state.deletions
+        } else if frame.method == "attachment.begin" {
+            &state.upload_begins
+        } else {
+            &state.requests
+        };
+        let Ok(permit) = capacity.clone().try_acquire_owned() else {
+            let response = failure(&frame.id, "temporarily_unavailable");
+            let queued = QueuedResponse {
+                message: WireResponse::ordinary(response),
+                _slot: slot,
+                _record_work: None,
+            };
+            let sent = if control {
+                control_send
+                    .try_send(ControlOutput::Response(Box::new(queued)))
+                    .is_ok()
+            } else if record {
+                record_send
+                    .try_send(QueuedRecordResponse::new(queued))
+                    .is_ok()
+            } else {
+                ordinary_send.try_send(queued).is_ok()
+            };
+            if !sent {
+                break;
+            }
+            continue;
+        };
+        let request_state = state.clone();
+        let request_session = session.clone();
+        requests.push(tokio::spawn(async move {
+            if matches!(class, ResponseClass::Record) {
+                let (message, record_work) = dispatch_passive_read(
+                    &request_state,
+                    &request_session,
+                    frame,
+                    RecordReadLease::new(permit),
+                    read_deadline,
+                )
+                .await;
+                (message, class, slot, record_work)
+            } else {
+                let _permit = permit;
+                let message = dispatch(&request_state, &request_session, frame).await;
+                (WireResponse::ordinary(message), class, slot, None)
+            }
+        }));
     }
     drop(control_send);
     drop(refusal_send);

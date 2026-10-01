@@ -354,3 +354,465 @@ async fn arriving_record_refusals_interrupt_stalled_priority() {
         }
     }
 }
+
+// Completion must remain observable while an unrelated authority read is held.
+struct HeldSocketAuthority {
+    authority: Arc<Authority>,
+    hold: AtomicBool,
+    entered: Notify,
+    release: Notify,
+    waiting: AtomicUsize,
+}
+struct HeldAuthorityRead<'a>(&'a AtomicUsize);
+impl Drop for HeldAuthorityRead<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+impl AccessReader for HeldSocketAuthority {
+    fn read<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+        Box::pin(async move {
+            if self.hold.load(Ordering::SeqCst) {
+                self.waiting.fetch_add(1, Ordering::SeqCst);
+                let _waiting = HeldAuthorityRead(&self.waiting);
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+            self.authority.read(id).await
+        })
+    }
+}
+struct HeldSuccessfulRead {
+    entered: Notify,
+    release: Notify,
+    completed: AtomicUsize,
+}
+impl RecordReadSource for HeldSuccessfulRead {
+    fn read<'a>(
+        &'a self,
+        admitted: ReceiverReadScope,
+        operation: RecordReadOperation,
+        lease: RecordReadLease,
+    ) -> RecordReadFuture<'a, RecordReadResponse> {
+        Box::pin(async move {
+            assert!(matches!(operation, RecordReadOperation::Head));
+            self.entered.notify_one();
+            self.release.notified().await;
+            let id = |value| nessa_sync::replication::domain::Id::new(value).unwrap();
+            let value = crate::conversation::application::RecordReadValue::Head(
+                crate::conversation::application::RecordHead {
+                    scope: nessa_sync::replication::domain::Scope::new(
+                        id(admitted.receiver_id),
+                        id("gateway".into()),
+                        id(admitted.conversation_id.to_string()),
+                        id("incarnation".into()),
+                        id("physical-schema".into()),
+                        id(format!("epoch-{}", admitted.access_epoch)),
+                    ),
+                    head: 1,
+                },
+            );
+            self.completed.fetch_add(1, Ordering::SeqCst);
+            Ok(RecordReadResponse { value, lease })
+        })
+    }
+}
+struct HealthEffects(AtomicUsize);
+impl UptimeClock for HealthEffects {
+    fn elapsed_ms(&self) -> u64 {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        42
+    }
+}
+#[derive(Clone, Copy, Debug)]
+enum HeldAuthorityInput {
+    Periodic,
+    Malformed,
+    Ordinary,
+}
+async fn successful_read_during_held_authority(input: HeldAuthorityInput, stalled: bool) {
+    let (state, authority) = fixture(MembershipRole::Member);
+    authority.snapshot.lock().unwrap().credential = Credential::new(
+        CredentialId::new("credential").unwrap(),
+        PrincipalId::new("principal").unwrap(),
+        OrganizationId::new("organization").unwrap(),
+        AudienceId::new("gateway").unwrap(),
+        100,
+        200,
+        ["conversation.read", "server.read"]
+            .into_iter()
+            .map(|action| {
+                Grant::new(
+                    Action::new(action).unwrap(),
+                    Resource::new(
+                        OrganizationId::new("organization").unwrap(),
+                        ResourceId::new("gateway-resource").unwrap(),
+                    ),
+                )
+            })
+            .collect(),
+    )
+    .unwrap();
+    let session = authenticate(&state).await;
+    let held = Arc::new(HeldSocketAuthority {
+        authority,
+        hold: AtomicBool::new(false),
+        entered: Notify::new(),
+        release: Notify::new(),
+        waiting: AtomicUsize::new(0),
+    });
+    let source = Arc::new(HeldSuccessfulRead {
+        entered: Notify::new(),
+        release: Notify::new(),
+        completed: AtomicUsize::new(0),
+    });
+    let repository = Arc::new(conversation_support::MemoryRepository::default());
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    repository.records.lock().unwrap().insert(
+        id.clone(),
+        Conversation::new(
+            id.clone(),
+            OrganizationId::new("organization").unwrap(),
+            PrincipalId::new("principal").unwrap(),
+            "panel".into(),
+            "create".into(),
+            1,
+            AgentId::Claude,
+            ConversationModelId::new("model").unwrap(),
+            ConversationApprovalMode::Ask,
+        )
+        .unwrap(),
+    );
+    let effects = Arc::new(HealthEffects(AtomicUsize::new(0)));
+    let mut state = state
+        .with_passive_read(Arc::new(RecordBinding), repository)
+        .with_record_source(source.clone());
+    state.access = held.clone();
+    state.uptime_clock = effects.clone();
+    state.settings = SessionSettings::new(
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        if matches!(input, HeldAuthorityInput::Periodic) {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_secs(120)
+        },
+    )
+    .unwrap();
+    let capacity = state.record_reads.clone();
+    let count = if stalled { 4 } else { 1 };
+    let mut tasks = Vec::new();
+    let mut peers = Vec::new();
+    let mut send_releases = Vec::new();
+    for _ in 0..count {
+        let (send_release, send_gate) = tokio::sync::oneshot::channel();
+        let (socket, peer) = test_socket(stalled.then_some(send_gate));
+        tasks.push(tokio::spawn(run_authenticated(
+            socket,
+            state.clone(),
+            session.clone(),
+        )));
+        peer.input.send(Ok(Message::Text(json!({
+            "type":"req", "id":"record", "method":"conversation.recordsHead",
+            "params":{"conversationId":id.to_string(),"receiverId":"receiver","accessEpoch":"3"}
+        }).to_string().into()))).unwrap();
+        timeout(Duration::from_secs(1), source.entered.notified())
+            .await
+            .unwrap();
+        peers.push(peer);
+        send_releases.push(send_release);
+    }
+    assert_eq!(capacity.available_permits(), 4 - count);
+    held.hold.store(true, Ordering::SeqCst);
+    match input {
+        HeldAuthorityInput::Periodic => tokio::time::advance(Duration::from_secs(1)).await,
+        HeldAuthorityInput::Malformed => {
+            for peer in &peers {
+                peer.input
+                    .send(Ok(Message::Text(
+                        r#"{"type":"req","id":"deferred","method":false,"params":{}}"#.into(),
+                    )))
+                    .unwrap();
+            }
+        }
+        HeldAuthorityInput::Ordinary => {
+            for peer in &peers {
+                peer.request("deferred");
+            }
+        }
+    }
+    timeout(Duration::from_secs(1), async {
+        while held.waiting.load(Ordering::SeqCst) != count {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(effects.0.load(Ordering::SeqCst), 0);
+    source.release.notify_waiters();
+    timeout(Duration::from_secs(1), async {
+        while source.completed.load(Ordering::SeqCst) != count {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    if stalled {
+        let mut started = true;
+        for peer in &mut peers {
+            started &= timeout(Duration::from_secs(1), peer.writing.recv())
+                .await
+                .is_ok();
+        }
+        tokio::time::advance(RECORD_SEND_TIMEOUT + Duration::from_millis(1)).await;
+        let _ = timeout(Duration::from_secs(1), async {
+            while !tasks.iter().all(tokio::task::JoinHandle::is_finished) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        let ended = tasks.iter().all(tokio::task::JoinHandle::is_finished);
+        let released = capacity.available_permits();
+        let cancelled_checks = held.waiting.load(Ordering::SeqCst);
+        let effects_before = effects.0.load(Ordering::SeqCst);
+        let gate_unreleased = held.hold.load(Ordering::SeqCst);
+        // Cleanup follows measurement and cannot make a failed deadline appear valid.
+        for task in tasks {
+            if !task.is_finished() {
+                task.abort();
+            }
+            let _ = task.await;
+        }
+        drop(send_releases);
+        assert!(
+            started,
+            "{input:?}: all ready sources must reach their sinks during held authority"
+        );
+        assert!(
+            ended,
+            "{input:?}: writer termination must remain observable during held authority"
+        );
+        assert_eq!(
+            released, 4,
+            "{input:?}: original delivery deadlines must return all shared read capacity"
+        );
+        assert!(gate_unreleased, "authority gate was not released");
+        assert_eq!(
+            cancelled_checks, 0,
+            "socket teardown drops pending authority owners"
+        );
+        assert_eq!(effects_before, 0);
+        for peer in &mut peers {
+            assert!(peer.output.try_recv().is_err());
+        }
+    } else {
+        let mut peer = peers.pop().unwrap();
+        let task = tasks.pop().unwrap();
+        let received = timeout(Duration::from_secs(1), peer.output.recv()).await;
+        let released = capacity.available_permits();
+        let still_held = held.waiting.load(Ordering::SeqCst);
+        let effects_before = effects.0.load(Ordering::SeqCst);
+        held.hold.store(false, Ordering::SeqCst);
+        held.release.notify_waiters();
+        let deferred = if received.is_ok() && !matches!(input, HeldAuthorityInput::Periodic) {
+            Some(timeout(Duration::from_secs(1), peer.output.recv()).await)
+        } else {
+            None
+        };
+        if received.is_err() {
+            task.abort();
+        } else {
+            drop(peer.input);
+        }
+        let _ = task.await;
+        let Message::Text(text) = received
+            .expect("completed read must deliver during held authority")
+            .unwrap()
+        else {
+            panic!("record response expected")
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["id"], "record");
+        assert_eq!(value["ok"], true);
+        assert_eq!(released, 4);
+        assert_eq!(still_held, 1);
+        assert_eq!(
+            effects_before, 0,
+            "pending input has no preauthorization effect"
+        );
+        if let Some(deferred) = deferred {
+            let Message::Text(text) = deferred.unwrap().unwrap() else {
+                panic!("deferred reply expected")
+            };
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["id"], "deferred");
+            match input {
+                HeldAuthorityInput::Malformed => {
+                    assert_eq!(value["error"]["code"], "invalid_request");
+                    assert_eq!(effects.0.load(Ordering::SeqCst), 0);
+                }
+                HeldAuthorityInput::Ordinary => {
+                    assert_eq!(value["ok"], true);
+                    assert_eq!(effects.0.load(Ordering::SeqCst), 1);
+                }
+                HeldAuthorityInput::Periodic => unreachable!(),
+            }
+        }
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn completed_record_delivers_during_periodic_authority() {
+    successful_read_during_held_authority(HeldAuthorityInput::Periodic, false).await;
+}
+#[tokio::test(start_paused = true)]
+async fn completed_record_delivers_during_malformed_authority() {
+    successful_read_during_held_authority(HeldAuthorityInput::Malformed, false).await;
+}
+#[tokio::test(start_paused = true)]
+async fn completed_record_delivers_during_ordinary_authority() {
+    successful_read_during_held_authority(HeldAuthorityInput::Ordinary, false).await;
+}
+#[tokio::test(start_paused = true)]
+async fn completed_record_expires_during_periodic_authority() {
+    successful_read_during_held_authority(HeldAuthorityInput::Periodic, true).await;
+}
+#[tokio::test(start_paused = true)]
+async fn completed_record_expires_during_malformed_authority() {
+    successful_read_during_held_authority(HeldAuthorityInput::Malformed, true).await;
+}
+#[tokio::test(start_paused = true)]
+async fn completed_record_expires_during_ordinary_authority() {
+    successful_read_during_held_authority(HeldAuthorityInput::Ordinary, true).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn held_input_authority_does_not_suspend_credential_expiry() {
+    let (mut state, authority) = fixture(MembershipRole::Member);
+    *authority.proof_expires_at.lock().unwrap() = Some(102);
+    let session = authenticate(&state).await;
+    let held = Arc::new(HeldSocketAuthority {
+        authority: authority.clone(),
+        hold: AtomicBool::new(true),
+        entered: Notify::new(),
+        release: Notify::new(),
+        waiting: AtomicUsize::new(0),
+    });
+    let effects = Arc::new(HealthEffects(AtomicUsize::new(0)));
+    state.access = held.clone();
+    state.uptime_clock = effects.clone();
+    state.settings = SessionSettings::new(
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        Duration::from_secs(120),
+    )
+    .unwrap();
+    let (socket, mut peer) = test_socket(None);
+    let task = tokio::spawn(run_authenticated(socket, state, session));
+    peer.request("deferred");
+    timeout(Duration::from_secs(1), held.entered.notified())
+        .await
+        .unwrap();
+    authority.now.store(102, Ordering::SeqCst);
+    tokio::time::advance(Duration::from_secs(2)).await;
+    let close = timeout(Duration::from_secs(1), peer.output.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let Message::Close(Some(close)) = close else {
+        panic!("credential expiry close expected")
+    };
+    let reason: serde_json::Value = serde_json::from_str(&close.reason).unwrap();
+    assert_eq!(reason["code"], "credential_expired");
+    timeout(Duration::from_secs(1), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.waiting.load(Ordering::SeqCst), 0);
+    assert!(held.hold.load(Ordering::SeqCst));
+    assert_eq!(effects.0.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn periodic_authority_cannot_authorize_deferred_input() {
+    for malformed in [false, true] {
+        let (mut state, authority) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let held = Arc::new(HeldSocketAuthority {
+            authority: authority.clone(),
+            hold: AtomicBool::new(true),
+            entered: Notify::new(),
+            release: Notify::new(),
+            waiting: AtomicUsize::new(0),
+        });
+        let effects = Arc::new(HealthEffects(AtomicUsize::new(0)));
+        state.access = held.clone();
+        state.uptime_clock = effects.clone();
+        state.settings = SessionSettings::new(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(1)).await;
+        timeout(Duration::from_secs(1), held.entered.notified())
+            .await
+            .unwrap();
+        if malformed {
+            peer.input
+                .send(Ok(Message::Text(
+                    r#"{"type":"req","id":"deferred","method":false,"params":{}}"#.into(),
+                )))
+                .unwrap();
+        } else {
+            peer.request("deferred");
+        }
+        timeout(Duration::from_secs(1), held.entered.notified())
+            .await
+            .unwrap();
+        assert_eq!(
+            held.waiting.load(Ordering::SeqCst),
+            2,
+            "periodic and input own distinct reads"
+        );
+        // Notify releases waiters in registration order: only the earlier periodic read.
+        held.release.notify_one();
+        timeout(Duration::from_secs(1), async {
+            while held.waiting.load(Ordering::SeqCst) != 1 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(held.waiting.load(Ordering::SeqCst), 1);
+        assert!(
+            peer.output.try_recv().is_err(),
+            "periodic success must not admit deferred input"
+        );
+        assert_eq!(effects.0.load(Ordering::SeqCst), 0);
+        *authority.snapshot.lock().unwrap() =
+            snapshot(MembershipRole::Member, MembershipStatus::Disabled);
+        held.release.notify_one();
+        let close = timeout(Duration::from_secs(1), peer.output.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let Message::Close(Some(close)) = close else {
+            panic!("invalid current authority close expected")
+        };
+        let reason: serde_json::Value = serde_json::from_str(&close.reason).unwrap();
+        assert_eq!(reason["code"], "authorization_lost");
+        timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(held.waiting.load(Ordering::SeqCst), 0);
+        assert_eq!(effects.0.load(Ordering::SeqCst), 0);
+        assert!(
+            peer.output.try_recv().is_err(),
+            "no deferred refusal or health after close"
+        );
+    }
+}
