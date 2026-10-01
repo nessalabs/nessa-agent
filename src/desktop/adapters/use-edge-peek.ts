@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react"
+import { inModal } from "./modal"
 import {
   edgePeekHidden,
   stepEdgePeek,
@@ -19,9 +27,15 @@ const HANDOFF_MS = 380
  * both workspace layouts and Settings. `enabled` is false whenever the
  * sidebar is drawn (or, in the classic shell, the panel is maximized).
  * Becoming docked while revealed is a handoff; anything else that disables
- * the reveal dismisses it.
+ * the reveal dismisses it. `surface` is the element the reveal belongs to,
+ * when that is itself a dialog (Settings): a dialog or a menu over it keeps
+ * its Escape, the surface's own does not.
  */
-export function useEdgePeek(enabled: boolean, docked: boolean) {
+export function useEdgePeek(
+  enabled: boolean,
+  docked: boolean,
+  surface?: RefObject<HTMLElement | null>,
+) {
   // The model's whole state, stepped on every event; the page is drawn again
   // only when what it draws changes — every press and release in the window
   // reaches the model, and most change nothing on screen.
@@ -59,14 +73,31 @@ export function useEdgePeek(enabled: boolean, docked: boolean) {
     if (!enabled) send(docked ? "dock" : "dismiss")
   }, [enabled, docked, send])
 
+  // A shown reveal, not handing off to the docked sidebar, takes Escape and
+  // nothing else does — but a menu or a dialog over it, a carrying drag, or a
+  // composition ending in a field, whose Escape is theirs. It is heard on the
+  // document in capture — after the window's own capture, where a carrying
+  // drag takes its Escape and stops it — marked handled and stopped, so the
+  // overview, a widget (ADR 326) or a field's own Escape never answers the
+  // same press. One listener for the hook's life, reading what was last
+  // committed: the reveal is on the page from its commit, so its Escape is
+  // too, not an effect later (`use-edge-peek.test.tsx`).
+  const ownsEscape = state.shown && state.pending !== "handoff"
+  const owns = useRef(ownsEscape)
+  useLayoutEffect(() => {
+    owns.current = ownsEscape
+  }, [ownsEscape])
   useEffect(() => {
-    if (!state.shown || state.pending === "handoff") return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") send("dismiss")
+      if (event.key !== "Escape" || !owns.current || event.defaultPrevented) return
+      if (event.isComposing || inModal(event.target, surface?.current)) return
+      event.preventDefault()
+      event.stopPropagation()
+      send("dismiss")
     }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [state.shown, state.pending, send])
+    document.addEventListener("keydown", onKeyDown, true)
+    return () => document.removeEventListener("keydown", onKeyDown, true)
+  }, [send, surface])
 
   // The pointer and keyboard focus each hold the reveal open: it hides once
   // neither is inside — the edge strip or the revealed sidebar — so choosing

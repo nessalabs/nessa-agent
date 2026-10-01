@@ -12,7 +12,7 @@ import {
   type Message,
   type Part,
 } from "./transcript"
-import { sameWidget } from "./widget-ref"
+import { sameWidget } from "../../widgets/model/widget-ref"
 
 describe("an agent message's parts", () => {
   it("gathers consecutive steps into one group, keeping everything else in order", () => {

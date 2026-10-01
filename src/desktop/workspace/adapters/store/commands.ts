@@ -29,7 +29,7 @@ import {
 import type { WorkspaceFailureReason } from "../../model/failure"
 import { consistentIndex, contradicts, type ModelRef } from "../../model/workspace-index"
 import { paneItemOf } from "../../model/pane-item"
-import type { WidgetRef } from "../../model/widget-ref"
+import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import { fromSource, knownToSource } from "../../model/revision"
 import {
   answering,

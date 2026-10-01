@@ -25,7 +25,15 @@ import {
 import { target } from "./lib/server.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
-const functional = ["smoke", "focus", "drag", "responsive", "safe-area", "load-fallback"]
+const functional = [
+  "smoke",
+  "focus",
+  "drag",
+  "responsive",
+  "safe-area",
+  "load-fallback",
+  "widgets",
+]
 
 const options = cli({
   name: "run-all",

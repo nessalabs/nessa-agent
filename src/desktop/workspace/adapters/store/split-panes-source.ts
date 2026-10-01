@@ -8,6 +8,7 @@
 import type { SplitPanesSource } from "../../../split-panes"
 import type { DesktopStore } from "../../../store"
 import { paneItemOf } from "../../model/pane-item"
+import { contentKind } from "../../application/workspace-state"
 import { commitDrop, equalizePanes, fitPanes, measureRoom, resizePanes } from "./commands"
 
 export function workspaceSplitPanes(store: DesktopStore): SplitPanesSource {
@@ -25,7 +26,7 @@ export function workspaceSplitPanes(store: DesktopStore): SplitPanesSource {
       )
     },
     // Only panes a person can see are aimed at: none under the Agents overview.
-    targetable: () => workspace().content === "panes",
+    targetable: () => contentKind(workspace().content) === "panes",
     measure: () => store.dispatch(measureRoom()),
     commitDrop: (drop) => store.dispatch(commitDrop(drop)),
     resize: (move) => store.dispatch(resizePanes(move)),

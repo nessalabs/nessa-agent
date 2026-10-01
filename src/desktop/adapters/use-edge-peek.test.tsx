@@ -135,3 +135,115 @@ it("takes the window's blur as the release", async () => {
   await wait(400)
   expect(peek.shown).toBe(false)
 })
+
+it("takes Escape while shown, first, handled and stopped, so nothing after it answers it", async () => {
+  const later = vi.fn((event: KeyboardEvent) => event.defaultPrevented)
+  const field = vi.fn()
+  window.addEventListener("keydown", later)
+  document.body.addEventListener("keydown", field)
+  act(() => peek.enter(free))
+  await wait(200)
+  expect(peek.shown).toBe(true)
+  const event = escapeKey()
+  act(() => void document.body.dispatchEvent(event))
+  expect(peek.shown).toBe(false)
+  expect(event.defaultPrevented).toBe(true)
+  expect(field).not.toHaveBeenCalled()
+  expect(later).not.toHaveBeenCalled()
+  // Hidden, it leaves Escape alone.
+  act(() => void document.body.dispatchEvent(escapeKey()))
+  expect(field).toHaveBeenCalledTimes(1)
+  expect(later).toHaveLastReturnedWith(false)
+  window.removeEventListener("keydown", later)
+  document.body.removeEventListener("keydown", field)
+})
+
+it("leaves Escape to a menu or dialog open over it, staying shown", async () => {
+  act(() => peek.enter(free))
+  await wait(200)
+  const menu = document.createElement("div")
+  menu.setAttribute("role", "menu")
+  const item = document.createElement("button")
+  menu.append(item)
+  document.body.append(menu)
+  const event = escapeKey()
+  act(() => void item.dispatchEvent(event))
+  expect(event.defaultPrevented).toBe(false)
+  expect(peek.shown).toBe(true)
+  menu.remove()
+})
+
+function escapeKey() {
+  return new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+}
+
+it("is heard before a listener that was there first, so where it mounts does not matter", async () => {
+  act(() => root.unmount())
+  const earlier = vi.fn()
+  window.addEventListener("keydown", earlier)
+  root = createRoot(document.createElement("div"))
+  act(() => root.render(<Peek />))
+  act(() => peek.enter(free))
+  await wait(200)
+  act(() => void document.body.dispatchEvent(escapeKey()))
+  expect(earlier).not.toHaveBeenCalled()
+  expect(peek.shown).toBe(false)
+  window.removeEventListener("keydown", earlier)
+})
+
+it("leaves a composition's Escape to its field", async () => {
+  act(() => peek.enter(free))
+  await wait(200)
+  const event = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+    isComposing: true,
+  })
+  act(() => void document.body.dispatchEvent(event))
+  expect(event.defaultPrevented).toBe(false)
+  expect(peek.shown).toBe(true)
+})
+
+it("comes after a carrying drag, which takes Escape on the window, whenever either began listening", async () => {
+  // Registered after the peek: the window's capture is still heard before the document's.
+  const drag = (event: KeyboardEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  window.addEventListener("keydown", drag, true)
+  act(() => peek.enter(free))
+  await wait(200)
+  act(() => void document.body.dispatchEvent(escapeKey()))
+  expect(peek.shown).toBe(true)
+  window.removeEventListener("keydown", drag, true)
+})
+
+it("in a surface that is a dialog itself, takes Escape from inside it, and leaves it to a menu over it", async () => {
+  act(() => root.unmount())
+  const dialog = document.createElement("div")
+  dialog.setAttribute("role", "dialog")
+  dialog.setAttribute("aria-modal", "true")
+  const field = document.createElement("button")
+  const menu = document.createElement("div")
+  menu.setAttribute("role", "menu")
+  const item = document.createElement("button")
+  menu.append(item)
+  dialog.append(field)
+  document.body.append(dialog, menu)
+  const surface = { current: dialog }
+  function InDialog() {
+    peek = useEdgePeek(true, false, surface)
+    return null
+  }
+  root = createRoot(document.createElement("div"))
+  act(() => root.render(<InDialog />))
+  act(() => peek.enter(free))
+  await wait(200)
+  act(() => void item.dispatchEvent(escapeKey()))
+  expect(peek.shown).toBe(true)
+  act(() => void field.dispatchEvent(escapeKey()))
+  expect(peek.shown).toBe(false)
+  dialog.remove()
+  menu.remove()
+})

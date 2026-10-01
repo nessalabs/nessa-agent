@@ -37,7 +37,13 @@
  * what the workspace adds to a drag (`split-panes-drag.ts`), focus, the
  * panes' room, keys, the clock's ticks — as hooks and adapters beside the
  * tree, never as state; `adapters/storage/` keeps the overview's filter
- * between launches. The Agents overview is part of the workspace: its rules
+ * between launches. Widgets (ADR 326) are drawn by `../widgets`' hosts —
+ * a card in a message, a widget's pane (`ui/panes/widget-pane.tsx`), the
+ * window over the panes (`ui/panes/widget-window.tsx`) — in the workspace's
+ * chrome, their callbacks carried out by its commands
+ * (`adapters/store/widget-hosts.ts`), and Escape for the one in front by
+ * `adapters/dom/widget-escape.ts`; the workspace imports widgets and no
+ * plugin. The Agents overview is part of the workspace: its rules
  * in `model/overview/`, its state in the slice, its views in `ui/overview/`,
  * answering and reading through the same commands and effects as a pane.
  *
@@ -48,9 +54,10 @@ export { SessionsInSidebar } from "./ui/layouts/sessions-in-sidebar"
 export { ThreeColumns } from "./ui/layouts/three-columns"
 export { shortcutNames, workspaceShortcuts } from "./ui/layouts/shortcuts"
 export { ClockProvider } from "./adapters/dom/clock"
-export { focusComposer } from "./adapters/dom/focus"
+export { focusInFront } from "./adapters/dom/focus"
 export { measureWorkspace } from "./adapters/dom/measure"
 export { inMemorySource } from "./adapters/in-memory/in-memory-source"
+export { sampleWidgetSession } from "./adapters/in-memory/sample-labs"
 export { workspaceEffects } from "./adapters/store/effects"
 export { initialWorkspaceFrom, workspaceReducer } from "./adapters/store/slice"
 export { rememberedFilter } from "./adapters/storage/remembered-filter"

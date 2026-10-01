@@ -24,7 +24,7 @@ import type {
   WorkspaceUpdate,
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
-import type { WidgetRef } from "../../model/widget-ref"
+import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import {
   initialWorkspace,
   type ContentView,

@@ -27,6 +27,18 @@ describe("peekOf", () => {
     expect(peekOf(conversation(asked, drawn, plain), 2).earlier).toBe(true)
   })
 
+  it("draws no message of widgets alone, so a turn of only widgets draws nothing", () => {
+    const widget: Part = { kind: "widget", widget: { plugin: "mcp:charts", id: "call" } }
+    const only = message("agent", 1, widget, widget)
+    expect(peekOf(conversation(only)).since).toEqual([])
+    const asked = message("user", 2, text("Again."))
+    const words = message("agent", 3, text("Done."))
+    expect(peekOf(conversation(asked, only, words)).since).toEqual([words])
+    // A reply with no parts yet — just begun streaming — is kept as it always was.
+    const begun = message("agent", 4)
+    expect(peekOf(conversation(asked, begun)).since).toEqual([begun])
+  })
+
   it("tells the turn from the person's latest message, then everything the agent did since, in order", () => {
     const first = message("user", 1, text("Fix it."))
     const earlier = message("agent", 2, step("old"), text("Fixed."))

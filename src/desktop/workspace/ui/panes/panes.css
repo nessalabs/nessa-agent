@@ -292,3 +292,64 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
   font-size: var(--desktop-text-footnote);
   animation: workspace-fade-in var(--desktop-base) ease both;
 }
+
+/*
+ * The window (`widget-window.tsx`, ADR 326): a widget over the chat area, in
+ * the chat area's own gutters, with a pane's glass. The panes stay laid out
+ * beneath it — their size, scroll, caret and what is typed — unseen and out
+ * of reach, so a pane command measures the room they really have and coming
+ * back lays nothing out again. The session list beside it stays in reach.
+ */
+.workspace[data-content="widget"] .workspace-chat {
+  position: relative;
+}
+
+.workspace-widget-window {
+  position: absolute;
+  z-index: 2;
+  top: var(--desktop-gutter);
+  right: var(--desktop-gutter);
+  bottom: var(--desktop-gutter);
+  left: 0;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  border-radius: var(--desktop-radius);
+  background: var(--desktop-pane-fill);
+  box-shadow:
+    inset 0 0 0 1px var(--desktop-rim),
+    0 16px 48px -18px rgb(0 0 0 / 55%);
+  overflow: hidden;
+  animation: workspace-pane-in var(--desktop-slow) var(--desktop-out) both;
+}
+
+html:not(.dark) .workspace-widget-window {
+  background: color-mix(in oklab, var(--background) 60%, white);
+}
+
+.workspace[data-panes-alone] .workspace-widget-window {
+  left: var(--desktop-gutter);
+}
+
+/* With nothing to its left, its header steps past the window's controls, as a corner pane's does. */
+.workspace[data-panes-alone] .workspace-widget-window .workspace-pane-header {
+  padding-left: var(--desktop-titlebar-safe-start);
+}
+
+.workspace-widget-window:hover .workspace-pane-actions {
+  opacity: 1;
+}
+
+.workspace[data-content="widget"] .workspace-chat > .split-panes-grid {
+  visibility: hidden;
+}
+
+:root[data-motion="reduced"] .workspace-widget-window {
+  animation: none;
+}
+
+/* A widget's way back, at the header's type: the trail truncates before the actions do. */
+.workspace-widget-trail {
+  min-width: 0;
+  font-size: var(--desktop-text-body);
+}

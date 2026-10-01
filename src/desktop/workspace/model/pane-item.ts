@@ -21,7 +21,7 @@
  * refuse a key it did not write (`shownBy` in `testing.ts`).
  */
 import { decodeId, encodeId } from "../../model/id-encoding"
-import type { WidgetRef } from "./widget-ref"
+import type { WidgetRef } from "../../widgets/model/widget-ref"
 
 export type PaneItem =
   | { readonly kind: "session"; readonly sessionId: string }

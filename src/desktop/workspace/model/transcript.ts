@@ -6,7 +6,7 @@
  * title from a first message) live here, not in the views.
  */
 import type { WorkspaceFailureReason } from "./failure"
-import type { WidgetRef } from "./widget-ref"
+import type { WidgetRef } from "../../widgets/model/widget-ref"
 
 export type StepKind = "read" | "edit" | "run" | "search"
 
@@ -25,8 +25,9 @@ export type Part =
   | { readonly kind: "list"; readonly items: readonly string[] }
   /**
    * A view a plugin draws in the message (ADR 326), such as an MCP app's UI
-   * for the tool call that produced it. Nothing draws it yet (#328, #349);
-   * the readers of a message's text and steps pass over it.
+   * for the tool call that produced it: a card `InlineWidget` draws
+   * (`ui/transcript/message.tsx`). The readers of a message's text and steps
+   * pass over it, and the overview's peek drops it (`model/overview/peek.ts`).
    */
   | { readonly kind: "widget"; readonly widget: WidgetRef }
 
