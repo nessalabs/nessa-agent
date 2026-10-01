@@ -445,6 +445,16 @@ mod tests {
                 other => panic!("{to}: {other:?}"),
             }
         }
+        // A saved structured result that is not JSON is refused on restore by
+        // the domain's constructor, not carried on as a structured value.
+        let not_json = text.replacen(r#"{\"rows\":2}"#, "not json", 1);
+        assert_ne!(not_json, text);
+        match decode_change(not_json.as_bytes(), &context) {
+            Err(StorageError::Corrupt(message)) => {
+                assert!(message.contains("InvalidStructuredResult"), "{message}")
+            }
+            other => panic!("{other:?}"),
+        }
         let oversize = text.replacen(
             r#"{\"rows\":2}"#,
             &"a".repeat(crate::domain::agent_execution::tools::MAX_STRUCTURED_RESULT_BYTES + 1),

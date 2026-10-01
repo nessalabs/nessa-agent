@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use super::{McpTool, ToolCallId};
+use super::{json::is_json, McpTool, ToolCallId};
 use crate::domain::agent_execution::ExecutionError;
 
 /// An untrusted path description, not a resolved file or permission to access it.
@@ -297,7 +297,9 @@ impl ToolObservation {
     /// Consume this snapshot and return a replacement using supplied `update` fields.
     /// Omitted fields retain their previous values; present empty fields clear them.
     /// Owned fields move without cloning. The value carries no tool or execution
-    /// identity, so this operation does not validate correlation or update a session.
+    /// identity, so this operation does not validate correlation or update a session;
+    /// a different MCP identity replaces the earlier one here, and only the session's
+    /// tool entity refuses that (`ExecutionError::DifferentMcpTool`).
     /// Session-owned tool updates validate identities before constructing a replacement.
     /// Providers can use this to build a review snapshot from a sparse tool report.
     pub fn with_update(self, update: ToolCallUpdate) -> Self {
@@ -407,12 +409,15 @@ impl ToolContent {
         }
     }
     /// Own a tool's structured result as `json`, the JSON text an adapter
-    /// serialized it to. Not parsed or checked here: the adapter that wrote it
-    /// owns its syntax, and nothing in the domain reads inside it.
+    /// serialized it to, kept exactly. Its syntax is checked (one JSON value,
+    /// RFC 8259) so nothing downstream receives text it cannot read as JSON;
+    /// nothing in the domain reads inside it.
     ///
     /// # Errors
     ///
-    /// [`ExecutionError::ValueTooLong`] past [`MAX_STRUCTURED_RESULT_BYTES`].
+    /// [`ExecutionError::ValueTooLong`] past [`MAX_STRUCTURED_RESULT_BYTES`],
+    /// checked first, and [`ExecutionError::InvalidStructuredResult`] for text
+    /// that is not one JSON value.
     pub fn structured(json: impl Into<String>) -> Result<Self, ExecutionError> {
         let json = json.into();
         if json.len() > MAX_STRUCTURED_RESULT_BYTES {
@@ -420,6 +425,9 @@ impl ToolContent {
                 field: "structured tool result",
                 max_bytes: MAX_STRUCTURED_RESULT_BYTES,
             });
+        }
+        if !is_json(&json) {
+            return Err(ExecutionError::InvalidStructuredResult);
         }
         Ok(Self {
             value: ToolContentValue::Structured(json.into_boxed_str()),

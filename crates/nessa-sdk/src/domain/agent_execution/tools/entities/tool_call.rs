@@ -93,7 +93,10 @@ impl ToolCall {
             .saturating_add(update.id().as_str().len())
             .saturating_add(update.payload_bytes())
     }
-    /// Apply the sparse update only when execution and tool identities match. Returns DifferentExecution or DifferentTool without mutation on mismatch.
+    /// Apply the sparse update only when execution and tool identities match,
+    /// and when any MCP identity it names agrees with the one already observed:
+    /// a call's server and tool are named once. Returns DifferentExecution,
+    /// DifferentTool or DifferentMcpTool without mutation on mismatch.
     pub(in crate::domain::agent_execution) fn apply_reversible(
         &mut self,
         execution_id: &ExecutionId,
@@ -104,6 +107,11 @@ impl ToolCall {
         }
         if update.id() != &self.id {
             return Err(ExecutionError::DifferentTool);
+        }
+        if let (Some(observed), Some(named)) = (self.observation.mcp_tool(), update.mcp_tool()) {
+            if observed != named {
+                return Err(ExecutionError::DifferentMcpTool);
+            }
         }
         let (next, undo) = std::mem::take(&mut self.observation).with_reversible_update(update);
         self.observation = next;

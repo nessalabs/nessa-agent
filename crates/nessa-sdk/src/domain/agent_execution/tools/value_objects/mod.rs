@@ -11,6 +11,7 @@
 //!
 //! Arrows mean the update produces observed data composed from these values.
 mod identity;
+mod json;
 mod mcp;
 mod tool;
 pub use identity::ToolCallId;
