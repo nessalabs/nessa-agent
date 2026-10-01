@@ -88,6 +88,7 @@ async fn a_handle_from_the_agents_call_resolves_in_the_same_sessions_later_read_
     let (servers, _, _) = servers(Behaviour::default());
     let session = servers.open("fixture").await.unwrap();
     let other = servers.open("fixture").await.unwrap();
+    session.list_tools().await.unwrap();
     let mut agent = Harness::attach(session.clone());
     agent
         .send(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "remember" } }))

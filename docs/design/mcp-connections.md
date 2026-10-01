@@ -117,7 +117,7 @@ each session by its conversation before any `mcp.callTool` or
 | Closing a session | stdin closed, 2 s, then the process group killed | — |
 | A refusal's message | 512 characters, control characters as spaces | — |
 | Change notices held for a stand-in or a session's list | 16 | the stand-in is sent all three `*/list_changed`; the list is read again |
-| Tool names whose visibility a session remembers | 4096 | earlier lists' names are forgotten, and a name not remembered is hidden |
+| Tool names whose visibility a session remembers | 4096 | earlier lists' names are forgotten, then all if one list alone passes it, and a name not remembered is hidden; tools paged past it are callable only from the latest pages |
 | Disagreements remembered as logged | 1024 | none more is logged |
 | Open sessions | not bounded here | each is a harness's stand-in, started by a process of the gateway's own user |
 
@@ -182,7 +182,7 @@ its own, and so a new stand-in.
 | Serving | harness `initialize` | Serving | answered from the upstream's `initialize` result, less `resources.subscribe` |
 | Serving | harness request | Serving | forwarded; the answer comes back with the harness's id |
 | Serving | `tools/list` answer | Serving | forwarded without the tools whose visibility excludes the model; of two lists answered out of order, the one asked later decides |
-| Serving | `tools/call` for a tool the session's latest list, or the stand-in's, hid | Serving | refused `-32602`, nothing forwarded |
+| Serving | `tools/call` for a tool the session's latest list, or the stand-in's, hid — or any tool before a list has said anything — | Serving | refused `-32602`, nothing forwarded; a name a list gives twice is hidden if either says so |
 | Serving | the stand-in falls behind the server's change notices | Serving | sent all three `*/list_changed` notices |
 | Serving | `resources/subscribe`, `resources/unsubscribe` | Serving | refused `-32601`, nothing forwarded |
 | Serving | a request reusing the id of one still waiting | Serving | refused `-32600`, nothing forwarded |
@@ -191,10 +191,10 @@ its own, and so a new stand-in.
 | Serving | harness closes, or its socket breaks | Closed | the session is closed (above) |
 | Serving | session ends | Closed | the socket is closed, and the `mcp-relay` process exits at once, its stdin unread: the harness sees its server end, as when it owned the process |
 
-The relay socket: a socket at the path that a gateway still answers on —
-or one whose probe does not answer within a second, or fails other than by
-refusing the connection — fails the bind, and MCP servers are off for that
-run; a socket nothing listens on is replaced. A gateway executable or socket
+The relay socket: an exclusive lock on `<socket>.lock`, held for the
+gateway's lifetime, decides which gateway holds it. While another holds it
+the bind fails and MCP servers are off for that run; once none does, a socket
+an earlier run left is replaced. A gateway executable or socket
 path that is not UTF-8 also leaves MCP servers off.
 
 ## What one connection per harness session means

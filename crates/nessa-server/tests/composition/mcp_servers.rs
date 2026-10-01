@@ -170,22 +170,22 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
         .is_socket());
     let directory = std::fs::metadata(socket.parent().unwrap()).unwrap();
     assert_eq!(directory.permissions().mode() & 0o777, 0o700);
-    // A second run replaces the socket the first left behind — once nothing
-    // answers on it: a child another test forks at that moment holds the
-    // listener until it execs.
+    // A second run replaces the socket the first left behind, once the first
+    // has let go — allowing an instant: a child another test forks just then
+    // holds the lock until it execs.
     drop(composed);
     let started = std::time::Instant::now();
-    while std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+    loop {
+        let mut again = agents(vec![configured.clone()]);
+        let composed = compose(&mut again, &socket, Path::new("/nessa"), BTreeMap::new())
+            .await
+            .unwrap();
+        if composed.is_some() {
+            break;
+        }
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    let mut again = agents(vec![configured]);
-    assert!(
-        compose(&mut again, &socket, Path::new("/nessa"), BTreeMap::new())
-            .await
-            .unwrap()
-            .is_some()
-    );
 }
 
 #[cfg(unix)]

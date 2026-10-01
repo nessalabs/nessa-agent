@@ -48,6 +48,14 @@ async fn closes(harness: &mut Harness, waiting: u64) {
     }
 }
 
+/// A session on the fixture whose tools have been listed, as a harness lists
+/// before it calls.
+async fn listed(servers: &McpServers) -> crate::infrastructure::mcp::McpSession {
+    let session = servers.open("fixture").await.unwrap();
+    session.list_tools().await.unwrap();
+    session
+}
+
 async fn call(harness: &mut Harness, id: u64, name: &str) -> Value {
     harness
         .send(json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": name } }))
@@ -108,8 +116,8 @@ async fn a_configured_server_runs_with_only_what_it_was_given() {
 #[tokio::test]
 async fn two_sessions_are_two_processes_and_neither_waits_on_or_outlives_the_other() {
     let (servers, _) = process(&[]);
-    let mut first = Harness::attach(servers.open("fixture").await.unwrap());
-    let mut second = Harness::attach(servers.open("fixture").await.unwrap());
+    let mut first = Harness::attach(listed(&servers).await);
+    let mut second = Harness::attach(listed(&servers).await);
     let pid = |answer: Value| {
         answer["result"]["structuredContent"]["pid"]
             .as_i64()
@@ -143,7 +151,7 @@ async fn two_sessions_are_two_processes_and_neither_waits_on_or_outlives_the_oth
 #[tokio::test]
 async fn the_agents_handle_resolves_in_its_own_session_and_dies_with_it() {
     let (servers, _) = process(&[]);
-    let session = servers.open("fixture").await.unwrap();
+    let session = listed(&servers).await;
     let mut agent = Harness::attach(session.clone());
     let handle = call(&mut agent, 1, "remember").await["result"]["content"][0]["text"]
         .as_str()
@@ -193,7 +201,7 @@ async fn a_server_that_cannot_be_launched_is_a_start_failure() {
 #[tokio::test]
 async fn a_stand_in_that_ends_stops_its_server_and_everything_it_started() {
     let (servers, _) = process(&["--ignore-eof", "--child"]);
-    let mut harness = Harness::attach(servers.open("fixture").await.unwrap());
+    let mut harness = Harness::attach(listed(&servers).await);
     let place = call(&mut harness, 1, "where").await;
     let pid = place["result"]["structuredContent"]["pid"]
         .as_i64()

@@ -85,9 +85,18 @@ impl RelayProcess {
             output,
         }
     }
+    /// List the tools, as a harness does before it calls.
+    async fn listed(self) -> Self {
+        self.ask(json!({ "jsonrpc": "2.0", "id": 0, "method": "tools/list" }))
+            .await
+            .0
+    }
     /// Ask `name` of the server and read the answer, off the runtime.
-    async fn call(mut self, id: u64, name: &str) -> (Self, Value) {
-        let request = json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": name } });
+    async fn call(self, id: u64, name: &str) -> (Self, Value) {
+        self.ask(json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": name } }))
+            .await
+    }
+    async fn ask(mut self, request: Value) -> (Self, Value) {
         tokio::task::spawn_blocking(move || {
             writeln!(self.input, "{request}").unwrap();
             let mut line = String::new();
@@ -121,7 +130,7 @@ async fn a_relay_killed_outright_ends_its_server_and_everything_it_started() {
     let directory = tempfile::tempdir().unwrap();
     let server = fixture(&["--child"]);
     let socket = serve(directory.path(), &server).await;
-    let relay = RelayProcess::start(&socket, &server);
+    let relay = RelayProcess::start(&socket, &server).listed().await;
     let (mut relay, place) = relay.call(1, "where").await;
     let pid = place["result"]["structuredContent"]["pid"]
         .as_i64()
@@ -142,7 +151,7 @@ async fn a_relay_whose_server_ends_exits_though_its_stdin_stays_open() {
     let directory = tempfile::tempdir().unwrap();
     let server = fixture(&[]);
     let socket = serve(directory.path(), &server).await;
-    let relay = RelayProcess::start(&socket, &server);
+    let relay = RelayProcess::start(&socket, &server).listed().await;
     let (relay, _) = relay.call(1, "where").await;
     let RelayProcess {
         mut child,

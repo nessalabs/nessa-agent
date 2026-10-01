@@ -141,11 +141,11 @@ impl Relay {
         session.serve(input, output).await;
     }
 
-    /// Accept stand-ins on `listener` until the task is dropped.
+    /// Accept stand-ins on `relay` until the task is dropped.
     #[cfg(unix)]
-    pub async fn listen(self: std::sync::Arc<Self>, listener: tokio::net::UnixListener) {
+    pub async fn listen(self: std::sync::Arc<Self>, relay: BoundRelay) {
         loop {
-            match listener.accept().await {
+            match relay.listener.accept().await {
                 Ok((connection, _)) => {
                     let relay = self.clone();
                     tokio::spawn(async move { relay.serve(connection).await });
@@ -170,36 +170,53 @@ pub(crate) fn said(message: &str) -> String {
         .collect()
 }
 
-/// Bind the relay socket at `socket`, in a private directory of its own. A
-/// socket an earlier run left there, which refuses a connection, is replaced;
-/// one a gateway still answers on, one whose probe fails otherwise (a full
-/// backlog answers at once that it would block), or anything else there,
-/// fails the bind.
+/// The relay socket, bound, and the lock that says this gateway holds it.
+/// Both are held for as long as this lives; the lock is released when it is
+/// dropped or the process ends, however it ends.
 #[cfg(unix)]
-pub async fn bind(socket: &std::path::Path) -> io::Result<tokio::net::UnixListener> {
-    use std::os::unix::fs::FileTypeExt;
+#[derive(Debug)]
+pub struct BoundRelay {
+    listener: tokio::net::UnixListener,
+    _lock: std::fs::File,
+}
+
+/// Bind the relay socket at `socket`, in a private directory of its own.
+///
+/// An exclusive lock on `<socket>.lock` beside it, held as long as the
+/// [`BoundRelay`], decides which gateway holds the socket: while another
+/// holds it, the bind fails with `AddrInUse` and nothing is touched; once
+/// none does, a socket an earlier run left behind is replaced. Anything at
+/// the path that is not a socket fails the bind.
+#[cfg(unix)]
+pub async fn bind(socket: &std::path::Path) -> io::Result<BoundRelay> {
+    use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+    use std::os::unix::io::AsRawFd;
     let directory = socket
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "socket has no directory"))?;
     nessa_local_storage::create_directory(directory)?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(socket.with_extension("lock"))?;
+    // SAFETY: flock has no memory preconditions; the descriptor is open.
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            "another gateway holds this relay socket",
+        ));
+    }
     match std::fs::symlink_metadata(socket) {
-        Ok(found) if found.file_type().is_socket() => {
-            match tokio::net::UnixStream::connect(socket).await {
-                Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
-                    std::fs::remove_file(socket)?;
-                }
-                Err(error) => return Err(error),
-                Ok(_) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::AddrInUse,
-                        "another gateway is serving this relay socket",
-                    ))
-                }
-            }
-        }
+        Ok(found) if found.file_type().is_socket() => std::fs::remove_file(socket)?,
         Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "not a socket")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    tokio::net::UnixListener::bind(socket)
+    Ok(BoundRelay {
+        listener: tokio::net::UnixListener::bind(socket)?,
+        _lock: lock,
+    })
 }

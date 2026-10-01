@@ -486,7 +486,9 @@ async fn list(session: &Session) -> Result<Vec<ListedTool>, McpError> {
             .request("tools/list", params, REQUEST_TIMEOUT)
             .await?;
         let page = wire::tools_page(&session.server, &result)?;
-        if tools.len() + page.tools.len() > MAX_TOOLS {
+        if tools.len() + page.tools.len() > MAX_TOOLS
+            || hidden.len() + page.hidden.len() > MAX_TOOLS
+        {
             return Err(McpError::TooLarge("tools/list"));
         }
         tools.extend(page.tools);

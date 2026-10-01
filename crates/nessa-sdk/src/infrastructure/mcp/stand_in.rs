@@ -48,8 +48,9 @@ const CHANGES: [&str; 3] = [
 ];
 
 /// The most tool names a session remembers the visibility of. Past it, the
-/// names lists asked earlier gave are forgotten, and a name not remembered is
-/// taken as hidden: past the bound the rule fails closed.
+/// names lists asked earlier gave are forgotten — and if that is not enough,
+/// all are — and a name not remembered is taken as hidden: past the bound the
+/// rule fails closed.
 pub(crate) const MAX_REMEMBERED_TOOLS: usize = 4096;
 
 /// Which of a session's tools the model may not see, as the list asked latest
@@ -66,6 +67,8 @@ pub(crate) struct Visibility {
 struct Known {
     /// By name: the number of the list that said it, and whether it hid it.
     tools: HashMap<String, (u64, bool)>,
+    /// Set once a list has said anything: until then no name is known.
+    listed: bool,
     /// Set once names have been forgotten past the bound.
     forgot: bool,
 }
@@ -74,30 +77,41 @@ impl Visibility {
     pub(crate) fn ask(&self) -> u64 {
         self.asked.fetch_add(1, Ordering::Relaxed) + 1
     }
-    /// What list `order` said of each tool it named: hidden or not.
+    /// What list `order` said of each tool it named: hidden or not. A name
+    /// the list gives twice is hidden if either says so.
     pub(crate) fn listed(&self, order: u64, tools: impl IntoIterator<Item = (String, bool)>) {
-        let mut known = self.known.lock().expect("visibility");
+        let mut said: HashMap<String, bool> = HashMap::new();
         for (name, hidden) in tools {
+            *said.entry(name).or_default() |= hidden;
+        }
+        let mut known = self.known.lock().expect("visibility");
+        known.listed = true;
+        for (name, hidden) in said {
             let entry = known.tools.entry(name).or_insert((order, hidden));
             if entry.0 <= order {
                 *entry = (order, hidden);
             }
         }
         if known.tools.len() > MAX_REMEMBERED_TOOLS {
-            // Keep what this list and any asked later said; forget the rest.
+            // Keep what this list and any asked later said; forget the rest,
+            // and all of it if that is still too much.
             known.tools.retain(|_, (said, _)| *said >= order);
+            if known.tools.len() > MAX_REMEMBERED_TOOLS {
+                known.tools.clear();
+            }
             known.forgot = true;
         }
     }
     /// Whether the latest list naming `name` hid it from the model. A tool no
-    /// list has named is not hidden — the server decides about it — unless
-    /// names have been forgotten past the bound.
+    /// list has named is not hidden — the server decides about it — once a
+    /// list has said anything; before then, or once names have been forgotten
+    /// past the bound, it is.
     pub(crate) fn hidden(&self, name: &str) -> bool {
         let known = self.known.lock().expect("visibility");
         known
             .tools
             .get(name)
-            .map_or(known.forgot, |(_, hidden)| *hidden)
+            .map_or(!known.listed || known.forgot, |(_, hidden)| *hidden)
     }
 }
 

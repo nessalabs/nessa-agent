@@ -16,7 +16,7 @@ use super::agent::{agent_search_path, AgentsConfig};
 use crate::core::RunError;
 use crate::mcp_servers::{
     domain::{configuration_digest, relay_arguments},
-    infrastructure::{bind, Relay},
+    infrastructure::{bind, BoundRelay, Relay},
 };
 use nessa_sdk::infrastructure::{
     acp::sessions::StdioMcpServer,
@@ -30,14 +30,13 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::net::UnixListener;
 
 /// What composition hands the server lifecycle: the servers to start once it
 /// is listening and stop once conversations have, and the relay to serve.
 pub(super) struct McpComposition {
     pub(super) servers: McpServers,
     pub(super) relay: Arc<Relay>,
-    pub(super) listener: UnixListener,
+    pub(super) listener: BoundRelay,
 }
 
 /// Where the relay socket of the namespace at `namespace` is, for the user
@@ -159,6 +158,6 @@ pub(super) async fn compose(
     }))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../../tests/composition/mcp_servers.rs"]
 mod tests;

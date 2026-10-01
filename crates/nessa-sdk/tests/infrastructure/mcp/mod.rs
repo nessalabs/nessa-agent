@@ -42,8 +42,14 @@ async fn session(
     Arc<FixtureLauncher>,
     Arc<ManualClock>,
 ) {
+    // Listed, as a harness lists before it calls, unless the test holds lists back.
+    let lists = !behaviour.silent.contains("tools/list");
     let (servers, launcher, clock) = servers(behaviour);
     let session = servers.open("fixture").await.unwrap();
+    if lists {
+        // A test whose lists fail on purpose sees that in its own list.
+        let _ = session.list_tools().await;
+    }
     (session, servers, launcher, clock)
 }
 

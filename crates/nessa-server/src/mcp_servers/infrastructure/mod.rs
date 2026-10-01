@@ -8,7 +8,7 @@ mod tool_uis;
 pub(crate) use relay::said;
 
 #[cfg(unix)]
-pub use relay::bind;
+pub use relay::{bind, BoundRelay};
 pub use relay::{
     read_line, write_line, Answer, Hello, Refusal, Relay, ANSWER_TIMEOUT, HELLO_TIMEOUT,
     MAX_HELLO_BYTES,

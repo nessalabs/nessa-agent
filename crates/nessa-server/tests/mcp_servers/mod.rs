@@ -315,6 +315,14 @@ async fn a_harness_through_the_relay_gets_a_session_of_its_own() {
         initialized["result"]["serverInfo"]["name"],
         "fixture-process"
     );
+    // Listed first, as a harness lists before it calls.
+    harness_in
+        .write_all(&ask(
+            json!({ "jsonrpc": "2.0", "id": 9, "method": "tools/list" }),
+        ))
+        .await
+        .unwrap();
+    answers.next_line().await.unwrap().unwrap();
     harness_in
         .write_all(&ask(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "where" } })))
         .await
@@ -370,17 +378,24 @@ fn a_refusals_message_is_one_bounded_line() {
 }
 
 #[tokio::test]
-async fn a_relay_socket_a_gateway_still_serves_is_not_taken_over() {
+async fn a_relay_socket_a_gateway_holds_is_not_taken_over() {
     use super::infrastructure::bind;
     let directory = tempfile::tempdir().unwrap();
     let socket = directory.path().join("relay").join("relay.sock");
     let serving = bind(&socket).await.unwrap();
     let refused = bind(&socket).await.unwrap_err();
     assert_eq!(refused.kind(), std::io::ErrorKind::AddrInUse);
-    // Once nothing listens, the socket left behind is replaced.
+    // The lock decides, not the socket: with its file gone, still refused,
+    // and nothing is made in its place.
+    std::fs::remove_file(&socket).unwrap();
+    assert_eq!(
+        bind(&socket).await.unwrap_err().kind(),
+        std::io::ErrorKind::AddrInUse
+    );
+    assert!(std::fs::symlink_metadata(&socket).is_err());
+    // Once released, it is bound again. A child another test forks at that
+    // moment holds the lock until it execs, so allow it an instant.
     drop(serving);
-    // A child another test forks at that moment holds the listener until it
-    // execs, so the socket may answer for an instant after the drop.
     let started = std::time::Instant::now();
     while let Err(error) = bind(&socket).await {
         assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse, "{error:?}");
@@ -393,15 +408,15 @@ async fn a_relay_socket_a_gateway_still_serves_is_not_taken_over() {
 }
 
 #[tokio::test]
-async fn a_relay_socket_whose_probe_fails_otherwise_is_left_alone() {
+async fn a_socket_an_earlier_run_left_is_replaced() {
     use super::infrastructure::bind;
-    use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
     let socket = directory.path().join("relay").join("relay.sock");
-    let _serving = bind(&socket).await.unwrap();
-    // Not answering, nor refusing: the probe is denied.
-    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let refused = bind(&socket).await.unwrap_err();
-    assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied);
-    assert!(std::fs::symlink_metadata(&socket).is_ok(), "not removed");
+    nessa_local_storage::create_directory(socket.parent().unwrap()).unwrap();
+    // A socket file with no gateway, and no lock held: what a crash leaves.
+    drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+    assert!(std::fs::symlink_metadata(&socket).is_ok());
+    let bound = bind(&socket).await.unwrap();
+    assert!(std::os::unix::net::UnixStream::connect(&socket).is_ok());
+    drop(bound);
 }

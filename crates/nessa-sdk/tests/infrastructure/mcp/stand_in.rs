@@ -385,13 +385,16 @@ async fn a_stand_in_that_falls_behind_the_change_notices_gets_all_three() {
 }
 
 #[test]
-fn past_its_bound_the_visibility_record_forgets_earlier_lists_and_fails_closed() {
+fn the_visibility_record_fails_closed_before_any_list_and_past_its_bound() {
     use crate::infrastructure::mcp::stand_in::{Visibility, MAX_REMEMBERED_TOOLS};
-    let many = |prefix: &str| -> Vec<(String, bool)> {
-        (0..MAX_REMEMBERED_TOOLS)
+    let names = |prefix: &str, count: usize| -> Vec<(String, bool)> {
+        (0..count)
             .map(|n| (format!("{prefix}{n}"), false))
             .collect()
     };
+    // Before a list has said anything, nothing is known: hidden.
+    let fresh = Visibility::default();
+    assert!(fresh.hidden("echo"));
     // Within the bound, a name no list gave is the server's to decide.
     let within = Visibility::default();
     let order = within.ask();
@@ -400,23 +403,41 @@ fn past_its_bound_the_visibility_record_forgets_earlier_lists_and_fails_closed()
         [("helper".to_owned(), true), ("echo".to_owned(), false)],
     );
     assert!(within.hidden("helper") && !within.hidden("echo") && !within.hidden("unlisted"));
-    // Past it: what the latest lists said stands, and anything else is hidden.
+    // A name one list gives twice is hidden if either says so.
+    let order = within.ask();
+    within.listed(
+        order,
+        [("twice".to_owned(), true), ("twice".to_owned(), false)],
+    );
+    assert!(within.hidden("twice"));
+    // Lists past the bound together: the latest list's names stand, the
+    // earlier one's are forgotten, and anything not remembered is hidden.
     let past = Visibility::default();
     let earlier = past.ask();
     let later = past.ask();
-    past.listed(later, [("x".to_owned(), false)]);
-    past.listed(
-        earlier,
-        many("a").into_iter().chain([("helper".to_owned(), true)]),
-    );
-    // The list asked later keeps its verdict though answered first.
-    assert!(!past.hidden("x"));
-    assert!(past.hidden("helper"));
-    assert!(!past.hidden("a1"));
-    assert!(past.hidden("unlisted"));
-    // A list asked later still decides for the names it gives.
-    let latest = past.ask();
-    past.listed(latest, many("b"));
+    past.listed(earlier, names("a", MAX_REMEMBERED_TOOLS - 100));
+    past.listed(later, names("b", 200));
     assert!(!past.hidden("b1"));
     assert!(past.hidden("a1"), "forgotten past the bound, so hidden");
+    assert!(past.hidden("unlisted"));
+    // One list past the bound alone: all is forgotten.
+    let flood = Visibility::default();
+    let order = flood.ask();
+    flood.listed(order, names("c", MAX_REMEMBERED_TOOLS + 1));
+    assert!(flood.hidden("c1") && flood.hidden("unlisted"));
+}
+
+#[tokio::test]
+async fn a_call_before_any_list_has_been_read_is_refused() {
+    let (session, _, launcher, _) = session(silent("tools/list")).await;
+    let mut harness = Harness::attach(session);
+    harness
+        .send(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "echo" } }))
+        .await;
+    let refused = harness.next().await.unwrap();
+    assert_eq!(
+        (refused["id"].clone(), refused["error"]["code"].clone()),
+        (json!(1), json!(-32602))
+    );
+    assert!(launcher.server(0).with_method("tools/call").is_empty());
 }
