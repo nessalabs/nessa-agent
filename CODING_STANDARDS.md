@@ -179,8 +179,9 @@ A reviewer is the second pair of eyes, not the first.
   write down what is mostly producing them (an ownership in the wrong place, a
   missing type, one rule in two places, a design that fights the codebase),
   make that structural change, and review again — at most two more rounds.
-  Still open after those, the work stops: push what is done to the branch, and
-  hand it off in a draft pull request and on its issue — what is done, what is
+  Still open after those, the work stops: push what is done to its branch —
+  never `main` — and hand it off in a draft pull request and on its issue —
+  what is done, what is
   not, the open findings with their evidence, the diagnosis, and the suggested
   next step — for a person to take up. Review loops are for code; a design
   record gets one round, and detail it cannot settle goes to its slices' tests.
@@ -455,6 +456,7 @@ not someone reconstructing it afterwards.
 | Its pull request is opened | **In review** |
 | Its pull request merges, or the issue is closed as done | **Done** |
 | Work stops before it is done | Back to **Ready** or **Backlog**, with a comment on the issue saying where it was left and why |
+| Work is handed off after the review loop's bounded rounds, in a draft pull request | **In review** — a person takes it up from the draft; the handoff comment on the issue says so. This row, not the one above, applies |
 
 Whoever works on an issue also keeps its description current, not only its
 Status: a **Status** section at the top of the body naming the remote
