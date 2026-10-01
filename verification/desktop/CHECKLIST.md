@@ -483,6 +483,20 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   fill in headless WebKit screenshots. Judge glass with `--headed` or in the
   app, not from a headless WebKit shot.
 
+## Load fallback
+
+The panel's webview is a stage larger than its window, pinned to the window's
+bottom right (`src/panel/adapters/panel-frame.ts`); before the frontend
+mounts, `index.html` shows the fallback on that stage.
+
+- [ ] **The avatar and "Loading" sit inside the visible window, centred in it
+  once the host reports its size**, on the default frame, a short configured
+  height, a narrow panel and setup; with the size pending or refused, or the
+  frontend never loading, they stay inside the bottom-right 320 × 320; nothing
+  paints over the title, the page does not scroll, and nothing animates with
+  reduced motion. _Check:_ `load-fallback.mjs` (runs the real frontend against
+  a fake host whose startup never answers and which fakes `panel_size`).
+
 ## Console errors
 
 - [ ] **No console error, page error or failed request** while any script

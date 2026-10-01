@@ -313,7 +313,7 @@ test("the page observation retains a fallback when root and status are absent", 
     fallback: pageElement({
       width: 320,
       height: 320,
-      textContent: "Loading Nessa… If this stays on screen",
+      textContent: "Loading",
     }),
     status: null,
     width: 400,
@@ -323,7 +323,7 @@ test("the page observation retains a fallback when root and status are absent", 
   assert.deepEqual(observation.root, { present: false })
   assert.equal(observation.fallback.present, true)
   assert.equal(observation.fallback.width, 320)
-  assert.match(observation.fallback.text, /Loading Nessa/)
+  assert.equal(observation.fallback.text, "Loading")
   assert.equal(observation.connectionText, null)
   assert.deepEqual(observation.viewport, { width: 400, height: 320 })
 })

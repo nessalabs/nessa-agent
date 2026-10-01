@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import { onWindowResize, windowSize } from "../../host"
+import { onWindowResize, windowSize, type PanelSize } from "../../host"
 
 /**
  * Tells the page how big the host window is.
@@ -25,20 +25,9 @@ import { onWindowResize, windowSize } from "../../host"
  */
 export function usePanelFrame() {
   React.useEffect(() => {
-    const root = document.documentElement
     let stale = false
-
-    // A size that is not a real length would be written as an invalid custom
-    // property, which CSS resolves not to the `100%` fallback but to `auto` —
-    // and an `auto` panel collapses to the height of the composer, because the
-    // transcript's `flex-1` has nothing definite to divide. Refusing the write
-    // keeps the fallback reachable.
-    const publish = (size: { width: number; height: number } | null) => {
-      if (stale || !size) return
-      if (!Number.isFinite(size.width) || !Number.isFinite(size.height)) return
-      if (size.width <= 0 || size.height <= 0) return
-      root.style.setProperty("--nessa-window-width", `${size.width}px`)
-      root.style.setProperty("--nessa-window-height", `${size.height}px`)
+    const publish = (size: PanelSize | null) => {
+      if (!stale) publishWindowSize(size)
     }
 
     void windowSize().then(publish, (error) => {
@@ -56,4 +45,25 @@ export function usePanelFrame() {
       void subscription.then((unlisten) => unlisten())
     }
   }, [])
+}
+
+/**
+ * Writes the host window's size to the document element. The load fallback
+ * in `index.html` reads the same properties, so `main.tsx` calls this before
+ * the panel mounts: a slow start shows its loading state centred in the
+ * window rather than in the corner box the fallback keeps until then.
+ *
+ * A size that is not a real length would be written as an invalid custom
+ * property, which CSS resolves not to the `100%` fallback but to `auto` — and
+ * an `auto` panel collapses to the height of the composer, because the
+ * transcript's `flex-1` has nothing definite to divide. Refusing the write
+ * keeps the fallback reachable.
+ */
+export function publishWindowSize(size: PanelSize | null) {
+  if (!size) return
+  if (!Number.isFinite(size.width) || !Number.isFinite(size.height)) return
+  if (size.width <= 0 || size.height <= 0) return
+  const root = document.documentElement
+  root.style.setProperty("--nessa-window-width", `${size.width}px`)
+  root.style.setProperty("--nessa-window-height", `${size.height}px`)
 }
