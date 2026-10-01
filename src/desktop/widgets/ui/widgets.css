@@ -40,10 +40,9 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .widget-waiting {
-    animation: none;
-  }
+/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
+:root[data-motion="reduced"] .widget-waiting {
+  animation: none;
 }
 
 .widget-line {

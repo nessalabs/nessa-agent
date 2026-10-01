@@ -41,6 +41,8 @@ export function peekOf(transcript: Transcript, limit = peekParts): Peek {
   let total = 0
   for (let index = messages.length - 1; index > last; index--) {
     const message = withoutWidgets(messages[index])
+    // A message of widgets alone tells the peek nothing: it is not drawn at all.
+    if (message.parts.length === 0 && messages[index].parts.length > 0) continue
     total += message.parts.length
     if (room === 0) continue
     const drawn =
