@@ -4,6 +4,7 @@ import { lines, record } from "./acp-recorder.mjs"
 import {
   allowOnce,
   frameShape,
+  permissionDecisions,
   parseRecording,
   toolFrames,
   uiMentions,
@@ -90,7 +91,7 @@ test("the view's MCP tools are those naming the server", () => {
   assert.deepEqual(viewTools(null, "mcptest"), [])
 })
 
-test("only a call to the test server's tools is allowed, and only once", () => {
+test("only a call to the test server's tools is allowed, with its allow-once option", () => {
   const options = [
     { id: "allow_always", label: "Always allow" },
     { id: "allow_once", label: "Allow" },
@@ -124,11 +125,104 @@ test("only a call to the test server's tools is allowed, and only once", () => {
   )
 })
 
+test("each permission is decided once: allowed if it is the server's, reported if not", () => {
+  const view = {
+    tools: [
+      { executionId: "e", toolId: "mcp", mcp: { server: "mcptest", tool: "x" } },
+      { executionId: "e", toolId: "shell" },
+    ],
+    permissions: [
+      {
+        executionId: "e",
+        permissionId: "p1",
+        toolId: "mcp",
+        options: [{ id: "allow_once" }],
+      },
+      {
+        executionId: "e",
+        permissionId: "p2",
+        toolId: "shell",
+        options: [{ id: "allow_once" }],
+      },
+    ],
+  }
+  const answered = new Set()
+  const first = permissionDecisions(view, answered, "mcptest")
+  assert.deepEqual(
+    first.allow.map(({ key, option }) => [key, option.id]),
+    [["e:p1", "allow_once"]],
+  )
+  assert.deepEqual(
+    first.declined.map(({ key }) => key),
+    ["e:p2"],
+  )
+  answered.add("e:p1")
+  const again = permissionDecisions(view, answered, "mcptest")
+  assert.deepEqual(again.allow, [])
+  assert.deepEqual(permissionDecisions(null, answered, "mcptest"), {
+    allow: [],
+    declined: [],
+  })
+})
+
+test("the recorder passes everything through to a slow reader, splits nothing, and reports a signal", async () => {
+  const { spawnSync } = await import("node:child_process")
+  const { mkdtempSync, readFileSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const { fileURLToPath } = await import("node:url")
+  const directory = mkdtempSync(join(tmpdir(), "acp-recorder-"))
+  try {
+    const log = join(directory, "log.jsonl")
+    const recorder = fileURLToPath(new URL("./acp-recorder.mjs", import.meta.url))
+    // 4 MB out of the agent, read by a consumer that sleeps first.
+    const writer =
+      'for(let i=0;i<20000;i++)process.stdout.write(JSON.stringify({i,pad:"x".repeat(200)})+"\\n")'
+    const run = spawnSync(
+      "/bin/sh",
+      [
+        "-c",
+        `"${process.execPath}" "${recorder}" "${log}" "${process.execPath}" -e '${writer}' </dev/null | (sleep 1; wc -c)`,
+      ],
+      { encoding: "utf8" },
+    )
+    const expected = Array.from(
+      { length: 20000 },
+      (_, i) => JSON.stringify({ i, pad: "x".repeat(200) }) + "\n",
+    ).join("").length
+    assert.equal(Number(run.stdout.trim()), expected)
+    assert.equal(parseRecording(readFileSync(log, "utf8")).length, 20000)
+    // A character split across two writes is passed through and logged whole.
+    rmSync(log)
+    const split = spawnSync(
+      process.execPath,
+      [
+        recorder,
+        log,
+        process.execPath,
+        "-e",
+        "process.stdout.write(Buffer.from([0x22,0xc3]));setTimeout(()=>process.stdout.write(Buffer.from([0xa9,0x22,0x0a])),50)",
+      ],
+      { input: "" },
+    )
+    assert.deepEqual([...split.stdout], [0x22, 0xc3, 0xa9, 0x22, 0x0a])
+    assert.deepEqual(parseRecording(readFileSync(log, "utf8"))[0].frame, "é")
+    const signalled = spawnSync(
+      process.execPath,
+      [recorder, log, process.execPath, "-e", 'process.kill(process.pid,"SIGTERM")'],
+      { input: "" },
+    )
+    assert.equal(signalled.status, 128 + 15)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 test("the recorder logs a last line that has no newline, and exits with the agent's status", async () => {
   const { spawnSync } = await import("node:child_process")
   const { mkdtempSync, readFileSync } = await import("node:fs")
   const { tmpdir } = await import("node:os")
-  const { join } = await import("node:path")
+  const { dirname, join } = await import("node:path")
   const { fileURLToPath } = await import("node:url")
   const log = join(mkdtempSync(join(tmpdir(), "acp-recorder-")), "log.jsonl")
   const recorder = fileURLToPath(new URL("./acp-recorder.mjs", import.meta.url))
@@ -154,4 +248,5 @@ test("the recorder logs a last line that has no newline, and exits with the agen
     { input: "" },
   )
   assert.equal(failing.status, 3)
+  ;(await import("node:fs")).rmSync(dirname(log), { recursive: true, force: true })
 })

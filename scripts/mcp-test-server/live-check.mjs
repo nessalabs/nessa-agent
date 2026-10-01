@@ -44,8 +44,8 @@ import { dirname, join, resolve } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import {
-  allowOnce,
   frameShape,
+  permissionDecisions,
   parseRecording,
   toolFrames,
   uiMentions,
@@ -106,6 +106,15 @@ function agentCommand(agent) {
   }
 }
 
+/** Wait up to `ms` for `child` to exit; whether it did. */
+async function exited(child, ms) {
+  if (child.exitCode !== null || child.signalCode !== null) return true
+  return Promise.race([
+    new Promise((done) => child.once("exit", () => done(true))),
+    sleep(ms).then(() => false),
+  ])
+}
+
 async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))]) {
   const command = agentCommand(agent)
   const evidence = join(resolve(out), agent)
@@ -116,72 +125,74 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
   // harness asked the server for, beside what it then told Nessa.
   const mcpRecording = join(evidence, "mcp.jsonl")
   writeFileSync(mcpRecording, "")
-  const directory = mkdtempSync(join(tmpdir(), `nessa-mcp-live-${agent}-`))
-  const workspace = join(directory, "workspace")
-  mkdirSync(workspace)
-  const port = Number(process.env.MCP_LIVE_PORT ?? 7431)
-  const instance = `mcp-live-${agent}`
-  const env = {
-    ...process.env,
-    NESSA_STAGE: "ci",
-    NESSA_PORT: String(port),
-    NESSA_DATA_DIR: directory,
-    NESSA_INSTANCE: instance,
-    ...(command.path ? { PATH: `${command.path}:${process.env.PATH}` } : {}),
-  }
-  const nessa = join(root, "target/debug/nessa")
-  if (!existsSync(nessa))
-    throw new Error("build the gateway first: cargo build -p nessa-server")
-  const token = join(directory, "owner.token")
-  const init = spawnSync(
-    nessa,
-    ["auth", "init", "--local", "--owner-token-file", token],
-    {
-      env,
-      encoding: "utf8",
-    },
-  )
-  if (init.status !== 0) throw new Error(`provisioning failed: ${init.stderr}`)
-  const configPath = join(directory, "ci", "instances", instance, "config.json")
-  writeFileSync(
-    configPath,
-    JSON.stringify({
-      agents: {
-        catalog: join(root, "crates/nessa-sdk/data/models.json"),
-        workspace,
-        selected: agent,
-        mcpServers: [
-          {
-            name: SERVER,
-            command: process.execPath,
-            args: [
-              join(here, "acp-recorder.mjs"),
-              mcpRecording,
-              process.execPath,
-              join(here, "server.mjs"),
-            ],
-          },
-        ],
-        runtimes: {
-          [agent]: {
-            command: process.execPath,
-            args: [join(here, "acp-recorder.mjs"), recording, ...command.argv],
-            model: command.model,
-            toolsEnabled: true,
+  const step = (name, detail) => console.error(`[${agent}:${name}] ${detail}`)
+  const log = []
+  let directory = null
+  let server = null
+  let client = null
+  let failed = false
+  try {
+    const nessa = join(root, "target/debug/nessa")
+    if (!existsSync(nessa))
+      throw new Error("build the gateway first: cargo build -p nessa-server")
+    directory = mkdtempSync(join(tmpdir(), `nessa-mcp-live-${agent}-`))
+    const workspace = join(directory, "workspace")
+    mkdirSync(workspace)
+    const port = Number(process.env.MCP_LIVE_PORT ?? 7431)
+    const instance = `mcp-live-${agent}`
+    const env = {
+      ...process.env,
+      NESSA_STAGE: "ci",
+      NESSA_PORT: String(port),
+      NESSA_DATA_DIR: directory,
+      NESSA_INSTANCE: instance,
+      ...(command.path ? { PATH: `${command.path}:${process.env.PATH}` } : {}),
+    }
+    const token = join(directory, "owner.token")
+    const init = spawnSync(
+      nessa,
+      ["auth", "init", "--local", "--owner-token-file", token],
+      {
+        env,
+        encoding: "utf8",
+      },
+    )
+    if (init.status !== 0) throw new Error(`provisioning failed: ${init.stderr}`)
+    const configPath = join(directory, "ci", "instances", instance, "config.json")
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        agents: {
+          catalog: join(root, "crates/nessa-sdk/data/models.json"),
+          workspace,
+          selected: agent,
+          mcpServers: [
+            {
+              name: SERVER,
+              command: process.execPath,
+              args: [
+                join(here, "acp-recorder.mjs"),
+                mcpRecording,
+                process.execPath,
+                join(here, "server.mjs"),
+              ],
+            },
+          ],
+          runtimes: {
+            [agent]: {
+              command: process.execPath,
+              args: [join(here, "acp-recorder.mjs"), recording, ...command.argv],
+              model: command.model,
+              toolsEnabled: true,
+            },
           },
         },
-      },
-    }),
-  )
-  chmodSync(configPath, 0o600)
-  const server = spawn(nessa, ["server"], { env, stdio: ["ignore", "pipe", "pipe"] })
-  const log = []
-  for (const stream of [server.stdout, server.stderr])
-    stream.on("data", (chunk) => log.push(chunk.toString()))
-  const step = (name, detail) => console.error(`[${agent}:${name}] ${detail}`)
-  let failed = false
-  let client = null
-  try {
+      }),
+    )
+    chmodSync(configPath, 0o600)
+    server = spawn(nessa, ["server"], { env, stdio: ["ignore", "pipe", "pipe"] })
+    for (const stream of [server.stdout, server.stderr])
+      stream.on("data", (chunk) => log.push(chunk.toString()))
     for (let i = 0; ; i += 1) {
       // A gateway that already exited is not the one answering on the port.
       if (server.exitCode !== null)
@@ -209,17 +220,16 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
     await client.conversation.create({ conversationId: id, agent })
     step("send", (await client.conversation.send(id, PROMPT)).disposition ?? "admitted")
     const answered = new Set()
+    const reported = new Set()
     let view = null
+    let outstanding = []
     const polls = Number(process.env.MCP_LIVE_POLLS ?? 300)
     for (let i = 0; i < polls; i += 1) {
       await sleep(1000)
       view = await client.conversation.read(id)
-      // Allow each test-server tool once; nothing else the agent asks for.
-      for (const permission of view.permissions) {
-        const key = `${permission.executionId}:${permission.permissionId}`
-        if (answered.has(key)) continue
-        const option = allowOnce(view, permission, SERVER)
-        if (!option) continue
+      // Allow each test-server tool once; say so, once, of anything else.
+      const { allow, declined } = permissionDecisions(view, answered, SERVER)
+      for (const { key, permission, option } of allow) {
         answered.add(key)
         step("allow", `${permission.toolName} → ${option.id}`)
         await client.conversation.answer(
@@ -228,6 +238,14 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
           permission.permissionId,
           option.id,
         )
+      }
+      outstanding = declined.map(
+        ({ permission }) => `${permission.toolName} (tool ${permission.toolId})`,
+      )
+      for (const { key, permission } of declined) {
+        if (reported.has(key)) continue
+        reported.add(key)
+        step("not allowed", `${permission.toolName} (tool ${permission.toolId})`)
       }
       const turn = view.messages.at(-1)
       if (turn && !["running", "queued"].includes(turn.status)) break
@@ -238,6 +256,7 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
       agent,
       turn: view?.messages.at(-1)?.status ?? null,
       error: view?.messages.at(-1)?.error ?? null,
+      outstandingPermissions: outstanding,
       frames: toolFrames(records).map(frameShape),
       viewTools: viewTools(view, SERVER),
       allTools: (view?.tools ?? []).map(({ title, kind, status, mcp }) => ({
@@ -247,27 +266,42 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
         mcp,
       })),
       uiMentions: uiMentions(records),
+      mcpCalls: parseRecording(readFileSync(mcpRecording, "utf8"))
+        .filter(({ direction, frame }) => direction === "to-agent" && frame?.method)
+        .map(({ frame }) =>
+          frame.method === "tools/call"
+            ? `tools/call ${frame.params?.name}`
+            : frame.method,
+        ),
     }
-    summary.mcpCalls = parseRecording(readFileSync(mcpRecording, "utf8"))
-      .filter(({ direction, frame }) => direction === "to-agent" && frame?.method)
-      .map(({ frame }) =>
-        frame.method === "tools/call" ? `tools/call ${frame.params?.name}` : frame.method,
-      )
     writeFileSync(join(evidence, "summary.json"), JSON.stringify(summary, null, 2))
     step("done", `turn ${summary.turn}; evidence in ${evidence}`)
     if (summary.turn !== "completed")
-      throw new Error(`the turn did not complete: ${summary.turn} ${summary.error ?? ""}`)
+      throw new Error(
+        `the turn did not complete: ${summary.turn} ${summary.error ?? ""}` +
+          (outstanding.length ? `; waiting on ${outstanding.join(", ")}` : ""),
+      )
   } catch (error) {
     failed = true
     console.error(`[${agent}:FAILED]`, error?.stack ?? error)
     console.error(log.join("").slice(-6000))
   } finally {
     client?.close()
+    // Stop the gateway, and wait for it, before its directory is removed: it
+    // stops the agent and the MCP server it started, and its last words go in
+    // the log.
+    if (server) {
+      server.kill("SIGTERM")
+      if (!(await exited(server, 10_000))) {
+        server.kill("SIGKILL")
+        if (!(await exited(server, 5_000))) {
+          failed = true
+          console.error(`[${agent}:FAILED] the gateway (pid ${server.pid}) did not exit`)
+        }
+      }
+    }
     writeFileSync(join(evidence, "gateway.log"), log.join(""))
-    server.kill("SIGTERM")
-    await sleep(1500)
-    if (server.exitCode === null) server.kill("SIGKILL")
-    rmSync(directory, { recursive: true, force: true })
+    if (directory) rmSync(directory, { recursive: true, force: true })
   }
   process.exit(failed ? 1 : 0)
 }

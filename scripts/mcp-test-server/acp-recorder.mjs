@@ -74,26 +74,24 @@ function main([log, command, ...args]) {
   process.stdout.on("error", fail)
   const toAgent = direction(log, "to-agent")
   const fromAgent = direction(log, "from-agent")
-  // Bytes pass through untouched; only the log decodes them.
-  process.stdin.on("data", (chunk) => {
-    toAgent.take(chunk)
-    child.stdin.write(chunk)
-  })
-  process.stdin.on("end", () => {
-    toAgent.end()
-    child.stdin.end()
-  })
-  child.stdout.on("data", (chunk) => {
-    fromAgent.take(chunk)
-    process.stdout.write(chunk)
-  })
+  // Bytes pass through untouched, with the pipes' own backpressure; the log
+  // sees the same chunks and only it decodes them.
+  process.stdin.on("data", (chunk) => toAgent.take(chunk))
+  process.stdin.on("end", () => toAgent.end())
+  process.stdin.pipe(child.stdin)
+  child.stdout.on("data", (chunk) => fromAgent.take(chunk))
   child.stdout.on("end", () => fromAgent.end())
+  child.stdout.pipe(process.stdout)
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"])
     process.on(signal, () => child.kill(signal))
-  // After its output has drained: the agent's status, or 128 + the signal.
-  child.on("close", (code, signal) =>
-    process.exit(code ?? 128 + (signal ? (osConstants.signals[signal] ?? 0) : 0)),
-  )
+  // The agent's status, or 128 + the signal. Not `process.exit`, which would
+  // drop output still queued for a slow reader: stop reading input and let
+  // the process end once everything written has been delivered.
+  child.on("close", (code, signal) => {
+    process.exitCode = code ?? 128 + (signal ? (osConstants.signals[signal] ?? 0) : 0)
+    process.stdin.unpipe(child.stdin)
+    process.stdin.destroy()
+  })
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) main(process.argv.slice(2))

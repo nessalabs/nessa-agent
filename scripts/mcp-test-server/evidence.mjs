@@ -93,6 +93,25 @@ export function allowOnce(view, permission, server) {
   return permission.options.find((option) => /^allow[-_]once$/i.test(option.id)) ?? null
 }
 
+/**
+ * What to do about the view's open permissions, given those already answered
+ * (keys `executionId:permissionId`, never answered twice): the ones to allow,
+ * each with its allow-once option, and the ones declined because they are not
+ * a call to `server`'s tools — which the run reports rather than answers.
+ */
+export function permissionDecisions(view, answered, server) {
+  const allow = []
+  const declined = []
+  for (const permission of view?.permissions ?? []) {
+    const key = `${permission.executionId}:${permission.permissionId}`
+    if (answered.has(key)) continue
+    const option = allowOnce(view, permission, server)
+    if (option) allow.push({ key, permission, option })
+    else declined.push({ key, permission })
+  }
+  return { allow, declined }
+}
+
 /** The view's tools whose MCP identity names `server`. */
 export function viewTools(view, server) {
   return (view?.tools ?? []).filter((tool) => tool.mcp?.server === server)
