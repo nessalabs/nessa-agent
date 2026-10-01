@@ -342,8 +342,9 @@ conversation.read. Setup persists exact receiver/epoch/evidence once. Restart
 resolves the binding rather than issuing/pairing again. Secrets are read through
 private files or protected input, never command-line arguments or general logs.
 
-The CLI has finite `sync`, offline `list`/`show`, explicit reset and bounded
-experiment/watch controls. Data goes to stdout as JSON and tracing to stderr.
+The CLI has finite record and catalogue sync, an online record check, offline
+`list`/`show`, and explicit reset. Experiment and watch controls remain future
+#262 work. Data goes to stdout as JSON and tracing to stderr.
 Offline cache readability is intentional local policy. Only correlated trusted
 grant/epoch/deletion contact evidence authorizes fencing/purge; generic auth
 failure or network absence supplies no such evidence.
