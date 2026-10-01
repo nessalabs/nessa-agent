@@ -867,14 +867,16 @@ and session deadlines. Use the
 
 `crates/nessa-mcp` is the stdio MCP server for all Nessa-provided tools. Claude's
 native file/web tools remain provider-owned. No tool request selects executable
-configuration. The gateway holds the one connection to each configured MCP
-server (ADR 344): the SDK's `infrastructure::mcp::McpServers` starts each
-server, lists its tools with their MCP Apps `_meta.ui`, and reads `ui://`
-resources; each agent's `session/new` gets a stand-in in the server's place
-(`nessa mcp-relay`, `crates/nessa-server/src/mcp_servers/`) that forwards the
-harness's calls over that same connection, so an agent and an app share one
-upstream session. The conversation view fills `ConversationTool.mcp.resourceUri`
-from the tools as last listed. Design and state tables:
+configuration. The gateway holds the connection to each configured MCP server
+for each harness session (ADR 344): each agent's `session/new` gets a stand-in
+in the server's place (`nessa mcp-relay`, `crates/nessa-server/src/mcp_servers/`);
+when a harness starts it, the SDK's `infrastructure::mcp::McpServers` opens a
+session of its own — the server process and the one connection to it — lists
+its tools with their MCP Apps `_meta.ui`, reads `ui://` resources, and
+forwards the harness's calls over that connection until the stand-in ends, so
+an agent and its app share one upstream session and no two conversations
+share one. The conversation view fills `ConversationTool.mcp.resourceUri` from
+the open sessions' lists when they agree. Design and state tables:
 [mcp-connections](design/mcp-connections.md).
 The shell tool coordinates an injected Shepherd runner and private process audit
 through its application ports. See the [MCP server](../crates/nessa-mcp/README.md).

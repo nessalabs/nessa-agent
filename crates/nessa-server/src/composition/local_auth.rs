@@ -23,7 +23,9 @@ use crate::{
     },
     agents::{domain::AgentId, infrastructure::AgentLaunchFiles},
     attachments::infrastructure::ModelImageNormalizer,
-    conversation::application::{ConversationAgents, ConversationDependencies, ConversationLimits},
+    conversation::application::{
+        ConversationAgents, ConversationDependencies, ConversationLimits, McpToolUis, NoMcpToolUis,
+    },
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
         DurableConversationFileLinkAudit, DurableConversationModeAudit, LocalConversationStore,
@@ -588,7 +590,14 @@ async fn conversations(
     // conversation's provider is.
     let mut erasers = built.erasers;
     resolver.register_session_eraser(&mut erasers);
-    let service = ConversationService::new(
+    // The view finds each MCP call's UI in its server's open sessions' lists.
+    let tool_uis: Arc<dyn McpToolUis> = match &mcp {
+        Some(mcp) => Arc::new(crate::mcp_servers::infrastructure::ListedToolUis(
+            mcp.servers.clone(),
+        )),
+        None => Arc::new(NoMcpToolUis),
+    };
+    let service = ConversationService::with_tool_uis(
         ConversationDependencies {
             agents: ConversationAgents::from_source(configured, selected, resolver.clone())
                 .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -610,14 +619,9 @@ async fn conversations(
         },
         ConversationLimits::default(),
         Some(agents.workspace.to_string_lossy().into_owned()),
+        tool_uis,
     )
     .map_err(|error| RunError::Agent(error.to_string()))?;
-    let service = match &mcp {
-        Some(mcp) => service.with_tool_uis(Arc::new(
-            crate::mcp_servers::infrastructure::ListedToolUis(mcp.servers.clone()),
-        )),
-        None => service,
-    };
     if warm_current_opencode {
         warm_ups.push(StartupWarmUp::Current(resolver.clone()));
     }

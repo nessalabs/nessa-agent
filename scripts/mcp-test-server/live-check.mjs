@@ -16,10 +16,10 @@
  * the agent asks for is left unanswered. It exits non-zero unless the turn
  * completed and `show_chart` yielded a widget part in the transcript.
  *
- * The gateway starts the test server itself and holds the one connection to
- * it; the harness is given a stand-in (`nessa mcp-relay`) in its place
- * (ADR 344), so `mcp.jsonl` is the gateway's traffic with the server, the
- * harness's forwarded calls among it.
+ * The harness is given a stand-in (`nessa mcp-relay`) in the test server's
+ * place; for each harness session that starts it, the gateway starts the
+ * server and holds the connection to it (ADR 344), so `mcp.jsonl` is the
+ * gateway's traffic with each server, the harness's forwarded calls among it.
  *
  * Writes `<out-dir>/<agent>/`: `acp.jsonl` and `mcp.jsonl` (every frame, both
  * directions), `view.json` (the final conversation view), `summary.json` (the

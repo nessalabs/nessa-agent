@@ -100,7 +100,9 @@ impl Relay {
         }
     }
 
-    /// Serve one stand-in's connection until it, or its server, ends.
+    /// Serve one stand-in's connection until it, or its server, ends. Its end —
+    /// a clean close, a broken socket, a relay killed outright — closes its
+    /// session and stops its server's process group.
     pub async fn serve(&self, connection: impl AsyncRead + AsyncWrite + Unpin) {
         let (input, mut output) = tokio::io::split(connection);
         let mut input = BufReader::new(input);
@@ -121,19 +123,22 @@ impl Relay {
             let _ = write_line(&mut output, &refused(reason, message.into())).await;
             return;
         }
-        let stand_in = match self.servers.stand_in(&hello.server).await {
-            Ok(stand_in) => stand_in,
+        // One session, and one server process, for this stand-in alone: its
+        // harness session's, ended with it.
+        let session = match self.servers.open(&hello.server).await {
+            Ok(session) => session,
             Err(error) => {
-                let answer = refused(StandInRefusal::Unavailable, error.to_string());
+                let answer = refused(StandInRefusal::Unavailable, said(&error.to_string()));
                 let _ = write_line(&mut output, &answer).await;
                 return;
             }
         };
         if write_line(&mut output, &Answer::Accepted).await.is_err() {
+            session.close().await;
             return;
         }
         // The reader keeps whatever it buffered past the hello.
-        stand_in.serve(input, output).await;
+        session.serve(input, output).await;
     }
 
     /// Accept stand-ins on `listener` until the task is dropped.
@@ -154,9 +159,20 @@ impl Relay {
     }
 }
 
+/// `message` as a refusal says it: control characters as spaces, at most
+/// 512 characters, so the answer stays one line within [`MAX_HELLO_BYTES`]
+/// however JSON escapes it.
+pub(crate) fn said(message: &str) -> String {
+    message
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(512)
+        .collect()
+}
+
 /// Bind the relay socket at `socket`, in a private directory of its own. A
-/// socket left there by an earlier run is replaced; anything else there is
-/// not touched and fails the bind.
+/// socket an earlier run left there, which nothing listens on, is replaced;
+/// one a gateway still listens on, or anything else there, fails the bind.
 #[cfg(unix)]
 pub fn bind(socket: &std::path::Path) -> io::Result<tokio::net::UnixListener> {
     use std::os::unix::fs::FileTypeExt;
@@ -165,7 +181,15 @@ pub fn bind(socket: &std::path::Path) -> io::Result<tokio::net::UnixListener> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "socket has no directory"))?;
     nessa_local_storage::create_directory(directory)?;
     match std::fs::symlink_metadata(socket) {
-        Ok(found) if found.file_type().is_socket() => std::fs::remove_file(socket)?,
+        Ok(found) if found.file_type().is_socket() => {
+            if std::os::unix::net::UnixStream::connect(socket).is_ok() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    "another gateway is serving this relay socket",
+                ));
+            }
+            std::fs::remove_file(socket)?;
+        }
         Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "not a socket")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),

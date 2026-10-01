@@ -3,17 +3,21 @@
 One tool with an MCP App (show_chart), a stateful pair (remember returns a
 handle; ui://fixture/handle/<handle> resolves only in the session that gave it
 out), where (the process's working directory and environment keys), and exit
-(the process exits without answering). With --ignore-eof it keeps running after
-its stdin closes, so stopping it has to kill it.
+(the process exits without answering), and sleep (answers after 30 s). With
+--ignore-eof it keeps running after its stdin closes, so stopping it has to
+kill it; with --child it starts a child process of its own (`where` names it),
+which stopping it has to stop too.
 """
 import json
 import os
+import subprocess
 import sys
 import time
 
 APP = "text/html;profile=mcp-app"
 CHART = "ui://fixture/chart.html"
 handles = set()
+child = subprocess.Popen(["/bin/sleep", "300"]) if "--child" in sys.argv else None
 
 
 def answer(message):
@@ -28,6 +32,7 @@ def answer(message):
             {"name": "remember", "inputSchema": {"type": "object"}},
             {"name": "where", "inputSchema": {"type": "object"}},
             {"name": "exit", "inputSchema": {"type": "object"}},
+            {"name": "sleep", "inputSchema": {"type": "object"}},
         ]}
     if method == "tools/call":
         name = params.get("name")
@@ -37,7 +42,11 @@ def answer(message):
             return {"content": [{"type": "text", "text": handle}]}
         if name == "where":
             return {"content": [], "structuredContent": {"cwd": os.getcwd(), "env": sorted(os.environ),
-                                                          "pid": os.getpid()}}
+                                                          "pid": os.getpid(),
+                                                          "child": child.pid if child else None}}
+        if name == "sleep":
+            time.sleep(30)
+            return {"content": [{"type": "text", "text": "slept"}]}
         if name == "exit":
             sys.stdout.flush()
             os._exit(0)

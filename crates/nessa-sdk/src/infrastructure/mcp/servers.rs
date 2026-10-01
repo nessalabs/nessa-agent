@@ -1,5 +1,5 @@
 use super::connection::Connection;
-use super::process::{self, Launched, Launcher, ProcessLauncher};
+use super::process::{Launched, Launcher, ProcessLauncher, ServerProcess};
 use super::{stand_in, wire, McpError};
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri};
@@ -10,18 +10,20 @@ use std::{
     collections::BTreeMap,
     ffi::OsString,
     path::PathBuf,
-    sync::{Arc, Mutex, RwLock, Weak},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, RwLock, Weak,
+    },
     time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    process::Child,
-    sync::{broadcast, watch, OnceCell},
+    sync::{broadcast, watch},
     task::JoinSet,
 };
 
-/// The budget for starting a server: launching it and its answer to
-/// `initialize`.
+/// The budget for opening a session: launching its server and the server's
+/// answer to `initialize`.
 pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The budget for each of this client's own requests (`tools/list` pages,
 /// `resources/read`). A forwarded request has none from here.
@@ -42,65 +44,70 @@ pub struct McpServerLaunch {
     pub environment: BTreeMap<OsString, OsString>,
 }
 
-/// The one connection to each configured MCP server, shared by this
-/// client's own requests and every stand-in.
+/// The configured MCP servers, and every session open on them.
 ///
-/// Each server is started on first use, and again on the next use after it
-/// ended: there is no retry of its own. One start at a time per server; a use
-/// during a start waits for that start. A *generation* — one process, one
-/// connection, one upstream MCP session — ends when the process exits, its
-/// pipes close, or it sends a frame that is not JSON or is past the frame
-/// bound; its stand-ins end with it. The states and orderings are tabled in
+/// A session is one server process and the one connection to it, opened for
+/// one harness session ([`McpServers::open`]) and closed when that ends: one
+/// connection per server for each harness session, held here (ADR 344). An
+/// agent's calls and its app's reach the same upstream session; two
+/// conversations never share one, so neither blocks, sees, or outlives the
+/// other's. The states and orderings are tabled in
 /// `docs/design/mcp-connections.md`, and each row has a test in
 /// `tests/infrastructure/mcp/`.
 ///
-/// Cloning shares the servers. [`McpServers::stop`] ends them all; until
-/// then, dropping the last clone kills every process.
+/// Cloning shares the servers. [`McpServers::stop`] closes every session and
+/// refuses new ones.
 #[derive(Clone)]
 pub struct McpServers {
     inner: Arc<Inner>,
 }
 
 struct Inner {
-    slots: BTreeMap<String, Slot>,
+    launches: BTreeMap<String, McpServerLaunch>,
     clock: Arc<dyn Clock>,
     launcher: Arc<dyn Launcher>,
+    /// Set once, by `stop`; what an opening races.
     stopping: watch::Sender<bool>,
-}
-
-struct Slot {
-    launch: McpServerLaunch,
-    current: Mutex<Arc<Generation>>,
-    /// The tools as last listed, by whichever generation listed them last.
-    tools: RwLock<Arc<[ListedTool]>>,
+    /// The sessions open now. A session is registered under this lock only
+    /// while `stopping` is unset, and `stop` sets it and takes them under the
+    /// same lock, so no session opens after a stop has looked.
+    live: Mutex<Live>,
 }
 
 #[derive(Default)]
-struct Generation {
-    started: OnceCell<Result<Arc<Ready>, McpError>>,
+struct Live {
+    next: u64,
+    sessions: BTreeMap<u64, Weak<Session>>,
 }
-impl Generation {
-    /// Whether this generation is over: its start failed, or its connection
-    /// ended. A start still running is not.
-    fn over(&self) -> bool {
-        match self.started.get() {
-            None => false,
-            Some(Err(_)) => true,
-            Some(Ok(ready)) => ready.connection.end_cause().is_some(),
+
+struct Session {
+    id: u64,
+    server: String,
+    connection: Arc<Connection>,
+    /// The server's answer to `initialize`, given to the harness as its own.
+    initialized: Arc<Value>,
+    process: Mutex<Option<ServerProcess>>,
+    /// The tools as this session last listed them, with the order the list
+    /// was asked in; `None` until a list has finished.
+    tools: RwLock<Option<(u64, Arc<[ListedTool]>)>>,
+    lists: AtomicU64,
+    owner: Weak<Inner>,
+}
+impl Drop for Session {
+    fn drop(&mut self) {
+        if let Some(owner) = self.owner.upgrade() {
+            owner
+                .live
+                .lock()
+                .expect("live sessions")
+                .sessions
+                .remove(&self.id);
         }
     }
 }
 
-struct Ready {
-    connection: Arc<Connection>,
-    /// The server's answer to `initialize`, given to each stand-in as its own.
-    initialized: Arc<Value>,
-    process: Mutex<Option<Child>>,
-}
-
 impl McpServers {
-    /// The servers in `servers`, none started yet; deadlines are measured on
-    /// `clock`.
+    /// The servers in `servers`; deadlines are measured on `clock`.
     ///
     /// # Errors
     ///
@@ -120,272 +127,279 @@ impl McpServers {
         if !StdioMcpServer::all_valid(&configured) {
             return Err(McpError::InvalidConfiguration);
         }
-        let slots = servers
-            .into_iter()
-            .map(|launch| {
-                let slot = Slot {
-                    launch,
-                    current: Mutex::default(),
-                    tools: RwLock::new(Arc::from([])),
-                };
-                (slot.launch.server.name.clone(), slot)
-            })
-            .collect();
         Ok(Self {
             inner: Arc::new(Inner {
-                slots,
+                launches: servers
+                    .into_iter()
+                    .map(|launch| (launch.server.name.clone(), launch))
+                    .collect(),
                 clock,
                 launcher,
                 stopping: watch::channel(false).0,
+                live: Mutex::default(),
             }),
         })
     }
 
     /// The configured servers' names.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.inner.slots.keys().map(String::as_str)
+        self.inner.launches.keys().map(String::as_str)
     }
 
-    /// Start every server in the background. A server that cannot start is
-    /// logged, and started again by its next use.
-    pub fn start_all(&self) {
-        for name in self.inner.slots.keys() {
-            let servers = self.clone();
-            let name = name.clone();
-            tokio::spawn(async move {
-                if let Err(error) = servers.ready(&name).await {
-                    tracing::warn!(server = %name, %error, "MCP server did not start");
-                }
-            });
-        }
-    }
-
-    /// List `server`'s tools now, with each tool's UI, and keep the list for
-    /// [`Self::tool_ui`]. Starts the server when it is not running.
+    /// Open a session on `server`: launch its process and initialize it,
+    /// within [`INITIALIZE_TIMEOUT`]. Its tools are then listed in the
+    /// background, and again whenever it says they changed.
     ///
     /// # Errors
     ///
-    /// [`McpError::NotConfigured`], a start's failure, [`McpError::Timeout`]
-    /// for a page not answered within [`REQUEST_TIMEOUT`],
-    /// [`McpError::TooLarge`] past [`MAX_TOOL_PAGES`] or [`MAX_TOOLS`], and
-    /// [`McpError::Malformed`] for a page of the wrong shape.
-    pub async fn list_tools(&self, server: &str) -> Result<Vec<ListedTool>, McpError> {
-        let ready = self.ready(server).await?;
-        list(self.slot(server)?, &ready).await
+    /// [`McpError::NotConfigured`], [`McpError::Stopped`], [`McpError::Start`]
+    /// when the process cannot be launched, [`McpError::Handshake`] for a
+    /// refused or unreadable `initialize` (an unsupported protocol version
+    /// among them), [`McpError::Timeout`], and [`McpError::ServerGone`] for a
+    /// server that ends during it. The process is stopped on each.
+    pub async fn open(&self, server: &str) -> Result<McpSession, McpError> {
+        let inner = &self.inner;
+        let launch = inner.launches.get(server).ok_or(McpError::NotConfigured)?;
+        if *inner.stopping.borrow() {
+            return Err(McpError::Stopped);
+        }
+        let deadline = inner.clock.now() + INITIALIZE_TIMEOUT;
+        let Launched {
+            output,
+            input,
+            process,
+        } = inner.launcher.launch(launch)?;
+        let connection = Arc::new(Connection::open(output, input, inner.clock.clone()));
+        let handshake = async {
+            let answer = within(
+                &*inner.clock,
+                deadline,
+                connection.call("initialize", Some(wire::initialize_params())),
+            )
+            .await
+            .ok_or(McpError::Timeout)?
+            .map_err(|error| match error {
+                // Something on stdout that is not an answer: no handshake.
+                McpError::Malformed(reason) => McpError::Handshake(reason),
+                other => other,
+            })?
+            .map_err(|error| match super::connection::remote(&error) {
+                McpError::Remote { code, message } => {
+                    McpError::Handshake(format!("{code}: {message}"))
+                }
+                other => McpError::Handshake(other.to_string()),
+            })?;
+            wire::initialized(&answer)?;
+            connection.notify("notifications/initialized", None).await?;
+            Ok(answer)
+        };
+        let mut stopping = inner.stopping.subscribe();
+        let initialized = tokio::select! {
+            answer = handshake => answer,
+            _ = stopping.wait_for(|stopping| *stopping) => Err(McpError::Stopped),
+        };
+        let initialized = match initialized {
+            Ok(answer) => answer,
+            Err(error) => {
+                // The process group is killed as `process` is dropped.
+                connection.close(error.clone());
+                return Err(error);
+            }
+        };
+        let session = {
+            let mut live = inner.live.lock().expect("live sessions");
+            if *inner.stopping.borrow() {
+                connection.close(McpError::Stopped);
+                return Err(McpError::Stopped);
+            }
+            live.next += 1;
+            let session = Arc::new(Session {
+                id: live.next,
+                server: server.to_owned(),
+                connection,
+                initialized: Arc::new(initialized),
+                process: Mutex::new(process),
+                tools: RwLock::new(None),
+                lists: AtomicU64::new(0),
+                owner: Arc::downgrade(inner),
+            });
+            live.sessions.insert(session.id, Arc::downgrade(&session));
+            session
+        };
+        // Subscribed before the first list, so a change during it is not missed.
+        let notices = session.connection.notices();
+        tokio::spawn(keep_listed(Arc::downgrade(&session), notices));
+        Ok(McpSession { session })
     }
 
-    /// Read the MCP App at `uri` from `server`. Starts the server when it is
-    /// not running.
+    /// The UI of the tool an observed call names, as the open sessions of its
+    /// server last listed it ([`ListedTool::ui_for`]). `None` when no open
+    /// session of that server has listed its tools yet, and when the sessions
+    /// that have disagree about this tool's UI — then which one the call went
+    /// through is not known here, so none is guessed, and the disagreement is
+    /// logged.
+    pub fn tool_ui(&self, call: &McpTool) -> Option<ToolUi> {
+        let sessions: Vec<Arc<Session>> = {
+            let live = self.inner.live.lock().expect("live sessions");
+            live.sessions.values().filter_map(Weak::upgrade).collect()
+        };
+        let mut declared = sessions
+            .iter()
+            .filter(|session| {
+                session.server == call.server() && session.connection.end_cause().is_none()
+            })
+            .filter_map(|session| {
+                let tools = session.tools.read().expect("tool list").clone()?;
+                Some(ListedTool::ui_for(&tools.1, call).cloned())
+            });
+        let first = declared.next()?;
+        if declared.any(|other| other != first) {
+            tracing::warn!(
+                server = call.server(),
+                tool = call.tool(),
+                "open MCP sessions disagree about a tool's UI; no widget is shown for its calls"
+            );
+            return None;
+        }
+        first
+    }
+
+    /// Close every open session — each harness's stand-in ends, its server's
+    /// stdin is closed, and a server still running two seconds later is
+    /// killed with its process group — and refuse every later open with
+    /// [`McpError::Stopped`].
+    pub async fn stop(&self) {
+        let sessions: Vec<Arc<Session>> = {
+            let live = self.inner.live.lock().expect("live sessions");
+            self.inner.stopping.send_replace(true);
+            live.sessions.values().filter_map(Weak::upgrade).collect()
+        };
+        let mut closing = JoinSet::new();
+        for session in sessions {
+            closing.spawn(close(session, McpError::Stopped));
+        }
+        while closing.join_next().await.is_some() {}
+    }
+}
+
+/// One server process and the one connection to it, for one harness session.
+/// Clones share it; it is closed by [`McpSession::close`], by the end of
+/// [`McpSession::serve`], by [`McpServers::stop`], or by its server ending —
+/// and when the last clone is dropped, its process group is killed.
+#[derive(Clone)]
+pub struct McpSession {
+    session: Arc<Session>,
+}
+impl McpSession {
+    /// The configured server's name.
+    pub fn server(&self) -> &str {
+        &self.session.server
+    }
+
+    /// The server's process id, while it has one.
+    pub fn process_id(&self) -> Option<u32> {
+        self.session
+            .process
+            .lock()
+            .expect("process")
+            .as_ref()
+            .and_then(ServerProcess::id)
+    }
+
+    /// List the tools now, with each tool's UI, and keep the list for
+    /// [`McpServers::tool_ui`].
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::Timeout`] for a page not answered within
+    /// [`REQUEST_TIMEOUT`], [`McpError::TooLarge`] past [`MAX_TOOL_PAGES`] or
+    /// [`MAX_TOOLS`], [`McpError::Malformed`] for a page of the wrong shape,
+    /// and the session's end cause once it has ended.
+    pub async fn list_tools(&self) -> Result<Vec<ListedTool>, McpError> {
+        list(&self.session).await
+    }
+
+    /// Read the MCP App at `uri` from this session's server.
     ///
     /// # Errors
     ///
     /// [`McpError::NotAnApp`] for a resource that is not
     /// `text/html;profile=mcp-app`, [`McpError::TooLarge`] past the domain's
     /// bounds ([`MAX_UI_HTML_BYTES`](crate::domain::mcp_apps::MAX_UI_HTML_BYTES)
-    /// and the CSP's), [`McpError::Remote`] for the server's refusal, and as
-    /// [`Self::list_tools`].
-    pub async fn read_ui_resource(
-        &self,
-        server: &str,
-        uri: &UiResourceUri,
-    ) -> Result<UiResource, McpError> {
-        let ready = self.ready(server).await?;
+    /// and the CSP's), [`McpError::Remote`] for the server's refusal,
+    /// [`McpError::Timeout`] past [`REQUEST_TIMEOUT`], and the session's end
+    /// cause once it has ended.
+    pub async fn read_ui_resource(&self, uri: &UiResourceUri) -> Result<UiResource, McpError> {
         let params = json!({ "uri": uri.as_str() });
-        let result = ready
+        let result = self
+            .session
             .connection
             .request("resources/read", Some(params), REQUEST_TIMEOUT)
             .await?;
         wire::ui_resource(uri, &result)
     }
 
-    /// The UI of the tool an observed call names, from its server's tools as
-    /// last listed ([`ListedTool::ui_for`]). `None` for a server not
-    /// configured, a list not read yet, or a call naming no tool with a UI.
-    pub fn tool_ui(&self, call: &McpTool) -> Option<ToolUi> {
-        let slot = self.inner.slots.get(call.server())?;
-        let tools = slot.tools.read().expect("tool list").clone();
-        ListedTool::ui_for(&tools, call).cloned()
-    }
-
-    /// A stand-in for `server`, attached to its current generation; the
-    /// server is started when it is not running.
-    ///
-    /// # Errors
-    ///
-    /// [`McpError::NotConfigured`], [`McpError::Stopped`], or why the server
-    /// could not be started.
-    pub async fn stand_in(&self, server: &str) -> Result<StandIn, McpError> {
-        Ok(StandIn {
-            ready: self.ready(server).await?,
-        })
-    }
-
-    /// Stop every server: waiting uses and stand-ins end with
-    /// [`McpError::Stopped`], each server's stdin is closed, and a server
-    /// still running two seconds later is killed.
-    /// Every use after this fails [`McpError::Stopped`].
-    pub async fn stop(&self) {
-        self.inner.stopping.send_replace(true);
-        let mut stopping = JoinSet::new();
-        for slot in self.inner.slots.values() {
-            let generation = slot.current.lock().expect("generation").clone();
-            if let Some(Ok(ready)) = generation.started.get() {
-                ready.connection.close(McpError::Stopped);
-                if let Some(child) = ready.process.lock().expect("process").take() {
-                    stopping.spawn(process::stop(child));
-                }
-            }
-        }
-        while stopping.join_next().await.is_some() {}
-    }
-
-    fn slot(&self, server: &str) -> Result<&Slot, McpError> {
-        self.inner.slots.get(server).ok_or(McpError::NotConfigured)
-    }
-
-    /// `server`'s running generation, started when there is none.
-    async fn ready(&self, server: &str) -> Result<Arc<Ready>, McpError> {
-        let slot = self.slot(server)?;
-        loop {
-            if *self.inner.stopping.borrow() {
-                return Err(McpError::Stopped);
-            }
-            let generation = {
-                let mut current = slot.current.lock().expect("generation");
-                if current.over() {
-                    *current = Arc::default();
-                }
-                current.clone()
-            };
-            let started = generation
-                .started
-                .get_or_init(|| start(&self.inner, slot))
-                .await
-                .clone();
-            match started {
-                Ok(ready) if ready.connection.end_cause().is_none() => return Ok(ready),
-                // Ended since it started: the next pass starts another.
-                Ok(_) => continue,
-                Err(error) => return Err(error),
-            }
-        }
-    }
-}
-
-/// A harness's connection to a server, attached to one generation of it.
-pub struct StandIn {
-    ready: Arc<Ready>,
-}
-impl StandIn {
-    /// Serve the harness over `input` and `output` until it closes or the
-    /// generation ends. The harness's `initialize` is answered with the
-    /// server's own answer; its other requests are forwarded under ids of the
-    /// connection's and answered under its own; its cancellations cancel
-    /// upstream; the server's `*/list_changed` notices are passed on.
+    /// Serve a harness over `input` and `output` until it closes, its input
+    /// breaks, or the server ends; then close the session. The harness's
+    /// `initialize` is answered with the server's own answer; its other
+    /// requests are forwarded under ids of the connection's and answered
+    /// under its own; its cancellations cancel upstream; tools the model may
+    /// not see are left out of its lists and refused if called; the server's
+    /// `*/list_changed` notices are passed on.
     pub async fn serve(self, input: impl AsyncRead + Unpin, output: impl AsyncWrite + Unpin) {
         stand_in::serve(
-            self.ready.connection.clone(),
-            self.ready.initialized.clone(),
+            self.session.connection.clone(),
+            self.session.initialized.clone(),
             input,
             output,
         )
         .await;
+        close(self.session, McpError::Closed).await;
+    }
+
+    /// Close the session: calls waiting on it end with
+    /// [`McpError::Closed`], the server's stdin is closed, and a server still
+    /// running two seconds later is killed with its process group.
+    pub async fn close(&self) {
+        close(self.session.clone(), McpError::Closed).await;
     }
 }
 
-/// Launch and initialize one generation of `slot`'s server, then list its
-/// tools. A failed list leaves the tools as they were and is logged; the
-/// server is still started.
-async fn start(inner: &Arc<Inner>, slot: &Slot) -> Result<Arc<Ready>, McpError> {
-    let deadline = inner.clock.now() + INITIALIZE_TIMEOUT;
-    let Launched {
-        output,
-        input,
-        process,
-    } = inner.launcher.launch(&slot.launch)?;
-    let connection = Arc::new(Connection::open(output, input, inner.clock.clone()));
-    let handshake = async {
-        let answer = within(
-            &*inner.clock,
-            deadline,
-            connection.call("initialize", Some(wire::initialize_params())),
-        )
-        .await
-        .ok_or(McpError::Timeout)??
-        .map_err(|error| match super::connection::remote(&error) {
-            McpError::Remote { code, message } => McpError::Handshake(format!("{code}: {message}")),
-            other => McpError::Handshake(other.to_string()),
-        })?;
-        wire::initialized(&answer)?;
-        connection.notify("notifications/initialized", None).await?;
-        Ok(answer)
-    };
-    let mut stopping = inner.stopping.subscribe();
-    let initialized = tokio::select! {
-        answer = handshake => answer,
-        _ = stopping.wait_for(|stopping| *stopping) => Err(McpError::Stopped),
-    };
-    let initialized = match initialized {
-        Ok(answer) => answer,
-        Err(error) => {
-            // The process is killed as it is dropped.
-            connection.close(error.clone());
-            return Err(error);
-        }
-    };
-    let ready = Arc::new(Ready {
-        connection,
-        initialized: Arc::new(initialized),
-        process: Mutex::new(process),
-    });
-    // Subscribed before the first list, so a change during it is not missed.
-    let notices = ready.connection.notices();
-    if let Err(error) = list(slot, &ready).await {
-        tracing::warn!(server = %slot.launch.server.name, %error, "MCP server's tools could not be listed");
+async fn close(session: Arc<Session>, cause: McpError) {
+    session.connection.close(cause);
+    let process = session.process.lock().expect("process").take();
+    if let Some(process) = process {
+        process.stop().await;
     }
-    if *inner.stopping.borrow() {
-        ready.connection.close(McpError::Stopped);
-        return Err(McpError::Stopped);
-    }
-    tokio::spawn(relist(
-        Arc::downgrade(inner),
-        slot.launch.server.name.clone(),
-        ready.clone(),
-        notices,
-    ));
-    Ok(ready)
 }
 
-/// List the tools again whenever the server says they changed, until its
-/// generation ends.
-async fn relist(
-    inner: Weak<Inner>,
-    name: String,
-    ready: Arc<Ready>,
-    mut notices: broadcast::Receiver<Arc<Value>>,
-) {
-    let ended = ready.connection.ended();
+/// List the session's tools now, and again whenever the server says they
+/// changed, until it ends. A failed list leaves the tools as they were and
+/// is logged.
+async fn keep_listed(session: Weak<Session>, mut notices: broadcast::Receiver<Arc<Value>>) {
+    let Some(ended) = session.upgrade().map(|session| session.connection.ended()) else {
+        return;
+    };
     tokio::pin!(ended);
+    let mut changed = true;
     loop {
+        if changed {
+            let Some(session) = session.upgrade() else {
+                return;
+            };
+            if let Err(error) = list(&session).await {
+                tracing::warn!(server = %session.server, %error, "MCP server's tools could not be listed");
+            }
+        }
         let notice = tokio::select! {
             _ = &mut ended => return,
             notice = notices.recv() => notice,
         };
-        let changed = match notice {
+        changed = match notice {
             Ok(notice) => tools_changed(&notice),
             Err(broadcast::error::RecvError::Lagged(_)) => true,
             Err(broadcast::error::RecvError::Closed) => return,
         };
-        if !changed {
-            continue;
-        }
-        let Some(inner) = inner.upgrade() else { return };
-        let Some(slot) = inner.slots.get(&name) else {
-            return;
-        };
-        if let Err(error) = list(slot, &ready).await {
-            tracing::warn!(server = %name, %error, "MCP server's changed tools could not be listed");
-        }
     }
 }
 
@@ -395,17 +409,19 @@ pub(super) fn tools_changed(notice: &Value) -> bool {
     notice.get("method").and_then(Value::as_str) == Some("notifications/tools/list_changed")
 }
 
-/// Every page of `tools/list`, kept as `slot`'s tools when all were read.
-async fn list(slot: &Slot, ready: &Ready) -> Result<Vec<ListedTool>, McpError> {
+/// Every page of `tools/list`, kept as the session's tools when all were read
+/// and no list asked later has been kept already.
+async fn list(session: &Session) -> Result<Vec<ListedTool>, McpError> {
+    let order = session.lists.fetch_add(1, Ordering::Relaxed);
     let mut tools = Vec::new();
     let mut cursor: Option<String> = None;
     for _ in 0..MAX_TOOL_PAGES {
         let params = cursor.map(|cursor| json!({ "cursor": cursor }));
-        let result = ready
+        let result = session
             .connection
             .request("tools/list", params, REQUEST_TIMEOUT)
             .await?;
-        let (page, next) = wire::tools_page(&slot.launch.server.name, &result)?;
+        let (page, next) = wire::tools_page(&session.server, &result)?;
         if tools.len() + page.len() > MAX_TOOLS {
             return Err(McpError::TooLarge("tools/list"));
         }
@@ -413,7 +429,10 @@ async fn list(slot: &Slot, ready: &Ready) -> Result<Vec<ListedTool>, McpError> {
         match next {
             Some(next) => cursor = Some(next),
             None => {
-                *slot.tools.write().expect("tool list") = Arc::from(tools.clone());
+                let mut kept = session.tools.write().expect("tool list");
+                if kept.as_ref().is_none_or(|(kept, _)| *kept < order) {
+                    *kept = Some((order, Arc::from(tools.clone())));
+                }
                 return Ok(tools);
             }
         }

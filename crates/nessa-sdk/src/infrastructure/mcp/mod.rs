@@ -1,30 +1,31 @@
-//! An MCP client that holds the one connection to each configured server
-//! (ADR 344): it lists tools with their MCP Apps UI, reads `ui://` resources,
-//! and serves stand-ins that forward a harness's traffic over that same
-//! connection, so the agent and an app share one upstream session.
+//! An MCP client that holds one connection per configured server for each
+//! harness session (ADR 344): it lists tools with their MCP Apps UI, reads
+//! `ui://` resources, and serves the stand-in that forwards a harness's
+//! traffic over that same connection, so an agent and its app share one
+//! upstream session and no two conversations share one.
 //!
 //! ```text
-//! McpServers ──per server──▶ generation: process ─ Connection ─ Ready
-//!     │                                              ▲    ▲
-//!     ├── list_tools / read_ui_resource ─────────────┘    │
-//!     ├── tool_ui (tools as last listed)                  │
-//!     └── stand_in ──▶ StandIn::serve(harness pipes) ─────┘
+//! McpServers ──open──▶ McpSession: server process ─ Connection
+//!     │                    ├── list_tools / read_ui_resource
+//!     │                    └── serve(harness pipes) ──▶ stand_in
+//!     └── tool_ui (the open sessions' lists, agreed or none)
 //!
 //! Connection: framing (bounded newline JSON-RPC) ─ wire (MCP JSON → domain)
 //! ```
 //!
-//! Arrows are calls. `McpServers` owns each server's lifecycle (started on
-//! first use, again on the next use after it ended) and its tool list;
-//! `Connection` owns request ids, answers, cancellation and the end of a
-//! connection; `stand_in` owns what a harness sees; `wire` owns the shapes,
-//! and the domain (`domain::mcp_apps`) the values and their bounds. The
-//! states and orderings are tabled in `docs/design/mcp-connections.md`.
+//! Arrows are calls. `McpServers` owns the open sessions and refuses new ones
+//! once stopped; an `McpSession` owns one process (its process group) and its
+//! connection, closed when its harness session ends; `Connection` owns
+//! request ids, answers, cancellation and the end of a connection; `stand_in`
+//! owns what a harness sees; `process` launching and stopping; `wire` the
+//! shapes, and the domain (`domain::mcp_apps`) the values and their bounds.
+//! The states and orderings are tabled in `docs/design/mcp-connections.md`.
 //!
 //! What is verified where: the protocol and the lifecycle against in-process
-//! fixture servers on a manual clock, and launching, exit, restart and the
-//! shared session against a real fixture process
-//! (`tests/infrastructure/mcp/`). A server's standard error goes to this
-//! process's, unread.
+//! fixture servers on a manual clock, and launching, isolation between
+//! sessions, exit, stopping a process group and the shared session against a
+//! real fixture process (`tests/infrastructure/mcp/`). A server's standard
+//! error goes to this process's, unread.
 #![deny(missing_docs)]
 
 mod connection;
@@ -37,7 +38,7 @@ mod wire;
 
 pub use error::McpError;
 pub use servers::{
-    McpServerLaunch, McpServers, StandIn, INITIALIZE_TIMEOUT, MAX_TOOLS, MAX_TOOL_PAGES,
+    McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT, MAX_TOOLS, MAX_TOOL_PAGES,
     REQUEST_TIMEOUT,
 };
 

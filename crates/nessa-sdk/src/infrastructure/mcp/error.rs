@@ -38,6 +38,8 @@ pub enum McpError {
     Busy,
     /// The MCP client is shutting down.
     Stopped,
+    /// The session was closed: its harness session ended.
+    Closed,
 }
 impl fmt::Display for McpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -60,6 +62,7 @@ impl fmt::Display for McpError {
             }
             Self::Busy => f.write_str("too many requests are waiting on the MCP server"),
             Self::Stopped => f.write_str("the MCP client is shutting down"),
+            Self::Closed => f.write_str("the MCP session was closed"),
         }
     }
 }

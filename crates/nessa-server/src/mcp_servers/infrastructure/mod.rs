@@ -4,6 +4,9 @@ mod relay;
 mod relay_command;
 mod tool_uis;
 
+#[cfg(test)]
+pub(crate) use relay::said;
+
 #[cfg(unix)]
 pub use relay::bind;
 pub use relay::{

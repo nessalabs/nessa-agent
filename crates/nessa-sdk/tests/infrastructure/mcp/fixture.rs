@@ -16,7 +16,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream},
-    sync::{mpsc, Notify},
+    sync::{mpsc, watch, Notify},
 };
 
 /// The chart app every fixture serves.
@@ -64,21 +64,35 @@ pub(super) struct Control {
     to_client: mpsc::UnboundedSender<Vec<u8>>,
     /// The pages `tools/list` answers with from now on.
     pages: Arc<Mutex<Vec<Vec<Value>>>>,
+    /// Set once the server stopped: its input closed, or it exited.
+    stopped: Arc<watch::Sender<bool>>,
 }
 impl Control {
+    /// Wait until the server has stopped: the client closed its stdin, or
+    /// the server exited.
+    pub async fn stopped(&self) {
+        let mut stopped = self.stopped.subscribe();
+        within_five_seconds("the server to stop", async {
+            let _ = stopped.wait_for(|stopped| *stopped).await;
+        })
+        .await;
+    }
     /// Answer `tools/list` with `pages` from now on.
     pub fn set_pages(&self, pages: Vec<Vec<Value>>) {
         *self.pages.lock().unwrap() = pages;
     }
     /// Wait until a received message satisfies `wanted`.
     pub async fn arrived_where(&self, wanted: impl Fn(&Value) -> bool) -> Value {
-        loop {
-            let notified = self.arrived.notified();
-            if let Some(found) = self.received().into_iter().find(|message| wanted(message)) {
-                return found;
+        within_five_seconds("a message to arrive", async {
+            loop {
+                let notified = self.arrived.notified();
+                if let Some(found) = self.received().into_iter().find(|message| wanted(message)) {
+                    return found;
+                }
+                notified.await;
             }
-            notified.await;
-        }
+        })
+        .await
     }
     /// Every message the server has received so far.
     pub fn received(&self) -> Vec<Value> {
@@ -93,13 +107,16 @@ impl Control {
     }
     /// Wait until a message with `method` has arrived `count` times.
     pub async fn arrived(&self, method: &str, count: usize) {
-        loop {
-            let notified = self.arrived.notified();
-            if self.with_method(method).len() >= count {
-                return;
+        within_five_seconds(method, async {
+            loop {
+                let notified = self.arrived.notified();
+                if self.with_method(method).len() >= count {
+                    return;
+                }
+                notified.await;
             }
-            notified.await;
-        }
+        })
+        .await;
     }
     /// Write `bytes` to the client as they are.
     pub fn send_raw(&self, bytes: Vec<u8>) {
@@ -117,6 +134,13 @@ impl Control {
     }
 }
 
+/// `waiting`, failing the test after five real seconds rather than hanging it.
+async fn within_five_seconds<T>(what: &str, waiting: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+        .await
+        .unwrap_or_else(|_| panic!("waited five seconds for {what}"))
+}
+
 /// Launches fixture servers with `behaviour`, keeping a [`Control`] for each.
 pub(super) struct FixtureLauncher {
     pub behaviour: Mutex<Behaviour>,
@@ -132,8 +156,8 @@ impl FixtureLauncher {
             refuse: Mutex::default(),
         })
     }
-    /// The `index`th generation's control.
-    pub fn generation(&self, index: usize) -> Control {
+    /// The `index`th launched server's control: one per session.
+    pub fn server(&self, index: usize) -> Control {
         self.launched.lock().unwrap()[index].clone()
     }
     pub fn launches(&self) -> usize {
@@ -154,6 +178,7 @@ impl Launcher for FixtureLauncher {
             arrived: Arc::default(),
             to_client,
             pages: Arc::new(Mutex::new(behaviour.pages.clone())),
+            stopped: Arc::new(watch::channel(false).0),
         };
         tokio::spawn(serve(
             behaviour,
@@ -191,8 +216,16 @@ async fn serve(
     mut output: DuplexStream,
     mut from_test: mpsc::UnboundedReceiver<Vec<u8>>,
 ) {
+    /// Marks the server stopped however its loop ends.
+    struct Stopping(Arc<watch::Sender<bool>>);
+    impl Drop for Stopping {
+        fn drop(&mut self) {
+            self.0.send_replace(true);
+        }
+    }
+    let _stopping = Stopping(control.stopped.clone());
     let mut lines = BufReader::new(input).lines();
-    // Handles this generation has given out: its session's state.
+    // Handles this server has given out: its session's state.
     let mut handles: HashSet<String> = HashSet::new();
     loop {
         let line = tokio::select! {
@@ -219,10 +252,9 @@ async fn serve(
         let error = |code: i64, text: &str| json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": text } });
         let answer = match method {
             "initialize" => match behaviour.version {
-                Some(version) => ok(
-                    json!({ "protocolVersion": version, "capabilities": { "tools": {} },
-                                            "serverInfo": { "name": "fixture", "version": "1" } }),
-                ),
+                Some(version) => ok(json!({ "protocolVersion": version,
+                            "capabilities": { "tools": {}, "resources": { "subscribe": true, "listChanged": true } },
+                                            "serverInfo": { "name": "fixture", "version": "1" } })),
                 None => error(-32600, "no"),
             },
             "tools/list" => {

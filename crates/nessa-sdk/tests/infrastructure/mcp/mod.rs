@@ -2,19 +2,19 @@
 //! `docs/design/mcp-connections.md`, named after it.
 //!
 //! ```text
-//! protocol  -> McpServers -> Connection -> fixture (in process, manual clock)
-//! stand_in  -> StandIn::serve -> Connection -> fixture
-//! lifecycle -> McpServers generations -> FixtureLauncher
-//! process   -> McpServers -> ProcessLauncher -> fixtures/server.py
+//! protocol -> McpSession -> Connection -> fixture (in process, manual clock)
+//! stand_in -> McpSession::serve -> Connection -> fixture
+//! sessions -> McpServers::open / tool_ui / stop -> FixtureLauncher
+//! process  -> McpServers -> ProcessLauncher -> fixtures/server.py
 //! ```
 //! Arrows show what each file drives.
 mod fixture;
-mod lifecycle;
 mod process;
 mod protocol;
+mod sessions;
 mod stand_in;
 
-use super::{McpServers, StandIn};
+use super::{McpServers, McpSession};
 use crate::infrastructure::clock::manual::ManualClock;
 use fixture::{launch, Behaviour, FixtureLauncher};
 use serde_json::Value;
@@ -33,17 +33,31 @@ fn servers(behaviour: Behaviour) -> (McpServers, Arc<FixtureLauncher>, Arc<Manua
     (servers, launcher, clock)
 }
 
+/// A session on `fixture` with `behaviour`, with the servers and launcher.
+async fn session(
+    behaviour: Behaviour,
+) -> (
+    McpSession,
+    McpServers,
+    Arc<FixtureLauncher>,
+    Arc<ManualClock>,
+) {
+    let (servers, launcher, clock) = servers(behaviour);
+    let session = servers.open("fixture").await.unwrap();
+    (session, servers, launcher, clock)
+}
+
 /// A harness's end of a stand-in.
 struct Harness {
     lines: Lines<BufReader<ReadHalf<DuplexStream>>>,
     write: WriteHalf<DuplexStream>,
 }
 impl Harness {
-    /// Serve `stand_in` to a new harness, in the background.
-    fn attach(stand_in: StandIn) -> Self {
+    /// Serve `session` to a new harness, in the background.
+    fn attach(session: McpSession) -> Self {
         let (harness, served) = tokio::io::duplex(64 * 1024);
         let (input, output) = tokio::io::split(served);
-        tokio::spawn(stand_in.serve(input, output));
+        tokio::spawn(session.serve(input, output));
         let (read, write) = tokio::io::split(harness);
         Self {
             lines: BufReader::new(read).lines(),

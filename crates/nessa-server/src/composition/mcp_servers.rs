@@ -1,5 +1,5 @@
-//! The gateway's one connection to each configured MCP server (ADR 344),
-//! composed before any agent is built.
+//! The gateway's connection to each configured MCP server for each harness
+//! session (ADR 344), composed before any agent is built.
 //!
 //! ```text
 //! AgentsConfig.mcpServers ──▶ McpServers (each started by the gateway)
@@ -64,11 +64,12 @@ pub(super) fn relay_socket(namespace: &Path, uid: u32) -> PathBuf {
 pub(super) fn server_environment(
     lookup: impl Fn(&str) -> Option<OsString>,
 ) -> BTreeMap<OsString, OsString> {
-    let mut environment: BTreeMap<OsString, OsString> =
-        ["HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL"]
-            .into_iter()
-            .filter_map(|key| lookup(key).map(|value| (key.into(), value)))
-            .collect();
+    let mut environment: BTreeMap<OsString, OsString> = [
+        "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+    ]
+    .into_iter()
+    .filter_map(|key| lookup(key).map(|value| (key.into(), value)))
+    .collect();
     if let Some(path) = agent_search_path(lookup("NESSA_AGENT_PATH"), lookup("PATH")) {
         environment.insert("PATH".into(), path);
     }

@@ -74,6 +74,13 @@ pub(crate) fn tools_page(
     Ok((listed, next))
 }
 
+/// Whether the model may see and call `tool`, a tool as `tools/list` gives it:
+/// unless its UI says its visibility leaves the model out. A tool without a
+/// UI, or whose UI cannot be read, is the model's as any tool is.
+pub(crate) fn model_may_see(tool: &Value) -> bool {
+    tool_ui(tool.pointer("/_meta/ui")).is_none_or(|ui| ui.visibility().model())
+}
+
 fn tool_ui(declared: Option<&Value>) -> Option<ToolUi> {
     let declared = declared?;
     let uri = UiResourceUri::new(declared.get("resourceUri")?.as_str()?).ok()?;
@@ -129,12 +136,21 @@ pub(crate) fn ui_resource(
     };
     let permissions = match ui.and_then(|ui| ui.get("permissions")) {
         None => UiPermissions::default(),
-        Some(Value::Object(asked)) => UiPermissions {
-            camera: asked.contains_key("camera"),
-            microphone: asked.contains_key("microphone"),
-            geolocation: asked.contains_key("geolocation"),
-            clipboard_write: asked.contains_key("clipboardWrite"),
-        },
+        // Asked for as the extension writes it, `{}`, or as `true`; `false`,
+        // `null` or anything else asks for nothing.
+        Some(Value::Object(asked)) => {
+            let asks = |name: &str| {
+                asked
+                    .get(name)
+                    .is_some_and(|value| value.is_object() || *value == Value::Bool(true))
+            };
+            UiPermissions {
+                camera: asks("camera"),
+                microphone: asks("microphone"),
+                geolocation: asks("geolocation"),
+                clipboard_write: asks("clipboardWrite"),
+            }
+        }
         Some(_) => return Err(malformed("permissions that are not an object")),
     };
     let domain = match ui.and_then(|ui| ui.get("domain")) {

@@ -75,9 +75,23 @@ impl CompositionRoot {
                 socket,
                 server,
                 configuration,
-            } => crate::mcp_servers::infrastructure::run(&socket, &server, &configuration)
-                .await
-                .map_err(|failure| RunError::Agent(failure.to_string())),
+            } => {
+                let ended =
+                    crate::mcp_servers::infrastructure::run(&socket, &server, &configuration).await;
+                // Exits here rather than returning: the harness's stdin is read
+                // on a blocking thread nothing can cancel, and the runtime
+                // would wait for it on the way out — leaving a relay whose
+                // server has ended alive for as long as the harness keeps its
+                // stdin open. Its stdout was flushed when the relay ended.
+                let status = match ended {
+                    Ok(()) => 0,
+                    Err(failure) => {
+                        tracing::error!(%failure, "MCP stand-in ended without serving");
+                        1
+                    }
+                };
+                std::process::exit(status)
+            }
             #[cfg(not(unix))]
             Command::McpRelay { .. } => {
                 Err(RunError::Agent("MCP stand-ins require Unix sockets".into()))
@@ -224,12 +238,10 @@ impl CompositionRoot {
         for warm_up in warm_ups.iter() {
             warm_up.start();
         }
-        // Each configured MCP server starts now, in the background, so its tools
-        // are listed before a harness asks for them; stand-ins reach it through
-        // the relay from here on.
+        // Stand-ins reach their servers through the relay from here on; each
+        // opens a session, and a server process, of its own.
         #[cfg(unix)]
         let mcp_servers = mcp.map(|mcp| {
-            mcp.servers.start_all();
             tokio::spawn(mcp.relay.listen(mcp.listener));
             mcp.servers
         });

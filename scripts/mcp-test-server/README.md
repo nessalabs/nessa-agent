@@ -41,8 +41,9 @@ gateway's `config.json`:
 `live-check.mjs` starts a real gateway in a temporary `ci` namespace, with one
 agent whose harness is wrapped by `acp-recorder.mjs` and the test server
 configured as `mcptest` (also wrapped, so its own traffic is recorded). The
-gateway starts the server and holds the one connection to it; the harness is
-given a stand-in, `nessa mcp-relay`, in its place (ADR 344). It
+harness is given a stand-in, `nessa mcp-relay`, in its place, and for each
+harness session that starts it the gateway starts the server and holds the
+connection to it (ADR 344). It
 sends one message asking for every tool once, allows each tool's permission
 request once, and writes what happened:
 

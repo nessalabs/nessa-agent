@@ -568,12 +568,13 @@ live under their feature name with domain, application and infrastructure owners
 All additional Nessa tools use this MCP boundary. See the
 [server guide](../crates/nessa-mcp/README.md).
 
-Nessa is also an MCP client, holding the one connection to each configured
-server (ADR 344, [design](design/mcp-connections.md)). The SDK owns the client:
-`domain/mcp_apps/` (tool UI and UI resource values, their bounds) and
-`infrastructure/mcp/` (`connection` for ids, answers and cancellation,
-`stand_in` for what a harness sees, `servers` for each server's generations
-and tool list, `wire` for MCP's JSON), tested in
+Nessa is also an MCP client, holding the connection to each configured server
+for each harness session (ADR 344, [design](design/mcp-connections.md)). The
+SDK owns the client: `domain/mcp_apps/` (tool UI and UI resource values, their
+bounds) and `infrastructure/mcp/` (`connection` for ids, answers and
+cancellation, `stand_in` for what a harness sees, `servers` for the open
+sessions and their tool lists, `process` for a server's process group, `wire`
+for MCP's JSON), tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
 gateway's `src/mcp_servers/` owns the stand-in rules (`domain`), the relay
 socket and the `mcp-relay` command, and the view's tool UI lookup

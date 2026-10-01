@@ -1,7 +1,8 @@
-//! The gateway's side of one MCP connection per server: what stands in for a
-//! server, the relay socket's hello ("A stand-in" table, Hello and Attaching
-//! rows), the `mcp-relay` command, and a harness's traffic reaching a real
-//! server through both and sharing its session with the gateway's own reads.
+//! The gateway's side of one MCP connection per server for each harness
+//! session: what stands in for a server, the relay socket's hello ("A
+//! stand-in" table, Hello and Opening rows), the `mcp-relay` command, and a
+//! harness's traffic reaching a real server through both on a session of its
+//! own. A real `nessa mcp-relay` process is driven in `tests/mcp_relay.rs`.
 //!
 //! ```text
 //! domain    -> configuration_digest / relay_arguments / admit
@@ -17,7 +18,7 @@ use super::infrastructure::{
     HELLO_TIMEOUT, MAX_HELLO_BYTES,
 };
 use crate::conversation::application::McpToolUis;
-use nessa_sdk::domain::{agent_execution::tools::McpTool, mcp_apps::UiResourceUri};
+use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::infrastructure::{
     acp::sessions::StdioMcpServer,
     clock::RuntimeClock,
@@ -281,10 +282,10 @@ async fn the_relay_command_copies_both_ways_until_the_gateway_closes() {
 }
 
 /// A harness reaches the real server through `mcp-relay` and the relay
-/// socket, and a handle its call got back resolves in the gateway's own read
-/// of the same session: one upstream session for the agent and the app.
+/// socket, on a session of its own, and the view's lookup reads that
+/// session's list; the session ends with the stand-in.
 #[tokio::test]
-async fn a_harness_through_the_relay_shares_the_servers_session_with_the_gateway() {
+async fn a_harness_through_the_relay_gets_a_session_of_its_own() {
     let server = fixture();
     let (relay_side, mcp) = relay_for(vec![server.clone()]);
     let (stand_in, gateway) = tokio::io::duplex(1024 * 1024);
@@ -292,7 +293,10 @@ async fn a_harness_through_the_relay_shares_the_servers_session_with_the_gateway
     let (mut harness_in, input) = tokio::io::duplex(64 * 1024);
     let (output, harness_out) = tokio::io::duplex(64 * 1024);
     let configuration = digest(&server);
-    tokio::spawn(async move { relay(stand_in, "fixture", &configuration, input, output).await });
+    let relayed =
+        tokio::spawn(
+            async move { relay(stand_in, "fixture", &configuration, input, output).await },
+        );
     let mut answers = BufReader::new(harness_out).lines();
     let ask = |message: Value| {
         let mut bytes = serde_json::to_vec(&message).unwrap();
@@ -312,20 +316,23 @@ async fn a_harness_through_the_relay_shares_the_servers_session_with_the_gateway
         "fixture-process"
     );
     harness_in
-        .write_all(&ask(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "remember" } })))
+        .write_all(&ask(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "where" } })))
         .await
         .unwrap();
-    let remembered: Value =
-        serde_json::from_str(&answers.next_line().await.unwrap().unwrap()).unwrap();
-    let handle = remembered["result"]["content"][0]["text"].as_str().unwrap();
-    let uri = UiResourceUri::new(format!("ui://fixture/handle/{handle}")).unwrap();
-    assert_eq!(
-        mcp.read_ui_resource("fixture", &uri).await.unwrap().html(),
-        format!("<p>{handle}</p>")
-    );
-    // The view's lookup reads the same connection's list.
+    let place: Value = serde_json::from_str(&answers.next_line().await.unwrap().unwrap()).unwrap();
+    let pid = place["result"]["structuredContent"]["pid"]
+        .as_i64()
+        .unwrap() as libc::pid_t;
+    // The view's lookup reads the session's list, once it has been read.
     let uis = ListedToolUis(mcp.clone());
     let chart = McpTool::new("fixture", "show_chart").unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while uis.resource_uri(&chart).is_none() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the session's tools are listed");
     assert_eq!(
         uis.resource_uri(&chart).unwrap().as_str(),
         "ui://fixture/chart.html"
@@ -334,5 +341,53 @@ async fn a_harness_through_the_relay_shares_the_servers_session_with_the_gateway
         uis.resource_uri(&McpTool::new("fixture", "remember").unwrap()),
         None
     );
-    mcp.stop().await;
+    // The harness goes; its stand-in and session end, and the server with them.
+    drop(harness_in);
+    assert_eq!(relayed.await.unwrap(), Ok(()));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        // SAFETY: signal 0 only asks whether the process exists.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the server ends with its stand-in");
+    assert_eq!(uis.resource_uri(&chart), None);
+}
+
+#[test]
+fn a_refusals_message_is_one_bounded_line() {
+    use super::infrastructure::said;
+    assert_eq!(said("could not\nstart\u{7}"), "could not start ");
+    let long = "é".repeat(600);
+    assert_eq!(said(&long).chars().count(), 512);
+    // However JSON escapes what is left, the answer stays within the bound.
+    let answer = Answer::Refused {
+        reason: Refusal::Unavailable,
+        message: said(&"\\".repeat(600)),
+    };
+    assert!(serde_json::to_vec(&answer).unwrap().len() < MAX_HELLO_BYTES);
+}
+
+#[tokio::test]
+async fn a_relay_socket_a_gateway_still_serves_is_not_taken_over() {
+    use super::infrastructure::bind;
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("relay").join("relay.sock");
+    let serving = bind(&socket).unwrap();
+    let refused = bind(&socket).unwrap_err();
+    assert_eq!(refused.kind(), std::io::ErrorKind::AddrInUse);
+    // Once nothing listens, the socket left behind is replaced.
+    drop(serving);
+    // A child another test forks at that moment holds the listener until it
+    // execs, so the socket may answer for an instant after the drop.
+    let started = std::time::Instant::now();
+    while let Err(error) = bind(&socket) {
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse, "{error:?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "still refused: {error:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 }

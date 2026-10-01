@@ -630,11 +630,22 @@ pub struct QuestionChoiceInput {
 }
 
 impl ConversationService {
-    /// Own every configured agent, and the one a caller gets by default.
+    /// Own every configured agent, and the one a caller gets by default. No
+    /// MCP call shows a UI: see [`Self::with_tool_uis`].
     pub fn new(
         dependencies: ConversationDependencies,
         limits: ConversationLimits,
         workspace: Option<String>,
+    ) -> Result<Self, ConversationError> {
+        Self::with_tool_uis(dependencies, limits, workspace, Arc::new(NoMcpToolUis))
+    }
+    /// As [`Self::new`], with each MCP call's UI looked up in `tool_uis` when
+    /// a view is read.
+    pub fn with_tool_uis(
+        dependencies: ConversationDependencies,
+        limits: ConversationLimits,
+        workspace: Option<String>,
+        tool_uis: Arc<dyn McpToolUis>,
     ) -> Result<Self, ConversationError> {
         let ConversationDependencies {
             agents,
@@ -688,18 +699,9 @@ impl ConversationService {
                 retired: watch::channel(false).0,
                 agents_asked: Arc::new(Semaphore::new(MAX_AGENTS_ASKED_AT_ONCE)),
                 retries: Arc::new(DeletionRetries::default()),
-                tool_uis: Arc::new(NoMcpToolUis),
+                tool_uis,
             }),
         })
-    }
-    /// Show each MCP call's UI from `tool_uis` in this service's views; without
-    /// it, none is shown. Set while composing, before the service is shared:
-    /// it panics on a service already cloned.
-    pub fn with_tool_uis(mut self, tool_uis: Arc<dyn McpToolUis>) -> Self {
-        Arc::get_mut(&mut self.inner)
-            .expect("tool UIs are set before the service is shared")
-            .tool_uis = tool_uis;
-        self
     }
     /// Persist ownership before opening a provider. Repeating the same UUID never changes its owner.
     ///

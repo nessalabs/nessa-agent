@@ -1,7 +1,7 @@
 //! The handshake, `tools/list`, `resources/read` and a gateway request's
 //! orderings ("A gateway request" table).
 use super::fixture::{Behaviour, CHART, CHART_HTML};
-use super::servers;
+use super::{servers, session};
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{UiResourceUri, UiVisibility, APP_MIME_TYPE, MAX_UI_HTML_BYTES};
 use crate::infrastructure::mcp::{
@@ -18,9 +18,9 @@ fn chart() -> UiResourceUri {
 
 #[tokio::test]
 async fn the_handshake_declares_the_mcp_apps_extension_and_lists_the_tools() {
-    let (servers, launcher, _) = servers(Behaviour::default());
-    let tools = servers.list_tools("fixture").await.unwrap();
-    let server = launcher.generation(0);
+    let (session, servers, launcher, _) = session(Behaviour::default()).await;
+    let tools = session.list_tools().await.unwrap();
+    let server = launcher.server(0);
     let initialize = &server.with_method("initialize")[0];
     assert_eq!(initialize["params"]["protocolVersion"], "2025-06-18");
     assert_eq!(
@@ -72,15 +72,11 @@ async fn an_unsupported_version_or_a_refused_initialize_is_a_handshake_failure()
             ..Behaviour::default()
         });
         assert!(matches!(
-            servers.list_tools("fixture").await,
+            servers.open("fixture").await,
             Err(McpError::Handshake(_))
         ));
-        // Starting -> Idle: the next use launches again.
-        assert!(matches!(
-            servers.list_tools("fixture").await,
-            Err(McpError::Handshake(_))
-        ));
-        assert_eq!(launcher.launches(), 2);
+        // Its process is stopped: the fixture sees its input close.
+        launcher.server(0).stopped().await;
     }
     // Each version this client accepts.
     for version in ["2025-06-18", "2025-03-26", "2024-11-05"] {
@@ -88,13 +84,13 @@ async fn an_unsupported_version_or_a_refused_initialize_is_a_handshake_failure()
             version: Some(version),
             ..Behaviour::default()
         });
-        assert!(servers.list_tools("fixture").await.is_ok(), "{version}");
+        assert!(servers.open("fixture").await.is_ok(), "{version}");
     }
 }
 
 #[tokio::test]
 async fn tools_are_read_across_pages_and_unreadable_ones_are_handled_one_by_one() {
-    let (servers, _, _) = servers(Behaviour {
+    let (session, _, _, _) = session(Behaviour {
         pages: vec![
             vec![
                 json!({ "name": "a", "_meta": { "ui": { "resourceUri": "ui://f/a", "visibility": ["app"] } } }),
@@ -111,8 +107,9 @@ async fn tools_are_read_across_pages_and_unreadable_ones_are_handled_one_by_one(
             ],
         ],
         ..Behaviour::default()
-    });
-    let tools = servers.list_tools("fixture").await.unwrap();
+    })
+    .await;
+    let tools = session.list_tools().await.unwrap();
     let names: Vec<_> = tools
         .iter()
         .map(|tool| tool.tool().tool().to_owned())
@@ -138,37 +135,37 @@ async fn a_list_past_its_bounds_or_of_the_wrong_shape_is_refused_and_not_kept() 
             .map(|n| json!({ "name": format!("t{n}") }))
             .collect::<Vec<_>>()
     };
-    let (servers, _, _) = servers(Behaviour {
+    let (session, _, _, _) = session(Behaviour {
         pages: vec![many(MAX_TOOLS), many(1)],
         ..Behaviour::default()
-    });
+    })
+    .await;
     assert_eq!(
-        servers.list_tools("fixture").await,
+        session.list_tools().await,
         Err(McpError::TooLarge("tools/list"))
     );
-    let (servers, _, _) = super::servers(Behaviour {
+    let (session, _, _, _) = super::session(Behaviour {
         pages: vec![many(1); MAX_TOOL_PAGES + 1],
         ..Behaviour::default()
-    });
+    })
+    .await;
     assert_eq!(
-        servers.list_tools("fixture").await,
+        session.list_tools().await,
         Err(McpError::TooLarge("tools/list"))
     );
     // Exactly at the bounds is a list.
-    let (servers, _, _) = super::servers(Behaviour {
+    let (session, _, _, _) = super::session(Behaviour {
         pages: vec![many(MAX_TOOLS / MAX_TOOL_PAGES); MAX_TOOL_PAGES],
         ..Behaviour::default()
-    });
-    assert_eq!(
-        servers.list_tools("fixture").await.unwrap().len(),
-        MAX_TOOLS
-    );
+    })
+    .await;
+    assert_eq!(session.list_tools().await.unwrap().len(), MAX_TOOLS);
 }
 
 #[tokio::test]
 async fn an_app_resource_is_read_with_what_it_asks_of_the_host() {
-    let (servers, _, _) = servers(Behaviour::default());
-    let app = servers.read_ui_resource("fixture", &chart()).await.unwrap();
+    let (session, _, _, _) = session(Behaviour::default()).await;
+    let app = session.read_ui_resource(&chart()).await.unwrap();
     assert_eq!(app.uri(), &chart());
     assert_eq!(app.html(), CHART_HTML);
     assert_eq!(&*app.csp().connect_domains()[0], "https://api.example.com");
@@ -182,8 +179,8 @@ async fn an_app_resource_is_read_with_what_it_asks_of_the_host() {
 async fn read(content: serde_json::Value) -> Result<crate::domain::mcp_apps::UiResource, McpError> {
     let mut behaviour = Behaviour::default();
     behaviour.resources.insert(CHART.into(), content);
-    let (servers, _, _) = servers(behaviour);
-    servers.read_ui_resource("fixture", &chart()).await
+    let (session, _, _, _) = session(behaviour).await;
+    session.read_ui_resource(&chart()).await
 }
 
 #[tokio::test]
@@ -258,7 +255,8 @@ async fn a_resource_of_the_wrong_shape_is_malformed() {
     let full = read(app(json!({ "_meta": { "ui": {
         "csp": { "connectDomains": [], "resourceDomains": ["https://cdn"], "frameDomains": ["https://f"],
                  "baseUriDomains": ["https://b"] },
-        "permissions": { "microphone": {}, "geolocation": {}, "clipboardWrite": {}, "unknown": {} },
+        "permissions": { "camera": false, "microphone": {}, "geolocation": true,
+                         "clipboardWrite": {}, "unknown": {} },
         "domain": "https://app.example", "prefersBorder": false } } })))
     .await
     .unwrap();
@@ -276,39 +274,39 @@ async fn a_resource_of_the_wrong_shape_is_malformed() {
 
 #[tokio::test]
 async fn a_server_error_answer_is_remote() {
-    let (servers, _, _) = servers(Behaviour::default());
+    let (session, servers, _, _) = session(Behaviour::default()).await;
     let missing = UiResourceUri::new("ui://fixture/missing").unwrap();
     assert_eq!(
-        servers.read_ui_resource("fixture", &missing).await,
+        session.read_ui_resource(&missing).await,
         Err(McpError::Remote {
             code: -32002,
             message: "not found".into()
         })
     );
-    assert_eq!(
-        servers.list_tools("absent").await,
+    assert!(matches!(
+        servers.open("absent").await,
         Err(McpError::NotConfigured)
-    );
+    ));
 }
 
 #[tokio::test]
 async fn an_unanswered_request_times_out_is_cancelled_upstream_and_the_connection_stays() {
     let mut behaviour = Behaviour::default();
     behaviour.silent.insert("resources/read");
-    let (servers, launcher, clock) = servers(behaviour);
-    servers.list_tools("fixture").await.unwrap();
+    let (session, _, launcher, clock) = session(behaviour).await;
+    session.list_tools().await.unwrap();
     let uri = chart();
-    let read = servers.read_ui_resource("fixture", &uri);
+    let read = session.read_ui_resource(&uri);
     let timeout = clock.passing(|wait| wait.limit() == REQUEST_TIMEOUT, read);
     assert_eq!(timeout.await, Err(McpError::Timeout));
-    let server = launcher.generation(0);
+    let server = launcher.server(0);
     server.arrived("notifications/cancelled", 1).await;
     let asked = &server.with_method("resources/read")[0];
     let cancelled = &server.with_method("notifications/cancelled")[0];
     assert_eq!(cancelled["params"]["requestId"], asked["id"]);
     // A late answer to it is dropped, and the connection still serves.
     server.send(json!({ "jsonrpc": "2.0", "id": asked["id"], "result": { "contents": [] } }));
-    assert_eq!(servers.list_tools("fixture").await.unwrap().len(), 2);
+    assert_eq!(session.list_tools().await.unwrap().len(), 2);
     assert_eq!(launcher.launches(), 1);
 }
 
@@ -316,12 +314,12 @@ async fn an_unanswered_request_times_out_is_cancelled_upstream_and_the_connectio
 async fn an_answer_with_neither_result_nor_error_is_malformed_for_that_request_only() {
     let mut behaviour = Behaviour::default();
     behaviour.silent.insert("resources/read");
-    let (servers, launcher, _) = servers(behaviour);
-    servers.list_tools("fixture").await.unwrap();
-    let server = launcher.generation(0);
+    let (session, _, launcher, _) = session(behaviour).await;
+    session.list_tools().await.unwrap();
+    let server = launcher.server(0);
     let read = tokio::spawn({
-        let servers = servers.clone();
-        async move { servers.read_ui_resource("fixture", &chart()).await }
+        let session = session.clone();
+        async move { session.read_ui_resource(&chart()).await }
     });
     server.arrived("resources/read", 1).await;
     let id = server.with_method("resources/read")[0]["id"].clone();
@@ -332,18 +330,18 @@ async fn an_answer_with_neither_result_nor_error_is_malformed_for_that_request_o
     assert!(matches!(read.await.unwrap(), Err(McpError::Malformed(_))));
     // An error answer without an integer code is malformed too.
     let read = tokio::spawn({
-        let servers = servers.clone();
-        async move { servers.read_ui_resource("fixture", &chart()).await }
+        let session = session.clone();
+        async move { session.read_ui_resource(&chart()).await }
     });
     server.arrived("resources/read", 2).await;
     let id = server.with_method("resources/read")[1]["id"].clone();
     server.send(json!({ "jsonrpc": "2.0", "id": id, "error": { "message": "no code" } }));
     assert!(matches!(read.await.unwrap(), Err(McpError::Malformed(_))));
-    assert!(servers.list_tools("fixture").await.is_ok());
+    assert!(session.list_tools().await.is_ok());
 }
 
 #[tokio::test]
-async fn an_oversize_or_non_json_frame_ends_the_generation_and_fails_what_waits() {
+async fn an_oversize_or_non_json_frame_ends_the_session_and_fails_what_waits() {
     for (frame, cause) in [
         (
             vec![b'a'; super::super::framing::MAX_FRAME_BYTES + 1],
@@ -356,26 +354,26 @@ async fn an_oversize_or_non_json_frame_ends_the_generation_and_fails_what_waits(
     ] {
         let mut behaviour = Behaviour::default();
         behaviour.silent.insert("resources/read");
-        let (servers, launcher, _) = servers(behaviour);
-        servers.list_tools("fixture").await.unwrap();
+        let (session, _, launcher, _) = session(behaviour).await;
+        session.list_tools().await.unwrap();
         let read = tokio::spawn({
-            let servers = servers.clone();
-            async move { servers.read_ui_resource("fixture", &chart()).await }
+            let session = session.clone();
+            async move { session.read_ui_resource(&chart()).await }
         });
-        launcher.generation(0).arrived("resources/read", 1).await;
-        launcher.generation(0).send_raw(frame);
-        assert_eq!(read.await.unwrap(), Err(cause));
-        // Gone -> Starting: the next use is a new generation.
-        servers.list_tools("fixture").await.unwrap();
-        assert_eq!(launcher.launches(), 2);
+        launcher.server(0).arrived("resources/read", 1).await;
+        launcher.server(0).send_raw(frame);
+        assert_eq!(read.await.unwrap(), Err(cause.clone()));
+        // Gone: nothing restarts it, and later requests get its end cause.
+        assert_eq!(session.list_tools().await, Err(cause));
+        assert_eq!(launcher.launches(), 1);
     }
 }
 
 #[tokio::test]
 async fn the_servers_own_requests_are_answered_here() {
-    let (servers, launcher, _) = servers(Behaviour::default());
-    servers.list_tools("fixture").await.unwrap();
-    let server = launcher.generation(0);
+    let (session, _, launcher, _) = session(Behaviour::default()).await;
+    session.list_tools().await.unwrap();
+    let server = launcher.server(0);
     server.send(json!({ "jsonrpc": "2.0", "id": "p", "method": "ping" }));
     server.send(
         json!({ "jsonrpc": "2.0", "id": 5, "method": "sampling/createMessage", "params": {} }),
@@ -392,11 +390,11 @@ async fn the_servers_own_requests_are_answered_here() {
 
 #[tokio::test]
 async fn a_changed_tool_list_is_read_again() {
-    let (servers, launcher, _) = servers(Behaviour::default());
-    servers.list_tools("fixture").await.unwrap();
+    let (session, servers, launcher, _) = session(Behaviour::default()).await;
+    session.list_tools().await.unwrap();
     let call = McpTool::new("fixture", "later").unwrap();
     assert_eq!(servers.tool_ui(&call), None);
-    let server = launcher.generation(0);
+    let server = launcher.server(0);
     server.set_pages(vec![vec![
         json!({ "name": "later", "_meta": { "ui": { "resourceUri": "ui://fixture/later" } } }),
     ]]);
