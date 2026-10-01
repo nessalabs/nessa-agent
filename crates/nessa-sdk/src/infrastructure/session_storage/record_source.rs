@@ -76,6 +76,7 @@ struct CommittedReceiver {
 #[derive(Default)]
 struct CacheLifetime(AtomicU8);
 impl CacheLifetime {
+    #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
     fn pin(&self, pinned: bool) -> Result<(), StorageError> {
         self.0
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {

@@ -2178,6 +2178,7 @@ impl<P: AcpProfile> Worker<P> {
                     .await
             }
         };
+        #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
         let sequence = self
             .permission_sequence
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -2237,6 +2238,7 @@ impl<P: AcpProfile> Worker<P> {
                 .await
                 .map_err(Into::into);
         };
+        #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
         let sequence = self
             .permission_sequence
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -2400,6 +2402,7 @@ impl<P: AcpProfile> Worker<P> {
     /// Asks that are admitted and asks that are refused draw from the one
     /// sequence, so no two requests an audit names can share an identity.
     fn mint_question_id(&self) -> Result<QuestionId, AgentError> {
+        #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
         let sequence = self
             .question_sequence
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
