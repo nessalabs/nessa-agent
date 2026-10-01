@@ -224,33 +224,40 @@ test("the recorder logs a last line that has no newline, and exits with the agen
   const { spawnSync } = await import("node:child_process")
   const { mkdtempSync, readFileSync } = await import("node:fs")
   const { tmpdir } = await import("node:os")
-  const { dirname, join } = await import("node:path")
+  const { join } = await import("node:path")
   const { fileURLToPath } = await import("node:url")
-  const log = join(mkdtempSync(join(tmpdir(), "acp-recorder-")), "log.jsonl")
-  const recorder = fileURLToPath(new URL("./acp-recorder.mjs", import.meta.url))
-  const echo = [process.execPath, "-e", "process.stdin.pipe(process.stdout)"]
-  const run = spawnSync(process.execPath, [recorder, log, ...echo], {
-    input: '{"a":1}\n{"b":"é"}',
-    encoding: "utf8",
-  })
-  assert.equal(run.status, 0)
-  assert.equal(run.stdout, '{"a":1}\n{"b":"é"}')
-  assert.deepEqual(
-    parseRecording(readFileSync(log, "utf8")).map((each) => [each.direction, each.frame]),
-    [
-      ["to-agent", { a: 1 }],
-      ["to-agent", { b: "é" }],
-      ["from-agent", { a: 1 }],
-      ["from-agent", { b: "é" }],
-    ],
-  )
-  const failing = spawnSync(
-    process.execPath,
-    [recorder, log, process.execPath, "-e", "process.exit(3)"],
-    { input: "" },
-  )
-  assert.equal(failing.status, 3)
-  ;(await import("node:fs")).rmSync(dirname(log), { recursive: true, force: true })
+  const directory = mkdtempSync(join(tmpdir(), "acp-recorder-"))
+  const log = join(directory, "log.jsonl")
+  try {
+    const recorder = fileURLToPath(new URL("./acp-recorder.mjs", import.meta.url))
+    const echo = [process.execPath, "-e", "process.stdin.pipe(process.stdout)"]
+    const run = spawnSync(process.execPath, [recorder, log, ...echo], {
+      input: '{"a":1}\n{"b":"é"}',
+      encoding: "utf8",
+    })
+    assert.equal(run.status, 0)
+    assert.equal(run.stdout, '{"a":1}\n{"b":"é"}')
+    assert.deepEqual(
+      parseRecording(readFileSync(log, "utf8")).map((each) => [
+        each.direction,
+        each.frame,
+      ]),
+      [
+        ["to-agent", { a: 1 }],
+        ["to-agent", { b: "é" }],
+        ["from-agent", { a: 1 }],
+        ["from-agent", { b: "é" }],
+      ],
+    )
+    const failing = spawnSync(
+      process.execPath,
+      [recorder, log, process.execPath, "-e", "process.exit(3)"],
+      { input: "" },
+    )
+    assert.equal(failing.status, 3)
+  } finally {
+    ;(await import("node:fs")).rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test("the recorder exits with the agent's status when the agent stops reading its input", async () => {

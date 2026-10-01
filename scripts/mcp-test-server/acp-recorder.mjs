@@ -12,8 +12,10 @@
  * unrecorded. It supervises nothing: it exits with the agent's status (128 +
  * the signal number when the agent was signalled, as a shell reports it) once
  * the agent's output has been delivered, and a signal sent to it ends it as it
- * would any process — the agent then sees its input close. Input is logged
- * only while the agent can still receive it.
+ * would any process — the agent then sees its input close. Input is logged as
+ * it is read and forwarded; once the agent has exited or closed its input,
+ * nothing more is read, so input still buffered then may be logged without
+ * having been delivered.
  *
  * What is recorded is the protocol stream, which carries prompts, tool
  * arguments and results — never credentials, which the gateway hands the
