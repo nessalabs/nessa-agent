@@ -988,6 +988,100 @@ async fn a_row_whose_text_is_not_utf8_costs_its_list_that_row_alone() {
     );
 }
 
+#[tokio::test]
+async fn oversized_text_costs_its_list_one_row_and_remains_refused_by_exact_reads() {
+    for (table, column, ceiling) in [
+        ("conversations", "model", ConversationModelId::MAX_BYTES),
+        (
+            "conversations",
+            "creator_surface",
+            Conversation::MAX_CREATOR_CONTEXT_BYTES,
+        ),
+        (
+            "conversations",
+            "creation_action",
+            Conversation::MAX_CREATOR_CONTEXT_BYTES,
+        ),
+        (
+            "summaries",
+            "title",
+            ConversationTitle::MAX_CHARS * char::MAX.len_utf8(),
+        ),
+        ("summaries", "preview", ConversationPreview::MAX_BYTES),
+    ] {
+        let opened = opened();
+        let (kept, damaged) = (new_id(), new_id());
+        for (id, at) in [(&kept, 5), (&damaged, 6)] {
+            opened.store.create(owned(id)).await.unwrap();
+            ConversationSummaries::record(&opened.store, id, said("hello", at))
+                .await
+                .unwrap();
+        }
+        let key = if table == "conversations" {
+            "id"
+        } else {
+            "conversation_id"
+        };
+        raw(&opened.path)
+            .execute(
+                &format!("UPDATE {table} SET {column} = ?1 WHERE {key} = ?2"),
+                params!["x".repeat(ceiling * 3), damaged.to_string()],
+            )
+            .unwrap();
+        assert_eq!(
+            listed(&opened.store, &alice(), false, 10).await,
+            (vec![kept.clone()], 1),
+            "{column}"
+        );
+        assert_eq!(
+            listed(&opened.store, &PrincipalId::new("bob").unwrap(), false, 10).await,
+            (vec![], 0)
+        );
+        let exact = if table == "conversations" {
+            ConversationRepository::load(&opened.store, &damaged)
+                .await
+                .map(|_| ())
+        } else {
+            ConversationSummaries::load(&opened.store, &damaged)
+                .await
+                .map(|_| ())
+        };
+        assert!(
+            matches!(exact, Err(ConversationError::Metadata)),
+            "{column}"
+        );
+        let head = opened.store.head(&org(), &alice()).await.unwrap();
+        assert!(
+            matches!(
+                opened
+                    .store
+                    .resolve(&org(), &alice(), &head.incarnation, &damaged)
+                    .await,
+                Err(ConversationError::Metadata)
+            ),
+            "{column}"
+        );
+        let reopened = LocalConversationStore::open(&opened.path).unwrap();
+        assert_eq!(
+            listed(&reopened, &alice(), false, 10).await,
+            (vec![kept], 1),
+            "{column} after reopen"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_failed_list_query_is_not_reported_as_row_damage() {
+    let opened = opened();
+    raw(&opened.path)
+        .execute("DROP TABLE summaries", [])
+        .unwrap();
+    assert!(matches!(
+        ConversationListing::list(&opened.store, &org(), &alice(), false, 10).await,
+        Err(ConversationError::Metadata)
+    ));
+}
+
 #[test]
 fn a_file_that_is_not_a_database_is_refused_as_unreadable() {
     let directory = tempfile::tempdir().unwrap();
