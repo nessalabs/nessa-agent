@@ -24,7 +24,7 @@ import type { ReadFailure } from "../../model"
  * not be refreshed.
  *
  * What each answer does here is the state table in
- * docs/adr/todo/182-conversation-deletion.md ("In the panel"). A lost answer
+ * docs/adr/done/182-conversation-deletion.md ("In the panel"). A lost answer
  * is said to be unconfirmed and nothing more: the list read that follows every
  * answer shows where the conversation stands.
  */

@@ -279,7 +279,7 @@ pub struct UnfinishedDeletions {
 /// A port of its own because the answer spans [`ConversationRepository`] and
 /// [`ConversationSummaries`]: a store that keeps both answers it in one
 /// question, without reading anybody else's conversations
-/// (docs/adr/todo/196-conversation-metadata-database.md).
+/// (docs/adr/done/196-conversation-metadata-database.md).
 pub trait ConversationListing: Send + Sync {
     /// The conversations `organization` and `owner` hold that are not deleted
     /// and have a summary whose archived flag is `archived`: most recently

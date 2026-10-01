@@ -1,6 +1,6 @@
 /**
  * The panel's archive and delete, row by row of the state table in
- * docs/adr/todo/182-conversation-deletion.md ("In the panel"). Each `describe`
+ * docs/adr/done/182-conversation-deletion.md ("In the panel"). Each `describe`
  * is one row of that table, named by its event.
  */
 import { describe, expect, it, vi } from "vitest"

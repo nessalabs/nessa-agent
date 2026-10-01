@@ -377,7 +377,7 @@ async fn conversations(
     // built, then attachments over it, and only then the providers.
     //
     // Ownership, tombstones and summaries are one database
-    // (docs/adr/todo/196-conversation-metadata-database.md).
+    // (docs/adr/done/196-conversation-metadata-database.md).
     let metadata_path = root.join("metadata.sqlite3");
     let metadata = Arc::new(
         LocalConversationStore::open(&metadata_path).map_err(|cause| {

@@ -400,7 +400,7 @@ context's schema at the one version its definition states, refusing any other.
 It has no tables of its own and no migrations; each context owns its schema, and
 a schema change ships its own move. See the
 [local-database crate](../crates/nessa-local-database/README.md) and
-[ADR 196](adr/todo/196-conversation-metadata-database.md).
+[ADR 196](adr/done/196-conversation-metadata-database.md).
 
 `crates/nessa-gateway-endpoint` owns the bound local endpoint, per-process
 identity, application publication/discovery ports, and private-file adapters.
@@ -497,7 +497,7 @@ conversations, newest first and one past the bound. `LocalConversationStore`
 `ConversationSummaries` store too: ownership records, tombstones and summaries are
 tables of one private SQLite file, `conversations/metadata.sqlite3`, defined
 once in `infrastructure/schema.sql` and opened by `crates/nessa-local-database`
-([ADR 196](adr/todo/196-conversation-metadata-database.md)).
+([ADR 196](adr/done/196-conversation-metadata-database.md)).
 The same store implements `ConversationCatalogue` for owner-scoped current
 metadata reads. Its per-owner head and per-conversation creation/change revisions
 are committed with the visible write; a retained tombstone is a catalogue deletion
@@ -523,7 +523,7 @@ the one authority, a registry keyed by agent and filled at one site in
 `composition/agent.rs`, and each agent's handler lives in its own SDK module
 (`claude_acp`, `codex_acp`, `opencode_acp`) over the shared ACP exchange in
 `acp/sessions/deletion.rs`. The ownership record and every audit store
-are kept; see [ADR 182](adr/todo/182-conversation-deletion.md).
+are kept; see [ADR 182](adr/done/182-conversation-deletion.md).
 The floating panel uses injected conversation effects and NessaClient; neither
 owns SDK scheduling. See [gateway chat](guides/gateway-chat.md).
 
@@ -1088,7 +1088,7 @@ adapter and `ui/agent-downloads.tsx` supply setup and panel download controls.
 `composition/managed_adapter.rs` joins a verified native snapshot to the bundled
 Node adapter and its environment override. `CurrentAgentResolver` refreshes the
 managed snapshot for readiness and cold provider construction. Existing
-conversations retain their provider generation. See [ADR 173](adr/todo/173-fetch-agent-runtimes.md)
+conversations retain their provider generation. See [ADR 173](adr/done/173-fetch-agent-runtimes.md)
 for download ordering, failure behavior and the chosen scope.
 
 `domain/value_objects/` owns what is true before any file exists: `AgentName`,

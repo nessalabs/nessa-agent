@@ -10,7 +10,7 @@ data more than "give me this ID" can use it too. This record changes
 [182](182-conversation-deletion.md) where that one describes the files.
 
 - **Date:** 2026-09-25
-- **Status:** proposed
+- **Status:** accepted
 - **Issue:** [#196](https://github.com/nessalabs/nessa-agent/issues/196)
 
 ## Context

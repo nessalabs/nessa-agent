@@ -7,7 +7,7 @@ data it cannot read, the refusal covers the smallest thing that owns that data:
 the whole gateway for gateway-wide records, one conversation for one
 conversation's records, nothing at all for a cache. This record also says how
 migrations ship once Nessa leaves alpha. It generalizes the refusal
-[196](196-conversation-metadata-database.md) introduced, and changes none of
+[196](../done/196-conversation-metadata-database.md) introduced, and changes none of
 196's tables.
 
 - **Date:** 2026-09-25

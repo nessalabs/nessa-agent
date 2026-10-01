@@ -8,7 +8,7 @@
 //! true independently of provider catalogue behavior is that telling somebody
 //! to install an agent before they can use Nessa is the thing this context
 //! exists to avoid, and that applies to every agent equally. See
-//! `docs/adr/todo/173-fetch-agent-runtimes.md`.
+//! `docs/adr/done/173-fetch-agent-runtimes.md`.
 //!
 //! A release is not always one file, and that is the other thing this context
 //! learned late. Opencode's archive holds one program and nothing the program

@@ -1,5 +1,9 @@
 # Bounded terminal discovery
 
+The architectural decision is owned by
+[ADR 315](../adr/done/315-bounded-terminal-discovery.md); this document holds
+its bounds, ordering and enforcing tests.
+
 Issue: [#315](https://github.com/nessalabs/nessa-agent/issues/315), prerequisite for
 [authorized record reads](https://github.com/nessalabs/nessa-agent/issues/296) and transcript folding.
 The request owner is published by [sync-engine #31](https://github.com/nessalabs/sync-engine/issues/31); identifier construction and its bounds are published by [#30](https://github.com/nessalabs/sync-engine/issues/30). The final dependency pin `8ce6a8226913cf8c455cab5a2f4e23ebadf01fb2`
