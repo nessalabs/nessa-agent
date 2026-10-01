@@ -1,5 +1,5 @@
 import type { RpcRequester } from "../application/session-port.js"
-import { ProductMethod } from "../generated/product.js"
+import { passiveReadTiming, ProductMethod } from "../generated/product.js"
 import type {
   ConversationCatalogueHeadParams,
   ConversationCatalogueHeadResult,
@@ -33,21 +33,27 @@ export function createCatalogueReadApi(session: RpcRequester): CatalogueReadApi 
     head: async (params) => {
       checkedCatalogueShape(params, "ConversationCatalogueHeadParams")
       const response = catalogueHead(
-        await session.request(ProductMethod.ConversationCatalogueHead, params),
+        await session.request(ProductMethod.ConversationCatalogueHead, params, {
+          atLeastMs: passiveReadTiming.minRequestTimeoutMs,
+        }),
       )
       return response
     },
     manifest: async (params) => {
       checkedCatalogueShape(params, "ConversationCatalogueManifestParams")
       const response = catalogueManifest(
-        await session.request(ProductMethod.ConversationCatalogueManifest, params),
+        await session.request(ProductMethod.ConversationCatalogueManifest, params, {
+          atLeastMs: passiveReadTiming.minRequestTimeoutMs,
+        }),
       )
       return response
     },
     resolve: async (params) => {
       checkedCatalogueShape(params, "ConversationCatalogueResolveParams")
       const response = catalogueResolved(
-        await session.request(ProductMethod.ConversationCatalogueResolve, params),
+        await session.request(ProductMethod.ConversationCatalogueResolve, params, {
+          atLeastMs: passiveReadTiming.minRequestTimeoutMs,
+        }),
       )
       return response
     },

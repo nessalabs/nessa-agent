@@ -2,6 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nessa://protocol/product/v1",
   "title": "NessaProductProtocol",
+  "x-passiveReadTiming": {
+    "readTimeoutMs": 10000,
+    "deliveryTimeoutMs": 30000,
+    "clientAllowanceMs": 5000
+  },
   "$defs": {
     "SessionChallenge": {
       "type": "object",

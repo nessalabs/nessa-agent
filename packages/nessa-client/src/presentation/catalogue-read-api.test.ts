@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { catalogueWireSchemas } from "../generated/product.js"
+import { catalogueWireSchemas, passiveReadTiming } from "../generated/product.js"
 import { createCatalogueReadApi } from "./catalogue-read-api.js"
 import type {
   CatalogueManifestRequest,
@@ -43,10 +43,11 @@ describe("catalogue transport", () => {
     expect((await api.head({ receiverId: "receiver", accessEpoch: "7" })).head).toBe(
       "18446744073709551615",
     )
-    expect(transport.request).toHaveBeenCalledWith("conversation.catalogueHead", {
-      receiverId: "receiver",
-      accessEpoch: "7",
-    })
+    expect(transport.request).toHaveBeenCalledWith(
+      "conversation.catalogueHead",
+      { receiverId: "receiver", accessEpoch: "7" },
+      { atLeastMs: passiveReadTiming.minRequestTimeoutMs },
+    )
   })
   it("preserves returned pass evidence for sync-engine correlation", async () => {
     const transport = {

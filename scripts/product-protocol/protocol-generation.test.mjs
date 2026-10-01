@@ -131,3 +131,51 @@ test("current supported generators publish complete outputs", () =>
     for (const name of [...genericOutputs, ...productOutputs])
       assert.notEqual(readFileSync(join(path, name), "utf8"), "unpublished sentinel\n")
   }))
+
+test("passive timing publishes changed phase values and their derived client floor", () =>
+  fixture((path) => {
+    edit(path, "protocol/product/v1.json", (schema) => {
+      schema["x-passiveReadTiming"] = {
+        readTimeoutMs: 61,
+        deliveryTimeoutMs: 73,
+        clientAllowanceMs: 89,
+      }
+    })
+    const result = generate(path, "generate-product-protocol")
+    assert.equal(result.status, 0, result.stderr)
+    const ts = readFileSync(join(path, productOutputs[0]), "utf8")
+    const rust = readFileSync(join(path, productOutputs[1]), "utf8")
+    assert.match(ts, /readTimeoutMs: 61/)
+    assert.match(ts, /deliveryTimeoutMs: 73/)
+    assert.match(ts, /clientAllowanceMs: 89/)
+    assert.match(ts, /minRequestTimeoutMs: 223/)
+    for (const [name, value] of [
+      ["READ_TIMEOUT_MS", 61],
+      ["DELIVERY_TIMEOUT_MS", 73],
+      ["CLIENT_ALLOWANCE_MS", 89],
+      ["MIN_REQUEST_TIMEOUT_MS", 223],
+    ])
+      assert.match(rust, new RegExp(`PASSIVE_${name}: u64 = ${value};`))
+  }))
+
+for (const [name, value] of [
+  ["readTimeoutMs", undefined],
+  ["readTimeoutMs", 0],
+  ["readTimeoutMs", "10000"],
+  ["deliveryTimeoutMs", -1],
+  ["deliveryTimeoutMs", 1.5],
+  ["clientAllowanceMs", null],
+  ["clientAllowanceMs", 2_147_483_647],
+])
+  test(`invalid passive ${name} ${value} preserves unpublished artifacts`, () =>
+    fixture((path) => {
+      edit(path, "protocol/product/v1.json", (schema) => {
+        schema["x-passiveReadTiming"][name] = value
+      })
+      const result = unchanged(
+        path,
+        ["protocol/product/v1.json", ...productOutputs],
+        () => generate(path, "generate-product-protocol"),
+      )
+      assert.match(result.stderr, /Invalid passive read timing|deadline exceeds/)
+    }))

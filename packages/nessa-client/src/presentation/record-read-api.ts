@@ -1,6 +1,6 @@
 import { validPositiveReadEpoch } from "../protocol/passive-read-validate.js"
 import type { RpcRequester } from "../application/session-port.js"
-import { ProductMethod } from "../generated/product.js"
+import { passiveReadTiming, ProductMethod } from "../generated/product.js"
 import type {
   ConversationRecordsHeadResult,
   RecordPageRequest,
@@ -42,11 +42,11 @@ export function createRecordReadApi(session: RpcRequester): RecordReadApi {
       const id = checkedConversationId(conversation)
       if (!validPositiveReadEpoch(accessEpoch) || !validRecordReceiverId(receiverId))
         throw new TypeError("Invalid record scope or binding epoch")
-      const response = await session.request(ProductMethod.ConversationRecordsHead, {
-        conversationId: id,
-        accessEpoch,
-        receiverId,
-      })
+      const response = await session.request(
+        ProductMethod.ConversationRecordsHead,
+        { conversationId: id, accessEpoch, receiverId },
+        { atLeastMs: passiveReadTiming.minRequestTimeoutMs },
+      )
       return recordHead(response)
     },
     page: async (conversation, accessEpoch, request) => {
@@ -54,11 +54,11 @@ export function createRecordReadApi(session: RpcRequester): RecordReadApi {
       if (!validPositiveReadEpoch(accessEpoch) || !validRecordPageRequest(request)) {
         throw new TypeError("Invalid record page request")
       }
-      const response = await session.request(ProductMethod.ConversationRecordsPage, {
-        conversationId: id,
-        accessEpoch,
-        request,
-      })
+      const response = await session.request(
+        ProductMethod.ConversationRecordsPage,
+        { conversationId: id, accessEpoch, request },
+        { atLeastMs: passiveReadTiming.minRequestTimeoutMs },
+      )
       return recordPage(response)
     },
   }

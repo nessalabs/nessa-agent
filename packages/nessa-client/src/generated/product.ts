@@ -1173,6 +1173,13 @@ export const CatalogueReadErrorCode = {
 } as const
 export type CatalogueReadErrorCode =
   (typeof CatalogueReadErrorCode)[keyof typeof CatalogueReadErrorCode]
+/** Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor. */
+export const passiveReadTiming = {
+  readTimeoutMs: 10000,
+  deliveryTimeoutMs: 30000,
+  clientAllowanceMs: 5000,
+  minRequestTimeoutMs: 45000,
+} as const
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,

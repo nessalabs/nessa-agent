@@ -2,6 +2,7 @@ use crate::read_only_sync::application::{CacheError, CachePolicy, CachedProgress
 use nessa_local_database::rusqlite::{
     params, Connection, Error, ErrorCode, OptionalExtension, Row,
 };
+use nessa_sdk::application::agent_execution::sessions::CommittedTranscript;
 use nessa_sdk::infrastructure::session_storage::{
     TranscriptCheckpoint, MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES,
 };
@@ -109,6 +110,8 @@ pub(super) fn progress_target(
                     if saved.generation == 0 || saved.applied > saved.downloaded {
                         return Err(CacheError::Corrupt);
                     }
+                    CommittedTranscript::validate_fact_count(saved.applied, saved.facts)
+                        .map_err(|_| CacheError::Corrupt)?;
                     Ok(saved)
                 })())
             },

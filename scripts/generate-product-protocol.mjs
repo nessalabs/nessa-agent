@@ -37,6 +37,27 @@ if (JSON.stringify(schema) !== ownedSchema) {
   })
 }
 
+// Timing is product policy, not a new wire field. The client must retain the
+// correlation through both server phases; a timer above the runtime range wraps.
+const timing = schema["x-passiveReadTiming"]
+const passiveReadTiming = {}
+for (const name of ["readTimeoutMs", "deliveryTimeoutMs", "clientAllowanceMs"]) {
+  if (
+    !timing ||
+    !Object.hasOwn(timing, name) ||
+    !Number.isSafeInteger(timing[name]) ||
+    timing[name] <= 0
+  )
+    throw new Error(`Invalid passive read timing: ${name}`)
+  passiveReadTiming[name] = timing[name]
+}
+passiveReadTiming.minRequestTimeoutMs =
+  passiveReadTiming.readTimeoutMs +
+  passiveReadTiming.deliveryTimeoutMs +
+  passiveReadTiming.clientAllowanceMs
+if (passiveReadTiming.minRequestTimeoutMs > 2_147_483_647)
+  throw new Error("Passive request deadline exceeds the runtime timer range")
+
 const sdkFrames = readFileSync(
   resolve(root, "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"),
   "utf8",
@@ -287,6 +308,12 @@ for (const name of [
 ]) {
   rs += `/// Published bound from the product schema.\npub const ${snake(name).toUpperCase()}: usize = ${bounds[name]};\n`
 }
+for (const [name, value] of Object.entries(passiveReadTiming)) {
+  rs += `/// Published passive read timing from the product schema, in milliseconds.\npub const PASSIVE_${snake(name).toUpperCase()}: u64 = ${value};\n`
+}
+ts += `${doc(
+  "Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor.",
+)}export const passiveReadTiming = ${JSON.stringify(passiveReadTiming)} as const\n`
 ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",
 )}export const bounds = ${JSON.stringify(bounds)} as const\n`

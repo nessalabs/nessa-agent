@@ -496,7 +496,7 @@ impl TranscriptFold {
             .map_err(|_| TranscriptError::Checkpoint)?;
         let saved: SavedFold = serde_json::from_reader(checkpoint.reader())
             .map_err(|_| TranscriptError::Checkpoint)?;
-        if saved.applied != expected_applied || saved.facts > saved.applied {
+        if saved.applied != expected_applied {
             return Err(TranscriptError::Checkpoint);
         }
         let saved_scope = Scope::new(
@@ -1655,6 +1655,7 @@ mod tests {
         for (field, replacement) in [
             ("applied", serde_json::json!(2)),
             ("facts", serde_json::json!(0)),
+            ("facts", serde_json::json!(2)),
             ("loaded", serde_json::json!(false)),
         ] {
             let mut changed = value.clone();

@@ -1,6 +1,7 @@
 //! Shared passive read transport conversion and capped response allocation.
 //! Record and catalogue codecs consume this representation owner.
-//! `deadlines` publishes source/read and queued-delivery phases consumed by
-//! the socket and default example composition; the operation deadline is client-owned.
+//! The product schema publishes phase budgets and the passive request floor.
+//! `deadlines` converts generated phases to Durations for the socket; default
+//! example composition consumes the generated floor for its client-owned deadline.
 pub(crate) mod deadlines;
 pub(crate) mod wire;

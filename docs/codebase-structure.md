@@ -1314,7 +1314,13 @@ Cloud auth is reserved but not implemented. See [local auth](guides/local-auth.m
 
 ### Product wire generation
 
-`protocol/product/v1.json` owns product transport shapes. The generator and check
+`protocol/product/v1.json` owns product transport shapes and `x-passiveReadTiming`
+phase budgets. Generation publishes the read/delivery phases and their sum with
+the client allowance to both languages. The socket consumes those phases;
+TypeScript passive APIs and the default Rust example consume the request floor.
+Actual API/socket timing and larger-response correlation evidence lives in
+`packages/nessa-client/src/presentation/passive-read-deadlines.test.ts`.
+The generator and check
 entrypoints in `scripts/` use `scripts/product-protocol/` for external Rust type
 mapping and the resolved sync-engine's machine-readable `wire_contract` export.
 `wire-shape-schema.mjs` admits the reachable current wire grammar before

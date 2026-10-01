@@ -8,7 +8,10 @@ use crate::read_only_sync::{
 };
 use nessa_auth::application::ports::Clock;
 use nessa_local_database::rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use nessa_sdk::infrastructure::session_storage::TranscriptFold;
+use nessa_sdk::{
+    application::agent_execution::sessions::CommittedTranscript,
+    infrastructure::session_storage::TranscriptFold,
+};
 
 impl CacheResets for ReadOnlyCache {
     fn reset_records(&mut self, request: &CacheReset) -> Result<ResetReceipt, CacheError> {
@@ -89,6 +92,7 @@ fn receipt(
             if before.applied > before.downloaded || after.generation != before.generation.checked_add(1).ok_or(CacheError::Corrupt)? {
                 return Err(CacheError::Corrupt);
             }
+            CommittedTranscript::validate_fact_count(before.applied, before.facts).map_err(|_| CacheError::Corrupt)?;
             Ok(ResetReceipt::new(request.clone(), before, after, rows::number(row,4)?))
         })()),
     ).optional().map_err(rows::database_error)?.transpose()?;

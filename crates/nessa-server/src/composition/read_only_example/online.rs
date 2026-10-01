@@ -4,10 +4,7 @@ use crate::composition::local_auth::SystemClock;
 use crate::{
     app::dependencies::RuntimeDependencies,
     conversation::domain::ConversationId,
-    product::{
-        generated::MAX_AUTH_CREDENTIAL_CHARACTERS,
-        passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT},
-    },
+    product::generated::{MAX_AUTH_CREDENTIAL_CHARACTERS, PASSIVE_MIN_REQUEST_TIMEOUT_MS},
     read_only_sync::{
         application::{
             driver::{run_catalogue, run_records},
@@ -21,7 +18,7 @@ use crate::{
     },
 };
 use serde_json::json;
-use std::{io::Write, path::Path, sync::Arc, time::Duration};
+use std::{io::Write, path::Path, sync::Arc};
 
 #[cfg(test)]
 thread_local! {
@@ -83,13 +80,7 @@ fn profile_code(error: ProfileError) -> &'static str {
 // B1: one whole-callback budget, not a renewed allowance for each RPC.
 // Finite passes may still exhaust this budget while retaining confirmed pages.
 fn default_gateway_policy() -> Result<GatewayPolicy, GatewayError> {
-    let operation = PASSIVE_READ_TIMEOUT
-        .checked_add(RECORD_SEND_TIMEOUT)
-        .and_then(|value| value.checked_add(Duration::from_secs(5)))
-        .ok_or(GatewayError::InvalidPolicy)?;
-    let operation_ms =
-        u64::try_from(operation.as_millis()).map_err(|_| GatewayError::InvalidPolicy)?;
-    GatewayPolicy::new(5000, operation_ms, 8192, 16, 16)
+    GatewayPolicy::new(5000, PASSIVE_MIN_REQUEST_TIMEOUT_MS, 8192, 16, 16)
 }
 fn connect(
     path: &Path,

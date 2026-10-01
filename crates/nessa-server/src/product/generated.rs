@@ -1099,6 +1099,14 @@ pub const MAX_RECORD_PAGE_RECORDS: usize = 16;
 pub const MAX_RECORD_PAGE_PAYLOAD_BYTES: usize = 65546;
 /// Published bound from the product schema.
 pub const MAX_RECORD_RESPONSE_BYTES: usize = 131072;
+/// Published passive read timing from the product schema, in milliseconds.
+pub const PASSIVE_READ_TIMEOUT_MS: u64 = 10000;
+/// Published passive read timing from the product schema, in milliseconds.
+pub const PASSIVE_DELIVERY_TIMEOUT_MS: u64 = 30000;
+/// Published passive read timing from the product schema, in milliseconds.
+pub const PASSIVE_CLIENT_ALLOWANCE_MS: u64 = 5000;
+/// Published passive read timing from the product schema, in milliseconds.
+pub const PASSIVE_MIN_REQUEST_TIMEOUT_MS: u64 = 45000;
 pub mod product_method {
     pub const SESSION_AUTHENTICATE: &str = "session.authenticate";
     pub const AUTH_SESSION: &str = "auth.session";

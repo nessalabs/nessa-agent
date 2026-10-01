@@ -768,7 +768,11 @@ fn unsupported_reset_schema_has_no_effects() {
 
 #[test]
 fn corrupt_reset_receipt_is_preserved() {
-    for (column, invalid) in [("before_applied", 1u64), ("after_generation", 99u64)] {
+    for (column, invalid) in [
+        ("before_applied", 1u64),
+        ("before_facts", 99u64),
+        ("after_generation", 99u64),
+    ] {
         let directory = tempfile::tempdir().unwrap();
         let path = cache_path(directory.path(), "reset-corrupt.sqlite");
         let saved = scope();
@@ -803,6 +807,127 @@ fn corrupt_reset_receipt_is_preserved() {
             .unwrap();
         assert_eq!(retained, invalid.to_be_bytes());
     }
+}
+
+// C23: independently valid-width counters can describe an impossible history.
+// Refusal must precede reset's raw/checkpoint deletion and audit publication.
+#[tokio::test]
+async fn reset_refuses_impossible_progress_fact_count() {
+    assert_impossible_reset_preserves_evidence(false).await;
+}
+
+#[tokio::test]
+async fn reset_refuses_impossible_receipt_fact_count() {
+    assert_impossible_reset_preserves_evidence(true).await;
+}
+
+async fn assert_impossible_reset_preserves_evidence(retry: bool) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = cache_path(directory.path(), "reset-facts.sqlite");
+    let (saved, records) = source_records(directory.path()).await;
+    let mut store = cache(&path);
+    store.apply(plan(&saved, 0, records.clone())).unwrap();
+    let before = store.cached_progress(&saved).unwrap().unwrap();
+    assert!(before.facts < before.applied);
+    let request = reset_request(&saved, before.generation, "reset-op");
+    if retry {
+        let receipt = store.reset(&request).unwrap();
+        assert_eq!(receipt.before(), &before);
+        store
+            .apply(plan(
+                request.replacement(),
+                0,
+                records
+                    .into_iter()
+                    .map(|record| Record {
+                        scope: request.replacement().clone(),
+                        ..record
+                    })
+                    .collect(),
+            ))
+            .unwrap();
+    }
+    let (table, column) = if retry {
+        ("cache_resets", "before_facts")
+    } else {
+        ("transcript_progress", "facts")
+    };
+    store
+        .connection
+        .execute(
+            &format!("UPDATE {table} SET {column}=?1"),
+            params![(before.applied + 1).to_be_bytes().as_slice()],
+        )
+        .unwrap();
+    drop(store);
+    let mut reopened = cache(&path);
+    let durable = std::fs::read(&path).unwrap();
+    assert_eq!(
+        reopened.reset(&request),
+        Err(CacheError::Corrupt),
+        "retry={retry}"
+    );
+    drop(reopened);
+    assert_eq!(std::fs::read(&path).unwrap(), durable, "retry={retry}");
+}
+
+#[tokio::test]
+async fn reset_accepts_aborted_physical_progress_and_retains_historical_retry() {
+    use sha2::{Digest, Sha256};
+    let directory = tempfile::tempdir().unwrap();
+    let path = cache_path(directory.path(), "reset-abort.sqlite");
+    let (saved, records) = source_records(directory.path()).await;
+    // A real SDK-produced chunked start and piece followed by its exact abort
+    // envelope reach the shared fold through the ordinary record cache surface.
+    let start = &records[0];
+    assert_eq!(start.payload[0], 1);
+    let mut payload = vec![4, 1];
+    payload.extend_from_slice(&1u64.to_be_bytes());
+    payload.extend_from_slice(&2u64.to_be_bytes());
+    payload.extend_from_slice(&Sha256::digest(&start.payload[1..]));
+    let prefix = start.id.as_str().strip_suffix("-start").unwrap();
+    let abort = Record {
+        position: 3,
+        id: id(&format!("{prefix}-abort-2")),
+        scope: saved.clone(),
+        payload,
+    };
+    let mut store = cache(&path);
+    store
+        .apply(plan(
+            &saved,
+            0,
+            vec![records[0].clone(), records[1].clone(), abort],
+        ))
+        .unwrap();
+    let before = store.cached_progress(&saved).unwrap().unwrap();
+    assert_eq!((before.downloaded, before.applied, before.facts), (3, 3, 0));
+    drop(store);
+    let mut reopened = cache(&path);
+    let request = reset_request(&saved, before.generation, "reset-aborted");
+    let receipt = reopened.reset(&request).unwrap();
+    assert_eq!(receipt.before(), &before);
+    reopened
+        .apply(plan(
+            request.replacement(),
+            0,
+            records
+                .into_iter()
+                .map(|record| Record {
+                    scope: request.replacement().clone(),
+                    ..record
+                })
+                .collect(),
+        ))
+        .unwrap();
+    let later = reopened.cached_progress(request.replacement()).unwrap();
+    drop(reopened);
+    let mut final_cache = cache(&path);
+    assert_eq!(final_cache.reset(&request).unwrap(), receipt);
+    assert_eq!(
+        final_cache.cached_progress(request.replacement()).unwrap(),
+        later
+    );
 }
 
 #[test]

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { createRecordReadApi } from "./record-read-api.js"
 import type { RpcRequester } from "../application/session-port.js"
-import { bounds, ProductMethod } from "../generated/product.js"
+import { bounds, passiveReadTiming, ProductMethod } from "../generated/product.js"
 import type { RecordPageRequest, RecordScope } from "../generated/product.js"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
@@ -36,11 +36,11 @@ describe("record read API", () => {
       scope,
       head: "1",
     })
-    expect(sent).toHaveBeenCalledWith(ProductMethod.ConversationRecordsHead, {
-      conversationId,
-      accessEpoch: "3",
-      receiverId: "receiver",
-    })
+    expect(sent).toHaveBeenCalledWith(
+      ProductMethod.ConversationRecordsHead,
+      { conversationId, accessEpoch: "3", receiverId: "receiver" },
+      { atLeastMs: passiveReadTiming.minRequestTimeoutMs },
+    )
   })
 
   it("decodes a physical record but leaves page validity to sync-engine", async () => {

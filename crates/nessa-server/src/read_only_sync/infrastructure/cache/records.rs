@@ -3,7 +3,8 @@ use crate::{
     conversation::{application::retained_view, domain::ConversationId},
     read_only_sync::{
         application::{
-            offline::SavedTranscript, CacheError, CachePolicy, CachedProgress, ResetReceipt,
+            driver::TranscriptCache, offline::SavedTranscript, CacheError, CachePolicy,
+            CachedProgress, ResetReceipt,
         },
         domain::CacheReset,
     },
@@ -436,7 +437,7 @@ impl ReplicaStore for ReadOnlyCache {
     }
 }
 
-impl crate::read_only_sync::application::driver::TranscriptCache for ReadOnlyCache {
+impl TranscriptCache for ReadOnlyCache {
     fn observe_head(&mut self, scope: &Scope, head: u64) -> Result<(), CacheError> {
         ReadOnlyCache::observe_head(self, scope, head)
     }
