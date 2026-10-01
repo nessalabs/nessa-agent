@@ -92,6 +92,7 @@ test("unknown tools, resources and methods are JSON-RPC errors; notifications ge
   assert.equal(error({ method: "resources/read", params: { uri: "ui://other" } }), -32002)
   assert.equal(error({ method: "nope" }), -32601)
   assert.equal(answer({ jsonrpc: "2.0", method: "notifications/initialized" }), null)
+  assert.equal(answer({ jsonrpc: "2.0", id: 3, result: {} }), null)
   assert.equal(answer({ id: 1, method: "ping" }).error.code, -32600)
 })
 

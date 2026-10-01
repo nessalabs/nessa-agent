@@ -142,7 +142,8 @@ const failure = (id, code, message) => ({ jsonrpc: "2.0", id, error: { code, mes
 export function answer(message) {
   if (!message || typeof message !== "object" || message.jsonrpc !== "2.0")
     return failure(message?.id ?? null, -32600, "Invalid request")
-  if (!Object.hasOwn(message, "id")) return null
+  // A notification, or a response (this server sends no requests): no answer.
+  if (!Object.hasOwn(message, "id") || !Object.hasOwn(message, "method")) return null
   const { id, method, params = {} } = message
   const ok = (result) => ({ jsonrpc: "2.0", id, result })
   switch (method) {

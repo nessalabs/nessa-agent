@@ -5,17 +5,23 @@
  * tool call and what the gateway's conversation view then says about it.
  *
  *   cargo build -p nessa-server
- *   node scripts/mcp-test-server/live-check.mjs <claude|codex|opencode> [out-dir]
+ *   pnpm exec tsx scripts/mcp-test-server/live-check.mjs <claude|codex|opencode> [out-dir]
  *
- * It uses whatever sign-in the agent already has on this machine: Claude's
- * from the keychain the gateway reads, Codex's from its own home, Opencode's
- * free models without one. It creates no account and writes no credential.
- * A run that cannot sign in fails at the first turn and says so.
+ * (`tsx`, because `@nessa/client` is TypeScript in this checkout.) It uses
+ * whatever sign-in the agent already has on this machine — Claude's from the
+ * keychain the gateway reads, Codex's from its own home, Opencode's from
+ * Nessa's credential store — and creates no account and writes no credential.
+ * A gateway without one refuses the conversation, and the run fails there.
+ * It allows only calls to the test server's tools, each once; anything else
+ * the agent asks for is left unanswered. It exits non-zero unless the turn
+ * completed.
  *
- * Writes `<out-dir>/<agent>/acp.jsonl` (every ACP frame, both directions),
- * `view.json` (the final conversation view) and `summary.json` (the MCP tool
- * frames' shapes, the view's MCP tools, and every place a `ui://` resource
- * appeared). Review recordings before checking any of them in.
+ * Writes `<out-dir>/<agent>/`: `acp.jsonl` and `mcp.jsonl` (every frame, both
+ * directions), `view.json` (the final conversation view), `summary.json` (the
+ * MCP tool frames' shapes, the view's MCP tools, every place a `ui://`
+ * resource appeared, the MCP calls made) and `gateway.log`. Review them before
+ * checking any of them in. The gateway's own data directory is removed at the
+ * end.
  *
  * Environment: `MCP_LIVE_HARNESSES` — the directory holding `claude-acp/` and
  * `codex-acp/` with their `node_modules` (default: this checkout's
@@ -25,6 +31,7 @@
 import { spawn, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import {
+  rmSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -37,6 +44,7 @@ import { dirname, join, resolve } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import {
+  allowOnce,
   frameShape,
   parseRecording,
   toolFrames,
@@ -172,8 +180,14 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
     stream.on("data", (chunk) => log.push(chunk.toString()))
   const step = (name, detail) => console.error(`[${agent}:${name}] ${detail}`)
   let failed = false
+  let client = null
   try {
     for (let i = 0; ; i += 1) {
+      // A gateway that already exited is not the one answering on the port.
+      if (server.exitCode !== null)
+        throw new Error(
+          `gateway exited (${server.exitCode}):\n${log.join("").slice(-4000)}`,
+        )
       try {
         if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break
       } catch {}
@@ -182,7 +196,7 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
       await sleep(250)
     }
     const { NessaClient } = await import("@nessa/client")
-    const client = await NessaClient.connect({
+    client = await NessaClient.connect({
       stage: "ci",
       url: `ws://127.0.0.1:${port}`,
       role: "surface",
@@ -200,14 +214,11 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
     for (let i = 0; i < polls; i += 1) {
       await sleep(1000)
       view = await client.conversation.read(id)
-      // Allow each tool once; nothing else the agent asks for is offered.
+      // Allow each test-server tool once; nothing else the agent asks for.
       for (const permission of view.permissions) {
         const key = `${permission.executionId}:${permission.permissionId}`
         if (answered.has(key)) continue
-        const option =
-          permission.options.find(
-            (each) => /allow/i.test(each.id) && !/always/i.test(each.id),
-          ) ?? permission.options.find((each) => /allow/i.test(each.label))
+        const option = allowOnce(view, permission, SERVER)
         if (!option) continue
         answered.add(key)
         step("allow", `${permission.toolName} → ${option.id}`)
@@ -244,16 +255,19 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
       )
     writeFileSync(join(evidence, "summary.json"), JSON.stringify(summary, null, 2))
     step("done", `turn ${summary.turn}; evidence in ${evidence}`)
-    client.close()
+    if (summary.turn !== "completed")
+      throw new Error(`the turn did not complete: ${summary.turn} ${summary.error ?? ""}`)
   } catch (error) {
     failed = true
     console.error(`[${agent}:FAILED]`, error?.stack ?? error)
     console.error(log.join("").slice(-6000))
   } finally {
+    client?.close()
     writeFileSync(join(evidence, "gateway.log"), log.join(""))
     server.kill("SIGTERM")
     await sleep(1500)
     if (server.exitCode === null) server.kill("SIGKILL")
+    rmSync(directory, { recursive: true, force: true })
   }
   process.exit(failed ? 1 : 0)
 }

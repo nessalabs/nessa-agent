@@ -61,10 +61,16 @@ MCP_LIVE_OPENCODE=/path/to/opencode-1.18.31 \
 | `gateway.log` | the gateway's own log |
 
 It uses the sign-in each agent already has on this machine — Claude's
-credential from the keychain the gateway reads, Codex's own home — and creates
-none. A gateway that has no credential for an agent refuses the conversation,
-and the check stops there. Recordings hold the prompt, tool arguments and
-results; review them before checking any of them in. The frames the SDK's
+credential from the keychain the gateway reads, Codex's own home, OpenCode's
+from Nessa's credential store — and creates none. A gateway that has no
+credential for an agent refuses the conversation, and the check stops there.
+It allows only calls to the test server's tools, each once, never a standing
+approval; anything else the agent asks for is left unanswered. It exits
+non-zero unless the turn completed, and removes the gateway's own data
+directory (its owner token among it) at the end. Recordings and
+`gateway.log` hold the prompt, tool arguments and results, and Codex's
+`_auth/status_update` names the signed-in account (its email): review them,
+and check in only extracted frames, never a whole recording. The frames the SDK's
 parser tests replay (`crates/nessa-sdk/tests/infrastructure/{claude_acp,codex_acp}/tools/fixtures/mcp_live_frames.json`)
 were extracted from such a run.
 

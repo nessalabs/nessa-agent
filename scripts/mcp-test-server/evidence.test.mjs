@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert"
 import { test } from "node:test"
 import { lines, record } from "./acp-recorder.mjs"
 import {
+  allowOnce,
   frameShape,
   parseRecording,
   toolFrames,
@@ -87,4 +88,70 @@ test("the view's MCP tools are those naming the server", () => {
     ["a"],
   )
   assert.deepEqual(viewTools(null, "mcptest"), [])
+})
+
+test("only a call to the test server's tools is allowed, and only once", () => {
+  const options = [
+    { id: "allow_always", label: "Always allow" },
+    { id: "allow_once", label: "Allow" },
+    { id: "reject_once", label: "Don't allow" },
+  ]
+  const view = {
+    tools: [
+      { executionId: "e", toolId: "mcp", mcp: { server: "mcptest", tool: "x" } },
+      { executionId: "e", toolId: "shell" },
+      { executionId: "e", toolId: "other", mcp: { server: "other", tool: "x" } },
+    ],
+  }
+  const ask = (toolId, offered = options) => ({
+    executionId: "e",
+    toolId,
+    toolName: "execute",
+    options: offered,
+  })
+  assert.equal(allowOnce(view, ask("mcp"), "mcptest")?.id, "allow_once")
+  assert.equal(
+    allowOnce(view, ask("mcp", [{ id: "allow-once", label: "x" }]), "mcptest")?.id,
+    "allow-once",
+  )
+  for (const toolId of ["shell", "other", "unknown"])
+    assert.equal(allowOnce(view, ask(toolId), "mcptest"), null, toolId)
+  // Never a standing approval, nor an option merely labelled as allowing.
+  assert.equal(allowOnce(view, ask("mcp", options.slice(0, 1)), "mcptest"), null)
+  assert.equal(
+    allowOnce(view, ask("mcp", [{ id: "x", label: "Allow once" }]), "mcptest"),
+    null,
+  )
+})
+
+test("the recorder logs a last line that has no newline, and exits with the agent's status", async () => {
+  const { spawnSync } = await import("node:child_process")
+  const { mkdtempSync, readFileSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const { fileURLToPath } = await import("node:url")
+  const log = join(mkdtempSync(join(tmpdir(), "acp-recorder-")), "log.jsonl")
+  const recorder = fileURLToPath(new URL("./acp-recorder.mjs", import.meta.url))
+  const echo = [process.execPath, "-e", "process.stdin.pipe(process.stdout)"]
+  const run = spawnSync(process.execPath, [recorder, log, ...echo], {
+    input: '{"a":1}\n{"b":"é"}',
+    encoding: "utf8",
+  })
+  assert.equal(run.status, 0)
+  assert.equal(run.stdout, '{"a":1}\n{"b":"é"}')
+  assert.deepEqual(
+    parseRecording(readFileSync(log, "utf8")).map((each) => [each.direction, each.frame]),
+    [
+      ["to-agent", { a: 1 }],
+      ["to-agent", { b: "é" }],
+      ["from-agent", { a: 1 }],
+      ["from-agent", { b: "é" }],
+    ],
+  )
+  const failing = spawnSync(
+    process.execPath,
+    [recorder, log, process.execPath, "-e", "process.exit(3)"],
+    { input: "" },
+  )
+  assert.equal(failing.status, 3)
 })

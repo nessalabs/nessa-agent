@@ -77,7 +77,23 @@ export function frameShape(update) {
   }
 }
 
-/** The view's tools whose MCP identity names `server`, keyed by tool name. */
+/**
+ * The option that allows `permission` once, when it asks about a call to one
+ * of `server`'s tools — and `null` for anything else the agent asks, so a run
+ * never allows a shell command, an edit, or a standing approval. The call is
+ * found in the view by its identity, since a permission's own name can be a
+ * kind (`execute`) rather than the tool.
+ */
+export function allowOnce(view, permission, server) {
+  const tool = (view?.tools ?? []).find(
+    (each) =>
+      each.executionId === permission.executionId && each.toolId === permission.toolId,
+  )
+  if (tool?.mcp?.server !== server) return null
+  return permission.options.find((option) => /^allow[-_]once$/i.test(option.id)) ?? null
+}
+
+/** The view's tools whose MCP identity names `server`. */
 export function viewTools(view, server) {
   return (view?.tools ?? []).filter((tool) => tool.mcp?.server === server)
 }

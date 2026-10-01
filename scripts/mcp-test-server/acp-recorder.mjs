@@ -7,9 +7,11 @@
  *   node acp-recorder.mjs <log.jsonl> <command> [args...]
  *
  * Each log line is `{"direction":"to-agent"|"from-agent","frame":<json>}`;
- * a line that is not JSON is kept as `"text"`. Standard error passes through
- * unrecorded. The recorder exits with the agent's status, and ends the agent
- * when its own input closes or it is signalled.
+ * a line that is not JSON is kept as `"text"`, and a last line without a
+ * newline is logged when its stream ends. Standard error passes through
+ * unrecorded. The recorder exits with the agent's status (128 + the signal
+ * number when it was signalled, as a shell reports it), ends the agent's input
+ * when its own closes, and passes on the signals it receives.
  *
  * What is recorded is the protocol stream, which carries prompts, tool
  * arguments and results — never credentials, which the gateway hands the
@@ -17,6 +19,8 @@
  */
 import { spawn } from "node:child_process"
 import { appendFileSync } from "node:fs"
+import { constants as osConstants } from "node:os"
+import { StringDecoder } from "node:string_decoder"
 import { fileURLToPath } from "node:url"
 
 /** One log line for one frame travelling in `direction`. */
@@ -38,32 +42,58 @@ export function lines(pending, chunk, each) {
   return rest
 }
 
+/** A logger for one direction: whole lines as they complete, the rest at the end. */
+function direction(log, name) {
+  const decoder = new StringDecoder("utf8")
+  let pending = ""
+  const write = (line) => appendFileSync(log, record(name, line))
+  return {
+    take: (chunk) => {
+      pending = lines(pending, decoder.write(chunk), write)
+    },
+    end: () => {
+      const rest = pending + decoder.end()
+      pending = ""
+      if (rest.trim()) write(rest)
+    },
+  }
+}
+
 function main([log, command, ...args]) {
   if (!log || !command) {
     process.stderr.write("usage: acp-recorder.mjs <log.jsonl> <command> [args...]\n")
     process.exit(2)
   }
+  const fail = (error) => {
+    process.stderr.write(`acp-recorder: ${error?.message ?? error}\n`)
+    process.exit(1)
+  }
   const child = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"] })
-  let inbound = ""
-  let outbound = ""
-  process.stdin.setEncoding("utf8")
-  child.stdout.setEncoding("utf8")
+  child.on("error", fail)
+  child.stdin.on("error", fail)
+  process.stdout.on("error", fail)
+  const toAgent = direction(log, "to-agent")
+  const fromAgent = direction(log, "from-agent")
+  // Bytes pass through untouched; only the log decodes them.
   process.stdin.on("data", (chunk) => {
-    inbound = lines(inbound, chunk, (line) =>
-      appendFileSync(log, record("to-agent", line)),
-    )
+    toAgent.take(chunk)
     child.stdin.write(chunk)
   })
-  process.stdin.on("end", () => child.stdin.end())
+  process.stdin.on("end", () => {
+    toAgent.end()
+    child.stdin.end()
+  })
   child.stdout.on("data", (chunk) => {
-    outbound = lines(outbound, chunk, (line) =>
-      appendFileSync(log, record("from-agent", line)),
-    )
+    fromAgent.take(chunk)
     process.stdout.write(chunk)
   })
+  child.stdout.on("end", () => fromAgent.end())
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"])
     process.on(signal, () => child.kill(signal))
-  child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)))
+  // After its output has drained: the agent's status, or 128 + the signal.
+  child.on("close", (code, signal) =>
+    process.exit(code ?? 128 + (signal ? (osConstants.signals[signal] ?? 0) : 0)),
+  )
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) main(process.argv.slice(2))
