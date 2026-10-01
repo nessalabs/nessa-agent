@@ -1,4 +1,4 @@
-//! SDK physical reads on tracked, non-entered threads after passive admission.
+//! SDK identity and physical reads on tracked threads after passive admission.
 
 use super::operation;
 use crate::conversation::application::{
@@ -25,7 +25,7 @@ pub struct NessaRecordReadSource {
     runtime: Handle,
     workers: Arc<ReadWorkers>,
     #[cfg(test)]
-    before_source: Option<Arc<TestReadGate>>,
+    before_identity: Option<Arc<TestReadGate>>,
 }
 
 #[cfg(test)]
@@ -61,12 +61,12 @@ impl NessaRecordReadSource {
             runtime,
             workers: ReadWorkers::new(),
             #[cfg(test)]
-            before_source: None,
+            before_identity: None,
         }
     }
 
-    /// Fence new reads, then join every tracked outer thread before storage
-    /// shutdown. If the waiter is cancelled, the blocking join retains itself.
+    /// Fence new reads, then join identity lookup and physical source work before
+    /// storage shutdown. Cancelled waiters retain the same blocking join.
     pub async fn shutdown(&self) -> Result<(), RecordReadError> {
         self.workers.shutdown().await.map_err(worker_error)
     }
@@ -82,29 +82,28 @@ impl RecordReadSource for NessaRecordReadSource {
         Box::pin(async move {
             self.workers.admit().map_err(worker_error)?;
             let session = session_id(&admitted)?;
-            let identity = self
-                .storage
-                .record_identity(&session, self.origin.clone())
-                .await
-                .map_err(operation::storage_error)?
-                .ok_or(RecordReadError::IdentityChanged)?;
-            let observed = record_scope_from_identity(&admitted, &identity)
-                .map_err(RecordReadError::Admission)?;
-            if let RecordReadOperation::Page(request) = &operation {
-                if request.scope != observed {
-                    return Err(RecordReadError::Admission(ReadRefusal::Unverifiable));
-                }
-            }
             let storage = self.storage.clone();
             let runtime = self.runtime.clone();
+            let origin = self.origin.clone();
             #[cfg(test)]
-            let before_source = self.before_source.clone();
+            let before_identity = self.before_identity.clone();
             self.workers
                 .run("nessa-record-read", move || {
                     debug_assert!(Handle::try_current().is_err());
                     #[cfg(test)]
-                    if let Some(gate) = before_source {
+                    if let Some(gate) = before_identity {
                         gate.wait();
+                    }
+                    let identity = runtime
+                        .block_on(storage.record_identity(&session, origin))
+                        .map_err(operation::storage_error)?
+                        .ok_or(RecordReadError::IdentityChanged)?;
+                    let observed = record_scope_from_identity(&admitted, &identity)
+                        .map_err(RecordReadError::Admission)?;
+                    if let RecordReadOperation::Page(request) = &operation {
+                        if request.scope != observed {
+                            return Err(RecordReadError::Admission(ReadRefusal::Unverifiable));
+                        }
                     }
                     let result = operation::execute(
                         storage, runtime, session, identity, admitted, observed, operation,

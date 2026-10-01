@@ -110,7 +110,7 @@ async fn reaped_worker_panic_fences_reads_and_survives_shutdown() {
         access_epoch: 3,
     };
     let mut source = NessaRecordReadSource::new(storage.clone(), origin, Handle::current());
-    source.before_source = Some(Arc::new(TestReadGate {
+    source.before_identity = Some(Arc::new(TestReadGate {
         entered: Notify::new(),
         panic_after_release: true,
         open: Mutex::new(true),
@@ -337,7 +337,7 @@ async fn cancelled_waiter_keeps_permit_until_non_entered_thread_finishes() {
         released: Condvar::new(),
     });
     let mut source = NessaRecordReadSource::new(storage.clone(), origin, Handle::current());
-    source.before_source = Some(gate.clone());
+    source.before_identity = Some(gate.clone());
     let source = Arc::new(source);
     let capacity = Arc::new(Semaphore::new(1));
     let permit = capacity.clone().try_acquire_owned().unwrap();
@@ -364,6 +364,88 @@ async fn cancelled_waiter_keeps_permit_until_non_entered_thread_finishes() {
     source.shutdown().await.unwrap();
     assert_eq!(capacity.available_permits(), 1);
     assert!(source.workers.state.lock().unwrap().joins.is_empty());
+    drop(writer);
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_waits_for_identity_work_after_both_waiters_cancel() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+    storage.initialize().await.unwrap();
+    let conversation_id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let session = SessionId::new(conversation_id.to_string()).unwrap();
+    let writer = storage.open(session).await.unwrap();
+    let admitted = ReceiverReadScope {
+        receiver_id: "receiver".into(),
+        organization_id: OrganizationId::new("org").unwrap(),
+        owner_id: PrincipalId::new("owner").unwrap(),
+        conversation_id,
+        access_epoch: 3,
+    };
+    let gate = Arc::new(TestReadGate {
+        entered: Notify::new(),
+        panic_after_release: false,
+        open: Mutex::new(false),
+        released: Condvar::new(),
+    });
+    let mut source = NessaRecordReadSource::new(
+        storage.clone(),
+        Id::new("origin").unwrap(),
+        Handle::current(),
+    );
+    source.before_identity = Some(gate.clone());
+    let source = Arc::new(source);
+    let capacity = Arc::new(Semaphore::new(2));
+    let read = {
+        let source = source.clone();
+        let admitted = admitted.clone();
+        let lease = RecordReadLease::new(capacity.clone().try_acquire_owned().unwrap());
+        tokio::spawn(async move {
+            source
+                .read(admitted, RecordReadOperation::Head, lease)
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), gate.entered.notified())
+        .await
+        .unwrap();
+    let mut first = Box::pin(source.shutdown());
+    let pending = tokio::time::timeout(Duration::from_millis(100), first.as_mut())
+        .await
+        .is_err();
+    if !pending {
+        gate.release();
+        let _ = read.await;
+        drop(writer);
+        storage.shutdown().await.unwrap();
+        panic!("shutdown must own identity work before reporting completion");
+    }
+    drop(first);
+    read.abort();
+    assert!(matches!(read.await, Err(error) if error.is_cancelled()));
+    assert_eq!(capacity.available_permits(), 1);
+    assert!(matches!(
+        source
+            .read(
+                admitted,
+                RecordReadOperation::Head,
+                RecordReadLease::new(capacity.clone().try_acquire_owned().unwrap()),
+            )
+            .await,
+        Err(RecordReadError::TemporarilyUnavailable)
+    ));
+    let mut second = Box::pin(source.shutdown());
+    let pending =
+        std::future::poll_fn(|cx| Poll::Ready(matches!(second.as_mut().poll(cx), Poll::Pending)))
+            .await;
+    gate.release();
+    assert!(
+        pending,
+        "replacement shutdown waits for the same identity work"
+    );
+    second.await.unwrap();
+    assert_eq!(capacity.available_permits(), 2);
     drop(writer);
     storage.shutdown().await.unwrap();
 }

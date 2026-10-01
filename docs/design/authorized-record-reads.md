@@ -387,6 +387,7 @@ refusals. Amend this table before adding a newly discovered ordering.
 | R46 | Encoded record queued; control, refusal or ordinary responses remain continuously ready until its original absolute deadline | Writer observes expiry independently of physical response priority, abandons transport and drops the record slot/read lease; no late record frame. Global read capacity returns when no other work owns it. |
 | R47 | Record arrives while a higher-priority physical send or close is stalled beyond the record's remaining deadline | Writer observes arrival and expiry during that write, abandons the sink at the original record deadline without appending another frame; delivery teardown does not recreate or release unjoined source ownership. |
 | R48 | Pending record is not expired; higher-priority responses drain; Stop arrives during physical record send | Physical control/refusal/ordinary priority is preserved; valid record sends once and releases its slot/read lease. Existing actual Stop dispatch/effect remains independent of physical acknowledgement. |
+| R49 | Shutdown arrives after read admission while identity lookup has not completed; read and shutdown waiters are cancelled | The existing read worker owns the identity lookup and subsequent source operation under one registration. Shutdown fences new reads and waits for that worker; cancelled waiters retain the read lease until the worker finishes. `shutdown_waits_for_identity_work_after_both_waiters_cancel` controls the identity boundary with real SDK storage. |
 
 
 
