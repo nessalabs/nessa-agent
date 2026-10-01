@@ -59,6 +59,7 @@ export {
   type Downloaded,
   type GatewayStartup,
   type HostStartup,
+  type PanelSize,
   type LinkNotOpened,
   type Release,
   type SetupHandoff,

@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 /**
  * The load fallback in `index.html`: what the panel and setup show before the
- * frontend mounts, measured with the frontend held back so it never does.
+ * frontend mounts.
  *
  * On macOS and Linux the panel's webview is larger than its window and pinned
  * to the window's bottom right (`src/panel/adapters/panel-frame.ts`), so the
- * viewport is the stage and only its bottom-right corner is on screen. Each
- * scenario gives the page a stage and a host that reports the window's size
- * (or never does, or refuses), then checks that the avatar and "Loading" sit
- * wholly inside the visible window, centred in it once its size is known, and
- * that nothing paints over them.
+ * viewport is the stage and only its bottom-right corner is on screen. A
+ * native scenario runs the real frontend against a fake host whose startup
+ * never answers, so the panel never mounts, and which reports the window's
+ * size (or never does, or refuses); `main.tsx` writes that size through
+ * `windowSize()` and `publishWindowSize()`. A browser scenario holds every
+ * script back instead. Each checks that the avatar and "Loading" sit wholly
+ * inside the visible window, centred in it once its size is known, and that
+ * nothing paints over them.
  */
 import { launch } from "./lib/browser.mjs"
 import { attempt } from "./lib/cli.mjs"
@@ -54,11 +57,10 @@ const scenarios = [
     visible: { width: 420, height: 320 },
   },
   {
-    name: "panel, plain browser",
+    name: "panel, frontend never loads",
     surface: "panel",
     stage: { width: 420, height: 800 },
     host: null,
-    centred: true,
   },
   {
     name: "setup",
@@ -69,13 +71,17 @@ const scenarios = [
   },
 ]
 
-/** Installed before the page's own scripts, as Tauri installs its IPC. */
+/**
+ * Installed before the page's own scripts, as Tauri installs its IPC. Only
+ * `panel_size` is ever answered: startup, and everything else, waits forever.
+ */
 function fakeHost(host) {
   if (host === null) return
+  let callbacks = 0
   window.__TAURI_INTERNALS__ = {
+    transformCallback: () => ++callbacks,
     invoke(command) {
-      if (command !== "panel_size") return Promise.reject(new Error(command))
-      if (host === "pending") return new Promise(() => {})
+      if (command !== "panel_size" || host === "pending") return new Promise(() => {})
       if (host === "refused") return Promise.reject(new Error("refused"))
       return Promise.resolve(host)
     },
@@ -202,8 +208,11 @@ await main(
                   // Hold the frontend back so the fallback is what stays: every
                   // script the page loads, whether dev's /src/main.tsx or a
                   // production build's hashed entry. The bootstrap is inline.
+                  // Without a host the frontend mounts at once, so hold back every
+                  // script it loads (dev's /src/main.tsx or a build's hashed entry).
+                  const holding = scenario.host === null
                   await page.route("**/*", (route) => {
-                    if (route.request().resourceType() !== "script")
+                    if (!holding || route.request().resourceType() !== "script")
                       return route.continue()
                     held.add(route.request())
                     heldUrls.add(route.request().url())
@@ -218,12 +227,20 @@ await main(
                   const search = scenario.surface === "setup" ? "?surface=setup" : ""
                   await page.goto(`${origin}/index.html${search}`)
                   await page.waitForSelector(css.loadMark)
-                  // The reported size lands a microtask after the bootstrap runs.
+                  if (typeof scenario.host === "object" && scenario.host)
+                    await page.waitForFunction(() =>
+                      document.documentElement.style.getPropertyValue(
+                        "--nessa-window-width",
+                      ),
+                    )
+                  else await page.waitForLoadState("networkidle")
                   await page.evaluate(() => new Promise(requestAnimationFrame))
                   const m = await measure(page)
                   const result = check(scenario, m)
-                  if (held.size === 0)
+                  if (holding && held.size === 0)
                     result.failures.push("no frontend script was held back")
+                  if (!(await page.$(css.loadMark)))
+                    result.failures.push("the frontend replaced the fallback")
                   result.failures.push(...errors)
                   if (motion === "reduce" && m.animations !== 0)
                     result.failures.push(

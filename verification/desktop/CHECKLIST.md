@@ -435,11 +435,11 @@ mounts, `index.html` shows the fallback on that stage.
 
 - [ ] **The avatar and "Loading" sit inside the visible window, centred in it
   once the host reports its size**, on the default frame, a short configured
-  height, a narrow panel, a plain browser and setup; with the size pending or
-  refused they stay inside the bottom-right 320 × 320; nothing paints over the
-  title, the page does not scroll, and nothing animates with reduced motion.
-  _Check:_ `load-fallback.mjs` (holds the frontend back, fakes the host's
-  `panel_size`).
+  height, a narrow panel and setup; with the size pending or refused, or the
+  frontend never loading, they stay inside the bottom-right 320 × 320; nothing
+  paints over the title, the page does not scroll, and nothing animates with
+  reduced motion. _Check:_ `load-fallback.mjs` (runs the real frontend against
+  a fake host whose startup never answers and which fakes `panel_size`).
 
 ## Console errors
 

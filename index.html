@@ -9,36 +9,6 @@
         new URLSearchParams(window.location.search).get("surface") === "setup"
           ? "setup"
           : "panel"
-
-      // The panel's webview is larger than its window and pinned to the
-      // window's bottom right (see src/panel/adapters/panel-frame.ts), so the
-      // fallback asks the host for the window's size to centre itself in what
-      // is actually on screen. The app writes the same properties once it runs.
-      if (document.documentElement.dataset.nessaSurface === "panel") {
-        const internals = window.__TAURI_INTERNALS__
-        if (internals) {
-          internals.invoke("panel_size").then(
-            function (size) {
-              if (
-                size &&
-                Number.isFinite(size.width) &&
-                Number.isFinite(size.height) &&
-                size.width > 0 &&
-                size.height > 0
-              ) {
-                const root = document.documentElement.style
-                root.setProperty("--nessa-window-width", size.width + "px")
-                root.setProperty("--nessa-window-height", size.height + "px")
-              }
-            },
-            function () {},
-          )
-        } else {
-          // A plain browser: the viewport is the window.
-          document.documentElement.style.setProperty("--nessa-window-width", "100vw")
-          document.documentElement.style.setProperty("--nessa-window-height", "100vh")
-        }
-      }
     </script>
     <style>
       [data-nessa-load-fallback] {
@@ -108,7 +78,9 @@
         text-align: center;
       }
 
-      /* Until the host reports the window's size, stay inside the bottom-right
+      /* The panel's webview is a stage larger than its window, pinned to the
+         window's bottom right (src/panel/adapters/panel-frame.ts). Until
+         main.tsx writes the window's size, stay inside the bottom-right
          320 × 320 that every panel the host opens covers (MIN_PANEL_HEIGHT,
          and narrower than the default minimum width). */
       html[data-nessa-surface="panel"] [data-nessa-load-message] {
