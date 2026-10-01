@@ -17,7 +17,12 @@ import {
 } from "../../application/ports"
 import { conversationTabSnapshot } from "../../application/saved-tabs"
 import type { ConversationView } from "../../application/view"
-import type { CommandFailure, FileAttachment, ImageReference } from "../../model"
+import type {
+  CommandFailure,
+  ConversationTranscriptState,
+  FileAttachment,
+  ImageReference,
+} from "../../model"
 import { scenarioEffects } from "../scenario/effects"
 import {
   attachFiles,
@@ -225,7 +230,7 @@ function viewSaying(imageInput: boolean): ConversationEffects["read"] {
     lifecycle: { phase: "attached" },
     truncated: false,
     queueComplete: true,
-    transcriptState: "complete",
+    transcriptState: "complete_empty",
   })
 }
 
@@ -485,6 +490,56 @@ it("closes the tab and nothing else when the conversation has turns or has not b
   const unread = storeWith({ close, read: () => gate.promise })
   await attachStored(unread.store, image("a"))
   await unread.store.dispatch(closeTab("c0"))
+  expect(close).not.toHaveBeenCalled()
+})
+
+it.each<ConversationTranscriptState>([
+  "not_loaded",
+  "partial",
+  "stale",
+  "unknown",
+  "complete",
+])(
+  "keeps %s history saved and closes its tab without closing shared work",
+  async (state) => {
+    const close = vi.fn(async () => {})
+    const read = viewSaying(true)
+    const context = await readyToSend({
+      close,
+      read: async (id) => ({ ...(await read(id)), transcriptState: state }),
+    })
+    const serverId = context.current().serverConversationId
+    context.store.dispatch(removeFile("finder"))
+    expect(context.current()).toMatchObject({
+      turns: [],
+      draft: [],
+      remote: { transcriptState: state, truncated: false, running: false, pending: [] },
+    })
+    expect
+      .soft(conversationTabSnapshot(context.store.getState().conversation).tabs)
+      .toEqual([{ conversationId: serverId }])
+    await context.store.dispatch(closeTab("c0"))
+    expect(close).not.toHaveBeenCalled()
+    expect(
+      context.store
+        .getState()
+        .conversation.conversations.some((item) => item.id === "c0"),
+    ).toBe(false)
+  },
+)
+
+it("retains a truncated confirmed-empty view and closes only its tab", async () => {
+  const close = vi.fn(async () => {})
+  const read = viewSaying(true)
+  const context = await readyToSend({
+    close,
+    read: async (id) => ({ ...(await read(id)), truncated: true }),
+  })
+  context.store.dispatch(removeFile("finder"))
+  expect(
+    conversationTabSnapshot(context.store.getState().conversation).tabs,
+  ).toHaveLength(1)
+  await context.store.dispatch(closeTab("c0"))
   expect(close).not.toHaveBeenCalled()
 })
 

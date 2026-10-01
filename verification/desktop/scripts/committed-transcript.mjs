@@ -130,6 +130,62 @@ await main(
               },
             )
           }
+          for (const [state, truncated] of [
+            ["not_loaded", false],
+            ["partial", false],
+            ["stale", false],
+            ["unknown", false],
+            ["complete", false],
+            ["complete_empty", false],
+            ["complete_empty", true],
+          ]) {
+            await attempt(
+              rep,
+              { engine, width, name: `tab-history:${state}:${truncated}` },
+              async () => {
+                await page
+                  .getByRole("button", {
+                    name: `tabs:${state}${truncated ? ":truncated" : ""}`,
+                    exact: true,
+                  })
+                  .click()
+                await page.waitForFunction(
+                  ([selector, name]) =>
+                    document.querySelector(selector)?.dataset.case === name,
+                  [css.historyTabConsumer, `${state}:${truncated}`],
+                )
+                const saved = await page
+                  .locator(css.historyTabConsumer)
+                  .getAttribute("data-saved-count")
+                await page
+                  .getByRole("button", { name: "Close history tab", exact: true })
+                  .click()
+                await page.waitForFunction(
+                  (selector) =>
+                    document.querySelector(selector)?.dataset.originalTabPresent ===
+                    "false",
+                  css.historyTabConsumer,
+                )
+                const closes = await page
+                  .locator(css.historyTabConsumer)
+                  .getAttribute("data-close-calls")
+                const empty = state === "complete_empty" && !truncated
+                return {
+                  saved: Number(saved),
+                  closes: Number(closes),
+                  tabClosed: true,
+                  failures: [
+                    ...(Number(saved) !== (empty ? 0 : 1)
+                      ? ["unconfirmed history lost its saved reference"]
+                      : []),
+                    ...(Number(closes) !== (empty ? 1 : 0)
+                      ? ["tab close dispatched an unconfirmed gateway close"]
+                      : []),
+                  ],
+                }
+              },
+            )
+          }
           await attempt(rep, { engine, width, name: "console" }, async () => ({
             failures: opened.errors,
           }))

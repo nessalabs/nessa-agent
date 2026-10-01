@@ -446,3 +446,11 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   complete without live attachment, and complete with offered authority, including
   re-enable after incomplete history. Server projection tests own execution identity.
   Fixture map: [conversation verification](../conversation/README.md).
+
+- [ ] **Empty display does not authorize saved-tab omission or gateway close.**
+  _Check:_ `committed-transcript.mjs` feeds published view states through the actual
+  decoder, Redux read projection, saved-tab selection and close thunk. Partial,
+  not loaded, stale, unknown and complete-zero preserve one saved reference and
+  dispatch zero gateway closes; confirmed complete-empty permits omission and one
+  close. A truncated complete-empty view still preserves the reference. Both
+  engines and all three widths assert the original local tab closes in every case.

@@ -18,3 +18,9 @@ The production question and notification components also render one retained ask
 with three real sibling fields while the interaction display-limit notice appears
 and disappears. Browser checks preserve the middle field's selection, whole
 question units, Stop guidance and bounded horizontal layout.
+
+The history-tab fixture also drives the real Redux refresh, saved-tab selection
+and close thunk after decoding each published history state. The browser measures
+saved-reference counts and external close-port invocations, with complete-empty
+as the permitted counterpart. It proves the UI consumer's dispatch decision;
+it does not run a gateway or establish physical provider cleanup.

@@ -15,6 +15,7 @@ export const content = {
 /** CSS selectors, grouped by the part of the window they belong to. */
 export const css = {
   // Committed conversation production-component fixture
+  historyTabConsumer: "[data-history-tab-consumer]",
   committedFixture: "[data-committed-fixture]",
   committedControls: "[data-committed-controls]",
   committedQuestions: "[data-committed-questions]",

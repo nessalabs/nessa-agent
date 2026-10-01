@@ -355,3 +355,18 @@ export type Phase = Conversation["phase"]
 export function conversation(id: string): IdleConversation {
   return { id, title: "New chat", turns: [], phase: "idle", draft: [] }
 }
+
+/**
+ * Empty display alone cannot establish empty committed history. Saved-tab and
+ * automatic-close consumers use this decision; attachments store tests exercise
+ * confirmed-empty and incomplete published views before either effect.
+ */
+export function conversationHistoryEmpty(
+  item: Pick<Conversation, "remote" | "turns">,
+): boolean {
+  return (
+    item.remote?.transcriptState === "complete_empty" &&
+    !item.remote.truncated &&
+    item.turns.length === 0
+  )
+}

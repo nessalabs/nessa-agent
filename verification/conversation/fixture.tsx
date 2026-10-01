@@ -4,10 +4,20 @@ import { useState } from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { conversationView as decodeView } from "../../packages/nessa-client/src/protocol/conversation-validate"
+import { makeStore } from "../../src/store"
+import { createDependencies } from "../../src/composition/dependencies"
+import { scenarioEffects } from "../../src/conversation/adapters/scenario/effects"
+import {
+  closeTab,
+  refreshConversation,
+  restoreConversations,
+} from "../../src/conversation/adapters/store/slice"
+import { conversationTabSnapshot } from "../../src/conversation/application/saved-tabs"
 import { applyView } from "../../src/conversation/application/usecases/apply-view"
 import type { ConversationView } from "../../src/conversation/application/view"
 import {
   conversation,
+  type Conversation,
   type ConversationTranscriptState,
 } from "../../src/conversation/model"
 import { ConversationControls } from "../../src/conversation/ui/conversation-controls"
@@ -123,8 +133,95 @@ function questionView(limited: boolean): ConversationView {
     "committed-conversation",
   )
 }
+/** Actual read projection, saved selection and close thunk; the remote port records dispatch. */
+function HistoryTabConsumer() {
+  const [result, setResult] = useState<{
+    name: string
+    saved: number
+    closes: number
+    open: boolean
+  }>()
+  const [active, setActive] = useState<{
+    store: ReturnType<typeof makeStore>
+    closeCalls: () => number
+  }>()
+  const show = async (state: ConversationTranscriptState, truncated = false) => {
+    let closes = 0
+    const serverId = "0b8f1c2e-1111-4a4a-8b8b-000000000001"
+    const effects = {
+      ...scenarioEffects("echo"),
+      read: async (id: string) =>
+        decodeView(
+          {
+            ...view(state, false),
+            conversationId: id,
+            messages: [],
+            permissions: [],
+            truncated,
+          },
+          id,
+        ),
+      close: async () => {
+        closes += 1
+      },
+    }
+    const tabs = makeStore(createDependencies({ conversation: effects }))
+    tabs.dispatch(restoreConversations({ tabs: [{ conversationId: serverId }] }))
+    await tabs.dispatch(refreshConversation("c0")).unwrap()
+    setActive({ store: tabs, closeCalls: () => closes })
+    setResult({
+      name: `${state}:${truncated}`,
+      saved: conversationTabSnapshot(tabs.getState().conversation).tabs.length,
+      closes,
+      open: true,
+    })
+  }
+  const close = async () => {
+    if (!active) return
+    await active.store.dispatch(closeTab("c0")).unwrap()
+    setResult(
+      (previous) =>
+        previous && {
+          ...previous,
+          closes: active.closeCalls(),
+          open: active.store
+            .getState()
+            .conversation.conversations.some((item) => item.id === "c0"),
+        },
+    )
+  }
+  return (
+    <section
+      data-history-tab-consumer
+      data-case={result?.name}
+      data-saved-count={result?.saved}
+      data-close-calls={result?.closes}
+      data-original-tab-present={result?.open}
+    >
+      <nav aria-label="Saved history cases">
+        {states.map((state) => (
+          <button key={state} onClick={() => void show(state)}>
+            tabs:{state}
+          </button>
+        ))}
+        <button onClick={() => void show("complete_empty", true)}>
+          tabs:complete_empty:truncated
+        </button>
+      </nav>
+      <button disabled={!active} onClick={() => void close()}>
+        Close history tab
+      </button>
+      <p>
+        Saved references: {result?.saved ?? 0}; gateway close calls: {result?.closes ?? 0}
+      </p>
+    </section>
+  )
+}
+
 function Fixture() {
-  const [current, setCurrent] = useState(() => conversation("committed-conversation"))
+  const [current, setCurrent] = useState<Conversation>(() =>
+    conversation("committed-conversation"),
+  )
   const [caseName, setCaseName] = useState("initial")
   const show = (state: ConversationTranscriptState, authority: boolean) => {
     setCurrent((previous) => applyView(previous, view(state, authority)))
@@ -165,6 +262,7 @@ function Fixture() {
       <section data-committed-questions>
         <ConversationQuestions conversation={current} gatewayAvailable />
       </section>
+      <HistoryTabConsumer />
       <section data-committed-controls>
         <ConversationControls conversation={current} gatewayAvailable />
       </section>
