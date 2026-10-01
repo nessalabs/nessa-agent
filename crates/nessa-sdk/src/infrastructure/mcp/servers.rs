@@ -75,12 +75,12 @@ struct Inner {
     /// read many times logs it once. Bounded by [`MAX_WARNED`].
     warned: Mutex<HashSet<(String, String)>>,
     /// How many disagreements have been logged.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     logged: std::sync::atomic::AtomicUsize,
 }
 
 /// The most disagreements remembered as logged; past it, none are logged.
-const MAX_WARNED: usize = 1024;
+pub(super) const MAX_WARNED: usize = 1024;
 
 #[derive(Default)]
 struct Live {
@@ -175,7 +175,7 @@ impl McpServers {
                 stopping: watch::channel(false).0,
                 live: Mutex::default(),
                 warned: Mutex::default(),
-                #[cfg(test)]
+                #[cfg(all(test, unix))]
                 logged: std::sync::atomic::AtomicUsize::new(0),
             }),
         })
@@ -296,15 +296,14 @@ impl McpServers {
             });
         let first = declared.next()?;
         if declared.any(|other| other != first) {
-            let mut warned = self.inner.warned.lock().expect("warned");
             let pair = (call.server().to_owned(), call.tool().to_owned());
-            if warned.len() < MAX_WARNED && warned.insert(pair) {
+            if first_time(&mut self.inner.warned.lock().expect("warned"), pair) {
                 tracing::warn!(
                     server = call.server(),
                     tool = call.tool(),
                     "open MCP sessions disagree about a tool's UI; no widget is shown for its calls"
                 );
-                #[cfg(test)]
+                #[cfg(all(test, unix))]
                 self.inner
                     .logged
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -315,7 +314,7 @@ impl McpServers {
     }
 
     /// How many disagreements have been logged.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn disagreements_logged(&self) -> usize {
         self.inner.logged.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -459,6 +458,12 @@ async fn keep_listed(session: Weak<Session>, mut notices: broadcast::Receiver<Ar
             Err(broadcast::error::RecvError::Closed) => return,
         };
     }
+}
+
+/// Whether `pair`'s disagreement is logged now: the first time it is seen,
+/// while fewer than [`MAX_WARNED`] are remembered.
+pub(super) fn first_time(warned: &mut HashSet<(String, String)>, pair: (String, String)) -> bool {
+    warned.len() < MAX_WARNED && warned.insert(pair)
 }
 
 /// Whether a server's notice says its tools changed. Its other lists

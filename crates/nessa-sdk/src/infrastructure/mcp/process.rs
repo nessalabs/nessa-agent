@@ -13,6 +13,12 @@ pub(crate) const STOP_GRACE: Duration = Duration::from_secs(2);
 /// A running server. On Unix it leads a process group of its own, so what it
 /// starts (`npx` starting `node`, say) is stopped with it. Dropped without
 /// [`ServerProcess::stop`], the whole group is killed at once.
+///
+/// Two limits, by design: a process the server starts that leaves the group
+/// (`setsid`) is not stopped with it; and after a graceful exit the leader is
+/// reaped before the group is killed, so for that instant its id could in
+/// principle be reused by an unrelated group — the kill then goes to a group
+/// this user owns that just started, which no test can arrange.
 pub(crate) struct ServerProcess {
     child: Option<Child>,
     /// The process group, which is the server's own process id.

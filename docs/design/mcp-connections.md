@@ -116,6 +116,10 @@ each session by its conversation before any `mcp.callTool` or
 | A forwarded request | none from the gateway | the harness's own deadline and cancellation |
 | Closing a session | stdin closed, 2 s, then the process group killed | — |
 | A refusal's message | 512 characters, control characters as spaces | — |
+| Change notices held for a stand-in or a session's list | 16 | the stand-in is sent all three `*/list_changed`; the list is read again |
+| Tool names whose visibility a session remembers | 4096 | earlier lists' names are forgotten, and a name not remembered is hidden |
+| Disagreements remembered as logged | 1024 | none more is logged |
+| Open sessions | not bounded here | each is a harness's stand-in, started by a process of the gateway's own user |
 
 ## Failures are typed
 
@@ -144,7 +148,7 @@ of its own) and the one connection to it.
 | Opening | process cannot be launched | — | `Start`; the stand-in is refused `unavailable` |
 | Opening | process exits | — | `ServerGone`; as above |
 | Opening | gateway stops | — | `Stopped`; registration and stop share one lock, so either stop closes it or the opening sees the stop and closes it itself |
-| Open | the stand-in ends: the harness closes, its socket breaks, the relay is killed, a frame that is not JSON or is past the bound | Closed | calls waiting end `Closed`, unanswered (closing the server's stdin ends them; no `notifications/cancelled` is sent first); 2 s; the process group killed |
+| Open | the stand-in ends: the harness closes, its socket breaks, the relay is killed, a frame that is not JSON or is past the bound | Closed | calls waiting end `Closed`, unanswered (closing the server's stdin ends them; a `notifications/cancelled` may or may not be written first); 2 s; the process group killed |
 | Open | process exits, stdout closes, oversize or non-JSON frame | Gone | calls waiting end (`ServerGone`, `TooLarge`, `Malformed`); the stand-in is closed, and its relay exits; the process group killed |
 | Open | gateway stops | Closed | as the stand-in ending, with `Stopped` |
 | Open | the last handle to it is dropped without closing | — | the process group killed at once, even while its background list waits on the server |

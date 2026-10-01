@@ -170,14 +170,11 @@ pub(crate) fn said(message: &str) -> String {
         .collect()
 }
 
-/// How long the probe of a socket left at the path may take to be answered.
-#[cfg(unix)]
-const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
-
 /// Bind the relay socket at `socket`, in a private directory of its own. A
 /// socket an earlier run left there, which refuses a connection, is replaced;
-/// one a gateway still answers on, one whose probe fails otherwise or takes
-/// longer than a second, or anything else there, fails the bind.
+/// one a gateway still answers on, one whose probe fails otherwise (a full
+/// backlog answers at once that it would block), or anything else there,
+/// fails the bind.
 #[cfg(unix)]
 pub async fn bind(socket: &std::path::Path) -> io::Result<tokio::net::UnixListener> {
     use std::os::unix::fs::FileTypeExt;
@@ -187,14 +184,12 @@ pub async fn bind(socket: &std::path::Path) -> io::Result<tokio::net::UnixListen
     nessa_local_storage::create_directory(directory)?;
     match std::fs::symlink_metadata(socket) {
         Ok(found) if found.file_type().is_socket() => {
-            let probe =
-                tokio::time::timeout(PROBE_TIMEOUT, tokio::net::UnixStream::connect(socket)).await;
-            match probe {
-                Ok(Err(error)) if error.kind() == io::ErrorKind::ConnectionRefused => {
+            match tokio::net::UnixStream::connect(socket).await {
+                Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
                     std::fs::remove_file(socket)?;
                 }
-                Ok(Err(error)) => return Err(error),
-                Ok(Ok(_)) | Err(_) => {
+                Err(error) => return Err(error),
+                Ok(_) => {
                     return Err(io::Error::new(
                         io::ErrorKind::AddrInUse,
                         "another gateway is serving this relay socket",

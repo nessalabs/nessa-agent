@@ -329,3 +329,43 @@ async fn a_disagreement_is_logged_once_however_often_it_is_read() {
     }
     assert_eq!(servers.disagreements_logged(), 1);
 }
+
+#[test]
+fn a_disagreement_is_logged_the_first_time_while_fewer_than_the_bound_are_remembered() {
+    use crate::infrastructure::mcp::servers::{first_time, MAX_WARNED};
+    use std::collections::HashSet;
+    let mut warned = HashSet::new();
+    let pair = |n: usize| ("s".to_owned(), format!("t{n}"));
+    assert!(first_time(&mut warned, pair(0)));
+    assert!(!first_time(&mut warned, pair(0)));
+    for n in 1..MAX_WARNED {
+        assert!(first_time(&mut warned, pair(n)));
+    }
+    assert!(
+        !first_time(&mut warned, pair(MAX_WARNED)),
+        "past the bound, nothing more"
+    );
+    assert_eq!(warned.len(), MAX_WARNED);
+}
+
+#[tokio::test]
+async fn a_list_that_falls_behind_the_change_notices_is_read_again() {
+    let (servers, launcher, _) = servers(silent("tools/list"));
+    let _session = servers.open("fixture").await.unwrap();
+    let server = launcher.server(0);
+    // The session's list waits on the server while notices pile up past what
+    // it holds: the one about tools among the first, so it is lost.
+    server.arrived("tools/list", 1).await;
+    server.send(json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" }));
+    for _ in 0..40 {
+        server.send(json!({ "jsonrpc": "2.0", "method": "notifications/resources/list_changed" }));
+    }
+    server.send(json!({ "jsonrpc": "2.0", "id": "barrier", "method": "ping" }));
+    server
+        .arrived_where(|message| message["id"] == "barrier" && message.get("method").is_none())
+        .await;
+    let first = server.with_method("tools/list")[0]["id"].clone();
+    server.send(json!({ "jsonrpc": "2.0", "id": first, "result": { "tools": [] } }));
+    // Having fallen behind, it lists again.
+    server.arrived("tools/list", 2).await;
+}

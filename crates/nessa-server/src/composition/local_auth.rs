@@ -377,8 +377,9 @@ async fn conversations(
         Ok(gateway) => {
             super::mcp_servers::compose(
                 &mut agents,
-                // SAFETY: getuid has no preconditions and cannot fail.
-                &super::mcp_servers::relay_socket(namespace, unsafe { libc::getuid() }),
+                // The effective user, whom `bind` requires to own the directory.
+                // SAFETY: geteuid has no preconditions and cannot fail.
+                &super::mcp_servers::relay_socket(namespace, unsafe { libc::geteuid() }),
                 &gateway,
                 super::mcp_servers::server_environment(|key| std::env::var_os(key)),
             )

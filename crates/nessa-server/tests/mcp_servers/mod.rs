@@ -391,3 +391,17 @@ async fn a_relay_socket_a_gateway_still_serves_is_not_taken_over() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 }
+
+#[tokio::test]
+async fn a_relay_socket_whose_probe_fails_otherwise_is_left_alone() {
+    use super::infrastructure::bind;
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("relay").join("relay.sock");
+    let _serving = bind(&socket).await.unwrap();
+    // Not answering, nor refusing: the probe is denied.
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let refused = bind(&socket).await.unwrap_err();
+    assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(std::fs::symlink_metadata(&socket).is_ok(), "not removed");
+}

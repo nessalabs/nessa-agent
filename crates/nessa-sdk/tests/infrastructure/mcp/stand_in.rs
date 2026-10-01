@@ -369,8 +369,12 @@ async fn a_stand_in_that_falls_behind_the_change_notices_gets_all_three() {
     for _ in 0..40 {
         server.send(json!({ "jsonrpc": "2.0", "method": "notifications/resources/list_changed" }));
     }
-    // Let the server's notices outrun what a stand-in holds for it.
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Once the client has answered a request the server sent after them, its
+    // reader has passed every notice on: they have outrun the stand-in.
+    server.send(json!({ "jsonrpc": "2.0", "id": "barrier", "method": "ping" }));
+    server
+        .arrived_where(|message| message["id"] == "barrier" && message.get("method").is_none())
+        .await;
     let mut seen = std::collections::BTreeSet::new();
     while seen.len() < 3 {
         let notice = harness.next().await.expect("the stand-in keeps serving");
@@ -378,4 +382,41 @@ async fn a_stand_in_that_falls_behind_the_change_notices_gets_all_three() {
     }
     assert!(seen.contains("notifications/tools/list_changed"));
     assert!(seen.contains("notifications/prompts/list_changed"));
+}
+
+#[test]
+fn past_its_bound_the_visibility_record_forgets_earlier_lists_and_fails_closed() {
+    use crate::infrastructure::mcp::stand_in::{Visibility, MAX_REMEMBERED_TOOLS};
+    let many = |prefix: &str| -> Vec<(String, bool)> {
+        (0..MAX_REMEMBERED_TOOLS)
+            .map(|n| (format!("{prefix}{n}"), false))
+            .collect()
+    };
+    // Within the bound, a name no list gave is the server's to decide.
+    let within = Visibility::default();
+    let order = within.ask();
+    within.listed(
+        order,
+        [("helper".to_owned(), true), ("echo".to_owned(), false)],
+    );
+    assert!(within.hidden("helper") && !within.hidden("echo") && !within.hidden("unlisted"));
+    // Past it: what the latest lists said stands, and anything else is hidden.
+    let past = Visibility::default();
+    let earlier = past.ask();
+    let later = past.ask();
+    past.listed(later, [("x".to_owned(), false)]);
+    past.listed(
+        earlier,
+        many("a").into_iter().chain([("helper".to_owned(), true)]),
+    );
+    // The list asked later keeps its verdict though answered first.
+    assert!(!past.hidden("x"));
+    assert!(past.hidden("helper"));
+    assert!(!past.hidden("a1"));
+    assert!(past.hidden("unlisted"));
+    // A list asked later still decides for the names it gives.
+    let latest = past.ask();
+    past.listed(latest, many("b"));
+    assert!(!past.hidden("b1"));
+    assert!(past.hidden("a1"), "forgotten past the bound, so hidden");
 }

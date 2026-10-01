@@ -112,6 +112,8 @@ fn the_help_text_mentions_installing_an_agent() {
     assert!(crate::cli::entrypoint::HELP.contains("install-agent"));
 }
 
+// A Unix socket's path: absolute as Unix spells it, which Windows does not.
+#[cfg(unix)]
 #[test]
 fn a_stand_in_names_an_absolute_socket_a_server_and_its_configuration() {
     assert_eq!(
