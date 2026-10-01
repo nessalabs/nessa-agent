@@ -86,7 +86,11 @@ impl ReadWorkers {
                 .map_err(|_| ReadWorkerError::Unavailable)?;
             state.joins.push(join);
         }
-        received.await.map_err(|_| ReadWorkerError::WorkerPanicked)
+        received.await.map_err(|_| {
+            // Sender loss observes the panic before the OS handle must be finished.
+            self.worker_panicked();
+            ReadWorkerError::WorkerPanicked
+        })
     }
     pub(in crate::conversation::infrastructure) async fn shutdown(
         self: &Arc<Self>,

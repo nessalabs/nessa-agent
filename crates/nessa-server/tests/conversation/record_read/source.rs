@@ -94,7 +94,7 @@ async fn shutdown_joins_later_gated_work_after_panic_and_cancelled_waiter() {
 }
 
 #[tokio::test]
-async fn reaped_worker_panic_fences_reads_and_survives_shutdown() {
+async fn observed_worker_panic_fences_reads_and_survives_shutdown() {
     let directory = tempfile::tempdir().unwrap();
     let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
     storage.initialize().await.unwrap();
@@ -126,9 +126,7 @@ async fn reaped_worker_panic_fences_reads_and_survives_shutdown() {
         .await;
     assert!(matches!(result, Err(RecordReadError::WorkerPanicked)));
     assert_eq!(permit.available_permits(), 1);
-    while !source.workers.state.lock().unwrap().joins[0].is_finished() {
-        tokio::task::yield_now().await;
-    }
+    assert!(source.workers.state.lock().unwrap().closed);
     let gate = Arc::new(TestReadGate {
         entered: Notify::new(),
         panic_after_release: false,
@@ -151,8 +149,8 @@ async fn reaped_worker_panic_fences_reads_and_survives_shutdown() {
             }));
     }
     gate.entered.notified().await;
-    // The production read entry point reaps the failed worker; shutdown
-    // must still retain its cause while joining the other live owner.
+    // The observed failure has already fenced the production read entry point;
+    // shutdown retains its cause while joining the other live owner.
     assert!(matches!(
         source
             .read(
@@ -448,4 +446,62 @@ async fn shutdown_waits_for_identity_work_after_both_waiters_cancel() {
     assert_eq!(capacity.available_permits(), 2);
     drop(writer);
     storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reported_worker_panic_fences_reads_and_retains_other_work() {
+    let workers = ReadWorkers::new();
+    let gate = Arc::new(TestReadGate {
+        entered: Notify::new(),
+        panic_after_release: false,
+        open: Mutex::new(false),
+        released: Condvar::new(),
+    });
+    let live = {
+        let workers = workers.clone();
+        let gate = gate.clone();
+        tokio::spawn(async move { workers.run("held-physical-read", move || gate.wait()).await })
+    };
+    tokio::time::timeout(Duration::from_secs(10), gate.entered.notified())
+        .await
+        .unwrap();
+    let result = workers
+        .run("failed-physical-read", || panic!("physical read failed"))
+        .await;
+    // Observe the actual admission boundary before another run could reap the handle.
+    let admission = workers.admit();
+    let executions = Arc::new(AtomicUsize::new(0));
+    let attempted = executions.clone();
+    let next = workers
+        .run("read-after-panic", move || {
+            attempted.fetch_add(1, Ordering::SeqCst);
+        })
+        .await;
+    let mut drain = Box::pin(workers.shutdown());
+    let pending =
+        std::future::poll_fn(|cx| Poll::Ready(matches!(drain.as_mut().poll(cx), Poll::Pending)))
+            .await;
+    drop(drain);
+    let mut replacement = Box::pin(workers.shutdown());
+    let replacement_pending = std::future::poll_fn(|cx| {
+        Poll::Ready(matches!(replacement.as_mut().poll(cx), Poll::Pending))
+    })
+    .await;
+    // Release actual physical work before assertions so a failed probe is finite.
+    gate.release();
+    let shutdown = replacement.await;
+    live.await.unwrap().unwrap();
+    assert_eq!(result, Err(ReadWorkerError::WorkerPanicked));
+    assert_eq!(admission, Err(ReadWorkerError::WorkerPanicked));
+    assert_eq!(next, Err(ReadWorkerError::WorkerPanicked));
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+    assert!(
+        pending && replacement_pending,
+        "cancelled shutdown retains the live physical join"
+    );
+    assert_eq!(shutdown, Err(ReadWorkerError::WorkerPanicked));
+    assert_eq!(
+        workers.shutdown().await,
+        Err(ReadWorkerError::WorkerPanicked)
+    );
 }
