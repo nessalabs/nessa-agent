@@ -147,8 +147,24 @@ peek, the open overview), goes to the widget in front — the window's while it
 shows one, else a pane's while focus is inside that pane. The view has the first
 refusal (`onEscape`, for a view with somewhere to step back to); then the host,
 which goes back to the panes from the window. A widget in a pane is not closed
-by Escape, as a session pane is not. #328 spells out the cases (the session
-list's search, the edge peek) and checks each in `widgets.mjs`.
+by Escape, as a session pane is not. The cases, in order — each owner takes
+Escape and stops it, so none after it answers:
+
+| Escape arrives while | Who takes it | How it holds the rest off |
+| --- | --- | --- |
+| focus is in a menu or a dialog | the menu or dialog | `defaultPrevented`; every later owner also leaves a target inside one alone (`adapters/modal.ts`) |
+| Settings is open | Settings | the window under it is inert |
+| a drag is carrying | the drag, which cancels | stops it in capture (`split-panes/adapters/dom/drag.ts`) |
+| the edge peek is shown | the peek, which dismisses and nothing more | heard in capture and marked handled (`adapters/use-edge-peek.ts`) |
+| the overview is open | the overview | the content view is the overview |
+| the session list's search holds a query | the search, which clears it | marked handled; the next Escape goes on |
+| the window shows a widget | its view's last step back, else the host: back to the panes | from anywhere outside the above — the session list's rows, and its search once empty, included (the window covers the content region only) |
+| focus is inside a widget's pane | its view's last step back, else nothing | — |
+| anything else | nothing here | — |
+
+`workspace/adapters/dom/widget-escape.ts` answers the last four rows, and each
+row is a test (`widget-escape.test.tsx`, `use-edge-peek.test.tsx`,
+`ui/layouts/widgets.test.tsx`) and a check in `widgets.mjs`.
 
 The window's **layout is not persisted** (238), and widgets do not change that.
 
@@ -238,3 +254,27 @@ direction, in the forms of import `split-panes-boundary.mjs` reads.
   view's use cases) and #328 (the registry, the hosts, the widget pane's
   chrome, the transcript part, Escape and focus, the boundary rule, the
   module map in `docs/codebase-structure.md`, `widgets.mjs`). Part of #325.
+
+## Evidence (#328)
+
+- **Registration and the table**, as plain functions: `application/registry.test.ts`
+  (a duplicate id refused at composition with `WidgetRegistryError`, and at
+  run time against a native and an `app` plugin, changing nothing; a native
+  plugin never unregistered), `model/host-table.test.ts` (every row of _What a
+  host draws_, in every place), `application/escape-stack.test.ts`.
+- **The hosts**, in jsdom: `ui/hosts.test.tsx` (each row drawn by the card and
+  by the body; a plugin registered and unregistered while a host is on the
+  page; a different plugin under one id read by a fresh reader).
+- **The workspace**, in jsdom, through the whole shell and the sample plugin:
+  `workspace/ui/layouts/widgets.test.tsx` (the card's pane beside its
+  conversation, the trail back, close, ⌘1–4 and ⌘W, the accessory, the window
+  left every way, Escape's order, focus on open and close),
+  `widget-escape.test.tsx`, `use-edge-peek.test.tsx`.
+- **The boundary**: `scripts/architecture/desktop-verticals.mjs`, refusing
+  every later vertical in each form of import (`desktop-verticals.test.mjs`).
+- **In real browsers**: `verification/desktop/scripts/widgets.mjs`, ten checks
+  in Chromium and WebKit, both layouts (`verification/desktop/CHECKLIST.md` ›
+  _Widgets_). Building it found the edge peek's Escape attached an effect after
+  the reveal was on the page: Escape pressed in between dismissed nothing
+  (2 of 8 runs in WebKit). The peek now listens for its life, in
+  capture, and marks Escape handled; 40 of 40 held after.

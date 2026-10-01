@@ -16,6 +16,7 @@ import { IconButton } from "../chrome/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { useWorkspaceFrame } from "../workspace-frame"
 import { PaneMenuItems } from "./pane-menu"
+import { SessionAccessories } from "./session-accessories"
 import { tooltip } from "../../../ui/tooltip"
 import { useChooseHeaderPicture } from "../../../adapters/header-image"
 import {
@@ -25,7 +26,8 @@ import {
 } from "../../../model/header-image"
 
 /**
- * A pane's title bar: the session's mark, title and state, then its "…" menu
+ * A pane's title bar: the session's mark, title and state, what each widget
+ * plugin draws for the session (`SessionAccessories`), then its "…" menu
  * and ×. At the top of a conversation the heading below already says it all,
  * so the name shows only once the heading has scrolled away; a new session's
  * home speaks for itself. With one pane the bar moves the window; with more
@@ -94,6 +96,7 @@ export const PaneHeader = memo(function PaneHeader({
             className="workspace-spacer"
             data-tauri-drag-region={multi ? undefined : true}
           />
+          <SessionAccessories sessionId={sessionId} />
           {refusal ? (
             <span className="workspace-pane-refusal" role="status">
               {refusal}

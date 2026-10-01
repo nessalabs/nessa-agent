@@ -1,4 +1,6 @@
 /** Sample sessions in Nessa Labs and Personal. */
+import { sampleWidgets } from "../../../widgets/fixture/sample-widgets"
+import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import {
   edited,
   exchange,
@@ -9,6 +11,16 @@ import {
   text,
   type SampleSession,
 } from "./sample-content"
+import type { Part } from "../../model/transcript"
+
+/**
+ * The session the sample plugin's widgets belong to (`widgets/fixture/`):
+ * composition registers the plugin with it while the sample workspace is in
+ * use, and its conversation carries one of each.
+ */
+export const sampleWidgetSession = "widget-hosts"
+
+const widget = (ref: WidgetRef): Part => ({ kind: "widget", widget: ref })
 
 export const labsSamples: readonly SampleSession[] = [
   {
@@ -255,6 +267,31 @@ export const labsSamples: readonly SampleSession[] = [
       "Focus now uses a soft halo in the theme's edge light, the same colour as the resize glow.",
       7 * 24 * 60 - 60,
     ),
+  },
+  {
+    id: sampleWidgetSession,
+    channelId: "design-system",
+    title: "Widget hosts, every state",
+    model: models.opus,
+    updated: 9 * 24 * 60,
+    preview: "One widget of each kind a host can draw.",
+    messages: [
+      ["user", 9 * 24 * 60 + 4, [text("Show me each thing a widget host can draw.")]],
+      [
+        "agent",
+        9 * 24 * 60,
+        [
+          text("The sample trail: open it beside us, or over the panes."),
+          widget(sampleWidgets.trail),
+          text("And what a host says when it cannot draw one:"),
+          widget(sampleWidgets.unread),
+          widget(sampleWidgets.missing),
+          widget(sampleWidgets.off),
+          widget(sampleWidgets.unshowable),
+          widget(sampleWidgets.unregistered),
+        ],
+      ],
+    ],
   },
   {
     id: "detect-opencode",

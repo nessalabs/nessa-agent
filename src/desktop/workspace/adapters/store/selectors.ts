@@ -48,11 +48,13 @@ import {
   focusedChannel,
   paneIds,
   sessionIn,
+  widgetIn,
   type Answer,
   type Chrome,
   type WorkspaceState,
 } from "../../application/workspace-state"
 import { canClosePane } from "../../application/usecases/panes"
+import type { WidgetRef } from "../../../widgets/model/widget-ref"
 
 type Root = { workspace: WorkspaceState }
 
@@ -73,6 +75,9 @@ export const selectColumnCount = (state: Root) =>
 export const selectView = (state: Root): SessionView => state.workspace.view
 /** Whether the Agents overview fills the content region. */
 export const selectOverviewOpen = (state: Root) => state.workspace.content === "agents"
+/** The widget the window shows over the panes, if it shows one. */
+export const selectWindowWidget = (state: Root): WidgetRef | null =>
+  typeof state.workspace.content === "object" ? state.workspace.content.widget : null
 /** The session the overview's peek shows, as chosen in its list. */
 export const selectOverviewSelected = (state: Root) => state.workspace.overview.selected
 /** What the overview lists. */
@@ -185,6 +190,12 @@ export const selectFocusedSessionId = (state: Root): string | null => {
 export const selectPaneSession = (state: Root, pane: PaneKey): string | null => {
   const shown = state.workspace.panes && paneByKey(state.workspace.panes, pane)
   return (shown && sessionIn(shown)) ?? null
+}
+
+/** The widget a pane shows; none when it shows a session. Compare with `shallowEqual`. */
+export const selectPaneWidget = (state: Root, pane: PaneKey): WidgetRef | null => {
+  const shown = state.workspace.panes && paneByKey(state.workspace.panes, pane)
+  return (shown && widgetIn(shown)) ?? null
 }
 
 /** Whether a pane closes (`canClosePane`): what its close button and menu item offer. */

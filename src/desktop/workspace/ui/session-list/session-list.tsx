@@ -112,7 +112,11 @@ export const SessionList = memo(function SessionList() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Escape") setQuery("")
+                // With a query, Escape clears it and goes no further: a widget
+                // in the window is left only by the next one (ADR 326).
+                if (event.key !== "Escape" || !query) return
+                event.preventDefault()
+                setQuery("")
               }}
             />
             {query || !shortcut ? null : <kbd>{shortcut}</kbd>}

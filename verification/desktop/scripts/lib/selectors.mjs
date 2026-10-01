@@ -10,6 +10,7 @@
 export const content = {
   panes: "panes",
   overview: "agents",
+  widget: "widget",
 }
 
 /** CSS selectors, grouped by the part of the window they belong to. */
@@ -49,6 +50,20 @@ export const css = {
   lifted: "[data-drag-lifted]",
   dragging: "[data-workspace][data-drag-carrying]",
   dropAnnouncer: '[data-workspace] [role="status"][aria-live="polite"]',
+
+  // Widgets (ADR 326) and the sample plugin that shows them (src/desktop/widgets/fixture/)
+  widgetCard: "[data-widget-inline]", // a widget's card in a message; its value says what it draws
+  widgetPane: "[data-widget-pane]", // a pane showing a widget
+  widgetBody: "[data-widget-body]", // a widget's body in a pane or the window, where its caret lands
+  widgetWindow: "[data-widget-window]", // the window: a widget over the panes
+  chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
+  widgetTrail: '[data-slot="breadcrumb"]', // a widget's way back, in its chrome
+  sampleCard: "[data-sample-card]", // the sample trail's own card
+  sampleView: "[data-sample-view]", // a sample widget's view; its value is the widget's id
+  sampleStep: "[data-sample-step]", // a step of the trail, which opens its detail
+  sampleDetail: "[data-sample-detail]", // the trail's open detail
+  sampleAccessory: "[data-sample-accessory]", // the sample plugin's accessory in its session's header
+  sampleSize: "[data-sample-size]", // the place's size as the sample view was told it, "<width>x<height>"
 
   // Quick switcher (⌘K, ⌘\\)
   switcherField: '[role="dialog"] input', // the switcher's search field
@@ -163,6 +178,8 @@ export const safeAreaTokens = {
  */
 export const modules = {
   drop: "/src/desktop/split-panes/model/drop.ts",
+  /** What a widget host says in each case (`hostLines`). */
+  hostTable: "/src/desktop/widgets/model/host-table.ts",
 }
 
 /** The SDK's model catalogue, which the composer reads; scripts read it too, never retype it. */
@@ -269,6 +286,12 @@ export const names = {
   /** Its least level is None, which `modelWithoutFast` does not offer. */
   modelWithLeastLevel: "GPT-5.6 Sol",
   alwaysAllow: "Always Allow",
+  /** The sample session (in-memory source) whose conversation carries a widget of each state. */
+  widgetSession: "Widget hosts, every state",
+  openWidget: "Open",
+  openInWindow: "Open in Window",
+  closePane: "Close Pane",
+  closeWindow: "Close",
 }
 
 /** Console noise that is known to be harmless (see CHECKLIST.md, "Console errors"). */

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { inModal } from "./modal"
 import {
   edgePeekHidden,
   stepEdgePeek,
@@ -59,14 +60,25 @@ export function useEdgePeek(enabled: boolean, docked: boolean) {
     if (!enabled) send(docked ? "dock" : "dismiss")
   }, [enabled, docked, send])
 
+  // A shown reveal, not handing off to the docked sidebar, takes Escape and
+  // keeps it, after a menu or a dialog's own: heard first (capture) and
+  // marked handled, so whatever else answers Escape — the overview, a widget
+  // (ADR 326) — leaves it be. Read as rendered, by one listener for the
+  // hook's life: the reveal is on the page from its commit, so its Escape is
+  // too, not an effect later.
+  const ownsEscape = state.shown && state.pending !== "handoff"
+  const owns = useRef(ownsEscape)
+  owns.current = ownsEscape
   useEffect(() => {
-    if (!state.shown || state.pending === "handoff") return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") send("dismiss")
+      if (event.key !== "Escape" || !owns.current || event.defaultPrevented) return
+      if (inModal(event.target)) return
+      event.preventDefault()
+      send("dismiss")
     }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [state.shown, state.pending, send])
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
+  }, [send])
 
   // The pointer and keyboard focus each hold the reveal open: it hides once
   // neither is inside — the edge strip or the revealed sidebar — so choosing

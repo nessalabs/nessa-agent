@@ -18,7 +18,7 @@ import {
   type PaneLayout,
 } from "../../split-panes/model/pane-layout"
 import { paneItemKey, paneItemOf, sessionItem, type PaneItem } from "../model/pane-item"
-import { sameWidget, type WidgetRef } from "../model/widget-ref"
+import { sameWidget, type WidgetRef } from "../../widgets/model/widget-ref"
 import { keptConversations, retention, type Removal } from "../model/retention"
 import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overview/filter"
 import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
@@ -256,6 +256,12 @@ export function itemIn(pane: Pane): PaneItem | null {
 export function sessionIn(pane: Pane): string | undefined {
   const item = itemIn(pane)
   return item?.kind === "session" ? item.sessionId : undefined
+}
+
+/** The widget a pane shows; none when it shows a session. */
+export function widgetIn(pane: Pane): WidgetRef | undefined {
+  const item = itemIn(pane)
+  return item?.kind === "widget" ? item.widget : undefined
 }
 
 /** The pane showing `item`, if one does. */

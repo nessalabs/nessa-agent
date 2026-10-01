@@ -216,16 +216,18 @@ writing the full defaults on first launch is buying.
   revisions, how the window fits the side columns, failures, retention,
   session groups, the new-session lifecycle, and what a pane shows —
   `pane-item.ts`, a session or a widget, with the one codec to split panes'
-  opaque key, and `widget-ref.ts`, held there until the widgets vertical of
-  [ADR 326](adr/todo/326-widgets.md) exists), `application/` (the
+  opaque key), `application/` (the
   `WorkspaceSource` port and pure use cases over the workspace's state),
   `adapters/` (the Redux slice, commands, effects, typed hooks, selectors and
   the split panes' source in `store/`; the in-memory source in `in-memory/`;
-  focus, the panes' room, what the workspace adds to a drag, keys and the
-  clock in `dom/`) and `ui/` (each component once, and `layouts/` that only
-  arrange them; `ui/overview/` the Agents overview, with its rules in
-  `model/overview/`), with `testing.ts` the fake source and store its tests
-  share. The
+  focus, Escape for the widget in front (`widget-escape.ts`), the panes'
+  room, what the workspace adds to a drag, keys and the clock in `dom/`; the
+  host callbacks each place gives a widget's view in
+  `store/widget-hosts.ts`) and `ui/` (each component once, and `layouts/`
+  that only arrange them; `ui/panes/` a session's pane, a widget's
+  (`widget-pane.tsx`) and the window over them (`widget-window.tsx`);
+  `ui/overview/` the Agents overview, with its rules in `model/overview/`),
+  with `testing.ts` the fake source and store its tests share. The
   window has its own store (`src/desktop/store.ts`) and composition
   (`src/desktop/dependencies.ts`). How the window's keys are matched and
   written on this platform is the window's, not the workspace's:
@@ -239,6 +241,24 @@ writing the full defaults on first launch is buying.
   (its map is `index.ts`), a typed catalogue (`model/`) rendered generically
   (`ui/`). See
   [adr/done/238-desktop-workspace-frontend.md](adr/done/238-desktop-workspace-frontend.md).
+- Widgets are the desktop window's vertical for what a plugin draws
+  ([ADR 326](adr/todo/326-widgets.md)): `src/desktop/widgets/` (its map is
+  `index.ts`) owns the reference (`model/widget-ref.ts`), the states and
+  places, and the one table of what a host draws for each
+  (`model/host-table.ts`); the registry plugins are looked up in — native
+  ones registered in composition, `app` ones (MCP Apps, ADR 344) at run time —
+  and a host's Escape (`application/`); the registry's React context and the
+  host context read from the page (`adapters/`); the plugin contract and the
+  hosts — the card in a message, a widget's body in a pane or the window
+  (`ui/`); and the sample plugin composition registers while the sample
+  workspace is in use (`fixture/`). It knows no plugin and imports no other
+  vertical. The workspace draws the chrome around the hosts and carries out
+  their callbacks with its own commands. The desktop's verticals depend one
+  way, widgets ← workspace ← subagents ← experiments, each importing only
+  those before it; `scripts/architecture/desktop-verticals.mjs` refuses an
+  import against that direction, in every form of import it reads, and the
+  window's composition (`main.tsx`, `dependencies.ts`), which imports them
+  all, is outside the rule.
 - Split panes are a module of the desktop window's, not of the workspace:
   `src/desktop/split-panes/` (its map is `index.ts`) owns the pane layout, its
   sizing, drops and the drag's phases (`model/`, pure), the port a host

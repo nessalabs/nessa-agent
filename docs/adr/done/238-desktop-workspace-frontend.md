@@ -249,7 +249,7 @@ pane marks its home `data-reshaped` when that name changes under it
 plays only its own entrance, as it did before. Focus on the scene's controls
 (Customize, the picture's framing) when the scene steps aside goes to the
 focused pane's composer, as focus that falls away from anything in a pane
-does (`adapters/dom/focus.ts`); a framing being adjusted waits, as it was,
+does (`adapters/dom/focus.ts`; a widget's body in a widget's pane, ADR 326); a framing being adjusted waits, as it was,
 for the scene to come back.
 
 `responsive.mjs --only home-shape` measures, in Chromium and WebKit: the
@@ -345,7 +345,7 @@ layer's width — whether the peek fits beside the list — is known before it
 opens, so its first frame is laid out once. Opened, the keyboard lands on the
 current row; left — by Escape, or by any command that brings the panes back,
 one that changed nothing else included — it goes back to the focused pane's
-composer; an answer given in it — by key or click — moves it to the next
+composer (its body, for a pane showing a widget: ADR 326); an answer given in it — by key or click — moves it to the next
 request. ⌘R puts the caret in the reply pill of the session the keyboard is
 on: the peek it sits in is drawn at once for it (not a step behind, as the
 list's walk draws it), so what is typed next lands in the pill. **The caret
@@ -438,7 +438,10 @@ whenever another pane takes focus — a split, ⌘N, ⌘W, ⌘1–4, ⇧⌘[ ⇧
 overview — the caret lands in its composer; when what held the
 caret went away (an answered approval), it lands there too. Focus in a dialog
 or a menu, or in a list walked with the arrow keys, is left alone. Closing ⌘K
-without a pick, or Settings, gives focus back to what opened it.
+without a pick, or Settings, gives focus back to what opened it. [ADR
+326](../todo/326-widgets.md) amends both halves of this rule: a pane showing a
+widget takes the caret in its body rather than a composer, and while the
+window shows a widget, focus that falls away lands in that widget's body.
 
 **Drag and drop** is carried by the pointer (`split-panes/adapters/dom/drag.ts`), not the
 browser's drag, and a pane's header carries the pane, never the window (no
@@ -467,7 +470,7 @@ button carries**; and **the zone settles at rest**.
 | carrying | a move of another pointer, or to where it already is | carrying | — (resting is not restarted) |
 | carrying | no move for 150ms (`restAfter`, `still`) | carrying | the pointer's heading has aged out: the zone is decided again as at rest, and previewed a frame later |
 | carrying | release of its pointer while the page shows a zone that offers something (`dropOutcome`) | dropping | the zone shown is committed — what the person saw, never one decided again at the release, so a heading that ages out as the button lifts cancels nothing — by `commitDrop`, in the room read as the press began, and the copy flies into its rect — already its shape, so it only moves, unless the release came mid-change; the click the release makes is swallowed |
-| carrying | release of its pointer with no zone shown that offers something: before any preview was shown (a flick), off the grid, over a side column, the carried pane's own place, a side the room refuses, no pane in sight | cancelling (home) | the copy flies home, taking its own size again, as the panes go back to theirs; the click is swallowed |
+| carrying | release of its pointer with no zone shown that offers something: before any preview was shown (a flick), off the grid, over a side column, the carried pane's own place, a side the room refuses, no pane in sight (under the overview, or under a widget in the window: [ADR 326](../todo/326-widgets.md)) | cancelling (home) | the copy flies home, taking its own size again, as the panes go back to theirs; the click is swallowed |
 | carrying | release of another pointer | carrying | — (no click is swallowed for it) |
 | carrying | Escape | cancelling (home) | as above; Escape goes no further |
 | carrying | another button, `lostpointercapture`, `pointercancel`, the window's blur | cancelling (home) | as above; with the press let go, a later move starts nothing |

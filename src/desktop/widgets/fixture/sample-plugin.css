@@ -1,0 +1,64 @@
+/* The sample plugin's views: plain, in the window's own tokens. */
+.sample-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px;
+  color: var(--desktop-ink-2);
+}
+
+.sample-view h2 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--desktop-text-title);
+  font-weight: 600;
+}
+
+.sample-view p {
+  margin: 0;
+  color: var(--desktop-muted);
+}
+
+.sample-steps {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+}
+
+.sample-actions,
+.sample-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.sample-detail {
+  flex-direction: column;
+}
+
+.sample-size {
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-footnote);
+  font-variant-numeric: tabular-nums;
+}
+
+.sample-card {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 12px;
+}
+
+.sample-card > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

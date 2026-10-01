@@ -291,6 +291,60 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   `in-memory-source.test.ts` (the source's line at each beat).
 
 
+## Widgets
+
+_ADR 326_ ([`docs/adr/todo/326-widgets.md`](../../docs/adr/todo/326-widgets.md)):
+a plugin's view is drawn inline in a message, in a pane of its own, or in the
+window over the panes; Escape and focus as its _Focus_ and _Escape_ say. The
+scripts drive the sample plugin the sample workspace registers
+(`src/desktop/widgets/fixture/`), on its session "Widget hosts, every state".
+
+- [ ] **A card opens its widget in a pane beside its conversation, and the
+  window over the panes, and Escape goes back** — the pane's rect beside the
+  conversation's, the caret in its body; the window inside the chat area and
+  clear of the session list, the caret in its body; the panes as they were
+  after Escape, the caret back in the focused pane's body.
+  _Check:_ `widgets.mjs --only card-pane-window`.
+- [ ] **The window is left as the overview is, with ⌘W its own**: its close,
+  ⌘W (no pane beneath it closes), a session chosen; ⌘0 from it opens the
+  overview. _ADR 326 › Places._ _Check:_ `widgets.mjs --only window-left`.
+- [ ] **Escape steps back in a view first, and the caret stays in the widget**:
+  a detail open in a pane or the window is closed by Escape, the caret falls
+  back to the widget's body, a second detail is still Escape's to close; in
+  the window the next Escape goes back to the panes; a widget pane is never
+  closed by Escape. _Check:_ `widgets.mjs --only escape-steps`.
+- [ ] **What a host cannot draw, it says**: the off and missing cards say the
+  hosts' own lines (`hostDraws`, read from the page). _ADR 326 › What a host
+  draws._ _Check:_ `widgets.mjs --only off-missing` (`--mode dev`); every row
+  of the table, in every place, is `host-table.test.ts` and `hosts.test.tsx`.
+- [ ] **⌘1–4 and ⌘W landing on a widget pane put the caret in its body.**
+  _ADR 238 › Focus follows the focused pane_, as ADR 326 amends it.
+  _Check:_ `widgets.mjs --only focus-keys`.
+- [ ] **Escape from a session row leaves the window; from the search, it
+  clears the query first and leaves on the next.** _Check:_ `widgets.mjs
+  --only escape-row-search` (the search: three columns, which has the list).
+- [ ] **With the edge peek shown over the window, Escape dismisses the peek
+  and nothing more.** _Check:_ `widgets.mjs --only escape-peek`, run ten times
+  in each engine and layout when the peek's Escape changes (it failed 2 of 8
+  in WebKit while the peek's listener came an effect after its commit).
+- [ ] **Beside the window the sidebar keeps the channel and the focused
+  session marked, and the Agents entry unmarked**, in both layouts.
+  _Check:_ `widgets.mjs --only sidebar-marks`.
+- [ ] **A session row carried over the window finds no target**: no zone said,
+  no placeholder, and the release changes neither the panes nor the window.
+  _ADR 238 › Drag and drop_, the no-target row. _Check:_ `widgets.mjs --only
+  drag-over-window`.
+- [ ] **A view is told its place's size**, as the place changes: a card grown
+  by its content alone and by a font, a pane after a window resize and a
+  split, the window after a resize — the size in its host context within a
+  pixel of the place's content box. _ADR 326 › The contract_ (the host
+  context). _Check:_ `widgets.mjs --only host-size`; it fails when the
+  observer stops after its first report.
+- [ ] **A widget pane's chrome fits a narrow pane in a short window**, and the
+  window's at the same size: no header overflow, the trail and close inside
+  it, the body with room. _Check:_ `widgets.mjs --only narrow-short` (1000 ×
+  560, three panes).
+
 ## Composer and approval card
 
 - [ ] **The approval card arranges itself by its own width** at 280, 340,

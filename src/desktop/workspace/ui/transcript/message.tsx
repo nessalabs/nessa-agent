@@ -1,6 +1,8 @@
 import { memo } from "react"
 import { discardUnsent, resendMessage } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
+import { useInlineWidgetHost } from "../../adapters/store/widget-hosts"
+import { InlineWidget, type WidgetRef } from "../../../widgets"
 import { groupSteps, type Message as MessageValue } from "../../model/transcript"
 import { RichText } from "./rich-text"
 import { ToolSteps } from "./tool-steps"
@@ -9,7 +11,8 @@ import { failureCopy } from "../failure-copy"
 
 /**
  * One message. The person's is a bubble, saying so when it has not reached
- * the agent; the agent's is prose, steps, code and lists. Memoised on the
+ * the agent; the agent's is prose, steps, code, lists and widgets, each a
+ * card its plugin draws (`InlineWidget`). Memoised on the
  * message itself, so a reply streaming in renders only the message it grows.
  */
 export const Message = memo(function Message({
@@ -69,6 +72,10 @@ export const Message = memo(function Message({
                 <code>{group.code}</code>
               </pre>
             )
+          if (group.kind === "widget")
+            return (
+              <MessageWidget key={index} sessionId={sessionId} widget={group.widget} />
+            )
           if (group.kind === "list")
             return (
               <ul key={index} className="workspace-list-items">
@@ -85,6 +92,12 @@ export const Message = memo(function Message({
     </div>
   )
 })
+
+/** A widget in a message: its card, whose pane opens beside this conversation. */
+function MessageWidget({ sessionId, widget }: { sessionId: string; widget: WidgetRef }) {
+  const host = useInlineWidgetHost(widget, sessionId)
+  return <InlineWidget widget={widget} host={host} />
+}
 
 /** Why a message did not reach the agent, and the two ways on: send it again, or let it go. */
 function Unsent({

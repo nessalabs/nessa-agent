@@ -20,7 +20,7 @@ import { chosen, drawn, fitted, type SideColumn } from "../../model/side-column"
 import { ColumnHeader } from "../../ui/column-header"
 import { EdgePeekStrip } from "../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../ui/history-buttons"
-import { focusComposer } from "../../workspace"
+import { focusInFront } from "../../workspace"
 import { settingsSidebar, settingsSidebarFits } from "../model/settings-sidebar"
 import {
   firstTabOf,
@@ -183,14 +183,14 @@ function SettingsView({
   const Page = settingsTabPages[tab]
 
   // Focus comes in on opening and goes back on closing: to what opened
-  // Settings, or — gone meanwhile — to the focused pane's composer.
+  // Settings, or — gone meanwhile — to what is in front (`focusInFront`).
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null
     rootRef.current?.focus()
     return () => {
       if (opener && opener !== document.body && opener.isConnected)
         opener.focus({ preventScroll: true })
-      else focusComposer()
+      else focusInFront()
     }
   }, [])
 
