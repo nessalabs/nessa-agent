@@ -22,8 +22,19 @@ function fixture() {
   const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" })
   mkdirSync(repo)
   git("init", "-q")
-  git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
+  git(
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@t",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "base",
+  )
   write("src-tauri/src/main.rs", "fn main() {}\n")
+  write("src-tauri/src/with space.rs", "\n")
   write("src-tauri/capabilities/default.json", "{}\n")
   write("src/app.tsx", "export {}\n")
 
@@ -31,21 +42,35 @@ function fixture() {
   mkdirSync(bin)
   writeFileSync(join(bin, "gh"), "#!/bin/sh\necho 'gh reached' >&2\nexit 97\n")
   chmodSync(join(bin, "gh"), 0o755)
-  const env = { ...process.env, XDG_CACHE_HOME: join(root, "cache"), PATH: `${bin}:${process.env.PATH}` }
-  const run = (...args) => spawnSync("bash", [script, ...args], { cwd: repo, env, encoding: "utf8" })
+  const env = {
+    ...process.env,
+    XDG_CACHE_HOME: join(root, "cache"),
+    PATH: `${bin}:${process.env.PATH}`,
+  }
+  const run = (...args) =>
+    spawnSync("bash", [script, ...args], { cwd: repo, env, encoding: "utf8" })
 
-  // A build of the current tree whose inputs are a source file and a watched directory.
+  // A build of the current tree whose inputs are two source files, one with a
+  // space in its path, and a watched directory.
+  const lines =
+    "src-tauri/capabilities\nsrc-tauri/src/main.rs\nsrc-tauri/src/with space.rs\n"
   const record = () => {
     const inputs = join(root, "inputs.txt")
-    writeFileSync(inputs, "src-tauri/capabilities\nsrc-tauri/src/main.rs\n")
+    writeFileSync(inputs, lines)
     const key = run("--key", inputs).stdout.trim()
     const build = join(root, "cache", "nessa", "macos-app", key)
     mkdirSync(build, { recursive: true })
-    writeFileSync(join(build, "inputs.txt"), "src-tauri/capabilities\nsrc-tauri/src/main.rs\n")
+    writeFileSync(join(build, "inputs.txt"), lines)
     writeFileSync(join(build, "nessa-app"), "")
     return join(build, "nessa-app")
   }
-  return { root, write, run, record, done: () => rmSync(root, { recursive: true, force: true }) }
+  return {
+    root,
+    write,
+    run,
+    record,
+    done: () => rmSync(root, { recursive: true, force: true }),
+  }
 }
 
 test("an unchanged tree reuses the recorded build", () => {
@@ -87,15 +112,53 @@ test("an edit to an input file asks CI for a new build", () => {
   }
 })
 
-test("a file added to a watched directory asks CI for a new build", () => {
-  const f = fixture()
+for (const [what, path, text] of [
+  ["a file added to a watched directory", "src-tauri/capabilities/extra.json", "{}\n"],
+  [
+    "an edit to an input whose path has a space",
+    "src-tauri/src/with space.rs",
+    "// edited\n",
+  ],
+  ["a build script no build listed yet", "crates/new/build.rs", "fn main() {}\n"],
+  ["a toolchain file no build listed yet", "rust-toolchain.toml", "[toolchain]\n"],
+]) {
+  test(`${what} asks CI for a new build`, () => {
+    const f = fixture()
+    try {
+      f.record()
+      f.write(path, text)
+      const result = f.run()
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /gh reached/)
+    } finally {
+      f.done()
+    }
+  })
+}
+
+test("dep-info inputs are the root's files, relative, with escaped spaces and .. resolved", () => {
+  const root = mkdtempSync(join(tmpdir(), "depinfo-"))
   try {
-    f.record()
-    f.write("src-tauri/capabilities/extra.json", "{}\n")
-    const result = f.run()
-    assert.notEqual(result.status, 0)
-    assert.match(result.stderr, /gh reached/)
+    const depinfo = join(root, "nessa-app.d")
+    writeFileSync(
+      depinfo,
+      `${root}/target/debug/nessa-app: ${root}/src-tauri/src/main.rs ${root}/src-tauri/src/with\\ space.rs \\\n` +
+        ` ${root}/crates/a/src/../../../protocol/defaults/ports.json /home/x/.cargo/registry/serde/lib.rs\n\n` +
+        `${root}/src-tauri/src/main.rs:\n`,
+    )
+    const inputs = execFileSync(
+      "python3",
+      [script.replace("macos-app.sh", "host_inputs.py"), "from-depinfo", depinfo, root],
+      {
+        encoding: "utf8",
+      },
+    )
+    assert.deepEqual(inputs.trim().split("\n"), [
+      "protocol/defaults/ports.json",
+      "src-tauri/src/main.rs",
+      "src-tauri/src/with space.rs",
+    ])
   } finally {
-    f.done()
+    rmSync(root, { recursive: true, force: true })
   }
 })

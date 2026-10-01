@@ -32,7 +32,9 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-boat exec --port "${port}" --port 1420 bash scripts/remote/stack.sh &
+# Its stdin is not the terminal: a background job that reads it, or sets its
+# modes, is stopped by the terminal until it is in the foreground.
+boat exec --port "${port}" --port 1420 bash scripts/remote/stack.sh </dev/null &
 stack_pid=$!
 
 # Built while the stack starts; usually already downloaded.

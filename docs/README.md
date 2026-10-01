@@ -2,6 +2,8 @@
 
 [Gateway chat setup and current contracts](guides/gateway-chat.md)
 
+[Building off the laptop: Boat for Linux work, CI for the macOS host](guides/remote-builds.md)
+
 
 Project-specific documentation for Nessa. All contributors follow the
 [canonical coding standards](../CODING_STANDARDS.md), including the

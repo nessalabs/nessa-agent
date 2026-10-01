@@ -524,6 +524,12 @@ cmd_remove() {
   [[ -n "$path" ]] || path="$(worktree_path "$1")"
   [[ -d "$path" ]] || die "no worktree for '$1' (looked at $path)"
 
+  # Its Boat builder (scripts/remote/boat.sh) goes with it; one never made is
+  # nothing to do. A builder is a paid machine, not something to leave behind.
+  if [[ -f "$path/scripts/remote/boat.sh" ]]; then
+    (cd "$path" && bash scripts/remote/boat.sh forget --yes) || true
+  fi
+
   # Legacy worktrees may still link to the original clone's target. Unlink the
   # path itself before asking git to remove the checkout; never traverse it.
   if [[ -L "$path/target" ]]; then

@@ -181,18 +181,21 @@ release stage="prod" mode="shipping":
 release stage="prod" mode="shipping":
     {{if mode == "fast" { "set CARGO_PROFILE_RELEASE_LTO=false&& set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16&& set CARGO_PROFILE_RELEASE_OPT_LEVEL=1&& set CARGO_PROFILE_RELEASE_STRIP=false&& " } else if mode == "shipping" { "" } else { error("Use just release [stage] or just release [stage] fast") }}}node scripts/desktop/build.mjs --stage "%1" {{if mode == "fast" { fast-bundles } else { release-bundles }}}
 
-# Rust workspace tests. Arguments go to nextest: `just test -p nessa-server`.
+# Rust workspace tests. Arguments go to nextest: `just test -E 'test(name)'`.
+# The desktop host without `custom-protocol`, as CI tests it
+# (scripts/check-desktop.mjs), so no frontend build has to come first.
 [positional-arguments]
 test *args:
-    cargo nextest run --workspace "$@"
+    cargo nextest run --workspace --exclude nessa-app --no-tests=warn "$@"
+    cargo nextest run -p nessa-app --no-default-features --no-tests=warn "$@"
 
 # This checkout syncs there on save, Cargo's build output stays there, and the
-# browser UI is forwarded to 127.0.0.1:1420. See scripts/remote/boat.sh.
+# browser UI and gateway are forwarded to 127.0.0.1:1420 and :7421 when free.
 # Run any recipe on the Linux build sandbox: `just remote test`, `just remote web`.
 [unix]
 [positional-arguments]
 remote +args:
-    bash scripts/remote/boat.sh exec --port 1420 just "$@"
+    bash scripts/remote/boat.sh exec --try-port 1420 --try-port 7421 just "$@"
 
 # The host binary is CI's build of this working tree (scripts/remote/macos-app.sh).
 # Desktop app on this Mac with nothing compiled here: gateway and UI on the sandbox.
