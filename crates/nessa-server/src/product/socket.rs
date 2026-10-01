@@ -557,7 +557,7 @@ async fn dispatch_passive_read(
     deadline: Instant,
 ) -> (WireResponse, Option<RecordReadLease>) {
     let request_id = frame.id.clone();
-    let result = timeout_at(deadline, async move {
+    let reading = async move {
         let (current, _) = match current_identity_inner(state, session).await {
             Ok(current) => current,
             Err(_) => {
@@ -601,9 +601,18 @@ async fn dispatch_passive_read(
             Ok((text, lease)) => (WireResponse::record(text), Some(lease)),
             Err(code) => (WireResponse::ordinary(failure(&request_id, code)), None),
         }
-    })
-    .await;
-    result.unwrap_or_else(|_| {
+    };
+    // Tokio polls a ready inner future before its timer. Exclude expired
+    // admission before that poll and a result completing at the deadline.
+    let result = if Instant::now() >= deadline {
+        None
+    } else {
+        timeout_at(deadline, reading)
+            .await
+            .ok()
+            .filter(|_| Instant::now() < deadline)
+    };
+    result.unwrap_or_else(|| {
         (
             WireResponse::ordinary(failure(&request_id, "read_timeout")),
             None,
@@ -1791,6 +1800,23 @@ mod tests {
         }
     }
 
+    struct CountingRecordAuthority {
+        authority: Arc<Authority>,
+        reads: AtomicU64,
+        delay: Duration,
+    }
+    impl AccessReader for CountingRecordAuthority {
+        fn read<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+            Box::pin(async move {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                if !self.delay.is_zero() {
+                    tokio::time::sleep(self.delay).await;
+                }
+                self.authority.read(id).await
+            })
+        }
+    }
+
     struct UnreachableRecordSource;
     impl RecordReadSource for UnreachableRecordSource {
         fn read<'a>(
@@ -1884,6 +1910,92 @@ mod tests {
             assert_eq!(Instant::now() - start, Duration::from_secs(10));
             assert_eq!(permits.available_permits(), available);
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expired_passive_read_does_not_poll_ready_authority() {
+        for method in [
+            "conversation.recordsHead",
+            "conversation.recordsPage",
+            "conversation.catalogueHead",
+            "conversation.catalogueManifest",
+            "conversation.catalogueResolve",
+        ] {
+            for (elapsed, code, reads) in [
+                (9, "invalid_request", 1),
+                (10, "read_timeout", 0),
+                (11, "read_timeout", 0),
+            ] {
+                let (mut state, authority) = fixture(MembershipRole::Member);
+                let session = authenticate(&state).await;
+                let authority = Arc::new(CountingRecordAuthority {
+                    authority,
+                    reads: AtomicU64::new(0),
+                    delay: Duration::ZERO,
+                });
+                state.access = authority.clone();
+                state.record_source = Some(Arc::new(UnreachableRecordSource));
+                let permits = Arc::new(Semaphore::new(1));
+                let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
+                let deadline = Instant::now() + Duration::from_secs(10);
+                tokio::time::advance(Duration::from_secs(elapsed)).await;
+                let (response, lease) = dispatch_passive_read(
+                    &state,
+                    &session,
+                    request("expired", method),
+                    lease,
+                    deadline,
+                )
+                .await;
+                let WireResponse::Ordinary(message) = response else {
+                    panic!("ordinary refusal expected")
+                };
+                let OutgoingMessage::Response(response) = *message else {
+                    panic!("correlated refusal expected")
+                };
+                assert_eq!(response.id, "expired");
+                assert_eq!(response.error.unwrap().code, code);
+                assert_eq!(authority.reads.load(Ordering::SeqCst), reads);
+                assert!(lease.is_none());
+                assert_eq!(permits.available_permits(), 1);
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn passive_read_ready_result_at_expiry_is_a_timeout() {
+        let (mut state, authority) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let authority = Arc::new(CountingRecordAuthority {
+            authority,
+            reads: AtomicU64::new(0),
+            delay: Duration::from_secs(10),
+        });
+        state.access = authority.clone();
+        state.record_source = Some(Arc::new(UnreachableRecordSource));
+        let permits = Arc::new(Semaphore::new(1));
+        let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
+        let start = Instant::now();
+        let (response, lease) = dispatch_passive_read(
+            &state,
+            &session,
+            request("ready", "conversation.recordsHead"),
+            lease,
+            start + Duration::from_secs(10),
+        )
+        .await;
+        let WireResponse::Ordinary(message) = response else {
+            panic!("ordinary refusal expected")
+        };
+        let OutgoingMessage::Response(response) = *message else {
+            panic!("correlated timeout expected")
+        };
+        assert_eq!(response.id, "ready");
+        assert_eq!(response.error.unwrap().code, "read_timeout");
+        assert_eq!(Instant::now() - start, Duration::from_secs(10));
+        assert_eq!(authority.reads.load(Ordering::SeqCst), 1);
+        assert!(lease.is_none());
+        assert_eq!(permits.available_permits(), 1);
     }
 
     struct MustNotRun;
