@@ -272,7 +272,7 @@ direction, in the forms of import `split-panes-boundary.mjs` reads.
   `widget-escape.test.tsx`, `use-edge-peek.test.tsx`.
 - **The boundary**: `scripts/architecture/desktop-verticals.mjs`, refusing
   every later vertical in each form of import (`desktop-verticals.test.mjs`).
-- **In real browsers**: `verification/desktop/scripts/widgets.mjs`, ten checks
+- **In real browsers**: `verification/desktop/scripts/widgets.mjs`, twelve checks
   in Chromium and WebKit, both layouts (`verification/desktop/CHECKLIST.md` ›
   _Widgets_). Building it found the edge peek's Escape attached an effect after
   the reveal was on the page: Escape pressed in between dismissed nothing

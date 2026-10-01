@@ -3,7 +3,8 @@
  * and handed to what draws it. Each plugin's hook is its own, so the answer
  * is read under a key per registered plugin: a plugin registered, replaced
  * or unregistered while a host is on the page mounts a fresh reader, and no
- * reader ever calls a different hook than the one it began with.
+ * reader ever calls a different hook than the one it began with
+ * (`hosts.test.tsx`, "reads a widget under a fresh reader").
  */
 import { useMemo, type ReactNode } from "react"
 import { useWidgetPlugin } from "../adapters/react/registry-context"

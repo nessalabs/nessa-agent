@@ -289,6 +289,8 @@ export const names = {
   alwaysAllow: "Always Allow",
   /** The sample session (in-memory source) whose conversation carries a widget of each state. */
   widgetSession: "Widget hosts, every state",
+  /** The channel the sample session is in. */
+  widgetChannel: "design-system",
   openWidget: "Open",
   openInWindow: "Open in Window",
   closePane: "Close Pane",

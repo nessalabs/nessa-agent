@@ -21,6 +21,7 @@ import type { PaneFrame } from "../../../split-panes"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
 import { IconButton } from "../chrome/icon-button"
 import { useWorkspaceFrame } from "../workspace-frame"
+import { headerBar } from "./header-bar"
 import { usePaneFocus } from "./use-pane-focus"
 import { WidgetTrail } from "./widget-trail"
 
@@ -92,6 +93,7 @@ function WidgetPaneParts({
   const origin = widgetOrigin(answer)
   const title = widgetTitle(answer)
   const host = usePaneWidgetHost(pane, widget, origin, steps)
+  const bar = headerBar({ pane, multi })
   // Back to the conversation: focused where it is, or opened beside this pane.
   const toOrigin = useCallback(
     (sessionId: string) => dispatch(openBeside({ sessionId, target: pane })),
@@ -108,21 +110,11 @@ function WidgetPaneParts({
       aria-label={title}
       {...focusHandlers}
     >
-      <header
-        className="workspace-pane-header"
-        // Held to the pane's top left as a drag's preview reshapes it.
-        data-split-keeps="top-left"
-        data-tauri-drag-region={multi ? undefined : true}
-        // With more than one pane, the bar carries the pane.
-        data-drag-pane={multi ? pane : undefined}
-      >
+      <header className="workspace-pane-header" {...bar.bar}>
         <div className="workspace-pane-name" data-shown>
           <WidgetTrail origin={origin} title={title} onOrigin={toOrigin} />
         </div>
-        <span
-          className="workspace-spacer"
-          data-tauri-drag-region={multi ? undefined : true}
-        />
+        <span className="workspace-spacer" {...bar.spacer} />
         <div className="workspace-pane-actions">
           {offersWindow(answer, offeredBy(plugin)) ? (
             <IconButton

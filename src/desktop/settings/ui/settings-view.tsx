@@ -110,8 +110,8 @@ export function useSettingsOpening(): { open: boolean; close: () => void } {
 /**
  * Settings over the window. Modal: the window under it is inert while it is
  * open (the window does that, from `useSettingsOpening`), and focus goes back
- * to what opened it when it closes — or, gone meanwhile, to the focused
- * pane's composer.
+ * to what opened it when it closes — or, gone meanwhile, to what is in
+ * front (`focusInFront`).
  */
 export function SettingsHost({
   open,

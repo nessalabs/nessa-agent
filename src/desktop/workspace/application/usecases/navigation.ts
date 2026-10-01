@@ -21,6 +21,7 @@ import {
   sameContent,
   sessionOf,
   toggled,
+  windowWidget,
   type ContentView,
   type WorkspaceState,
 } from "../workspace-state"
@@ -63,7 +64,7 @@ export function closeInFront(
   state: WorkspaceState,
   { draftId }: { draftId?: string },
 ): WorkspaceState {
-  if (typeof state.content === "object") return navigated(state)
+  if (windowWidget(state.content)) return navigated(state)
   if (!state.panes) return state
   return closePane(state, { pane: state.panes.focused, draftId })
 }

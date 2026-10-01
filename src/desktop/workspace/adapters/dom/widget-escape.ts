@@ -8,7 +8,8 @@
  * is in no pane — so its Escape is left to it. Then the window's widget,
  * from anywhere — its view's last step back, else back to the panes — or,
  * with focus inside a widget's pane, that view's last step back, else
- * nothing: a widget pane is never closed by Escape, as a session pane is not.
+ * nothing: a widget pane is never closed by Escape, as a session pane is not
+ * (`ui/layouts/widgets.test.tsx`, `widgets.mjs --only escape-steps`).
  *
  * A host registers its view's steps back under its scope while it is on the
  * page (`useEscapeScope`): the window's, or a widget pane's, with the
@@ -19,6 +20,7 @@ import type { DesktopStore } from "../../../store"
 import { escapeStack, type EscapeStack } from "../../../widgets"
 import { inModal } from "../../../adapters/modal"
 import { showContent } from "../store/commands"
+import { selectWindowWidget } from "../store/selectors"
 
 /** A host's Escape: its view's steps back, and the element it is drawn in. */
 interface EscapeHost {
@@ -75,8 +77,7 @@ export function useWidgetEscape({
       if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return
       const scope = root.current
       if (!scope || scope.closest("[inert]") || inModal(event.target)) return
-      const { content } = store.getState().workspace
-      if (typeof content === "object") {
+      if (selectWindowWidget(store.getState())) {
         event.preventDefault()
         if (!scopes.get(windowScope)?.stack.escape())
           store.dispatch(showContent({ content: "panes" }))

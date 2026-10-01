@@ -158,6 +158,11 @@ export interface WorkspaceState {
  */
 export type ContentView = "panes" | "agents" | { readonly widget: WidgetRef }
 
+/** The widget the window shows over the panes, if the content view is one: the one test of it. */
+export function windowWidget(content: ContentView): WidgetRef | null {
+  return typeof content === "object" ? content.widget : null
+}
+
 /** Whether two content views are the same place: a widget compared by value (`sameWidget`). */
 export function sameContent(a: ContentView, b: ContentView): boolean {
   if (typeof a === "string" || typeof b === "string") return a === b

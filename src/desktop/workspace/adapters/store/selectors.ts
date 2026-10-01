@@ -49,6 +49,7 @@ import {
   paneIds,
   sessionIn,
   widgetIn,
+  windowWidget,
   type Answer,
   type Chrome,
   type WorkspaceState,
@@ -77,7 +78,7 @@ export const selectView = (state: Root): SessionView => state.workspace.view
 export const selectOverviewOpen = (state: Root) => state.workspace.content === "agents"
 /** The widget the window shows over the panes, if it shows one. */
 export const selectWindowWidget = (state: Root): WidgetRef | null =>
-  typeof state.workspace.content === "object" ? state.workspace.content.widget : null
+  windowWidget(state.workspace.content)
 /** The session the overview's peek shows, as chosen in its list. */
 export const selectOverviewSelected = (state: Root) => state.workspace.overview.selected
 /** What the overview lists. */

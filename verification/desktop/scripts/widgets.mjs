@@ -467,7 +467,7 @@ const checks = {
     return { failures }
   },
 
-  "sidebar-marks": async (page) => {
+  "sidebar-marks": async (page, layout) => {
     const failures = []
     const marks = () =>
       page.evaluate(
@@ -482,9 +482,20 @@ const checks = {
         }),
         [css.sidebar, css.sessionList, css.overviewEntry],
       )
+    // The list shows the sample session's channel, so its row is there to stay marked.
+    if (layout === "columns") {
+      await page
+        .locator(css.sidebar)
+        .getByRole("button", { name: names.widgetChannel })
+        .first()
+        .click()
+      await settled(page)
+    }
     const before = await marks()
     if (!before.sidebar.length)
       throw new CannotRun("nothing is marked in the sidebar before the window")
+    if (layout === "columns" && !before.list.length)
+      throw new CannotRun("nothing is marked in the session list before the window")
     await windowFromCard(page, failures)
     const beside = await marks()
     if (JSON.stringify(beside.sidebar) !== JSON.stringify(before.sidebar))
@@ -505,8 +516,11 @@ const checks = {
     await openTrailPane(page, failures)
     await windowFromPane(page, failures)
     const before = (await order(page)).join(",")
+    // A session no pane shows, so a drop anywhere would change the panes.
     const row = page
-      .locator(`${css.sidebar} ${css.sessionRow}, ${css.sessionList} ${css.sessionRow}`)
+      .locator(
+        `${css.sidebar} ${css.sessionRow}:not([data-open]), ${css.sessionList} ${css.sessionRow}:not([data-open])`,
+      )
       .last()
     const box = await row.boundingBox()
     if (!box) throw new CannotRun(`no session row to carry (${css.sessionRow})`)
@@ -523,8 +537,17 @@ const checks = {
     await page.waitForTimeout(300)
     const said = await zones.take()
     const placeholders = await page.locator(css.dragPlaceholder).count()
+    // The press became a carry: else nothing below would have been tested.
+    const carrying = await page.locator(css.dragging).count()
     await page.mouse.up()
     await settled(page)
+    if (!carrying) throw new CannotRun("the row's press did not become a carry")
+    const residue = await page.evaluate(
+      ([layer, ghost, dragging]) =>
+        [layer, ghost, dragging].filter((sel) => document.querySelector(sel)),
+      [css.dragLayer, css.dragGhost, css.dragging],
+    )
+    if (residue.length) failures.push(`the carry left ${residue.join(", ")} on the page`)
     if (said.length)
       failures.push(`a zone was offered over the window: ${said.join(" → ")}`)
     if (placeholders) failures.push("a placeholder was drawn over the window")

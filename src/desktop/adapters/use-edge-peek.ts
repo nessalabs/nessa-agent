@@ -81,7 +81,7 @@ export function useEdgePeek(
   // overview, a widget (ADR 326) or a field's own Escape never answers the
   // same press. One listener for the hook's life, reading what was last
   // committed: the reveal is on the page from its commit, so its Escape is
-  // too, not an effect later.
+  // too, not an effect later (`use-edge-peek.test.tsx`).
   const ownsEscape = state.shown && state.pending !== "handoff"
   const owns = useRef(ownsEscape)
   useLayoutEffect(() => {

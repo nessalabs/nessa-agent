@@ -18,6 +18,7 @@ import { useWindowWidgetHost } from "../../adapters/store/widget-hosts"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
 import { IconButton } from "../chrome/icon-button"
 import { useWorkspaceFrame } from "../workspace-frame"
+import { headerBar } from "./header-bar"
 import { WidgetTrail } from "./widget-trail"
 
 /**
@@ -25,7 +26,8 @@ import { WidgetTrail } from "./widget-trail"
  * the chat area — the panes stay laid out beneath it, unseen and out of
  * reach — while the session list stays in reach beside it. It is left as the
  * overview is: its close, Escape (`adapters/dom/widget-escape.ts`), a session
- * chosen, any change of the panes; ⌘W closes it, never a pane beneath it.
+ * chosen, any change of the panes; ⌘W closes it, never a pane beneath it
+ * (`ui/layouts/widgets.test.tsx`, `widgets.mjs --only window-left`).
  *
  * A widget asked for over another replaces it: each is drawn under its own
  * key, so its view, its steps back and the caret in it go with it.
@@ -70,6 +72,8 @@ function WindowParts({
   const shortcuts = useWorkspaceFrame()
   const origin = widgetOrigin(answer)
   const host = useWindowWidgetHost(widget, origin, steps)
+  // Alone in the titlebar's row, as one pane is: the bar moves the window.
+  const bar = headerBar({ pane: null, multi: false })
   // Back to the panes, focusing the pane showing the conversation, or
   // opening it in the focused pane.
   const toOrigin = useCallback(
@@ -78,11 +82,11 @@ function WindowParts({
   )
   return (
     <>
-      <header className="workspace-pane-header">
+      <header className="workspace-pane-header" {...bar.bar}>
         <div className="workspace-pane-name" data-shown>
           <WidgetTrail origin={origin} title={widgetTitle(answer)} onOrigin={toOrigin} />
         </div>
-        <span className="workspace-spacer" />
+        <span className="workspace-spacer" {...bar.spacer} />
         <div className="workspace-pane-actions">
           <IconButton
             icon="close"
