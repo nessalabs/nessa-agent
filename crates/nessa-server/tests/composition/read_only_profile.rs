@@ -45,9 +45,8 @@ fn configure_health_socket(socket: &TcpStream) {
 }
 
 #[test]
-fn health_socket_waits_for_controlled_request_after_nonblocking_accept() {
+fn health_socket_waits_for_controlled_request_on_nonblocking_stream() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
     let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (mut accepted, _) = listener.accept().unwrap();
     // Force the inherited mode on every platform, before any request exists.
