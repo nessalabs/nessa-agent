@@ -4,7 +4,11 @@ use super::generated::{
     SessionTermination, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
     PRODUCT_VERSION,
 };
-use super::{state::ProductRouteState, wire::*};
+use super::{
+    passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT},
+    state::ProductRouteState,
+    wire::*,
+};
 use crate::browser_session::{
     application::{invalidation_reason, BrowserSessionVerifier, ReadBrowserSession},
     domain::value_objects::RemovalReason,
@@ -295,8 +299,6 @@ enum WireResponse {
     Record { text: String },
 }
 
-const RECORD_SEND_TIMEOUT: Duration = Duration::from_secs(30);
-
 impl WireResponse {
     fn ordinary(message: OutgoingMessage) -> Self {
         Self::Ordinary(Box::new(message))
@@ -568,7 +570,7 @@ where
         let Some((frame, received_at)) = admitted else {
             continue;
         };
-        let read_deadline = received_at + Duration::from_secs(10);
+        let read_deadline = received_at + PASSIVE_READ_TIMEOUT;
         let class = ResponseClass::for_method(&frame.method);
         let control = matches!(class, ResponseClass::Control);
         let record = matches!(class, ResponseClass::Record);
@@ -1779,7 +1781,7 @@ mod tests {
             &session,
             head_frame,
             RecordReadLease::new(()),
-            Instant::now() + Duration::from_secs(10),
+            Instant::now() + PASSIVE_READ_TIMEOUT,
         )
         .await;
         let WireResponse::Record { text, .. } = head_wire else {
@@ -1803,7 +1805,7 @@ mod tests {
             &session,
             page_frame,
             RecordReadLease::new(()),
-            Instant::now() + Duration::from_secs(10),
+            Instant::now() + PASSIVE_READ_TIMEOUT,
         )
         .await;
         let WireResponse::Record { text, .. } = page_wire else {
@@ -1826,7 +1828,7 @@ mod tests {
             &session,
             wrong,
             RecordReadLease::new(()),
-            Instant::now() + Duration::from_secs(10),
+            Instant::now() + PASSIVE_READ_TIMEOUT,
         )
         .await;
         let WireResponse::Ordinary(message) = failure else {
@@ -2035,10 +2037,10 @@ mod tests {
                 &session,
                 request("deadline", "conversation.recordsHead"),
                 lease,
-                start + Duration::from_secs(10),
+                start + PASSIVE_READ_TIMEOUT,
             )
             .await;
-            assert_eq!(Instant::now() - start, Duration::from_secs(10));
+            assert_eq!(Instant::now() - start, PASSIVE_READ_TIMEOUT);
             assert!(lease.is_none());
             assert_eq!(permits.available_permits(), 1);
             let WireResponse::Ordinary(message) = response else {
@@ -2097,7 +2099,7 @@ mod tests {
             let value: serde_json::Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["id"], "deadline");
             assert_eq!(value["error"]["code"], "read_timeout");
-            assert_eq!(Instant::now() - start, Duration::from_secs(10));
+            assert_eq!(Instant::now() - start, PASSIVE_READ_TIMEOUT);
             assert_eq!(permits.available_permits(), available);
         }
     }
@@ -2127,7 +2129,7 @@ mod tests {
                 state.record_source = Some(Arc::new(UnreachableRecordSource));
                 let permits = Arc::new(Semaphore::new(1));
                 let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
-                let deadline = Instant::now() + Duration::from_secs(10);
+                let deadline = Instant::now() + PASSIVE_READ_TIMEOUT;
                 tokio::time::advance(Duration::from_secs(elapsed)).await;
                 let (response, lease) = dispatch_passive_read(
                     &state,
@@ -2159,7 +2161,7 @@ mod tests {
         let authority = Arc::new(CountingRecordAuthority {
             authority,
             reads: AtomicU64::new(0),
-            first_read_delay: Duration::from_secs(10),
+            first_read_delay: PASSIVE_READ_TIMEOUT,
         });
         state.access = authority.clone();
         state.record_source = Some(Arc::new(UnreachableRecordSource));
@@ -2171,7 +2173,7 @@ mod tests {
             &session,
             request("ready", "conversation.recordsHead"),
             lease,
-            start + Duration::from_secs(10),
+            start + PASSIVE_READ_TIMEOUT,
         )
         .await;
         let WireResponse::Ordinary(message) = response else {
@@ -2182,7 +2184,7 @@ mod tests {
         };
         assert_eq!(response.id, "ready");
         assert_eq!(response.error.unwrap().code, "read_timeout");
-        assert_eq!(Instant::now() - start, Duration::from_secs(10));
+        assert_eq!(Instant::now() - start, PASSIVE_READ_TIMEOUT);
         assert_eq!(authority.reads.load(Ordering::SeqCst), 1);
         assert!(lease.is_none());
         assert_eq!(permits.available_permits(), 1);
@@ -2242,14 +2244,9 @@ mod tests {
             frame.params =
                 json!({"conversationId":id.to_string(),"accessEpoch":"3","receiverId":"receiver"});
             let start = Instant::now();
-            let (response, lease) = dispatch_passive_read(
-                &state,
-                &session,
-                frame,
-                lease,
-                start + Duration::from_secs(10),
-            )
-            .await;
+            let (response, lease) =
+                dispatch_passive_read(&state, &session, frame, lease, start + PASSIVE_READ_TIMEOUT)
+                    .await;
             let WireResponse::Ordinary(message) = response else {
                 panic!("ordinary refusal expected")
             };
@@ -3197,7 +3194,7 @@ mod tests {
                         &session,
                         request("browser-outage", method),
                         RecordReadLease::new(permits.clone().try_acquire_owned().unwrap()),
-                        Instant::now() + Duration::from_secs(10),
+                        Instant::now() + PASSIVE_READ_TIMEOUT,
                     )
                     .await;
                     let WireResponse::Ordinary(message) = response else {

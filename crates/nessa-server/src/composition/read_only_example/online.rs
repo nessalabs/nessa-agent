@@ -4,11 +4,14 @@ use crate::composition::local_auth::SystemClock;
 use crate::{
     app::dependencies::RuntimeDependencies,
     conversation::domain::ConversationId,
-    product::generated::MAX_AUTH_CREDENTIAL_CHARACTERS,
+    product::{
+        generated::MAX_AUTH_CREDENTIAL_CHARACTERS,
+        passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT},
+    },
     read_only_sync::{
         application::{
             driver::{run_catalogue, run_records},
-            CachePolicy, Cancellation, GatewayPolicy,
+            CachePolicy, Cancellation, GatewayError, GatewayPolicy,
         },
         entrypoint::{online, Command, CommandError},
         infrastructure::{
@@ -18,7 +21,7 @@ use crate::{
     },
 };
 use serde_json::json;
-use std::{io::Write, path::Path, sync::Arc};
+use std::{io::Write, path::Path, sync::Arc, time::Duration};
 
 #[cfg(test)]
 thread_local! {
@@ -77,6 +80,17 @@ fn profile_code(error: ProfileError) -> &'static str {
         ProfileError::CredentialEncoding => "credentialEncoding",
     }
 }
+// B1: one whole-callback budget, not a renewed allowance for each RPC.
+// Finite passes may still exhaust this budget while retaining confirmed pages.
+fn default_gateway_policy() -> Result<GatewayPolicy, GatewayError> {
+    let operation = PASSIVE_READ_TIMEOUT
+        .checked_add(RECORD_SEND_TIMEOUT)
+        .and_then(|value| value.checked_add(Duration::from_secs(5)))
+        .ok_or(GatewayError::InvalidPolicy)?;
+    let operation_ms =
+        u64::try_from(operation.as_millis()).map_err(|_| GatewayError::InvalidPolicy)?;
+    GatewayPolicy::new(5000, operation_ms, 8192, 16, 16)
+}
 fn connect(
     path: &Path,
     output: &mut dyn Write,
@@ -97,7 +111,7 @@ fn connect(
             return Err(CommandError::OnlineRefused);
         }
     };
-    let policy = GatewayPolicy::new(5000, 5000, 8192, 16, 16).map_err(CommandError::Gateway)?;
+    let policy = default_gateway_policy().map_err(CommandError::Gateway)?;
     match Session::connect(
         &endpoint,
         &credential,

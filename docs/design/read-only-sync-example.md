@@ -34,6 +34,7 @@ Owner: #261. This transport section composes with the separately owned cache des
 | S1 | Catalogue identity validation from physical constructor or receiver head | Same published check_scope_identity consumes org/principal domain IDs; caller attribution is not manufactured; wrong org/principal/schema/stream refused before source use |
 | O1 | Driver callback returns or panics while an attempt owns the socket | GatewayConnection::run consumes one outcome; panic records DriverPanicked then physically drops socket before returning; no guessed core success |
 | T16 | Cancellation during physical read/write | Synchronous owner stops by cancellation check/absolute syscall deadline and closes; no detached task, cache publication or success before completion |
+| B1 | Default online CLI receives a valid passive response after five seconds but before the server read deadline, the server's own generated read timeout, or cumulative valid RPCs lasting sixteen seconds (three 3s head RPCs and a 7s page RPC, each within the 10s read phase) | Default composition derives one absolute whole-callback operation budget from shared server read (10s) plus queued delivery (30s) durations plus its existing 5s scheduling/cache allowance (45s). Handshake remains 5s; custom shorter GatewayPolicy stays valid. Finite page count bounds work count, while elapsed budget may stop a cumulative pass retaining confirmed progress: 45s does not promise completion of every allowed maximum-cardinality pass or arbitrary local work. Enforcers: `default_budget_consumes_valid_delayed_source`, `default_budget_preserves_real_server_read_timeout`, and `default_budget_consumes_cumulative_valid_rpcs` in the composition online tests enforce delayed success, genuine server timeout and cumulative success; existing custom deadline and confirmed-page tests retain refusal semantics. |
 
 Use actual separate Rust client/gateway processes for normal challenge/read,
 Preparing/retry progress, cached restart/reconnect, credential-only-read refusing
@@ -47,6 +48,21 @@ already-admitted immutable page semantics.
 
 The adapter consumes core9d ordering: record authorization precedes page acquisition; admitted immutable pages may commit after subsequent revocation. Catalogue consumes its existing final authorization. No store authorization wrapper. Reuse app::ports::Clock; absolute elapsed deadlines are checked at every underlying socket syscall. One synchronous connection owner; no hidden retries or unsolicited event queue.
 
+
+## Default elapsed budget
+
+The online example derives its 45-second whole-callback budget from the existing
+[passive source/read and queued delivery phases](../../crates/nessa-server/src/product/passive_read/deadlines.rs)
+plus a five-second client scheduling/cache allowance. This allowance is not proof
+that arbitrary local work completes in five seconds. Handshake keeps its separate
+five-second budget. Discovery and the subsequent finite driver each begin their
+own operation; individual RPCs do not renew that operation's deadline. Custom
+shorter `GatewayPolicy` remains valid and can end as local `TimedOut`.
+
+Page count bounds work count. Cumulative RPCs and cache work can exceed the default
+elapsed budget even when each RPC stays inside the server phases. An incomplete
+pass retains confirmed progress for the next explicit invocation; the default
+does not promise completion of every allowed maximum-cardinality pass (B1).
 
 ## One explicit operation
 

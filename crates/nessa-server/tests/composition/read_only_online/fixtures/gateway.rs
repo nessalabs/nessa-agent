@@ -51,6 +51,7 @@ use nessa_sdk::{
 };
 use nessa_sync::replication::domain::Id;
 use serde_json::json;
+use std::time::Duration;
 use std::{
     io::{self, Write},
     path::Path,
@@ -87,11 +88,20 @@ impl RecordReadSource for GatedRead {
     ) -> RecordReadFuture<'a, RecordReadResponse> {
         let page = matches!(&operation, RecordReadOperation::Page(_));
         Box::pin(async move {
+            let head = (!page).then(|| self.heads.fetch_add(1, Ordering::SeqCst) + 1);
+            // Source latency exercises the real socket phase owner (B1), not a
+            // fabricated timeout reply. Successful reads still use SDK storage.
+            match (self.mode.as_str(), head) {
+                ("delayed-head", Some(1)) => tokio::time::sleep(Duration::from_secs(6)).await,
+                ("timeout-head", Some(1)) => std::future::pending::<()>().await,
+                ("cumulative-head", Some(count)) if count > 1 => {
+                    tokio::time::sleep(Duration::from_secs(3)).await
+                }
+                ("cumulative-head", None) => tokio::time::sleep(Duration::from_secs(7)).await,
+                _ => {}
+            }
             let response = self.source.read(admitted, operation, lease).await?;
-            if !page
-                && self.mode == "before-page"
-                && self.heads.fetch_add(1, Ordering::SeqCst) + 1 == 3
-            {
+            if !page && self.mode == "before-page" && head == Some(3) {
                 self.authority
                     .change(
                         self.receiver.clone(),

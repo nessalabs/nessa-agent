@@ -25,8 +25,11 @@ use nessa_sync::replication::{
     domain::{validate_page, Id, Limits, Page, PageRequest, Scope},
 };
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 #[test]
 fn online_process_restarts_reuse_actual_binding() {
     let directory = tempfile::tempdir().unwrap();
@@ -640,4 +643,58 @@ fn online_saved_projection_handles_competing_owner() {
             );
         }
     }
+}
+
+fn default_passive_budget(mode: &str) -> (bool, Value, Duration) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let _gateway = Gateway::start_mode(&root, mode);
+    let setup: Setup =
+        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
+    let cache_root = directory.path().join("cache");
+    nessa_local_storage::create_directory(&cache_root).unwrap();
+    let start = Instant::now();
+    let (ok, value) = command(
+        vec![
+            "sync-records".into(),
+            cache_root
+                .join("cache.sqlite3")
+                .to_string_lossy()
+                .into_owned(),
+            root.join("profile.json").to_string_lossy().into_owned(),
+            setup.conversation,
+            "1".into(),
+        ],
+        false,
+    );
+    (ok, value.unwrap(), start.elapsed())
+}
+#[test]
+fn default_budget_consumes_valid_delayed_source() {
+    let (ok, value, elapsed) = default_passive_budget("delayed-head");
+    assert!(ok, "{value:?}");
+    assert!(elapsed >= Duration::from_secs(6));
+    assert!(value["transportFailure"].is_null());
+    assert_eq!(value["work"]["pages"], 1);
+    assert_eq!(value["durable"]["progress"]["downloaded"], "1");
+}
+#[test]
+fn default_budget_preserves_real_server_read_timeout() {
+    let (ok, value, elapsed) = default_passive_budget("timeout-head");
+    assert!(!ok);
+    assert!(elapsed >= Duration::from_secs(10));
+    assert_eq!(value["transportFailure"]["code"], "record", "{value:?}");
+    assert_eq!(value["transportFailure"]["productCode"], "read_timeout");
+    assert_eq!(value["discoveryFailure"], true);
+}
+#[test]
+fn default_budget_consumes_cumulative_valid_rpcs() {
+    let (ok, value, elapsed) = default_passive_budget("cumulative-head");
+    assert!(ok, "{value:?}");
+    // The discovery is immediate. Authorize/head/authorize are each 3s, followed by a 7s page, in
+    // the same actual driver callback, whose absolute deadline is not reset.
+    assert!(elapsed >= Duration::from_secs(16));
+    assert!(value["transportFailure"].is_null());
+    assert_eq!(value["work"]["pages"], 1);
+    assert_eq!(value["durable"]["progress"]["downloaded"], "1");
 }
