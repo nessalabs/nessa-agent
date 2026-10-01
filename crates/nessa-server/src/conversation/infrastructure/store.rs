@@ -62,7 +62,7 @@ pub(crate) const UNFINISHED: &str =
     "SELECT conversation_id FROM deletions WHERE erased = 0 ORDER BY conversation_id";
 
 /// Ownership records, tombstones and summaries in one private database,
-/// `metadata.sqlite3` (docs/adr/todo/196-conversation-metadata-database.md).
+/// `metadata.sqlite3` (docs/adr/done/196-conversation-metadata-database.md).
 ///
 /// A record is written once, and creating the same identity again returns it
 /// (`a_tombstone_outlives_reopening_and_its_identity_is_never_created_again`).

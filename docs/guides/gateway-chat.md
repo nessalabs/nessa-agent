@@ -118,7 +118,7 @@ agent for the rest of its life, so changing `selected` moves new conversations
 only.
 
 Conversation metadata is one private database, `conversations/metadata.sqlite3`
-([ADR 196](../adr/todo/196-conversation-metadata-database.md)). Nessa is in
+([ADR 196](../adr/done/196-conversation-metadata-database.md)). Nessa is in
 alpha and keeps no migrations. A namespace an earlier build wrote
 conversations into has them deleted once, with the gateway stopped: its whole
 `conversations/` directory and its `attachments/`. The JSON directories alone
@@ -483,7 +483,7 @@ The gateway stores conversation ownership separately from SDK SQLite records, in
 `conversations/metadata.sqlite3`: a private SQLite file whose three tables hold
 each conversation's owner record, its summary (title, last line said, time,
 archived) for `conversation.list`, and a deleted conversation's tombstone
-([ADR 196](../adr/todo/196-conversation-metadata-database.md)). An owner record
+([ADR 196](../adr/done/196-conversation-metadata-database.md)). An owner record
 is created in one transaction that first looks for the ID, so an interrupted
 creation leaves either no record, and the same ID can still be created, or a
 complete record whose original creator owns it; creating it again never changes
@@ -505,7 +505,7 @@ journal's empty `.lock` file stays behind on purpose: removing it while a lease
 is held would let a second opener lock a new file beside the held one. The
 agent is asked to delete its own session over ACP (`session/delete`) and the
 deletion record says what it did — Claude's adapter deletes it, Codex's archives
-it; see [ADR 182](../adr/todo/182-conversation-deletion.md). Conversations nothing
+it; see [ADR 182](../adr/done/182-conversation-deletion.md). Conversations nothing
 was ever said in are not listed.
 
 Opening a conversation's provider for the first time is gated on its mandatory

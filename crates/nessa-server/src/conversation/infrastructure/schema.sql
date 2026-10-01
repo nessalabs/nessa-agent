@@ -1,6 +1,6 @@
 -- Conversation metadata. The one definition, version included (the last
 -- line), which the server includes (`store.rs`).
--- See docs/adr/todo/196-conversation-metadata-database.md.
+-- See docs/adr/done/196-conversation-metadata-database.md.
 --
 -- Columns hold stored text and numbers, and a flag is 0 or 1, the file's
 -- spelling of a boolean. What a valid value is — an identity, a title's

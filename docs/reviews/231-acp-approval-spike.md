@@ -1,7 +1,7 @@
 # ADR 231: Claude and Codex approval evidence
 
 Date: 2026-09-26. This is a direct-harness investigation for
-[ADR 231](../adr/todo/231-model-and-approval-per-conversation.md), not a review
+[ADR 231](../adr/done/231-model-and-approval-per-conversation.md), not a review
 claim that the proposed Nessa feature is implemented.
 
 The later implementation adds opt-in SDK restoration probes in
@@ -260,7 +260,7 @@ The evidence JSON's `closure` retains the inventories and recording hashes.
 ## Implementation conclusions and remaining boundaries
 
 The policy and lifecycle decisions are now settled in
-[ADR 231](../adr/todo/231-model-and-approval-per-conversation.md#decision).
+[ADR 231](../adr/done/231-model-and-approval-per-conversation.md#decision).
 Claude will use a fixed native-rule profile without blanket ask rules, native
 `auto` only on supported models, and explicit rejection of fallback. This changes
 today's strict read-approval semantics. Codex uses its native presets. Nessa blocks

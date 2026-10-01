@@ -115,8 +115,7 @@ and user approval; “anything risky still asks” is not supported. The
 [detailed report](../../reviews/231-acp-approval-spike.md#follow-up-deny-list-coverage-and-automatic-review-counterexamples)
 records each deny-list entry, controls, decision evidence and remaining limits.
 
-The policy and recovery decisions below are settled. Remaining work is to
-implement and verify the Nessa lifecycle and cover consequential failures. Automatic-review
+The policy and recovery decisions below are settled. Automatic-review
 classification belongs to the ACP providers. Nessa exposes the supported modes
 and preserves the outcomes they provide; reproducing or certifying arbitrary
 Claude/Codex classifier decisions is outside this feature's scope and is not a
@@ -394,7 +393,7 @@ arbitrary classifier decisions or every live mode/model combination.
   That adds a pending-mode state that must survive restarts and races with turn
   admission. Refusing is one sentence and has no hidden state.
 - **One Nessa-level approval policy on top of the agents' own modes.** Nessa's
-  policy hooks ([0014](0014-nessa-owned-policy-hooks.md)) may later tighten any
+  policy hooks ([0014](../todo/0014-nessa-owned-policy-hooks.md)) may later tighten any
   mode. This record chooses the native approval preset and the binding permission rules needed to honour it.
 
 ## Consequences

@@ -2,7 +2,7 @@
 
 Opens one private SQLite file for one context. The context owns its tables and
 its schema; this crate owns only how the file is opened and at which version.
-Decided in [ADR 196](../../docs/adr/todo/196-conversation-metadata-database.md)
+Decided in [ADR 196](../../docs/adr/done/196-conversation-metadata-database.md)
 and [ADR 202](../../docs/adr/todo/202-versioned-local-datasets.md).
 
 - The directory must already be private and owned by this OS user, and the file

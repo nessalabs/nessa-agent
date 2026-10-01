@@ -406,7 +406,7 @@ applicable. Tests use gates and channels rather than elapsed sleeps.
    selection or permit dispatch, and local cancellation never claims provider
    acknowledgement or confirmed cleanup. Deleting a conversation stops it through
    the same close before anything is erased, and erases nothing when that stop is
-   not confirmed ([ADR 182](../adr/todo/182-conversation-deletion.md)).
+   not confirmed ([ADR 182](../adr/done/182-conversation-deletion.md)).
 
 ## Findings disposition from design review round 2
 

@@ -3,15 +3,17 @@
 > Current implementation: [gateway chat](../guides/gateway-chat.md) uses the existing SDK Agent,
 > leased SQLite record sessions, independent durable audit, and bounded replacement views.
 > NessaClient and the panel use authenticated conversation commands; retired spike
-> methods are absent. The exact durable cursor/event-store and broader collaboration design
-> below remains a proposal, not a prerequisite or description of the current chat API.
+> methods are absent. Semantic records on the `event-stream` SQLite runtime and bounded
+> committed reads are implemented ([semantic record writer](semantic-record-writer.md)).
+> Subscriptions, gateway views from committed records, and the broader collaboration
+> design below remain a proposal, not a description of the current chat API.
 
 
 This explains the interfaces required by [ADR 0008](../adr/todo/0008-agent-client-api.md)
 (runtime), [ADR 0009](../adr/todo/0009-reusable-event-stream-crate.md) (records), and
 [ADR 0011](../adr/todo/0011-nessa-session-protocol-and-authorities.md) (shared views).
 It adds detail to those decisions without creating another runtime or delivery
-plan. Real agent conversations, their schemas, and subscriptions are not implemented.
+plan. Replay/live subscriptions and gateway reads of committed records are not implemented.
 Use [surface/collaboration rules](surfaces-and-collaboration.md) for later message
 input and [MCP sequences](collaboration-sequences-and-mcp.md) for tool examples.
 
