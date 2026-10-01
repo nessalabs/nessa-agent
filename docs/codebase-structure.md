@@ -592,8 +592,10 @@ independently of whether that turn contains text.
   process cleanup, WebDriver request lifecycles, failure evidence, and the
   deterministic ACP provider so each boundary can be tested without launching
   the native window. Those script tests run in bare Node with no installed
-  packages. `src/host/load-fallback.test.ts` owns the embedded fallback's real
-  DOM and computed-style clipping regression in the frontend jsdom gate.
+  packages. `src/host/load-fallback.test.ts` owns the embedded fallback's surface
+  and window-size rules in the frontend jsdom gate;
+  `verification/desktop/scripts/load-fallback.mjs` measures where it lands on
+  a stage larger than the window, in WebKit and Chromium.
 - `scripts/desktop/stage.mjs` resolves one named stage for the Tauri command and its Vite child. Vite records the stage beside the assets it builds; `src-tauri/build.rs` resolves Tauri's effective base, platform, and `TAURI_CONFIG` layers and reads that record from the `build.frontendDist` Tauri will embed. It refuses a frontend whose stage differs from the host bundle stage, and the host accepts only an equal runtime `NESSA_STAGE` override.
 - `scripts/desktop/prepare.mjs` selects runtime preparation on macOS and Linux;
   Windows leaves it disabled.

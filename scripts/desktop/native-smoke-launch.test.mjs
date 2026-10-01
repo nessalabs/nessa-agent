@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 
-test("the embedded document explains a frontend that never replaces it", () => {
+test("the embedded document shows a loading fallback until the frontend replaces it", () => {
   const document = readFileSync("index.html", "utf8")
 
   assert.match(document, /data-nessa-load-fallback/)
