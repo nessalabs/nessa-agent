@@ -326,7 +326,9 @@ scripts drive the sample plugin the sample workspace registers
 - [ ] **With the edge peek shown over the window, Escape dismisses the peek
   and nothing more.** _Check:_ `widgets.mjs --only escape-peek`, run ten times
   in each engine and layout when the peek's Escape changes (it failed 2 of 8
-  in WebKit while the peek's listener came an effect after its commit).
+  in WebKit while the peek's listener came an effect after its commit). In
+  Settings, a dialog itself, Escape dismisses its own peek and Settings stays:
+  `widgets.mjs --only escape-peek-settings`.
 - [ ] **Beside the window the sidebar keeps the channel and the focused
   session marked, and the Agents entry unmarked**, in both layouts.
   _Check:_ `widgets.mjs --only sidebar-marks`.

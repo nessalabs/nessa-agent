@@ -59,6 +59,8 @@ Checks, per engine and layout (--only <names> to pick):
                      search, it clears the query first and leaves on the next
   escape-peek        with the edge peek shown over the window, Escape dismisses
                      the peek and the window stays
+  escape-peek-settings  Settings, itself a dialog, with its sidebar folded: Escape
+                     dismisses its own edge peek, and Settings stays open
   sidebar-marks      beside the window, the sidebar keeps the channel and the
                      focused session marked, the Agents entry not
   drag-over-window   a session row carried over the window: no zone, no
@@ -435,6 +437,33 @@ const checks = {
     )
     if (!gone) failures.push("Escape did not dismiss the edge peek")
     await expectContent(page, content.widget, "Escape dismissing the peek", failures)
+    return { failures }
+  },
+
+  "escape-peek-settings": async (page, layout, size) => {
+    const failures = []
+    await page.keyboard.press(keys.settings)
+    await need(page, css.settings, "Settings")
+    await settled(page)
+    await page.locator(css.settingsSidebarToggle).first().click()
+    await settled(page)
+    await page.mouse.move(3, size.height / 2)
+    const peeked = await until(
+      page,
+      (sel) => document.querySelector(sel)?.hasAttribute("data-peek") === true,
+      css.settings,
+    )
+    if (!peeked)
+      throw new CannotRun("Settings' edge peek did not show from its left edge")
+    await page.keyboard.press(keys.escape)
+    const gone = await until(
+      page,
+      (sel) => !document.querySelector(sel)?.hasAttribute("data-peek"),
+      css.settings,
+    )
+    if (!gone) failures.push("Escape did not dismiss Settings' own edge peek")
+    if (!(await page.locator(css.settings).first().isVisible()))
+      failures.push("Escape dismissing Settings' peek closed Settings too")
     return { failures }
   },
 

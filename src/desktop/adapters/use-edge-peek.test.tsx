@@ -190,3 +190,60 @@ it("is heard before a listener that was there first, so where it mounts does not
   expect(peek.shown).toBe(false)
   window.removeEventListener("keydown", earlier)
 })
+
+it("leaves a composition's Escape to its field", async () => {
+  act(() => peek.enter(free))
+  await wait(200)
+  const event = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+    isComposing: true,
+  })
+  act(() => void document.body.dispatchEvent(event))
+  expect(event.defaultPrevented).toBe(false)
+  expect(peek.shown).toBe(true)
+})
+
+it("comes after a carrying drag, which takes Escape on the window, whenever either began listening", async () => {
+  // Registered after the peek: the window's capture is still heard before the document's.
+  const drag = (event: KeyboardEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  window.addEventListener("keydown", drag, true)
+  act(() => peek.enter(free))
+  await wait(200)
+  act(() => void document.body.dispatchEvent(escapeKey()))
+  expect(peek.shown).toBe(true)
+  window.removeEventListener("keydown", drag, true)
+})
+
+it("in a surface that is a dialog itself, takes Escape from inside it, and leaves it to a menu over it", async () => {
+  act(() => root.unmount())
+  const dialog = document.createElement("div")
+  dialog.setAttribute("role", "dialog")
+  dialog.setAttribute("aria-modal", "true")
+  const field = document.createElement("button")
+  const menu = document.createElement("div")
+  menu.setAttribute("role", "menu")
+  const item = document.createElement("button")
+  menu.append(item)
+  dialog.append(field)
+  document.body.append(dialog, menu)
+  const surface = { current: dialog }
+  function InDialog() {
+    peek = useEdgePeek(true, false, surface)
+    return null
+  }
+  root = createRoot(document.createElement("div"))
+  act(() => root.render(<InDialog />))
+  act(() => peek.enter(free))
+  await wait(200)
+  act(() => void item.dispatchEvent(escapeKey()))
+  expect(peek.shown).toBe(true)
+  act(() => void field.dispatchEvent(escapeKey()))
+  expect(peek.shown).toBe(false)
+  dialog.remove()
+  menu.remove()
+})

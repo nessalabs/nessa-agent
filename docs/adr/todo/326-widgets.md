@@ -155,7 +155,7 @@ Escape and stops it, so none after it answers:
 | focus is in a menu or a dialog | the menu or dialog | `defaultPrevented`; every later owner also leaves a target inside one alone (`adapters/modal.ts`) |
 | Settings is open | Settings | the window under it is inert |
 | a drag is carrying | the drag, which cancels | stops it in capture (`split-panes/adapters/dom/drag.ts`) |
-| the edge peek is shown | the peek, which dismisses and nothing more | heard in capture and marked handled (`adapters/use-edge-peek.ts`) |
+| the edge peek is shown | the peek, which dismisses and nothing more | heard on the document in capture — after the window's, where the drag is — marked handled and stopped (`adapters/use-edge-peek.ts`); in Settings, itself a dialog, its own peek too |
 | the overview is open | the overview | the content view is the overview |
 | the session list's search holds a query | the search, which clears it | marked handled; the next Escape goes on |
 | the window shows a widget | its view's last step back, else the host: back to the panes | from anywhere outside the above — the session list's rows, and its search once empty, included (the window covers the content region only) |

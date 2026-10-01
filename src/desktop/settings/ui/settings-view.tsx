@@ -157,7 +157,9 @@ function SettingsView({
     [setSidebarColumn],
   )
   // Folded, the sidebar can be revealed from the window's edge, as the app's can.
-  const peek = useEdgePeek(!sidebarOpen, sidebarOpen)
+  const rootRef = useRef<HTMLDivElement>(null)
+  // Settings is a dialog itself: its own reveal is not under one.
+  const peek = useEdgePeek(!sidebarOpen, sidebarOpen, rootRef)
   const revealed = peek.shown && !peek.handingOff
   const [category, setCategory] = useState<SettingsCategoryId>("appearance")
   // The tab last shown in each category, kept while Settings is open.
@@ -169,7 +171,6 @@ function SettingsView({
   const [found, setFound] = useState<SettingId | null>(null)
   // The search result last taken, marked in the results while they stay up.
   const [picked, setPicked] = useState<string | null>(null)
-  const rootRef = useRef<HTMLDivElement>(null)
   const toggleRef = useRef<HTMLButtonElement>(null)
   const sidebarRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)

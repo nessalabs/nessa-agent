@@ -127,6 +127,7 @@ export const css = {
   // Settings (data-sidebar is "open" | "closed"; --settings-sidebar-w its width)
   settings: ".settings", // class
   settingsTitlebar: ".settings-titlebar", // class
+  settingsSidebarToggle: '.settings-titlebar [aria-controls="settings-sidebar"]', // Settings' own sidebar toggle
   settingsCategory: ".settings-nav-item", // class: a category in Settings' sidebar
   settingsHeading: "#settings-heading", // the open category's name
   settingsTab: '.settings-tabs [role="tab"]',

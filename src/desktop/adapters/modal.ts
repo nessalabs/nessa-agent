@@ -6,7 +6,12 @@
  */
 export const modalSelector = '[role="dialog"], [role="menu"], [aria-modal="true"]'
 
-/** Whether `target` lies inside a dialog or a menu. */
-export function inModal(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest(modalSelector) !== null
+/**
+ * Whether `target` lies inside a dialog or a menu — one over `surface`, when
+ * a surface is named: a surface that is itself a dialog (Settings) holds its
+ * own parts inside it, and they are not under anything.
+ */
+export function inModal(target: EventTarget | null, surface?: Element | null): boolean {
+  const modal = target instanceof Element ? target.closest(modalSelector) : null
+  return modal !== null && !(surface && modal.contains(surface))
 }
