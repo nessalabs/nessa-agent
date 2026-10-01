@@ -1,5 +1,5 @@
 {
- "recorded": "Live run through the Nessa gateway (scripts/mcp-test-server/live-check.mjs codex), 2026-10-01: @agentclientprotocol/codex-acp 1.12.0 (codex 0.154.0) on gpt-5.6-terra, MCP server scripts/mcp-test-server/server.mjs configured as \"mcptest\". Frames are the session/update tool updates exactly as the harness sent them, grouped by tool.",
+ "recorded": "Live run through the Nessa gateway (scripts/mcp-test-server/live-check.mjs codex), 2026-10-01 UTC: @agentclientprotocol/codex-acp 1.12.0 (codex 0.154.0) on gpt-5.6-terra, MCP server scripts/mcp-test-server/server.mjs configured as \"mcptest\". Frames are the session/update tool updates exactly as the harness sent them, grouped by tool.",
  "calls": {
   "report_rows": [
    {

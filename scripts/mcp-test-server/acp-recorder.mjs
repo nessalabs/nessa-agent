@@ -70,7 +70,11 @@ function main([log, command, ...args]) {
   }
   const child = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"] })
   child.on("error", fail)
-  child.stdin.on("error", fail)
+  // An agent that stops reading its input is the agent's business, as it
+  // would be without the recorder: its own status still decides the exit.
+  child.stdin.on("error", (error) => {
+    if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") fail(error)
+  })
   process.stdout.on("error", fail)
   const toAgent = direction(log, "to-agent")
   const fromAgent = direction(log, "from-agent")
@@ -82,13 +86,21 @@ function main([log, command, ...args]) {
   child.stdout.on("data", (chunk) => fromAgent.take(chunk))
   child.stdout.on("end", () => fromAgent.end())
   child.stdout.pipe(process.stdout)
+  // Passed on while the agent runs; once it has exited, a signal ends the
+  // recorder as it would have ended the agent, even if something the agent
+  // started still holds its output open.
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"])
-    process.on(signal, () => child.kill(signal))
+    process.on(signal, () => {
+      if (child.exitCode === null && child.signalCode === null) child.kill(signal)
+      else process.exit(process.exitCode ?? 128 + osConstants.signals[signal])
+    })
   // The agent's status, or 128 + the signal. Not `process.exit`, which would
   // drop output still queued for a slow reader: stop reading input and let
   // the process end once everything written has been delivered.
-  child.on("close", (code, signal) => {
+  child.on("exit", (code, signal) => {
     process.exitCode = code ?? 128 + (signal ? (osConstants.signals[signal] ?? 0) : 0)
+  })
+  child.on("close", () => {
     process.stdin.unpipe(child.stdin)
     process.stdin.destroy()
   })

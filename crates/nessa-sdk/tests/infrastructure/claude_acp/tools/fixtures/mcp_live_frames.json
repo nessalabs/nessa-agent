@@ -1,5 +1,5 @@
 {
- "recorded": "Live run through the Nessa gateway (scripts/mcp-test-server/live-check.mjs claude), 2026-10-01: @agentclientprotocol/claude-agent-acp 0.76.0 on claude-sonnet-5, MCP server scripts/mcp-test-server/server.mjs configured as \"mcptest\". Frames are the session/update tool updates exactly as the harness sent them, grouped by tool.",
+ "recorded": "Live run through the Nessa gateway (scripts/mcp-test-server/live-check.mjs claude), 2026-10-01 UTC: @agentclientprotocol/claude-agent-acp 0.76.0 on claude-sonnet-5, MCP server scripts/mcp-test-server/server.mjs configured as \"mcptest\". Frames are the session/update tool updates exactly as the harness sent them, grouped by tool.",
  "calls": {
   "ToolSearch": [
    {

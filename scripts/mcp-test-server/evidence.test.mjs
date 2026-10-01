@@ -175,7 +175,9 @@ test("the recorder passes everything through to a slow reader, splits nothing, a
   try {
     const log = join(directory, "log.jsonl")
     const recorder = fileURLToPath(new URL("./acp-recorder.mjs", import.meta.url))
-    // 4 MB out of the agent, read by a consumer that sleeps first.
+    // 4 MB out of the agent, read by a consumer that sleeps first. Forwarding
+    // with unpiped writes and exiting on the agent's close lost all but the
+    // first 64 KB here on macOS; this is the run that showed it.
     const writer =
       'for(let i=0;i<20000;i++)process.stdout.write(JSON.stringify({i,pad:"x".repeat(200)})+"\\n")'
     const run = spawnSync(
@@ -249,4 +251,66 @@ test("the recorder logs a last line that has no newline, and exits with the agen
   )
   assert.equal(failing.status, 3)
   ;(await import("node:fs")).rmSync(dirname(log), { recursive: true, force: true })
+})
+
+test("the recorder exits with the agent's status when the agent stops reading its input", async () => {
+  const { spawnSync } = await import("node:child_process")
+  const { mkdtempSync, readFileSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const { fileURLToPath } = await import("node:url")
+  const directory = mkdtempSync(join(tmpdir(), "acp-recorder-"))
+  try {
+    const log = join(directory, "log.jsonl")
+    const recorder = fileURLToPath(new URL("./acp-recorder.mjs", import.meta.url))
+    const run = spawnSync(
+      process.execPath,
+      [
+        recorder,
+        log,
+        process.execPath,
+        "-e",
+        'process.stdout.write("{\\"bye\\":1}\\n");setTimeout(()=>process.exit(5),200)',
+      ],
+      { input: '{"x":1}\n'.repeat(2_000_000), encoding: "utf8" },
+    )
+    assert.equal(run.status, 5)
+    assert.equal(run.stdout, '{"bye":1}\n')
+    assert.ok(
+      parseRecording(readFileSync(log, "utf8")).some(
+        (each) => each.direction === "from-agent" && each.frame?.bye === 1,
+      ),
+    )
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("a signal ends the recorder once the agent has exited, though its output is still held open", async () => {
+  const { spawn } = await import("node:child_process")
+  const { once } = await import("node:events")
+  const { mkdtempSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const { fileURLToPath } = await import("node:url")
+  const directory = mkdtempSync(join(tmpdir(), "acp-recorder-"))
+  try {
+    const recorder = fileURLToPath(new URL("./acp-recorder.mjs", import.meta.url))
+    // The agent exits 4, leaving a background process holding its stdout.
+    const run = spawn(process.execPath, [
+      recorder,
+      join(directory, "log.jsonl"),
+      "/bin/sh",
+      "-c",
+      "sleep 30 & exit 4",
+    ])
+    await new Promise((done) => setTimeout(done, 500))
+    const started = Date.now()
+    run.kill("SIGTERM")
+    const [code] = await once(run, "exit")
+    assert.equal(code, 4)
+    assert.ok(Date.now() - started < 5000)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
