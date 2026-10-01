@@ -11,7 +11,7 @@ use serde_json::json;
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 use std::{
     io::{ErrorKind, Read, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
@@ -30,6 +30,59 @@ fn document(root: &Path) -> Vec<u8> {
         "credentialFile":root.join("reader.token"), "endpointRoot":root,
         "endpointDirectory":"gateway"}))
     .unwrap()
+}
+
+fn configure_health_socket(socket: &TcpStream) {
+    // Accepted sockets may inherit the listener's mode. Timeouts bound blocking
+    // I/O; they do not turn a nonblocking socket into a blocking one.
+    socket.set_nonblocking(false).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    socket
+        .set_write_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+}
+
+#[test]
+fn health_socket_waits_for_controlled_request_after_nonblocking_accept() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut accepted, _) = listener.accept().unwrap();
+    // Force the inherited mode on every platform, before any request exists.
+    accepted.set_nonblocking(true).unwrap();
+    let mut bytes = [0; 64];
+    assert_eq!(
+        accepted.read(&mut bytes).unwrap_err().kind(),
+        ErrorKind::WouldBlock
+    );
+    configure_health_socket(&accepted);
+    let (ready_send, ready) = std::sync::mpsc::channel();
+    let (result_send, result) = std::sync::mpsc::channel();
+    let reader = thread::spawn(move || {
+        ready_send.send(()).unwrap();
+        let read = accepted
+            .read(&mut bytes)
+            .map(|count| bytes[..count].to_vec());
+        result_send.send(read).unwrap();
+    });
+    ready.recv_timeout(Duration::from_secs(1)).unwrap();
+    let before_request = result.recv_timeout(Duration::from_millis(50));
+    client.write_all(b"GET /health HTTP/1.1\r\n\r\n").unwrap();
+    reader.join().unwrap();
+    assert!(
+        matches!(
+            before_request,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        "the fixture read must wait for the controlled request: {before_request:?}"
+    );
+    let request = result
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    assert!(request.starts_with(b"GET /health "));
 }
 
 #[test]
@@ -131,12 +184,7 @@ fn profile_resolves_current_endpoint_without_copied_identity() {
                     _ => return,
                 }
             };
-            socket
-                .set_read_timeout(Some(Duration::from_secs(1)))
-                .unwrap();
-            socket
-                .set_write_timeout(Some(Duration::from_secs(1)))
-                .unwrap();
+            configure_health_socket(&socket);
             let mut request = [0u8; 4096];
             let read = socket.read(&mut request).unwrap();
             assert!(request[..read].starts_with(b"GET /health "));
