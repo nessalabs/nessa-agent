@@ -158,7 +158,15 @@ export interface WorkspaceState {
  */
 export type ContentView = "panes" | "agents" | { readonly widget: WidgetRef }
 
-/** The widget the window shows over the panes, if the content view is one: the one test of it. */
+/** What fills the content region, by kind: the panes, the overview, or a widget in the window. */
+export type ContentKind = "panes" | "agents" | "widget"
+
+/** The content view's kind: the one reading of its shape, with `windowWidget`. */
+export function contentKind(content: ContentView): ContentKind {
+  return typeof content === "object" ? "widget" : content
+}
+
+/** The widget the window shows over the panes, if the content view is one. */
 export function windowWidget(content: ContentView): WidgetRef | null {
   return typeof content === "object" ? content.widget : null
 }

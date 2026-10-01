@@ -65,12 +65,11 @@ import {
   selectColumnCount,
   selectFocusedChannel,
   selectFocusedPaneKey,
-  selectOverviewOpen,
+  selectContentKind,
   selectPanes,
   selectSessionListOpen,
   selectSidebarOpen,
   selectView,
-  selectWindowWidget,
 } from "../../adapters/store/selectors"
 import { workspaceSplitPanes } from "../../adapters/store/split-panes-source"
 import {
@@ -310,8 +309,7 @@ export function WorkspaceShell({
   const [escapeScopes] = useState<EscapeScopes>(() => new Map())
   useWidgetEscape({ store, root, scopes: escapeScopes })
   // What fills the content region: the panes, the Agents overview over them, or a widget over the panes.
-  const overviewShown = useWorkspaceSelector(selectOverviewOpen)
-  const widgetShown = useWorkspaceSelector((state) => selectWindowWidget(state) !== null)
+  const contentShown = useWorkspaceSelector(selectContentKind)
   const shape = useMotionShape(sidebarOpen, listOpen)
 
   // Beside where the room allows it, in the focused pane's place where not —
@@ -374,7 +372,7 @@ export function WorkspaceShell({
                   region.sessionList ? (listOpen ? "open" : "closed") : undefined
                 }
                 data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
-                data-content={overviewShown ? "agents" : widgetShown ? "widget" : "panes"}
+                data-content={contentShown}
                 style={
                   {
                     "--workspace-sidebar-width": `${sidebarWidth}px`,

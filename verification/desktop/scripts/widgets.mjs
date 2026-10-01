@@ -527,6 +527,9 @@ const checks = {
     const over = await page.locator(css.widgetWindow).boundingBox()
     await page.mouse.move(box.x + 40, box.y + box.height / 2)
     await page.mouse.down()
+    // The drag makes its copy in a task once the press has painted; a move
+    // before it is not a lift.
+    await frames(page, 3)
     for (let i = 1; i <= 6; i++)
       await page.mouse.move(box.x + 40 + i * 5, box.y + box.height / 2 + i * 2)
     const zones = await recordZones(page)

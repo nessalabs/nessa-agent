@@ -31,7 +31,7 @@ import { modalSelector } from "../../../adapters/modal"
 import type { DesktopStore } from "../../../store"
 import { widgetBodyAttribute } from "../../../widgets"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
-import { selectOverviewOpen, selectWindowWidget } from "../store/selectors"
+import { selectContentKind, selectWindowWidget } from "../store/selectors"
 
 /** Marks the focused pane, whichever layout draws it, for the caret to find. */
 export const focusedPaneAttribute = "data-pane-focused"
@@ -91,11 +91,7 @@ function signature(store: DesktopStore): {
   const state = store.getState()
   const { panes } = state.workspace
   const widget = selectWindowWidget(state)
-  const shown = widget
-    ? paneItemKey(widgetItem(widget))
-    : selectOverviewOpen(state)
-      ? "agents"
-      : "panes"
+  const shown = widget ? paneItemKey(widgetItem(widget)) : selectContentKind(state)
   if (!panes) return { pane: "", rest: "", shown }
   const pane = focusedPane(panes)
   // What it shows by its key alone: two keys are equal exactly when their

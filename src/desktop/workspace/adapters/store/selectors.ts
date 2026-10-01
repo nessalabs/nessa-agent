@@ -50,7 +50,9 @@ import {
   sessionIn,
   widgetIn,
   windowWidget,
+  contentKind,
   type Answer,
+  type ContentKind,
   type Chrome,
   type WorkspaceState,
 } from "../../application/workspace-state"
@@ -75,7 +77,11 @@ export const selectColumnCount = (state: Root) =>
   state.workspace.panes?.columns.length ?? 1
 export const selectView = (state: Root): SessionView => state.workspace.view
 /** Whether the Agents overview fills the content region. */
-export const selectOverviewOpen = (state: Root) => state.workspace.content === "agents"
+export const selectOverviewOpen = (state: Root) =>
+  contentKind(state.workspace.content) === "agents"
+/** What fills the content region, by kind (`contentKind`): the page's `data-content`. */
+export const selectContentKind = (state: Root): ContentKind =>
+  contentKind(state.workspace.content)
 /** The widget the window shows over the panes, if it shows one. */
 export const selectWindowWidget = (state: Root): WidgetRef | null =>
   windowWidget(state.workspace.content)
