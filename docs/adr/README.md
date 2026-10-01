@@ -125,5 +125,6 @@ refined during review. Moving files or fixing links does not change a decision.
 
 ## Format
 
-Copy [0000-template.md](0000-template.md) into `todo/`, take the next unused
-number across both folders, and keep it to one page. If it needs more than a page, the decision is probably two decisions.
+Follow [Numbering: open the issue first](#numbering-open-the-issue-first),
+then copy [0000-template.md](0000-template.md) into `todo/<issue>-<slug>.md`.
+Keep it to one page. If it needs more than a page, the decision is probably two decisions.
