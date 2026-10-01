@@ -110,6 +110,14 @@ app widgets alike.
 
 - The gateway gains the one connection to each server — the harness's MCP
   traffic now passes through it — and two app methods, with policy and audit;
+  what that one connection means is designed in
+  [mcp-connections](../../design/mcp-connections.md) (#346): a harness's
+  context fingerprint covers its stand-in, whose arguments carry a digest of
+  the configured server, so it still changes exactly when the server does; a
+  gateway restart is a new upstream session, so a restored conversation's
+  handles are gone and the server says so; a server that exits takes its
+  stand-ins with it, as when the harness owned it, and the next use starts it
+  again; and one session now serves every conversation;
   the SDK and protocol carry tool identity and `_meta`, which also helps any
   tool view in the transcript.
 - A view like experiments becomes a package with its own release, testable in a

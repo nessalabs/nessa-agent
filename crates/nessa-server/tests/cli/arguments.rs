@@ -111,3 +111,23 @@ fn the_help_text_mentions_installing_an_agent() {
     // The command exists to be discovered by someone reading `nessa --help`.
     assert!(crate::cli::entrypoint::HELP.contains("install-agent"));
 }
+
+#[test]
+fn a_stand_in_names_an_absolute_socket_a_server_and_its_configuration() {
+    assert_eq!(
+        parse(&args(&[
+            "mcp-relay",
+            "/ns/mcp/relay.sock",
+            "mcptest",
+            "sha256:ab"
+        ])),
+        Ok(Command::McpRelay {
+            socket: "/ns/mcp/relay.sock".into(),
+            server: "mcptest".into(),
+            configuration: "sha256:ab".into(),
+        })
+    );
+    assert!(parse(&args(&["mcp-relay", "relay.sock", "mcptest", "sha256:ab"])).is_err());
+    assert!(parse(&args(&["mcp-relay", "/s", "mcptest"])).is_err());
+    assert!(parse(&args(&["mcp-relay", "/s", "mcptest", "d", "extra"])).is_err());
+}

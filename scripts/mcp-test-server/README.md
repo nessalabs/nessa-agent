@@ -40,7 +40,9 @@ gateway's `config.json`:
 
 `live-check.mjs` starts a real gateway in a temporary `ci` namespace, with one
 agent whose harness is wrapped by `acp-recorder.mjs` and the test server
-configured as `mcptest` (also wrapped, so its own traffic is recorded). It
+configured as `mcptest` (also wrapped, so its own traffic is recorded). The
+gateway starts the server and holds the one connection to it; the harness is
+given a stand-in, `nessa mcp-relay`, in its place (ADR 344). It
 sends one message asking for every tool once, allows each tool's permission
 request once, and writes what happened:
 
@@ -55,9 +57,9 @@ MCP_LIVE_OPENCODE=/path/to/opencode-1.18.31 \
 | File | Contents |
 | --- | --- |
 | `acp.jsonl` | every ACP frame between the gateway and the harness, both directions |
-| `mcp.jsonl` | every MCP frame between the harness and the test server |
+| `mcp.jsonl` | every MCP frame between the gateway and the test server, the harness's forwarded calls among them |
 | `view.json` | the conversation view the window reads at the end of the turn |
-| `summary.json` | the tool frames' shapes, the view's MCP tools, every `ui://` the harness sent, and the MCP calls made |
+| `summary.json` | the tool frames' shapes, the view's MCP tools with their `resourceUri`, every `ui://` the harness sent, the MCP calls made, the servers the harness was given (stand-ins), and the widget parts the desktop transcript makes of the view |
 | `gateway.log` | the gateway's own log |
 
 It uses the sign-in each agent already has on this machine — Claude's
@@ -66,7 +68,8 @@ from Nessa's credential store — and creates none. A gateway that has no
 credential for an agent refuses the conversation, and the check stops there.
 It allows only calls to the test server's tools, each once, never a standing
 approval; anything else the agent asks for is left unanswered. It exits
-non-zero unless the turn completed, and removes the gateway's own data
+non-zero unless the turn completed and `show_chart` yielded a widget part,
+and removes the gateway's own data
 directory (its owner token among it) at the end. Recordings and
 `gateway.log` hold the prompt, tool arguments and results, and Codex's
 `_auth/status_update` names the signed-in account (its email): review them,
@@ -76,5 +79,6 @@ were extracted from such a run.
 
 `MCP_LIVE_HARNESSES` names the directory holding `claude-acp/` and `codex-acp/`
 with their `node_modules` (default: `crates/nessa-sdk/harnesses` in this
-checkout); `MCP_LIVE_PORT` (default 7431) and `MCP_LIVE_POLLS` (seconds,
+checkout); `MCP_LIVE_NESSA` the gateway binary (default: this checkout's
+`target/debug/nessa`); `MCP_LIVE_PORT` (default 7431) and `MCP_LIVE_POLLS` (seconds,
 default 300) adjust the run.

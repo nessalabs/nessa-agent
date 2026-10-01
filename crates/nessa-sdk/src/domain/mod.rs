@@ -8,6 +8,7 @@
 //!                                      +-- model_metadata --> common
 //!                                      +-- effective_capabilities --> common
 //!                                      +-- agent_execution
+//!                                      +-- mcp_apps --> agent_execution (McpTool)
 //! ```
 //! Arrows mean "depends on". More domain features belong beside model_metadata.
 
@@ -16,3 +17,4 @@ pub mod effective_capabilities;
 pub mod model_metadata;
 
 pub mod agent_execution;
+pub mod mcp_apps;

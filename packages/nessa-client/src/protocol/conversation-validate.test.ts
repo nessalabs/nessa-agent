@@ -116,7 +116,11 @@ describe("conversation view agreement", () => {
   it("accepts a tool's MCP identity and structured result within the published bounds", () => {
     const value = view()
     Object.assign(value.tools[0]!, {
-      mcp: { server: "é".repeat(bounds.maxMcpNameBytes / 2), tool: "show" },
+      mcp: {
+        server: "é".repeat(bounds.maxMcpNameBytes / 2),
+        tool: "show",
+        resourceUri: `ui://${"é".repeat((bounds.maxUiResourceUriBytes - 6) / 2)}`,
+      },
       structuredContent: "a".repeat(bounds.maxToolStructuredContentBytes),
     })
     expect(conversationView(value, "conversation").tools[0]).toMatchObject({
@@ -133,7 +137,15 @@ describe("conversation view agreement", () => {
       { mcp: { server: "a".repeat(bounds.maxMcpNameBytes + 1), tool: "show" } },
       { mcp: { server: "charts", tool: "é".repeat(bounds.maxMcpNameBytes / 2 + 1) } },
       { mcp: { server: "charts" } },
-      { mcp: { server: "charts", tool: "show", resourceUri: "ui://x" } },
+      { mcp: { server: "charts", tool: "show", resourceUri: "" } },
+      {
+        mcp: {
+          server: "charts",
+          tool: "show",
+          resourceUri: `ui://${"a".repeat(bounds.maxUiResourceUriBytes - 4)}`,
+        },
+      },
+      { mcp: { server: "charts", tool: "show", other: "x" } },
       { mcp: "charts" },
       { structuredContent: "a".repeat(bounds.maxToolStructuredContentBytes + 1) },
       { structuredContent: { rows: 2 } },

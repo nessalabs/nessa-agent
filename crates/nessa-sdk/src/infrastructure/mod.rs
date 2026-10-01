@@ -19,6 +19,10 @@
 //!
 //! ACP worker -> tool / permission wire mapping
 //!            -> JSON-RPC -> owned process
+//!
+//! host -> mcp::McpServers -> one connection per configured MCP server
+//!            ^                 (domain::mcp_apps values)
+//! stand-in --'  (a harness's MCP traffic, forwarded over that connection)
 //! ```
 //! Arrows show calls and translation, not ownership shared between layers. The
 //! vendor `sessions` modules are alternatives, not a chain: a host reaches one
@@ -32,6 +36,7 @@ pub mod acp;
 pub mod claude_acp;
 pub mod clock;
 pub mod codex_acp;
+pub mod mcp;
 pub mod model_metadata_json;
 pub mod opencode_acp;
 pub mod session_storage;

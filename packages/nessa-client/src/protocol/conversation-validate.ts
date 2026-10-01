@@ -428,9 +428,13 @@ export function conversationView(value: unknown, expected: string): Conversation
     // are valid is the SDK's rule, and only the published bound is checked here.
     if (tool.mcp !== undefined) {
       const mcp = record(tool.mcp)
-      exact(mcp, ["server", "tool"])
+      exact(mcp, ["server", "tool", "resourceUri"])
       text(mcp, "server", bounds.maxMcpNameBytes, false)
       text(mcp, "tool", bounds.maxMcpNameBytes, false)
+      // The UI the gateway read from the server itself; which URIs are valid is
+      // the SDK's rule, and only the published bound is checked here.
+      if (mcp.resourceUri !== undefined)
+        text(mcp, "resourceUri", bounds.maxUiResourceUriBytes, false)
     }
     if (tool.structuredContent !== undefined)
       text(tool, "structuredContent", bounds.maxToolStructuredContentBytes)

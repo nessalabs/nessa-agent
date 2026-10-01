@@ -6,6 +6,7 @@ use crate::conversation::{
     domain::{ConversationPreview, ConversationTitle, LATEST_TIME_MS},
 };
 use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
+use nessa_sdk::domain::mcp_apps::MAX_UI_URI_BYTES;
 use serde_json::Value;
 
 fn schema() -> Value {
@@ -80,4 +81,9 @@ fn a_tool_states_the_mcp_name_and_structured_result_bounds_the_view_keeps() {
             "{field}"
         );
     }
+    // The UI resource's URI is the SDK domain's too, bounded the same.
+    assert_eq!(
+        mcp["resourceUri"]["x-utf8MaxBytes"].as_u64(),
+        Some(MAX_UI_URI_BYTES as u64)
+    );
 }

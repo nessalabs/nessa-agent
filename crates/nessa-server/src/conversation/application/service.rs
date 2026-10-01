@@ -19,7 +19,7 @@ use super::{
     ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
     ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
-    RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
+    McpToolUis, NoMcpToolUis, RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
 };
 use crate::agents::domain::AgentId;
 use crate::conversation::domain::{
@@ -477,6 +477,8 @@ struct Inner {
     retries: Arc<DeletionRetries>,
     /// Permits for asking agents about their own record of a session.
     agents_asked: Arc<Semaphore>,
+    /// Where a view finds the UI an MCP call's tool declared.
+    tool_uis: Arc<dyn McpToolUis>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -686,8 +688,18 @@ impl ConversationService {
                 retired: watch::channel(false).0,
                 agents_asked: Arc::new(Semaphore::new(MAX_AGENTS_ASKED_AT_ONCE)),
                 retries: Arc::new(DeletionRetries::default()),
+                tool_uis: Arc::new(NoMcpToolUis),
             }),
         })
+    }
+    /// Show each MCP call's UI from `tool_uis` in this service's views; without
+    /// it, none is shown. Set while composing, before the service is shared:
+    /// it panics on a service already cloned.
+    pub fn with_tool_uis(mut self, tool_uis: Arc<dyn McpToolUis>) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("tool UIs are set before the service is shared")
+            .tool_uis = tool_uis;
+        self
     }
     /// Persist ownership before opening a provider. Repeating the same UUID never changes its owner.
     ///
@@ -1073,7 +1085,8 @@ impl ConversationService {
                                 agent_features: operation_capabilities.into(),
                             };
                             let mut projection =
-                                Projection::new(id.to_string(), capabilities, snapshot.as_ref());
+                                Projection::new(id.to_string(), capabilities, snapshot.as_ref())
+                                    .with_tool_uis(service.inner.tool_uis.clone());
                             projection.view.selection = Some(ConversationSelectionView {
                                 agent: record.agent().expect("agent was resolved"),
                                 model: record.model().as_str().into(),
@@ -1563,6 +1576,7 @@ impl ConversationService {
                 },
                 snapshot.as_ref(),
             )
+            .with_tool_uis(self.inner.tool_uis.clone())
             .read_with_mode_change(Some(change))
         };
         view.selection = Some(ConversationSelectionView {

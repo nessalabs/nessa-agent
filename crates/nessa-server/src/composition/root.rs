@@ -70,6 +70,18 @@ impl CompositionRoot {
             } => super::cli::online(true, credential_file, ttl_seconds),
             Command::Doctor { credential_file } => super::cli::online(false, credential_file, None),
             Command::InstallAgent { agent } => super::install_command::execute(&agent).await,
+            #[cfg(unix)]
+            Command::McpRelay {
+                socket,
+                server,
+                configuration,
+            } => crate::mcp_servers::infrastructure::run(&socket, &server, &configuration)
+                .await
+                .map_err(|failure| RunError::Agent(failure.to_string())),
+            #[cfg(not(unix))]
+            Command::McpRelay { .. } => {
+                Err(RunError::Agent("MCP stand-ins require Unix sockets".into()))
+            }
         }
     }
 
@@ -103,6 +115,7 @@ impl CompositionRoot {
         let super::local_auth::LocalProduct {
             routes: product,
             warm_ups,
+            mcp,
         } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle).await?;
         let conversations = product.conversations.clone();
         // Shared with the retirement below, which asks whether any of them may
@@ -211,6 +224,17 @@ impl CompositionRoot {
         for warm_up in warm_ups.iter() {
             warm_up.start();
         }
+        // Each configured MCP server starts now, in the background, so its tools
+        // are listed before a harness asks for them; stand-ins reach it through
+        // the relay from here on.
+        #[cfg(unix)]
+        let mcp_servers = mcp.map(|mcp| {
+            mcp.servers.start_all();
+            tokio::spawn(mcp.relay.listen(mcp.listener));
+            mcp.servers
+        });
+        #[cfg(not(unix))]
+        let _ = mcp;
         // Deletions a tombstone says did not finish — interrupted by the last
         // run's exit, or stopped short — are finished now, in the background:
         // a deletion that cannot finish is reported, never a reason to hold up
@@ -298,8 +322,14 @@ impl CompositionRoot {
         let served = axum::serve(listener, router)
             .with_graceful_shutdown(async move {
                 shutdown_signal().await;
-                let Some(service) = conversations else { return };
-                record_conversation_shutdown(&slot, service.shutdown()).await;
+                if let Some(service) = conversations {
+                    record_conversation_shutdown(&slot, service.shutdown()).await;
+                }
+                // After the agents, whose stand-ins end with their servers.
+                #[cfg(unix)]
+                if let Some(servers) = mcp_servers {
+                    servers.stop().await;
+                }
             })
             .await;
         serve_outcome(served, &report)
