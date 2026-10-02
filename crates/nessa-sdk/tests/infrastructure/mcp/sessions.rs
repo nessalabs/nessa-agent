@@ -303,6 +303,18 @@ async fn each_conversation_sees_its_own_newest_sessions_ui() {
 async fn a_revoked_grant_closes_its_sessions_and_no_others() {
     use crate::domain::agent_execution::sessions::SessionId;
     use crate::infrastructure::mcp::McpOwner;
+    // Its connection is closed before `revoke` returns: the view stops
+    // reading it at once, with nothing awaited in between.
+    {
+        let (servers, _, _) = servers(Behaviour::default());
+        let only = SessionId::new("only").unwrap();
+        let owner = McpOwner::new(only.clone());
+        let session = servers.open("fixture", owner.clone()).await.unwrap();
+        session.list_tools().await.unwrap();
+        assert!(servers.tool_ui(&only, &chart_call()).is_some());
+        servers.revoke(&owner);
+        assert_eq!(servers.tool_ui(&only, &chart_call()), None);
+    }
     let (servers, launcher, _) = servers(Behaviour::default());
     let a = SessionId::new("a").unwrap();
     let revoked_owner = McpOwner::new(a.clone());
@@ -327,6 +339,66 @@ async fn a_revoked_grant_closes_its_sessions_and_no_others() {
         servers.open("fixture", revoked_owner).await,
         Err(McpError::Closed)
     ));
+}
+
+#[test]
+fn reading_the_view_while_sessions_end_never_deadlocks() {
+    // A session whose last reference is dropped while the view's lookup holds
+    // it takes the open sessions' lock in its `Drop`; the lookup must not
+    // hold that lock then. Readers on threads of their own, sessions opening
+    // and ending on a runtime: all of it within the watchdog's bound.
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (servers, _, _) = servers(Behaviour::default());
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let readers: Vec<_> = (0..3)
+                .map(|_| {
+                    let (servers, stop) = (servers.clone(), stop.clone());
+                    std::thread::spawn(move || {
+                        let nobody =
+                            crate::domain::agent_execution::sessions::SessionId::new("nobody")
+                                .unwrap();
+                        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                            let _ = servers.tool_ui(&nobody, &chart_call());
+                        }
+                    })
+                })
+                .collect();
+            for _ in 0..200 {
+                let session = servers.open("fixture", super::owner()).await.unwrap();
+                let _ = session.list_tools().await;
+                drop(session);
+            }
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            for reader in readers {
+                reader.join().unwrap();
+            }
+        });
+        let _ = done.send(());
+    });
+    finished
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the lookup and sessions ending deadlocked");
+}
+
+#[tokio::test]
+async fn a_grant_revoked_before_its_session_opens_launches_nothing() {
+    use crate::domain::agent_execution::sessions::SessionId;
+    use crate::infrastructure::mcp::McpOwner;
+    let (servers, launcher, _) = servers(Behaviour::default());
+    let owner = McpOwner::new(SessionId::new("a").unwrap());
+    servers.revoke(&owner);
+    assert!(matches!(
+        servers.open("fixture", owner).await,
+        Err(McpError::Closed)
+    ));
+    assert_eq!(launcher.launches(), 0);
 }
 
 #[tokio::test]

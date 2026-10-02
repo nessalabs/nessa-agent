@@ -216,27 +216,32 @@ fn unknown_session(answer: Option<Answer>) -> bool {
 
 #[tokio::test]
 async fn a_stand_in_without_a_token_the_gateway_issued_is_refused_and_starts_nothing() {
-    let server = fixture();
-    let (relay, mcp, grants) = relay_for(vec![server.clone()]);
+    // A server that leaves a mark when it is started, and does nothing else.
+    let marks = tempfile::tempdir().unwrap();
+    let mark = marks.path().join("started");
+    let marking = StdioMcpServer {
+        name: "marking".into(),
+        command: PathBuf::from("/usr/bin/touch"),
+        args: vec![mark.to_str().unwrap().into()],
+    };
+    let (relay, _, grants) = relay_for(vec![marking.clone()]);
     let (_grant, token) = granted(&grants, "conversation");
-    // None, forged, and one a character off.
+    // None, forged, and one a character off: refused, and nothing started.
     let mut off = token.clone();
     off.replace_range(0..1, if token.starts_with('0') { "1" } else { "0" });
     for forged in [String::new(), "0".repeat(64), off] {
-        assert!(unknown_session(answered(&relay, &server, &forged).await));
+        assert!(unknown_session(answered(&relay, &marking, &forged).await));
     }
-    // Refused before anything is said of the server, or started for it.
+    assert!(!mark.exists(), "a server was started for a forged token");
+    // Refused before anything is said of the server: an unknown one too.
     let other = StdioMcpServer {
         name: "other".into(),
-        ..server.clone()
+        ..marking.clone()
     };
     assert!(unknown_session(answered(&relay, &other, "forged").await));
-    assert!(mcp
-        .tool_ui(
-            &SessionId::new("conversation").unwrap(),
-            &McpTool::new("fixture", "show_chart").unwrap()
-        )
-        .is_none());
+    // The issued token does start it — which is what the mark shows.
+    assert!(!unknown_session(answered(&relay, &marking, &token).await));
+    assert!(mark.exists());
 }
 
 #[tokio::test]
@@ -270,7 +275,7 @@ impl TokenSource for NoRandom {
 }
 
 #[tokio::test]
-async fn without_a_token_an_opens_stand_ins_are_refused_and_nothing_else_is_affected() {
+async fn without_a_token_an_opens_stand_ins_are_refused() {
     let server = fixture();
     let (_, mcp, _) = relay_for(vec![server.clone()]);
     let grants = ConversationGrants::new(mcp.clone(), Arc::new(NoRandom));

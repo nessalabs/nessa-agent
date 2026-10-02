@@ -186,6 +186,77 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
     }
 }
 
+/// What the composed relay answers a hello naming `token` for `server`.
+async fn answered(
+    composed: &super::McpComposition,
+    server: &StdioMcpServer,
+    token: &str,
+) -> crate::mcp_servers::infrastructure::Answer {
+    use crate::mcp_servers::infrastructure::{read_line, write_line, Hello};
+    let (stand_in, gateway) = tokio::io::duplex(64 * 1024);
+    let relay = composed.relay.clone();
+    tokio::spawn(async move { relay.serve(gateway).await });
+    let (read, mut write) = tokio::io::split(stand_in);
+    let hello = Hello {
+        server: server.name.clone(),
+        configuration: configuration_digest(&server.command, &server.args),
+        session: token.into(),
+    };
+    write_line(&mut write, &hello).await.unwrap();
+    read_line(&mut tokio::io::BufReader::new(read))
+        .await
+        .expect("an answer")
+}
+
+#[tokio::test]
+async fn the_agents_grants_are_the_ones_the_composed_relay_lets_through() {
+    use crate::mcp_servers::infrastructure::{Answer, Refusal};
+    use nessa_sdk::domain::agent_execution::sessions::SessionId;
+    let namespace = tempfile::tempdir().unwrap();
+    let socket = namespace.path().join("mcp").join("relay.sock");
+    let configured = server("mcptest", &["/s.mjs"]);
+    let mut config = agents(vec![configured.clone()]);
+    let composed = compose(&mut config, &socket, Path::new("/nessa"), BTreeMap::new())
+        .await
+        .unwrap()
+        .expect("composed");
+    // An open of a conversation's session, as its provider makes it.
+    let (opened, grant) = config
+        .stand_ins
+        .opened(Some(&SessionId::new("conversation").unwrap()));
+    let token = opened
+        .environment()
+        .iter()
+        .find(|(name, _)| name == crate::mcp_servers::domain::SESSION_VARIABLE)
+        .map(|(_, token)| token.clone())
+        .expect("the agents' opens carry a token");
+    // Let past the session check (this test's server cannot start, so it is
+    // refused as unavailable instead); a forged one is not.
+    assert!(!matches!(
+        answered(&composed, &configured, &token).await,
+        Answer::Refused {
+            reason: Refusal::UnknownSession,
+            ..
+        }
+    ));
+    assert!(matches!(
+        answered(&composed, &configured, "forged").await,
+        Answer::Refused {
+            reason: Refusal::UnknownSession,
+            ..
+        }
+    ));
+    // Revoked with its open, it is refused too.
+    drop(grant);
+    assert!(matches!(
+        answered(&composed, &configured, &token).await,
+        Answer::Refused {
+            reason: Refusal::UnknownSession,
+            ..
+        }
+    ));
+}
+
 #[tokio::test]
 async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
     let namespace = tempfile::tempdir().unwrap();

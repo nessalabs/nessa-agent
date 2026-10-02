@@ -218,7 +218,7 @@ One per provider open of an SDK session (a conversation's, or a warm-up's).
 | — | the SDK opens a provider session for `S`: new, resumed, or warm-up | Live | a token minted; its digest registered as `S`; each stand-in of the open carries it |
 | Live | the harness process restarts inside that provider session | Live | the same token: the same open |
 | Live | a hello names its token | Live | a session opens, owned by (`S`, this grant) |
-| Live | the provider session ends: closed, deleted, stopped, retired, shut down, warm-up done, or its open fails | Revoked | the token is refused; the grant's open sessions are closed (stdin, 2 s, the process group); a session still opening under it is refused when its `initialize` is answered — the revocation and its registration share one lock |
+| Live | the provider session ends: closed, deleted, stopped, retired, shut down, warm-up done, or its open fails | Revoked | the token is refused; the grant's open sessions are closed (stdin, 2 s, the process group); a session still opening under it is refused when its `initialize` is answered — the revocation and its registration share one lock — and one asked for after it launches nothing; with no runtime to close on, or one shutting down, the process groups are killed at once |
 | Revoked | a hello names its token | Revoked | refused `unknown-session` |
 | Live | `S` is opened again (resumed) | Live, beside the new one | the new open's stand-ins carry the new token; the view reads `S`'s newest session; this one is revoked when its provider session ends |
 | — | the gateway restarts | none | every old token is refused; each conversation gets a new one when it opens |
@@ -282,10 +282,14 @@ Each row above has at least one test, named after it:
   cancellation both ways, id reuse, hidden tools, subscriptions, server
   requests answered, list-changed notices, sessions apart from each other,
   the view's lookup of a conversation's own newest session and not yet
-  listed, a revoked grant closing its sessions and no others, a grant revoked
+  listed, the lookup never deadlocking with sessions ending, a revoked grant
+  closing its connections before `revoke` returns and its sessions and no
+  others, a grant revoked before its session opens launching nothing, one
+  revoked off any runtime killing at once, a grant revoked
   while its session opens refusing that opening, a grant revoked while its
   session closes leaving every close waiting for the stop, stop racing an
-  opening; a provider open holding its session's grant until it ends, every
+  opening; a provider open holding its session's grant until it ends and
+  through a relaunch of its process, the open naming the manager's session, every
   `mcpServers` entry carrying the open's environment, and grants left out of
   the fingerprint.
 - SDK, real processes (python fixture): launching as configured, separate
@@ -294,11 +298,14 @@ Each row above has at least one test, named after it:
   with its stand-in, and the **stateful** fixture: a handle returned to a
   stand-in's call resolves in a later read on the same session, and not on
   another.
-- Gateway: hello refusals (no, forged, and revoked tokens among them), a
+- Gateway: the composed agents' grants being the ones the composed relay
+  lets through, the launch configuration carrying them, the view keyed by its
+  conversation's session, hello refusals (no, forged, and revoked tokens among
+  them, a forged one starting nothing), a
   token mapping to its conversation while its grant lives, a revoked grant
   ending the sessions it opened, two conversations on one server and a
   resumed one each on sessions of their own, no token when the random source
-  fails (its stand-ins refused, nothing else affected), a hello's `Debug`
+  fails (its stand-ins refused), a hello's `Debug`
   never printing its token, the relay command's exit and its token read from
   its environment, the stand-ins and digest in `session/new`, a relay process killed outright ending its server's
   process group, a relay exiting when its server ends with its stdin still

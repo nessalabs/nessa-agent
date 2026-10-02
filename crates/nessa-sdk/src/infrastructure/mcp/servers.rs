@@ -256,6 +256,11 @@ impl McpServers {
         if *inner.stopping.borrow() {
             return Err(McpError::Stopped);
         }
+        // Revoked already: nothing to launch. Revoked from here on is seen
+        // when the session is registered, below.
+        if owner.revoked() {
+            return Err(McpError::Closed);
+        }
         let deadline = inner.clock.now() + INITIALIZE_TIMEOUT;
         let Launched {
             output,
@@ -348,16 +353,20 @@ impl McpServers {
 
     /// `session`'s newest open session of `server`, if it has one.
     fn newest(&self, session: &SessionId, server: &str) -> Option<Arc<Session>> {
+        self.open_sessions().into_iter().rev().find(|each| {
+            each.owned_by.session() == session
+                && each.server == server
+                && each.connection.end_cause().is_none()
+        })
+    }
+
+    /// The sessions open now, oldest first. Upgraded under the lock and
+    /// handed out of it: a session whose last other reference goes meanwhile
+    /// is dropped by the caller, after the lock is released — its `Drop`
+    /// takes the lock itself.
+    fn open_sessions(&self) -> Vec<Arc<Session>> {
         let live = self.inner.live.lock().expect("live sessions");
-        live.sessions
-            .values()
-            .rev()
-            .filter_map(Weak::upgrade)
-            .find(|each| {
-                each.owned_by.session() == session
-                    && each.server == server
-                    && each.connection.end_cause().is_none()
-            })
+        live.sessions.values().filter_map(Weak::upgrade).collect()
     }
 
     /// Revoke `owner`'s grant: no session opens under it from now on — one
@@ -365,10 +374,12 @@ impl McpServers {
     /// closed as its stand-in ending would close it: calls waiting end
     /// [`McpError::Closed`] at once, the server's stdin is closed, and a
     /// server still running two seconds later is killed with its process
-    /// group. Returns at once; the closing runs on the current runtime
-    /// (without one, the process groups are killed at once).
+    /// group. Returns at once: the connections are closed before it does,
+    /// and stopping the processes runs on the current runtime. Without one —
+    /// or on a runtime shutting down, which drops what is spawned on it — the
+    /// process groups are killed at once, without the grace.
     pub fn revoke(&self, owner: &McpOwner) {
-        let granted: Vec<Arc<Session>> = {
+        let open = {
             let live = self.inner.live.lock().expect("live sessions");
             owner
                 .grant
@@ -377,10 +388,15 @@ impl McpServers {
             live.sessions
                 .values()
                 .filter_map(Weak::upgrade)
-                .filter(|each| each.owned_by.same_grant(owner))
-                .collect()
+                .collect::<Vec<_>>()
         };
+        // Filtered, and the others dropped, outside the lock: see
+        // `open_sessions`.
+        let granted = open
+            .into_iter()
+            .filter(|each| each.owned_by.same_grant(owner));
         for session in granted {
+            session.connection.close(McpError::Closed);
             match tokio::runtime::Handle::try_current() {
                 Ok(runtime) => {
                     runtime.spawn(close(session, McpError::Closed));

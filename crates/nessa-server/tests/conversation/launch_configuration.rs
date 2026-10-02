@@ -189,3 +189,39 @@ fn the_published_delete_bound_is_what_a_delete_can_spend() {
     let deletion = agent_budgets::deletion();
     assert_eq!(deletion.stop + deletion.history_lease + exchange, published);
 }
+
+/// Grants that give every open one variable.
+struct OneVariable;
+impl nessa_sdk::infrastructure::acp::sessions::StandInGrants for OneVariable {
+    fn grant(
+        &self,
+        _: &nessa_sdk::domain::agent_execution::sessions::SessionId,
+    ) -> nessa_sdk::infrastructure::acp::sessions::StandInGrant {
+        nessa_sdk::infrastructure::acp::sessions::StandInGrant::new(
+            vec![("NESSA_MCP_SESSION".into(), "token".into())],
+            Box::new(()),
+        )
+    }
+}
+
+#[test]
+fn the_launch_configuration_carries_the_agents_grants() {
+    let mut config = agents_config();
+    config.stand_ins = nessa_sdk::infrastructure::acp::sessions::StandInSessions::granted_by(
+        std::sync::Arc::new(OneVariable),
+    );
+    let injected = launch_configuration(
+        &config,
+        &runtime(),
+        PathBuf::from("/workspace"),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        None,
+    );
+    let session = nessa_sdk::domain::agent_execution::sessions::SessionId::new("c").unwrap();
+    let (opened, _grant) = injected.stand_ins.opened(Some(&session));
+    assert_eq!(
+        opened.environment(),
+        [("NESSA_MCP_SESSION".to_owned(), "token".to_owned())]
+    );
+}

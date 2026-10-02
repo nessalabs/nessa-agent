@@ -1715,10 +1715,15 @@ fn a_message_linking_long_paths_gives_way_before_an_ask_does() {
 }
 
 /// The tools a server listed, as the view's lookup sees them: `charts`'
-/// `show` has whatever UI the test sets, nothing else has any.
+/// `show` has whatever UI the test sets in the conversation's own session,
+/// nothing else has any, and no other conversation's session has it.
 struct ListedUis(Mutex<Option<&'static str>>);
 impl McpToolUis for ListedUis {
-    fn resource_uri(&self, _: &SessionId, call: &McpTool) -> Option<UiResourceUri> {
+    fn resource_uri(&self, session: &SessionId, call: &McpTool) -> Option<UiResourceUri> {
+        // The projection's conversation, as its SDK session is named.
+        if session.as_str() != "conversation" {
+            return None;
+        }
         if (call.server(), call.tool()) != ("charts", "show") {
             return None;
         }

@@ -85,6 +85,17 @@ fn alive(pid: i64) -> bool {
     !state.trim().is_empty() && !state.trim_start().starts_with('Z')
 }
 
+/// Until a close has taken `session`'s server process to stop it.
+async fn taken(session: &crate::infrastructure::mcp::McpSession) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while session.process_id().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("a close took the process");
+}
+
 /// Until `pid` is no longer running, within five seconds.
 async fn gone(pid: i64) {
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -265,7 +276,7 @@ async fn every_close_returns_only_once_the_server_is_stopped() {
         let session = session.clone();
         async move { session.close().await }
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    taken(&session).await;
     let started = std::time::Instant::now();
     session.close().await;
     assert!(!exists(pid), "process {pid} is left after the second close");
@@ -282,7 +293,7 @@ async fn every_close_returns_only_once_the_server_is_stopped() {
         let session = session.clone();
         async move { session.close().await }
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    taken(&session).await;
     servers.stop().await;
     assert!(!exists(pid), "process {pid} is left after stop returned");
     closing.await.unwrap();
@@ -301,7 +312,7 @@ async fn a_grant_revoked_while_its_session_closes_leaves_every_close_waiting_for
         let session = session.clone();
         async move { session.close().await }
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    taken(&session).await;
     servers.revoke(&owner);
     session.close().await;
     assert!(!exists(pid), "process {pid} is left after close returned");
@@ -318,10 +329,37 @@ async fn a_session_dropped_while_a_close_holds_its_server_leaves_stop_waiting_fo
     // Revoking starts a close that holds the server through its grace; the
     // last handle then goes, which must not say it is stopped before it is.
     servers.revoke(&owner);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    taken(&session).await;
     drop(session);
     servers.stop().await;
     assert!(!exists(pid), "process {pid} is left after stop returned");
+}
+
+#[tokio::test]
+async fn a_grant_revoked_off_any_runtime_kills_its_sessions_at_once() {
+    let (servers, _) = process(&["--ignore-eof"]);
+    let owner = super::owner();
+    let session = servers.open("fixture", owner.clone()).await.unwrap();
+    session.list_tools().await.unwrap();
+    let pid = i64::from(session.process_id().unwrap());
+    // Revoked from a thread with no runtime: nothing can wait out a grace
+    // there, so the process group is killed at once.
+    let revoking = servers.clone();
+    std::thread::spawn(move || revoking.revoke(&owner))
+        .join()
+        .unwrap();
+    assert_eq!(
+        session.list_tools().await,
+        Err(crate::infrastructure::mcp::McpError::Closed)
+    );
+    // Closing returns once it is stopped, which it already is.
+    let started = std::time::Instant::now();
+    session.close().await;
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "no grace waited"
+    );
+    gone(pid).await;
 }
 
 #[tokio::test]

@@ -200,6 +200,8 @@ impl MemoryStorage {
 #[derive(Default)]
 struct ProviderCalls {
     opens: Mutex<Vec<Option<ExecutionSessionId>>>,
+    /// The SDK session each open named.
+    sessions: Mutex<Vec<Option<nessa_sdk::domain::agent_execution::sessions::SessionId>>>,
     executions: AtomicUsize,
     closes: Mutex<Vec<SessionCloseRequest>>,
     order: Mutex<Vec<String>>,
@@ -244,9 +246,10 @@ impl AgentProvider for TestProvider {
         capabilities_ref()
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
-        let (_, restore, _control) = request.into_parts();
+        let (session, restore, _control) = request.into_parts();
         Box::pin(async move {
             self.calls.opens.lock().unwrap().push(restore.clone());
+            self.calls.sessions.lock().unwrap().push(session);
             let id =
                 restore.unwrap_or_else(|| ExecutionSessionId::new("provider-context").unwrap());
             let (sender, receiver) = mpsc::unbounded_channel();
@@ -425,6 +428,11 @@ async fn invocation_drains_and_persists_without_any_subscriber() {
         ));
     }
     assert_eq!(provider.calls.opens.lock().unwrap().as_slice(), &[None]);
+    // The open names the SDK session it is for: what a host keys its grant to.
+    assert_eq!(
+        provider.calls.sessions.lock().unwrap().as_slice(),
+        &[Some(agent.session_manager().id().clone())]
+    );
     assert_eq!(
         agent
             .session_manager()

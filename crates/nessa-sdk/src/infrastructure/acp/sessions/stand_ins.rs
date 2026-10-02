@@ -70,8 +70,9 @@ impl StandInSessions {
     }
     /// For one open of `session` (none for an open that names no session):
     /// these sessions with that open's environment, and the grant to hold
-    /// while the provider session lives.
-    pub(crate) fn opened(&self, session: Option<&SessionId>) -> (Self, Option<StandInGrant>) {
+    /// while the provider session lives. The ACP binding asks this itself; a
+    /// host builds an open's entries with it only to check what they carry.
+    pub fn opened(&self, session: Option<&SessionId>) -> (Self, Option<StandInGrant>) {
         let grant = self
             .grants
             .as_ref()
@@ -89,7 +90,7 @@ impl StandInSessions {
         )
     }
     /// What every MCP server process of this open is given.
-    pub(crate) fn environment(&self) -> &[(String, String)] {
+    pub fn environment(&self) -> &[(String, String)] {
         &self.environment
     }
 }
