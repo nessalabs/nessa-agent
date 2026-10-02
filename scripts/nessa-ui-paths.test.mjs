@@ -57,6 +57,19 @@ test("a specific rule wins over the prefix it extends, whatever order the table 
   )
 })
 
+test("a whole specifier is exact in Vite and TypeScript alike: a path under it is a component", () => {
+  const aliases = viteAliases("/ui/src")
+  assert.equal(
+    resolveWith(aliases, "@nessa-ui/react/app-shell/app-shell-dock"),
+    "/ui/src/components/app-shell/app-shell-dock",
+  )
+  // TypeScript: no `app-shell/*` key, so the same import falls to `@nessa-ui/react/*`.
+  const keys = Object.keys(tsconfigPaths())
+  assert.ok(keys.includes("@nessa-ui/react/app-shell"))
+  assert.ok(!keys.includes("@nessa-ui/react/app-shell/*"))
+  assert.ok(keys.includes("@nessa-ui/react/*"))
+})
+
 test("an import the table does not cover is left to the resolver", () => {
   const aliases = viteAliases("/ui/src")
   assert.equal(resolveWith(aliases, "@/hooks/use-thing"), null)
@@ -110,11 +123,25 @@ test("tsconfig disagreeing with the table is reported: missing, elsewhere, or no
     /has "@\/hooks\/\*", which .* does not map/,
   )
 
+  // Ownership follows where an entry leads, not how its key is spelled.
+  const renamed = {
+    ...agreed,
+    "~ui/*": ["./node_modules/@nessa-ui/react/src/components/*"],
+  }
+  assert.match(
+    tsconfigPathViolations(renamed).join("\n"),
+    /has "~ui\/\*", which .* does not map/,
+  )
+
   assert.equal(tsconfigPathViolations(undefined).length, nessaUiPaths.length)
 })
 
-test("entries that are not the design system's are left alone", () => {
-  const withOthers = { ...tsconfigPaths(), react: ["./node_modules/@types/react"] }
+test("entries that lead anywhere but the design system's source are left alone", () => {
+  const withOthers = {
+    ...tsconfigPaths(),
+    react: ["./node_modules/@types/react"],
+    "@/app/*": ["./src/app/*"],
+  }
   assert.deepEqual(tsconfigPathViolations(withOthers), [])
 })
 

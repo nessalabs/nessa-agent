@@ -11,7 +11,8 @@
  *
  * Each rule maps an import prefix to a directory of the package's `src/`:
  *
- * - `@nessa-ui/react/app-shell`, the one composite, is a whole specifier.
+ * - `@nessa-ui/react/app-shell`, the one composite: a whole specifier, matched
+ *   exactly by all three tools, so none of them reads `app-shell/…` into it.
  * - `@nessa-ui/react/lib/<name>`: the registry libraries, such as the shared
  *   size observer, which the package's entry does not export.
  * - `@nessa-ui/react/<component>`: everything else under the namespace.
@@ -22,10 +23,10 @@
  * Order is not part of the table: the derivers put a whole specifier and a
  * longer prefix ahead of a shorter one, so `lib/` is never claimed by the
  * components' rule. Pure on purpose — the architecture check imports this with
- * bare Node and no `node_modules`.
+ * bare Node and no `node_modules`. Its types are `nessa-ui-paths.d.mts`'s.
  */
 
-/** @typedef {{ specifier: string, directory: string, whole?: true }} NessaUiPath */
+/** @typedef {import("./nessa-ui-paths.d.mts").NessaUiPath} NessaUiPath */
 
 /** @type {readonly NessaUiPath[]} */
 export const nessaUiPaths = [
@@ -41,8 +42,12 @@ export const nessaUiPaths = [
   { specifier: "@/provider/", directory: "provider/" },
 ]
 
-/** Where `tsconfig.json` finds the package's source, from the project root. */
-export const tsconfigSourceRoot = "./node_modules/@nessa-ui/react/src"
+/**
+ * The package's `src/` as its `node_modules` link reaches it, from the project
+ * root: where `tsconfig.json` and Vitest find the source. Vite reaches it by
+ * its real path instead (see `vite.config.ts`).
+ */
+export const linkedSourceRoot = "./node_modules/@nessa-ui/react/src"
 
 /** Whole specifiers first, then longer prefixes before the prefixes they extend. */
 const mostSpecificFirst = (paths) =>
@@ -64,7 +69,7 @@ const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
  */
 export function viteAliases(sourceRoot, paths = nessaUiPaths) {
   return mostSpecificFirst(paths).map(({ specifier, directory, whole }) => ({
-    find: whole ? specifier : new RegExp(`^${escapeRegExp(specifier)}`),
+    find: new RegExp(`^${escapeRegExp(specifier)}${whole ? "$" : ""}`),
     replacement: `${sourceRoot}/${directory}`,
   }))
 }
@@ -80,20 +85,28 @@ export function tsconfigPaths(paths = nessaUiPaths) {
   return Object.fromEntries(
     mostSpecificFirst(paths).map(({ specifier, directory, whole }) =>
       whole
-        ? [specifier, [`${tsconfigSourceRoot}/${directory}`]]
-        : [`${specifier}*`, [`${tsconfigSourceRoot}/${directory}*`]],
+        ? [specifier, [`${linkedSourceRoot}/${directory}`]]
+        : [`${specifier}*`, [`${linkedSourceRoot}/${directory}*`]],
     ),
   )
 }
 
-/** Whether a `paths` key is one of the design system's, so the table owns it. */
-const ownedKey = (key) => key.startsWith("@nessa-ui/react") || key.startsWith("@/")
+/**
+ * Whether a `paths` entry leads into the design system's source, which makes
+ * it the table's to hold, whatever its key.
+ */
+const intoTheSource = (targets) =>
+  Array.isArray(targets) &&
+  targets.some(
+    (target) => typeof target === "string" && target.startsWith(`${linkedSourceRoot}/`),
+  )
 
 /**
  * How `tsconfig.json`'s `compilerOptions.paths` disagrees with the table: an
- * entry missing, pointing elsewhere, or for a design-system specifier the
- * table does not have. Other entries (`react`, `react-dom`) are not the
- * table's and are left alone. Empty when they agree.
+ * entry missing, pointing elsewhere, or leading into the design system's
+ * source under a key the table does not have. Entries that lead elsewhere
+ * (`react`, `react-dom`) are not the table's and are left alone. Empty when
+ * they agree.
  *
  * @param {Record<string, unknown> | undefined} actual
  * @param {readonly NessaUiPath[]} [paths]
@@ -115,8 +128,8 @@ export function tsconfigPathViolations(actual, paths = nessaUiPaths) {
       )
     }
   }
-  for (const key of Object.keys(given)) {
-    if (ownedKey(key) && !Object.hasOwn(expected, key))
+  for (const [key, targets] of Object.entries(given)) {
+    if (intoTheSource(targets) && !Object.hasOwn(expected, key))
       violations.push(
         `tsconfig.json paths has "${key}", which scripts/nessa-ui-paths.mjs does not map`,
       )

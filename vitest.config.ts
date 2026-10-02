@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { defineConfig } from "vitest/config"
 
-import { viteAliases } from "./scripts/nessa-ui-paths.mjs"
+import { linkedSourceRoot, viteAliases } from "./scripts/nessa-ui-paths.mjs"
 
 const designSystemEditorDependencies = existsSync(resolve("node_modules/@nessa-ui/react"))
   ? [
@@ -27,7 +27,7 @@ export default defineConfig({
     // The design system's import paths, from the one table
     // (`scripts/nessa-ui-paths.mjs`) that `vite.config.ts` uses too, against
     // the source as the `node_modules` link reaches it.
-    alias: viteAliases(resolve("node_modules/@nessa-ui/react/src")),
+    alias: viteAliases(resolve(linkedSourceRoot)),
   },
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "packages/**/*.test.ts"],
