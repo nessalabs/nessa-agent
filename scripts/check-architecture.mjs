@@ -361,6 +361,7 @@ const architecture = join(root, "scripts", "architecture")
 for (const file of [
   join(root, "scripts", "check-architecture.mjs"),
   join(root, "scripts", "check-runtime-dependencies.mjs"),
+  join(root, "scripts", "nessa-ui-paths.mjs"),
   ...walk(architecture),
 ]) {
   const text = readFileSync(file, "utf8")

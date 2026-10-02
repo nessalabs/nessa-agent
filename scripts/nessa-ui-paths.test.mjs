@@ -107,7 +107,7 @@ test("the repository's tsconfig.json agrees with the table", () => {
   assert.deepEqual(tsconfigPathViolations(tsconfig.compilerOptions.paths), [])
 })
 
-test("tsconfig disagreeing with the table is reported: missing, elsewhere, or not the table's", () => {
+test("tsconfig disagreeing with the table is reported: an entry missing, or elsewhere", () => {
   const agreed = tsconfigPaths()
   const { ["@/lib/*"]: _dropped, ...missing } = agreed
   assert.match(tsconfigPathViolations(missing).join("\n"), /has no "@\/lib\/\*"/)
@@ -118,26 +118,10 @@ test("tsconfig disagreeing with the table is reported: missing, elsewhere, or no
     /maps "@nessa-ui\/react\/\*" to \["\.\/elsewhere\/\*"\]/,
   )
 
-  const extra = { ...agreed, "@/hooks/*": ["./node_modules/@nessa-ui/react/src/hooks/*"] }
-  assert.match(
-    tsconfigPathViolations(extra).join("\n"),
-    /has "@\/hooks\/\*", which leads into the design system.s source/,
-  )
-
-  // Ownership follows where an entry leads, not how its key is spelled.
-  const renamed = {
-    ...agreed,
-    "~ui/*": ["./node_modules/@nessa-ui/react/src/components/*"],
-  }
-  assert.match(
-    tsconfigPathViolations(renamed).join("\n"),
-    /has "~ui\/\*", which leads into the design system.s source/,
-  )
-
   assert.equal(tsconfigPathViolations(undefined).length, nessaUiPaths.length)
 })
 
-test("entries that lead anywhere but the design system's source are left alone", () => {
+test("entries the table does not have are not read", () => {
   const withOthers = {
     ...tsconfigPaths(),
     react: ["./node_modules/@types/react"],
@@ -149,22 +133,6 @@ test("entries that lead anywhere but the design system's source are left alone",
 test("a key inherited from Object.prototype is not read as an entry", () => {
   const paths = Object.assign(Object.create({ "@/lib/*": ["./inherited/*"] }), {})
   assert.match(tsconfigPathViolations(paths).join("\n"), /has no "@\/lib\/\*"/)
-})
-
-test("an entry into the source is the table's however its path is spelled", () => {
-  const agreed = tsconfigPaths()
-  for (const [key, target] of [
-    ["@ui", "./node_modules/@nessa-ui/react/src"],
-    ["@ui/*", "node_modules/@nessa-ui/react/src/components/*"],
-    ["@ui-dot/*", "./node_modules/@nessa-ui/react/./src/components/*"],
-  ]) {
-    const violations = tsconfigPathViolations({ ...agreed, [key]: [target] })
-    assert.equal(violations.length, 1, `${key} → ${target}`)
-    assert.match(violations[0], /remove it, or add its mapping to the table first/)
-  }
-  // A neighbour of the source is not the source.
-  const beside = { ...agreed, "@x/*": ["./node_modules/@nessa-ui/react/srcX/*"] }
-  assert.deepEqual(tsconfigPathViolations(beside), [])
 })
 
 test("tsconfig.json that is not plain JSON is reported, not thrown", () => {

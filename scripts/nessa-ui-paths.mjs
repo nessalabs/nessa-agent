@@ -22,12 +22,10 @@
  *
  * Order is not part of the table: the derivers put a whole specifier and a
  * longer prefix ahead of a shorter one, so `lib/` is never claimed by the
- * components' rule. Pure on purpose — the architecture check imports this with
- * bare Node and no `node_modules`, so it imports Node's own modules alone. Its
- * types are `nessa-ui-paths.d.mts`'s.
+ * components' rule. It imports nothing: the architecture check imports it on
+ * bare Node with no `node_modules`, and that check's own import rule reads this
+ * file to hold it so. Its types are `nessa-ui-paths.d.mts`'s.
  */
-
-import { posix } from "node:path"
 
 /** @typedef {import("./nessa-ui-paths.d.mts").NessaUiPath} NessaUiPath */
 
@@ -94,29 +92,12 @@ export function tsconfigPaths(paths = nessaUiPaths) {
   )
 }
 
-const sourceRoot = posix.normalize(linkedSourceRoot)
-
 /**
- * Whether a `paths` entry leads into the design system's source through its
- * `node_modules` link, however the path is spelled (`./` or not, `a/./b`,
- * the root itself): that makes it the table's to hold, whatever its key. A
- * path into the vendored checkout's real location (`.vendor/…`) is not
- * recognised; nothing in `tsconfig.json` reaches the source that way.
- */
-const intoTheSource = (targets) =>
-  Array.isArray(targets) &&
-  targets.some((target) => {
-    if (typeof target !== "string") return false
-    const path = posix.normalize(target)
-    return path === sourceRoot || path.startsWith(`${sourceRoot}/`)
-  })
-
-/**
- * How `tsconfig.json`'s `compilerOptions.paths` disagrees with the table: an
- * entry missing, pointing elsewhere, or leading into the design system's
- * source under a key the table does not have. Entries that lead elsewhere
- * (`react`, `react-dom`) are not the table's and are left alone. Empty when
- * they agree.
+ * How `tsconfig.json`'s `compilerOptions.paths` disagrees with the table: one
+ * of the table's entries missing, or pointing elsewhere. Empty when they
+ * agree. Entries the table does not have (`react`, `react-dom`) are not
+ * read: an alias only TypeScript knew would not resolve in Vite or Vitest,
+ * so an import through it fails there rather than passing unnoticed.
  *
  * @param {Record<string, unknown> | undefined} actual
  * @param {readonly NessaUiPath[]} [paths]
@@ -137,12 +118,6 @@ export function tsconfigPathViolations(actual, paths = nessaUiPaths) {
         `tsconfig.json paths maps "${key}" to ${JSON.stringify(given[key])}; scripts/nessa-ui-paths.mjs maps it to ${want}`,
       )
     }
-  }
-  for (const [key, targets] of Object.entries(given)) {
-    if (intoTheSource(targets) && !Object.hasOwn(expected, key))
-      violations.push(
-        `tsconfig.json paths has "${key}", which leads into the design system's source but is not in scripts/nessa-ui-paths.mjs; remove it, or add its mapping to the table first`,
-      )
   }
   return violations
 }
