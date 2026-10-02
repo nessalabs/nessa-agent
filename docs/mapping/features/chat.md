@@ -267,8 +267,8 @@ sequenceDiagram
     User->>UI: Close tab
     UI->>Store: closeTab(localId)
     Store->>Store: Remove local tab, select neighbor or make empty tab
-    alt Proven empty history and remote idle/no pending
-        Store->>Gateway: close empty remote conversation to release uploads
+    alt View explicitly complete_empty and remote idle/no pending
+        Store->>Gateway: Best-effort close for eligible explicit empty view
     else History exists / view unknown / work active or pending
         Note over Store,Gateway: No close command, shared work continues
     end
@@ -290,8 +290,8 @@ sequenceDiagram
 
 - **Designed limitation:** closing a tab discards its unsent draft from this window. It is not archive, delete, Stop, or gateway shutdown. Empty remote cleanup is best effort and logs a failure after the local tab has closed.
 - **Designed limitation:** browser storage rejects malformed/oversized snapshots, caps references at 64, deduplicates server IDs, and tolerates unavailable storage. Deleted tabs are not saved; a live remotely-deleted tab keeps draft text available to copy until closed.
-- **Hypothesis:** close an apparently empty tab while another surface admits work after its last read. The cleanup guard is a local snapshot of remote running/pending/history; it is not an atomic “close only if still empty” server command. The server close path accepts a general close. This race needs multi-surface execution evidence before being called a defect.
-- **Regression evidence:** [tab use cases](../../../src/conversation/application/usecases/usecases.test.ts), [saved tab tests](../../../src/conversation/application/saved-tabs.test.ts), [storage tests](../../../src/conversation/adapters/browser/tab-storage.test.ts), and [tab navigation tests](../../../src/panel/application/tab-navigation.test.ts).
+- **Falsified for built-in storage (R6):** the cleanup branch requires `complete_empty`. SDK preparation commits an `Opened` session snapshot before provider attachment, so both built-in stores report `complete` for prepared empty history. [Preparation](../../../crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs) and [memory committed reads](../../../crates/nessa-sdk/src/infrastructure/session_storage/memory.rs) explain the precondition. A controlled real Redux → ConversationService → SDK/scripted-provider probe with both InMemoryStorage and RecordStorage retained a stale empty view, admitted running and queued work from another surface, then executed `closeTab`: no close command was sent and both work items continued. The general server close is unconditional, but that alone does not establish a reachable automatic-close race. Custom storage/scenario views explicitly reporting `complete_empty` remain a separate precondition; see [risk register](risks.md).
+- **Regression evidence:** [prepared empty gateway view in both stores](../../../crates/nessa-server/tests/conversation/projection.rs), [stale complete-view tab detachment](../../../src/conversation/adapters/store/attachments.test.ts), [tab use cases](../../../src/conversation/application/usecases/usecases.test.ts), [saved tab tests](../../../src/conversation/application/saved-tabs.test.ts), [storage tests](../../../src/conversation/adapters/browser/tab-storage.test.ts), and [tab navigation tests](../../../src/panel/application/tab-navigation.test.ts).
 
 ## User flow: rename a tab and inspect conversation details
 
@@ -392,6 +392,6 @@ For storage/streaming lineage, Git also records `9d75a88c` (semantic record stor
 
 ## Investigation boundaries
 
-Static traces cover panel UI, local tabs/drafts, injected gateway effects, TypeScript client command validation, Rust product routing, conversation metadata/projection/cleanup, and SDK scheduling/retry contracts. No browser session, real provider dispatch, multi-surface race reproduction, or fault-injected suite was run for this document. The risks above are explicitly hypotheses where code permits an ordering but no failing execution was observed. Provider/tool effects, permission authority, questions, native steering transport, physical record synchronization, and app widgets have deeper sequences in [runtime](runtime.md) and [extensions](extensions-ui.md).
+Static traces cover panel UI, local tabs/drafts, injected gateway effects, TypeScript client command validation, Rust product routing, conversation metadata/projection/cleanup, and SDK scheduling/retry contracts. No browser session or real external provider was run. R6 was checked with the real Redux thunk, gateway service, SDK scheduler, both built-in storage implementations, and a held scripted provider: closing a stale prepared-empty tab preserved other-surface running and queued work. The service was invoked directly, without product socket/auth/native transport. The risks above are explicitly hypotheses where code permits an ordering but no failing execution was observed. Provider/tool effects, permission authority, questions, native steering transport, physical record synchronization, and app widgets have deeper sequences in [runtime](runtime.md) and [extensions](extensions-ui.md).
 
 The [scenario adapter](../../../src/conversation/adapters/scenario/effects.ts) is fixture behavior. ADRs for exact replay/broader collaboration remain proposals; they do not make the bounded panel view a replay engine. Read the current [gateway contract guide](../../guides/gateway-chat.md), [SDK guides](../../../crates/nessa-sdk/docs/agent_execution/README.md), and [architecture](../../ARCHITECTURE.md#agent-entry-point-and-local-sessions) alongside these traces.

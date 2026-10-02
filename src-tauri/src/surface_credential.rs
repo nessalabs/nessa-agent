@@ -1,8 +1,6 @@
-//! Native storage for the bundled chat surface. Renderer input never selects a file.
+//! Native storage for bundled chat and setup surfaces. Renderer input never selects a file.
 use crate::composition::HostDependencies;
-use crate::gateway::application::Gateway;
-use crate::gateway::domain::value_objects::BundledSurface;
-use crate::panel;
+use crate::gateway::{application::Gateway, infrastructure::bundled_window};
 use std::{io::Read, path::PathBuf, sync::Arc};
 use tauri::State;
 
@@ -199,7 +197,7 @@ impl SurfaceCredentials for SurfaceCredential {
 /// The order a credential load goes in, with its two outside things supplied.
 ///
 /// Split from [`load_surface_credential`] so the rules survive without a window
-/// server: only the bundled panel may ask; a packaged build waits for the
+/// server: only the bundled panel and setup may ask; a packaged build waits for the
 /// gateway to reconcile before handing anything over, and a build without one
 /// does not wait at all; and the refusal for the wrong window happens before
 /// either of those, so a stray webview cannot make the app register a service.
@@ -211,12 +209,10 @@ async fn load_for(
     stage: &str,
     url: &str,
 ) -> Result<String, String> {
-    if label != panel::MAIN_WINDOW {
-        return Err("Only the bundled chat surface can load this credential".into());
-    }
+    let surface = bundled_window(label)?;
     if let Some(gateway) = gateway {
         gateway
-            .wait_ready(BundledSurface::Main)
+            .wait_ready(surface)
             .await
             .map_err(|error| error.to_string())?;
     }
@@ -265,8 +261,10 @@ mod tests {
         ReconciliationHistoryFact,
     };
     use crate::gateway::domain::value_objects::{
-        AuditDeliveryReceipt, LifecycleObservation, ReconciliationTarget, SearchPath,
+        AuditDeliveryReceipt, BundledSurface, LifecycleObservation, ReconciliationInitiator,
+        ReconciliationTarget, SearchPath,
     };
+    use crate::panel;
     use nessa_gateway_endpoint::{
         application::EndpointDiscovery,
         domain::{EndpointIdentity, GatewayEndpoint},
@@ -340,6 +338,7 @@ mod tests {
     struct FakeHost {
         registration: Result<ReconciledGateway, GatewayError>,
         registrations: Mutex<u32>,
+        initiators: Mutex<Vec<ReconciliationInitiator>>,
     }
 
     impl GatewayHost for FakeHost {
@@ -352,6 +351,10 @@ mod tests {
             progress: &dyn GatewayReconciliationProgress,
         ) -> Result<ReconciledGateway, GatewayError> {
             *self.registrations.lock().unwrap() += 1;
+            self.initiators
+                .lock()
+                .unwrap()
+                .push(attempt.origin().evidence().initiator());
             let target = match &self.registration {
                 Ok(gateway) => gateway.audit_identity()?.target().clone(),
                 Err(_) => ReconciliationTarget::new(
@@ -392,6 +395,7 @@ mod tests {
         let host = Arc::new(FakeHost {
             registration,
             registrations: Mutex::new(0),
+            initiators: Mutex::new(Vec::new()),
         });
         (
             Gateway::bootstrap(
@@ -448,6 +452,54 @@ mod tests {
         assert_eq!(credential.reads(), 1);
     }
 
+    #[test]
+    fn the_bundled_setup_waits_for_the_gateway_and_gets_its_token() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, host) = gateway(Ok(reconciled()));
+        assert_eq!(
+            load(panel::SETUP_WINDOW, Some(&gateway), &credential).unwrap(),
+            "fixture-only"
+        );
+        assert_eq!(*host.registrations.lock().unwrap(), 1);
+        assert_eq!(credential.reads(), 1);
+        assert_eq!(
+            *host.initiators.lock().unwrap(),
+            vec![ReconciliationInitiator::BundledSurface(
+                BundledSurface::Setup
+            )]
+        );
+    }
+
+    #[test]
+    fn setup_keeps_the_stage_and_verified_destination_guards() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let endpoint = GatewayEndpoint::new(
+            "ws://127.0.0.1:9137".into(),
+            EndpointIdentity::new("5485b918-1eeb-4a4a-ad1d-9fdc70dfa231".into(), 4711).unwrap(),
+        )
+        .unwrap();
+        for (stage, url) in [
+            ("dev", "ws://127.0.0.1:9137"),
+            ("ci", "ws://127.0.0.1:7420"),
+        ] {
+            let result = tauri::async_runtime::block_on(load_for(
+                panel::SETUP_WINDOW,
+                None,
+                Arc::new(endpoint_access(Some(endpoint.clone()))),
+                &credential,
+                stage,
+                url,
+            ));
+            let expected = if stage == "dev" {
+                "Desktop and gateway stages must match"
+            } else {
+                "The credential request does not match the verified gateway endpoint"
+            };
+            assert_eq!(result.err().as_deref(), Some(expected));
+            assert_eq!(credential.reads(), 0);
+        }
+    }
+
     /// The refusal that matters most: any other window is turned away before
     /// the gateway is touched, so a stray webview cannot make a packaged build
     /// register a background service, let alone read a token.
@@ -457,8 +509,8 @@ mod tests {
         let (gateway, host) = gateway(Ok(reconciled()));
 
         assert_eq!(
-            load(panel::SETUP_WINDOW, Some(&gateway), &credential).err(),
-            Some("Only the bundled chat surface can load this credential".to_string())
+            load("untrusted", Some(&gateway), &credential).err(),
+            Some("Only a bundled Nessa surface can access the gateway".to_string())
         );
         assert_eq!(*host.registrations.lock().unwrap(), 0);
         assert_eq!(credential.reads(), 0);

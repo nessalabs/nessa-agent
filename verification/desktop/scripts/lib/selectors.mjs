@@ -337,3 +337,21 @@ export const harmlessConsole = [
   // Chrome's message does not name the URL, so both the text and the source are matched.
   { text: /status of 404/i, url: /\/favicon\.ico(\?|$)/ },
 ]
+
+/** Actual-panel attachment race verification gestures and refusal notices. */
+export const attachmentVerification = {
+  editor: '[contenteditable="true"]',
+  addAttachment: ["button", { name: "Add attachment", exact: true }],
+  addFiles: ["button", { name: "Add files", exact: true }],
+  selectedName: "picked.png",
+  pendingNotice: "Attachments still loading",
+  busyDropNotice: "Still reading files",
+}
+
+/** Setup request-deadline verification fixture and user-facing controls. */
+export const readinessVerification = {
+  checkingButton: "Checking…",
+  retryButton: "Check again",
+  readyObservation: "false:ready",
+  buttons: "button",
+}

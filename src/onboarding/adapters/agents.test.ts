@@ -18,9 +18,12 @@ describe("asking the gateway which agents can start", () => {
   it("asks where the environment says the gateway answers", async () => {
     const fetch = answering(READY)
     await httpAgentReadiness({ baseUrl: "http://127.0.0.1:7420", fetch }).read()
-    expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:7420/onboarding/agents", {
-      headers: { accept: "application/json" },
-    })
+    expect(fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:7420/onboarding/agents",
+      expect.objectContaining({
+        headers: { accept: "application/json" },
+      }),
+    )
   })
 
   it("asks this page's own origin when the base is empty", async () => {
@@ -153,5 +156,81 @@ describe("asking the gateway which agents can start", () => {
     await expect(
       httpAgentReadiness({ baseUrl: "", fetch }).read(),
     ).resolves.toHaveProperty("ok", false)
+  })
+})
+
+describe("the readiness request deadline", () => {
+  it.each(["fetch", "body"] as const)(
+    "bounds a stalled %s, aborts transport and allows the next check",
+    async (phase) => {
+      vi.useFakeTimers()
+      let release!: (value: unknown) => void
+      const held = new Promise<unknown>((resolve) => {
+        release = resolve
+      })
+      const fetch = vi.fn<typeof globalThis.fetch>()
+      if (phase === "fetch") fetch.mockReturnValueOnce(held as Promise<Response>)
+      else fetch.mockResolvedValueOnce({ ok: true, json: () => held } as Response)
+      fetch.mockResolvedValue(new Response(JSON.stringify(READY)))
+      const source = httpAgentReadiness({ baseUrl: "", fetch })
+      let answer: unknown
+      const pending = source.read().then((value) => {
+        answer = value
+      })
+      try {
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(answer).toEqual({ ok: false, reason: "unreachable" })
+        expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(true)
+        await expect(source.read()).resolves.toEqual({
+          ok: true,
+          agents: { claude: "ready" },
+        })
+        expect(fetch).toHaveBeenCalledTimes(2)
+      } finally {
+        release(phase === "fetch" ? { ok: false } : { agents: [] })
+        await pending
+        vi.useRealTimers()
+      }
+    },
+  )
+
+  it("ignores a retired deadline delivered after the successful answer", async () => {
+    let elapsed: () => void = () => undefined
+    const cancel = vi.fn()
+    const fetch = answering(READY)
+    await httpAgentReadiness({
+      baseUrl: "",
+      fetch,
+      scheduleDeadline: (callback) => {
+        elapsed = callback
+        return cancel
+      },
+    }).read()
+    expect(cancel).toHaveBeenCalledOnce()
+    elapsed()
+    const signal = (
+      fetch.mock.calls[0] as unknown as Parameters<typeof globalThis.fetch>
+    )[1]?.signal
+    expect(signal?.aborted).toBe(false)
+  })
+
+  it("cancels its deadline after an answer without aborting the completed request", async () => {
+    vi.useFakeTimers()
+    const fetch = answering(READY)
+    try {
+      await expect(httpAgentReadiness({ baseUrl: "", fetch }).read()).resolves.toEqual({
+        ok: true,
+        agents: { claude: "ready" },
+      })
+      const signal = (
+        fetch.mock.calls[0] as unknown as Parameters<typeof globalThis.fetch>
+      )[1]?.signal
+      expect(signal).toBeInstanceOf(AbortSignal)
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(signal?.aborted).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

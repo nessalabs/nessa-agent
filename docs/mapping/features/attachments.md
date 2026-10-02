@@ -2,7 +2,7 @@
 
 This map follows a person's content from the floating panel's composer through the native host, TypeScript client, gateway, image store, SDK, and ACP provider boundary. It also covers what the person sees on return and where a clicked link goes. The desktop workspace has a different, partly prototype transcript contract; it does not inherit the panel's attachment pipeline merely by sharing UI components.
 
-Evidence baseline: `nessa-agent` commit `52bc6cbc` and the source present in the shared checkout. Source and named regression tests were inspected; the tests and native/browser interactions were **not run for this mapping**. Historical PR validation is attributed to its commit message, not presented as a new result. See [chat](chat.md), [desktop](desktop.md), [runtime](runtime.md), [startup](startup.md), and [extensions/UI](extensions-ui.md) for adjacent flows.
+Mapping baseline: `nessa-agent` commit `52bc6cbc`; the documentation merged in #385 at `028f4642`. Source and named regression tests were initially inspected without execution. The subsequent R2/R4 confirmation and local fix below use actual-App regressions against that merged baseline. Historical PR validation is attributed to its commit message, not presented as a new result. See [chat](chat.md), [desktop](desktop.md), [runtime](runtime.md), [startup](startup.md), and [extensions/UI](extensions-ui.md) for adjacent flows.
 
 ## Ownership and representations
 
@@ -134,9 +134,29 @@ Implementation: native [dropping](../../../src-tauri/src/attachments/dropping.rs
 
 Regression evidence: [host-drop tests](../../../src/panel/ui/use-host-drop.test.ts), [content-drop tests](../../../src/panel/ui/use-content-drop.test.ts), [drop-zone tests](../../../src/panel/ui/attachment-drop-zone.test.ts), [dropped-text tests](../../../src/panel/adapters/dropped-text.test.ts), [dropped-image tests](../../../src/panel/adapters/dropped-image.test.ts), and [folder tests](../../../src/panel/adapters/dropped-folder.test.ts). Historical contribution: [PR #34](https://github.com/nessalabs/nessa-agent/pull/34), squash [`ee1970f7`](https://github.com/nessalabs/nessa-agent/commit/ee1970f7), introduced local attachment resources and content drops; [PR #122](https://github.com/nessalabs/nessa-agent/pull/122) replaced the native entry path while retaining browser handling.
 
-Bug tracing: a URL download may fail because of HTTP status, missing/non-image content type, CORS/CSP, timeout, abort, or size. The hook collapses these into `unreadable-image-url`; that notice alone does not identify which boundary failed. **Current source-confirmed silent path:** `addImageUrl` returns immediately when `busyRef.current` is true, whereas file admission emits `reading-files`. A second web-image drop while the first is downloading is discarded without its own refusal or queue entry. This conclusion is from the reachable source branch; no runtime reproduction or new regression was performed. Hold the first fetch pending, drop a second image, and inspect fetch count/notice to reproduce.
+Bug tracing: a URL download may fail because of HTTP status, missing/non-image content type, CORS/CSP, timeout, abort, or size. The hook collapses these into `unreadable-image-url`; that notice alone does not identify which boundary failed. **R2, reproduced before the local fix:** with the first image fetch held pending, the actual App accepted a second host image-URL drop without a second fetch, draft file, or refusal. The tracked regression failed because `Still reading files` was absent. `addImageUrl` now emits the existing `reading-files` refusal for that second gesture while preserving the first read. See the [race regressions](../../../src/panel/ui/use-file-attachments-races.test.ts) and [execution evidence](#r2r4-regression-execution).
 
 ## User flow: Wait for a cloud file without attaching it to another tab
+
+### Read and submission orderings for R2/R4
+
+`useFileAttachments` owns one local read phase and its captured conversation; a picked selection may read several image files within that phase.
+Host readiness remains separately keyed by host file identity. A pending native
+image read uses the existing local-read state also used by URL images; it is not
+an attached/uploading draft file yet. This table records the intended ordering
+before the R2/R4 implementation change. Each race-suite row is exercised by the [actual-App regressions](../../../src/panel/ui/use-file-attachments-races.test.ts).
+
+| Starting state / event order | Intended observable outcome | Regression evidence |
+| --- | --- | --- |
+| Idle → ordinary Enter | Text submits normally | Race suite ordinary-text control |
+| URL read pending → another URL drop | Refuse second gesture as `reading-files`; preserve first read; no second fetch | Race suite concurrent URL drop |
+| Native image read pending → Enter in original conversation | Keep draft, show loading refusal, call no send port | Race suite pending native read |
+| Native image read → success → upload settles → Enter | Clear local pending tile, attach original image to captured draft, then send gateway reference | Race suite settled read and send |
+| Native image read → failure → Enter | Clear local read/pending state; explain read failure; text can subsequently submit | Race suite failed read |
+| Native image read in A → switch to B → Enter → return to A | B's text can submit; A remains pending and cannot send until its own read settles | Race suite conversation switch |
+| Native image read → remove an already-attached draft file | Remove only that draft file; keep new read pending and block submission | Race suite removal while reading |
+| Native image read → originating tab closes → read succeeds | Do not attach to replacement tab; clear pending read and explain original conversation closed | Existing picker closed-during-read regression; race suite closed target |
+| Native image read → surface unmounts → read settles | No late draft/resource attachment or React state publication | Race suite unmounted read |
 
 A placeholder is not treated as a usable path just because its metadata exists. Readiness dispatches on the file's state, not its MIME type. The implemented macOS handler asks iCloud to materialize the file, polls under a bound, and the fallback refuses unsupported dataless providers honestly. While waiting, the panel shows a named pending tile and prevents submission for that tile's conversation. Pending tiles are keyed by host file identity, not basename, so two `report.pdf` files remain independent.
 
@@ -169,7 +189,7 @@ Implementation: [readiness seam](../../../src-tauri/src/attachments/readiness.rs
 
 Regression evidence: [readying tests](../../../src/panel/ui/use-file-attachments-readying.test.ts) cover independent pending identities, settlement on either outcome, submission refusal, tab switching, picker-vs-drop binding, and overlapping gestures. Readiness modules contain seam tests. [PR #122](https://github.com/nessalabs/nessa-agent/pull/122) supplies the historical readiness and conversation-binding contribution. Real cloud-provider integration is not established by these doubles.
 
-Bug tracing: pending tile on the wrong tab or stale refusal after a switch starts with `gesture`, batch mapping, and `conversationOf`, not MIME detection. **Hypothesis needing a deferred-read reproduction:** after host readiness has ended, `addChosenFiles` sets `reading` while awaiting image `readAttachmentBytes`, but does not set `pendingConversation`; `isPending` checks URL pending or host readying entries, and the composer uses `isPending`. Pressing Enter during that byte read may send existing text before the selected image is attached. `reading` disables the `+` tray but is not itself this submit guard. This ordering was inspected, not exercised; distinguish it from the tested cloud-readiness wait.
+Bug tracing: pending tile on the wrong tab or stale refusal after a switch starts with `gesture`, batch mapping, and `conversationOf`, not MIME detection. **R4, reproduced before the local fix:** with a native picked-image byte read held pending, Enter in the actual Markdown editor sent existing text with empty image/file lists and cleared the draft. The tracked regression failed because the send port had been called. `addChosenFiles` now publishes the captured conversation as pending before requesting bytes, so the existing composer guard preserves the draft and shows `Attachments still loading`. Settlement clears local pending state; success attaches only to the captured conversation, failure permits later text submission, and unmount discards the late result. The [race regressions](../../../src/panel/ui/use-file-attachments-races.test.ts) cover these orderings separately from cloud readiness; see [execution evidence](#r2r4-regression-execution).
 
 ## User flow: Upload an image and retry a failed upload
 
@@ -508,7 +528,7 @@ Bug tracing: native policy tests cover origin/scheme decisions and injected open
 
 ## User flow: Stop or delete a conversation and release its uploaded images
 
-Closing a tab normally detaches a UI view. There is one cleanup exception: `closeTab` asks the gateway to close an already-created conversation only when the known view is empty and idle, so a discarded image-only draft need not strand its uploads. It does not stop a tab's existing work. Stop explicitly closes active/queued work through chat controls. Once close establishes that no unsettled invocation still needs image bytes, the gateway releases that conversation's tickets and holds. If close fails and queued/active image work may still need them, holds remain. Delete writes a tombstone to exclude new use, stops the owner, and includes attachment release in its cleanup report. An image transfer racing deletion rechecks ownership after pending-hold audit and cannot confirm a usable hold for the tombstoned conversation.
+Closing a tab normally detaches a UI view. There is one cleanup exception: `closeTab` asks the gateway to close an already-created conversation only when the known view has exact `complete_empty` transcript state, is empty/idle, and has no pending work. Both built-in gateway stores project a prepared empty conversation as `complete`, so that automatic-close exception does not apply to their ordinary prepared sessions; see [the R6 negative controls](chat.md). Tab detachment preserves existing work. Stop explicitly closes active/queued work through chat controls. Once close establishes that no unsettled invocation still needs image bytes, the gateway releases that conversation's tickets and holds. If close fails and queued/active image work may still need them, holds remain. Delete writes a tombstone to exclude new use, stops the owner, and includes attachment release in its cleanup report. An image transfer racing deletion rechecks ownership after pending-hold audit and cannot confirm a usable hold for the tombstoned conversation.
 
 ```mermaid
 sequenceDiagram
@@ -546,7 +566,7 @@ Implementation: [frontend Stop and empty-tab close](../../../src/conversation/ad
 
 Regression evidence: server [application tests](../../../crates/nessa-server/tests/attachments/application.rs) include `one_hold_that_will_not_release_does_not_stop_the_others`, `a_release_that_cannot_be_recorded_still_releases_and_says_so`, `a_hold_another_upload_took_over_is_not_this_uploads_to_keep_or_to_undo`, and `an_upload_finishing_after_its_conversation_was_deleted_keeps_nothing`; [store tests](../../../crates/nessa-server/tests/attachments/store.rs) cover last-hold blob removal, crash leftovers, unreadable records, pending claims, and shared-byte retention; [service-over-store tests](../../../crates/nessa-server/tests/attachments/service_over_store.rs) check unacknowledged rollback versus later acknowledged ownership; [conversation attachment tests](../../../crates/nessa-server/tests/conversation/attachments.rs) exercise gateway close integration. These are source evidence, not new test results.
 
-Bug tracing: holds do not expire merely because the five-minute upload ticket did. Removing a draft tile is not hold release, and tab closing releases gateway holds only through the empty/idle exception above. A release failure must preserve which cleanup failed and whether evidence was delivered; logs alone are not its durable transition trail. A pending hold left by a crash stays unusable until replaced/released, a conservative **designed limitation** that can retain disk bytes.
+Bug tracing: holds do not expire merely because the five-minute upload ticket did. Removing a draft tile is not hold release, and tab closing releases gateway holds only through the exact `complete_empty` exception above, which the built-in prepared-session projection does not satisfy. A release failure must preserve which cleanup failed and whether evidence was delivered; logs alone are not its durable transition trail. A pending hold left by a crash stays unusable until replaced/released, a conservative **designed limitation** that can retain disk bytes.
 
 ## Historical contributions and verification limits
 
@@ -564,6 +584,18 @@ The PR links above are identified by GitHub-authored squash subjects and detaile
 
 **Historically confirmed, fixed:** silent file send; stale refusal suppressing Retry; wrong picker advice for a shared byte limit; delayed file/refusal routed to the wrong tab; basename-keyed pending tiles; picker/drop image classification mismatch; unsafe link syntax; false file-naming evidence on conflicting retries. [PR #99's commit](https://github.com/nessalabs/nessa-agent/commit/910abd65cdae39a672a8d83d58c507165b5659f0) reports nine manually reverted defects making named tests fail; this is historical author evidence, not a rerun here.
 
-**Current source-confirmed behavior to investigate:** the silent second web-image drop described in [drop routing](#user-flow-drop-files-folders-text-or-a-web-image). **Unconfirmed hypothesis:** sending existing text during the picked-image byte-read gap described in [readiness](#user-flow-wait-for-a-cloud-file-without-attaching-it-to-another-tab). Both need a controlled reproduction before claiming runtime scope or a fix.
+### R2/R4 regression execution
+
+**Confirmed before fix, locally corrected:** [R2 concurrent image drops](#user-flow-drop-files-folders-text-or-a-web-image) and [R4 picked-image submission](#user-flow-wait-for-a-cloud-file-without-attaching-it-to-another-tab) reproduced at the actual App/shared Markdown editor/Redux submission boundary. Before changing the hook, the two intended-behavior regressions failed and an ordinary Enter control passed. The controlled native-read and URL-fetch promises make the failing order deterministic; these are not hook-only assertions.
+
+After the minimal hook change, the nine [race tests](../../../src/panel/ui/use-file-attachments-races.test.ts) and 36 existing picker, readiness, composer and key tests passed: **45 tests across five files**. Run from the repository with the environment activated:
+
+```sh
+source /workspace/.setup/activate.sh
+pnpm exec vitest run src/panel/ui/use-file-attachments-races.test.ts src/panel/ui/use-file-attachments-picker.test.ts src/panel/ui/use-file-attachments-readying.test.ts src/panel/ui/use-composer.test.ts src/panel/ui/composer-keys.test.ts --maxWorkers=1 --minWorkers=1 --reporter=dot
+pnpm exec eslint src/panel/ui/use-file-attachments.ts src/panel/ui/use-file-attachments-races.test.ts
+```
+
+The targeted ESLint check passed and both source/test files were formatted. The first `pnpm typecheck` encountered an unrelated onboarding test return-type error at `src/onboarding/adapters/agents.test.ts:195`; it reported no attachment errors. Existing picker/readiness tests emit React act-environment warnings; the run completed without unhandled errors. These jsdom regressions substitute host IO, browser geometry and gateway scenario effects: they establish composer routing and admission behavior, not real native picker/read latency, production uploads, or provider delivery. The fix remains a local change until its fix PR merges.
 
 Exclusions: audio/video message payload transport, remote file upload/delivery, exact replay proposals, new provider adapters, real macOS/Linux picker/drag/cloud/opener measurements, actual image decoder execution, and exhaustive SDK cancellation review. Desktop home/header-art image preferences belong to [desktop](desktop.md), while MCP tool resource/widget rendering belongs to [extensions/UI](extensions-ui.md); neither is a conversation image attachment. Fixture/scenario effects are test/prototype substitutes, not evidence that a production upload or provider read occurred.
