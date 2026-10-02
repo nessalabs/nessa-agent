@@ -236,8 +236,9 @@ app widgets alike.
   a fake `client.mcpApps` that gives every answer the gateway can:
   `mcp-app-server.test.ts`, one test at least per row of the state table on
   #384 — each refusal with its reason, `server-gone` and `failed` apart, a
-  server's own JSON-RPC error passed on with its signed code, the 32 KiB bound
-  refused before sending, the ticket redeemed once and never handed on — and
+  server's own JSON-RPC error passed on with its signed code, what the app
+  sends held to the client's bounds (`mcpAppRequestProblem`) before sending,
+  the ticket redeemed once and never handed on — and
   #349's L14 and L24 through the real bridge over it.
 - **The mount**: each view mints its `instanceId` and releases it once, the
   first time it fails or ends, aborting what its reads have not fetched
@@ -251,7 +252,9 @@ app widgets alike.
 - **The calls from the transcript** (`app-calls.ts`), each named by its
   conversation as well as its execution and tool ids, and kept, at the last
   state a view reported, until the conversation goes — a view holds only its
-  latest tools: `app-calls.test.ts`, and
+  latest tools; an ended call stays ended, and a forgotten conversation is not
+  brought back by a late view. The order of views is the gateway source's to
+  keep (#248): `app-calls.test.ts`, and
   `workspace/adapters/gateway/tool-widget.test.ts` for the widget the
   transcript draws reading the same call.
 - **Not yet in a real browser against a real gateway**: the window shows a

@@ -207,9 +207,27 @@ describe("the calls of each server", () => {
     calls.forget(conversationId)
     expect(port.read(id)).toEqual({ kind: "missing" })
     expect(told).toHaveBeenCalledTimes(2)
-    // Seen again, it is known again.
-    calls.observe(conversationId, [tool()])
-    expect(port.read(id).kind).toBe("known")
+    // A view of it arriving after it went does not bring it back.
+    expect(calls.observe(conversationId, [tool()])).toEqual([])
+    expect(port.read(id)).toEqual({ kind: "missing" })
+    expect(told).toHaveBeenCalledTimes(2)
+  })
+
+  it("C11: an ended call stays ended: a view behind the one that ended it changes nothing", () => {
+    const calls = gatewayAppCalls()
+    const port = calls.forServer("mcptest")
+    calls.observe(conversationId, [tool({ status: "completed", details: "Done" })])
+    const ended = port.read(id)
+    const told = vi.fn()
+    port.subscribe(id, told)
+    calls.observe(conversationId, [tool({ status: "running" })])
+    expect(port.read(id)).toBe(ended)
+    expect(told).not.toHaveBeenCalled()
+    // A later report of the ended call, changed, is still read.
+    calls.observe(conversationId, [tool({ status: "failed", details: "No" })])
+    expect(port.read(id)).toMatchObject({
+      call: { phase: { result: { isError: true } } },
+    })
   })
 
   it("C7: a stopped subscription is not told", () => {

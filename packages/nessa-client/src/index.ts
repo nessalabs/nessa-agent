@@ -161,6 +161,7 @@ export {
   MAX_MCP_ARGUMENTS_BYTES,
   MAX_MCP_RESOURCE_BYTES,
   MAX_MCP_RESULT_BYTES,
+  mcpAppRequestProblem,
 } from "./protocol/mcp-app-validate.js"
 export type {
   McpAppReference,

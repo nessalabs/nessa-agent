@@ -10,6 +10,8 @@ import {
   ConversationErrorCode,
   MAX_MCP_ARGUMENTS_BYTES,
   MCP_APP_CALL_DEADLINE_MS,
+  mcpAppRequestProblem,
+  NessaConversationControlError,
   NessaMcpAppError,
   NessaMcpResourceError,
   NessaRpcError,
@@ -129,9 +131,30 @@ describe("tools/call", () => {
     expect((await server.callTool(address, "t", fits)).kind).toBe("ok")
     expect(await server.callTool(address, "t", { a: `${fits.a}x` })).toEqual({
       kind: "refused",
-      reason: `The arguments are larger than ${MAX_MCP_ARGUMENTS_BYTES / 1024} KiB`,
+      reason: `Arguments must contain at most ${MAX_MCP_ARGUMENTS_BYTES} UTF-8 bytes`,
     })
     expect(apps.callTool).toHaveBeenCalledTimes(1)
+  })
+
+  it("A2: a tool name or resource URI past the client's bounds is the app's request refused, before sending, and not logged", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const apps = fakeApps()
+    const server = gatewayAppServer(apps)
+    // `é` is two UTF-8 bytes: the bounds are bytes, not characters.
+    expect((await server.callTool(address, "é".repeat(64), {})).kind).toBe("ok")
+    expect(await server.callTool(address, `${"é".repeat(64)}x`, {})).toEqual({
+      kind: "refused",
+      reason: mcpAppRequestProblem.tool(`${"é".repeat(64)}x`),
+    })
+    expect(await server.callTool(address, "", {})).toMatchObject({ kind: "refused" })
+    const long = `ui://w/${"a".repeat(2048)}`
+    expect(await server.readResource(address, long, live())).toEqual({
+      kind: "refused",
+      reason: mcpAppRequestProblem.uri(long),
+    })
+    expect(apps.callTool).toHaveBeenCalledTimes(1)
+    expect(apps.readResource).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
   })
 
   it("A11: any other TypeError the client throws is a fault of the host's, logged — never the app's refusal", async () => {
@@ -153,7 +176,10 @@ describe("tools/call", () => {
     [ConversationErrorCode.McpToolNotForApp, "This app may not use that tool"],
     [ConversationErrorCode.McpServerMismatch, "This app may not use that tool"],
     [ConversationErrorCode.McpAppUnknown, "This app may not use that tool"],
-    [ConversationErrorCode.McpRequestTooLarge, "The arguments are larger than 32 KiB"],
+    [
+      ConversationErrorCode.McpRequestTooLarge,
+      "The request is larger than the gateway accepts",
+    ],
   ])("A3–A7: %s is refused with the gateway's reason", async (code, reason) => {
     const server = gatewayAppServer(
       fakeApps({ callTool: vi.fn(() => Promise.reject(refusal(code))) }),
@@ -458,6 +484,29 @@ describe("the release", () => {
     await gatewayAppServer(apps).release(address)
     expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, app)
   })
+
+  it.each([
+    ConversationErrorCode.ConversationNotFound,
+    ConversationErrorCode.ConversationDeleted,
+    ConversationErrorCode.ConversationClosed,
+  ])(
+    "M5: a release refused %s — the conversation is gone — has nothing left to let go, and is no fault",
+    async (code) => {
+      const apps = fakeApps({
+        releaseApp: vi.fn(() =>
+          Promise.reject(
+            new NessaConversationControlError(
+              conversationId,
+              "r",
+              app.executionId,
+              new NessaRpcError(code, "gone"),
+            ),
+          ),
+        ),
+      })
+      await expect(gatewayAppServer(apps).release(address)).resolves.toBeUndefined()
+    },
+  )
 
   it("M5: a release the gateway did not take rejects, for the bridge to log", async () => {
     const apps = fakeApps({

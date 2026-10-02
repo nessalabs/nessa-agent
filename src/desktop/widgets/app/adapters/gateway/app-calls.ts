@@ -22,8 +22,11 @@
  * A view is bounded — the gateway keeps its latest tools, and drops the oldest
  * — so a call missing from a later view has not ended: it keeps the last state
  * a view reported, and its app stays (C11, `app-calls.test.ts`). A
- * conversation's calls go only with the conversation (`forget`), so what is
- * kept is the app calls of the conversations the window holds.
+ * conversation's calls go only with the conversation (`forget`, which its
+ * source calls — #248's to wire), so what is kept grows until then; a
+ * forgotten conversation is not brought back by a view of it arriving late. An ended call
+ * stays ended. The order of a conversation's views is its source's to keep
+ * (#248): `ConversationView.revision` is for equality, not order.
  */
 import type { ConversationTool } from "@nessa/client"
 import type { CallRead, McpAppCalls } from "../../application/ports"
@@ -41,7 +44,10 @@ export interface GatewayAppCalls {
    * calls in `tools`, so a plugin can be registered for each.
    */
   observe(conversationId: string, tools: readonly ConversationTool[]): readonly string[]
-  /** The conversation is gone: its calls are forgotten, and their readers told (C11). */
+  /**
+   * The conversation is gone: its calls are forgotten, their readers told, and
+   * any later view of it is ignored (C11).
+   */
   forget(conversationId: string): void
   /** The calls port of `server`'s app plugin. */
   forServer(server: string): McpAppCalls
@@ -97,12 +103,15 @@ export function gatewayAppCall(
 export function gatewayAppCalls(): GatewayAppCalls {
   /** One call as it was last read. */
   interface Known {
-    /** The call as JSON text, to tell a change from a repeat. */
-    readonly from: string
+    readonly call: AppCall
     readonly read: CallRead
   }
   // Each conversation's calls, by server and widget id (`keyOf`).
   const conversations = new Map<string, Map<string, Known>>()
+  // Conversations that went. Their ids are never used again (the protocol's
+  // `conversation_deleted`), so a view of one arriving late is ignored rather
+  // than bringing its calls back: kept as ids alone.
+  const forgotten = new Set<string>()
   const listeners = new Map<string, Set<() => void>>()
   const keyOf = (server: string, widgetId: string) => JSON.stringify([server, widgetId])
   // Where a server's widget id is read. The conversation is the widget id's
@@ -115,6 +124,7 @@ export function gatewayAppCalls(): GatewayAppCalls {
 
   return {
     observe(conversationId, tools) {
+      if (forgotten.has(conversationId)) return []
       let calls = conversations.get(conversationId)
       const servers = new Set<string>()
       const changed: string[] = []
@@ -123,10 +133,13 @@ export function gatewayAppCalls(): GatewayAppCalls {
         if (!app) continue
         servers.add(app.server)
         const key = keyOf(app.server, app.widgetId)
-        const from = JSON.stringify(app.call)
-        if (calls?.get(key)?.from === from) continue
+        const before = calls?.get(key)?.call
+        // A repeat changes nothing; and an ended call stays ended — a view
+        // that reports it running again is behind the one that ended it.
+        if (before && JSON.stringify(before) === JSON.stringify(app.call)) continue
+        if (before?.phase.kind === "done" && app.call.phase.kind !== "done") continue
         if (!calls) conversations.set(conversationId, (calls = new Map()))
-        const known: Known = { from, read: { kind: "known", call: app.call } }
+        const known: Known = { call: app.call, read: { kind: "known", call: app.call } }
         calls.set(key, known)
         index.set(key, known)
         changed.push(key)
@@ -135,6 +148,7 @@ export function gatewayAppCalls(): GatewayAppCalls {
       return [...servers]
     },
     forget(conversationId) {
+      forgotten.add(conversationId)
       const calls = conversations.get(conversationId)
       if (!calls) return
       conversations.delete(conversationId)

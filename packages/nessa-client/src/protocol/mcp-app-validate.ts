@@ -19,6 +19,33 @@ export const MAX_MCP_RESULT_BYTES = bounds.maxMcpResultBytes
 export const MAX_MCP_RESOURCE_BYTES = bounds.maxMcpResourceBytes
 
 const utf8 = new TextEncoder()
+
+/**
+ * What an MCP App may send its server, held to the schema's bounds: the one
+ * statement of them. `McpAppsApi` refuses a request past them before sending
+ * anything, and a host may ask first, so it can refuse the app's request
+ * itself rather than read a `TypeError` whose cause it cannot tell.
+ *
+ * Each answers the problem in words, or `undefined` within bounds.
+ */
+export const mcpAppRequestProblem = {
+  /** A tool's name: 1 to `maxMcpNameBytes` UTF-8 bytes. */
+  tool: (tool: string): string | undefined =>
+    boundedName(tool, bounds.maxMcpNameBytes)
+      ? undefined
+      : `Tool must contain 1-${bounds.maxMcpNameBytes} UTF-8 bytes`,
+  /** A resource's URI: 1 to `maxMcpResourceUriBytes` UTF-8 bytes. */
+  uri: (uri: string): string | undefined =>
+    boundedName(uri, bounds.maxMcpResourceUriBytes)
+      ? undefined
+      : `Resource URI must contain 1-${bounds.maxMcpResourceUriBytes} UTF-8 bytes`,
+  /** A tool's arguments, encoded: at most `MAX_MCP_ARGUMENTS_BYTES` UTF-8 bytes. */
+  argumentsJson: (argumentsJson: string): string | undefined =>
+    utf8.encode(argumentsJson).byteLength <= MAX_MCP_ARGUMENTS_BYTES
+      ? undefined
+      : `Arguments must contain at most ${MAX_MCP_ARGUMENTS_BYTES} UTF-8 bytes`,
+} as const
+
 const instanceIdPattern = new RegExp(bounds.mcpAppInstanceIdPattern)
 const digestPattern = new RegExp(bounds.mcpResourceDigestPattern)
 const ticketPattern = new RegExp(bounds.mcpResourceTicketPattern)

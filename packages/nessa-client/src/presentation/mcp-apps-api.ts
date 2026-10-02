@@ -24,8 +24,8 @@ import {
 } from "../protocol/conversation-validate.js"
 import {
   boundedName,
-  MAX_MCP_ARGUMENTS_BYTES,
   mcpAppReferenceProblem,
+  mcpAppRequestProblem,
   mcpCallToolResult,
   mcpReadResourceResult,
   validResourceDigest,
@@ -224,16 +224,17 @@ export function createMcpAppsApi(
     async callTool(conversationId, app, server, tool, argumentsJson, options = {}) {
       const command = addressed(conversationId, app, options)
       serverName(server)
-      if (!boundedName(tool, bounds.maxMcpNameBytes))
-        throw new TypeError(`Tool must contain 1-${bounds.maxMcpNameBytes} UTF-8 bytes`)
-      if (
-        argumentsJson !== undefined &&
-        (typeof argumentsJson !== "string" ||
-          utf8.encode(argumentsJson).byteLength > MAX_MCP_ARGUMENTS_BYTES)
-      )
-        throw new TypeError(
-          `Arguments must contain at most ${MAX_MCP_ARGUMENTS_BYTES} UTF-8 bytes`,
-        )
+      const toolProblem =
+        typeof tool === "string"
+          ? mcpAppRequestProblem.tool(tool)
+          : "Tool must be a string"
+      if (toolProblem) throw new TypeError(toolProblem)
+      if (argumentsJson !== undefined) {
+        if (typeof argumentsJson !== "string")
+          throw new TypeError("Arguments must be one JSON object, encoded")
+        const problem = mcpAppRequestProblem.argumentsJson(argumentsJson)
+        if (problem) throw new TypeError(problem)
+      }
       return call(
         ProductMethod.McpCallTool,
         {
@@ -249,10 +250,11 @@ export function createMcpAppsApi(
     async readResource(conversationId, app, server, uri, options = {}) {
       const command = addressed(conversationId, app, options)
       serverName(server)
-      if (!boundedName(uri, bounds.maxMcpResourceUriBytes))
-        throw new TypeError(
-          `Resource URI must contain 1-${bounds.maxMcpResourceUriBytes} UTF-8 bytes`,
-        )
+      const uriProblem =
+        typeof uri === "string"
+          ? mcpAppRequestProblem.uri(uri)
+          : "Resource URI must be a string"
+      if (uriProblem) throw new TypeError(uriProblem)
       return call(ProductMethod.McpReadResource, { ...command, server, uri }, (value) =>
         mcpReadResourceResult(value, uri),
       )

@@ -13,12 +13,13 @@
  * goes no further than that call: nothing here keeps, logs or returns it
  * (`mcp-app-server.test.ts`, "the ticket").
  *
- * Arguments past the client's published bound (`MAX_MCP_ARGUMENTS_BYTES`) are
- * refused before anything is sent (A2): the one bound the app controls that a
- * review is held to. Any other `TypeError` the client throws — an address the
- * host built, a name past its bound — is a fault, logged, never told to the
- * app as its own refusal. A read whose mount was released fetches nothing more
- * (R6).
+ * What the app sends — a tool's name, a resource's URI, the arguments — is
+ * held to the gateway's bounds by asking the client, which owns them
+ * (`mcpAppRequestProblem`), before anything is sent: past them, the app's
+ * request is refused in the client's words, and nothing is logged (A2). So a
+ * `TypeError` the client throws after that is from what the host built — its
+ * address — and is a fault, logged. A read whose mount was released fetches
+ * nothing more (R6).
  *
  * `callTool` and `readResource` settle with an outcome whatever the client
  * throws, so the bridge never mistakes one for a fault of this adapter
@@ -27,8 +28,9 @@
  */
 import {
   ConversationErrorCode,
-  MAX_MCP_ARGUMENTS_BYTES,
   MCP_APP_CALL_DEADLINE_MS,
+  mcpAppRequestProblem,
+  NessaConversationControlError,
   NessaMcpAppError,
   NessaMcpResourceError,
   type McpAppsApi,
@@ -110,13 +112,19 @@ const refusalWords: Record<Refusal, { tool: string; resource: string }> = {
     resource: "This app may not read that resource",
   },
   "too-large": {
-    tool: `The arguments are larger than ${MAX_MCP_ARGUMENTS_BYTES / 1024} KiB`,
-    resource: "The request is too large",
+    tool: "The request is larger than the gateway accepts",
+    resource: "The request is larger than the gateway accepts",
   },
 }
 
 const failed: ServerAnswer = { kind: "failed" }
-const utf8 = new TextEncoder()
+
+/** The conversation is gone: a release finds nothing left to let go (M5). */
+const conversationGone: ReadonlySet<ConversationErrorCode | undefined> = new Set([
+  ConversationErrorCode.ConversationNotFound,
+  ConversationErrorCode.ConversationDeleted,
+  ConversationErrorCode.ConversationClosed,
+])
 
 /** The port's answer for what a call threw: a refusal, a server gone, or a failure. */
 function answerFor(error: unknown, asked: "tool" | "resource"): ServerAnswer {
@@ -185,10 +193,11 @@ export function gatewayAppServer(mcpApps: McpAppsApi): McpAppServer {
 
     async callTool(address: AppAddress, tool: string, args: JsonObject) {
       const argumentsJson = JSON.stringify(args)
-      // The client's published bound, as the client counts it, so the app is
-      // told before anything is sent (A2, gate 13: consumed, not retyped).
-      if (utf8.encode(argumentsJson).byteLength > MAX_MCP_ARGUMENTS_BYTES)
-        return { kind: "refused", reason: refusalWords["too-large"].tool }
+      // Asked of the client, the bounds' owner, before anything is sent (A2).
+      const problem =
+        mcpAppRequestProblem.tool(tool) ??
+        mcpAppRequestProblem.argumentsJson(argumentsJson)
+      if (problem) return { kind: "refused", reason: problem }
       try {
         const { resultJson } = await mcpApps.callTool(
           address.sessionId,
@@ -205,6 +214,8 @@ export function gatewayAppServer(mcpApps: McpAppsApi): McpAppServer {
     },
 
     async readResource(address: AppAddress, uri: string, signal: AbortSignal) {
+      const problem = mcpAppRequestProblem.uri(uri)
+      if (problem) return { kind: "refused", reason: problem }
       let described: McpReadResourceResult
       try {
         described = await mcpApps.readResource(
@@ -241,7 +252,18 @@ export function gatewayAppServer(mcpApps: McpAppsApi): McpAppServer {
     },
 
     async release(address: AppAddress) {
-      await mcpApps.releaseApp(address.sessionId, address.app)
+      try {
+        await mcpApps.releaseApp(address.sessionId, address.app)
+      } catch (error) {
+        // A conversation that is gone has no mount left to release: the
+        // expected end of one, not a fault. Anything else is for the bridge.
+        if (
+          error instanceof NessaConversationControlError &&
+          conversationGone.has(error.code)
+        )
+          return
+        throw error
+      }
     },
   }
 }
