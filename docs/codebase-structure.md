@@ -493,6 +493,12 @@ replies; `product/socket.rs` reserves independent record capacity and retains
 it until both physical source work and delivery/drop have finished. The existing
 one-per-socket permit is shared with that physical lease, so delivering a read
 timeout cannot admit another source while the original worker remains live.
+`core/read_workers/` owns tracked blocking source threads, sticky faults and the
+retained join-all drain used by record/catalogue infrastructure. It grants no
+source permission or socket capacity. Its lifecycle tests live under
+`tests/core/read_workers.rs`; record-specific admission tests stay with their
+source adapter. Attachment adapters consume this owner when activated.
+
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without

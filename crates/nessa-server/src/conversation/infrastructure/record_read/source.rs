@@ -5,8 +5,8 @@ use crate::conversation::application::{
     ReadRefusal, ReceiverReadScope, RecordReadError, RecordReadFuture, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadSource,
 };
-use crate::conversation::infrastructure::read_workers::{ReadWorkerError, ReadWorkers};
 use crate::conversation::infrastructure::record_scope_from_identity;
+use crate::core::read_workers::{ReadWorkerError, ReadWorkers};
 use nessa_sdk::{
     domain::agent_execution::sessions::SessionId, infrastructure::session_storage::RecordStorage,
 };
