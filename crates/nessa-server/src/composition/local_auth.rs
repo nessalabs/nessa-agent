@@ -687,10 +687,15 @@ async fn conversations(
     let (service, resource_route) = match mcp.as_mut() {
         Some(mcp) => {
             if let Some(events) = mcp.ticket_events.take() {
-                tokio::spawn(crate::mcp_servers::infrastructure::audit_ticket_ends(
-                    events,
-                    mcp_app_audit.clone(),
-                ));
+                let (stop, stopping) = tokio::sync::oneshot::channel();
+                mcp.ticket_recorder = Some(super::mcp_servers::TicketRecorder {
+                    stop,
+                    task: tokio::spawn(crate::mcp_servers::infrastructure::audit_ticket_ends(
+                        events,
+                        mcp_app_audit.clone(),
+                        stopping,
+                    )),
+                });
             }
             let service = ConversationService::with_mcp_apps(
                 dependencies,

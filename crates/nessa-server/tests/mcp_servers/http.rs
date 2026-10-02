@@ -3,11 +3,12 @@
 use super::*;
 use crate::attachments::entrypoint::http as attachments;
 use crate::conversation::application::McpAppAuditPhase;
+use crate::conversation::application::McpAppInitiator;
 use crate::conversation::application::{ResourceTickets, RESOURCE_TICKET_LIFETIME_MS};
 use crate::mcp_servers::domain::ResourceTicketDigest;
 use crate::mcp_servers::infrastructure::ticket_test_support::app_initiator;
 use crate::mcp_servers::infrastructure::ticket_test_support::{
-    app, conversation, held, Fixture, CONVERSATION,
+    app, conversation, held, issued, Fixture, CONVERSATION,
 };
 use axum::body::to_bytes;
 
@@ -30,10 +31,11 @@ fn headers(origin: Option<&str>, tickets: &[&[u8]]) -> HeaderMap {
     headers
 }
 fn issue(fixture: &Fixture) -> String {
-    fixture
-        .store
-        .issue(held(CONVERSATION, app("call-1", "mount-1"), PAGE))
-        .unwrap()
+    issued(
+        &fixture.store,
+        held(CONVERSATION, app("call-1", "mount-1"), PAGE),
+    )
+    .unwrap()
 }
 async fn body(response: Response) -> Vec<u8> {
     to_bytes(response.into_body(), 1 << 20)
@@ -137,9 +139,13 @@ async fn every_refused_ticket_is_the_same_empty_404() {
     let expired = issue(&fixture);
     fixture.clock.advance(RESOURCE_TICKET_LIFETIME_MS);
     let app_released = issue(&fixture);
-    fixture.store.release_app(&us, &app("call-1", "mount-1"));
+    fixture
+        .store
+        .release_app(&us, &app("call-1", "mount-1"), &McpAppInitiator::System);
     let conversation_released = issue(&fixture);
-    fixture.store.release_conversation(&us);
+    fixture
+        .store
+        .release_conversation(&us, &McpAppInitiator::System);
     let unknown = crate::mcp_servers::domain::resource_ticket([42; 32]);
     let doubled = issue(&fixture);
 

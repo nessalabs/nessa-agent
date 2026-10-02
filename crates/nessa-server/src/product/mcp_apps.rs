@@ -18,13 +18,16 @@ use crate::conversation::application::{
 use crate::mcp_servers::entrypoint::http::CONTENT_TYPE;
 use crate::protocol::{OutgoingMessage, RequestFrame};
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
+use nessa_sdk::domain::mcp_apps::MAX_UI_URI_BYTES;
 
 /// The most characters of a server's error message the wire carries.
 const MAX_REMOTE_MESSAGE_CHARS: usize = 512;
 /// The longest identity of an execution or a tool call.
 const MAX_IDENTITY_BYTES: usize = 256;
-/// The longest MCP server or tool name.
-const MAX_MCP_NAME_BYTES: usize = 128;
+/// The largest JSON-RPC code the wire carries either way: the schema's
+/// integer bound, what a JSON number keeps exactly.
+const MAX_REMOTE_CODE: i64 = 9_007_199_254_740_991;
 
 pub(super) async fn dispatch(
     state: &ProductRouteState,
@@ -68,6 +71,9 @@ pub(super) async fn dispatch(
             "mcp.readResource" => {
                 let params = params!(McpReadResourceParams);
                 name(&params.server)?;
+                if params.uri.len() > MAX_UI_URI_BYTES {
+                    return Err(ConversationError::InvalidInput);
+                }
                 let resource = service
                     .read_app_resource(
                         conversation_id(&params.conversation_id)?,
@@ -133,7 +139,9 @@ pub(super) async fn dispatch(
     .await;
     match result {
         Ok(response) => response,
-        Err(ConversationError::McpApp(McpAppError::Remote(Some((code, message))))) => {
+        Err(ConversationError::McpApp(McpAppError::Remote(Some((code, message)))))
+            if (-MAX_REMOTE_CODE..=MAX_REMOTE_CODE).contains(&code) =>
+        {
             let details = McpRemoteErrorDetails {
                 code,
                 message: remote_message(&message),
@@ -180,7 +188,7 @@ fn remote_message(message: &str) -> String {
         .chars()
         .take(MAX_REMOTE_MESSAGE_CHARS)
         .map(|character| {
-            if character.is_control() {
+            if character.is_control() || reorders_text(character) {
                 ' '
             } else {
                 character
@@ -188,3 +196,17 @@ fn remote_message(message: &str) -> String {
         })
         .collect()
 }
+
+/// A character that changes how the text around it reads without being
+/// seen: the bidirectional marks, embeddings, overrides and isolates, and the
+/// line and paragraph separators.
+fn reorders_text(character: char) -> bool {
+    matches!(
+        character,
+        '\u{200E}' | '\u{200F}' | '\u{061C}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{2028}' | '\u{2029}'
+    )
+}
+
+#[cfg(test)]
+#[path = "../../tests/product/mcp_apps.rs"]
+mod tests;

@@ -37,6 +37,8 @@ pub enum McpAppFailure {
     NotAnApp,
     /// The answer was not of the protocol's shape.
     Malformed,
+    /// The session has as many requests waiting as it takes.
+    Busy,
 }
 
 /// A future an [`McpApps`] port answers with.
@@ -76,9 +78,11 @@ pub enum McpAppAsk {
 }
 
 /// Who a step was taken by: the app, on behalf of the person whose
-/// credential it runs under; the person, answering its review; or the
-/// gateway itself, for a deadline or a cleanup. The app is not
-/// authenticated beyond the credential — that is what "on behalf of" says.
+/// credential it runs under; a person, by an explicit command of theirs —
+/// answering a review, releasing a mount, closing or deleting the
+/// conversation; or the gateway itself, for a deadline, an automatic stop
+/// or its own shutdown. The app is not authenticated beyond the credential —
+/// that is what "on behalf of" says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpAppInitiator {
     App {
@@ -104,13 +108,80 @@ pub enum McpAppWithdrawal {
     ConversationEnded,
 }
 
+/// The protocol code a step ended an app's call with, as audit names it.
+/// The wire answers with the same code (`tests/conversation/agreement.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpAppCode {
+    AppUnknown,
+    ServerMismatch,
+    ToolNotForApp,
+    RequestTooLarge,
+    SessionUnavailable,
+    ApprovalDenied,
+    ApprovalExpired,
+    Cancelled,
+    ResultTooLarge,
+    TimedOut,
+    RemoteError,
+    InvalidRequest,
+    TemporarilyUnavailable,
+}
+impl McpAppCode {
+    /// Every code, for the tests that hold them to the protocol's.
+    pub const ALL: [Self; 13] = [
+        Self::AppUnknown,
+        Self::ServerMismatch,
+        Self::ToolNotForApp,
+        Self::RequestTooLarge,
+        Self::SessionUnavailable,
+        Self::ApprovalDenied,
+        Self::ApprovalExpired,
+        Self::Cancelled,
+        Self::ResultTooLarge,
+        Self::TimedOut,
+        Self::RemoteError,
+        Self::InvalidRequest,
+        Self::TemporarilyUnavailable,
+    ];
+    /// The protocol's name for it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AppUnknown => "mcp_app_unknown",
+            Self::ServerMismatch => "mcp_server_mismatch",
+            Self::ToolNotForApp => "mcp_tool_not_for_app",
+            Self::RequestTooLarge => "mcp_request_too_large",
+            Self::SessionUnavailable => "mcp_session_unavailable",
+            Self::ApprovalDenied => "mcp_approval_denied",
+            Self::ApprovalExpired => "mcp_approval_expired",
+            Self::Cancelled => "mcp_cancelled",
+            Self::ResultTooLarge => "mcp_result_too_large",
+            Self::TimedOut => "mcp_timed_out",
+            Self::RemoteError => "mcp_remote_error",
+            Self::InvalidRequest => "invalid_request",
+            Self::TemporarilyUnavailable => "temporarily_unavailable",
+        }
+    }
+}
+
 /// How a call that reached the server ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpAppOutcome {
     /// Answered within bounds; `is_error` as the server set it.
     Answered { is_error: bool, bytes: usize },
-    /// Failed after it was sent, by the protocol code it is refused with.
-    Failed(&'static str),
+    /// Failed after it was sent, by the code it is refused with.
+    Failed(McpAppCode),
+}
+
+/// How a ticket ended unredeemed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TicketEnd {
+    /// Its lifetime passed.
+    Expired,
+    /// Its app's mount was released.
+    AppReleased,
+    /// Its conversation ended: closed, deleted, stopped, or the gateway
+    /// stopping.
+    ConversationEnded,
 }
 
 /// One step of an app call's life. Each is recorded before the step's
@@ -118,7 +189,7 @@ pub enum McpAppOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpAppAuditPhase {
     /// Refused before anything reached the server, by protocol code.
-    Refused(&'static str),
+    Refused(McpAppCode),
     /// Admitted with nothing to wait for; sent next.
     Admitted,
     /// A destructive tool: the person is asked first.
@@ -144,8 +215,11 @@ pub enum McpAppAuditPhase {
     },
     /// The ticket was redeemed and the bytes served.
     TicketRedeemed { ticket_digest: String },
-    /// The ticket expired unredeemed, or its conversation ended first.
-    TicketExpired { ticket_digest: String },
+    /// The ticket ended unredeemed, and why.
+    TicketEnded {
+        ticket_digest: String,
+        cause: TicketEnd,
+    },
 }
 
 /// Immutable evidence of one step: its target (the conversation, the app,
@@ -216,18 +290,26 @@ pub enum TicketRefusal {
 /// Where an app resource's bytes wait for their one redemption over HTTP.
 /// A ticket is 256 random bits, valid for [`RESOURCE_TICKET_LIFETIME_MS`],
 /// redeemable once; the store keeps only its digest.
+///
+/// A ticket is issued pending, and made redeemable once its issue is on
+/// record. A pending ticket that ends — released, expired — is not reported:
+/// its end is the issuer's to record, after its issue, from what
+/// [`Self::activate`] answers. So no ticket's end is reported before its
+/// issue is recorded.
 pub trait ResourceTickets: Send + Sync {
-    /// Hold `resource` and answer its ticket.
+    /// Hold `resource`, pending, and answer its ticket.
     fn issue(&self, resource: HeldResource) -> Result<String, TicketRefusal>;
-    /// Let go of everything held for `conversation`: its tickets are
-    /// refused from now on.
-    fn release_conversation(&self, conversation: &ConversationId);
-    /// Let go of everything held for the one mount `app` of
-    /// `conversation`. Idempotent.
-    fn release_app(&self, conversation: &ConversationId, app: &McpAppRef);
-    /// Let go of `ticket` unredeemed and unreported: its issue could not be
+    /// Make the pending `ticket` redeemable; or, when it ended first, how
+    /// and by whom.
+    fn activate(&self, ticket: &str) -> Result<(), (TicketEnd, McpAppInitiator)>;
+    /// Let go of the pending `ticket`, unreported: its issue could not be
     /// recorded, so it was never handed out and has no history to end.
     fn discard(&self, ticket: &str);
+    /// Let go of everything held for `conversation`, which `by` ended.
+    fn release_conversation(&self, conversation: &ConversationId, by: &McpAppInitiator);
+    /// Let go of everything held for the one mount `app` of
+    /// `conversation`, which `by` released. Idempotent.
+    fn release_app(&self, conversation: &ConversationId, app: &McpAppRef, by: &McpAppInitiator);
 }
 
 /// How long a resource ticket can be redeemed.
@@ -237,8 +319,8 @@ pub const MAX_HELD_RESOURCE_BYTES: usize = 16 * 1024 * 1024;
 /// The most tickets a conversation may hold at once, whatever their size.
 pub const MAX_HELD_TICKETS: usize = 64;
 
-/// Why an app's call was refused, or failed once sent: one protocol
-/// `mcp_` code each. [`Self::code`] is how audit names it.
+/// Why an app's call was refused, or failed once sent: one protocol code
+/// each. [`Self::code`] is how audit names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpAppError {
     AppUnknown,
@@ -254,22 +336,25 @@ pub enum McpAppError {
     /// The server's JSON-RPC error, or `None` for an answer that is no MCP
     /// answer at all.
     Remote(Option<(i64, String)>),
+    /// The session cannot take another request now; nothing was sent.
+    Busy,
 }
 impl McpAppError {
     /// The protocol code.
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> McpAppCode {
         match self {
-            Self::AppUnknown => "mcp_app_unknown",
-            Self::ServerMismatch => "mcp_server_mismatch",
-            Self::ToolNotForApp => "mcp_tool_not_for_app",
-            Self::RequestTooLarge => "mcp_request_too_large",
-            Self::SessionUnavailable => "mcp_session_unavailable",
-            Self::ApprovalDenied => "mcp_approval_denied",
-            Self::ApprovalExpired => "mcp_approval_expired",
-            Self::Cancelled => "mcp_cancelled",
-            Self::ResultTooLarge => "mcp_result_too_large",
-            Self::TimedOut => "mcp_timed_out",
-            Self::Remote(_) => "mcp_remote_error",
+            Self::AppUnknown => McpAppCode::AppUnknown,
+            Self::ServerMismatch => McpAppCode::ServerMismatch,
+            Self::ToolNotForApp => McpAppCode::ToolNotForApp,
+            Self::RequestTooLarge => McpAppCode::RequestTooLarge,
+            Self::SessionUnavailable => McpAppCode::SessionUnavailable,
+            Self::ApprovalDenied => McpAppCode::ApprovalDenied,
+            Self::ApprovalExpired => McpAppCode::ApprovalExpired,
+            Self::Cancelled => McpAppCode::Cancelled,
+            Self::ResultTooLarge => McpAppCode::ResultTooLarge,
+            Self::TimedOut => McpAppCode::TimedOut,
+            Self::Remote(_) => McpAppCode::RemoteError,
+            Self::Busy => McpAppCode::TemporarilyUnavailable,
         }
     }
 }
@@ -283,6 +368,7 @@ impl From<McpAppFailure> for McpAppError {
             // A resource that is not an app's: read, and changing nothing.
             McpAppFailure::NotAnApp => Self::AppUnknown,
             McpAppFailure::Malformed => Self::Remote(None),
+            McpAppFailure::Busy => Self::Busy,
         }
     }
 }
