@@ -12,12 +12,12 @@ export interface NessaUiPath {
 
 export const nessaUiPaths: readonly NessaUiPath[]
 export const linkedSourceRoot: string
-export const sharedTypes: Readonly<Record<string, readonly string[]>>
+export const sharedPackages: readonly string[]
 
 export function viteAliases(
   sourceRoot: string,
   paths?: readonly NessaUiPath[],
-): { find: string | RegExp; replacement: string }[]
+): { find: RegExp; replacement: string }[]
 
 export function tsconfigPaths(paths?: readonly NessaUiPath[]): Record<string, string[]>
 

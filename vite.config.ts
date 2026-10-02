@@ -6,7 +6,7 @@ import { defineConfig, searchForWorkspaceRoot } from "vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
-import { viteAliases } from "./scripts/nessa-ui-paths.mjs"
+import { sharedPackages, viteAliases } from "./scripts/nessa-ui-paths.mjs"
 import { gatewayOrigin, parseStage } from "./src/env/gateway-ports"
 import { loadEnvironment } from "./src/env/environment"
 
@@ -166,7 +166,7 @@ export default defineConfig({
     // The linked checkout carries its own React in devDependencies. Without
     // deduping, the app and the library each load a copy and every hook in the
     // library throws.
-    dedupe: ["react", "react-dom"],
+    dedupe: [...sharedPackages],
   },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: {

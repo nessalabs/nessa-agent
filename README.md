@@ -189,7 +189,7 @@ and `just release` there.
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm ui:check` | Confirm the vendored UI matches `nessa-ui-revision` (offline, runs before `typecheck`, `dev`, `build`, `test`) |
 | `pnpm ui:types` | Reconcile the vendored UI with `nessa-ui-revision` |
-| `pnpm ui:paths` | Write `tsconfig.json`'s `paths` from the design system's path table (`scripts/nessa-ui-paths.mjs`) |
+| `pnpm ui:paths` | Write `tsconfig.json`'s `paths` from `scripts/nessa-ui-paths.mjs`, which owns them whole |
 
 ### Desktop verification
 
@@ -511,12 +511,13 @@ their own module rather than adding them to a static import. They then become
 chunks fetched the first time a message contains a diagram, instead of weight
 every launch pays for.
 
-Types still come from the package's built `.d.ts`, not its source: typechecking
-its source pulls in the copy of React's types under its own `node_modules`, and
-two copies make identical types nominally incompatible. `pnpm ui:types` refreshes
-them after changing the package. `noUnusedLocals` is off for the same reason —
-consuming the design system as source puts its files in this program, and its
-dead locals are not this app's to fix.
+Types come from the package's source as well (`tsconfig.json`'s `paths`). Its
+source would pull in the copy of React's types under its own `node_modules`, and
+two copies make identical types nominally incompatible, so those `paths` also
+point `react` and `react-dom` at this app's `@types` — the same shared packages
+Vite and Vitest `dedupe` (`sharedPackages` in `scripts/nessa-ui-paths.mjs`).
+`noUnusedLocals` is off because consuming the design system as source puts its
+files in this program, and its dead locals are not this app's to fix.
 
 ### The frosted surface is native, not CSS
 
@@ -570,10 +571,12 @@ The app imports the package's source, not its build: a component by
 not export, such as the shared size observer, by `@nessa-ui/react/lib/<name>`.
 One table, `scripts/nessa-ui-paths.mjs`, maps each of these to the package's
 source. `vite.config.ts` and `vitest.config.ts` build their aliases from it.
-`tsconfig.json` cannot import it, so its `paths` are written from it by
-`pnpm ui:paths`, and `pnpm architecture` fails when they are anything else —
-an entry missing, pointing elsewhere, or added by hand. To change a path,
-change the table and run `pnpm ui:paths`.
+`tsconfig.json` cannot import it, so the table owns its `paths` whole — its
+entries and the React type redirects above — and `pnpm ui:paths` writes them.
+`pnpm architecture` fails when an entry is missing, points elsewhere or was
+added by hand, or when `baseUrl` or `extends` would move them; a test holds
+the file to exactly what `pnpm ui:paths` writes. To change a path, change the
+table and run `pnpm ui:paths`.
 
 The composer requires the shared Markdown AST extension and on-demand math/diagram
 renderers in the pinned UI revision. To reconcile a managed clone with that pin:

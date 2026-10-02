@@ -1,16 +1,23 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { test } from "node:test"
 
 import {
   nessaUiPaths,
-  sharedTypes,
+  sharedPackages,
   tsconfigPathViolations,
   tsconfigPaths,
   tsconfigTextViolations,
   withTsconfigPaths,
   viteAliases,
 } from "./nessa-ui-paths.mjs"
+
+/** Each shared package's types, as `tsconfig.json` points at them. */
+const sharedTypes = {
+  react: ["./node_modules/@types/react"],
+  "react-dom": ["./node_modules/@types/react-dom"],
+}
 
 /** Where Vite's aliases send `specifier`: the first that matches, as Vite applies them. */
 function resolveWith(aliases, specifier) {
@@ -157,7 +164,7 @@ test("the shared types are required too", () => {
 test("the writer sets paths from the table and keeps everything else", () => {
   const before = JSON.stringify(
     {
-      extends: "./base.json",
+      exclude: ["dist"],
       compilerOptions: { strict: true, paths: { "@ui/*": ["./x/*"] } },
       include: ["src"],
     },
@@ -166,7 +173,7 @@ test("the writer sets paths from the table and keeps everything else", () => {
   )
   const after = withTsconfigPaths(before)
   const written = JSON.parse(after)
-  assert.equal(written.extends, "./base.json")
+  assert.deepEqual(written.exclude, ["dist"])
   assert.equal(written.compilerOptions.strict, true)
   assert.deepEqual(written.include, ["src"])
   assert.deepEqual(written.compilerOptions.paths, tsconfigPaths())
@@ -197,4 +204,57 @@ test("tsconfig.json that is not plain JSON is reported, not thrown", () => {
     ),
     [],
   )
+})
+
+test("the shared packages are the ones whose types tsconfig redirects", () => {
+  assert.deepEqual(sharedPackages, Object.keys(sharedTypes))
+  for (const [name, targets] of Object.entries(sharedTypes))
+    assert.deepEqual(tsconfigPaths()[name], targets)
+})
+
+test("baseUrl or extends, which would move the paths written, is reported", () => {
+  const paths = tsconfigPaths()
+  assert.match(
+    tsconfigTextViolations(
+      JSON.stringify({ compilerOptions: { baseUrl: "./src", paths } }),
+    ).join("\n"),
+    /has `baseUrl`/,
+  )
+  assert.match(
+    tsconfigTextViolations(
+      JSON.stringify({ extends: "./base.json", compilerOptions: { paths } }),
+    ).join("\n"),
+    /has `extends`/,
+  )
+})
+
+test("a $ in the source root reaches Vite's replacement literally", () => {
+  const aliases = viteAliases("/a/$&b/src")
+  assert.equal(resolveWith(aliases, "@/lib/utils"), "/a/$&b/src/lib/utils")
+})
+
+test("the writer keeps CRLF line endings, and is then a no-op", () => {
+  const lf = withTsconfigPaths(JSON.stringify({ compilerOptions: {} }, null, 2))
+  const crlf = lf.replaceAll("\n", "\r\n")
+  assert.equal(withTsconfigPaths(crlf), crlf)
+  assert.equal(withTsconfigPaths(lf), lf)
+})
+
+test("the writer refuses text that is not plain JSON with a sentence", () => {
+  assert.throws(
+    () => withTsconfigPaths("{ // no\n }"),
+    /tsconfig\.json is not plain JSON/,
+  )
+})
+
+test("pnpm ui:paths leaves the repository's tsconfig.json as it is", () => {
+  const file = new URL("../tsconfig.json", import.meta.url)
+  const before = readFileSync(file, "utf8")
+  const run = spawnSync(
+    process.execPath,
+    [new URL("./write-nessa-ui-paths.mjs", import.meta.url).pathname],
+    { encoding: "utf8" },
+  )
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(readFileSync(file, "utf8"), before)
 })

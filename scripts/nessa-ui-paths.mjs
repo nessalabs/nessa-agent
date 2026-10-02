@@ -1,5 +1,6 @@
 /**
- * Where an import of the design system lands in its source: the one table.
+ * Where an import of the design system lands, for every tool that resolves
+ * one: the one table, and the owner of all of `tsconfig.json`'s `paths`.
  *
  * Nessa UI is consumed as source (see `vite.config.ts` for why), so three
  * tools each resolve its import paths: TypeScript (`tsconfig.json`'s
@@ -7,8 +8,15 @@
  * already parted: Vitest sent `@nessa-ui/react/app-shell` to a components
  * directory that does not exist. Now Vite and Vitest build their aliases from
  * this table. `tsconfig.json` cannot import code, so its `paths` are written
- * from it (`pnpm ui:paths`), and `scripts/check-architecture.mjs` fails when
- * they are not exactly what that writes (`tsconfigPathViolations`).
+ * from here (`pnpm ui:paths`, `write-nessa-ui-paths.mjs`) — the table's
+ * entries and the React type redirects its source needs (`sharedPackages`),
+ * and nothing else. `scripts/check-architecture.mjs` fails when any entry is
+ * missing, points elsewhere, or is not one of those, or when `baseUrl` or
+ * `extends` would move them (`tsconfigPathViolations`); the test "the
+ * repository's tsconfig.json is exactly what the writer makes of it" holds
+ * the file byte for byte, line endings aside. An alias of the app's own
+ * would be a new decision: it is added here, or this module stops owning
+ * `paths` whole.
  *
  * Each rule maps an import prefix to a directory of the package's `src/`:
  *
@@ -24,13 +32,10 @@
  * Order is not part of the table: the derivers put a whole specifier and a
  * longer prefix ahead of a shorter one, so `lib/` is never claimed by the
  * components' rule. The architecture check imports this on bare Node with no
- * `node_modules`, so it may import only Node's builtins and its neighbours —
- * held by that check's own import rule, which reads this file. Its types are
+ * `node_modules`, so it imports nothing; that check's import rule reads this
+ * file's own imports (not what they import in turn). Its types are
  * `nessa-ui-paths.d.mts`'s.
  */
-
-import { readFileSync, writeFileSync } from "node:fs"
-import { fileURLToPath, pathToFileURL } from "node:url"
 
 /** @typedef {import("./nessa-ui-paths.d.mts").NessaUiPath} NessaUiPath */
 
@@ -49,16 +54,19 @@ export const nessaUiPaths = [
 ]
 
 /**
- * The other entries `tsconfig.json`'s `paths` holds, and why: the vendored
- * checkout carries its own `@types/react`, so without these TypeScript reads
- * React's types twice — once for the app, once for the design system's source
- * — and the two do not assign to each other (155 errors when removed). They
- * are TypeScript's half of Vite's `dedupe: ["react", "react-dom"]`.
+ * The packages the app and the design system's source must share one copy of.
+ * The vendored checkout carries its own, so Vite and Vitest `dedupe` them, and
+ * `tsconfig.json`'s `paths` points each at this app's `@types/<name>`:
+ * without that TypeScript reads React's types twice — once for the app, once
+ * for the design system's source — and the two do not assign to each other
+ * (155 errors when removed).
  */
-export const sharedTypes = {
-  react: ["./node_modules/@types/react"],
-  "react-dom": ["./node_modules/@types/react-dom"],
-}
+export const sharedPackages = ["react", "react-dom"]
+
+/** `tsconfig.json`'s redirect of each shared package to this app's types. */
+const sharedTypes = Object.fromEntries(
+  sharedPackages.map((name) => [name, [`./node_modules/@types/${name}`]]),
+)
 
 /**
  * The package's `src/` as its `node_modules` link reaches it, from the project
@@ -88,13 +96,14 @@ const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 export function viteAliases(sourceRoot, paths = nessaUiPaths) {
   return mostSpecificFirst(paths).map(({ specifier, directory, whole }) => ({
     find: new RegExp(`^${escapeRegExp(specifier)}${whole ? "$" : ""}`),
-    replacement: `${sourceRoot}/${directory}`,
+    // Vite applies this with String.replace, where `$` is special.
+    replacement: `${sourceRoot}/${directory}`.replaceAll("$", "$$$$"),
   }))
 }
 
 /**
  * `tsconfig.json`'s `compilerOptions.paths`, whole: the table's entries (a
- * prefix `p` becomes `p*`), then `sharedTypes`.
+ * prefix `p` becomes `p*`), then each shared package's types.
  *
  * @param {readonly NessaUiPath[]} [paths]
  * @returns {Record<string, string[]>}
@@ -142,16 +151,21 @@ export function tsconfigPathViolations(actual, paths = nessaUiPaths) {
   for (const key of Object.keys(given)) {
     if (!Object.hasOwn(expected, key))
       violations.push(
-        `tsconfig.json paths has "${key}", which scripts/nessa-ui-paths.mjs does not write; add it there, or run \`pnpm ui:paths\` to drop it`,
+        `tsconfig.json paths has "${key}", which scripts/nessa-ui-paths.mjs does not write — it owns paths whole; add the entry there, or run \`pnpm ui:paths\` to drop it`,
       )
   }
   return violations
 }
 
+const notPlainJson = (error) =>
+  `tsconfig.json is not plain JSON (${error.message}); scripts/nessa-ui-paths.mjs reads and writes it with JSON, so keep it free of comments and trailing commas`
+
 /**
- * `tsconfigPathViolations` for `tsconfig.json`'s text. The check reads it with
- * `JSON.parse`, having no parser for comments or trailing commas, so a file
- * that is not plain JSON is reported as such rather than thrown.
+ * `tsconfigPathViolations` for `tsconfig.json`'s text, and the two settings
+ * that would move what it holds: `baseUrl` re-roots every path, and `extends`
+ * can bring one in. A file that is not plain JSON — the check reads it with
+ * `JSON.parse`, having no parser for comments or trailing commas — is
+ * reported as such rather than thrown.
  *
  * @param {string} text
  * @param {readonly NessaUiPath[]} [paths]
@@ -162,30 +176,47 @@ export function tsconfigTextViolations(text, paths = nessaUiPaths) {
   try {
     tsconfig = JSON.parse(text)
   } catch (error) {
-    return [
-      `tsconfig.json is not plain JSON (${error.message}); the check that holds its paths to scripts/nessa-ui-paths.mjs reads it with JSON.parse, so keep it free of comments and trailing commas`,
-    ]
+    return [notPlainJson(error)]
   }
-  return tsconfigPathViolations(tsconfig?.compilerOptions?.paths, paths)
+  const moved = []
+  if (
+    tsconfig !== null &&
+    typeof tsconfig === "object" &&
+    Object.hasOwn(tsconfig, "extends")
+  )
+    moved.push(
+      "tsconfig.json has `extends`, which can bring in a baseUrl or paths that scripts/nessa-ui-paths.mjs does not write; the paths it writes are relative to tsconfig.json alone",
+    )
+  const options = tsconfig?.compilerOptions
+  if (
+    options !== null &&
+    typeof options === "object" &&
+    Object.hasOwn(options, "baseUrl")
+  )
+    moved.push(
+      "tsconfig.json has `baseUrl`, which re-roots every path scripts/nessa-ui-paths.mjs writes; they are relative to tsconfig.json",
+    )
+  return [...moved, ...tsconfigPathViolations(options?.paths, paths)]
 }
 
 /**
  * `tsconfig.json`'s text with its `paths` written from the table and the rest
- * kept as it was, formatted as `JSON.stringify` with two spaces.
+ * kept as it was, formatted as `JSON.stringify` with two spaces, in the line
+ * endings the text already had. Throws a sentence, not a parser's error, when
+ * the text is not plain JSON.
  *
  * @param {string} text
  * @param {readonly NessaUiPath[]} [paths]
  * @returns {string}
  */
 export function withTsconfigPaths(text, paths = nessaUiPaths) {
-  const tsconfig = JSON.parse(text)
+  let tsconfig
+  try {
+    tsconfig = JSON.parse(text)
+  } catch (error) {
+    throw new Error(notPlainJson(error))
+  }
   tsconfig.compilerOptions = { ...tsconfig.compilerOptions, paths: tsconfigPaths(paths) }
-  return `${JSON.stringify(tsconfig, null, 2)}\n`
-}
-
-// `pnpm ui:paths`: write `tsconfig.json`'s paths from the table.
-const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
-if (invoked && process.argv.includes("--write")) {
-  const file = fileURLToPath(new URL("../tsconfig.json", import.meta.url))
-  writeFileSync(file, withTsconfigPaths(readFileSync(file, "utf8")))
+  const eol = text.includes("\r\n") ? "\r\n" : "\n"
+  return `${JSON.stringify(tsconfig, null, 2)}\n`.replaceAll("\n", eol)
 }
