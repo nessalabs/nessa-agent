@@ -18,7 +18,7 @@ import {
   type PaneLayout,
 } from "../../split-panes/model/pane-layout"
 import { paneItemKey, paneItemOf, sessionItem, type PaneItem } from "../model/pane-item"
-import { sameWidget, type WidgetRef } from "../model/widget-ref"
+import { sameWidget, type WidgetRef } from "../../widgets/model/widget-ref"
 import { keptConversations, retention, type Removal } from "../model/retention"
 import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overview/filter"
 import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
@@ -158,6 +158,19 @@ export interface WorkspaceState {
  */
 export type ContentView = "panes" | "agents" | { readonly widget: WidgetRef }
 
+/** What fills the content region, by kind: the panes, the overview, or a widget in the window. */
+export type ContentKind = "panes" | "agents" | "widget"
+
+/** The content view's kind: the one reading of its shape, with `windowWidget`. */
+export function contentKind(content: ContentView): ContentKind {
+  return typeof content === "object" ? "widget" : content
+}
+
+/** The widget the window shows over the panes, if the content view is one. */
+export function windowWidget(content: ContentView): WidgetRef | null {
+  return typeof content === "object" ? content.widget : null
+}
+
 /** Whether two content views are the same place: a widget compared by value (`sameWidget`). */
 export function sameContent(a: ContentView, b: ContentView): boolean {
   if (typeof a === "string" || typeof b === "string") return a === b
@@ -256,6 +269,12 @@ export function itemIn(pane: Pane): PaneItem | null {
 export function sessionIn(pane: Pane): string | undefined {
   const item = itemIn(pane)
   return item?.kind === "session" ? item.sessionId : undefined
+}
+
+/** The widget a pane shows; none when it shows a session. */
+export function widgetIn(pane: Pane): WidgetRef | undefined {
+  const item = itemIn(pane)
+  return item?.kind === "widget" ? item.widget : undefined
 }
 
 /** The pane showing `item`, if one does. */

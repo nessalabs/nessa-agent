@@ -1,11 +1,7 @@
 /**
  * A widget, by reference: the plugin that draws it and the plugin's own id
  * for the thing drawn (ADR 326). The one shape everywhere a widget is named —
- * a pane item, the window's content view, a command.
- *
- * Held here until the widgets vertical (`src/desktop/widgets/`, #328), which
- * owns the contract, exists: this file imports nothing, so it moves there
- * whole.
+ * a pane item, a transcript part, the window's content view, a command.
  */
 
 export interface WidgetRef {

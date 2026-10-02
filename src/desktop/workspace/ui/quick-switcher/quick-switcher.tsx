@@ -10,7 +10,7 @@ import { DesktopIcon } from "../../../ui/icons"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectChannels, selectListedSessions } from "../../adapters/store/selectors"
 import { useNow } from "../../adapters/dom/clock"
-import { focusComposer } from "../../adapters/dom/focus"
+import { focusInFront } from "../../adapters/dom/focus"
 import { isMac } from "../../../adapters/platform"
 import { commandKey, commandLabel } from "../../../model/keyboard"
 import { agentName, agentOf } from "../../model/workspace-index"
@@ -48,8 +48,8 @@ function Highlight({ text, hits }: { text: string; hits: readonly number[] }) {
  * and moves through them. Modal: focus stays in the field.
  */
 /**
- * A pick hands the caret to the focused pane's composer, which may still be
- * filling in (`focusComposer` tries for a few frames). The try is kept so it
+ * A pick hands the caret to what is in front — the focused pane's composer — which may still be
+ * filling in (`focusInFront` tries for a few frames). The try is kept so it
  * can be called off — by the switcher opening again, or the person pressing
  * somewhere else first — rather than land the caret after they moved on.
  */
@@ -62,7 +62,7 @@ function handToComposer() {
     stopHanding = () => {}
   }
   // Landed (or given up), there is nothing left to call off: the listener goes.
-  const stop = focusComposer(document, finish)
+  const stop = focusInFront(document, finish)
   const callOff = () => {
     stop()
     finish()

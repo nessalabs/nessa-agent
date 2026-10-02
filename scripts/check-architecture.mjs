@@ -18,6 +18,7 @@ import { composerBudgetViolations } from "./architecture/composer-budget.mjs"
 import { wholeWorkspaceViolations } from "./architecture/whole-workspace.mjs"
 import { importedPaths } from "./architecture/imported-paths.mjs"
 import { splitPanesBoundaryViolations } from "./architecture/split-panes-boundary.mjs"
+import { desktopVerticalViolations } from "./architecture/desktop-verticals.mjs"
 import {
   normalizedPath,
   rustBoundaryViolations,
@@ -240,6 +241,10 @@ for (const file of walk(src)) {
   }
 
   for (const violation of splitPanesBoundaryViolations(path, imports)) {
+    fail(file, violation)
+  }
+
+  for (const violation of desktopVerticalViolations(path, imports)) {
     fail(file, violation)
   }
 

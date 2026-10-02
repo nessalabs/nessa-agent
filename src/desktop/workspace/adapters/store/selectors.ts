@@ -48,11 +48,16 @@ import {
   focusedChannel,
   paneIds,
   sessionIn,
+  widgetIn,
+  windowWidget,
+  contentKind,
   type Answer,
+  type ContentKind,
   type Chrome,
   type WorkspaceState,
 } from "../../application/workspace-state"
 import { canClosePane } from "../../application/usecases/panes"
+import type { WidgetRef } from "../../../widgets/model/widget-ref"
 
 type Root = { workspace: WorkspaceState }
 
@@ -72,7 +77,14 @@ export const selectColumnCount = (state: Root) =>
   state.workspace.panes?.columns.length ?? 1
 export const selectView = (state: Root): SessionView => state.workspace.view
 /** Whether the Agents overview fills the content region. */
-export const selectOverviewOpen = (state: Root) => state.workspace.content === "agents"
+export const selectOverviewOpen = (state: Root) =>
+  contentKind(state.workspace.content) === "agents"
+/** What fills the content region, by kind (`contentKind`): the page's `data-content`. */
+export const selectContentKind = (state: Root): ContentKind =>
+  contentKind(state.workspace.content)
+/** The widget the window shows over the panes, if it shows one. */
+export const selectWindowWidget = (state: Root): WidgetRef | null =>
+  windowWidget(state.workspace.content)
 /** The session the overview's peek shows, as chosen in its list. */
 export const selectOverviewSelected = (state: Root) => state.workspace.overview.selected
 /** What the overview lists. */
@@ -185,6 +197,12 @@ export const selectFocusedSessionId = (state: Root): string | null => {
 export const selectPaneSession = (state: Root, pane: PaneKey): string | null => {
   const shown = state.workspace.panes && paneByKey(state.workspace.panes, pane)
   return (shown && sessionIn(shown)) ?? null
+}
+
+/** The widget a pane shows; none when it shows a session. Compare with `shallowEqual`. */
+export const selectPaneWidget = (state: Root, pane: PaneKey): WidgetRef | null => {
+  const shown = state.workspace.panes && paneByKey(state.workspace.panes, pane)
+  return (shown && widgetIn(shown)) ?? null
 }
 
 /** Whether a pane closes (`canClosePane`): what its close button and menu item offer. */

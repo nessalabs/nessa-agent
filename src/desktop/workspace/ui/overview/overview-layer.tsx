@@ -1,5 +1,5 @@
 import { useCallback, useRef, type RefObject } from "react"
-import { focusComposer } from "../../adapters/dom/focus"
+import { focusInFront } from "../../adapters/dom/focus"
 import { useAtLeastWide } from "../../adapters/dom/width"
 import { showContent } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
@@ -28,7 +28,7 @@ export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> })
   const leave = useCallback(() => {
     dispatch(showContent({ content: "panes" }))
     stop.current()
-    stop.current = focusComposer(root.current ?? document)
+    stop.current = focusInFront(root.current ?? document)
   }, [dispatch, root])
   return (
     <div className="workspace-overview-layer" ref={layer} data-open={open || undefined}>

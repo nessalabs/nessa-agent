@@ -10,6 +10,7 @@
 export const content = {
   panes: "panes",
   overview: "agents",
+  widget: "widget",
 }
 
 const committedQuestions = "[data-committed-questions]"
@@ -30,6 +31,11 @@ export const css = {
   surface: "[data-surface]",
   workspace: "[data-workspace]", // carries data-content (see `content`)
   anyReady: "[data-pane-key], [data-surface]",
+
+  // The load fallback in index.html, before the frontend mounts
+  loadMessage: "[data-nessa-load-message]",
+  loadMark: "[data-nessa-load-mark]",
+  loadTitle: "[data-nessa-load-title]",
 
   // Panes (data-pane-key is the pane's identity; data-pane-focused marks the focused one)
   pane: "[data-pane-key]",
@@ -61,6 +67,20 @@ export const css = {
   lifted: "[data-drag-lifted]",
   dragging: "[data-workspace][data-drag-carrying]",
   dropAnnouncer: '[data-workspace] [role="status"][aria-live="polite"]',
+
+  // Widgets (ADR 326) and the sample plugin that shows them (src/desktop/widgets/fixture/)
+  widgetCard: "[data-widget-inline]", // a widget's card in a message; its value says what it draws
+  widgetPane: "[data-widget-pane]", // a pane showing a widget
+  widgetBody: "[data-widget-body]", // a widget's body in a pane or the window, where its caret lands
+  widgetWindow: "[data-widget-window]", // the window: a widget over the panes
+  chatArea: ".workspace-chat", // class: the content region the panes, and the window, are drawn in
+  widgetTrail: '[data-slot="breadcrumb"]', // a widget's way back, in its chrome
+  sampleCard: "[data-sample-card]", // the sample trail's own card
+  sampleView: "[data-sample-view]", // a sample widget's view; its value is the widget's id
+  sampleStep: "[data-sample-step]", // a step of the trail, which opens its detail
+  sampleDetail: "[data-sample-detail]", // the trail's open detail
+  sampleAccessory: "[data-sample-accessory]", // the sample plugin's accessory in its session's header
+  sampleSize: "[data-sample-size]", // the place's size as the sample view was told it, "<width>x<height>"
 
   // Quick switcher (⌘K, ⌘\\)
   switcherField: '[role="dialog"] input', // the switcher's search field
@@ -124,6 +144,7 @@ export const css = {
   // Settings (data-sidebar is "open" | "closed"; --settings-sidebar-w its width)
   settings: ".settings", // class
   settingsTitlebar: ".settings-titlebar", // class
+  settingsSidebarToggle: '.settings-titlebar [aria-controls="settings-sidebar"]', // Settings' own sidebar toggle
   settingsCategory: ".settings-nav-item", // class: a category in Settings' sidebar
   settingsHeading: "#settings-heading", // the open category's name
   settingsTab: '.settings-tabs [role="tab"]',
@@ -175,6 +196,8 @@ export const safeAreaTokens = {
  */
 export const modules = {
   drop: "/src/desktop/split-panes/model/drop.ts",
+  /** What a widget host says in each case (`hostLines`). */
+  hostTable: "/src/desktop/widgets/model/host-table.ts",
 }
 
 /** The SDK's model catalogue, which the composer reads; scripts read it too, never retype it. */
@@ -281,6 +304,14 @@ export const names = {
   /** Its least level is None, which `modelWithoutFast` does not offer. */
   modelWithLeastLevel: "GPT-5.6 Sol",
   alwaysAllow: "Always Allow",
+  /** The sample session (in-memory source) whose conversation carries a widget of each state. */
+  widgetSession: "Widget hosts, every state",
+  /** The channel the sample session is in. */
+  widgetChannel: "design-system",
+  openWidget: "Open",
+  openInWindow: "Open in Window",
+  closePane: "Close Pane",
+  closeWindow: "Close",
 }
 
 /** Role and accessible-name selectors for the committed conversation fixture. */

@@ -42,7 +42,7 @@ import {
   type PaneItem,
   type PaneItemKey,
 } from "../../model/pane-item"
-import type { WidgetRef } from "../../model/widget-ref"
+import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import {
   channelOf,
   draftOf,

@@ -20,7 +20,7 @@ import { chosen, drawn, fitted, type SideColumn } from "../../model/side-column"
 import { ColumnHeader } from "../../ui/column-header"
 import { EdgePeekStrip } from "../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../ui/history-buttons"
-import { focusComposer } from "../../workspace"
+import { focusInFront } from "../../workspace"
 import { settingsSidebar, settingsSidebarFits } from "../model/settings-sidebar"
 import {
   firstTabOf,
@@ -110,8 +110,8 @@ export function useSettingsOpening(): { open: boolean; close: () => void } {
 /**
  * Settings over the window. Modal: the window under it is inert while it is
  * open (the window does that, from `useSettingsOpening`), and focus goes back
- * to what opened it when it closes — or, gone meanwhile, to the focused
- * pane's composer.
+ * to what opened it when it closes — or, gone meanwhile, to what is in
+ * front (`focusInFront`).
  */
 export function SettingsHost({
   open,
@@ -157,7 +157,9 @@ function SettingsView({
     [setSidebarColumn],
   )
   // Folded, the sidebar can be revealed from the window's edge, as the app's can.
-  const peek = useEdgePeek(!sidebarOpen, sidebarOpen)
+  const rootRef = useRef<HTMLDivElement>(null)
+  // Settings is a dialog itself: its own reveal is not under one.
+  const peek = useEdgePeek(!sidebarOpen, sidebarOpen, rootRef)
   const revealed = peek.shown && !peek.handingOff
   const [category, setCategory] = useState<SettingsCategoryId>("appearance")
   // The tab last shown in each category, kept while Settings is open.
@@ -169,7 +171,6 @@ function SettingsView({
   const [found, setFound] = useState<SettingId | null>(null)
   // The search result last taken, marked in the results while they stay up.
   const [picked, setPicked] = useState<string | null>(null)
-  const rootRef = useRef<HTMLDivElement>(null)
   const toggleRef = useRef<HTMLButtonElement>(null)
   const sidebarRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -183,14 +184,14 @@ function SettingsView({
   const Page = settingsTabPages[tab]
 
   // Focus comes in on opening and goes back on closing: to what opened
-  // Settings, or — gone meanwhile — to the focused pane's composer.
+  // Settings, or — gone meanwhile — to what is in front (`focusInFront`).
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null
     rootRef.current?.focus()
     return () => {
       if (opener && opener !== document.body && opener.isConnected)
         opener.focus({ preventScroll: true })
-      else focusComposer()
+      else focusInFront()
     }
   }, [])
 

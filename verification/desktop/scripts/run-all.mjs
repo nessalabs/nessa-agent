@@ -32,6 +32,8 @@ const functional = [
   "responsive",
   "safe-area",
   "committed-transcript",
+  "load-fallback",
+  "widgets",
 ]
 
 const options = cli({

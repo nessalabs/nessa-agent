@@ -15,58 +15,122 @@
         position: fixed;
         inset: 0;
         box-sizing: border-box;
-        color: #e8e8e8;
-        background: #171717;
+        overflow: hidden;
+        color: #ededed;
+        background: #121214;
         font:
-          14px/1.5 system-ui,
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          system-ui,
           sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* The same drifting light the window paints behind its glass. */
+      [data-nessa-load-fallback]::before,
+      [data-nessa-load-fallback]::after {
+        content: "";
+        position: absolute;
+        width: 70vmax;
+        height: 70vmax;
+        border-radius: 50%;
+        filter: blur(80px);
+        opacity: 0.55;
+        animation: nessa-load-drift 28s ease-in-out infinite alternate;
+      }
+
+      [data-nessa-load-fallback]::before {
+        left: 10%;
+        top: -35%;
+        background: radial-gradient(
+          closest-side,
+          oklch(0.52 0.15 295 / 42%),
+          transparent
+        );
+      }
+
+      [data-nessa-load-fallback]::after {
+        right: -20%;
+        bottom: -45%;
+        background: radial-gradient(closest-side, oklch(0.6 0.13 35 / 22%), transparent);
+        animation-duration: 36s;
+        animation-direction: alternate-reverse;
+      }
+
+      @keyframes nessa-load-drift {
+        to {
+          transform: translate3d(6vw, 4vh, 0) scale(1.08);
+        }
       }
 
       [data-nessa-load-message] {
         position: fixed;
+        z-index: 1;
         box-sizing: border-box;
         max-width: 100vw;
         max-height: 100vh;
         display: grid;
         place-content: center;
-        gap: 0.5rem;
+        justify-items: center;
+        gap: 0.75rem;
         padding: 1.5rem;
         overflow-wrap: anywhere;
         text-align: center;
       }
 
+      /* The panel's webview is a stage larger than its window, pinned to the
+         window's bottom right (src/panel/adapters/panel-frame.ts). Until
+         main.tsx writes the window's size, stay inside the bottom-right
+         320 × 320 that every panel the host opens covers (MIN_PANEL_HEIGHT,
+         and narrower than the default minimum width). */
       html[data-nessa-surface="panel"] [data-nessa-load-message] {
         right: 0;
         bottom: 0;
-        width: 320px;
-        height: 320px;
+        width: var(--nessa-window-width, 320px);
+        height: var(--nessa-window-height, 320px);
       }
 
       html[data-nessa-surface="setup"] [data-nessa-load-message] {
         inset: 0;
       }
 
-      @keyframes reveal-load-help {
-        to {
-          opacity: 1;
+      [data-nessa-load-mark] {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        box-shadow: 0 0 36px oklch(0.6 0.16 295 / 40%);
+        animation: nessa-load-breathe 2.4s ease-in-out infinite;
+      }
+
+      @keyframes nessa-load-breathe {
+        50% {
+          transform: scale(0.88);
+          opacity: 0.7;
+          box-shadow: 0 0 18px oklch(0.6 0.16 295 / 25%);
         }
       }
 
-      [data-nessa-load-help] {
-        opacity: 0;
-        animation: reveal-load-help 0s 4s forwards;
+      [data-nessa-load-title] {
+        color: rgb(237 237 237 / 60%);
+        font-size: 0.8125rem;
+        letter-spacing: 0.02em;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        [data-nessa-load-fallback]::before,
+        [data-nessa-load-fallback]::after,
+        [data-nessa-load-mark] {
+          animation: none;
+        }
       }
     </style>
   </head>
   <body>
     <div id="root">
       <main data-nessa-load-fallback>
-        <div data-nessa-load-message>
-          <strong>Loading Nessa…</strong>
-          <span data-nessa-load-help>
-            If this stays on screen, quit and reopen the app. If it keeps happening,
-            reinstall Nessa.
-          </span>
+        <div data-nessa-load-message role="status">
+          <img data-nessa-load-mark src="/src-tauri/icons/nessa-avatar.svg" alt="" />
+          <span data-nessa-load-title>Loading</span>
         </div>
       </main>
     </div>

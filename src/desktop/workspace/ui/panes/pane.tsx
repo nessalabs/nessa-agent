@@ -1,10 +1,6 @@
 import { memo, startTransition, useCallback, useEffect, useRef, useState } from "react"
-import { focusPane, sendMessage } from "../../adapters/store/commands"
-import {
-  useWorkspaceDispatch,
-  useWorkspaceSelector,
-  useWorkspaceStore,
-} from "../../adapters/store/hooks"
+import { sendMessage } from "../../adapters/store/commands"
+import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectDraft,
   selectFocusedPaneKey,
@@ -21,6 +17,7 @@ import type { PaneFrame } from "../../../split-panes"
 import type { PanePlacement } from "../../../split-panes/model/pane-sizing"
 import { Conversation, PaneHome } from "./conversation"
 import { PaneHeader } from "./pane-header"
+import { usePaneFocus } from "./use-pane-focus"
 
 /**
  * One pane: its header, and a new session's home or a conversation. It
@@ -45,7 +42,7 @@ export const Pane = memo(function Pane({
 }) {
   const key = placement.key
   const dispatch = useWorkspaceDispatch()
-  const store = useWorkspaceStore()
+  const focusHandlers = usePaneFocus(key)
   const sessionId = useWorkspaceSelector((state) => selectPaneSession(state, key)) ?? ""
   const focused = useWorkspaceSelector((state) => selectFocusedPaneKey(state) === key)
   const draft = useWorkspaceSelector(
@@ -128,13 +125,7 @@ export const Pane = memo(function Pane({
       data-focused={(focused && multi) || undefined}
       {...{ [focusedPaneAttribute]: focused || undefined }}
       aria-label={sessionTitle ?? (draft ? "New session" : "Empty pane")}
-      onPointerDown={() => {
-        if (!focused) dispatch(focusPane({ pane: key }))
-      }}
-      onFocusCapture={() => {
-        if (selectFocusedPaneKey(store.getState()) !== key)
-          dispatch(focusPane({ pane: key }))
-      }}
+      {...focusHandlers}
     >
       {pictured && filled && listed && !showHome ? (
         <HeaderSliver moving={focused} />
