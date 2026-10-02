@@ -1353,6 +1353,20 @@ export const bounds = {
   maxToolStructuredContentBytes: 16384,
   maxMcpNameBytes: 128,
   maxUiResourceUriBytes: 2048,
+  mcpAppInstanceIdPattern:
+    "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+  maxMcpArgumentsBytes: 32768,
+  maxMcpResultBytes: 57344,
+  maxMcpResourceUriBytes: 2048,
+  mcpAppMimeType: "text/html;profile=mcp-app",
+  maxMcpResourceBytes: 4194304,
+  mcpResourceDigestPattern: "^[0-9a-f]{64}$",
+  mcpResourceTicketPattern: "^[A-Za-z0-9_-]{43}$",
+  mcpResourceTicketMs: 60000,
+  maxMcpCspDomains: 64,
+  maxMcpCspDomainBytes: 512,
+  maxMcpDomainBytes: 512,
+  maxMcpRemoteMessageCharacters: 512,
 } as const
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
