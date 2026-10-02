@@ -1,29 +1,31 @@
 # Bug and risk register
 
-This is the investigation queue produced by tracing the user flows. No product
-code was changed to fix these findings. Source-confirmed behavior and contract
-inconsistencies are separated from hypotheses that still need reproduction.
-Existing test links describe evidence to inspect or rerun; they do not establish
-that an untested race occurred in a live application.
+This register started as the investigation queue from the user-flow map in
+[PR #385](https://github.com/nessalabs/nessa-agent/pull/385). Follow-up work in
+[issue #386](https://github.com/nessalabs/nessa-agent/issues/386) and
+[PR #387](https://github.com/nessalabs/nessa-agent/pull/387) adds controlled
+reproductions, regression fixes and negative controls. Test evidence below
+distinguishes real application paths with substituted outside effects from
+production/native execution; remaining boundaries are investigation prompts.
 
 ## Start here
 
 | ID | Evidence status | User trigger and possible result | Owning flow and next useful check |
 | --- | --- | --- | --- |
-| R1 | Source-confirmed access mismatch; independently reviewed; native reproduction unrun | First-run setup tries to download an agent. Its own session cannot obtain the native endpoint or surface credential because both command implementations accept `main`, while setup's native label is `setup`. | [Startup](startup.md). Launch fresh native setup, inspect session failure and installation availability. Check both default endpoint discovery and an explicit URL override; the latter still reaches the credential guard. |
-| R2 | Source-confirmed silent branch; independently reviewed; runtime reproduction unrun | Drop a second web-image URL while the first download is pending. `addImageUrl` returns on `busyRef` without a refusal or another fetch. | [Attachment drop routing](attachments.md#user-flow-drop-files-folders-text-or-a-web-image). Hold the first fetch pending; record notice state and fetch count after the second drop. |
-| R3 | Source-confirmed API retry inconsistency; lost-answer impact is a hypothesis | Answer an agent's structured question and lose the acknowledgement. The client exposes retry through the general mutation path, while the backend consumes the ask without a same-action outcome recovery receipt. | [Runtime questions and permissions](runtime.md). Pause response delivery after audited selection; retry the retained action and compare the current view with the returned failure. Do not infer that retry repeats provider execution. |
-| R4 | Hypothesis; independently checked against source | Choose an image, then press Enter while the native byte read is pending after host readiness ends. The hook marks `reading`, but the composer send guard reads `isPending`, which does not include this selected-file read. Existing text might send before the image joins it. | [File readiness](attachments.md#user-flow-wait-for-a-cloud-file-without-attaching-it-to-another-tab). Defer `readAttachmentBytes`, end host readying, press Enter and inspect the sent content before resolving the read. |
-| R5 | Hypothesis | A readiness HTTP request never settles. The check stays pending and Check again remains disabled; repeated controller checks join the existing request. The fetch adapter has no frontend deadline, even though server-side probing is bounded. | [Startup risk table](startup.md). Supply a controlled never-settling fetch and verify whether gateway-state change, unmount or another action releases the check. |
-| R6 | Hypothesis | Closing a tab based on a last-known empty/idle remote snapshot races another surface admitting work. Empty-tab cleanup invokes general `conversation.close`, which can stop the work admitted after that snapshot. | [Chat tab lifecycle](chat.md). Pause between empty-view classification and close, submit from a second surface, then release the close. Evaluate the intended authority for automatic cleanup before proposing a fix. |
+| R1 | Three native command regressions red → green; nine setup tests pass | Setup previously failed the native `main`-only endpoint and credential guards. The fix reuses the host-owned bundled-surface admission rule for exactly `main` and `setup`, retaining stage and destination verification. | [Startup](startup.md). Native command tests must verify trusted Setup attribution and unrelated-window refusal before effects. |
+| R2 | Actual App and Chromium/WebKit regressions red → green | A second web-image URL during a pending download previously vanished silently. The fix reports the existing reading-files refusal. | [Attachment drop routing](attachments.md#user-flow-drop-files-folders-text-or-a-web-image), [App regressions](../../../src/panel/ui/use-file-attachments-races.test.ts). Controlled host and scenario gateway effects; six browser cases pass, and the pre-fix hook fails four intended cases. |
+| R3 | Lost-acknowledgement client regression red → green | Structured-question answers previously exposed a replay callback despite one-shot ask consumption. They now use the existing non-retryable control-action path; the caller can reconcile current state before a deliberate new answer. No duplicated provider execution was established. | [Runtime questions and permissions](runtime.md), [client regressions](../../../packages/nessa-client/src/presentation/conversation-api.test.ts). Real SDK consumption control is separate from the substituted client transport. |
+| R4 | Actual App and Chromium/WebKit regressions red → green | Enter previously sent the text draft while native picked-image bytes were pending. That read now marks its captured conversation pending and displays pending attachments until admission finishes. | [File readiness](attachments.md#user-flow-wait-for-a-cloud-file-without-attaching-it-to-another-tab), [App regressions](../../../src/panel/ui/use-file-attachments-races.test.ts). Controlled native read and scenario gateway effects; Chromium/WebKit confirm blocked send before completion and one text-plus-image send afterward. |
+| R5 | Controlled fetch/body and actual onboarding regressions red → green | A fetch or JSON body that never settled left Check again disabled indefinitely. One 10-second deadline now bounds both stages, aborts transport and releases retry; existing generation checks prevent stale overwrite. | [Startup risk table](startup.md), [adapter regressions](../../../src/onboarding/adapters/agents.test.ts), [onboarding regression](../../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx). Controlled effects/fake time plus four Chromium/WebKit cases against stalled real HTTP responses (10.02–10.10 seconds); not a production outage. |
+| R6 | Falsified for both built-in stores; contingent for custom state producers | The suspected stale-empty cleanup requires exact `complete_empty`. Real InMemoryStorage and RecordStorage instead project a prepared empty conversation as `complete`, so closing its tab detaches without issuing automatic close, including after external work admission. | [Chat tab lifecycle](chat.md), [gateway projection regression](../../../crates/nessa-server/tests/conversation/projection.rs), [frontend negative control](../../../src/conversation/adapters/store/attachments.test.ts). No product fix; custom producers of `complete_empty` remain a separate question. |
 
 R1's enforcement sites are
 [endpoint loading](../../../src-tauri/src/gateway_endpoint/entrypoint/command.rs)
 and [surface credential loading](../../../src-tauri/src/surface_credential.rs);
 the requesting setup composition is [main.tsx](../../../src/main.tsx). The
-existing `another_window_is_refused_before_the_gateway_is_asked_for_anything`
-test asserts setup refusal, so an intended change must reconcile the command's
-authority and the setup workflow rather than simply removing a guard.
+updated `another_window_is_refused_before_the_gateway_is_asked_for_anything`
+test uses an unrelated window; positive setup tests reconcile trusted admission
+with the existing readiness, stage and endpoint checks.
 
 R2 and R4 originate in
 [use-file-attachments.ts](../../../src/panel/ui/use-file-attachments.ts). R3's

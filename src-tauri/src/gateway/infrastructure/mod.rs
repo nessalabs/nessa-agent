@@ -17,7 +17,7 @@
 //! the account's own login shell for the search path the agent will be given.
 //!
 //! ```text
-//! bundled windows -> commands -> Gateway startup snapshot / retry
+//! bundled windows -> commands authorization -> Gateway startup / endpoint / credential access
 //! Gateway -> native manager -> staging -> verified immutable runtime
 //!                    -> control -> launchd / existing gateway
 //!                    -> systemd -> typed D-Bus jobs / pidfds
@@ -25,8 +25,9 @@
 //!         -> reconciliation audit -> private atomic intent/outcome records
 //!         -> LoginShell -------> the account's login shell
 //! ```
-//! Arrows mean calls; commands translate only the application-owned startup
-//! contract, and each native manager adapter owns its background process lifetime.
+//! Arrows mean calls; commands translate the application-owned startup contract
+//! and verify bundled caller identity for native gateway access. Each native
+//! manager adapter owns its background process lifetime.
 mod commands;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -41,6 +42,7 @@ mod retirement;
 mod selection;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported;
+pub(crate) use commands::bundled_window;
 pub use commands::{
     __cmd__gateway_startup, __cmd__retry_gateway_startup, __tauri_command_name_gateway_startup,
     __tauri_command_name_retry_gateway_startup, gateway_startup, retry_gateway_startup,

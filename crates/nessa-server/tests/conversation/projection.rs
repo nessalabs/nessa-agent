@@ -62,6 +62,73 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+/// Preparing an empty session commits Opened before provider attachment. This
+/// must not look like absent history, which the frontend may reclaim on tab close.
+#[tokio::test]
+async fn prepared_empty_history_is_complete_before_provider_attachment_in_both_stores() {
+    let directory = tempfile::tempdir().unwrap();
+    let records = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+    records.initialize().await.unwrap();
+    let stores: [Arc<dyn SessionStorage>; 2] = [Arc::new(InMemoryStorage::new()), records];
+    for storage in stores {
+        let provider = Arc::new(ProviderFactory::default());
+        let (release, gate) = oneshot::channel();
+        *provider.open_gate.lock().unwrap() = Some(gate);
+        let service = ConversationService::new(
+            ConversationDependencies {
+                agents: only(Arc::new(Provider::new(provider))),
+                storage,
+                metadata: Arc::new(MemoryRepository::default()),
+                mode_audit: Arc::new(AcceptingModeAudit),
+                creation_audit: Arc::new(AcceptingCreationAudit),
+                file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                attachments: None,
+                summaries: Arc::new(MemorySummaries::default()),
+                listing: Arc::new(Unlisted),
+                deletion_audit: Arc::new(AcceptingDeletionAudit),
+                provider_sessions: ProviderSessionErasers::default(),
+                deletion_budgets: DELETION_BUDGETS,
+                message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+                clock: Arc::new(TestClock),
+            },
+            ConversationLimits::default(),
+            None,
+        )
+        .unwrap();
+        let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+        service
+            .create(
+                id.clone(),
+                caller("create-empty"),
+                RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+        let view = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let view = service
+                    .read(id.clone(), caller("read-empty"))
+                    .await
+                    .unwrap();
+                if view.transcript_state == ConversationTranscriptState::Complete {
+                    break view;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(view.messages.is_empty());
+        assert!(view.pending.is_empty());
+        assert!(matches!(
+            view.lifecycle.phase,
+            ConversationLifecyclePhase::Starting
+        ));
+        release.send(()).unwrap();
+        service.shutdown().await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn gateway_record_view_waits_for_message_commit() {
     struct HeldClock;

@@ -19,6 +19,13 @@ a separate placeholder. PR #376 also centralizes the agent's design-system impor
 paths. Other journeys retain their original inspection baseline and explicit
 verification limits.
 
+The documentation baseline was merged in [PR #385](https://github.com/nessalabs/nessa-agent/pull/385)
+at `028f4642b93a19be9a083cd5a64c00302d4f6576`. Subsequent controlled validation
+and regressions for R1–R6 are tracked in [issue #386](https://github.com/nessalabs/nessa-agent/issues/386);
+[PR #387](https://github.com/nessalabs/nessa-agent/pull/387) contains the corrective
+changes and regressions. See the [risk register](risks.md) for reproduced,
+corrected and falsified claims.
+
 The agent consumes the separately pinned UI revision in
 [`nessa-ui-revision`](../../../nessa-ui-revision), rather than necessarily using
 the sibling UI checkout's `main`. Cross-repository paths are relative to this

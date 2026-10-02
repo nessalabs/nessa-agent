@@ -1027,21 +1027,31 @@ async fn a_question_reaches_a_host_and_its_answer_reaches_the_agent() {
         "{refused:?}"
     );
 
+    let answer = QuestionAnswer {
+        actor: answerer(),
+        execution_id: ExecutionId::new("write").unwrap(),
+        id: id.clone(),
+        choices: Some(vec![QuestionChoice::new(
+            "question_0",
+            vec!["staging".into()],
+            Some("and only the eu region".into()),
+        )
+        .unwrap()]),
+    };
     opened
         .session
-        .answer_question(QuestionAnswer {
-            actor: answerer(),
-            execution_id: ExecutionId::new("write").unwrap(),
-            id: id.clone(),
-            choices: Some(vec![QuestionChoice::new(
-                "question_0",
-                vec!["staging".into()],
-                Some("and only the eu region".into()),
-            )
-            .unwrap()]),
-        })
+        .answer_question(answer.clone())
         .await
         .unwrap();
+
+    // Losing the acknowledgement cannot make the same consumed ask answerable
+    // again. Its second selection adds neither an answer nor audit evidence.
+    let repeated = opened
+        .session
+        .answer_question(answer)
+        .await
+        .map_err(ProviderOperationFailure::into_error);
+    assert!(matches!(repeated, Err(AgentError::InvalidInput(_))));
 
     // The ask stops waiting as its own observation, so a surface that did not
     // answer still sees it close.

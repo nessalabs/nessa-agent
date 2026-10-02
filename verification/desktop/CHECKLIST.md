@@ -528,3 +528,30 @@ mounts, `index.html` shows the fallback on that stage.
   dispatch zero gateway closes; confirmed complete-empty permits omission and one
   close. A truncated complete-empty view still preserves the reference. Both
   engines and all three widths assert the original local tab closes in every case.
+
+### Onboarding readiness recovery
+
+`node verification/desktop/scripts/onboarding-readiness.mjs` drives the real
+setup UI, controller and HTTP adapter in Chromium and WebKit against controlled
+HTTP responses that never send headers or never complete the JSON body. It
+measures release at the ten-second request deadline (9.9–12 seconds including
+browser scheduling), verifies the aborted first request, an enabled and painted
+Check again control, and exactly one healthy retry that makes Claude ready.
+Both cases require zero page errors. The rule is owned by
+`src/onboarding/adapters/agents.ts`; ordering and unit regressions are linked in
+`docs/mapping/features/startup.md#startup-recovery-ordering-design`.
+
+### Attachment admission races
+
+`node verification/desktop/scripts/attachments-races.mjs` drives the actual App,
+Redux store and Markdown editor in Chromium and WebKit, with controlled native
+picker/read, host drop delivery, image HTTP responses and scenario gateway/session
+effects. The fixture supplies a digest and session readiness; it exercises no real
+gateway, provider or authentication. A healthy Enter
+control sends exactly once. Enter during an unresolved native image read sends
+zero times, preserves the draft and paints **Attachments still loading**; read
+completion allows one send containing the text and one image. A second URL drop
+while the first fetch is pending paints **Still reading files** and starts no
+second fetch. The JSON reports send, attachment, refusal and page-error counts
+for all six engine/scenario pairs. This verifies browser interactions with the
+production panel; it does not exercise an operating-system file picker.

@@ -413,7 +413,7 @@ sequenceDiagram
     participant UI as Session projection
     Lifecycle->>Host: Discover verified loopback endpoint
     Lifecycle->>Host: Load assigned credential for stage and URL
-    Host->>Host: Admit main window, wait for gateway, verify destination
+    Host->>Host: Admit main or setup, wait with caller identity, verify destination
     Host-->>Lifecycle: Panel token or refusal
     Lifecycle->>Client: Connect product profile as panel surface
     Client->>Socket: Authenticate handshake
@@ -444,7 +444,8 @@ sequenceDiagram
 
 The native source only provides a credential to client ID `nessa-panel` at a
 loopback WebSocket destination, and the native command additionally only admits
-window label `main`. The assigned stage and endpoint are checked before reading
+the bundled window labels `main` and `setup` through the shared native
+`bundled_window` authority. The assigned stage and endpoint are checked before reading
 the private token. File permissions, owner, symlink/namespace safety, and size
 are enforced; absence, refusal, wrong stage, invalid token, and unopenable file
 remain distinct host errors. Dev without a managed gateway skips the gateway
@@ -611,17 +612,50 @@ Evidence: [CLI application tests](../../../crates/nessa-server/tests/cli/applica
 [registry refusal tests](../../../crates/nessa-server/tests/credential_registry_refusal.rs),
 and [process smoke script](../../../scripts/smoke-auth.mjs).
 
+## Startup recovery ordering design
+
+The regression fix keeps the existing trusted bundled-window authority owned by
+`gateway::infrastructure::commands::bundled_window`: main and setup run the
+bundled application, while other labels cannot trigger discovery, reconciliation,
+or credential reads. Both admitted labels still use the configured local namespace,
+stage and verified endpoint; setup is recorded as the reconciliation initiator.
+
+The frontend readiness request has a ten-second transport deadline: the server's
+five-second probe budget plus five seconds for transport and body delivery,
+matching the existing browser-auth HTTP request budget. This
+is a client request budget, distinct from the machine probe's server-side budget.
+The HTTP adapter owns one deadline across fetch and JSON consumption and aborts
+the request when it expires. Timeout reports unreachable so the existing check
+owner releases busy state and the person can retry. Abandonment still discards an
+old answer independently of whether its transport has settled.
+
+| State / ordering | Result | Regression evidence |
+| --- | --- | --- |
+| Main or setup requests endpoint/credential | Admit the trusted bundled surface, wait for gateway with its own initiator, then validate stage/endpoint before reading credential | Native setup credential and endpoint tests |
+| Unrelated window requests endpoint/credential | Refuse before gateway reconciliation, discovery or credential read | Native unrelated-window tests |
+| Setup uses another stage or a mismatched verified URL | Refuse without reading a credential | Native setup destination tests |
+| Fetch settles with a readable answer before deadline | Deliver answer and cancel deadline | HTTP adapter success/deadline cleanup test |
+| Fetch or JSON body does not settle by deadline | Abort transport, deliver unreachable, release checking | HTTP adapter timeout tests and setup retry UI test |
+| Person retries after timeout | Start a new request, accept its current answer | Setup retry UI test |
+| Gateway identity changes before old request answers | Abandon the old generation and ask again, ignore old success/failure/timeout | Setup startup tests and timeout-generation test |
+| A retired deadline arrives after its answer settled | Do not abort a completed request or change its answer | HTTP adapter deadline cleanup test |
+
 ## Troubleshooting traces and review boundaries
 
 | Classification | Trigger, trace, and expected/actual behavior | Evidence / next verification |
 | --- | --- | --- |
-| **Confirmed defect by source agreement; not reproduced here** | First-run setup mounts `SessionLifecycle` specifically to support authenticated downloads. `build_setup_window` creates native label `setup` and query `surface=setup`. Default connection first invokes `load_gateway_endpoint`, which rejects labels other than `main`; an explicit gateway URL skips that first refusal, but `load_surface_credential` likewise rejects setup before gateway wait or token read. Thus setup's own session cannot connect; installation offers consume `session.get()?.agents` and report unavailable. The panel's separate session does not populate setup's separate handle/store, and `finish_setup` shows the existing main window rather than relabeling setup. | [setup builder and handoff](../../../src-tauri/src/panel.rs), [setup mount](../../../src/main.tsx), [dependency-owned handle](../../../src/composition/dependencies.ts), [endpoint guard](../../../src-tauri/src/gateway_endpoint/entrypoint/command.rs), [native credential guard](../../../src-tauri/src/surface_credential.rs), [download consumer](../../../src/onboarding/adapters/agent-installations.ts). Existing `another_window_is_refused_before_the_gateway_is_asked_for_anything` explicitly asserts setup is rejected. Capability admission lists both windows in [default capability](../../../src-tauri/capabilities/default.json), so it supplies no alternate identity. A native first-run download reproduction is still needed; no fix is made by this map. |
-| **Hypothesis** | A readiness HTTP request that never settles can hold the UI check busy indefinitely: `httpAgentReadiness` has no AbortSignal/deadline, and active checks coalesce until `read()` settles or gateway state/lifetime abandons them. The server reader has a deadline, but an unresponsive intermediary or incomplete response body is outside that server timer. Expected recovery would need a settled/abandoned frontend ask; Check again remains disabled while the check is pending, while repeated controller calls join the active one. | [fetch adapter](../../../src/onboarding/adapters/agents.ts), [check ownership](../../../src/onboarding/application/readiness-check.ts), [server bounds](../../../crates/nessa-server/src/agents/application/shared_readiness.rs). Verify with a controlled never-settling fetch; do not infer a real network incident from this static trace. |
+| **Fixed defect, native boundary regressions reproduced** | Before the fix, first-run setup mounted its own authenticated download session but both native commands rejected label setup. Endpoint and credential commands now consume the existing shared bundled-window authority, which admits main/setup and refuses other labels before effects. Gateway readiness receives the actual caller identity, so setup initiates reconciliation as Setup. Credential release still validates the configured stage, verified endpoint and existing private namespace; no new credential or remote credential source is introduced. | [sole native caller authority](../../../src-tauri/src/gateway/infrastructure/commands.rs), [endpoint guard and tests](../../../src-tauri/src/gateway_endpoint/entrypoint/command.rs), [credential guard and tests](../../../src-tauri/src/surface_credential.rs), [setup session composition](../../../src/composition/dependencies.ts), [download consumer](../../../src/onboarding/adapters/agent-installations.ts). Three native Rust regressions failed against the original guards and passed after the fix, including Setup initiator, destination validation and unrelated-window denial. A real native first-run runtime download remains unverified. |
+| **Fixed defect, controlled frontend reproduction** | Before the fix, a stalled fetch or incomplete JSON body held Checking disabled indefinitely. The HTTP adapter now owns one ten-second deadline across both phases, aborts transport and returns unreachable; `createReadinessCheck` releases busy so Check again starts a fresh request. A retired deadline and a late old answer cannot change completed/newer state. | [request owner](../../../src/onboarding/adapters/agents.ts), [adapter regressions](../../../src/onboarding/adapters/agents.test.ts), [actual setup retry/generation regressions](../../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx), [server probe bounds](../../../crates/nessa-server/src/agents/application/shared_readiness.rs), [Chromium/WebKit verification](../../../verification/desktop/scripts/onboarding-readiness.mjs). Adapter and UI regressions failed before the fix, then passed; this does not claim a real network incident. |
 | **Designed limitation** | Linux packaged gateway startup is implemented, but entering a provider API key through the native host cannot save it because the non-macOS credential-store adapter is unavailable. | [platform store selection](../../../src-tauri/src/agent_credentials/infrastructure/mod.rs), [unsupported store](../../../src-tauri/src/agent_credentials/infrastructure/unsupported.rs), [save status UI](../../../src/onboarding/ui/agent-api-key-form.tsx). External sign-in/runtime configuration and API-key-save capability must be distinguished. |
 | **Designed limitation** | A conversation created while practising the summon shortcut can precede completion/choice persistence, use the gateway default, and retain that agent. Completing setup affects later creations, not the existing conversation's recorded agent. | [choice caching explanation and implementation](../../../src/composition/dependencies.ts), [handoff ordering](../../../src-tauri/src/panel.rs), [chat map](chat.md). |
 | **Designed behavior to preserve** | A gateway startup event can outrun its snapshot, a session can fail while gateway recovery is finishing, and an old connection can finish after disposal. Revision comparison, one owed panel retry, and session generation checks handle these separate races. | [startup monitor tests](../../../src/startup/application/gateway-startup.test.ts), [panel retry tests](../../../src/panel/ui/use-panel-startup.test.ts), [supervisor tests](../../../src/session/adapters/lifecycle/supervisor.test.ts). |
 
-No browser/native flow or test suite was executed for this map. macOS keychain,
+The readiness and session confirmation pass executed 112 focused frontend
+tests and three red-then-green native boundary regressions. Chromium and WebKit
+each verified stalled fetch and body recovery at 10.02–10.10 seconds with two
+requests including the healthy retry and zero page errors.
+Earlier controlled setup-window probes mocked native command refusals. Native first-run
+installation remains distinct from those frontend probes. macOS keychain,
 launchd, Linux systemd user-manager behavior, upgrade retirement, real credential
 revocation, and reconnect timing remain unverified in this workspace. Source
 and regression references identify where to reproduce them. This map does not
