@@ -1,7 +1,7 @@
 //! One exclusive writer's committed cursor and exact pending bytes.
 //! The owner of this value supplies the conversation lease and runtime lifetime.
 
-use super::{snapshot, stream_fact};
+use super::{record_changes::RecordChanges, snapshot, stream_fact};
 use crate::{
     application::agent_execution::sessions::{
         records::{self, FactKind},
@@ -28,6 +28,7 @@ pub(super) struct RecordWriter {
     inflight_base: Option<Option<SessionSnapshot>>,
     committed_prefix: Vec<Vec<u8>>,
     blocked: bool,
+    changes: Option<RecordChanges>,
 }
 
 impl RecordWriter {
@@ -51,6 +52,7 @@ impl RecordWriter {
             inflight_base: None,
             committed_prefix: Vec::new(),
             blocked: false,
+            changes: None,
         };
         loop {
             match stream_fact::read_next_fact(reader, &writer.stream, &writer.cursor)
@@ -96,6 +98,17 @@ impl RecordWriter {
             }
         }
         Ok(writer)
+    }
+
+    pub(super) fn with_changes(mut self, changes: RecordChanges) -> Self {
+        self.changes = Some(changes);
+        self
+    }
+
+    fn publish_committed(&self) {
+        if let Some(changes) = &self.changes {
+            changes.publish(&self.id);
+        }
     }
 
     #[cfg(test)]
@@ -221,6 +234,7 @@ impl RecordWriter {
             let pending_len = pending.changes.len();
             self.committed_prefix.extend(pending.changes);
             remaining = &remaining[pending_len..];
+            self.publish_committed();
         }
         if remaining.is_empty() {
             self.batch_complete = true;
@@ -273,6 +287,7 @@ impl RecordWriter {
         self.committed = Some(pending.candidate);
         self.committed_prefix.extend(pending.changes);
         self.batch_complete = true;
+        self.publish_committed();
         Ok(())
     }
 }

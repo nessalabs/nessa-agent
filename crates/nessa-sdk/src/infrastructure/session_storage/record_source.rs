@@ -1152,9 +1152,9 @@ mod tests {
         providers::ProviderIdentity,
         sessions::{
             records::{self, FactKey, FactKind},
-            CommittedCompleteness, CommittedFreshness, CommittedViewState, InvocationRecord,
-            ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
-            SubmissionAcknowledgement,
+            ChangeWatchError, ChangeWatchState, CommittedCompleteness, CommittedFreshness,
+            CommittedViewState, InvocationRecord, ProviderContext, SessionChange,
+            SessionSaveGeneration, SessionSnapshot, SessionStorage, SubmissionAcknowledgement,
         },
     };
     use crate::domain::agent_execution::{
@@ -1177,11 +1177,13 @@ mod tests {
     };
     use rusqlite::{params, Connection, OptionalExtension};
     use std::{
+        future::Future,
         io::{BufRead, BufReader, Write},
         net::{Ipv4Addr, SocketAddrV4},
         path::Path,
         process::{Child, Command, Stdio},
         sync::Arc,
+        task::{Context, Poll, Waker},
         time::Duration,
     };
 
@@ -2021,6 +2023,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let storage = Arc::new(RecordStorage::new(root.path().join("sessions")).unwrap());
         storage.initialize().await.unwrap();
+        let session = SessionId::new("stream").unwrap();
+        let mut watch = storage.watch_committed(&session).unwrap();
+        let (finished, joined_worker) = mpsc::channel();
         let (release, gate) = mpsc::channel();
         let (entered, started) = mpsc::channel();
         let receipt = storage
@@ -2034,6 +2039,7 @@ mod tests {
                         thread: Mutex::new(Some(thread::spawn(move || {
                             gate.recv().unwrap();
                             assert!(matches!(receiver.recv().unwrap(), SourceCommand::Shutdown));
+                            finished.send(()).unwrap();
                         }))),
                     }),
                     identity: RecordStreamIdentity {
@@ -2050,20 +2056,58 @@ mod tests {
             .unwrap();
         started.recv().unwrap();
         drop(receipt);
-        let first_storage = storage.clone();
-        let first = tokio::spawn(async move { first_storage.shutdown().await });
-        // Poll the same owner rather than racing a scheduler delay.
-        loop {
-            if matches!(storage.owner.initialize(), Err(StorageError::Closed)) {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        first.abort();
+        let mut original_waiter = storage.shutdown();
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(matches!(
+            original_waiter.as_mut().poll(&mut context),
+            Poll::Pending
+        ));
+        assert_eq!(storage.owner.initialize(), Err(StorageError::Closed));
         assert!(
-            tokio::time::timeout(Duration::from_millis(10), storage.shutdown())
-                .await
-                .is_err()
+            matches!(
+                Box::pin(watch.changed()).as_mut().poll(&mut context),
+                Poll::Ready(ChangeWatchState::Closed)
+            ),
+            "watch closes before held source joins"
+        );
+        assert!(
+            matches!(
+                storage.watch_committed(&session),
+                Err(ChangeWatchError::Closed)
+            ),
+            "watch admission closes before held source joins"
+        );
+        let (original_completion, work) = storage.owner.close().unwrap();
+        assert!(
+            work.is_none(),
+            "first shutdown already owns physical cleanup"
+        );
+        assert!(matches!(
+            Box::pin(original_completion.wait())
+                .as_mut()
+                .poll(&mut context),
+            Poll::Pending
+        ));
+        assert!(matches!(
+            joined_worker.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        drop(original_waiter);
+        let (retained_completion, work) = storage.owner.close().unwrap();
+        assert!(work.is_none());
+        assert!(
+            Arc::ptr_eq(&original_completion, &retained_completion),
+            "cancelled caller cannot replace the original completion owner"
+        );
+        assert!(matches!(
+            Box::pin(retained_completion.wait())
+                .as_mut()
+                .poll(&mut context),
+            Poll::Pending
+        ));
+        assert!(
+            matches!(joined_worker.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "cancelled caller cannot complete the held physical worker"
         );
         assert!(matches!(
             storage.open(SessionId::new("closed-writer").unwrap()).await,
@@ -2076,6 +2120,11 @@ mod tests {
             Err(StorageError::Closed)
         ));
         release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), original_completion.wait())
+            .await
+            .expect("released physical source joins within fixture deadline")
+            .unwrap();
+        joined_worker.recv().unwrap();
         storage.shutdown().await.unwrap();
         storage.shutdown().await.unwrap();
     }

@@ -1,12 +1,15 @@
 mod acquisition;
 
+use super::catalogue_changes::CatalogueChanges;
+
 use crate::agents::domain::AgentId;
 use crate::conversation::application::{
-    CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
-    CatalogueValue, ConversationCatalogue, ConversationCreation, ConversationCreationDisposition,
-    ConversationError, ConversationFuture, ConversationListing, ConversationModeApplication,
-    ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
-    ConversationSummaries, ListedConversation, ListedConversations, UnfinishedDeletions,
+    CatalogueChangeWatch, CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage,
+    CataloguePageRequest, CatalogueValue, CatalogueWatchError, ConversationCatalogue,
+    ConversationCreation, ConversationCreationDisposition, ConversationError, ConversationFuture,
+    ConversationListing, ConversationModeApplication, ConversationModeRequest,
+    ConversationModeRequestState, ConversationRepository, ConversationSummaries,
+    ListedConversation, ListedConversations, UnfinishedDeletions, WatchCatalogue,
 };
 use crate::conversation::domain::{
     Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
@@ -24,6 +27,8 @@ use nessa_sync::replication::domain::{Id, MAX_ID_BYTES};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
+use std::sync::{MutexGuard, PoisonError};
 
 /// The tables and their version, defined once.
 const DEFINITION: &str = include_str!("schema.sql");
@@ -67,6 +72,7 @@ pub(crate) const UNFINISHED: &str =
 /// One connection, held one call at a time, off the async runtime.
 pub struct LocalConversationStore {
     connection: Arc<Mutex<Connection>>,
+    changes: CatalogueChanges,
 }
 impl LocalConversationStore {
     /// Open the database at `path`, in a composition-selected directory that
@@ -78,8 +84,16 @@ impl LocalConversationStore {
         let connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            changes: CatalogueChanges::default(),
         })
     }
+    #[cfg(test)]
+    pub(super) fn hold_mutation(&self) -> MutexGuard<'_, Connection> {
+        self.connection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn run<T: Send + 'static>(
         &self,
         work: impl FnOnce(&mut Connection) -> Result<T, ConversationError> + Send + 'static,
@@ -717,6 +731,7 @@ impl ConversationRepository for LocalConversationStore {
         self.run(move |connection| read(connection, &id))
     }
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
+        let changes = self.changes.clone();
         self.run(move |connection| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -753,6 +768,10 @@ impl ConversationRepository for LocalConversationStore {
                 )
                 .map_err(failed)?;
             transaction.commit().map_err(failed)?;
+            changes.publish(&(
+                conversation.organization().clone(),
+                conversation.owner().clone(),
+            ));
             Ok(ConversationCreation {
                 conversation,
                 disposition: ConversationCreationDisposition::Created,
@@ -894,6 +913,7 @@ impl ConversationRepository for LocalConversationStore {
     ) -> ConversationFuture<'_, ConversationModeRequest> {
         let id = id.clone();
         let request_id = request_id.to_owned();
+        let changes = self.changes.clone();
         self.run(move |connection| {
             if state == ConversationModeRequestState::Pending {
                 return Err(ConversationError::InvalidInput);
@@ -952,6 +972,9 @@ impl ConversationRepository for LocalConversationStore {
                 )
                 .map_err(failed)?;
             transaction.commit().map_err(failed)?;
+            if state == ConversationModeRequestState::Applied {
+                changes.publish(&(current.organization().clone(), current.owner().clone()));
+            }
             Ok(ConversationModeRequest { state, ..request })
         })
     }
@@ -961,6 +984,7 @@ impl ConversationRepository for LocalConversationStore {
         deletion: ConversationDeletion,
     ) -> ConversationFuture<'_, Conversation> {
         let id = id.clone();
+        let changes = self.changes.clone();
         self.run(move |connection| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -982,6 +1006,9 @@ impl ConversationRepository for LocalConversationStore {
                     .map_err(failed)?;
             }
             transaction.commit().map_err(failed)?;
+            if first_deletion {
+                changes.publish(&(deleted.organization().clone(), deleted.owner().clone()));
+            }
             Ok(deleted)
         })
     }
@@ -1042,6 +1069,7 @@ impl ConversationSummaries for LocalConversationStore {
         summary: ConversationSummary,
     ) -> ConversationFuture<'_, ()> {
         let id = id.clone();
+        let changes = self.changes.clone();
         self.run(move |connection| {
             let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(failed)?;
             let conversation = read(&transaction, &id)?.ok_or(ConversationError::Metadata)?;
@@ -1071,11 +1099,14 @@ impl ConversationSummaries for LocalConversationStore {
                 "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
                 params![revision, id.to_string()],
             ).map_err(failed)?;
-            transaction.commit().map_err(failed)
+            transaction.commit().map_err(failed)?;
+            changes.publish(&(conversation.organization().clone(), conversation.owner().clone()));
+            Ok(())
         })
     }
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
         let id = id.clone();
+        let changes = self.changes.clone();
         self.run(move |connection| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1087,7 +1118,7 @@ impl ConversationSummaries for LocalConversationStore {
                     [id.to_string()],
                 )
                 .map_err(failed)?;
-            if let Some(conversation) =
+            let changed_owner = if let Some(conversation) =
                 conversation.filter(|conversation| removed > 0 && conversation.deletion().is_none())
             {
                 let revision = next_revision(&transaction, &conversation, false)?;
@@ -1097,8 +1128,18 @@ impl ConversationSummaries for LocalConversationStore {
                         params![revision, id.to_string()],
                     )
                     .map_err(failed)?;
+                Some((
+                    conversation.organization().clone(),
+                    conversation.owner().clone(),
+                ))
+            } else {
+                None
+            };
+            transaction.commit().map_err(failed)?;
+            if let Some(owner) = changed_owner {
+                changes.publish(&owner);
             }
-            transaction.commit().map_err(failed)
+            Ok(())
         })
     }
 }
@@ -1337,5 +1378,15 @@ impl ConversationCatalogue for LocalConversationStore {
                 summary,
             }))
         })
+    }
+}
+
+impl WatchCatalogue for LocalConversationStore {
+    fn watch(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+    ) -> Result<CatalogueChangeWatch, CatalogueWatchError> {
+        self.changes.watch((organization.clone(), owner.clone()))
     }
 }
