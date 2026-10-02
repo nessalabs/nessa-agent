@@ -200,6 +200,11 @@ describe("the reporter", () => {
       "apply(sourceOf, event, [])",
       "apply(dataOf, event, [])",
       "apply(stopImmediately, event, [])",
+      // in strict mode, and only the message's own data fields
+      '"use strict";',
+      'own(data, "method")',
+      'own(params, "check")',
+      'apply(hasOwn, found, ["value"])',
       sandboxMethods.appCheck,
       "stopImmediatePropagation",
       'addEventListener("click"',

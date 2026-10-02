@@ -175,12 +175,15 @@ export function approvedDomains(csp: AppliedCsp): JsonObject {
  * answers (design L32): a document naming itself as another than the first,
  * or a `load` of the frame its document does not answer. It answers only a
  * check the browser delivered from the proxy, read through what it took
- * before the app ran, so the app cannot have it answer a check of the app's
- * own making, nor hear the proxy's. The app can send a report or a
+ * before the app ran and only as the message's own data (never a field the
+ * app's prototypes lend it), in strict mode (so no function of its can be
+ * reached through \`caller\`), so the app cannot have it answer a check of
+ * the app's own making, nor hear the proxy's. The app can send a report or a
  * departure itself; a report says only an origin, and a departure only ends
  * its own view. Enforcement never depends on them.
  */
 const reporter = `(function () {
+  "use strict";
   var token = ${JSON.stringify(frameTokenSlot)};
   var parentWindow = window.parent;
   var post = parentWindow.postMessage.bind(parentWindow);
@@ -190,6 +193,14 @@ const reporter = `(function () {
   var sourceOf = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "source").get;
   var dataOf = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data").get;
   var stopImmediately = Event.prototype.stopImmediatePropagation;
+  var ownDescriptor = Object.getOwnPropertyDescriptor;
+  var hasOwn = Object.prototype.hasOwnProperty;
+  // A field of a message, only as the message's own data: never one its
+  // prototype chain lends it, nor a getter.
+  function own(object, key) {
+    var found = ownDescriptor(object, key);
+    return found !== undefined && apply(hasOwn, found, ["value"]) ? found.value : undefined;
+  }
   var bytes = crypto.getRandomValues(new Uint8Array(16));
   var documentId = "";
   for (var i = 0; i < bytes.length; i++) documentId += (bytes[i] + 256).toString(16).slice(1);
@@ -207,9 +218,10 @@ const reporter = `(function () {
     // the app's reach), from the proxy.
     if (event.isTrusted !== true || apply(sourceOf, event, []) !== parentWindow) return;
     var data = apply(dataOf, event, []);
-    if (data === null || typeof data !== "object" || data.method !== ${JSON.stringify(sandboxMethods.appCheck)}) return;
+    if (data === null || typeof data !== "object" || own(data, "method") !== ${JSON.stringify(sandboxMethods.appCheck)}) return;
     apply(stopImmediately, event, []);
-    here(data.params !== null && typeof data.params === "object" ? data.params.check : undefined);
+    var params = own(data, "params");
+    here(params !== null && typeof params === "object" ? own(params, "check") : undefined);
   }, true);
   window.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
