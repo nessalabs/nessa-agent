@@ -12,7 +12,7 @@
 //! without an answer.
 use super::grants::ConversationGrants;
 use crate::mcp_servers::domain::{admit, StandInRefusal};
-use nessa_sdk::infrastructure::mcp::{McpServers, INITIALIZE_TIMEOUT};
+use nessa_sdk::infrastructure::mcp::{McpError, McpServers, INITIALIZE_TIMEOUT};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io, time::Duration};
 use tokio::io::{
@@ -25,6 +25,9 @@ pub const MAX_HELLO_BYTES: usize = 4096;
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a stand-in waits for its answer: the server may be starting.
 pub const ANSWER_TIMEOUT: Duration = INITIALIZE_TIMEOUT.saturating_add(HELLO_TIMEOUT);
+/// What a stand-in whose token no live grant holds is told.
+const NO_CONVERSATION: &str =
+    "this MCP stand-in belongs to no open conversation; start a new session";
 
 /// What a stand-in says first.
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
@@ -141,7 +144,7 @@ impl Relay {
         };
         // Whose it is, before anything about the server is said.
         let Some(owner) = self.grants.owner(&hello.session) else {
-            let message = "this MCP stand-in belongs to no open conversation; start a new session";
+            let message = NO_CONVERSATION;
             let answer = refused(StandInRefusal::UnknownSession, message.into());
             let _ = write_line(&mut output, &answer).await;
             return;
@@ -158,6 +161,14 @@ impl Relay {
         // harness session's, ended with it or with its grant.
         let session = match self.servers.open(&hello.server, owner).await {
             Ok(session) => session,
+            // Its grant was revoked while it opened: as stale as a token
+            // refused at the door.
+            Err(McpError::Closed) => {
+                let message = NO_CONVERSATION;
+                let answer = refused(StandInRefusal::UnknownSession, message.into());
+                let _ = write_line(&mut output, &answer).await;
+                return;
+            }
             Err(error) => {
                 let answer = refused(StandInRefusal::Unavailable, said(&error.to_string()));
                 let _ = write_line(&mut output, &answer).await;

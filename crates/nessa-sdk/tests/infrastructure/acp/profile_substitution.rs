@@ -449,7 +449,7 @@ async fn an_open_holds_its_sessions_grant_until_the_provider_session_ends() {
 }
 
 #[test]
-fn every_mcp_server_entry_carries_the_opens_environment_and_nothing_else_does() {
+fn every_mcp_server_entry_carries_the_opens_environment() {
     use super::super::sessions::{StandInSessions, StdioMcpServer};
     use crate::domain::agent_execution::sessions::SessionId;
     let (_root, mut config, _) = profile_setup();

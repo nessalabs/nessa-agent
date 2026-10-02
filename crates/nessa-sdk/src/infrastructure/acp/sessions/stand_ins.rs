@@ -71,7 +71,13 @@ impl StandInSessions {
     /// For one open of `session` (none for an open that names no session):
     /// these sessions with that open's environment, and the grant to hold
     /// while the provider session lives. The ACP binding asks this itself; a
-    /// host builds an open's entries with it only to check what they carry.
+    /// host calls it only to check what an open's entries carry.
+    ///
+    /// It is not inert: it asks the host's [`StandInGrants`] for a real grant
+    /// — the gateway's mints a token it lets through — which lasts until the
+    /// returned [`StandInGrant`] is dropped. After that, the returned
+    /// sessions still carry its environment, but the host no longer honours
+    /// it.
     pub fn opened(&self, session: Option<&SessionId>) -> (Self, Option<StandInGrant>) {
         let grant = self
             .grants

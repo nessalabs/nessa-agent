@@ -46,12 +46,14 @@ pub struct McpServerLaunch {
 /// The configured MCP servers, and every session open on them.
 ///
 /// A session is one server process and the one connection to it, opened for
-/// one harness session ([`McpServers::open`]) and closed when that ends: one
-/// connection per server for each harness session, held here (ADR 344). An
-/// agent's calls and its app's reach the same upstream session; two openings
-/// never share one (`each_opening_is_a_server_process_and_a_session_of_its_own`),
-/// so neither blocks, sees, or outlives the other's. Which conversation an
-/// opening is for is not known here yet (#348). The states and orderings are tabled in
+/// one harness session ([`McpServers::open`]) and closed when that ends, or
+/// when the grant it was opened under is revoked ([`McpServers::revoke`]):
+/// one connection per server for each harness session, held here (ADR 344).
+/// An agent's calls and its app's reach the same upstream session; two
+/// openings never share one
+/// (`each_opening_is_a_server_process_and_a_session_of_its_own`), so neither
+/// blocks, sees, or outlives the other's. Each is owned by the SDK session
+/// (a conversation's) it was opened for ([`McpOwner`]). The states and orderings are tabled in
 /// `docs/design/mcp-connections.md`, and each row has a test in
 /// `tests/infrastructure/mcp/`.
 ///
@@ -342,9 +344,12 @@ impl McpServers {
     }
 
     /// The UI of the tool an observed call names, as `session`'s own session
-    /// of its server last listed it ([`ListedTool::ui_for`]): its newest one
-    /// still open, which is the one its harness talks to now. `None` when it
-    /// has none open, or that one has not listed its tools yet.
+    /// of its server last listed it ([`ListedTool::ui_for`]): the one of its
+    /// sessions of that server registered last and still open. An SDK session
+    /// holds one provider attachment at a time, so that is the one its harness
+    /// talks to now; while a resumed open and the one it replaces briefly
+    /// overlap, it is the resumed one's once that has said hello. `None` when
+    /// it has none open, or that one has not listed its tools yet.
     pub fn tool_ui(&self, session: &SessionId, call: &McpTool) -> Option<ToolUi> {
         let own = self.newest(session, call.server())?;
         let listed = own.tools.read().expect("tool list").clone()?;
@@ -375,9 +380,11 @@ impl McpServers {
     /// [`McpError::Closed`] at once, the server's stdin is closed, and a
     /// server still running two seconds later is killed with its process
     /// group. Returns at once: the connections are closed before it does,
-    /// and stopping the processes runs on the current runtime. Without one —
-    /// or on a runtime shutting down, which drops what is spawned on it — the
-    /// process groups are killed at once, without the grace.
+    /// and stopping the processes runs on the current runtime. Without one,
+    /// the process groups are killed at once, without the grace. On a runtime
+    /// shutting down, which drops what is spawned on it, each is stopped by
+    /// whatever else closes it — its stand-in's end, with the grace, or its
+    /// last handle going, at once.
     pub fn revoke(&self, owner: &McpOwner) {
         let open = {
             let live = self.inner.live.lock().expect("live sessions");
@@ -426,9 +433,9 @@ impl McpServers {
 
 /// One server process and the one connection to it, for one harness session.
 /// Clones share it; it is closed by [`McpSession::close`], by the end of
-/// [`McpSession::serve`], by [`McpServers::stop`], or by its server ending —
-/// and when the last clone is dropped, it is closed and its process group
-/// killed at once.
+/// [`McpSession::serve`], by [`McpServers::stop`], by [`McpServers::revoke`]
+/// of its grant, or by its server ending — and when the last clone is
+/// dropped, it is closed and its process group killed at once.
 #[derive(Clone)]
 pub struct McpSession {
     owner: Arc<Owner>,

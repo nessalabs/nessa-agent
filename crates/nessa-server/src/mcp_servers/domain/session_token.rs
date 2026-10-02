@@ -13,8 +13,10 @@ pub fn session_token(bytes: [u8; 32]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// What the gateway keeps of a token it issued: its SHA-256. A token is
-/// found by its digest, so the token itself is never stored or compared.
+/// What the gateway's registry of grants keeps of a token it issued: its
+/// SHA-256. A hello's token is looked up by its digest; the token itself
+/// lives only in the grant handed to the SDK, and in the stand-ins'
+/// environments.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TokenDigest([u8; 32]);
 impl TokenDigest {

@@ -171,7 +171,12 @@ for line in sys.stdin:
         assert set(params) <= {"cwd", "mcpServers", "sessionId"}
         # Compared as resolved paths, for the reason the Codex handler gives.
         assert pathlib.Path(params["cwd"]).resolve() == root
-        assert params["mcpServers"] == []
+        # In `stand-ins` mode, the MCP server entries each session request
+        # carried, by method, for the test to read back; otherwise none.
+        if mode == "stand-ins":
+            (root / ("mcp-servers-" + method.split("/")[1])).write_text(json.dumps(params["mcpServers"]))
+        else:
+            assert params["mcpServers"] == []
         if method == "session/resume":
             session = params["sessionId"]
         if mode == "startup-update-before-session-response":
