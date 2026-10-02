@@ -76,6 +76,7 @@ mod catalogue;
 mod catalogue_read;
 mod error;
 mod locks;
+mod mcp_apps;
 mod passive_read;
 mod ports;
 mod projection;
@@ -97,6 +98,11 @@ pub use catalogue_read::{
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
+pub use mcp_apps::{
+    HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppFailure,
+    McpAppFuture, McpAppInitiator, McpAppOutcome, McpAppRef, McpAppWithdrawal, McpApps, NoMcpApps,
+    ResourceTickets, TicketRefusal, MAX_HELD_RESOURCE_BYTES, RESOURCE_TICKET_LIFETIME_MS,
+};
 pub use passive_read::{
     AdmitPassiveRead, CatalogueReadScope, ReadRefusal, ReceiverAuthority, ReceiverReadScope,
 };
