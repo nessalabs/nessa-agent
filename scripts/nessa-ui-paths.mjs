@@ -97,11 +97,15 @@ export function tsconfigPaths(paths = nessaUiPaths) {
  * How `tsconfig.json`'s `compilerOptions.paths` disagrees with the table: one
  * of the table's entries missing, or pointing elsewhere. Empty when they
  * agree. Entries the table does not have (`react`, `react-dom`) are not
- * read. An alias only TypeScript knew would not resolve in Vite or Vitest, so
- * an import through it that reaches either fails there. One that never
- * reaches them — `import type`, an import used only as a type (elided under
- * `isolatedModules`), a file no entry or test loads — is not caught, and is
- * accepted: it changes no module the app or its tests load.
+ * read. Such an entry is caught only by its use: when its key is nothing Vite
+ * or Vitest can resolve, an import through it that reaches either fails
+ * there. Three cases pass unnoticed, and are accepted:
+ *
+ * - an import that never reaches them — `import type`, an import used only as
+ *   a type (elided under `isolatedModules`), a file no entry or test loads;
+ * - a key they resolve another way, such as a package name (`react`, or the
+ *   bare `@nessa-ui/react`, which they load from its build): TypeScript then
+ *   reads types from one place while the app runs another.
  *
  * @param {Record<string, unknown> | undefined} actual
  * @param {readonly NessaUiPath[]} [paths]
