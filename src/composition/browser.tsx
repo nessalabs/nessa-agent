@@ -15,7 +15,7 @@ import {
   createBrowserAuth,
   browserSessionUrl,
 } from "../session/adapters/client/browser-auth"
-import { connectBrowserSession } from "../session/adapters/client/dev-session"
+import { connectBrowserSession } from "../session/adapters/client/browser-auth"
 import { makeStore } from "../store"
 import type { Environment } from "../env/environment"
 import { maintainBrowserSession } from "../session/adapters/lifecycle/browser-renewal"

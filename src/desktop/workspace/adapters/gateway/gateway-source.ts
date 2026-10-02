@@ -26,7 +26,8 @@
  *   and on the first list that answers after a poll failed.
  * - **What the gateway does not keep**: pins and "always" answers are
  *   refused as `not-supported`, and so is a message asking a conversation
- *   for another model than the one it was created on; there is no unread
+ *   for another model than the one the gateway says it runs (before a read
+ *   says, it cannot be told, and the message goes); there is no unread
  *   mark, so `markRead` has nothing to do. Nor does it take an initiator: it
  *   records each answer and archive as this window's authenticated caller,
  *   and cannot tell the person from an agent dispatching the same command —
@@ -36,7 +37,14 @@
  *   conversation runs, not whether it waits on the person, so a summary says
  *   `needs-you` only for a conversation the window has read; and a question
  *   the agent asks (`view.questions`) has no place in the workspace's model
- *   and is not shown.
+ *   and is not shown; nor is a review the gateway withholds from its view
+ *   (`interactionViewError`) — the session shows no approval while it waits.
+ * - **For MCP Apps (#384)**: a widget part is named by its call alone
+ *   (`gatewayToolWidget`), and the apps are not yet told each view or a
+ *   deleted conversation. #384's API does that; whichever of the two merges
+ *   second wires it: `transcriptFrom` for the conversation-scoped widget id,
+ *   `applyRead` for each view in the order read, and a read refused as a
+ *   deleted conversation for `forget` (the plan is on #248).
  *
  * It owns the client it connects (`connect`), and `dispose` closes it.
  */
@@ -65,11 +73,7 @@ import {
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import type { Transcript } from "../../model/transcript"
-import type {
-  ModelRef,
-  SessionSummary,
-  WorkspaceIndex,
-} from "../../model/workspace-index"
+import type { SessionSummary, WorkspaceIndex } from "../../model/workspace-index"
 import {
   gatewayChannel,
   gatewaySection,
@@ -151,8 +155,8 @@ export function gatewaySource(options: {
   const reads = new Map<string, Read>()
   // When each message was first seen, per session: the gateway's view has no times.
   const firstSeen = new Map<string, Map<string, number>>()
-  // The model each session the window began was created on.
-  const startModels = new Map<string, ModelRef>()
+  // How often each session was taken out: a read asked before its latest removal is let go (S3c).
+  const removals = new Map<string, number>()
   // Conversations the window has read, and so wants kept current.
   const watched = new Set<string>()
   // Conversations opened on the current connection (`create`), shared by callers.
@@ -210,9 +214,10 @@ export function gatewaySource(options: {
       if (current?.client !== connected) return
       if (state.status === "connected") resync()
       else if (state.status === "closed") {
-        // Gone for good: the next call connects again.
+        // Gone for good: the next call connects again, and opens again on it (C3b).
         current.off()
         current = undefined
+        opened.clear()
         gap = true
       }
     })
@@ -274,9 +279,8 @@ export function gatewaySource(options: {
     return { turn, settled: turn.then(noop, noop) }
   }
 
-  /** The model a session is known to run on: the one it was begun with here, or the one the gateway says. */
-  const knownModel = (sessionId: string) =>
-    startModels.get(sessionId) ?? runningModel(reads.get(sessionId)?.view)
+  /** The model a session is known to run on: the gateway's own word for it, from its last read. */
+  const knownModel = (sessionId: string) => runningModel(reads.get(sessionId)?.view)
   const modelOf = (sessionId: string) => modelFor(knownModel(sessionId))
 
   /**
@@ -306,6 +310,7 @@ export function gatewaySource(options: {
     const revision = (summaryCounts.get(sessionId) ?? 0) + 1
     summaryCounts.set(sessionId, revision)
     if (held) summaries.set(sessionId, { summary: held.summary, removed: true })
+    removals.set(sessionId, (removals.get(sessionId) ?? 0) + 1)
     rows.delete(sessionId)
     watched.delete(sessionId)
     // Its last read goes with it: listed again, nothing it said then speaks for it.
@@ -381,8 +386,14 @@ export function gatewaySource(options: {
   const read = (sessionId: string): Promise<Transcript> => {
     const { turn, settled } = inTurn(reading.get(sessionId) ?? Promise.resolve(), () => {
       const against = rows.get(sessionId)
+      const removed = removals.get(sessionId) ?? 0
       return within(async () => (await client()).conversation.read(sessionId)).then(
-        (view) => applyRead(sessionId, view, against),
+        (view) => {
+          // Taken out while it was asked: its answer speaks for a session no longer held (S3c).
+          if ((removals.get(sessionId) ?? 0) !== removed)
+            throw new WorkspaceSourceError("unknown-session")
+          return applyRead(sessionId, view, against)
+        },
       )
     })
     reading.set(sessionId, settled)
@@ -535,30 +546,40 @@ export function gatewaySource(options: {
     send: (message) =>
       within(async () => {
         // The gateway keeps a conversation on the model it was created with: a
-        // message asking for another is refused rather than sent on the old one (W8).
-        const known = message.start ? undefined : knownModel(message.sessionId)
+        // message asking for another than the one it says it runs is refused
+        // rather than sent on the old one (W8). Not read yet, it cannot be told.
+        const known = knownModel(message.sessionId)
         if (
           known &&
           (known.provider !== message.model.provider ||
             known.modelId !== message.model.modelId)
         )
           throw new WorkspaceSourceError("not-supported")
-        if (message.start) startModels.set(message.sessionId, message.model)
         await open(message.sessionId, message.start ? message : undefined)
-        await (
-          await client()
-        ).conversation.send(message.sessionId, message.text, [], [], {
-          // The message's id names the same turn however often it is sent.
-          executionId: message.messageId,
-          requestId: message.messageId,
-        })
+        const connected = await client()
+        let sending: Promise<unknown>
+        try {
+          sending = connected.conversation.send(message.sessionId, message.text, [], [], {
+            // The message's id names the same turn however often it is sent.
+            executionId: message.messageId,
+            requestId: message.messageId,
+          })
+        } catch (error) {
+          // The client refuses a message past its bounds before sending it, by
+          // throwing `TypeError` at once (`ConversationApi.send`): sent again, it
+          // is refused again (F5).
+          if (error instanceof TypeError) throw new WorkspaceSourceError("not-supported")
+          throw error
+        }
+        await sending
         watched.add(message.sessionId)
         publish(message.sessionId)
       }),
     approve: (sessionId: string, approvalId: string, scope: ApprovalScope) =>
       scope === "always"
         ? // No option the gateway shows reaches past its request: the projection
-          // offers no review with one (`projection.rs`, nessa-server).
+          // offers no review with one (nessa-server's projection test
+          // `a_review_reaching_beyond_its_request_is_not_offered`).
           Promise.reject(new WorkspaceSourceError("not-supported"))
         : answer(sessionId, approvalId, "allow"),
     deny: (sessionId, approvalId) => answer(sessionId, approvalId, "deny"),
@@ -594,24 +615,29 @@ export function gatewaySource(options: {
 function noop() {}
 
 /**
- * The source's reason for a failed call, by the error's type: the gateway's
- * conversation codes it can name, `unavailable` for no answer, and anything
- * else — a fault, such as an answer the client could not read — as it is.
+ * The source's reason for a failed call, by the error's type. Whether a
+ * refused command may have taken effect is the client's to say (`uncertain`,
+ * from `rejectedBeforeDispatch`): one that may have is `unavailable`, sent
+ * again under its id. Otherwise the gateway's code says why (`reasonFor`);
+ * no answer at all is `unavailable`; and anything else — a fault, such as an
+ * answer the client could not read — is passed on as it is.
  */
 export function refusalOf(error: unknown): unknown {
   if (error instanceof WorkspaceSourceError) return error
-  const code =
-    error instanceof NessaConversationMutationError ||
-    error instanceof NessaConversationControlError
-      ? error.code
-      : error instanceof NessaRpcError
-        ? conversationErrorCode(error.code)
-        : undefined
-  if (code !== undefined) return new WorkspaceSourceError(reasonFor(code))
   if (
     error instanceof NessaConversationMutationError ||
-    error instanceof NessaConversationControlError ||
-    error instanceof NessaRpcError ||
+    error instanceof NessaConversationControlError
+  )
+    return new WorkspaceSourceError(
+      error.code === undefined ? "unavailable" : reasonFor(error.code, error.uncertain),
+    )
+  if (error instanceof NessaRpcError) {
+    const code = conversationErrorCode(error.code)
+    return new WorkspaceSourceError(
+      code === undefined ? "unavailable" : reasonFor(code, false),
+    )
+  }
+  if (
     error instanceof NessaConnectionClosedError ||
     error instanceof NessaSessionUnavailableError ||
     isRetryableConnectionError(error)
@@ -623,11 +649,16 @@ export function refusalOf(error: unknown): unknown {
 /**
  * A conversation code as the workspace's reason, answered for every code: a
  * `switch` with a declared return does not compile until the next code the
- * gateway adds is answered (gate 11). `unavailable` is kept for what may yet
- * be done, or may have been — `failure.ts`'s meaning — and never for a refusal
- * that asking again cannot change, which is `not-supported`.
+ * gateway adds is answered (gate 11). A code that says where the target
+ * stands — no such conversation, no such review waiting — holds whatever this
+ * command did. A refusal for good is `not-supported` only when the client says
+ * the command certainly did nothing (`uncertain` false); one that may have
+ * taken effect is `unavailable`, which `failure.ts` keeps for that.
  */
-function reasonFor(code: ConversationErrorCode): WorkspaceFailureReason {
+function reasonFor(
+  code: ConversationErrorCode,
+  uncertain: boolean,
+): WorkspaceFailureReason {
   switch (code) {
     // The gateway holds no such conversation for this caller, or it was deleted.
     case ConversationErrorCode.ConversationNotFound:
@@ -637,7 +668,9 @@ function reasonFor(code: ConversationErrorCode): WorkspaceFailureReason {
     case ConversationErrorCode.StalePermission:
       return "not-waiting"
     // Refused for good, whatever the timing: the gateway cannot do this here,
-    // or this window asked it wrongly, and asking again changes nothing.
+    // this window asked it wrongly, or it cannot read this conversation's
+    // saved state or its configuration changed under it — asking again
+    // changes nothing.
     case ConversationErrorCode.AgentNotConfigured:
     case ConversationErrorCode.AgentUnsupported:
     case ConversationErrorCode.ConversationsNotConfigured:
@@ -647,7 +680,9 @@ function reasonFor(code: ConversationErrorCode): WorkspaceFailureReason {
     case ConversationErrorCode.UnknownMethod:
     case ConversationErrorCode.InvalidRequest:
     case ConversationErrorCode.SubmissionConflict:
-      return "not-supported"
+    case ConversationErrorCode.ConversationStateUnreadable:
+    case ConversationErrorCode.ConversationConfigurationChanged:
+      return uncertain ? "unavailable" : "not-supported"
     // Not done now, or not known to be: busy, starting, stopped, storage or
     // audit that did not answer, an outcome the gateway could not settle.
     case ConversationErrorCode.ApprovalModeNotApplied:
@@ -656,8 +691,6 @@ function reasonFor(code: ConversationErrorCode): WorkspaceFailureReason {
     case ConversationErrorCode.TurnRunning:
     case ConversationErrorCode.ConversationCapacity:
     case ConversationErrorCode.ConversationClosed:
-    case ConversationErrorCode.ConversationConfigurationChanged:
-    case ConversationErrorCode.ConversationStateUnreadable:
     case ConversationErrorCode.ConversationStorageUnavailable:
     case ConversationErrorCode.TemporarilyUnavailable:
     case ConversationErrorCode.AuditUnavailable:
@@ -671,7 +704,8 @@ function reasonFor(code: ConversationErrorCode): WorkspaceFailureReason {
     case ConversationErrorCode.AttachmentCleanupUnavailable:
     case ConversationErrorCode.ConversationErasureIncomplete:
       return "unavailable"
-    // An MCP App's own calls; this source makes none, so none is its answer.
+    // An MCP App's own calls: this source makes none, so none of these can
+    // answer it; one that did would be no answer it knows.
     case ConversationErrorCode.McpAppUnknown:
     case ConversationErrorCode.McpServerMismatch:
     case ConversationErrorCode.McpToolNotForApp:

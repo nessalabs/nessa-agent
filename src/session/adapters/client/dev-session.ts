@@ -1,6 +1,5 @@
 import {
   NessaClient,
-  NessaRpcError,
   type HealthResult,
   type ProductSessionReady,
   type CredentialSource,
@@ -10,7 +9,6 @@ import {
 } from "@nessa/client"
 
 import { host } from "../../../host"
-import { browserSessionUrl } from "./browser-auth"
 
 export type EstablishedDevSession = {
   client: NessaClient
@@ -80,30 +78,4 @@ export async function connectDevSession(
       error,
     )
   }
-}
-
-/**
- * Connects a surface running in a browser, over the gateway session this
- * origin signed in to: the one way a browser surface connects, whichever it
- * is. An origin that is not signed in is refused as `unauthorized` before
- * anything is opened, as an expired session is.
- */
-export async function connectBrowserSession(deps: {
-  auth: { restore(): Promise<boolean> }
-  stage: Stage
-  clientId: string
-  /** The page's own URL: the session is this origin's. */
-  pageUrl: string
-  surfaceKind?: SurfaceKind
-  connect?: typeof NessaClient.connect
-}): Promise<EstablishedDevSession> {
-  if (!(await deps.auth.restore()))
-    throw new NessaRpcError("unauthorized", "Please sign in again.")
-  return connectDevSession({
-    connect: deps.connect,
-    stage: deps.stage,
-    clientId: deps.clientId,
-    surfaceKind: deps.surfaceKind,
-    browserUrl: browserSessionUrl(deps.pageUrl, deps.stage),
-  })
 }

@@ -4,5 +4,4 @@ export { useSession } from "./ui/use-session"
 
 export { BrowserSignIn } from "./ui/browser-sign-in"
 export { signOutBrowserSession } from "./application/browser-session"
-export { createBrowserAuth } from "./adapters/client/browser-auth"
-export { connectBrowserSession } from "./adapters/client/dev-session"
+export { connectBrowserSession, createBrowserAuth } from "./adapters/client/browser-auth"

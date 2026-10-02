@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import {
-  connectBrowserSession,
-  connectDevSession,
-  SessionHealthError,
-} from "./dev-session"
+import { connectDevSession, SessionHealthError } from "./dev-session"
 import { createSessionHandle } from "./handle"
 
 describe("connectDevSession", () => {
@@ -139,45 +135,5 @@ describe("session client handle", () => {
     expect(handle.get()).toBe(fake)
     handle.set(null)
     expect(handle.get()).toBeNull()
-  })
-})
-
-describe("connectBrowserSession", () => {
-  it("refuses an origin that is not signed in, before anything is opened", async () => {
-    const connect = vi.fn()
-    await expect(
-      connectBrowserSession({
-        auth: { restore: () => Promise.resolve(false) },
-        stage: "dev",
-        clientId: "nessa-browser",
-        pageUrl: "http://127.0.0.1:1420/desktop.html?gateway",
-        connect,
-      }),
-    ).rejects.toMatchObject({ code: "unauthorized" })
-    expect(connect).not.toHaveBeenCalled()
-  })
-
-  it("connects over this origin's browser session, as the surface it names", async () => {
-    const connect = vi.fn().mockResolvedValue({
-      productSession: { version: 1 },
-      server: { health: vi.fn().mockResolvedValue({ ok: true }) },
-      close: vi.fn(),
-    })
-    await connectBrowserSession({
-      auth: { restore: () => Promise.resolve(true) },
-      stage: "dev",
-      clientId: "nessa-browser",
-      surfaceKind: "desktop",
-      pageUrl: "http://127.0.0.1:1420/desktop.html?gateway",
-      connect,
-    })
-    expect(connect).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:1420/browser/session",
-        auth: { browserCookie: true },
-        surface: expect.objectContaining({ kind: "desktop" }),
-        client: expect.objectContaining({ id: "nessa-browser" }),
-      }),
-    )
   })
 })

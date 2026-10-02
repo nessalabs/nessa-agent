@@ -72,6 +72,16 @@ function started(
   return { gateway, source, updates, follow, advance }
 }
 
+const runtime = (modelId: string) => ({
+  model: modelId,
+  provider: "x",
+  workspace: "/",
+  agent: "x",
+  modelName: "x",
+  contextWindowTokens: 1,
+  reasoning: false,
+})
+
 const kinds = (updates: readonly WorkspaceUpdate[]) =>
   updates.map((update) => update.kind)
 
@@ -670,6 +680,8 @@ describe("refusals are typed (F)", () => {
       "model_unavailable",
       "invalid_request",
       "submission_conflict",
+      "conversation_state_unreadable",
+      "conversation_configuration_changed",
     ])
       expect(refusalOf(rpc(code))).toMatchObject({ reason: "not-supported" })
   })
@@ -781,36 +793,61 @@ describe("round 1's rows", () => {
     expect(kinds(updates)).toEqual(["session-removed"])
   })
 
-  it("W8: a message asking an existing session for another model is refused, and nothing is sent", async () => {
+  it("W8: a message asking another model than the one the gateway says it runs is refused, and nothing is sent", async () => {
     const { gateway, source } = started()
-    const started_ = { channelId: "gateway-conversations", title: "Hi" }
+    const runs = composerModels[composerModels.length - 1]
+    const other = composerModels.find(
+      (each) => each.modelId !== runs.modelId || each.provider !== runs.provider,
+    )!
+    gateway.views.set("s", view("s", { runtime: runtime(runs.modelId) }))
+    await source.transcript("s")
+    const asking = (messageId: string, chosen: { provider: string; modelId: string }) =>
+      source.send({
+        sessionId: "s",
+        messageId,
+        text: "Again",
+        model: { provider: chosen.provider, modelId: chosen.modelId },
+        initiator: "person",
+      })
+    await expect(asking("m1", other)).rejects.toMatchObject({ reason: "not-supported" })
+    // Carrying `start` changes nothing: only the gateway's word counts.
+    await expect(
+      source.send({
+        sessionId: "s",
+        messageId: "m2",
+        text: "Again",
+        model: { provider: other.provider, modelId: other.modelId },
+        initiator: "person",
+        start: { channelId: "gateway-conversations", title: "Again" },
+      }),
+    ).rejects.toMatchObject({ reason: "not-supported" })
+    expect(gateway.count("send")).toBe(0)
+    await asking("m3", runs)
+    expect(gateway.count("send")).toBe(1)
+  })
+
+  it("W8: a first message and a resend on another model, before any read, record nothing the gateway did not say", async () => {
+    const { gateway, source } = started()
+    const start = { channelId: "gateway-conversations", title: "Hi" }
     await source.send({
       sessionId: "s",
       messageId: "m1",
       text: "Hi",
       model,
       initiator: "person",
-      start: started_,
+      start,
     })
     const other = { provider: "openai", modelId: "gpt-5" }
-    await expect(
-      source.send({
-        sessionId: "s",
-        messageId: "m2",
-        text: "Again",
-        model: other,
-        initiator: "person",
-      }),
-    ).rejects.toMatchObject({ reason: "not-supported" })
-    expect(gateway.count("send")).toBe(1)
-    // The same model goes.
+    // Not read yet: it cannot be told, so it goes — and it runs on what the gateway created.
     await source.send({
       sessionId: "s",
-      messageId: "m3",
-      text: "Again",
-      model,
+      messageId: "m2",
+      text: "Hi",
+      model: other,
       initiator: "person",
+      start,
     })
+    expect(gateway.count("create")).toBe(1)
     expect(gateway.count("send")).toBe(2)
   })
 
@@ -909,6 +946,101 @@ describe("round 1's ownership rows", () => {
         model: { provider: listed.provider, modelId: listed.modelId },
       }),
     })
+  })
+})
+
+describe("round 2's rows", () => {
+  it("F5: a message the client refuses before sending is not supported, not a fault", async () => {
+    const { gateway, source } = started()
+    gateway.client.conversation.send = () => {
+      throw new TypeError("Message must contain 1-8192 UTF-8 bytes")
+    }
+    await expect(
+      source.send({
+        sessionId: "a",
+        messageId: "m",
+        text: "x".repeat(9000),
+        model,
+        initiator: "person",
+      }),
+    ).rejects.toMatchObject({ reason: "not-supported" })
+  })
+
+  it("S3c: a read answered after its session was taken out is let go, even once it is listed again", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set("a", view("a", { revision: "1", messages: [running()] }))
+    await source.index()
+    await source.transcript("a")
+    follow()
+    const held = deferred<unknown>()
+    gateway.once("read", () => held.promise)
+    await advance(timing.pollMs)
+    gateway.rows.delete("a")
+    await source.index()
+    gateway.rows.set("a", row("a"))
+    held.resolve(
+      view("a", { revision: "2", messages: [running()], permissions: [permission()] }),
+    )
+    await source.index()
+    await flush()
+    const said = updates.filter((update) => update.kind === "session").pop()
+    expect(said).toMatchObject({ session: { id: "a", status: "idle" } })
+    expect(updates).not.toContainEqual(
+      expect.objectContaining({
+        kind: "transcript",
+        transcript: expect.objectContaining({ revision: 2 }),
+      }),
+    )
+  })
+
+  it("C3b: after a client closes for good, the next connection opens a conversation again before reading it", async () => {
+    const first = fakeGateway()
+    const second = fakeGateway()
+    let attempts = 0
+    const { source } = started(first, () =>
+      Promise.resolve(++attempts === 1 ? first.client : second.client),
+    )
+    first.views.set("a", view("a"))
+    second.views.set("a", view("a"))
+    await source.transcript("a")
+    first.setState({ status: "closed", error: new Error("gone") })
+    await source.transcript("a")
+    expect(second.calls.map((call) => call.method)).toEqual(["create", "read"])
+  })
+
+  it("F4: a refusal for good the client cannot say was refused before it ran may have been done", () => {
+    const rpc = (code: string) => new NessaRpcError(code, "message text nobody parses")
+    // submission_conflict is not certain before dispatch, by the client's own table.
+    expect(
+      refusalOf(
+        new NessaConversationMutationError(
+          "c",
+          "r",
+          "e",
+          rpc("submission_conflict"),
+          () => Promise.resolve(),
+        ),
+      ),
+    ).toMatchObject({ reason: "unavailable" })
+    // agent_not_configured is: then it is for good.
+    expect(
+      refusalOf(
+        new NessaConversationMutationError(
+          "c",
+          "r",
+          "e",
+          rpc("agent_not_configured"),
+          () => Promise.resolve(),
+        ),
+      ),
+    ).toMatchObject({ reason: "not-supported" })
+    // Where the target stands holds whatever the command did.
+    expect(
+      refusalOf(
+        new NessaConversationControlError("c", "r", "e", rpc("stale_permission"), true),
+      ),
+    ).toMatchObject({ reason: "not-waiting" })
   })
 })
 
