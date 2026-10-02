@@ -7,9 +7,10 @@
  * declare, and its requests are refused — never answered as if done
  * (gate 7).
  *
- * A port call is given a deadline by the bridge (`deadlines.request`): past
- * it the app is answered that it timed out and its slot is freed, so a port
- * that never settles cannot hold the app's requests (`bridge.test.ts`, L31).
+ * A port call is given a deadline by the bridge (`deadlines.request`, or the
+ * server's own `callWithin` for `tools/call`): past it the app is answered
+ * that it timed out and its slot is freed, so a port that never settles
+ * cannot hold the app's requests (`bridge.test.ts`, L31).
  * A port that rejects is a fault of its adapter, not an answer: the bridge
  * logs it and answers the app as `failed`.
  */
@@ -30,20 +31,52 @@ export type ServerAnswer =
   | { readonly kind: "refused"; readonly reason: string }
   /** The server, or its session, is gone: nothing more will reach it. */
   | { readonly kind: "server-gone" }
-  | { readonly kind: "failed" }
+  /**
+   * It did not answer. `error` is the server's own JSON-RPC error, when it
+   * sent one: passed to the app as it came, its code a signed integer.
+   */
+  | { readonly kind: "failed"; readonly error?: ServerError }
 
-/** Which session's connection to which server a call goes over. */
-export interface ServerAddress {
-  readonly sessionId: string
-  readonly server: string
+/** A JSON-RPC error the app's server answered with. */
+export interface ServerError {
+  readonly code: number
+  readonly message: string
 }
 
-/** The MCP server an app belongs to, over the gateway's connection for its session (#346, #348). */
+/**
+ * Who is asking, and over what: the conversation the app's tool call was made
+ * in, the server it belongs to, and the app itself — its tool call, by the
+ * execution and tool ids that name it, and this mount of it. The bridge makes
+ * it from the view's own call and never from anything the app says
+ * (`bridge.test.ts`, "forged identity").
+ */
+export interface AppAddress {
+  readonly conversationId: string
+  readonly server: string
+  readonly app: {
+    readonly executionId: string
+    readonly toolId: string
+    /** One per mount of the app (#349's view); minted by the bridge. */
+    readonly instanceId: string
+  }
+}
+
+/** The MCP server an app belongs to, over the gateway's connection for its conversation (#346, #348). */
 export interface McpAppServer {
   /** `resources/read` (`ReadResourceResult`). */
-  readResource(address: ServerAddress, uri: string): Promise<ServerAnswer>
+  readResource(address: AppAddress, uri: string): Promise<ServerAnswer>
   /** `tools/call` (`CallToolResult`). */
-  callTool(address: ServerAddress, tool: string, args: JsonObject): Promise<ServerAnswer>
+  callTool(address: AppAddress, tool: string, args: JsonObject): Promise<ServerAnswer>
+  /**
+   * This mount is torn down: whatever it still waits on — a review, a
+   * resource — is let go. Sent once, when the view ends (#384, M2).
+   */
+  release(address: AppAddress): Promise<void>
+  /**
+   * How long, in milliseconds, a `tools/call` may take before the bridge gives
+   * up on it: a destructive tool waits on the person's review first.
+   */
+  readonly callWithin: number
 }
 
 /** What the conversation holds of the call a widget names. */
@@ -107,6 +140,8 @@ export interface McpAppPorts {
   readonly links?: LinkOpener
   readonly downloads?: FileDownloader
   readonly timers: Timers
+  /** A fresh UUID, for each mount's `instanceId`. */
+  readonly newId: () => string
   /** Where the proxy is; absent when this window has none, and no app can be shown. */
   readonly sandbox?: SandboxOrigin
   /** What the host calls itself to an app (`hostInfo`). */

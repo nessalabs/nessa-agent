@@ -23,6 +23,7 @@ describe("an app's widgets", () => {
       sessionId: "a",
       sandbox: undefined,
       timers: { after: () => () => {} },
+      newId: () => crypto.randomUUID(),
       page: () => ({ styles: {}, timeZone: "UTC", platform: "web" }),
     }).ports
     const plugin = appPlugin({ server: "charts", name: "Charts", ports })

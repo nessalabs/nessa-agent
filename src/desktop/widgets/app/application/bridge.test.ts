@@ -24,7 +24,7 @@ import {
   teardownId,
   type AppBridge,
 } from "./bridge"
-import type { McpAppPorts, McpAppServer, ServerAnswer } from "./ports"
+import type { AppAddress, McpAppPorts, McpAppServer, ServerAnswer } from "./ports"
 
 const sandbox = {
   url: "http://127.0.0.1:9999/proxy.html",
@@ -49,6 +49,17 @@ function deferred<T>() {
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+// Each harness's mounts are numbered, so a test can tell one from another.
+let mounts = 0
+const mountId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
+
+/** The address the fixture's call is reached at from mount `instanceId`. */
+const addressOf = (instanceId: string): AppAddress => ({
+  conversationId: "session-a",
+  server: "weather",
+  app: { executionId: "fixture-execution", toolId: "fixture-call", instanceId },
+})
 
 interface Harness {
   readonly bridge: AppBridge
@@ -102,6 +113,7 @@ function harness(
         return () => void (timer.cancelled = true)
       },
     },
+    newId: () => mountId(++mounts),
     sandbox,
     hostInfo: { name: "Nessa", version: "test" },
     page: () => ({
@@ -188,6 +200,7 @@ async function live(app: Harness) {
 
 beforeEach(() => {
   harnesses = []
+  mounts = 0
 })
 
 afterEach(() => {
@@ -205,10 +218,7 @@ describe("the handshake", () => {
     const app = harness({ server: { ...fixtureServerPort(), readResource: read } })
     expect(frameOn(app.bridge.view().lifecycle)).toBe(false)
     await flush()
-    expect(read).toHaveBeenCalledWith(
-      { sessionId: "session-a", server: "weather" },
-      fixtureResourceUri,
-    )
+    expect(read).toHaveBeenCalledWith(addressOf(mountId(1)), fixtureResourceUri)
     expect(app.bridge.view()).toMatchObject({ lifecycle: { kind: "proxy" } })
     expect(app.take()).toEqual([])
     app.say({
@@ -633,7 +643,7 @@ describe("what reaches the bridge", () => {
 })
 
 describe("a live app's requests", () => {
-  it("L14: tools/call goes over the view's own session and server, never the app's say", async () => {
+  it("L14, M1: tools/call goes over the view's own conversation, server and mount, never the app's say (forged identity)", async () => {
     const calls: unknown[] = []
     const app = harness({
       server: {
@@ -652,16 +662,19 @@ describe("a live app's requests", () => {
       params: {
         name: "get_weather",
         arguments: { location: "New York" },
-        _meta: { server: "other", sessionId: "session-b" },
+        _meta: {
+          server: "other",
+          sessionId: "session-b",
+          conversationId: "session-b",
+          app: { executionId: "e", toolId: "t", instanceId: mountId(9) },
+        },
+        app: { executionId: "e", toolId: "t", instanceId: mountId(9) },
+        instanceId: mountId(9),
       },
     })
     await flush()
     expect(calls).toEqual([
-      [
-        { sessionId: "session-a", server: "weather" },
-        "get_weather",
-        { location: "New York" },
-      ],
+      [addressOf(mountId(1)), "get_weather", { location: "New York" }],
     ])
     expect(app.take()).toEqual([
       { jsonrpc: "2.0", id: 11, result: { content: [{ type: "text", text: "72" }] } },
@@ -724,6 +737,199 @@ describe("a live app's requests", () => {
     })
   })
 
+  it("L14, A10: a server's own JSON-RPC error reaches the app as it came, its code of either sign", async () => {
+    const answers: ServerAnswer[] = [
+      { kind: "failed", error: { code: -32002, message: "Resource not found" } },
+      { kind: "failed", error: { code: 42, message: "Positive codes are codes too" } },
+    ]
+    const app = harness({
+      server: { ...fixtureServerPort(), callTool: async () => answers.shift()! },
+    })
+    await live(app)
+    for (const id of [1, 2])
+      app.say({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "t" } })
+    await flush()
+    expect(app.take()).toEqual([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32002, message: "Resource not found" },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        error: { code: 42, message: "Positive codes are codes too" },
+      },
+    ])
+  })
+
+  it("L14, L31: resources/read reads over the same mount", async () => {
+    const read = vi.fn(fixtureServerPort().readResource)
+    const app = harness({ server: { ...fixtureServerPort(), readResource: read } })
+    await live(app)
+    app.say({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "resources/read",
+      params: { uri: "ui://elsewhere", app: { instanceId: mountId(9) } },
+    })
+    await flush()
+    expect(read.mock.calls).toEqual([
+      [addressOf(mountId(1)), fixtureResourceUri],
+      [addressOf(mountId(1)), "ui://elsewhere"],
+    ])
+  })
+})
+
+describe("how long a tools/call is waited for", () => {
+  it("D1: tools/call waits the server's callWithin, so a review the person is deciding is not cut off", async () => {
+    const answer = deferred<ServerAnswer>()
+    const app = harness({
+      server: {
+        ...fixtureServerPort(),
+        callTool: () => answer.promise,
+        callWithin: 370_000,
+      },
+    })
+    await live(app)
+    app.say({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "t" } })
+    app.say({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "resources/read",
+      params: { uri: "ui://x" },
+    })
+    expect(app.timers.filter((t) => !t.cancelled).map((t) => t.ms)).toEqual([
+      370_000,
+      deadlines.request,
+    ])
+    answer.resolve({ kind: "ok", result: { content: [] } })
+    await flush()
+    expect(app.take()).toContainEqual({ jsonrpc: "2.0", id: 1, result: { content: [] } })
+  })
+})
+
+describe("the mount and its release (#384)", () => {
+  function releasing(server: Partial<McpAppServer> = {}) {
+    const released: AppAddress[] = []
+    return {
+      released,
+      server: {
+        ...fixtureServerPort(),
+        release: async (address: AppAddress) => void released.push(address),
+        ...server,
+      } satisfies McpAppServer,
+    }
+  }
+
+  it("M2, L24, M3: removing the place releases this mount, once", async () => {
+    const { released, server } = releasing()
+    const app = harness({ server })
+    await live(app)
+    expect(released).toEqual([])
+    app.bridge.remove()
+    app.bridge.remove()
+    app.say({ jsonrpc: "2.0", id: 1, method: "ping" })
+    await flush()
+    expect(released).toEqual([addressOf(mountId(1))])
+  })
+
+  it("M2, L23: a teardown the app answered releases it, and removing the place after does not again", async () => {
+    const { released, server } = releasing()
+    const app = harness({ server })
+    await live(app)
+    app.say({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" })
+    expect(released).toEqual([])
+    app.say({ jsonrpc: "2.0", id: teardownId, result: {} })
+    app.bridge.remove()
+    await flush()
+    expect(released).toEqual([addressOf(mountId(1))])
+    expect(app.closed.count).toBe(1)
+  })
+
+  it("M2, L23: a teardown past its deadline releases it", async () => {
+    const { released, server } = releasing()
+    const app = harness({ server })
+    await live(app)
+    app.say({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" })
+    app.deadline()
+    await flush()
+    expect(released).toEqual([addressOf(mountId(1))])
+  })
+
+  it("M4: a failed view, removed, releases the mount it read under", async () => {
+    const { released, server } = releasing({
+      readResource: async () => ({ kind: "refused", reason: "No" }),
+    })
+    const app = harness({ server })
+    await flush()
+    expect(app.bridge.view().lifecycle).toEqual({ kind: "failed", reason: "load" })
+    expect(released).toEqual([])
+    app.bridge.remove()
+    await flush()
+    expect(released).toEqual([addressOf(mountId(1))])
+  })
+
+  it("M5: a release that fails is logged, and the view stays gone", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const { server } = releasing({ release: () => Promise.reject(new Error("closed")) })
+    const app = harness({ server })
+    await live(app)
+    app.bridge.remove()
+    await flush()
+    expect(error).toHaveBeenCalledWith("An MCP App's release failed", expect.any(Error))
+    expect(app.bridge.view().lifecycle.kind).toBe("gone")
+  })
+
+  it("M6: two mounts of one call are two instances: each calls, and is released, as itself (the wrong mount)", async () => {
+    const { released, server } = releasing()
+    const calls: AppAddress[] = []
+    const both = {
+      ...server,
+      callTool: async (address: AppAddress) => {
+        calls.push(address)
+        return { kind: "ok", result: {} } as const
+      },
+    }
+    const inline = harness({ server: both, place: "inline" })
+    const pane = harness({ server: both, place: "pane" })
+    await live(inline)
+    await live(pane)
+    inline.bridge.remove()
+    pane.say({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "t" } })
+    await flush()
+    expect(released).toEqual([addressOf(mountId(1))])
+    expect(calls).toEqual([addressOf(mountId(2))])
+    expect(pane.take()).toEqual([{ jsonrpc: "2.0", id: 1, result: {} }])
+  })
+
+  it("M7, L25: a call the release withdrew answers after the view is gone, and nothing is posted", async () => {
+    const answer = deferred<ServerAnswer>()
+    const { released, server } = releasing({ callTool: () => answer.promise })
+    const app = harness({ server })
+    await live(app)
+    app.say({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "t" } })
+    app.bridge.remove()
+    await flush()
+    expect(released).toHaveLength(1)
+    answer.resolve({ kind: "refused", reason: "The request was withdrawn" })
+    await flush()
+    expect(app.take()).toEqual([])
+  })
+
+  it("L12: a call of another execution or tool call is not this view's", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const app = harness({ phase: { kind: "running", arguments: {} } })
+    await live(app)
+    const done: CallPhase = { kind: "done", arguments: {}, result: { content: [] } }
+    app.bridge.setCall({ ...fixtureCall("session-a"), executionId: "other", phase: done })
+    app.bridge.setCall({ ...fixtureCall("session-a"), toolId: "other", phase: done })
+    expect(app.take()).toEqual([])
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe("a live app's other requests", () => {
   it("L15: ui/message and ui/update-model-context go to the conversation, or are not offered", async () => {
     const sent: unknown[] = []
     const conversation = {
@@ -1153,10 +1359,7 @@ describe("the end", () => {
     })
     app.bridge.remove()
     read.resolve(
-      await fixtureServerPort().readResource(
-        { sessionId: "", server: "" },
-        fixtureResourceUri,
-      ),
+      await fixtureServerPort().readResource(addressOf(mountId(1)), fixtureResourceUri),
     )
     await flush()
     expect(app.bridge.view()).toMatchObject({ lifecycle: { kind: "gone" } })

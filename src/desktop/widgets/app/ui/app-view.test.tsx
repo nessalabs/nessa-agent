@@ -45,6 +45,7 @@ function app(
     sessionId: "session-a",
     sandbox: "sandbox" in options ? options.sandbox : sandbox,
     timers: { after: () => () => {} },
+    newId: () => crypto.randomUUID(),
     page: () => ({ styles: {}, timeZone: "UTC", platform: "web" }),
   })
   return options.server

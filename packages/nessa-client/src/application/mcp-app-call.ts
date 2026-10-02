@@ -15,7 +15,8 @@ import { mcpRemoteErrorDetails } from "../protocol/mcp-app-validate.js"
  * gave up sooner would drop an answer the gateway still sends — and giving up
  * does not withdraw the review, which only the socket closing does. Written out
  * from the gateway's `APP_REVIEW_DEADLINE` and the SDK's `APP_CALL_TIMEOUT`;
- * neither is published in the protocol.
+ * neither is published in the protocol yet (#393). A host that waits on an
+ * app's call reads it from here rather than writing it out again.
  */
 export const MCP_APP_CALL_DEADLINE_MS = 300_000 + 60_000 + 10_000
 

@@ -34,6 +34,9 @@ export type CallPhase =
 export interface AppCall {
   /** The session the call was made in: the widget's origin, and where its app's calls go. */
   readonly sessionId: string
+  /** The execution the call belongs to, and the call itself: the app's identity (`app-ref.ts`). */
+  readonly executionId: string
+  readonly toolId: string
   /** The tool's name: what the widget is called. */
   readonly tool: string
   /** The tool as the server described it (`Tool`), when known: the app's `toolInfo`. */

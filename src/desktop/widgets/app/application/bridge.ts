@@ -9,8 +9,10 @@
  * It knows nothing of the DOM: what reaches it is already a typed message
  * (`model/messages.ts`) read from a frame the transport vouched for
  * (`adapters/dom/frame-transport.ts`), and what it sends goes to `post`. The
- * address its server calls go to — the session and the server — is the
- * view's own, never anything the app says.
+ * address its server calls go to — the conversation, the server, the call and
+ * this mount of it — is the view's own, never anything the app says. Each
+ * bridge is one mount: it mints its `instanceId` when it is made, and releases
+ * that mount once, when the view ends (#384, M1–M7).
  */
 import { appDocument, approvedDomains, cspPolicy } from "../model/csp"
 import { sandboxMethods } from "../model/sandbox-methods"
@@ -19,6 +21,7 @@ import {
   errorCodes,
   notify,
   refuse,
+  relayError,
   reply,
   request,
   type JsonObject,
@@ -49,7 +52,7 @@ import {
 } from "../model/tool-call"
 import { blockedOrigins, firstView, type AppViewState } from "../model/app-view"
 import type { HostContext, OpenPlace, WidgetPlace } from "../../model/widget-state"
-import type { McpAppPorts, ServerAddress, ServerAnswer } from "./ports"
+import type { AppAddress, McpAppPorts, ServerAnswer } from "./ports"
 
 /** The protocol version this host speaks. */
 export const protocolVersion = "2026-01-26"
@@ -62,7 +65,7 @@ export const deadlines = {
   initialize: 15_000,
   /** For the app to answer `ui/resource-teardown`. */
   teardown: 3_000,
-  /** For a port to answer one of the app's requests. */
+  /** For a port to answer one of the app's requests; `tools/call` waits the server's `callWithin`. */
   request: 60_000,
 } as const
 
@@ -116,7 +119,15 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   const pending = new Map<RequestId, () => void>()
   let logged = 0
 
-  const address: ServerAddress = { sessionId: call.sessionId, server: options.server }
+  const address: AppAddress = {
+    conversationId: call.sessionId,
+    server: options.server,
+    app: {
+      executionId: call.executionId,
+      toolId: call.toolId,
+      instanceId: ports.newId(),
+    },
+  }
   const gone = () => lifecycle.kind === "gone"
   const initialized = () => lifecycle.kind === "live" || lifecycle.kind === "ending"
 
@@ -219,6 +230,11 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     if (lifecycle.kind === "gone") {
       for (const cancel of pending.values()) cancel()
       pending.clear()
+      // The mount ends here, and only here: `gone` is never left, so this is
+      // the one release (M2, M3). What it still waits on is let go with it.
+      ports.server.release(address).catch((error: unknown) => {
+        console.error("An MCP App's release failed", error)
+      })
     }
     show({})
     for (const effect of next.effects) run(effect, answering)
@@ -234,7 +250,9 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         if (!view.serverGone) show({ serverGone: true })
         return send(refuse(id, errorCodes.refused, "The app's server has stopped"))
       case "failed":
-        return send(refuse(id, errorCodes.internal, "The request failed"))
+        return answer.error
+          ? send(relayError(id, answer.error))
+          : send(refuse(id, errorCodes.internal, "The request failed"))
     }
   }
 
@@ -244,7 +262,12 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
    * port's answer after that is dropped. `send` posts nothing once the view
    * is gone.
    */
-  function settle<T>(id: RequestId, work: Promise<T>, answer: (value: T) => void) {
+  function settle<T>(
+    id: RequestId,
+    work: Promise<T>,
+    answer: (value: T) => void,
+    within: number = deadlines.request,
+  ) {
     const settled = () => {
       if (!pending.has(id)) return false
       pending.get(id)?.()
@@ -253,7 +276,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     }
     pending.set(
       id,
-      ports.timers.after(deadlines.request, () => {
+      ports.timers.after(within, () => {
         if (settled()) send(refuse(id, errorCodes.internal, "The request timed out"))
       }),
     )
@@ -286,6 +309,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
           id,
           ports.server.callTool(address, message.tool, message.arguments),
           (answer) => answerServer(id, answer),
+          ports.server.callWithin,
         )
       case "resources/read":
         return settle(id, ports.server.readResource(address, message.uri), (answer) =>
@@ -296,7 +320,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         if (!conversation) return unsupported(id)
         return settle(
           id,
-          conversation.sendMessage(address.sessionId, message.content),
+          conversation.sendMessage(address.conversationId, message.content),
           (done) => (done === "done" ? ok(id) : declined(id)),
         )
       }
@@ -311,7 +335,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         }
         return settle(
           id,
-          conversation.updateModelContext(address.sessionId, update),
+          conversation.updateModelContext(address.conversationId, update),
           (done) =>
             done === "done"
               ? ok(id)
@@ -443,9 +467,14 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   return {
     receive,
     setCall(next) {
-      // One view is one call, at one address: a call of another session or
-      // resource is not this view's, and is not told to it.
-      if (next.sessionId !== address.sessionId || next.resourceUri !== call.resourceUri)
+      // One view is one call, at one address: a call of another session,
+      // identity or resource is not this view's, and is not told to it.
+      if (
+        next.sessionId !== address.conversationId ||
+        next.executionId !== address.app.executionId ||
+        next.toolId !== address.app.toolId ||
+        next.resourceUri !== call.resourceUri
+      )
         return console.warn(`[mcp app ${options.server}] another call for this view`)
       call = next
       tellCall()

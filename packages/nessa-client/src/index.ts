@@ -152,7 +152,7 @@ export {
   type AttachmentFailureCode,
 } from "./application/attachment-upload.js"
 export type { McpAppsApi, McpResourceDescription } from "./presentation/mcp-apps-api.js"
-export { NessaMcpAppError } from "./application/mcp-app-call.js"
+export { MCP_APP_CALL_DEADLINE_MS, NessaMcpAppError } from "./application/mcp-app-call.js"
 export {
   NessaMcpResourceError,
   type McpResourceFailureCode,

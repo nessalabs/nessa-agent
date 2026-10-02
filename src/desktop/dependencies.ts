@@ -6,18 +6,31 @@
  * Overrides are explicit, never a service locator — a test or a future
  * gateway adapter passes its own `workspace`.
  *
+ * With a gateway's `client.mcpApps`, real servers' apps are drawn: an app
+ * plugin is registered for each server a conversation's view names with a UI,
+ * and the source hands each view's tools to `gatewayApps.observe` (#384,
+ * `widgets/app/adapters/gateway/`). The fixture app stays with the sample
+ * workspace.
+ *
  * ```ts
- * const dependencies = createDesktopDependencies({ workspace: gatewaySource })
+ * const dependencies = createDesktopDependencies({
+ *   workspace: gatewaySource,
+ *   gateway: { mcpApps: client.mcpApps },
+ *   apps,
+ * })
  * const store = makeDesktopStore(dependencies)
  * ```
  */
+import type { McpAppsApi } from "@nessa/client"
 import {
   createWidgetRegistry,
   fixtureAppPlugin,
+  gatewayApps,
   platformFor,
   readPageContext,
   samplePlugin,
   type DesktopWidgetRegistry,
+  type GatewayApps,
   type NativeWidgetPlugin,
   type SandboxOrigin,
   type Timers,
@@ -36,6 +49,12 @@ import {
 export interface DesktopDependencies extends WorkspaceDependencies {
   /** The widget plugins, native ones registered here (ADR 326); provided to the tree by `main.tsx`. */
   readonly widgets: DesktopWidgetRegistry
+  /**
+   * Where a gateway source reports each conversation view's tools, so the
+   * apps of their servers are registered and their calls read; absent with
+   * no gateway, or where no app can be drawn.
+   */
+  readonly gatewayApps?: GatewayApps
 }
 
 export function createDesktopDependencies(
@@ -54,6 +73,8 @@ export function createDesktopDependencies(
      * at all, no app plugin is registered.
      */
     apps?: AppsOptions
+    /** The gateway's MCP App calls (`client.mcpApps`): real servers' apps reach the window through them. */
+    gateway?: { readonly mcpApps: McpAppsApi }
   } = {},
 ): DesktopDependencies {
   // The real clock and timers; tests pass their own.
@@ -65,15 +86,27 @@ export function createDesktopDependencies(
   // With no source given, the window runs on the sample workspace.
   const sample = options.workspace === undefined
   const workspace = options.workspace ?? inMemorySource({ now, after })
+  const newId = options.newId ?? (() => crypto.randomUUID())
+  const widgets = widgetRegistry(options.widgets, sample, options.apps, after, newId)
+  const { apps, gateway } = options
   return {
     workspace,
     now,
-    newId: options.newId ?? (() => crypto.randomUUID()),
+    newId,
     // The page's own layout: every command that changes the panes is held to it.
     measure: options.measure ?? (() => measureWorkspace(document)),
     // The webview's storage, where the overview's filter is kept between launches.
     overviewFilter: options.overviewFilter ?? rememberedFilter(),
-    widgets: widgetRegistry(options.widgets, sample, options.apps, after),
+    widgets,
+    ...(gateway && apps
+      ? {
+          gatewayApps: gatewayApps({
+            registry: widgets,
+            mcpApps: gateway.mcpApps,
+            ports: appPorts(apps, after, newId),
+          }),
+        }
+      : {}),
   }
 }
 
@@ -83,24 +116,37 @@ interface AppsOptions {
   readonly platform: ReturnType<typeof platformFor>
 }
 
+/** What every app's view is given by the window, whichever server it is. */
+function appPorts(apps: AppsOptions, after: Timers["after"], newId: () => string) {
+  return {
+    timers: { after },
+    newId,
+    ...(apps.sandbox ? { sandbox: apps.sandbox } : {}),
+    hostInfo: { name: "Nessa", version: "desktop" },
+    page: () => readPageContext(document, apps.platform),
+  }
+}
+
 function widgetRegistry(
   natives: readonly NativeWidgetPlugin[] | undefined,
   sample: boolean,
   apps: AppsOptions | undefined,
   after: Timers["after"],
+  newId: () => string,
 ): DesktopWidgetRegistry {
   // The sample plugin only beside the sample workspace, whose session its widgets belong to.
   const registry = createWidgetRegistry<WidgetPlugin>(
     natives ?? (sample ? [samplePlugin(sampleWidgetSession)] : []),
   )
-  // And the fixture MCP App beside it: real servers' apps reach the window
-  // once `McpAppServer` is wired to the gateway's `client.mcpApps` (#384).
+  // And the fixture MCP App beside it; real servers' apps come through the
+  // gateway (`gatewayApps`).
   if (sample && apps)
     registry.register(
       fixtureAppPlugin({
         sessionId: sampleAppSession,
         sandbox: apps.sandbox,
         timers: { after },
+        newId,
         page: () => readPageContext(document, apps.platform),
       }),
     )
