@@ -372,7 +372,7 @@ export const harmlessConsole = [
   // The fixture MCP App asks for a page its CSP does not declare, on purpose
   // (`mcp-apps.mjs --only csp`): the engine reports the refusal it is checked for.
   // Its navigations of its own frame are refused by the proxy's policy, and
-  // reported against the proxy's page (`--only escape-navigate,escape-refresh`).
+  // reported against the proxy's page (`--only escape-navigate,escape-refresh,escape-rewrite,departures`).
   {
     text: /Content Security Policy|Refused to (connect|frame)/i,
     url: /^(about:srcdoc|https?:\/\/127\.0\.0\.1:\d+\/proxy\.html)?$/,

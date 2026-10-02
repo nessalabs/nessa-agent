@@ -82,8 +82,9 @@ mod tests {
         assert!(body.contains(r#"app.setAttribute("sandbox", "allow-scripts")"#));
     }
 
-    /// The window and the browser build spell the proxy's address from these
-    /// constants, not their own: this is what holds them to it.
+    /// The window's CSP, its sandbox lookup and the browser build's listener
+    /// each spell the proxy's address themselves: this holds every spelling
+    /// to these constants.
     #[test]
     fn every_other_spelling_of_the_address_is_this_one() {
         let origins = include_str!("../../src/desktop/widgets/app/adapters/dom/sandbox-origin.ts");

@@ -106,7 +106,7 @@ describe("what fails", () => {
 })
 
 describe("the app leaving its frame", () => {
-  it("L32: once the document is handed over, its frame loading again fails it and takes the frame", () => {
+  it("L32: once the document is handed over, the proxy's word that it is gone fails it and takes the frame", () => {
     for (const kind of ["loading", "initializing", "live", "ending"] as const)
       expect(advance(states[kind], { kind: "app-left" }), kind).toEqual({
         state: { kind: "failed", reason: "load" },

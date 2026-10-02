@@ -11,14 +11,15 @@
  * (`adapters/dom/sandbox-origin.ts`). Over HTTPS the listener uses Vite's
  * own certificate, so the frame is never mixed content.
  *
- * The proxy is read once, when the dev server starts: an edit to
- * `proxy.html` is served after the dev server restarts.
+ * The proxy's bytes are handed in by the dev server's composition
+ * (`vite.config.ts`, which reads them once as it starts: an edit to
+ * `proxy.html` is served after the dev server restarts); serving them is
+ * this plugin's whole work, and what it answers is `sandboxResponse`'s.
  *
  * `vite preview` serves a build as it was written, so a previewed page has
  * no meta and shows every app as one it cannot load: the preview is for the
  * frame budget (`verification/desktop`), which no app is part of.
  */
-import { readFileSync } from "node:fs"
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -26,7 +27,6 @@ import {
 } from "node:http"
 import { createServer as createHttpsServer, type ServerOptions } from "node:https"
 import type { AddressInfo } from "node:net"
-import { fileURLToPath } from "node:url"
 import type { Plugin } from "vite"
 import { sandboxMetaName } from "../adapters/dom/sandbox-origin"
 
@@ -55,15 +55,11 @@ export function sandboxResponse(
   }
 }
 
-/**
- * Starts the listener; resolves with the proxy's URL. The proxy is read once,
- * here, as the dev server starts — this is developer tooling, the one outside
- * read it makes, and what it serves is `sandboxResponse`'s.
- */
+/** Starts the listener for `proxy`; resolves with the proxy's URL. */
 function listen(
+  proxy: Buffer,
   https: ServerOptions | undefined,
 ): Promise<{ url: string; close(): void }> {
-  const proxy = readFileSync(fileURLToPath(new URL("./proxy.html", import.meta.url)))
   const answer = (request: IncomingMessage, response: ServerResponse) => {
     const { status, headers, body } = sandboxResponse(request.method, request.url, proxy)
     response.writeHead(status, headers).end(body)
@@ -89,14 +85,14 @@ export function withMeta(html: string, url: string): string {
     : meta + html
 }
 
-/** The Vite plugin: the listener, for the dev server's life. */
-export function appSandbox(): Plugin {
+/** The Vite plugin: the listener for `proxy` (`proxy.html`'s bytes), for the dev server's life. */
+export function appSandbox(proxy: Buffer): Plugin {
   let url: string | undefined
   return {
     name: "nessa-app-sandbox",
     async configureServer(server) {
       const https = server.config.server.https || undefined
-      const listener = await listen(https)
+      const listener = await listen(proxy, https)
       url = listener.url
       server.httpServer?.once("close", listener.close)
     },

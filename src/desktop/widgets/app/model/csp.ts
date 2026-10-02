@@ -12,9 +12,9 @@
  * tells the app it approved (`hostCapabilities.sandbox.csp`).
  *
  * `frameDomains` is never applied: `frame-src` is always `'none'`, so the
- * app's frame loads nothing but the document handed over — no nested frame,
- * and no navigation of its own frame anywhere (#349, design amendment after
- * review round 2). The app is told: the domains it is told were approved
+ * app's frame loads nothing but the document handed over — no nested frame
+ * loads anything but inline content, and no navigation of its own frame
+ * goes anywhere (#349, design amendment after review round 2). The app is told: the domains it is told were approved
  * never list any.
  *
  * The one owner of the policy: the host writes it (`cspPolicy`), into the
@@ -144,20 +144,27 @@ export function approvedDomains(csp: AppliedCsp): JsonObject {
 
 /**
  * Runs first in the app's document, before any of its own markup, with its
- * listeners registered before any of the app's:
+ * listeners registered before any of the app's. While the app leaves them in
+ * place — `document.open()` erases them, and a frame the app makes has none —
+ * it:
  *
- * - each load the policy blocked, by the blocked origin alone, heard in
- *   capture on the window before anything the app registers can hear it;
- * - the document going, by any way — a navigation of its frame, refused or
- *   not, before or after its first `load`; a reload — on `pagehide`, which
- *   the proxy takes as the app's departure (design L32). It carries the
- *   token the proxy wrote into its slot (`departureTokenSlot`), as the
- *   browser delivers it with no sender once the document is gone.
+ * - reports each load the policy blocked, by the blocked origin alone;
+ * - answers the proxy's check at the frame's first `load` (`appCheck`), and
+ *   keeps the check from the app;
+ * - says the document is going, on `pagehide`.
  *
- * The app can send either itself; a report says only an origin, and a
+ * Both carry the token the proxy wrote into its slot (`departureTokenSlot`),
+ * in this document alone: what says the answer is from the document handed
+ * over and not another the frame came to hold, and the departure from this
+ * frame, which the browser no longer names once its document has gone.
+ *
+ * None of it is what the proxy relies on to know the app is gone: a further
+ * `load` of the frame is that, or no answer to the check (design L32). The
+ * app can send any of these itself; a report says only an origin, and a
  * departure only ends its own view. Enforcement never depends on them.
  */
 const reporter = `(function () {
+  var token = ${JSON.stringify(departureTokenSlot)};
   var parentWindow = window.parent;
   var post = parentWindow.postMessage.bind(parentWindow);
   window.addEventListener("securitypolicyviolation", function (event) {
@@ -165,8 +172,14 @@ const reporter = `(function () {
     try { origin = new URL(event.blockedURI).origin; } catch (error) { origin = undefined; }
     post({ jsonrpc: "2.0", method: ${JSON.stringify(sandboxMethods.cspViolation)}, params: origin && origin !== "null" ? { origin: origin } : {} }, "*");
   }, true);
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (event.source !== parentWindow || data === null || typeof data !== "object" || data.method !== ${JSON.stringify(sandboxMethods.appCheck)}) return;
+    event.stopImmediatePropagation();
+    post({ jsonrpc: "2.0", method: ${JSON.stringify(sandboxMethods.appCheck)}, params: { token: token } }, "*");
+  }, true);
   window.addEventListener("pagehide", function () {
-    post({ jsonrpc: "2.0", method: ${JSON.stringify(sandboxMethods.appLeft)}, params: { token: ${JSON.stringify(departureTokenSlot)} } }, "*");
+    post({ jsonrpc: "2.0", method: ${JSON.stringify(sandboxMethods.appLeft)}, params: { token: token } }, "*");
   }, true);
 })();`
 

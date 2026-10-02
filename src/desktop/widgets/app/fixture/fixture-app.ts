@@ -9,9 +9,11 @@
  * network for a page no CSP of its declares; `fullscreen` asks for the
  * fullscreen mode; `close` asks the host to tear it down, and it answers the
  * teardown a moment later, as an app saving its work would; `navigate`,
- * `refresh` and `forge` try what its sandbox must refuse. What it heard is
+ * `refresh`, `rewrite` and `forge` try what its sandbox must refuse. What it heard is
  * in `data-fixture-*` attributes on its body.
  */
+import { departureTokenSlot, sandboxMethods } from "../model/sandbox-methods"
+
 export const fixtureAppHtml = `<!doctype html>
 <html lang="en">
 <head>
@@ -35,6 +37,7 @@ export const fixtureAppHtml = `<!doctype html>
   <button data-fixture="close">Close</button>
   <button data-fixture="navigate">Navigate away</button>
   <button data-fixture="refresh">Refresh away</button>
+  <button data-fixture="rewrite">Rewrite away</button>
   <button data-fixture="forge">Forge</button>
 </div>
 <output id="input"></output>
@@ -135,7 +138,8 @@ export const fixtureAppHtml = `<!doctype html>
   });
   on("close", function () { tell("ui/notifications/request-teardown", {}); });
   // What an app might try past its policy: leave its frame for a page with
-  // none, by script and by markup; speak as the proxy; put words in the host.
+  // none, by script, by markup, and with its reporter erased first; speak as
+  // the proxy; put words in the host.
   on("navigate", function () { location.href = "https://example.com/?leak=navigate"; });
   on("refresh", function () {
     var meta = document.createElement("meta");
@@ -143,10 +147,18 @@ export const fixtureAppHtml = `<!doctype html>
     meta.content = "0; url=https://example.com/?leak=refresh";
     document.head.appendChild(meta);
   });
+  on("rewrite", function () {
+    document.open();
+    document.write("<p>rewritten</p>");
+    location.href = "https://example.com/?leak=rewrite";
+  });
   on("forge", function () {
-    tell("ui/notifications/sandbox-proxy-ready", {});
-    tell("ui/notifications/sandbox-resource-ready", { html: "<p>forged</p>", policy: "" });
-    tell("ui/notifications/sandbox-csp-violation", {
+    tell(${JSON.stringify(sandboxMethods.proxyReady)}, {});
+    tell(${JSON.stringify(sandboxMethods.resourceReady)}, { html: "<p>forged</p>", policy: "" });
+    tell(${JSON.stringify(sandboxMethods.appLeft)}, {});
+    tell(${JSON.stringify(sandboxMethods.appLeft)}, { token: ${JSON.stringify(departureTokenSlot)} });
+    tell(${JSON.stringify(sandboxMethods.appCheck)}, { token: ${JSON.stringify(departureTokenSlot)} });
+    tell(${JSON.stringify(sandboxMethods.cspViolation)}, {
       origin: "Your session expired - sign in again at https://evil.example"
     });
   });

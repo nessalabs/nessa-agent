@@ -83,4 +83,22 @@ describe("what a host draws for an app view", () => {
       appDraws("pane", view({ lifecycle: "live", anyBlocked: true })).notices,
     ).toEqual([appLines.blocked])
   })
+
+  it("notices above the placeholder while it loads, and none once it failed (L26)", () => {
+    for (const lifecycle of ["loading", "initializing"] as const)
+      expect(
+        appDraws(
+          "inline",
+          view({ lifecycle, anyBlocked: true, blocked: ["https://a.example"] }),
+        ),
+      ).toEqual({
+        frame: "hidden",
+        waiting: true,
+        notices: [`${appLines.blocked}: https://a.example`],
+      })
+    expect(
+      appDraws("pane", view({ lifecycle: "failed", anyBlocked: true, serverGone: true }))
+        .notices,
+    ).toEqual([])
+  })
 })

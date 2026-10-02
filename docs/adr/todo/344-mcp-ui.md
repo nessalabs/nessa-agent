@@ -104,15 +104,20 @@ holds the frame when the app navigates it, which a policy inside the app's
 document alone does not (review round 1 on #349 found exactly that escape) —
 and the app's document carries it first as well. `frameDomains` is not
 applied: `frame-src` is always `'none'`, so the app's frame loads nothing but
-its own document — no nested frame, no navigation of its own frame anywhere —
-and the app is told so in the domains it is told were approved. A nested
+its own document — a nested frame loads nothing but inline content, and no
+navigation of its own frame goes anywhere — and the app is told so in the domains it is told were approved. A nested
 frame needs an origin per app, and Tauri's navigation policy to tell a
 frame's load from the window's (it would hand a declared frame to the
 person's browser); round 2 on #349 showed what a declared frame lets an app's
 frame become. When the app's document goes anyway — a navigation refused, a
-reload — its reporter says so on `pagehide`, with a token the proxy wrote
-into that document alone, and the proxy removes the frame and the host
-fails the view. Permissions (`camera`, …) and `_meta.ui.domain` are not
+reload, a document rewritten — the proxy knows it from the frame's own
+`load` events, which it hears in its own document where nothing the app runs
+reaches: any load after the first, or a first whose document does not answer
+the proxy's check with the token the proxy wrote into the document it handed
+over, and the proxy removes the frame and the host fails the view. The
+reporter in the app's document says so sooner on `pagehide` while the app
+leaves it in place; the guarantee is not its (round 3 on #349 erased it with
+`document.open()`). Permissions (`camera`, …) and `_meta.ui.domain` are not
 granted.
 
 What the sandbox does not hold, and is not claimed to: CSP does not govern

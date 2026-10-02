@@ -3,9 +3,9 @@
  * plugin is the server's app, `mcp:` then the server's name; the widget is
  * one tool call, by the execution and tool ids that name it. The one
  * statement of both: the transcript names a call's widget with them
- * (`workspace/model/transcript.ts`, `toolWidget`), and an app plugin's id is
- * derived from its server (`appPluginId`, which `appPlugin` builds every
- * app plugin with).
+ * (`workspace/model/transcript.ts`, `toolWidget`), and `appPlugin` derives
+ * an app plugin's id from its server with `appPluginId`
+ * (`app-ref.test.ts`). A plugin built by hand is not held to it.
  */
 import type { WidgetRef } from "../../model/widget-ref"
 

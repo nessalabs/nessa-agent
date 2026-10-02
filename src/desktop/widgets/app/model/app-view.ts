@@ -46,7 +46,10 @@ export interface AppDraws {
   readonly waiting: boolean
   /** One line in the app's stead, with close where the place has one. */
   readonly line?: { readonly text: string; readonly closes: boolean }
-  /** Notices above a live app. */
+  /**
+   * Notices above the app, from its loading on: a connection blocked while
+   * it loads is worth saying too (design L26). None once it has failed.
+   */
   readonly notices: readonly string[]
 }
 

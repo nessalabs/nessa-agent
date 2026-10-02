@@ -4,7 +4,11 @@
  */
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { departureTokenSlot, sandboxMethods } from "../model/sandbox-methods"
+import {
+  departureTokenSlot,
+  sandboxMethods,
+  sandboxPrefix,
+} from "../model/sandbox-methods"
 import { sandboxMetaName } from "../adapters/dom/sandbox-origin"
 import { sandboxResponse, withMeta } from "./serve"
 
@@ -50,9 +54,22 @@ describe("the proxy", () => {
   // methods it speaks are checked against the host's own here.
   const text = proxy.toString("utf8")
 
-  it("speaks the methods the host listens for", () => {
-    for (const method of [...Object.values(sandboxMethods), departureTokenSlot])
-      expect(text, method).toContain(`"${method}"`)
+  it("binds each name the host states to the variable of that name", () => {
+    const names: [string, string][] = [
+      ...Object.entries(sandboxMethods),
+      ["reserved", sandboxPrefix],
+      ["tokenSlot", departureTokenSlot],
+    ]
+    for (const [name, value] of names) {
+      expect(text, name).toContain(`var ${name} = "${value}"\n`)
+      // Spelled once: everything else in the proxy says it by its variable.
+      expect(text.split(`"${value}"`).length - 1, value).toBe(1)
+    }
+  })
+
+  it("reserves every method the host states", () => {
+    for (const method of Object.values(sandboxMethods))
+      expect(method.startsWith(sandboxPrefix), method).toBe(true)
   })
 
   it("frames the app with allow-scripts alone, and applies the host's policy first", () => {

@@ -2,8 +2,8 @@
  * What an app's frame may say to the host, by method, read from an envelope
  * (`json-rpc.ts`) into the typed message the bridge acts on — or into the
  * error it answers with. The set of methods is closed: the requests and
- * notifications of MCP Apps (2026-01-26) a view sends, and the one the
- * sandbox proxy sends; anything else is answered as not found, or, for a
+ * notifications of MCP Apps (2026-01-26) a view sends, and those the sandbox
+ * proxy sends the host (`sandbox-methods.ts`); anything else is answered as not found, or, for a
  * notification, ignored.
  *
  * Every field the bridge uses is read here from the envelope's copy, and the
@@ -74,7 +74,11 @@ export type AppNotification =
   | { readonly method: "ui/notifications/request-teardown" }
   | { readonly method: "notifications/message"; readonly level: string }
   | { readonly method: typeof sandboxMethods.proxyReady }
-  /** The proxy's: the app's frame loaded a second time, and the proxy removed it. */
+  /**
+   * The proxy's: the app's document is gone from its frame — the frame
+   * loaded again, did not answer the check, or its reporter said it was
+   * going — and the proxy removed the frame (design L32).
+   */
   | { readonly method: typeof sandboxMethods.appLeft }
   | {
       readonly method: typeof sandboxMethods.cspViolation

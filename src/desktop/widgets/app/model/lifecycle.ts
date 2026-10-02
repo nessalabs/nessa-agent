@@ -42,7 +42,7 @@ export type Lifecycle =
 export type LifecycleEvent =
   | { readonly kind: "read"; readonly outcome: "html" | "unloadable" | "server-gone" }
   | { readonly kind: "proxy-ready" }
-  /** The proxy saw the app's frame load again, and removed it. */
+  /** The proxy found the app's document gone from its frame, and removed the frame (L32). */
   | { readonly kind: "app-left" }
   | { readonly kind: "initialize"; readonly initialize: Initialize }
   | { readonly kind: "initialized" }

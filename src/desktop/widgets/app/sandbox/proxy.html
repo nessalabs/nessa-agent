@@ -18,13 +18,18 @@
   frame) are heard; nothing is relayed before the document; methods under
   `ui/notifications/sandbox-` are the host's and this proxy's — none is
   relayed from the host to the app, and of the app's only the CSP reporter's
-  is passed on; and the reporter's word that the app's document is going —
+  is passed on; and the app's departure, after which nothing more is relayed
+  and the frame is removed. The departure is the proxy's own reading of the
+  frame, where the app cannot reach (design L32): any `load` of the frame
+  after its first — a navigation, refused or not, a reload, a rewritten
+  document — or, at the first, no answer to the check only the reporter the
+  host wrote into the document answers. The reporter's word on `pagehide`,
   carrying the token this proxy minted for the frame and wrote into that
-  document alone, as the browser no longer names the sender of a document
-  that has gone — after which nothing more is relayed and the frame is
-  removed. What its own policy blocks, it reports the same way.
+  document alone (the browser no longer names the sender of a document that
+  has gone), says it sooner while the app leaves the reporter in place. What
+  its own policy blocks, it reports the same way.
   `verification/desktop/scripts/mcp-apps.mjs --only
-  escape-navigate,escape-refresh,forge` holds each.
+  escape-navigate,escape-refresh,escape-rewrite,departures,forge` holds each.
 -->
 <html>
   <head>
@@ -65,10 +70,12 @@
         var resourceReady = "ui/notifications/sandbox-resource-ready"
         var cspViolation = "ui/notifications/sandbox-csp-violation"
         var appLeft = "ui/notifications/sandbox-app-left"
+        var appCheck = "ui/notifications/sandbox-app-check"
         var tokenSlot = "__nessa_departure_token__"
         // Minted for this frame, and written into its document's reporter
-        // alone: the one way a departure notice is known to be the app's own
-        // once its document is gone and the browser names no sender.
+        // alone: the one way the check's answer is known to come from the
+        // document handed over, and a departure notice from this frame once
+        // its document is gone and the browser names no sender.
         // (`getRandomValues`, not `randomUUID`: a custom scheme's page need
         // not be a secure context.)
         var token = Array.prototype.map
@@ -76,17 +83,24 @@
             return (byte + 256).toString(16).slice(1)
           })
           .join("")
+        // How long the frame's document has, from its first load, to answer
+        // the check.
+        var checkWithin = 5000
         // The host's origin, from its first message; the app's frame, once made.
         var hostOrigin = null
         var app = null
         var left = false
+        var loads = 0
+        var checking = null
 
-        // The app's document is going — its reporter says so on `pagehide`,
-        // before anything of the app's — and what comes after it in this
+        // The app's document is gone, or going — by the frame's loads, the
+        // check, or its reporter's word — and what comes after it in this
         // frame is not the app: nothing more is relayed either way, the frame
-        // is removed, the host told.
+        // is removed, the host told, once.
         function leave() {
+          if (left) return
           left = true
+          clearTimeout(checking)
           app.remove()
           host.postMessage({ jsonrpc: "2.0", method: appLeft, params: {} }, hostOrigin)
         }
@@ -141,6 +155,25 @@
               // The reporter's slot comes first in the document, before any
               // of the app's markup: only it is filled.
               app.srcdoc = html.replace(tokenSlot, token)
+              // The frame's loads, heard here, where nothing the app runs can
+              // remove the listener. The first is checked: the document in it
+              // must be the one handed over, whose reporter alone holds the
+              // token to answer with; silence is a departure. Any later one
+              // is a new document — a navigation, refused or not, a reload, a
+              // rewrite — and the app's departure.
+              app.addEventListener("load", function () {
+                if (left) return
+                loads += 1
+                if (loads > 1) {
+                  leave()
+                  return
+                }
+                checking = setTimeout(leave, checkWithin)
+                app.contentWindow.postMessage(
+                  { jsonrpc: "2.0", method: appCheck, params: {} },
+                  "*",
+                )
+              })
               document.body.appendChild(app)
               return
             }
@@ -163,6 +196,15 @@
           }
           if (app !== null && !left && event.source === app.contentWindow) {
             var from = methodOf(event.data)
+            if (from === appCheck) {
+              if (
+                event.data.params !== null &&
+                typeof event.data.params === "object" &&
+                event.data.params.token === token
+              )
+                clearTimeout(checking)
+              return
+            }
             if (from !== null && from.indexOf(reserved) === 0 && from !== cspViolation)
               return
             host.postMessage(event.data, hostOrigin)

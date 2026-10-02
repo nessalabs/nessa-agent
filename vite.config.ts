@@ -73,7 +73,14 @@ export default defineConfig({
     react(),
     tailwindcss(),
     // The MCP Apps sandbox proxy's own origin, beside the dev server.
-    appSandbox(),
+    appSandbox(
+      readFileSync(
+        resolve(
+          dirname(fileURLToPath(import.meta.url)),
+          "src/desktop/widgets/app/sandbox/proxy.html",
+        ),
+      ),
+    ),
     {
       name: "nessa-bundle-stage",
       apply: "build",
