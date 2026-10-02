@@ -122,14 +122,17 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
 - **What a refusal tells the host.** Nothing reached the server for
   `mcp_app_unknown`, `mcp_server_mismatch`, `mcp_tool_not_for_app`,
   `mcp_request_too_large`, `mcp_approval_denied`, `mcp_approval_expired`,
-  `mcp_cancelled`, `invalid_request` or `temporarily_unavailable`; an
+  `mcp_cancelled` or `invalid_request`; an
   `mcp_app_unknown` for a resource that is not an app's HTML, or an
   `mcp_cancelled` for one whose mount or conversation ended while it was
   read, was read, which changes nothing. The server may have been asked for
   `mcp_session_unavailable`, `mcp_timed_out`, `mcp_remote_error` (its JSON-RPC
   error in `McpRemoteErrorDetails`, or no details for an answer that is no
   MCP answer, or a code past what a JSON number keeps) or
-  `mcp_result_too_large`. `audit_unavailable` says a step could not be
+  `mcp_result_too_large`. `temporarily_unavailable` may come either side:
+  a lane or slot that was full, or a busy session, asked nothing; a
+  resource read that found no room to hold its bytes was read.
+  `audit_unavailable` says a step could not be
   recorded and was not taken — except the last: a call already made whose
   answer could not be recorded is answered `audit_unavailable` too, its
   answer withheld.

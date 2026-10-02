@@ -10,7 +10,7 @@ use crate::conversation::application::app_reviews::{
     ALLOW, DENY, MAX_APP_REVIEW_BYTES, MAX_OPEN_APP_REVIEWS,
 };
 use crate::conversation::application::mcp_apps::TicketEnd;
-use crate::conversation::application::projection::{bound_view, MAX_VIEW_BYTES};
+use crate::conversation::application::projection::MAX_VIEW_BYTES;
 use crate::conversation::application::view::{ConversationMessage, ConversationPermissionOrigin};
 use crate::mcp_servers::domain::MAX_APP_ARGUMENTS_BYTES;
 use nessa_auth::domain::PrincipalId;
@@ -795,11 +795,21 @@ async fn a_resource_read_when_its_conversation_closes_is_never_held() {
     fixture.apps.gate.0.add_permits(1);
     assert_eq!(refused(reading.await.unwrap()), McpAppError::Cancelled);
     assert!(fixture.tickets.issued.lock().unwrap().is_empty());
+    // By the close, another command: the system's.
+    let last = fixture
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .unwrap();
     assert_eq!(
-        fixture.audit.phases().last(),
-        Some(&McpAppAuditPhase::Completed(McpAppOutcome::Failed(
-            McpAppCode::Cancelled
-        )))
+        (last.phase, last.initiator),
+        (
+            McpAppAuditPhase::Completed(McpAppOutcome::Failed(McpAppCode::Cancelled)),
+            McpAppInitiator::System
+        )
     );
 }
 
@@ -1238,7 +1248,8 @@ async fn app_reviews_are_the_last_of_a_full_view_to_go() {
         })
         .collect();
     view.messages.push(message);
-    let shown = bound_view(with_app_reviews(view, vec![review.clone()]));
+    // As the read hands it out: bounded, with its reviews, and no further.
+    let shown = with_app_reviews(view, vec![review.clone()]);
     assert!(serde_json::to_vec(&shown).unwrap().len() <= MAX_VIEW_BYTES);
     assert_eq!(
         shown
@@ -1252,4 +1263,90 @@ async fn app_reviews_are_the_last_of_a_full_view_to_go() {
         .tools
         .iter()
         .any(|tool| tool.tool_id == fixture.tool_id));
+}
+
+#[tokio::test]
+async fn a_call_still_running_holds_no_reopening_or_deletion_back() {
+    // The call keeps its conversation's apps, never its agent: the history
+    // is free to be opened again, or deleted, while it runs.
+    let fixture = Fixture::new().await;
+    fixture.apps.hold.store(true, Ordering::SeqCst);
+    let running = {
+        let service = fixture.service.clone();
+        let id = fixture.id.clone();
+        let call = fixture.call("read_rows", None);
+        tokio::spawn(async move { service.call_app_tool(id, caller("held"), call).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.apps.calls() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    fixture
+        .service
+        .close(fixture.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    // Opened again while the call runs.
+    fixture
+        .service
+        .read(fixture.id.clone(), caller("reopen"))
+        .await
+        .unwrap();
+    // And deleted while it runs: the history is not leased elsewhere.
+    let deleted = fixture
+        .service
+        .delete(fixture.id.clone(), caller("delete"))
+        .await;
+    if let Err(ConversationError::DeletionIncomplete(failures)) = &deleted {
+        assert!(!failures.history_leased_elsewhere, "{deleted:?}");
+    }
+    fixture.apps.gate.0.add_permits(1);
+    running.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn a_mount_released_after_its_call_was_allowed_is_not_sent() {
+    // Allowed, and released while the approval was being recorded: checked
+    // once more as it is sent, it is not.
+    let fixture = Fixture::new().await;
+    let (task, review) = fixture.held(fixture.call("delete_rows", None)).await;
+    *fixture.audit.slow.lock().unwrap() = Some(Duration::from_millis(300));
+    fixture.answer(&review, ALLOW).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    fixture
+        .service
+        .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
+        .await
+        .unwrap();
+    assert_eq!(refused(task.await.unwrap()), McpAppError::Cancelled);
+    assert_eq!(fixture.apps.calls(), 0);
+    assert_eq!(
+        fixture.audit.phases().last(),
+        Some(&McpAppAuditPhase::Refused(McpAppCode::Cancelled))
+    );
+}
+
+#[tokio::test]
+async fn a_mount_released_after_its_read_was_admitted_is_not_read() {
+    let fixture = Fixture::new().await;
+    *fixture.apps.resource.lock().unwrap() = Some(Ok(page("<p/>")));
+    // `Admitted` takes a while to record; the release lands meanwhile.
+    *fixture.audit.slow.lock().unwrap() = Some(Duration::from_millis(300));
+    let reading = {
+        let service = fixture.service.clone();
+        let id = fixture.id.clone();
+        let read = read(&fixture, INSTANCE);
+        tokio::spawn(async move { service.read_app_resource(id, caller("read"), read).await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    fixture
+        .service
+        .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
+        .await
+        .unwrap();
+    assert_eq!(refused(reading.await.unwrap()), McpAppError::Cancelled);
+    assert_eq!(fixture.apps.reads.load(Ordering::SeqCst), 0);
 }

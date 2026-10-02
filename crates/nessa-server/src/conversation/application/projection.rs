@@ -975,12 +975,22 @@ impl Projection {
     }
 }
 
+/// What a view bounded to its size says of the interactions it left out.
+const UNSHOWN_INTERACTIONS: &str =
+    "Some pending interactions exceed this display limit. Use Stop to cancel them.";
+
 /// Bound the complete service result after its metadata and authority additions.
-pub(super) fn bound_view(mut view: ConversationView) -> ConversationView {
+pub(super) fn bound_view(view: ConversationView) -> ConversationView {
+    bound_view_within(view, MAX_VIEW_BYTES)
+}
+
+/// As [`bound_view`], within `limit` bytes: the view that leaves room for
+/// what is added beside it after.
+pub(super) fn bound_view_within(mut view: ConversationView, limit: usize) -> ConversationView {
     // The binding bounds actual admitted ACP asks. Custom backends can
     // retain other valid histories, so the encoded display owner gives up
     // whole interactions with an explicit notice rather than cutting choices.
-    while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
+    while serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > limit {
         // The structured result is optional display data. Preserve the history
         // and its text before giving up a message or interaction.
         if let Some(tool) = view
@@ -1025,16 +1035,10 @@ pub(super) fn bound_view(mut view: ConversationView) -> ConversationView {
             view.queue_complete = false;
         } else if !view.permissions.is_empty() {
             view.permissions.pop();
-            view.interaction_view_error = Some(
-                "Some pending interactions exceed this display limit. Use Stop to cancel them."
-                    .into(),
-            );
+            view.interaction_view_error = Some(UNSHOWN_INTERACTIONS.into());
         } else if !view.questions.is_empty() {
             view.questions.pop();
-            view.interaction_view_error = Some(
-                "Some pending interactions exceed this display limit. Use Stop to cancel them."
-                    .into(),
-            );
+            view.interaction_view_error = Some(UNSHOWN_INTERACTIONS.into());
         } else {
             break;
         }

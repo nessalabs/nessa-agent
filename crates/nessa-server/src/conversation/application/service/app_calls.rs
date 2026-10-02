@@ -19,6 +19,7 @@ use super::super::mcp_apps::{
     McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef, McpAppWithdrawal,
     TicketRefusal,
 };
+use super::super::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
 use super::super::session_key::conversation_session;
 use super::super::view::{ConversationPermission, ConversationTranscriptState, ConversationView};
 use super::{ConversationCaller, ConversationError, ConversationService, LiveConversation};
@@ -168,13 +169,18 @@ impl ConversationService {
             .clone()
     }
 
-    /// Let go of the deleted conversation `id`'s apps.
-    pub(super) fn forget_apps(&self, id: &ConversationId) {
-        self.inner
-            .apps
-            .lock()
-            .expect("conversations' apps")
-            .remove(id);
+    /// The conversation `id` was deleted, and its agent stopped: its apps
+    /// take no more work, ever, and keep nothing. Kept as that, not
+    /// removed, so that a release or an opening racing the delete cannot
+    /// build them afresh.
+    pub(super) fn close_apps_for_good(&self, id: &ConversationId) {
+        self.apps_of(id).delete(|| {
+            if let Some(ports) = &self.inner.mcp_apps {
+                ports
+                    .tickets
+                    .release_conversation(id, &McpAppInitiator::System);
+            }
+        });
     }
 
     /// `by` ended `live`'s conversation: withdraw its apps' reviews, let go
@@ -218,7 +224,7 @@ impl ConversationService {
         call: McpAppCall,
         mut gone: oneshot::Receiver<()>,
     ) -> Result<String, ConversationError> {
-        let (live, ports) = self.app_conversation(&id, &caller).await?;
+        let (opening, facts, ports) = self.app_opening(&id, &caller, &call.app).await?;
         let session = conversation_session(&id);
         let step = Step::new(
             &ports,
@@ -230,13 +236,12 @@ impl ConversationService {
                 tool: call.tool.clone(),
             },
         );
-        let facts = self.app_facts(&live, &call.app, &session).await;
         let arguments_text = call.arguments_json.as_deref();
         let admission = match admitted(&ports, &session, facts.as_ref(), &call, arguments_text) {
             Ok(admission) => admission,
             Err(error) => return Err(step.refuse(error).await),
         };
-        if live.app_reviews.admit(live.app_epoch, &call.app).is_err() {
+        if opening.admit(&call.app).is_err() {
             return Err(step.refuse_by_system(McpAppError::Cancelled).await);
         }
         let arguments = match arguments_text.map(serde_json::from_str::<Value>) {
@@ -257,7 +262,7 @@ impl ConversationService {
                 let shown = arguments
                     .as_ref()
                     .map_or_else(|| "{}".to_owned(), Value::to_string);
-                self.approved(&live, &step, &call, &shown, &mut gone)
+                self.approved(&opening, &step, &call, &shown, &mut gone)
                     .await?;
                 // Allowed: the tool must still be what the person allowed.
                 match admitted(&ports, &session, facts.as_ref(), &call, arguments_text) {
@@ -268,6 +273,12 @@ impl ConversationService {
                     Err(error) => return Err(step.refuse(error).await),
                 }
             }
+        }
+        // Checked once more as it is sent, with nothing awaited between: the
+        // mount released or the opening ended since it was admitted, and it
+        // is not sent — not to this opening's session, nor a later one's.
+        if opening.admit(&call.app).is_err() {
+            return Err(step.refuse_by_system(McpAppError::Cancelled).await);
         }
         let answer = ports
             .apps
@@ -304,7 +315,7 @@ impl ConversationService {
     /// Ask the person, and wait for their answer: `Ok` once they allowed it.
     async fn approved(
         &self,
-        live: &LiveConversation,
+        opening: &Opening,
         step: &Step,
         call: &McpAppCall,
         arguments_json: &str,
@@ -327,8 +338,8 @@ impl ConversationService {
             None,
         )
         .await?;
-        let waiting = match live.app_reviews.open(
-            live.app_epoch,
+        let waiting = match opening.apps.open(
+            opening.epoch,
             permission_id.clone(),
             &call.app,
             &call.server,
@@ -370,7 +381,7 @@ impl ConversationService {
             _ = &mut *gone => {
                 // The caller went. Withdraw it, then take how it actually
                 // ended: an answer that came first is what it ended with.
-                live.app_reviews.withdraw(&permission_id);
+                opening.apps.withdraw(&permission_id);
                 ended.await
             }
         };
@@ -409,7 +420,7 @@ impl ConversationService {
         caller: ConversationCaller,
         read: McpAppRead,
     ) -> Result<McpAppResource, ConversationError> {
-        let (live, ports) = self.app_conversation(&id, &caller).await?;
+        let (opening, facts, ports) = self.app_opening(&id, &caller, &read.app).await?;
         let session = conversation_session(&id);
         let step = Step::new(
             &ports,
@@ -421,7 +432,6 @@ impl ConversationService {
                 uri: read.uri.clone(),
             },
         );
-        let facts = self.app_facts(&live, &read.app, &session).await;
         if let Err(refusal) = admit_app(facts.as_ref(), &read.server) {
             return Err(step.refuse(refusal.into()).await);
         }
@@ -430,10 +440,14 @@ impl ConversationService {
                 .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
                 .await);
         };
-        if live.app_reviews.admit(live.app_epoch, &read.app).is_err() {
+        if opening.admit(&read.app).is_err() {
             return Err(step.refuse_by_system(McpAppError::Cancelled).await);
         }
         step.record(McpAppAuditPhase::Admitted, None).await?;
+        // As it is sent, once more: see `app_tool_call`.
+        if opening.admit(&read.app).is_err() {
+            return Err(step.refuse_by_system(McpAppError::Cancelled).await);
+        }
         let resource = match ports.apps.read_resource(&session, &read.server, &uri).await {
             Ok(resource) => resource,
             // Too busy to take it: nothing was sent.
@@ -472,9 +486,9 @@ impl ConversationService {
             record: step.record.clone(),
             bytes,
         };
-        let ticket = match live
-            .app_reviews
-            .issue(live.app_epoch, &read.app, || ports.tickets.issue(held))
+        let ticket = match opening
+            .apps
+            .issue(opening.epoch, &read.app, || ports.tickets.issue(held))
         {
             Ok(Ok(ticket)) => ticket,
             Ok(Err(TicketRefusal::Capacity | TicketRefusal::Unavailable)) => {
@@ -485,10 +499,16 @@ impl ConversationService {
                     )
                     .await);
             }
+            // The mount released or the opening ended while it was read: by
+            // that other command, so the system's.
             Err(_) => {
                 let error = McpAppError::Cancelled;
                 return Err(step
-                    .fail(error.code(), ConversationError::McpApp(error))
+                    .ended(
+                        McpAppAuditPhase::Completed(McpAppOutcome::Failed(error.code())),
+                        Some(McpAppInitiator::System),
+                        ConversationError::McpApp(error),
+                    )
                     .await);
             }
         };
@@ -543,14 +563,19 @@ impl ConversationService {
         })
     }
 
-    /// The conversation an app's call is in, open, and the ports it goes
-    /// through. Admission is held only this long: a call can wait minutes on
-    /// its review, and must not hold a shutdown back for it.
-    async fn app_conversation(
+    /// The opening of the conversation an app's call is in — opened, if it
+    /// was not — what its view says of the app, and the ports the call goes
+    /// through. The call keeps only its conversation's apps and the opening's
+    /// epoch, never the live agent: a call that runs a minute must not hold
+    /// the conversation's history, and so its reopening or its deletion,
+    /// that long. Admission is held only this long too: a call can wait
+    /// minutes on its review, and must not hold a shutdown back for it.
+    async fn app_opening(
         &self,
         id: &ConversationId,
         caller: &ConversationCaller,
-    ) -> Result<(Arc<LiveConversation>, McpAppPorts), ConversationError> {
+        app: &McpAppRef,
+    ) -> Result<(Opening, Option<AppFacts>, McpAppPorts), ConversationError> {
         let _admission = self.admit().await?;
         caller.actor()?;
         let live = self.resolve(id, caller).await?;
@@ -560,7 +585,12 @@ impl ConversationService {
             .mcp_apps
             .clone()
             .ok_or(ConversationError::McpApp(McpAppError::AppUnknown))?;
-        Ok((live, ports))
+        let facts = self.app_facts(&live, app, &conversation_session(id)).await;
+        let opening = Opening {
+            apps: live.app_reviews.clone(),
+            epoch: live.app_epoch,
+        };
+        Ok((opening, facts, ports))
     }
 
     /// What the conversation's view says of the tool call `app` names as
@@ -582,6 +612,20 @@ impl ConversationService {
             server: mcp.server.clone(),
             has_ui: self.inner.tool_uis.resource_uri(session, &call).is_some(),
         })
+    }
+}
+
+/// What an app call keeps of the conversation it is in: its apps, and the
+/// opening it was admitted in.
+struct Opening {
+    apps: Arc<AppReviews>,
+    epoch: u64,
+}
+impl Opening {
+    /// Whether `app` may still be admitted, opened for or issued to in this
+    /// opening.
+    fn admit(&self, app: &McpAppRef) -> Result<(), ReviewRefusal> {
+        self.apps.admit(self.epoch, app)
     }
 }
 
@@ -723,24 +767,31 @@ impl From<AppRefusal> for McpAppError {
     }
 }
 
-/// The view, with the app reviews open beside the agent's: their
-/// identities folded into its revision, so a window holding this revision
-/// holds these reviews. 16 hex digits of the fold keep the revision within
-/// its bound.
+/// The view, bounded, with the app reviews open beside it. Room is kept for
+/// them — at most [`MAX_APP_REVIEW_BYTES`] — by bounding the rest of the
+/// view to leave it: its transcript, tool calls and queue give way first,
+/// then, in a view of the agent's reviews alone past its size, the agent's
+/// newest. Their identities are folded into its revision — 16 hex digits of
+/// the fold keep the revision within its bound — so a window holding this
+/// revision holds these reviews.
+///
+/// [`MAX_APP_REVIEW_BYTES`]: super::super::app_reviews::MAX_APP_REVIEW_BYTES
 ///
 /// Shown only in a view whose transcript is confirmed complete: the client
-/// refuses one of unconfirmed history that offers any control. A view
-/// bounded to its size gives up its transcript, its tool calls and its queue
-/// before any review, so the reviews — at most
-/// [`MAX_APP_REVIEW_BYTES`](super::super::app_reviews::MAX_APP_REVIEW_BYTES)
-/// — are the last of it to go.
+/// refuses one of unconfirmed history that offers any control.
 pub(super) fn with_app_reviews(
-    mut view: ConversationView,
+    view: ConversationView,
     reviews: Vec<ConversationPermission>,
 ) -> ConversationView {
     if reviews.is_empty() || view.transcript_state != ConversationTranscriptState::Complete {
-        return view;
+        return bound_view(view);
     }
+    // Each review, its comma, and the revision's fold.
+    let room = reviews
+        .iter()
+        .map(|review| serde_json::to_vec(review).map_or(usize::MAX, |bytes| bytes.len() + 1))
+        .fold(":app:".len() + 16, usize::saturating_add);
+    let mut view = bound_view_within(view, MAX_VIEW_BYTES.saturating_sub(room));
     let mut digest = Sha256::new();
     for review in &reviews {
         digest.update((review.permission_id.len() as u64).to_be_bytes());

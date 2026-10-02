@@ -114,6 +114,8 @@ struct Reviews {
     /// The current opening ended: nothing is admitted, opened or issued
     /// for it again.
     ended: bool,
+    /// The conversation was deleted: no opening begins again.
+    deleted: bool,
 }
 impl Reviews {
     fn key(&self, permission: &str) -> Option<u64> {
@@ -155,8 +157,32 @@ impl AppReviews {
     pub fn begin(&self) -> u64 {
         let mut state = self.state.lock().expect("app reviews");
         state.epoch += 1;
-        state.ended = false;
+        state.ended = state.deleted;
+        state.bytes = 0;
+        // Every opening is ended before the next begins. Should one ever not
+        // be, its reviews are not carried into this one: let go of, each
+        // wait reads its review as withdrawn by the system.
+        state.pending.clear();
         state.epoch
+    }
+
+    /// The conversation was deleted: end the current opening, and begin no
+    /// other; what was held of it — its released mounts — is let go, as
+    /// nothing will name it again. `release` runs under the lock.
+    pub fn delete(&self, release: impl FnOnce()) {
+        let ended = {
+            let mut state = self.state.lock().expect("app reviews");
+            state.deleted = true;
+            // Its opening's end let go of what was held for it already.
+            if !state.ended {
+                release();
+            }
+            state.ended = true;
+            state.released.clear();
+            state.bytes = 0;
+            std::mem::take(&mut state.pending)
+        };
+        withdraw_ended(ended, &McpAppInitiator::System);
     }
 
     /// Whether `app` may be admitted in the opening `epoch` now.
@@ -331,12 +357,7 @@ impl AppReviews {
             state.bytes = 0;
             std::mem::take(&mut state.pending)
         };
-        for (_, open) in ended {
-            let _ = open.end.send(ReviewEnd::Withdrawn {
-                cause: McpAppWithdrawal::ConversationEnded,
-                by: Some(by.clone()),
-            });
-        }
+        withdraw_ended(ended, by);
     }
 }
 
@@ -387,6 +408,17 @@ fn review_of(
 /// What a review takes of the view, encoded.
 fn encoded_len(review: &ConversationPermission) -> usize {
     serde_json::to_vec(review).map_or(usize::MAX, |encoded| encoded.len())
+}
+
+/// Tell each review in `ended` that it was withdrawn as its conversation
+/// ended, by `by`.
+fn withdraw_ended(ended: BTreeMap<u64, Pending>, by: &McpAppInitiator) {
+    for (_, open) in ended {
+        let _ = open.end.send(ReviewEnd::Withdrawn {
+            cause: McpAppWithdrawal::ConversationEnded,
+            by: Some(by.clone()),
+        });
+    }
 }
 
 /// A new app review's identity.

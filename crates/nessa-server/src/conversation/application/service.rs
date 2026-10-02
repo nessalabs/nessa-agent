@@ -1575,9 +1575,10 @@ impl ConversationService {
             }
         });
         view.title = self.title(&id).await;
+        // Bounded there, before its app reviews are added beside it.
         let view = app_calls::with_app_reviews(view, live.app_reviews.reviews());
         self.check_view_access(&id, &caller).await?;
-        Ok(bound_view(view))
+        Ok(view)
     }
     async fn read_pending_mode_change(
         &self,
@@ -2547,9 +2548,11 @@ impl ConversationService {
                     )))
                 }
             };
-            // Tombstoned: nothing names it again, so its apps' state goes.
-            service.forget_apps(&id);
-            match service.finish_deletion(record).await {
+            let finished = service.finish_deletion(record).await;
+            // Its agent stopped — its apps ended by the deleter — or not:
+            // either way nothing names it again, and its apps take no more.
+            service.close_apps_for_good(&id);
+            match finished {
                 Ok(()) => {
                     // Nothing is left for the worker to carry
                     // (`a_person_s_delete_that_finishes_leaves_nothing_waiting`).

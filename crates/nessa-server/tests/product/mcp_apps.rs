@@ -102,10 +102,11 @@ fn the_largest_resource_the_gateway_reads_is_answered_within_one_message() {
     }))
     .unwrap()
     .len();
-    // The rest of the bound, as one list of sources that need escaping.
-    let source = "\"".repeat(100);
-    let encoded = serde_json::to_string(&source).unwrap().len() + 1;
-    let count = (MAX_RESOURCE_META_BYTES - fixed) / encoded;
+    // The rest of the bound, across the four lists at their most sources —
+    // what the schema allows — each source needing escaping.
+    let per_source = (MAX_RESOURCE_META_BYTES - fixed) / (4 * 64);
+    let source = "\"".repeat((per_source - 3) / 2);
+    let list = vec![source; 64];
     let result = McpReadResourceResult {
         uri,
         mime_type: crate::mcp_servers::entrypoint::http::CONTENT_TYPE.into(),
@@ -114,10 +115,10 @@ fn the_largest_resource_the_gateway_reads_is_answered_within_one_message() {
         ticket: "t".repeat(43),
         expires_in_ms: 60_000,
         csp: McpUiCsp {
-            connect_domains: vec![source; count],
-            resource_domains: vec![],
-            frame_domains: vec![],
-            base_uri_domains: vec![],
+            connect_domains: list.clone(),
+            resource_domains: list.clone(),
+            frame_domains: list.clone(),
+            base_uri_domains: list,
         },
         permissions: McpUiPermissions {
             camera: true,

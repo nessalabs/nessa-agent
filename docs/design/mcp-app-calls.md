@@ -47,7 +47,7 @@ Each step is recorded with who took it:
 | the caller of `mcp.releaseApp` | that caller, with their request |
 | the person who closed or deleted the conversation | that person, with their request |
 | a deadline, an automatic stop, the recovery of an approval-mode change that could not be applied, the gateway stopping | the system |
-| a refusal because the mount was released before the call came | the system: the release was an earlier command, recorded as its caller's when it ended anything |
+| a refusal because the mount was released, or the opening ended, before the call was admitted, sent or held | the system: the release or the end was another command, recorded as its caller's when it ended anything |
 
 ## A conversation's apps
 
@@ -69,8 +69,19 @@ end ends that epoch.
 - Ending an opening takes the lock, ends that epoch, and lets go of every
   review and ticket.
 
-So nothing is admitted, opened or issued for a mount or an opening once it
-has ended, whatever the interleaving; a call admitted already is sent. A
+An app call keeps only its conversation's apps and the epoch of the opening
+it was admitted in — never the live agent, so a call that runs a minute
+holds neither the conversation's history nor its reopening or deletion. It
+is checked once more as it is sent, with nothing awaited between: a call
+whose mount was released, or whose opening ended, after it was admitted is
+not sent — not to that opening's session, nor a later one's. Its
+`Admitted` is on record before that last check, so the evidence of a
+release can come between them.
+
+So nothing is admitted, opened, sent or issued for a mount or an opening
+once it has ended, whatever the interleaving. A deleted conversation's apps
+are kept as that — ended, and holding nothing — once its agent is stopped,
+so a release or an opening racing the delete cannot build them afresh. A
 conversation remembers its last 1024 released mounts. A mount released
 longer ago than that is forgotten: a host gives each mount a fresh
 `instanceId` and never asks in a released one's name, so only a host that
@@ -88,7 +99,7 @@ is opened again.
 | — | the app is no MCP tool call with a UI in this conversation | — | `Refused(mcp_app_unknown)` |
 | — | another server than the app's | — | `Refused(mcp_server_mismatch)` |
 | — | no open session of that server | — | `Refused(mcp_session_unavailable)` |
-| — | its mount released, or the opening it resolved ended | — | `Refused(mcp_cancelled)`, by the system |
+| — | its mount released, or the opening it resolved ended (checked after the rows above) | — | `Refused(mcp_cancelled)`, by the system |
 | — | the tool is not listed, or its `visibility` excludes `app` | — | `Refused(mcp_tool_not_for_app)` |
 | — | arguments past 32 KiB | — | `Refused(mcp_request_too_large)` |
 | — | arguments that are not one JSON object | — | `Refused(invalid_request)` |
@@ -132,9 +143,11 @@ not in an app.
 
 An app review is shown only in a view whose transcript is confirmed
 complete: the client refuses a view of unconfirmed history that offers any
-control. A view bounded to its size gives up its transcript, its tool calls
-and its queue before any review, so the app reviews — at most 16 000 bytes
-together — are the last of it to go.
+control. Room is kept for app reviews — at most 16 000 bytes together — by
+bounding the rest of the view to leave it: its transcript, tool calls and
+queue give way first, then — in a view of the agent's reviews alone past
+its size — the agent's newest. The view's revision folds in the app reviews
+it shows.
 
 ### A resource read
 
@@ -146,7 +159,7 @@ together — are the last of it to go.
 | no open session, or it ends | `Completed(Failed(mcp_session_unavailable))` |
 | read, and not an app's HTML | `Completed(Failed(mcp_app_unknown))` |
 | the session cannot take another request now; nothing is sent | `Refused(temporarily_unavailable)` |
-| read, its mount released or its opening ended meanwhile | `Completed(Failed(mcp_cancelled))`; nothing held |
+| read, its mount released or its opening ended meanwhile | `Completed(Failed(mcp_cancelled))`, by the system; nothing held |
 | read, its URI, CSP and domain past 48 KiB encoded, more than a response carries beside them | `Completed(Failed(mcp_result_too_large))`; nothing held |
 | read, no room to hold it: 16 MiB or 64 tickets per conversation | `Completed(Failed(temporarily_unavailable))` |
 | read and held, pending | `Completed(Answered)`, then `TicketIssued{digest, size, sha256}`, then the ticket is made redeemable and answered |
@@ -160,7 +173,9 @@ cannot be redeemed, and if it is let go meanwhile its end is not reported by
 the store but by the read that issued it, after its issue — how and by whom
 it ended, kept until the read asks, however long its records took. So no
 ticket's end is ever on record before its issue. Its 60 s run from its issue,
-so the host has at most 60 s.
+so the host has at most 60 s. An issuer that panics between holding its
+ticket and recording its issue leaves its pending end kept until the
+gateway stops; nothing reports it.
 
 | Event | Effect, and what is recorded |
 | --- | --- |

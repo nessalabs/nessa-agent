@@ -430,3 +430,48 @@ fn a_release_outlasts_the_opening_it_came_in_and_any_before_one() {
     );
     assert_eq!(reviews.admit(second, &app("i2")), Ok(()));
 }
+
+#[tokio::test]
+async fn a_deleted_conversations_apps_take_nothing_and_keep_nothing() {
+    let reviews = reviews();
+    let waiting = open(&reviews, "i1").unwrap();
+    let mut released = 0;
+    reviews.delete(|| released += 1);
+    assert_eq!(released, 1);
+    assert!(matches!(
+        waiting.ended(APP_REVIEW_DEADLINE).await,
+        ReviewEnd::Withdrawn {
+            cause: McpAppWithdrawal::ConversationEnded,
+            ..
+        }
+    ));
+    // No opening begins again, and a release racing it keeps nothing.
+    let after = reviews.begin();
+    assert_eq!(reviews.admit(after, &app("i2")), Err(ReviewRefusal::Ended));
+    reviews.release_app(&app("i3"), &releaser(), || {});
+    assert_eq!(reviews.admit(after, &app("i3")), Err(ReviewRefusal::Ended));
+    // Its opening ended already: what it held was let go then, not again.
+    let ended = AppReviews::default();
+    let epoch = ended.begin();
+    ended.end(epoch, &McpAppInitiator::System, || {});
+    let mut again = 0;
+    ended.delete(|| again += 1);
+    assert_eq!(again, 0);
+}
+
+#[tokio::test]
+async fn an_opening_never_carries_another_s_reviews() {
+    let reviews = reviews();
+    let waiting = open(&reviews, "i1").unwrap();
+    // Should an opening ever begin over one not ended, its reviews end.
+    let next = reviews.begin();
+    assert!(matches!(
+        waiting.ended(APP_REVIEW_DEADLINE).await,
+        ReviewEnd::Withdrawn {
+            cause: McpAppWithdrawal::ConversationEnded,
+            by: Some(McpAppInitiator::System),
+        }
+    ));
+    assert!(reviews.reviews().is_empty());
+    assert_eq!(reviews.admit(next, &app("i1")), Ok(()));
+}
