@@ -1,9 +1,14 @@
 //! Substitutes for what the resource ticket store reads from outside — the
-//! clock and the random source — and a recorder of the ends it reports.
+//! clock and the random source — a recorder of the ends it reports, and an
+//! audit that can be made to fail.
 use super::{ResourceTicketStore, TicketEvent, TicketEvents, TokenSource};
-use crate::conversation::application::{HeldResource, McpAppRef};
+use crate::conversation::application::{
+    ConversationError, ConversationFuture, HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase,
+    McpAppAuditRecord, McpAppInitiator, McpAppRef,
+};
 use crate::conversation::domain::ConversationId;
 use nessa_auth::application::ports::Clock;
+use nessa_auth::domain::{OrganizationId, PrincipalId};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
@@ -25,11 +30,58 @@ pub(crate) fn app(execution: &str, instance: &str) -> McpAppRef {
     }
 }
 
+/// The app, on behalf of the person whose credential it runs under.
+pub(crate) fn app_initiator() -> McpAppInitiator {
+    McpAppInitiator::App {
+        principal_id: PrincipalId::new("owner").unwrap(),
+        surface_id: "surface-1".into(),
+    }
+}
+
+/// `bytes`, held for the `mcp.readResource` call `call-<execution>` of the
+/// mount `app` in `conversation_id`, as the service last recorded it.
 pub(crate) fn held(conversation_id: &str, app: McpAppRef, bytes: &[u8]) -> HeldResource {
     HeldResource {
-        conversation_id: conversation(conversation_id),
-        app,
+        record: McpAppAuditRecord {
+            conversation_id: conversation(conversation_id),
+            organization_id: OrganizationId::new("organization").unwrap(),
+            call_id: format!("call-{}", app.execution_id),
+            request_id: "read-1".into(),
+            app,
+            ask: McpAppAsk::ReadResource {
+                server: "charts".into(),
+                uri: "ui://charts/chart.html".into(),
+            },
+            initiator: app_initiator(),
+            phase: McpAppAuditPhase::Admitted,
+        },
         bytes: Arc::from(bytes),
+    }
+}
+
+/// Every record committed, in order; or, while failing, none.
+#[derive(Default)]
+pub(crate) struct RecordingAudit {
+    records: Mutex<Vec<McpAppAuditRecord>>,
+    failing: AtomicBool,
+}
+impl RecordingAudit {
+    pub(crate) fn fail(&self, failing: bool) {
+        self.failing.store(failing, Ordering::SeqCst);
+    }
+    pub(crate) fn take(&self) -> Vec<McpAppAuditRecord> {
+        std::mem::take(&mut self.records.lock().unwrap())
+    }
+}
+impl McpAppAudit for RecordingAudit {
+    fn record(&self, record: McpAppAuditRecord) -> ConversationFuture<'_, ()> {
+        Box::pin(async move {
+            if self.failing.load(Ordering::SeqCst) {
+                return Err(ConversationError::Audit);
+            }
+            self.records.lock().unwrap().push(record);
+            Ok(())
+        })
     }
 }
 
@@ -113,6 +165,8 @@ pub(crate) struct Fixture {
     pub(crate) random: Arc<ScriptedRandom>,
     pub(crate) ends: Arc<RecordedEnds>,
     pub(crate) store: Arc<ResourceTicketStore>,
+    /// What the route records redemptions in.
+    pub(crate) audit: Arc<RecordingAudit>,
 }
 impl Fixture {
     pub(crate) fn new() -> Self {
@@ -131,6 +185,7 @@ impl Fixture {
             random,
             ends,
             store,
+            audit: Arc::new(RecordingAudit::default()),
         }
     }
 }

@@ -51,7 +51,7 @@ mod mcp_resource_gateway {
 
         let fixture = Fixture::new();
         let (state, _) = fixture_state();
-        let state = state.with_resource_tickets(fixture.store.clone());
+        let state = state.with_resource_tickets(fixture.store.clone(), fixture.audit.clone());
         let ticket = fixture
             .store
             .issue(held(CONVERSATION, app("call-1", "mount-1"), PAGE))

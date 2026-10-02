@@ -171,12 +171,37 @@ pub trait McpAppAudit: Send + Sync {
     fn record(&self, record: McpAppAuditRecord) -> ConversationFuture<'_, ()>;
 }
 
-/// A resource's bytes, held for one redemption.
+/// A resource's bytes, held for one redemption, and the audit record of the
+/// `mcp.readResource` call that read them: its conversation, app, call and
+/// initiator, whatever its phase. Each end of the ticket is recorded against
+/// that call. Whose the bytes are is read from the record, so there is one
+/// answer to it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeldResource {
-    pub conversation_id: ConversationId,
-    pub app: McpAppRef,
+    pub record: McpAppAuditRecord,
     pub bytes: Arc<[u8]>,
+}
+impl HeldResource {
+    /// The conversation the bytes are held for.
+    pub fn conversation_id(&self) -> &ConversationId {
+        &self.record.conversation_id
+    }
+    /// The mount of the app the bytes are held for.
+    pub fn app(&self) -> &McpAppRef {
+        &self.record.app
+    }
+    /// The record of this ticket's step `phase`, taken by `initiator`.
+    pub fn audit_record(
+        &self,
+        phase: McpAppAuditPhase,
+        initiator: McpAppInitiator,
+    ) -> McpAppAuditRecord {
+        McpAppAuditRecord {
+            phase,
+            initiator,
+            ..self.record.clone()
+        }
+    }
 }
 
 /// Why no ticket was issued.

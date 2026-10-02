@@ -1,8 +1,9 @@
 //! The resource ticket store: what a ticket buys, for how long, against what
-//! bound, what the store keeps of it, and how each ticket's end is told.
+//! bound, what the store keeps of it, and how each ticket's end is recorded.
 use super::*;
 use crate::mcp_servers::infrastructure::ticket_test_support::{
-    app, conversation, held, Fixture, ScriptedRandom, CONVERSATION, OTHER_CONVERSATION,
+    app, app_initiator, conversation, held, Fixture, RecordingAudit, ScriptedRandom, CONVERSATION,
+    OTHER_CONVERSATION,
 };
 use std::collections::HashSet;
 
@@ -23,16 +24,15 @@ fn issue_then_redeem_hands_over_exactly_the_held_bytes_once() {
     let resource = held(CONVERSATION, app("call-1", "mount-1"), PAGE);
     let ticket = fixture.store.issue(resource.clone()).unwrap();
 
-    assert_eq!(fixture.store.redeem(ticket.as_bytes()), Some(resource));
     assert_eq!(
-        fixture.ends.take(),
-        vec![TicketEvent {
-            conversation_id: conversation(CONVERSATION),
-            app: app("call-1", "mount-1"),
+        fixture.store.redeem(ticket.as_bytes()),
+        Some(Redemption {
+            resource,
             ticket_digest: ResourceTicketDigest::of(&ticket),
-            end: TicketEnd::Redeemed,
-        }]
+        })
     );
+    // A redemption is the route's to record, never an event too.
+    assert!(fixture.ends.take().is_empty());
     // Spent: the second redemption finds nothing, and reports nothing.
     assert_eq!(fixture.store.redeem(ticket.as_bytes()), None);
     assert!(fixture.ends.take().is_empty());
@@ -53,10 +53,7 @@ fn a_ticket_is_refused_from_its_deadline_and_its_expiry_is_reported() {
     // One millisecond before its deadline, a ticket still works.
     fixture.clock.advance(RESOURCE_TICKET_LIFETIME_MS - 1);
     assert!(fixture.store.redeem(early.as_bytes()).is_some());
-    assert_eq!(
-        ends(&fixture),
-        vec![(TicketEnd::Redeemed, ResourceTicketDigest::of(&early))]
-    );
+    assert!(ends(&fixture).is_empty());
 
     // At its deadline it is refused, its bytes are let go of, and it ended
     // unredeemed.
@@ -296,7 +293,6 @@ fn every_ticket_ends_once_whatever_ends_it() {
     assert_eq!(
         ends(&fixture),
         vec![
-            (TicketEnd::Redeemed, ResourceTicketDigest::of(&redeemed)),
             (
                 TicketEnd::AppReleased,
                 ResourceTicketDigest::of(&app_released)
@@ -403,24 +399,104 @@ fn a_random_source_that_repeats_itself_issues_no_second_ticket() {
     );
     // The first ticket still holds the first app's bytes, and nothing else.
     let redeemed = fixture.store.redeem(first.as_bytes()).unwrap();
-    assert_eq!(redeemed.app, app("call-1", "mount-1"));
+    assert_eq!(redeemed.resource.app(), &app("call-1", "mount-1"));
     assert_eq!(fixture.store.held_bytes(&conversation(CONVERSATION)), 0);
 }
 
 #[test]
-fn a_redemption_is_reported_as_ticket_redeemed_by_its_digest() {
+fn a_redemption_is_recorded_against_the_reading_call_as_the_app() {
     let fixture = Fixture::new();
-    let ticket = fixture
-        .store
-        .issue(held(CONVERSATION, app("call-1", "mount-1"), PAGE))
-        .unwrap();
-    fixture.store.redeem(ticket.as_bytes()).unwrap();
+    let resource = held(CONVERSATION, app("call-1", "mount-1"), PAGE);
+    let ticket = fixture.store.issue(resource.clone()).unwrap();
+    let redemption = fixture.store.redeem(ticket.as_bytes()).unwrap();
     assert_eq!(
-        fixture.ends.take()[0].phase(),
-        McpAppAuditPhase::TicketRedeemed {
-            ticket_digest: ResourceTicketDigest::of(&ticket).to_hex()
+        redemption.audit_record(),
+        McpAppAuditRecord {
+            phase: McpAppAuditPhase::TicketRedeemed {
+                ticket_digest: ResourceTicketDigest::of(&ticket).to_hex()
+            },
+            initiator: app_initiator(),
+            ..resource.record
         }
     );
+}
+
+#[test]
+fn an_unredeemed_end_is_recorded_against_the_reading_call_as_the_system() {
+    let fixture = Fixture::new();
+    let mount = app("call-1", "mount-1");
+    let resource = held(CONVERSATION, mount.clone(), PAGE);
+    let ticket = fixture.store.issue(resource.clone()).unwrap();
+    fixture
+        .store
+        .release_app(&conversation(CONVERSATION), &mount);
+    let ended = fixture.ends.take();
+    assert_eq!(ended[0].record, resource.record);
+    assert_eq!(
+        ended[0].audit_record(),
+        McpAppAuditRecord {
+            phase: McpAppAuditPhase::TicketExpired {
+                ticket_digest: ResourceTicketDigest::of(&ticket).to_hex()
+            },
+            initiator: McpAppInitiator::System,
+            ..resource.record
+        }
+    );
+}
+
+#[tokio::test]
+async fn each_unredeemed_end_is_audited_in_order_and_a_failed_record_does_not_stop_the_next() {
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let audit = Arc::new(RecordingAudit::default());
+    let auditing = tokio::spawn(audit_ticket_ends(receiver, audit.clone()));
+    let fixture = Fixture::new();
+    let store = ResourceTicketStore::new(
+        fixture.clock.clone(),
+        fixture.random.clone(),
+        Arc::new(sender),
+    );
+    let lost = store
+        .issue(held(CONVERSATION, app("call-1", "mount-1"), PAGE))
+        .unwrap();
+    audit.fail(true);
+    store.release_app(&conversation(CONVERSATION), &app("call-1", "mount-1"));
+    for _ in 0..3 {
+        tokio::task::yield_now().await;
+    }
+    audit.fail(false);
+    let expired = store
+        .issue(held(CONVERSATION, app("call-2", "mount-2"), PAGE))
+        .unwrap();
+    let released = store
+        .issue(held(OTHER_CONVERSATION, app("call-3", "mount-3"), PAGE))
+        .unwrap();
+    fixture.clock.advance(RESOURCE_TICKET_LIFETIME_MS);
+    store.sweep();
+    store.release_conversation(&conversation(OTHER_CONVERSATION));
+    // The store dropped is every sender gone: the audit finishes what it was
+    // sent and ends.
+    drop(store);
+    auditing.await.unwrap();
+
+    let records = audit.take();
+    let digests: Vec<_> = records
+        .iter()
+        .map(|record| match &record.phase {
+            McpAppAuditPhase::TicketExpired { ticket_digest } => ticket_digest.clone(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    // `released` was past its deadline by its release: it ended once, by
+    // the sweep, after `expired`.
+    assert_eq!(
+        digests,
+        [&expired, &released].map(|ticket| ResourceTicketDigest::of(ticket).to_hex())
+    );
+    assert!(!digests.contains(&ResourceTicketDigest::of(&lost).to_hex()));
+    assert!(records
+        .iter()
+        .all(|record| record.initiator == McpAppInitiator::System));
+    assert_eq!(records[0].call_id, "call-call-2");
 }
 
 #[tokio::test]
@@ -432,11 +508,14 @@ async fn ends_sent_to_a_channel_arrive_and_a_closed_channel_does_not_stop_cleanu
         fixture.random.clone(),
         Arc::new(sender),
     );
-    let ticket = store
+    store
         .issue(held(CONVERSATION, app("call-1", "mount-1"), PAGE))
         .unwrap();
-    store.redeem(ticket.as_bytes()).unwrap();
-    assert_eq!(receiver.recv().await.unwrap().end, TicketEnd::Redeemed);
+    store.release_conversation(&conversation(CONVERSATION));
+    assert_eq!(
+        receiver.recv().await.unwrap().end,
+        TicketEnd::ConversationReleased
+    );
 
     // Nothing receives any more: the end is lost, and said to be, but the
     // bytes are let go of all the same.

@@ -1,6 +1,7 @@
 //! `GET /mcp-resources` (#348): an MCP App resource's held bytes, for the
 //! ticket `mcp.readResource` answered with. The protocol's contract is
 //! `protocol/README.md`, "An MCP App's calls".
+use crate::conversation::application::McpAppAudit;
 use crate::mcp_servers::infrastructure::ResourceTicketStore;
 use crate::server::entrypoint::origin::{self, allowed_origin, with_cors, Allowed};
 use axum::{
@@ -20,15 +21,15 @@ pub const TICKET_HEADER: &str = "x-nessa-resource-ticket";
 /// MCP Apps extension names it with.
 pub const CONTENT_TYPE: &str = "text/html;profile=mcp-app";
 
-/// All the resource route is given: the ticket store, when MCP servers are
-/// composed. It has no use for sessions, credentials, or conversations, and
-/// cannot reach them.
+/// All the resource route is given: the ticket store, and the audit each
+/// redemption is recorded in, when MCP servers are composed. It has no use
+/// for sessions, credentials, or conversations, and cannot reach them.
 #[derive(Clone)]
 pub struct ResourceRoute {
-    tickets: Option<Arc<ResourceTicketStore>>,
+    tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
 }
 impl ResourceRoute {
-    pub fn new(tickets: Option<Arc<ResourceTicketStore>>) -> Self {
+    pub fn new(tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>) -> Self {
         Self { tickets }
     }
 }
@@ -45,6 +46,11 @@ impl ResourceRoute {
 /// the audit trail's to know, not the holder's. A page on an origin this
 /// server does not trust is refused `403` before the ticket is looked at, as
 /// at `PUT /attachments`.
+///
+/// A redeemed ticket's `TicketRedeemed` is recorded, against the call that
+/// read the resource, before a byte is served. When it cannot be, the answer
+/// is `503` with no body: the ticket is spent and nothing is served
+/// (`a_redemption_that_cannot_be_recorded_serves_nothing_and_spends_the_ticket`).
 pub(crate) async fn handle_resource(
     State(route): State<ResourceRoute>,
     headers: HeaderMap,
@@ -54,7 +60,7 @@ pub(crate) async fn handle_resource(
         return with_cors(StatusCode::FORBIDDEN.into_response(), allowed);
     }
     let response = match &route.tickets {
-        Some(tickets) => redeem(tickets, &headers),
+        Some((tickets, audit)) => redeem(tickets, audit.as_ref(), &headers).await,
         // No MCP server is composed, so nothing issued a ticket.
         None => not_found(),
     };
@@ -71,15 +77,22 @@ pub(crate) async fn handle_head(headers: HeaderMap) -> Response {
     with_cors(not_found(), allowed)
 }
 
-fn redeem(tickets: &ResourceTicketStore, headers: &HeaderMap) -> Response {
+async fn redeem(
+    tickets: &ResourceTicketStore,
+    audit: &dyn McpAppAudit,
+    headers: &HeaderMap,
+) -> Response {
     // Exactly one ticket. Two headers are not a choice this route makes.
     let mut presented = headers.get_all(TICKET_HEADER).iter();
     let (Some(ticket), None) = (presented.next(), presented.next()) else {
         return not_found();
     };
-    match tickets.redeem(ticket.as_bytes()) {
-        Some(resource) => {
-            let mut response = Body::from(resource.bytes.to_vec()).into_response();
+    let Some(redemption) = tickets.redeem(ticket.as_bytes()) else {
+        return not_found();
+    };
+    match audit.record(redemption.audit_record()).await {
+        Ok(()) => {
+            let mut response = Body::from(redemption.resource.bytes.to_vec()).into_response();
             let answer = response.headers_mut();
             answer.insert(header::CONTENT_TYPE, HeaderValue::from_static(CONTENT_TYPE));
             answer.insert(
@@ -93,7 +106,15 @@ fn redeem(tickets: &ResourceTicketStore, headers: &HeaderMap) -> Response {
             );
             response
         }
-        None => not_found(),
+        Err(error) => {
+            tracing::error!(
+                ticket_digest = %redemption.ticket_digest.to_hex(),
+                call_id = %redemption.resource.record.call_id,
+                ?error,
+                "an MCP App resource ticket's redemption could not be audited; nothing is served"
+            );
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
     }
 }
 
