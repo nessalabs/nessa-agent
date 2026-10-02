@@ -32,6 +32,8 @@
 //! answer about its own record of a session into the deletion, unchanged.
 //! `DurableConversationModeAudit` keeps application and recovery evidence in
 //! separate immutable files keyed by the conversation, request and phase.
+//! `DurableMcpAppAudit` does the same for each step of an MCP App's call, keyed
+//! by the conversation, the app's mount, the app's request and the phase.
 mod receiver_authority;
 mod store;
 pub use receiver_authority::{LocalReceiverAuthority, ReceiverChangeError};
@@ -63,6 +65,9 @@ pub use creation_audit::DurableConversationCreationAudit;
 
 mod mode_audit;
 pub use mode_audit::DurableConversationModeAudit;
+
+mod mcp_app_audit;
+pub use mcp_app_audit::DurableMcpAppAudit;
 
 mod file_link_audit;
 pub use file_link_audit::DurableConversationFileLinkAudit;

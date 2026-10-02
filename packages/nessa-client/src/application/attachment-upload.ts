@@ -1,3 +1,4 @@
+import { gatewayHttpOrigin } from "./gateway-http.js"
 import { NessaRpcError } from "./rpc-error.js"
 import type { ConversationErrorCode } from "../generated/product.js"
 
@@ -30,13 +31,6 @@ export type AttachmentUploadReply = { status: number; body: unknown }
 export interface AttachmentUploadTransport {
   put(upload: AttachmentUploadRequest): Promise<AttachmentUploadReply>
 }
-
-/**
- * The clock an upload's deadline runs on: call `elapsed` once after `ms`, unless
- * the returned function is called first. Composition supplies `setTimeout`;
- * tests supply one they fire by hand, so no test waits.
- */
-export type UploadTimer = (ms: number, elapsed: () => void) => () => void
 
 /**
  * How long one upload may go unanswered before this client gives up on it. The
@@ -189,14 +183,7 @@ export class NessaAttachmentError extends Error {
   }
 }
 
-/**
- * Where uploads go for a session: the gateway's own origin, over HTTP. Same
- * host and port as the WebSocket, `ws` to `http` and `wss` to `https`, and no
- * path — `/session` and `/browser/session` are socket routes.
- */
+/** Where uploads go for a session: `/attachments` on the gateway's own HTTP origin. */
 export function attachmentUploadUrl(sessionUrl: string): string {
-  const url = new URL(sessionUrl)
-  if (url.protocol !== "ws:" && url.protocol !== "wss:")
-    throw new TypeError("Session URL must use ws: or wss:")
-  return `${url.protocol === "wss:" ? "https:" : "http:"}//${url.host}/attachments`
+  return `${gatewayHttpOrigin(sessionUrl)}/attachments`
 }

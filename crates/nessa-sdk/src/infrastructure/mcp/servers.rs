@@ -27,6 +27,8 @@ pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The budget for each of this client's own requests (`tools/list` pages,
 /// `resources/read`). A forwarded request has none from here.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// The budget for a tool an MCP App calls ([`McpServers::call_tool`]).
+pub const APP_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// The most `tools/list` pages read for one list.
 pub const MAX_TOOL_PAGES: usize = 32;
 /// The most tools one server may list.
@@ -380,6 +382,89 @@ impl McpServers {
         let own = self.newest(session, call.server())?;
         let listed = own.tools.read().expect("tool list").clone()?;
         ListedTool::ui_for(&listed.tools, call).cloned()
+    }
+
+    /// The tool `name` exactly as `session`'s own newest open session of
+    /// `server` last listed it, or `None` when that list does not have it —
+    /// or there is no list yet, which an app cannot be acting on.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::NoSession`] when `session` has no open session of
+    /// `server`.
+    pub fn listed_tool(
+        &self,
+        session: &SessionId,
+        server: &str,
+        name: &str,
+    ) -> Result<Option<ListedTool>, McpError> {
+        let own = self.newest(session, server).ok_or(McpError::NoSession)?;
+        let listed = own.tools.read().expect("tool list").clone();
+        Ok(listed.and_then(|listed| {
+            listed
+                .tools
+                .iter()
+                .find(|each| each.tool().tool() == name)
+                .cloned()
+        }))
+    }
+
+    /// Call the tool `name` with `arguments` over `session`'s own newest open
+    /// session of `server`, within [`APP_CALL_TIMEOUT`]: an MCP App's call,
+    /// on the connection its agent's calls use. The answer is the server's
+    /// `CallToolResult` as it gave it (`isError` included); which tools an
+    /// app may call is the caller's to decide.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::NoSession`], [`McpError::Timeout`] (the call is cancelled
+    /// upstream), [`McpError::Remote`] for the server's JSON-RPC error,
+    /// [`McpError::Malformed`] for an answer that is not an object,
+    /// [`McpError::Busy`], and the session's end cause once it has ended.
+    pub async fn call_tool(
+        &self,
+        session: &SessionId,
+        server: &str,
+        name: &str,
+        arguments: Option<Value>,
+    ) -> Result<Value, McpError> {
+        let own = self.newest(session, server).ok_or(McpError::NoSession)?;
+        let mut params = json!({ "name": name });
+        if let Some(arguments) = arguments {
+            params["arguments"] = arguments;
+        }
+        let result = own
+            .connection
+            .request("tools/call", Some(params), APP_CALL_TIMEOUT)
+            .await?;
+        if !result.is_object() {
+            return Err(McpError::Malformed(
+                "a tools/call result that is not an object".into(),
+            ));
+        }
+        Ok(result)
+    }
+
+    /// Read the MCP App resource `uri` over `session`'s own newest open
+    /// session of `server`, as [`McpSession::read_ui_resource`] does.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::NoSession`], and what [`McpSession::read_ui_resource`]
+    /// fails with.
+    pub async fn read_app_resource(
+        &self,
+        session: &SessionId,
+        server: &str,
+        uri: &UiResourceUri,
+    ) -> Result<UiResource, McpError> {
+        let own = self.newest(session, server).ok_or(McpError::NoSession)?;
+        let params = json!({ "uri": uri.as_str() });
+        let result = own
+            .connection
+            .request("resources/read", Some(params), REQUEST_TIMEOUT)
+            .await?;
+        wire::ui_resource(uri, &result)
     }
 
     /// `session`'s newest open session of `server`, if it has one.

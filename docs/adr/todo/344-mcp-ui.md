@@ -73,13 +73,23 @@ reads `ui://` resources (#346). A tool call's identity, `_meta` and result
 travel from the ACP parser to the window's transcript (#347). The gateway offers
 the window `mcp.readResource` and `mcp.callTool` for an app, under a policy —
 only tools whose `_meta.ui.visibility` includes `"app"`, only on the app's own
-server, approval through the existing permission flow for a tool marked
-`destructiveHint` — with each call audited (#348). The desktop hosts the app as
+server, the person's approval for a destructive tool (below) — with each
+call audited (#348). The desktop hosts the app as
 an `app`-kind widget (326): a sandbox proxy on a separate origin, a CSP built
 only from `_meta.ui.csp` (no network by default), and the `ui/*` bridge mapped
 onto the widget host (#349). Nessa declares `capabilities.extensions: {
 "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } }`;
 the `openai/*` fields are optional.
+
+**An app's destructive calls wait on the person, through a review the
+gateway owns.** A tool is destructive unless it says it only reads or says
+it is not destructive (MCP's own default). Its call waits on a review shown
+in the conversation's `permissions` beside the agent's, marked as the app's,
+and answered the same way — never the agent's own permission flow, because
+the harness did not ask and has nothing waiting. The conversation's approval
+mode does not apply: it is trust in the agent, not in an app. The app is not
+authenticated beyond the caller's credential, so every step is recorded as
+the app's, on that caller's behalf ([design](../../design/mcp-app-calls.md)).
 
 **Display modes map onto 326's places:** `inline` is inline; `fullscreen` on
 desktop is a pane beside the conversation, as ChatGPT's desktop draws it; the

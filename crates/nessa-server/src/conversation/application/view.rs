@@ -210,6 +210,18 @@ pub struct ConversationPermission {
     pub tool_name: String,
     pub arguments_json: String,
     pub options: Vec<ConversationPermissionOption>,
+    /// Who asked for the review: the agent, or an MCP App.
+    pub origin: ConversationPermissionOrigin,
+}
+/// Who asked for a review. For [`ConversationPermissionOrigin::Harness`],
+/// the review's execution and tool are the agent's call being reviewed; for
+/// [`ConversationPermissionOrigin::App`], they are the app — the tool call
+/// whose UI it is — and `server` and `tool` the tool it asked to call.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConversationPermissionOrigin {
+    Harness,
+    App { server: String, tool: String },
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ConversationPermissionOption {

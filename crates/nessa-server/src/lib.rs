@@ -38,5 +38,9 @@ pub(crate) mod attachments_test_support;
 pub(crate) mod conversation_test_support;
 
 #[cfg(test)]
+#[path = "../tests/conversation/app_call_support.rs"]
+pub(crate) mod app_call_test_support;
+
+#[cfg(test)]
 #[path = "../tests/conversation/catalogue_receiver/store.rs"]
 pub(crate) mod catalogue_receiver_store;
