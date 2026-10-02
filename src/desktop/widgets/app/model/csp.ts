@@ -165,6 +165,13 @@ const reporter = `(function () {
  * reporter, then the app's own HTML. The policy is written from parsed parts
  * and keywords alone, so it holds no `"`, `<` or `&` to escape.
  *
+ * The proxy applies the same policy to its own document before it makes the
+ * frame (`sandbox-resource-ready`'s `policy`), and that is the copy that
+ * holds the frame itself: a document's policy governs only what it loads,
+ * so this one is gone the moment the app navigates its frame elsewhere,
+ * while the proxy's `frame-src` refuses that navigation. This one is kept
+ * because the `srcdoc`'s inheriting the proxy's is not yet seen in WebKit.
+ *
  * The leading doctype keeps the document in standards mode; an app that
  * meant quirks mode does not get it.
  */

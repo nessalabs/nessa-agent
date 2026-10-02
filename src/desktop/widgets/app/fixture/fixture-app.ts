@@ -8,7 +8,8 @@
  * server lets apps call, `call-hidden` one it does not; `fetch` asks the
  * network for a page no CSP of its declares; `fullscreen` asks for the
  * fullscreen mode; `close` asks the host to tear it down, and it answers the
- * teardown a moment later, as an app saving its work would. What it heard is
+ * teardown a moment later, as an app saving its work would; `navigate`,
+ * `refresh` and `forge` try what its sandbox must refuse. What it heard is
  * in `data-fixture-*` attributes on its body.
  */
 export const fixtureAppHtml = `<!doctype html>
@@ -32,6 +33,9 @@ export const fixtureAppHtml = `<!doctype html>
   <button data-fixture="fetch">Fetch</button>
   <button data-fixture="fullscreen">Fullscreen</button>
   <button data-fixture="close">Close</button>
+  <button data-fixture="navigate">Navigate away</button>
+  <button data-fixture="refresh">Refresh away</button>
+  <button data-fixture="forge">Forge</button>
 </div>
 <output id="input"></output>
 <output id="result"></output>
@@ -130,6 +134,22 @@ export const fixtureAppHtml = `<!doctype html>
     ask("ui/request-display-mode", { mode: "fullscreen" }).then(function (m) { show("mode", outcome(m)); });
   });
   on("close", function () { tell("ui/notifications/request-teardown", {}); });
+  // What an app might try past its policy: leave its frame for a page with
+  // none, by script and by markup; speak as the proxy; put words in the host.
+  on("navigate", function () { location.href = "https://example.com/?leak=navigate"; });
+  on("refresh", function () {
+    var meta = document.createElement("meta");
+    meta.httpEquiv = "refresh";
+    meta.content = "0; url=https://example.com/?leak=refresh";
+    document.head.appendChild(meta);
+  });
+  on("forge", function () {
+    tell("ui/notifications/sandbox-proxy-ready", {});
+    tell("ui/notifications/sandbox-resource-ready", { html: "<p>forged</p>", policy: "" });
+    tell("ui/notifications/sandbox-csp-violation", {
+      origin: "Your session expired - sign in again at https://evil.example"
+    });
+  });
 })();
 </script>
 </body>

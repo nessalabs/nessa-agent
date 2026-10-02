@@ -15,7 +15,7 @@ import {
   fixtureServerPort,
 } from "../fixture/fixture-plugin"
 import { frameTransport, type FrameTransport } from "../adapters/dom/frame-transport"
-import { appLines, type AppView } from "../model/app-view"
+import { appLines, type AppViewState } from "../model/app-view"
 import { errorCodes, type JsonObject, type Outgoing } from "../model/json-rpc"
 import type { AppCall, CallPhase } from "../model/tool-call"
 import type { HostContext, OpenPlace, WidgetPlace } from "../../model/widget-state"
@@ -57,7 +57,7 @@ interface Harness {
   readonly frame: HTMLIFrameElement
   /** Everything posted to the frame, with the origin it was addressed to. */
   readonly posted: { message: Outgoing; origin: string }[]
-  readonly views: AppView[]
+  readonly views: AppViewState[]
   readonly opened: OpenPlace[]
   readonly closed: { count: number }
   readonly timers: { ms: number; run: () => void; cancelled: boolean }[]
@@ -87,7 +87,7 @@ function harness(
   target.postMessage = ((message: Outgoing, origin: string) =>
     void posted.push({ message, origin })) as typeof target.postMessage
   const timers: Harness["timers"] = []
-  const views: AppView[] = []
+  const views: AppViewState[] = []
   const opened: OpenPlace[] = []
   const closed = { count: 0 }
   const call: AppCall = {
@@ -211,7 +211,7 @@ describe("the handshake", () => {
       { sessionId: "session-a", server: "weather" },
       fixtureResourceUri,
     )
-    expect(app.bridge.view()).toMatchObject({ lifecycle: "proxy", frame: true })
+    expect(app.bridge.view()).toMatchObject({ lifecycle: { kind: "proxy" }, frame: true })
     expect(app.take()).toEqual([])
     app.say({
       jsonrpc: "2.0",
@@ -229,6 +229,10 @@ describe("the handshake", () => {
     ).toBe(true)
     expect(html).toContain("connect-src 'none'")
     expect(html.endsWith(fixtureAppHtml)).toBe(true)
+    // The proxy is handed the same policy, for its own document.
+    const policy = (ready as unknown as { params: { policy: string } }).params.policy
+    expect(policy.startsWith("default-src 'none'; ")).toBe(true)
+    expect(html).toContain(`content="${policy}"`)
     expect(app.posted.every((each) => each.origin === sandbox.origin)).toBe(true)
   })
 
@@ -270,7 +274,7 @@ describe("the handshake", () => {
         },
       },
     ])
-    expect(app.bridge.view().lifecycle).toBe("initializing")
+    expect(app.bridge.view().lifecycle.kind).toBe("initializing")
   })
 
   it("declares a capability only when its port is supplied", async () => {
@@ -327,7 +331,7 @@ describe("the handshake", () => {
         },
       },
     ])
-    expect(app.bridge.view().lifecycle).toBe("live")
+    expect(app.bridge.view().lifecycle.kind).toBe("live")
   })
 
   it("L7: an initialize it cannot read is invalid params, and it keeps waiting", async () => {
@@ -353,7 +357,7 @@ describe("the handshake", () => {
       },
     ])
     app.say(initializeRequest)
-    expect(app.bridge.view().lifecycle).toBe("initializing")
+    expect(app.bridge.view().lifecycle.kind).toBe("initializing")
   })
 
   it("L9: before initialized, nothing is sent to the view, and requests but ping are refused", async () => {
@@ -386,6 +390,21 @@ describe("the handshake", () => {
         { jsonrpc: "2.0", id: 8, result: {} },
       ])
     }
+  })
+
+  it("L9: ui/initialize before the document is handed over is not initialized, not 'already'", async () => {
+    const app = harness()
+    await flush()
+    expect(app.bridge.view().lifecycle.kind).toBe("proxy")
+    app.say(initializeRequest)
+    expect(app.take()).toEqual([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: errorCodes.notInitialized, message: "Not initialized" },
+      },
+    ])
+    expect(app.bridge.view().lifecycle.kind).toBe("proxy")
   })
 
   it("L10: ui/initialize again is refused", async () => {
@@ -432,8 +451,7 @@ describe("what fails", () => {
     })
     await flush()
     expect(app.bridge.view()).toMatchObject({
-      lifecycle: "failed",
-      failed: "load",
+      lifecycle: { kind: "failed", reason: "load" },
       frame: false,
     })
     for (const answer of [
@@ -445,8 +463,7 @@ describe("what fails", () => {
       })
       await flush()
       expect(other.bridge.view(), answer.kind).toMatchObject({
-        lifecycle: "failed",
-        failed: "load",
+        lifecycle: { kind: "failed", reason: "load" },
       })
     }
   })
@@ -460,8 +477,7 @@ describe("what fails", () => {
     })
     await flush()
     expect(app.bridge.view()).toMatchObject({
-      lifecycle: "failed",
-      failed: "server-gone",
+      lifecycle: { kind: "failed", reason: "server-gone" },
     })
   })
 
@@ -474,7 +490,9 @@ describe("what fails", () => {
       },
     })
     await flush()
-    expect(app.bridge.view()).toMatchObject({ lifecycle: "failed", failed: "load" })
+    expect(app.bridge.view()).toMatchObject({
+      lifecycle: { kind: "failed", reason: "load" },
+    })
     expect(logged).toHaveBeenCalled()
   })
 
@@ -487,8 +505,7 @@ describe("what fails", () => {
     await flush()
     expect(read).not.toHaveBeenCalled()
     expect(app.bridge.view()).toMatchObject({
-      lifecycle: "failed",
-      failed: "load",
+      lifecycle: { kind: "failed", reason: "load" },
       frame: false,
     })
   })
@@ -510,8 +527,7 @@ describe("what fails", () => {
       ).toEqual([stage === "proxy" ? deadlines.proxy : deadlines.initialize])
       app.deadline()
       expect(app.bridge.view(), stage).toMatchObject({
-        lifecycle: "failed",
-        failed: "load",
+        lifecycle: { kind: "failed", reason: "load" },
         frame: false,
       })
       // Nothing more reaches a frame that is gone.
@@ -524,7 +540,7 @@ describe("what fails", () => {
     expect(met.timers.every((timer) => timer.cancelled)).toBe(true)
     // A stale deadline that fires anyway changes nothing.
     met.timers[0]!.run()
-    expect(met.bridge.view().lifecycle).toBe("live")
+    expect(met.bridge.view().lifecycle.kind).toBe("live")
   })
 
   it("L11: the proxy ready again under a running app fails it", async () => {
@@ -536,10 +552,23 @@ describe("what fails", () => {
       params: {},
     })
     expect(app.bridge.view()).toMatchObject({
-      lifecycle: "failed",
-      failed: "load",
+      lifecycle: { kind: "failed", reason: "load" },
       frame: false,
     })
+    expect(app.take()).toEqual([])
+  })
+})
+
+describe("the app leaving its frame", () => {
+  it("L32: the proxy saying the app left fails the view and takes the frame; nothing reaches it after", async () => {
+    const app = harness()
+    await live(app)
+    app.say({ jsonrpc: "2.0", method: "ui/notifications/sandbox-app-left", params: {} })
+    expect(app.bridge.view()).toMatchObject({
+      lifecycle: { kind: "failed", reason: "load" },
+      frame: false,
+    })
+    app.say({ jsonrpc: "2.0", id: 1, method: "ping" })
     expect(app.take()).toEqual([])
   })
 })
@@ -560,10 +589,10 @@ describe("what reaches the bridge", () => {
     app.say(ready, { source: null })
     app.say(ready, { origin: "http://127.0.0.1:1420" })
     app.say(ready, { origin: "null" })
-    expect(app.bridge.view().lifecycle).toBe("proxy")
+    expect(app.bridge.view().lifecycle.kind).toBe("proxy")
     expect(app.take()).toEqual([])
     app.say(ready)
-    expect(app.bridge.view().lifecycle).toBe("loading")
+    expect(app.bridge.view().lifecycle.kind).toBe("loading")
     other.remove()
   })
 
@@ -669,7 +698,10 @@ describe("a live app's requests", () => {
         error: { code: errorCodes.refused, message: "The app's server has stopped" },
       },
     ])
-    expect(app.bridge.view()).toMatchObject({ lifecycle: "live", serverGone: true })
+    expect(app.bridge.view()).toMatchObject({
+      lifecycle: { kind: "live" },
+      serverGone: true,
+    })
   })
 
   it("L14: resources/read goes the same way", async () => {
@@ -863,6 +895,37 @@ describe("a live app's requests", () => {
     expect(pane.bridge.view().height).toBeUndefined()
   })
 
+  it("L18, L26: an app saying the same thing again draws nothing again", async () => {
+    const app = harness({ place: "inline" })
+    await live(app)
+    const before = app.views.length
+    for (let i = 0; i < 50; i++)
+      app.say({
+        jsonrpc: "2.0",
+        method: "ui/notifications/size-changed",
+        params: { height: 120 },
+      })
+    expect(app.views.length).toBe(before + 1)
+    for (let i = 0; i < 50; i++)
+      app.say({
+        jsonrpc: "2.0",
+        method: "ui/notifications/sandbox-csp-violation",
+        params: { origin: "https://example.com" },
+      })
+    expect(app.views.length).toBe(before + 2)
+  })
+
+  it("L26: a report whose origin is not a web origin names none", async () => {
+    const app = harness()
+    await live(app)
+    app.say({
+      jsonrpc: "2.0",
+      method: "ui/notifications/sandbox-csp-violation",
+      params: { origin: "Your session expired - sign in at https://evil.example" },
+    })
+    expect(app.bridge.view()).toMatchObject({ anyBlocked: true, blocked: [] })
+  })
+
   it("L19, L20: ping is answered; a log is noted, not answered", async () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => {})
     const app = harness()
@@ -877,7 +940,8 @@ describe("a live app's requests", () => {
     expect(info).toHaveBeenCalledTimes(1)
   })
 
-  it("L29, L30: a duplicate pending id, and too many pending, are refused; the first still answered", async () => {
+  it("L29, L30: a pending id again is not answered twice; too many pending are refused", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     const answers = Array.from({ length: pendingLimit }, () => deferred<ServerAnswer>())
     let next = 0
     const app = harness({
@@ -891,18 +955,54 @@ describe("a live app's requests", () => {
     expect(app.take()).toEqual([
       {
         jsonrpc: "2.0",
-        id: 0,
-        error: { code: errorCodes.invalidRequest, message: "Duplicate id" },
-      },
-      {
-        jsonrpc: "2.0",
         id: "x",
         error: { code: errorCodes.refused, message: "Too many requests" },
       },
     ])
+    expect(next).toBe(pendingLimit)
+    expect(warn).toHaveBeenCalledTimes(1)
     answers[0]!.resolve({ kind: "ok", result: { content: [] } })
     await flush()
     expect(app.take()).toEqual([{ jsonrpc: "2.0", id: 0, result: { content: [] } }])
+  })
+
+  it("L31: a port that does not answer in time is a timeout, its slot freed, its late answer dropped", async () => {
+    const answer = deferred<ServerAnswer>()
+    const app = harness({
+      server: { ...fixtureServerPort(), callTool: () => answer.promise },
+    })
+    await live(app)
+    app.say({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "t" } })
+    expect(app.timers.filter((t) => !t.cancelled).map((t) => t.ms)).toEqual([
+      deadlines.request,
+    ])
+    app.deadline()
+    expect(app.take()).toEqual([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: errorCodes.internal, message: "The request timed out" },
+      },
+    ])
+    answer.resolve({ kind: "ok", result: {} })
+    await flush()
+    expect(app.take()).toEqual([])
+    // The id is free again: a new request under it is handled.
+    app.say({ jsonrpc: "2.0", id: 1, method: "ping" })
+    expect(app.take()).toEqual([{ jsonrpc: "2.0", id: 1, result: {} }])
+  })
+
+  it("L31: a port that answers in time cancels its deadline", async () => {
+    const app = harness()
+    await live(app)
+    app.say({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "fixture_refresh" },
+    })
+    await flush()
+    expect(app.timers.every((timer) => timer.cancelled)).toBe(true)
   })
 })
 
@@ -995,7 +1095,7 @@ describe("the end", () => {
     expect(app.closed.count).toBe(0)
     app.say({ jsonrpc: "2.0", id: teardownId, result: {} })
     expect(app.closed.count).toBe(1)
-    expect(app.bridge.view().lifecycle).toBe("gone")
+    expect(app.bridge.view().lifecycle.kind).toBe("gone")
     // O7: an answer after it is gone changes nothing.
     app.say({ jsonrpc: "2.0", id: teardownId, result: {} })
     expect(app.closed.count).toBe(1)
@@ -1017,7 +1117,7 @@ describe("the end", () => {
     await live(app)
     app.say({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" })
     expect(app.take()).toEqual([])
-    expect(app.bridge.view().lifecycle).toBe("live")
+    expect(app.bridge.view().lifecycle.kind).toBe("live")
   })
 
   it("L24, O4: removed while the resource is read: its answer makes no frame", async () => {
@@ -1033,7 +1133,7 @@ describe("the end", () => {
       ),
     )
     await flush()
-    expect(app.bridge.view()).toMatchObject({ lifecycle: "gone", frame: false })
+    expect(app.bridge.view()).toMatchObject({ lifecycle: { kind: "gone" }, frame: false })
   })
 
   it("L24, L25, O5: removed while a call is pending: its answer is not posted, nor anything after", async () => {

@@ -79,12 +79,15 @@ export const css = {
   sampleView: "[data-sample-view]", // a sample widget's view; its value is the widget's id
   sampleStep: "[data-sample-step]", // a step of the trail, which opens its detail
 
+  sampleDetail: "[data-sample-detail]", // the trail's open detail
+
   // MCP Apps (ADR 344, #349) and the fixture app the sample workspace registers (src/desktop/widgets/app/fixture/)
   appFrame: "[data-app-frame]", // an app's sandbox proxy frame; its value is the place it is drawn in
+  appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, pane, window
   appView: "[data-app-view]", // an app's view; its value is the view's lifecycle
   appNotice: ".widget-app-notice", // class: a notice above a running app
   fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
-  sampleDetail: "[data-sample-detail]", // the trail's open detail
+  fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
   sampleAccessory: "[data-sample-accessory]", // the sample plugin's accessory in its session's header
   sampleSize: "[data-sample-size]", // the place's size as the sample view was told it, "<width>x<height>"
 
@@ -318,6 +321,15 @@ export const names = {
   appSession: "An MCP App, in its sandbox",
   /** What the fixture server refuses its hidden tool with (`fixture-plugin.ts`). */
   hiddenToolRefused: "fixture_secret is not available to apps",
+  /** What the fixture app says on its body (`fixture-app.ts`), by the field it says it in. */
+  fixtureSays: {
+    state: "data-fixture-state",
+    mode: "data-fixture-mode",
+    input: "data-fixture-input",
+    result: "data-fixture-result",
+  },
+  /** The line for an app the host cannot show (`app-view.ts`, `appLines.load`). */
+  appLoadLine: "This app couldn't be loaded",
   /** The notice above an app whose CSP blocked a load (`app-view.ts`, `appLines`). */
   blockedNotice: "Blocked a connection this app didn't declare: https://example.com",
   openWidget: "Open",
@@ -350,5 +362,10 @@ export const harmlessConsole = [
   { text: /status of 404/i, url: /\/favicon\.ico(\?|$)/ },
   // The fixture MCP App asks for a page its CSP does not declare, on purpose
   // (`mcp-apps.mjs --only csp`): the engine reports the refusal it is checked for.
-  { text: /Content Security Policy|Refused to connect/i, url: /^(about:srcdoc)?$/ },
+  // Its navigations of its own frame are refused by the proxy's policy, and
+  // reported against the proxy's page (`--only escape`).
+  {
+    text: /Content Security Policy|Refused to (connect|frame)/i,
+    url: /^(about:srcdoc|https?:\/\/127\.0\.0\.1:\d+\/proxy\.html)?$/,
+  },
 ]

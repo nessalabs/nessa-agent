@@ -209,6 +209,76 @@ describe("the spec's notifications", () => {
   })
 })
 
+describe("what a report and a message may carry", () => {
+  const report = (origin: unknown) =>
+    read({
+      jsonrpc: "2.0",
+      method: "ui/notifications/sandbox-csp-violation",
+      params: { origin },
+    })
+
+  it("a blocked origin only when it is a web origin as the URL parser writes it", () => {
+    for (const origin of [
+      "https://example.com",
+      "http://127.0.0.1:8080",
+      "wss://rt.example",
+    ])
+      expect(report(origin), origin).toEqual({
+        kind: "notification",
+        notification: { method: "ui/notifications/sandbox-csp-violation", origin },
+      })
+    for (const origin of [
+      "Your session expired - sign in at https://evil.example",
+      "https://example.com/",
+      "https://example.com/path",
+      "HTTPS://EXAMPLE.COM",
+      "javascript:alert(1)",
+      "file:///etc",
+      "null",
+      7,
+    ])
+      expect(report(origin), String(origin)).toEqual({
+        kind: "notification",
+        notification: { method: "ui/notifications/sandbox-csp-violation" },
+      })
+  })
+
+  it("text blocks only, rebuilt from their text alone", () => {
+    expect(
+      read({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "ui/message",
+        params: {
+          role: "user",
+          content: [{ type: "text", text: "Hi", extra: { a: 1 } }],
+        },
+      }),
+    ).toEqual({
+      kind: "request",
+      id: 1,
+      request: { method: "ui/message", content: [{ type: "text", text: "Hi" }] },
+    })
+    for (const block of [
+      { type: "image", data: "AAAA", mimeType: "image/png" },
+      // Another modality that also carries text: refused by its type.
+      { type: "image", text: "caption", data: "AAAA", mimeType: "image/png" },
+      { type: "resource_link", uri: "https://a.example" },
+      { type: "text" },
+      { type: "text", text: 3 },
+    ])
+      expect(
+        read({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "ui/update-model-context",
+          params: { content: [block] },
+        }),
+        block.type,
+      ).toMatchObject({ kind: "refused", code: errorCodes.invalidParams })
+  })
+})
+
 describe("what the host refuses or ignores", () => {
   it("a request's params of the wrong shape are invalid params, under its id", () => {
     for (const [method, params] of [
@@ -230,6 +300,7 @@ describe("what the host refuses or ignores", () => {
       ["ui/message", { role: "user", content: { type: "text", text: "x" } }],
       ["ui/message", { role: "user", content: [] }],
       ["ui/message", { role: "user", content: [{ text: "no type" }] }],
+      ["ui/message", { role: "user", content: [{ type: "image", data: "AAAA" }] }],
       ["ui/update-model-context", { content: "x" }],
       ["ui/update-model-context", { structuredContent: [1] }],
       ["ui/open-link", {}],

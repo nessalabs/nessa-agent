@@ -20,6 +20,7 @@ import {
   type JsonObject,
   type RequestId,
 } from "./json-rpc"
+import { cspViolationMethod } from "./csp"
 
 /** A display mode, as MCP Apps names them. */
 export type DisplayMode = "inline" | "fullscreen" | "pip"
@@ -73,9 +74,11 @@ export type AppNotification =
   | { readonly method: "ui/notifications/request-teardown" }
   | { readonly method: "notifications/message"; readonly level: string }
   | { readonly method: "ui/notifications/sandbox-proxy-ready" }
+  /** The proxy's: the app's frame loaded a second time, and the proxy removed it. */
+  | { readonly method: "ui/notifications/sandbox-app-left" }
   | {
-      readonly method: "ui/notifications/sandbox-csp-violation"
-      /** The blocked origin, when the blocked thing had one. */
+      readonly method: typeof cspViolationMethod
+      /** The blocked origin, when the report named a web origin. */
       readonly origin?: string
     }
 
@@ -108,15 +111,37 @@ function size(value: Json | undefined): number | undefined | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null
 }
 
-/** Content blocks: an array of objects that each name a `type`. */
-function blocks(value: Json | undefined): readonly JsonObject[] | undefined {
+/**
+ * Text content blocks, each rebuilt as `{ type: "text", text }`: the one
+ * modality the host declares for `ui/message` and `ui/update-model-context`
+ * (`hostCapabilities`); any other block makes the whole list unreadable.
+ */
+function textBlocks(value: Json | undefined): readonly JsonObject[] | undefined {
   if (!Array.isArray(value)) return undefined
   const out: JsonObject[] = []
   for (const block of value as readonly Json[]) {
-    if (!isObject(block) || typeof field(block, "type") !== "string") return undefined
-    out.push(block)
+    if (!isObject(block) || field(block, "type") !== "text") return undefined
+    const body = field(block, "text")
+    if (typeof body !== "string") return undefined
+    out.push({ type: "text", text: body })
   }
   return out
+}
+
+/**
+ * `value` when it is a web origin exactly as the URL parser writes one
+ * (`https://host[:port]`), else `undefined`: a report's origin is shown in
+ * the host's chrome, so nothing else of the app's choosing may be.
+ */
+function webOrigin(value: Json | undefined): string | undefined {
+  if (typeof value !== "string" || value.length > nameLength) return undefined
+  try {
+    const url = new URL(value)
+    const web = ["http:", "https:", "ws:", "wss:"].includes(url.protocol)
+    return web && url.origin === value ? value : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function readInitialize(params: JsonObject): Initialize | undefined {
@@ -198,7 +223,7 @@ function readRequest(id: RequestId, method: string, params: JsonObject): FromFra
       return uri === undefined || uri.length === 0 ? invalid(id) : ok({ method, uri })
     }
     case "ui/message": {
-      const content = blocks(field(params, "content"))
+      const content = textBlocks(field(params, "content"))
       return field(params, "role") === "user" && content && content.length > 0
         ? ok({ method, content })
         : invalid(id)
@@ -206,7 +231,7 @@ function readRequest(id: RequestId, method: string, params: JsonObject): FromFra
     case "ui/update-model-context": {
       const rawContent = field(params, "content")
       const rawStructured = field(params, "structuredContent")
-      const content = rawContent === undefined ? undefined : blocks(rawContent)
+      const content = rawContent === undefined ? undefined : textBlocks(rawContent)
       if (rawContent !== undefined && content === undefined) return invalid(id)
       if (rawStructured !== undefined && !isObject(rawStructured)) return invalid(id)
       return ok({
@@ -246,6 +271,7 @@ function readNotification(method: string, params: JsonObject): FromFrame {
     case "ui/notifications/initialized":
     case "ui/notifications/request-teardown":
     case "ui/notifications/sandbox-proxy-ready":
+    case "ui/notifications/sandbox-app-left":
       return ok({ method })
     case "ui/notifications/size-changed": {
       const width = size(field(params, "width"))
@@ -261,8 +287,8 @@ function readNotification(method: string, params: JsonObject): FromFrame {
       const level = text(field(params, "level"), 32)
       return level === undefined ? { kind: "ignored" } : ok({ method, level })
     }
-    case "ui/notifications/sandbox-csp-violation": {
-      const origin = text(field(params, "origin"))
+    case cspViolationMethod: {
+      const origin = webOrigin(field(params, "origin"))
       return ok(origin === undefined ? { method } : { method, origin })
     }
     default:

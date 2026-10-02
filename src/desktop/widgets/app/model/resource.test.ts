@@ -1,7 +1,8 @@
 /** An app's UI resource, from `resources/read` (#349, L1–L2), and what a host draws for a view. */
 import { describe, expect, it } from "vitest"
-import { appDraws, appLines, firstView, type AppView } from "./app-view"
+import { appDraws, appLines, firstView, type AppViewState } from "./app-view"
 import { appliedCsp } from "./csp"
+import type { FailedReason, Lifecycle } from "./lifecycle"
 import { appMimeType, uiResource } from "./resource"
 
 const uri = "ui://weather-server/dashboard-template"
@@ -65,7 +66,31 @@ describe("the UI resource", () => {
 })
 
 describe("what a host draws for an app view", () => {
-  const view = (fields: Partial<AppView>): AppView => ({ ...firstView, ...fields })
+  const initialize = { protocolVersion: "2026-01-26", appName: "App" }
+  const lifecycleOf = (kind: Lifecycle["kind"], failed: FailedReason): Lifecycle => {
+    switch (kind) {
+      case "initializing":
+      case "live":
+      case "ending":
+        return { kind, initialize }
+      case "failed":
+        return { kind, reason: failed }
+      default:
+        return { kind }
+    }
+  }
+  const view = ({
+    lifecycle,
+    failed = "load",
+    ...fields
+  }: Partial<Omit<AppViewState, "lifecycle">> & {
+    lifecycle: Lifecycle["kind"]
+    failed?: FailedReason
+  }): AppViewState => ({
+    ...firstView,
+    ...fields,
+    lifecycle: lifecycleOf(lifecycle, failed),
+  })
 
   it("the placeholder over a hidden frame while it loads, then the frame", () => {
     expect(appDraws("pane", view({ lifecycle: "reading" }))).toEqual({

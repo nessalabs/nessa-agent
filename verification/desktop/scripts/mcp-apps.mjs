@@ -40,6 +40,12 @@ Checks, per engine and layout (--only <names> to pick):
                names it
   isolation    the app's origin is opaque: no parent document, no storage; the
                proxy is on another origin than the window
+  escape-navigate, escape-refresh
+               the app sending its frame away, by script or by meta refresh:
+               refused (nothing reaches the other site), the frame taken off
+               the page, and the host says it cannot show the app
+  forge        forged proxy messages change nothing; a forged report puts no
+               words of the app's in the host's chrome
   teardown     closing the pane takes its frames off the page; the app asking to
                go is sent ui/resource-teardown before its pane closes`,
 }
@@ -60,12 +66,7 @@ async function onSample(browser, { url, layout }) {
   }
   if (!(await row.count())) throw new CannotRun(`no session row "${names.appSession}"`)
   await row.click()
-  await need(
-    page,
-    `${css.appFrame}[data-app-frame="inline"]`,
-    "the app's card frame",
-    10_000,
-  )
+  await need(page, css.appFrameIn("inline"), "the app's card frame", 10_000)
   await settled(page)
   return opened
 }
@@ -74,7 +75,7 @@ async function onSample(browser, { url, layout }) {
 async function appFrame(page, place, timeout = 10_000) {
   const until = Date.now() + timeout
   while (Date.now() < until) {
-    const element = await page.$(`${css.appFrame}[data-app-frame="${place}"]`)
+    const element = await page.$(css.appFrameIn(place))
     const proxy = await element?.contentFrame()
     const app = proxy?.childFrames()[0]
     if (app && !app.isDetached()) return { element, proxy, app }
@@ -86,16 +87,20 @@ async function appFrame(page, place, timeout = 10_000) {
 /** Waits until the app in `frame` says it is `state` (`data-fixture-state`), and says what it is. */
 async function appState(frame, state, timeout = 10_000) {
   try {
-    await frame.waitForSelector(`body[data-fixture-state="${state}"]`, { timeout })
+    await frame.waitForSelector(css.fixtureState(state), { timeout })
   } catch {
     // Reported below.
   }
-  return frame.evaluate(() => ({
-    state: document.body.getAttribute("data-fixture-state"),
-    mode: document.body.getAttribute("data-fixture-mode"),
-    input: document.body.getAttribute("data-fixture-input"),
-    result: document.body.getAttribute("data-fixture-result"),
-  }))
+  return frame.evaluate(
+    (says) =>
+      Object.fromEntries(
+        Object.entries(says).map(([field, attribute]) => [
+          field,
+          document.body.getAttribute(attribute),
+        ]),
+      ),
+    names.fixtureSays,
+  )
 }
 
 /** What an output of the fixture app says, once it says anything but `pending`. */
@@ -118,6 +123,46 @@ const rect = (element) =>
     const r = e.getBoundingClientRect()
     return { x: r.left, y: r.top, w: r.width, h: r.height }
   })
+
+/**
+ * The place's body and the app's frame in it, measured together once the
+ * place has settled (a pane opening animates its width): whether the frame
+ * fills the body, within a pixel.
+ */
+async function fills(page, body, frame) {
+  const measure = () =>
+    page.evaluate(
+      ([body, frame]) => {
+        const r = (sel) => {
+          const box = document.querySelector(sel)?.getBoundingClientRect()
+          return box && { x: box.left, y: box.top, w: box.width, h: box.height }
+        }
+        return { body: r(body), frame: r(frame) }
+      },
+      [body, frame],
+    )
+  await until(
+    page,
+    ([body, frame]) => {
+      const a = document.querySelector(body)?.getBoundingClientRect()
+      const b = document.querySelector(frame)?.getBoundingClientRect()
+      return (
+        !!a &&
+        !!b &&
+        Math.abs(a.width - b.width) <= 1 &&
+        Math.abs(a.height - b.height) <= 1
+      )
+    },
+    [body, frame],
+  ).catch(() => {})
+  const both = await measure()
+  const fit =
+    !!both.body &&
+    !!both.frame &&
+    Math.abs(both.body.w - both.frame.w) <= 1 &&
+    Math.abs(both.body.h - both.frame.h) <= 1
+  return { ...both, fit }
+}
 
 /** Checks the app in `place` is live, told `mode`, with its call's input and result. */
 async function expectLive(page, place, mode, failures) {
@@ -159,9 +204,9 @@ const checks = {
       ([frame, want]) =>
         Math.abs(document.querySelector(frame).getBoundingClientRect().height - want) <=
         1,
-      [`${css.appFrame}[data-app-frame="inline"]`, height],
+      [css.appFrameIn("inline"), height],
     ).catch(() => {})
-    const drawn = await rect(await page.$(`${css.appFrame}[data-app-frame="inline"]`))
+    const drawn = await rect(await page.$(css.appFrameIn("inline")))
     if (Math.abs(drawn.h - height) > 1)
       failures.push(`the card's frame is ${drawn.h}px tall; the app said ${height}px`)
     return { frame: box, drawn, appHeight: height, failures }
@@ -172,12 +217,16 @@ const checks = {
     const { box } = await openPane(page, failures)
     const card = await appState((await appFrame(page, "inline")).app, "live")
     if (card.mode !== "inline") failures.push(`the card's app is told ${card.mode} after`)
-    const body = await rect(await page.$(`${css.widgetPane} ${css.widgetBody}`))
-    if (Math.abs(body.w - box.w) > 1 || Math.abs(body.h - box.h) > 1)
+    const measured = await fills(
+      page,
+      `${css.widgetPane} ${css.widgetBody}`,
+      `${css.widgetPane} ${css.appFrameIn("pane")}`,
+    )
+    if (!measured.fit)
       failures.push(
-        `the pane's frame does not fill its body: ${JSON.stringify({ body, frame: box })}`,
+        `the pane's frame does not fill its body: ${JSON.stringify(measured)}`,
       )
-    return { frame: box, body, failures }
+    return { frame: box, measured, failures }
   },
 
   window: async (page) => {
@@ -192,12 +241,16 @@ const checks = {
       .click()
     await contentIs(page, content.widget)
     const { box } = await expectLive(page, "window", "fullscreen", failures)
-    const body = await rect(await page.$(`${css.widgetWindow} ${css.widgetBody}`))
-    if (Math.abs(body.w - box.w) > 1 || Math.abs(body.h - box.h) > 1)
+    const measured = await fills(
+      page,
+      `${css.widgetWindow} ${css.widgetBody}`,
+      css.appFrameIn("window"),
+    )
+    if (!measured.fit)
       failures.push(
-        `the window's frame does not fill its body: ${JSON.stringify({ body, frame: box })}`,
+        `the window's frame does not fill its body: ${JSON.stringify(measured)}`,
       )
-    return { frame: box, body, failures }
+    return { frame: box, measured, failures }
   },
 
   "tools-call": async (page) => {
@@ -272,6 +325,57 @@ const checks = {
     return { inside, pageOrigin, proxyOrigin, failures }
   },
 
+  ...Object.fromEntries(
+    ["navigate", "refresh"].map((control) => [
+      `escape-${control}`,
+      async (page) => {
+        const failures = []
+        const leaked = []
+        page.on("request", (request) => {
+          if (new URL(request.url()).hostname === "example.com")
+            leaked.push(request.url())
+        })
+        const { app } = await appFrame(page, "inline")
+        await appState(app, "live")
+        // The app's frame sent away: refused by the proxy's policy, and the
+        // frame, which is no longer the app's, taken off the page — said.
+        await app.click(css.fixtureControl(control))
+        const line = page.locator(css.appView, { hasText: names.appLoadLine })
+        await line
+          .first()
+          .waitFor({ timeout: 5000 })
+          .catch(() => {})
+        if (!(await line.count()))
+          failures.push(`after ${control}, the host does not say "${names.appLoadLine}"`)
+        if (await page.$(css.appFrameIn("inline")))
+          failures.push(`after ${control}, the app's frame is still on the page`)
+        if (leaked.length > 0)
+          failures.push(`requests reached example.com: ${leaked.join(", ")}`)
+        return { leaked, failures }
+      },
+    ]),
+  ),
+
+  forge: async (page) => {
+    const failures = []
+    const { app } = await appFrame(page, "inline")
+    await appState(app, "live")
+    // Speaking as the proxy, and putting words in the host's chrome.
+    await app.click(css.fixtureControl("forge"))
+    await page.waitForTimeout(500)
+    const view = await page.locator(css.appView).first().getAttribute("data-app-view")
+    if (view !== "live")
+      failures.push(`after the forged proxy messages the app is ${view}`)
+    const said = await appState(app, "live", 1000)
+    if (said.state !== "live") failures.push(`the app is ${said.state} after forging`)
+    const notices = await page.locator(css.appNotice).allInnerTexts()
+    if (notices.some((text) => /sign in|evil/i.test(text)))
+      failures.push(
+        `the app's words reached the host's chrome: ${JSON.stringify(notices)}`,
+      )
+    return { notices, failures }
+  },
+
   teardown: async (page) => {
     const failures = []
     // By its pane's close: the frames go with the place.
@@ -283,9 +387,9 @@ const checks = {
     await until(
       page,
       (frame) => !document.querySelector(frame),
-      `${css.appFrame}[data-app-frame="pane"]`,
+      css.appFrameIn("pane"),
     ).catch(() => {})
-    if (await page.$(`${css.appFrame}[data-app-frame="pane"]`))
+    if (await page.$(css.appFrameIn("pane")))
       failures.push("the pane's frame is still on the page after its close")
     if (!proxy.isDetached() || !app.isDetached())
       failures.push("the pane's proxy or app document outlived its close")

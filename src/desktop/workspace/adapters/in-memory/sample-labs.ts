@@ -1,5 +1,5 @@
 /** Sample sessions in Nessa Labs and Personal. */
-import { fixtureCallId, fixtureServer } from "../../../widgets/app/fixture/fixture-plugin"
+import { fixtureWidget } from "../../../widgets/app/fixture/fixture-plugin"
 import { sampleWidgets } from "../../../widgets/fixture/sample-widgets"
 import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import {
@@ -12,7 +12,7 @@ import {
   text,
   type SampleSession,
 } from "./sample-content"
-import { mcpAppPlugin, type Part } from "../../model/transcript"
+import type { Part } from "../../model/transcript"
 
 /**
  * The session the sample plugin's widgets belong to (`widgets/fixture/`):
@@ -313,10 +313,7 @@ export const labsSamples: readonly SampleSession[] = [
       [
         "agent",
         9 * 24 * 60 + 30,
-        [
-          text("The fixture server's app, drawn in its sandbox:"),
-          widget({ plugin: mcpAppPlugin(fixtureServer), id: fixtureCallId }),
-        ],
+        [text("The fixture server's app, drawn in its sandbox:"), widget(fixtureWidget)],
       ],
     ],
   },

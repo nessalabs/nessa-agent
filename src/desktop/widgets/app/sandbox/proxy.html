@@ -3,18 +3,23 @@
   The sandbox proxy for MCP Apps (MCP Apps 2026-01-26, *Sandbox proxy*).
 
   Served on an origin of its own, never the window's: by a listener of its
-  own in the browser build (`app/sandbox/vite-plugin.ts`) and by the
+  own in the browser build (`app/sandbox/serve.ts`) and by the
   `nessa-sandbox` scheme in the desktop app (`src-tauri/src/app_sandbox.rs`).
   The window frames it with `sandbox="allow-scripts allow-same-origin"`.
 
-  It holds no rule of its own. It says it is ready; it loads the one document
-  the host hands it into the app's frame, with `sandbox="allow-scripts"` (an
-  opaque origin: the app reaches neither this document, nor any other app's,
-  nor storage); and it relays messages between the two. The document arrives
-  with its Content Security Policy already in it (`app/model/csp.ts`,
-  `appDocument`). Methods under `ui/notifications/sandbox-` are the host's and
-  this proxy's: none is relayed from the host to the app, and of the app's
-  only the CSP reporter's is passed on.
+  It decides no policy: the host writes it (`app/model/csp.ts`). It says it is
+  ready; it applies the policy the host hands it to its own document, before
+  anything else, so its `frame-src` holds the app's frame wherever the app
+  navigates it; it loads the one document the host hands it into the app's
+  frame, with `sandbox="allow-scripts"` (an opaque origin: the app reaches
+  neither this document, nor any other app's, nor storage), which inherits
+  the policy and carries it too; and it relays messages between the two. What
+  it enforces itself is the relay: only the host (its parent) and the app (its
+  frame) are heard; nothing is relayed before the document; methods under
+  `ui/notifications/sandbox-` are the host's and this proxy's — none is
+  relayed from the host to the app, and of the app's only the CSP reporter's
+  is passed on. What its own policy blocks, it reports the same way.
+  `verification/desktop/scripts/mcp-apps.mjs --only escape` holds each.
 -->
 <html>
   <head>
@@ -53,6 +58,7 @@
         // The host's origin, from its first message; the app's frame, once made.
         var hostOrigin = null
         var app = null
+        var left = false
 
         function methodOf(data) {
           return data !== null &&
@@ -72,22 +78,65 @@
               var params = event.data.params
               if (params === null || typeof params !== "object") return
               var html = params.html
-              if (typeof html !== "string") return
+              var policy = params.policy
+              if (typeof html !== "string" || typeof policy !== "string") return
+              // The policy first, on this document: what it loads from now
+              // on, the app's frame and the frame's every navigation, is held
+              // to it.
+              var meta = document.createElement("meta")
+              meta.setAttribute("http-equiv", "Content-Security-Policy")
+              meta.setAttribute("content", policy)
+              document.head.appendChild(meta)
               hostOrigin = event.origin
+              window.addEventListener("securitypolicyviolation", function (violation) {
+                var origin
+                try {
+                  origin = new URL(violation.blockedURI).origin
+                } catch (error) {
+                  origin = undefined
+                }
+                host.postMessage(
+                  {
+                    jsonrpc: "2.0",
+                    method: reporter,
+                    params: origin && origin !== "null" ? { origin: origin } : {},
+                  },
+                  hostOrigin,
+                )
+              })
               app = document.createElement("iframe")
               app.setAttribute("sandbox", "allow-scripts")
               app.setAttribute("title", "App")
               app.srcdoc = html
+              // The frame loads once, the document handed over. A second load
+              // is the app gone — its frame navigated, refused or not, or
+              // reloaded — and nothing in it is the app's any more: the frame
+              // is removed, and the host told.
+              var loads = 0
+              app.addEventListener("load", function () {
+                loads += 1
+                if (loads < 2 || left) return
+                left = true
+                app.remove()
+                host.postMessage(
+                  {
+                    jsonrpc: "2.0",
+                    method: "ui/notifications/sandbox-app-left",
+                    params: {},
+                  },
+                  hostOrigin,
+                )
+              })
               document.body.appendChild(app)
               return
             }
-            if (event.origin !== hostOrigin) return
+            if (event.origin !== hostOrigin || left) return
             if (method !== null && method.indexOf(reserved) === 0) return
             // The app's origin is opaque: it can be addressed only as "*".
             app.contentWindow.postMessage(event.data, "*")
             return
           }
-          if (app !== null && event.source === app.contentWindow) {
+          if (app !== null && !left && event.source === app.contentWindow) {
             var from = methodOf(event.data)
             if (from !== null && from.indexOf(reserved) === 0 && from !== reporter) return
             host.postMessage(event.data, hostOrigin)

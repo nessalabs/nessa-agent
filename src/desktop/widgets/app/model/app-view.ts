@@ -3,17 +3,17 @@
  * what a host draws, for the rows only an app has (#349) — loading, live,
  * not loadable, its server gone, and a connection its CSP blocked.
  */
+import { closesIn } from "../../model/host-table"
 import type { WidgetPlace } from "../../model/widget-state"
-import type { Lifecycle } from "./lifecycle"
+import { firstState, type Lifecycle } from "./lifecycle"
 
-/** How many blocked origins a view keeps to say; later ones are counted, not kept. */
+/** How many blocked origins a view keeps to name; a later one is not named. */
 export const blockedOrigins = 8
 
 /** The view as its host draws it. */
-export interface AppView {
-  readonly lifecycle: Lifecycle["kind"]
-  /** Why it failed, when it did. */
-  readonly failed?: "load" | "server-gone"
+export interface AppViewState {
+  /** Where it is in its lifecycle, why it failed included. */
+  readonly lifecycle: Lifecycle
   /** Whether the sandbox proxy's frame is on the page. */
   readonly frame: boolean
   /** Inline only: the height the app asked for (`size-changed`), clamped. */
@@ -26,8 +26,8 @@ export interface AppView {
   readonly serverGone: boolean
 }
 
-export const firstView: AppView = {
-  lifecycle: "reading",
+export const firstView: AppViewState = {
+  lifecycle: firstState,
   frame: false,
   blocked: [],
   anyBlocked: false,
@@ -53,19 +53,19 @@ export interface AppDraws {
   readonly notices: readonly string[]
 }
 
-export function appDraws(place: WidgetPlace, view: AppView): AppDraws {
-  const closes = place !== "inline"
-  if (view.lifecycle === "failed")
+export function appDraws(place: WidgetPlace, view: AppViewState): AppDraws {
+  const { lifecycle } = view
+  if (lifecycle.kind === "failed")
     return {
       frame: "none",
       waiting: false,
       line: {
-        text: view.failed === "server-gone" ? appLines.serverGone : appLines.load,
-        closes,
+        text: lifecycle.reason === "server-gone" ? appLines.serverGone : appLines.load,
+        closes: closesIn(place),
       },
       notices: [],
     }
-  const live = view.lifecycle === "live" || view.lifecycle === "ending"
+  const live = lifecycle.kind === "live" || lifecycle.kind === "ending"
   const notices = [
     ...(view.serverGone ? [appLines.serverGone] : []),
     ...(view.anyBlocked
@@ -78,7 +78,7 @@ export function appDraws(place: WidgetPlace, view: AppView): AppDraws {
   ]
   return {
     frame: !view.frame ? "none" : live ? "shown" : "hidden",
-    waiting: !live && view.lifecycle !== "gone",
+    waiting: !live && lifecycle.kind !== "gone",
     notices,
   }
 }

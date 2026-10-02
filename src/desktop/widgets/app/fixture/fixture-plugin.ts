@@ -21,6 +21,8 @@ import type {
 } from "../application/ports"
 import type { PageContext } from "../model/host-context"
 import { appMimeType } from "../model/resource"
+import { appPlugin } from "../ui/app-plugin"
+import { appWidget } from "../model/app-ref"
 import { fixtureAppHtml } from "./fixture-app"
 
 /** The fixture server's name, as the gateway would name it. */
@@ -29,8 +31,8 @@ export const fixtureServer = "nessa-fixture"
 /** The UI resource its tool declares. */
 export const fixtureResourceUri = "ui://nessa-fixture/app.html"
 
-/** The widget id of its one call: the execution and tool ids that name it. */
-export const fixtureCallId = JSON.stringify(["fixture-execution", "fixture-call"])
+/** The widget its one call is drawn as. */
+export const fixtureWidget = appWidget(fixtureServer, "fixture-execution", "fixture-call")
 
 /** The tools it answers an app for, and the one it refuses as hidden. */
 export const fixtureTools = {
@@ -81,7 +83,6 @@ export function fixtureCall(sessionId: string): AppCall {
 
 /** The fixture server's app, its call belonging to `sessionId`. */
 export function fixtureAppPlugin(options: {
-  readonly id: string
   readonly sessionId: string
   readonly sandbox: SandboxOrigin | undefined
   readonly timers: Timers
@@ -92,7 +93,7 @@ export function fixtureAppPlugin(options: {
   const ports: McpAppPorts = {
     server: fixtureServerPort(),
     calls: {
-      read: (id) => (id === fixtureCallId ? known : missing),
+      read: (id) => (id === fixtureWidget.id ? known : missing),
       subscribe: () => () => {},
     },
     timers: options.timers,
@@ -100,5 +101,5 @@ export function fixtureAppPlugin(options: {
     hostInfo: { name: "Nessa", version: "fixture" },
     page: options.page,
   }
-  return { kind: "app", id: options.id, name: "Fixture", server: fixtureServer, ports }
+  return appPlugin({ server: fixtureServer, name: "Fixture", ports })
 }

@@ -6,7 +6,7 @@ import { createDesktopDependencies } from "./dependencies"
 import { makeDesktopStore } from "./store"
 import { DesktopIconFamilyProvider } from "./ui/icons"
 import { DesktopWindow } from "./ui/desktop-window"
-import { sandboxFor, WidgetRegistryProvider } from "./widgets"
+import { platformFor, sandboxFor, WidgetRegistryProvider } from "./widgets"
 import { ClockProvider, followWorkspace, loadWorkspace } from "./workspace"
 
 import "@fontsource-variable/geist"
@@ -19,7 +19,7 @@ import "./styles.css"
 const dependencies = createDesktopDependencies({
   apps: {
     sandbox: sandboxFor(host.kind, document),
-    platform: host.kind === "browser" ? "web" : "desktop",
+    platform: platformFor(host.kind),
   },
 })
 const store = makeDesktopStore(dependencies)

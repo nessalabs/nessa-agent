@@ -14,6 +14,7 @@ import type { WidgetRef } from "../model/widget-ref"
 import type { WidgetAnswer } from "../model/widget-state"
 import type { WidgetHost, WidgetPlugin } from "./plugin"
 import { offeredBy, WidgetAnswerOf } from "./widget-answer"
+import { WidgetLine, WidgetWaiting } from "./widget-line"
 import "./widgets.css"
 
 export function InlineWidget({ widget, host }: { widget: WidgetRef; host: WidgetHost }) {
@@ -55,11 +56,9 @@ function InlineCard({
           </Button>
         </div>
       ) : draws.kind === "waiting" ? (
-        <p className="widget-waiting" role="status">
-          {draws.name}
-        </p>
+        <WidgetWaiting name={draws.name} />
       ) : draws.kind === "line" ? (
-        <p className="widget-line-inline">{draws.text}</p>
+        <WidgetLine place="inline" text={draws.text} closes={false} onClose={() => {}} />
       ) : null}
     </div>
   )

@@ -7,8 +7,11 @@
  * declare, and its requests are refused — never answered as if done
  * (gate 7).
  *
- * Every call settles. A port that rejects is a fault of its adapter, not an
- * answer: the bridge logs it and answers the app as `failed`.
+ * A port call is given a deadline by the bridge (`deadlines.request`): past
+ * it the app is answered that it timed out and its slot is freed, so a port
+ * that never settles cannot hold the app's requests (`bridge.test.ts`, L31).
+ * A port that rejects is a fault of its adapter, not an answer: the bridge
+ * logs it and answers the app as `failed`.
  */
 import type { PageContext } from "../model/host-context"
 import type { DownloadFile } from "../model/messages"

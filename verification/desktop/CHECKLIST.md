@@ -373,6 +373,13 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 - [ ] **The app is on an opaque origin**: no parent or top document, no
   storage, no cookie; the proxy on another origin than the window.
   _Check:_ `mcp-apps.mjs --only isolation`.
+- [ ] **An app cannot leave its frame for a page without its policy**: sent
+  away by script or by `<meta refresh>`, its frame's navigation is refused by
+  the proxy's policy (nothing reaches the other site), the frame is taken off
+  the page and the host says it cannot show the app; forged proxy messages
+  change nothing, and a forged report puts none of the app's words in the
+  host's chrome. _#349 design, L32 and Sandbox._
+  _Check:_ `mcp-apps.mjs --only escape-navigate,escape-refresh,forge`.
 - [ ] **It is torn down on close**: a pane's close takes its proxy and app
   documents with it; an app asking to go is sent `ui/resource-teardown`, and
   its pane closes only once it answers. _Check:_ `mcp-apps.mjs --only teardown`.

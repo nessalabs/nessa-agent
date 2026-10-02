@@ -10,7 +10,9 @@
  * on another origin than its own, has no sandbox: every app in it is one the
  * window cannot load, said as such.
  */
+import type { HostKind } from "../../../../../host/features"
 import type { SandboxOrigin } from "../../application/ports"
+import type { PageContext } from "../../model/host-context"
 
 /** The meta element the browser build's dev server writes the proxy's URL into. */
 export const sandboxMetaName = "nessa-app-sandbox"
@@ -21,7 +23,7 @@ export const sandboxMetaName = "nessa-app-sandbox"
  * `http` host on the one host that is neither macOS nor Linux, Windows.
  */
 export function sandboxFor(
-  host: "macos" | "linux" | "browser" | "other",
+  host: HostKind,
   document: Document,
 ): SandboxOrigin | undefined {
   switch (host) {
@@ -57,4 +59,9 @@ export function pageSandbox(document: Document): SandboxOrigin | undefined {
   // On the page's own origin the proxy would be no boundary at all.
   if (url.origin === document.location.origin) return undefined
   return { url: url.href, origin: url.origin }
+}
+
+/** What an app is told it runs on (`hostContext.platform`): the desktop app, or a browser. */
+export function platformFor(host: HostKind): PageContext["platform"] {
+  return host === "browser" ? "web" : "desktop"
 }

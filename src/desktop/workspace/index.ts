@@ -73,4 +73,3 @@ export type {
   WorkspaceUpdate,
 } from "./application/ports"
 export type { WorkspaceFailureReason } from "./model/failure"
-export { mcpAppPlugin } from "./model/transcript"

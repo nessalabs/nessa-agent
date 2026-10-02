@@ -11,6 +11,9 @@
  * (`adapters/dom/sandbox-origin.ts`). Over HTTPS the listener uses Vite's
  * own certificate, so the frame is never mixed content.
  *
+ * The proxy is read once, when the dev server starts: an edit to
+ * `proxy.html` is served after the dev server restarts.
+ *
  * `vite preview` serves a build as it was written, so a previewed page has
  * no meta and shows every app as one it cannot load: the preview is for the
  * frame budget (`verification/desktop`), which no app is part of.
@@ -30,29 +33,39 @@ import { sandboxMetaName } from "../adapters/dom/sandbox-origin"
 const proxyPath = "/proxy.html"
 const host = "127.0.0.1"
 
-function proxyDocument(): Buffer {
-  return readFileSync(fileURLToPath(new URL("./proxy.html", import.meta.url)))
-}
-
-function answer(request: IncomingMessage, response: ServerResponse) {
-  const path = new URL(request.url ?? "/", "http://sandbox").pathname
-  if (request.method !== "GET" || path !== proxyPath) {
-    response.writeHead(404, { "Content-Type": "text/plain" }).end("Not found")
-    return
-  }
-  response
-    .writeHead(200, {
+/** What the listener answers: the proxy for `GET /proxy.html`, and nothing for anything else. */
+export function sandboxResponse(
+  method: string | undefined,
+  url: string | undefined,
+  proxy: Buffer,
+): { status: number; headers: Record<string, string>; body: Buffer | string } {
+  const path = new URL(url ?? "/", "http://sandbox").pathname
+  if (method !== "GET" || path !== proxyPath)
+    return { status: 404, headers: { "Content-Type": "text/plain" }, body: "Not found" }
+  return {
+    status: 200,
+    headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
-    })
-    .end(proxyDocument())
+    },
+    body: proxy,
+  }
 }
 
-/** Starts the listener; resolves with the proxy's URL. */
+/**
+ * Starts the listener; resolves with the proxy's URL. The proxy is read once,
+ * here, as the dev server starts — this is developer tooling, the one outside
+ * read it makes, and what it serves is `sandboxResponse`'s.
+ */
 function listen(
   https: ServerOptions | undefined,
 ): Promise<{ url: string; close(): void }> {
+  const proxy = readFileSync(fileURLToPath(new URL("./proxy.html", import.meta.url)))
+  const answer = (request: IncomingMessage, response: ServerResponse) => {
+    const { status, headers, body } = sandboxResponse(request.method, request.url, proxy)
+    response.writeHead(status, headers).end(body)
+  }
   const server = https ? createHttpsServer(https, answer) : createHttpServer(answer)
   return new Promise((resolve, reject) => {
     server.once("error", reject)
@@ -66,7 +79,8 @@ function listen(
   })
 }
 
-function withMeta(html: string, url: string): string {
+/** `html` with the meta that names the proxy's URL, at the end of its head. */
+export function withMeta(html: string, url: string): string {
   const meta = `<meta name="${sandboxMetaName}" content="${url}">`
   return html.includes("</head>")
     ? html.replace("</head>", `${meta}</head>`)

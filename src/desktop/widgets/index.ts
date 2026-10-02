@@ -43,7 +43,8 @@
  *   app/application/ports.ts: the server (#348), the calls, the conversation, links, downloads, timers
  * ```
  *
- * An arrow points the way a message travels. The proxy is
+ * The first arrow is what draws what; the rest point the way a message
+ * travels. The proxy is
  * `app/sandbox/proxy.html`; `app/fixture/` is a fixture server's app,
  * registered beside the sample workspace.
  */
@@ -82,7 +83,7 @@ export { WidgetBody, widgetBodyAttribute } from "./ui/widget-body"
 export { InlineWidget } from "./ui/inline-widget"
 export type { McpAppPorts, SandboxOrigin, Timers } from "./app/application/ports"
 export { readPageContext } from "./app/adapters/dom/page-context"
-export { sandboxFor } from "./app/adapters/dom/sandbox-origin"
+export { platformFor, sandboxFor } from "./app/adapters/dom/sandbox-origin"
 export { fixtureAppPlugin, fixtureServer } from "./app/fixture/fixture-plugin"
 export { samplePlugin } from "./fixture/sample-plugin"
 export { samplePluginId, sampleWidgets } from "./fixture/sample-widgets"

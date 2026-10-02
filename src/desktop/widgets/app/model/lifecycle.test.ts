@@ -19,6 +19,7 @@ const events: LifecycleEvent[] = [
   { kind: "read", outcome: "unloadable" },
   { kind: "read", outcome: "server-gone" },
   { kind: "proxy-ready" },
+  { kind: "app-left" },
   { kind: "initialize", initialize },
   { kind: "initialized" },
   { kind: "deadline" },
@@ -98,6 +99,18 @@ describe("what fails", () => {
   })
 })
 
+describe("the app leaving its frame", () => {
+  it("L32: once the document is handed over, its frame loading again fails it and takes the frame", () => {
+    for (const kind of ["loading", "initializing", "live", "ending"] as const)
+      expect(advance(states[kind], { kind: "app-left" }), kind).toEqual({
+        state: { kind: "failed", reason: "load" },
+        effects: [{ kind: "remove-frame" }],
+      })
+    for (const kind of ["reading", "proxy"] as const)
+      expect(advance(states[kind], { kind: "app-left" }).state, kind).toBe(states[kind])
+  })
+})
+
 describe("what is ignored", () => {
   it("L22: an inline app asking to go is declined", () => {
     const step = advance(states.live, { kind: "request-teardown", place: "inline" })
@@ -130,6 +143,10 @@ describe("what is ignored", () => {
       "initializing proxy-ready",
       "live proxy-ready",
       "ending proxy-ready",
+      "loading app-left",
+      "initializing app-left",
+      "live app-left",
+      "ending app-left",
     ])
     for (const state of Object.values(states))
       for (const event of events) {

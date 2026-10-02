@@ -9,10 +9,9 @@
  * its listener with it (`remove`), and nothing is posted after.
  */
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Button } from "@nessa-ui/react/button"
-import { EmptyState } from "@nessa-ui/react/empty-state"
 import type { HostContext, WidgetPlace } from "../../model/widget-state"
 import type { AppWidgetPlugin, WidgetHost } from "../../ui/plugin"
+import { WidgetLine, WidgetWaiting } from "../../ui/widget-line"
 import { frameTransport, type FrameTransport } from "../adapters/dom/frame-transport"
 import { createAppBridge, type AppBridge } from "../application/bridge"
 import { appDraws, firstView } from "../model/app-view"
@@ -115,7 +114,7 @@ function AppFrame({
 
   const draws = appDraws(place, view)
   return (
-    <div className="widget-app" data-app-view={view.lifecycle} data-place={place}>
+    <div className="widget-app" data-app-view={view.lifecycle.kind} data-place={place}>
       {draws.notices.map((notice) => (
         <p key={notice} className="widget-app-notice" role="status">
           {notice}
@@ -135,27 +134,15 @@ function AppFrame({
         />
       ) : null}
       {draws.waiting ? (
-        <p className="widget-waiting widget-app-waiting" role="status">
-          {plugin.name}
-        </p>
+        <WidgetWaiting name={plugin.name} className="widget-app-waiting" />
       ) : null}
       {draws.line ? (
-        place === "inline" ? (
-          <p className="widget-line-inline">{draws.line.text}</p>
-        ) : (
-          <EmptyState
-            variant="compact"
-            className="widget-line"
-            title={draws.line.text}
-            action={
-              draws.line.closes ? (
-                <Button size="sm" variant="ghost" onClick={() => host.close()}>
-                  Close
-                </Button>
-              ) : undefined
-            }
-          />
-        )
+        <WidgetLine
+          place={place}
+          text={draws.line.text}
+          closes={draws.line.closes}
+          onClose={() => host.close()}
+        />
       ) : null}
     </div>
   )

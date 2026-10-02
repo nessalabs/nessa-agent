@@ -17,7 +17,7 @@ import { WidgetBody } from "../../ui/widget-body"
 import type { McpAppServer } from "../application/ports"
 import {
   fixtureAppPlugin,
-  fixtureCallId,
+  fixtureWidget,
   fixtureServerPort,
 } from "../fixture/fixture-plugin"
 import { appLines } from "../model/app-view"
@@ -45,7 +45,6 @@ function app(
   options: { sandbox?: typeof sandbox | undefined; server?: McpAppServer } = {},
 ): AppWidgetPlugin {
   const plugin = fixtureAppPlugin({
-    id: "mcp:fixture",
     sessionId: "session-a",
     sandbox: "sandbox" in options ? options.sandbox : sandbox,
     timers: { after: () => () => {} },
@@ -68,7 +67,7 @@ function fakeHost(): WidgetHost & { opened: OpenPlace[]; closed: number } {
   return fake
 }
 
-const widget = { plugin: "mcp:fixture", id: fixtureCallId }
+const widget = fixtureWidget
 
 async function draw(
   plugin: AppWidgetPlugin,

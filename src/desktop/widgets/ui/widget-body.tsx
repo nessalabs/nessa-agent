@@ -9,14 +9,13 @@
  * view to place further.
  */
 import { useRef } from "react"
-import { Button } from "@nessa-ui/react/button"
-import { EmptyState } from "@nessa-ui/react/empty-state"
 import { useHostContext } from "../adapters/dom/host-context"
 import { AppView } from "../app/ui/app-view"
 import { hostDraws } from "../model/host-table"
 import type { OpenPlace, WidgetAnswer } from "../model/widget-state"
 import type { WidgetHost, WidgetPlugin } from "./plugin"
 import { offeredBy } from "./widget-answer"
+import { WidgetLine, WidgetWaiting } from "./widget-line"
 import "./widgets.css"
 
 /** The attribute on a widget's body, where focus lands for it. */
@@ -52,21 +51,13 @@ export function WidgetBody({
       ) : draws.kind === "view" && View ? (
         <View id={id} place={place} host={host} context={context} />
       ) : draws.kind === "waiting" ? (
-        <p className="widget-waiting" role="status">
-          {draws.name}
-        </p>
+        <WidgetWaiting name={draws.name} />
       ) : draws.kind === "line" ? (
-        <EmptyState
-          variant="compact"
-          className="widget-line"
-          title={draws.text}
-          action={
-            draws.closes ? (
-              <Button size="sm" variant="ghost" onClick={() => host.close()}>
-                Close
-              </Button>
-            ) : undefined
-          }
+        <WidgetLine
+          place={place}
+          text={draws.text}
+          closes={draws.closes}
+          onClose={() => host.close()}
         />
       ) : null}
     </div>

@@ -9,7 +9,7 @@
  *      │                │                      │                            │
  *      │ unloadable,    │ deadline             │ deadline                   │ initialized
  *      │ server gone    ▼                      ▼                            ▼
- *      └────────────▶ failed ◀──── proxy-ready again (any state but proxy) live
+ *      └────────────▶ failed ◀──── proxy-ready again, app-left (loading … ending) live
  *                                                                           │ request-teardown
  *                                                                           ▼ (pane, window)
  *   removed, from anywhere ──▶ gone ◀──── answered, or deadline ──────── ending
@@ -42,6 +42,8 @@ export type Lifecycle =
 export type LifecycleEvent =
   | { readonly kind: "read"; readonly outcome: "html" | "unloadable" | "server-gone" }
   | { readonly kind: "proxy-ready" }
+  /** The proxy saw the app's frame load again, and removed it. */
+  | { readonly kind: "app-left" }
   | { readonly kind: "initialize"; readonly initialize: Initialize }
   | { readonly kind: "initialized" }
   | { readonly kind: "deadline" }
@@ -99,6 +101,14 @@ export function advance(state: Lifecycle, event: LifecycleEvent): Step {
       // The proxy loaded again under a running app: what it shows now is
       // nothing the host handed it.
       if (state.kind === "reading") return stay(state)
+      return {
+        state: { kind: "failed", reason: "load" },
+        effects: [{ kind: "remove-frame" }],
+      }
+    case "app-left":
+      // The app's document is no longer the one handed over: a navigation of
+      // its frame, refused or not, or a reload.
+      if (state.kind === "reading" || state.kind === "proxy") return stay(state)
       return {
         state: { kind: "failed", reason: "load" },
         effects: [{ kind: "remove-frame" }],

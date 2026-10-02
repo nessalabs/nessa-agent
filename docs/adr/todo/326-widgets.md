@@ -93,10 +93,11 @@ What binds:
   `onEscape(handler)` (below), with a read-only **host context** — theme,
   locale, the place's size and safe area. These are shaped after MCP Apps'
   bridge so the `app` kind is a translation, not a second contract:
-  `open(place)` is `ui/request-display-mode`, the host context is `hostContext`;
-  sending a message and updating the model's context (`ui/message`,
-  `ui/update-model-context`) are named for both kinds and built with the `app`
-  host (344).
+  `open(place)` is `ui/request-display-mode`, the host context is `hostContext`.
+  Sending a message and updating the model's context (`ui/message`,
+  `ui/update-model-context`) were built with the `app` host as an app's own
+  port (344, #349); a native view has not needed them, and gets them on
+  `WidgetHost` when one does.
 - Native plugins are **registered once, in composition** (`main.tsx`), into a
   `WidgetRegistry` provided to the tree; `app` plugins are **registered and
   unregistered while the window runs**, as the gateway reports MCP servers with

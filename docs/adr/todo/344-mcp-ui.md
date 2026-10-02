@@ -96,10 +96,23 @@ share the proxy's origin: one app could script another's proxy through
 give each app an origin of its own avoid that; a custom scheme and a dev
 listener cannot give one per server on every platform, so an app here has no
 storage or cookies, and its requests carry `Origin: null`. An origin per
-server is the change that would allow more. The CSP is written into the app's
-document, first, from the parsed parts of `_meta.ui.csp` alone (with
-`form-action 'none'` beside the spec's directives); nothing declared means no
-network. Permissions (`camera`, …) and `_meta.ui.domain` are not granted.
+server is the change that would allow more. The CSP is written from the
+parsed parts of `_meta.ui.csp` alone (with `form-action 'none'` beside the
+spec's directives); nothing declared means no network. The proxy applies it
+to its own document before it makes the app's frame — its `frame-src` is what
+holds the frame when the app navigates it, which a policy inside the app's
+document alone does not (review round 1 on #349 found exactly that escape) —
+and the app's document carries it first as well. Permissions (`camera`, …)
+and `_meta.ui.domain` are not granted.
+
+What the sandbox does not hold, and is not claimed to: CSP does not govern
+WebRTC, so an app can reach a STUN or TURN host it did not declare; a server
+may declare a loopback domain (`http://127.0.0.1:…`), as the spec allows for
+an app in development, and its app then reaches that local service, with
+`Origin: null`; and in the desktop app, whether WebKit refuses an app's
+navigation of its own frame (by the proxy's `frame-src`) before Tauri's
+navigation policy would hand the URL to the person's browser is not yet seen
+(`src-tauri/src/links.rs`).
 
 **Teardown.** The host sends `ui/resource-teardown` and waits for the answer
 (or a deadline) where it ends an app itself and the place stays: an app in a

@@ -12,7 +12,7 @@
  * address its server calls go to — the session and the server — is the
  * view's own, never anything the app says.
  */
-import { appDocument, approvedDomains } from "../model/csp"
+import { appDocument, approvedDomains, cspPolicy, cspViolationMethod } from "../model/csp"
 import { appHostContext, changedContext, inlineMaxHeight } from "../model/host-context"
 import {
   errorCodes,
@@ -40,7 +40,7 @@ import {
   type AppCall,
   type CallTold,
 } from "../model/tool-call"
-import { blockedOrigins, firstView, type AppView } from "../model/app-view"
+import { blockedOrigins, firstView, type AppViewState } from "../model/app-view"
 import type { HostContext, OpenPlace, WidgetPlace } from "../../model/widget-state"
 import type { McpAppPorts, ServerAddress, ServerAnswer } from "./ports"
 
@@ -55,6 +55,8 @@ export const deadlines = {
   initialize: 15_000,
   /** For the app to answer `ui/resource-teardown`. */
   teardown: 3_000,
+  /** For a port to answer one of the app's requests. */
+  request: 60_000,
 } as const
 
 /** At most this many of an app's requests wait on the host at once. */
@@ -74,7 +76,7 @@ export interface BridgeOptions {
   /** The host's callbacks for the view's place. */
   readonly host: { open(place: OpenPlace): void; close(): void }
   /** Told what the view shows when the bridge is made, and of each change. */
-  readonly onView: (view: AppView) => void
+  readonly onView: (view: AppViewState) => void
 }
 
 export interface AppBridge {
@@ -87,7 +89,7 @@ export interface AppBridge {
   /** The view's place was removed: nothing is sent to it again. */
   remove(): void
   /** What the view shows now. */
-  view(): AppView
+  view(): AppViewState
 }
 
 const logLimit = 100
@@ -95,7 +97,7 @@ const logLimit = 100
 export function createAppBridge(options: BridgeOptions): AppBridge {
   const { place, ports } = options
   let lifecycle: Lifecycle = firstState
-  let view: AppView = firstView
+  let view: AppViewState = firstView
   let call = options.call
   let context = options.context
   let resource: UiResource | undefined
@@ -103,15 +105,16 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   // The host context the app was last given, to send only what changed.
   let given: JsonObject | undefined
   let cancelDeadline: (() => void) | undefined
-  const pending = new Set<RequestId>()
+  // Each request waiting on a port, by id, with its deadline's cancel.
+  const pending = new Map<RequestId, () => void>()
   let logged = 0
 
   const address: ServerAddress = { sessionId: call.sessionId, server: options.server }
   const gone = () => lifecycle.kind === "gone"
   const initialized = () => lifecycle.kind === "live" || lifecycle.kind === "ending"
 
-  const show = (next: Partial<AppView>) => {
-    view = { ...view, ...next, lifecycle: lifecycle.kind }
+  const show = (next: Partial<AppViewState>) => {
+    view = { ...view, ...next, lifecycle }
     options.onView(view)
   }
 
@@ -163,6 +166,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
           send(
             notify("ui/notifications/sandbox-resource-ready", {
               html: appDocument(resource.html, resource.csp),
+              policy: cspPolicy(resource.csp),
             }),
           )
         return
@@ -208,8 +212,11 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     cancelDeadline?.()
     cancelDeadline = undefined
     lifecycle = next.state
-    if (lifecycle.kind === "failed") show({ failed: lifecycle.reason, frame: false })
-    else show({})
+    if (lifecycle.kind === "gone") {
+      for (const cancel of pending.values()) cancel()
+      pending.clear()
+    }
+    show({})
     for (const effect of next.effects) run(effect, answering)
   }
 
@@ -227,17 +234,32 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     }
   }
 
-  /** Waits for a port, then answers `id` — unless the view is gone by then. */
+  /**
+   * Waits for a port, then answers `id` once: with what the port said, or —
+   * past the request deadline — that it timed out, freeing its slot; the
+   * port's answer after that is dropped. `send` posts nothing once the view
+   * is gone.
+   */
   function settle<T>(id: RequestId, work: Promise<T>, answer: (value: T) => void) {
-    pending.add(id)
+    const settled = () => {
+      if (!pending.has(id)) return false
+      pending.get(id)?.()
+      pending.delete(id)
+      return true
+    }
+    pending.set(
+      id,
+      ports.timers.after(deadlines.request, () => {
+        if (settled()) send(refuse(id, errorCodes.internal, "The request timed out"))
+      }),
+    )
     work
       .catch((error: unknown) => {
         console.error("An MCP App port failed", error)
         return undefined
       })
       .then((value) => {
-        pending.delete(id)
-        // `send` posts nothing once the view is gone.
+        if (!settled()) return
         if (value === undefined)
           send(refuse(id, errorCodes.internal, "The request failed"))
         else answer(value)
@@ -321,14 +343,15 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     if (message.method === "ui/initialize" && lifecycle.kind === "loading")
       return step({ kind: "initialize", initialize: message.initialize }, id)
     if (lifecycle.kind === "live" || lifecycle.kind === "ending") {
+      // One id is answered once: a second request under a pending id is not.
       if (pending.has(id))
-        return send(refuse(id, errorCodes.invalidRequest, "Duplicate id"))
+        return console.warn(`[mcp app ${options.server}] a pending id again`)
       if (pending.size >= pendingLimit)
         return send(refuse(id, errorCodes.refused, "Too many requests"))
       return handle(id, message, lifecycle.initialize)
     }
     if (message.method === "ping") return ok(id)
-    if (message.method === "ui/initialize")
+    if (message.method === "ui/initialize" && lifecycle.kind === "initializing")
       return send(refuse(id, errorCodes.invalidRequest, "Already initialized"))
     return send(refuse(id, errorCodes.notInitialized, "Not initialized"))
   }
@@ -350,20 +373,28 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         switch (note.method) {
           case "ui/notifications/sandbox-proxy-ready":
             return step({ kind: "proxy-ready" })
+          case "ui/notifications/sandbox-app-left":
+            return step({ kind: "app-left" })
           case "ui/notifications/initialized":
             return step({ kind: "initialized" })
           case "ui/notifications/request-teardown":
             return step({ kind: "request-teardown", place })
           case "ui/notifications/size-changed":
             if (place !== "inline" || !initialized() || note.height === undefined) return
-            return show({ height: Math.min(Math.ceil(note.height), inlineMaxHeight) })
-          case "ui/notifications/sandbox-csp-violation": {
+            {
+              const height = Math.min(Math.ceil(note.height), inlineMaxHeight)
+              // An app may say its size as often as it likes; only a change draws.
+              return height === view.height ? undefined : show({ height })
+            }
+          case cspViolationMethod: {
             if (lifecycle.kind === "reading" || lifecycle.kind === "proxy") return
             const { origin } = note
             const known =
               origin === undefined ||
               view.blocked.includes(origin) ||
               view.blocked.length >= blockedOrigins
+            // A report that adds nothing draws nothing.
+            if (known && view.anyBlocked) return
             return show({
               anyBlocked: true,
               ...(known ? {} : { blocked: [...view.blocked, origin] }),

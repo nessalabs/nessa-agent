@@ -8,6 +8,7 @@ import { act, StrictMode, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { fixtureAppPlugin } from "../app/fixture/fixture-plugin"
+import { appPlugin } from "../app/ui/app-plugin"
 import { createWidgetRegistry } from "../application/registry"
 import { WidgetRegistryProvider } from "../adapters/react/registry-context"
 import type { WidgetRef } from "../model/widget-ref"
@@ -238,16 +239,18 @@ describe("plugins registered while the window runs", () => {
     // An MCP App, whose calls hold no widget "run": it says so, by the table.
     await act(
       async () =>
-        void registry.register({
-          ...fixtureAppPlugin({
-            id: "mcp:rows",
-            sessionId: "a",
-            sandbox: undefined,
-            timers: { after: () => () => {} },
-            page: () => ({ styles: {}, timeZone: "UTC", platform: "web" }),
+        void registry.register(
+          appPlugin({
+            server: "rows",
+            name: "Rows",
+            ports: fixtureAppPlugin({
+              sessionId: "a",
+              sandbox: undefined,
+              timers: { after: () => () => {} },
+              page: () => ({ styles: {}, timeZone: "UTC", platform: "web" }),
+            }).ports,
           }),
-          name: "Rows",
-        }),
+        ),
     )
     expect(host.querySelector('[data-slot="empty-state-title"]')?.textContent).toBe(
       "This is no longer available",

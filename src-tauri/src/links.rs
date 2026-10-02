@@ -42,6 +42,12 @@
 //! | `http://tauri.localhost` | Linux and Windows, where that protocol is an http host |
 //! | `http://localhost:1420` | the dev server alone, and only in a `tauri dev` build |
 //!
+//! Beside them, the frame an MCP App is drawn in (ADR 344, `app_frame`): the
+//! sandbox proxy on its own scheme ([`app_sandbox::SCHEME`], an http host on
+//! Windows) and the app's document inside it, `about:srcdoc`. Those are not
+//! the app's pages; they are allowed because a frame's load passes through
+//! this policy too, and refusing them would draw no app.
+//!
 //! # Which ways out of the page this actually sees
 //!
 //! The navigation policy is not every exit. Covered on both macOS and Linux:
@@ -54,10 +60,20 @@
 //!
 //! Those are shut elsewhere rather than here, and are recorded so the next
 //! person does not read this module as a complete gate: the CSP sets
-//! `frame-src 'none'` and `form-action 'none'`, and the transcript renders
-//! markdown with no raw HTML, so model output cannot author a `target`, a
-//! `download` or a script that calls `window.open`. A change to either of those
-//! re-opens a route past this file.
+//! `form-action 'none'` and a `frame-src` that names only the MCP Apps sandbox
+//! proxy, and the transcript renders markdown with no raw HTML, so model
+//! output cannot author a `target`, a `download` or a script that calls
+//! `window.open`. A change to either of those re-opens a route past this file.
+//!
+//! The sandbox frame is that one route, opened on purpose: its document is
+//! the proxy, which holds no link of the model's, and the app inside it is
+//! someone else's HTML. An app navigating its own frame is refused by the
+//! proxy's own `frame-src` (the app's CSP, `src/desktop/widgets/app/model/
+//! csp.ts`) before it reaches anything — in Chromium, where it is checked
+//! (`verification/desktop/scripts/mcp-apps.mjs --only escape`). Whether
+//! WebKit refuses it before this policy runs is not yet seen; if it does not,
+//! this policy would hand an `http`, `https` or `mailto` URL the app chose to
+//! the OS, with no gesture of the person's (#349, open question 3).
 //!
 //! A dropped URL is the other way a page can be made to navigate, and the page
 //! stops that itself in `src/panel/adapters/use-drop-navigation-guard.ts`. One
@@ -69,6 +85,7 @@ use tauri::{
     Emitter, Runtime, Url, Webview,
 };
 
+use crate::app_sandbox;
 use crate::host::{LinkNotOpened, LINK_NOT_OPENED};
 use crate::platform::{self, Host};
 
@@ -128,7 +145,7 @@ fn own_page(url: &Url, serving: Serving) -> bool {
     }
 }
 
-/// Whether this is the frame an MCP App is drawn in (`app_sandbox.rs`): the
+/// Whether this is the frame an MCP App is drawn in ([`app_sandbox`]): the
 /// sandbox proxy on its own scheme — an `http` host on Windows — or the app's
 /// document inside it, which the proxy loads as `about:srcdoc`.
 ///
@@ -138,8 +155,8 @@ fn own_page(url: &Url, serving: Serving) -> bool {
 /// (`src/desktop/widgets/app/sandbox/proxy.html`).
 fn app_frame(url: &Url) -> bool {
     match (url.scheme(), url.host_str()) {
-        ("nessa-sandbox", Some("localhost")) => url.port().is_none(),
-        ("http", Some("nessa-sandbox.localhost")) => url.port().is_none(),
+        (scheme, Some("localhost")) if scheme == app_sandbox::SCHEME => url.port().is_none(),
+        ("http", Some(host)) if host == app_sandbox::HTTP_HOST => url.port().is_none(),
         ("about", None) => url.path() == "srcdoc",
         _ => false,
     }
