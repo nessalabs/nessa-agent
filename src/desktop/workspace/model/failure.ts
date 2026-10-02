@@ -9,6 +9,9 @@
  * a message is sent again under its id and the source's updates say what
  * happened. `unknown-session`: the source holds no such session, archived
  * ones included, and begins none under an archived id. `not-waiting`: the
- * approval was already answered, or never asked.
+ * approval was already answered, or never asked. `not-supported`: the source
+ * has no such thing to do — a pin, or an answer it does not offer — so it
+ * did nothing, and asking again changes nothing.
  */
-export type WorkspaceFailureReason = "unavailable" | "unknown-session" | "not-waiting"
+export type WorkspaceFailureReason =
+  "unavailable" | "unknown-session" | "not-waiting" | "not-supported"

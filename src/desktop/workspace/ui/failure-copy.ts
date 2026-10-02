@@ -9,6 +9,7 @@ const copy: Record<WorkspaceFailureReason, string> = {
   unavailable: "Nessa couldn’t reach your sessions.",
   "unknown-session": "This session is no longer there.",
   "not-waiting": "This was already answered.",
+  "not-supported": "This isn’t available for this session.",
 }
 
 export function failureCopy(reason: WorkspaceFailureReason): string {

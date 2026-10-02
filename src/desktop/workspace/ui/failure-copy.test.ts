@@ -7,6 +7,7 @@ it("says each reason in words of its own", () => {
     "unavailable",
     "unknown-session",
     "not-waiting",
+    "not-supported",
   ]
   const said = reasons.map(failureCopy)
   expect(said.every((sentence) => sentence.length > 0)).toBe(true)
