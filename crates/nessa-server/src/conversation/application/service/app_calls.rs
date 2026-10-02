@@ -17,8 +17,8 @@ use super::super::view::{ConversationPermission, ConversationView};
 use super::{ConversationCaller, ConversationError, ConversationService, LiveConversation};
 use crate::conversation::domain::ConversationId;
 use crate::mcp_servers::domain::{
-    admit_resource_read, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal,
-    ResourceTicketDigest, MAX_APP_RESULT_BYTES,
+    admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, ResourceTicketDigest,
+    MAX_APP_RESULT_BYTES,
 };
 use nessa_sdk::domain::agent_execution::{sessions::SessionId, tools::McpTool};
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions, UiResourceUri};
@@ -165,7 +165,7 @@ impl ConversationService {
             },
         );
         let facts = self.app_facts(&live, &call.app, &session).await;
-        if let Err(refusal) = admit_resource_read(facts.as_ref(), &call.server) {
+        if let Err(refusal) = admit_app(facts.as_ref(), &call.server) {
             return Err(step.refuse(refusal.into()).await);
         }
         let listed = match ports.apps.listed_tool(&session, &call.server, &call.tool) {
@@ -342,7 +342,7 @@ impl ConversationService {
             },
         );
         let facts = self.app_facts(&live, &read.app, &session).await;
-        if let Err(refusal) = admit_resource_read(facts.as_ref(), &read.server) {
+        if let Err(refusal) = admit_app(facts.as_ref(), &read.server) {
             return Err(step.refuse(refusal.into()).await);
         }
         let Ok(uri) = UiResourceUri::new(read.uri.as_str()) else {
@@ -382,23 +382,31 @@ impl ConversationService {
                 return Err(ConversationError::Unavailable);
             }
         };
-        step.record(
-            McpAppAuditPhase::Completed(McpAppOutcome::Answered {
-                is_error: false,
-                bytes: size,
-            }),
-            None,
-        )
-        .await?;
-        step.record(
-            McpAppAuditPhase::TicketIssued {
-                ticket_digest: ResourceTicketDigest::of(ticket.as_bytes()).to_hex(),
-                size,
-                sha256: sha256.clone(),
-            },
-            None,
-        )
-        .await?;
+        let recorded = async {
+            step.record(
+                McpAppAuditPhase::Completed(McpAppOutcome::Answered {
+                    is_error: false,
+                    bytes: size,
+                }),
+                None,
+            )
+            .await?;
+            step.record(
+                McpAppAuditPhase::TicketIssued {
+                    ticket_digest: ResourceTicketDigest::of(ticket.as_bytes()).to_hex(),
+                    size,
+                    sha256: sha256.clone(),
+                },
+                None,
+            )
+            .await
+        };
+        if let Err(error) = recorded.await {
+            // Never on record as issued, so never handed out, and never ended
+            // on record either: an end with no issue behind it is no history.
+            ports.tickets.discard(&ticket);
+            return Err(error);
+        }
         Ok(McpAppResource {
             uri: uri.as_str().to_owned(),
             size,

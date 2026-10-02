@@ -68,12 +68,9 @@ pub fn admit_tool_call(
     })
 }
 
-/// Whether the app `app` may read a resource of `server`: its own.
-pub fn admit_resource_read(app: Option<&AppFacts>, server: &str) -> Result<(), AppRefusal> {
-    admit_app(app, server)
-}
-
-fn admit_app(app: Option<&AppFacts>, server: &str) -> Result<(), AppRefusal> {
+/// Whether `app` is an app at all, asking of its own `server`: all a
+/// resource read needs, and the first of what a tool call does.
+pub fn admit_app(app: Option<&AppFacts>, server: &str) -> Result<(), AppRefusal> {
     let app = app.filter(|app| app.has_ui).ok_or(AppRefusal::AppUnknown)?;
     if app.server != server {
         return Err(AppRefusal::ServerMismatch);

@@ -1,8 +1,7 @@
 //! The policy rows of an MCP App's calls (#348, "An app's request" table):
 //! one test each, over the pure rules.
 use super::{
-    admit_resource_read, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal,
-    MAX_APP_ARGUMENTS_BYTES,
+    admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, MAX_APP_ARGUMENTS_BYTES,
 };
 use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::mcp_apps::{ListedTool, ToolHints, ToolUi, UiResourceUri, UiVisibility};
@@ -73,7 +72,7 @@ fn another_servers_tool_is_refused_whatever_it_is() {
         Err(AppRefusal::ServerMismatch)
     );
     assert_eq!(
-        admit_resource_read(Some(&app("charts")), "files"),
+        admit_app(Some(&app("charts")), "files"),
         Err(AppRefusal::ServerMismatch)
     );
 }
@@ -90,12 +89,9 @@ fn no_app_or_one_without_a_ui_is_unknown() {
             admit_tool_call(app, "charts", Some(&reads), 10),
             Err(AppRefusal::AppUnknown)
         );
-        assert_eq!(
-            admit_resource_read(app, "charts"),
-            Err(AppRefusal::AppUnknown)
-        );
+        assert_eq!(admit_app(app, "charts"), Err(AppRefusal::AppUnknown));
     }
-    assert_eq!(admit_resource_read(Some(&app("charts")), "charts"), Ok(()));
+    assert_eq!(admit_app(Some(&app("charts")), "charts"), Ok(()));
 }
 
 #[test]

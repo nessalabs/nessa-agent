@@ -90,6 +90,9 @@ async fn redeem(
     let Some(redemption) = tickets.redeem(ticket.as_bytes()) else {
         return not_found();
     };
+    // Awaited without a deadline of its own: a write given up on could still
+    // commit, and then record bytes served that never were. A write that
+    // hangs holds only this request.
     match audit.record(redemption.audit_record()).await {
         Ok(()) => {
             let mut response = Body::from(redemption.resource.bytes.to_vec()).into_response();

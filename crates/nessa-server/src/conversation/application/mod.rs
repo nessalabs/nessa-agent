@@ -103,7 +103,7 @@ pub use mcp_apps::{
     HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppError,
     McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef,
     McpAppWithdrawal, McpApps, ResourceTickets, TicketRefusal, MAX_HELD_RESOURCE_BYTES,
-    RESOURCE_TICKET_LIFETIME_MS,
+    MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
 };
 pub use passive_read::{
     AdmitPassiveRead, CatalogueReadScope, ReadRefusal, ReceiverAuthority, ReceiverReadScope,

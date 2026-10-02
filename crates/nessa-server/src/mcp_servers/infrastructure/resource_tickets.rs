@@ -28,7 +28,8 @@
 //! sweep period of its deadline even when nothing else happens.
 use crate::conversation::application::{
     HeldResource, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator, McpAppRef,
-    ResourceTickets, TicketRefusal, MAX_HELD_RESOURCE_BYTES, RESOURCE_TICKET_LIFETIME_MS,
+    ResourceTickets, TicketRefusal, MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS,
+    RESOURCE_TICKET_LIFETIME_MS,
 };
 use crate::conversation::domain::ConversationId;
 use crate::mcp_servers::domain::{resource_ticket, ResourceTicketDigest};
@@ -179,9 +180,9 @@ struct Held {
     /// which is deadline order, the lifetime being one constant — including
     /// some already ended otherwise, which the sweep passes over.
     deadlines: VecDeque<(u64, ResourceTicketDigest)>,
-    /// What each conversation holds now, in bytes. A conversation that holds
-    /// nothing has no entry.
-    bytes: HashMap<ConversationId, usize>,
+    /// What each conversation holds now: its bytes, and its tickets. A
+    /// conversation that holds nothing has no entry.
+    bytes: HashMap<ConversationId, (usize, usize)>,
 }
 
 impl Held {
@@ -189,9 +190,10 @@ impl Held {
     fn take(&mut self, digest: &ResourceTicketDigest) -> Option<Ticket> {
         let ticket = self.tickets.remove(digest)?;
         let conversation = ticket.resource.conversation_id();
-        if let Some(held) = self.bytes.get_mut(conversation) {
-            *held -= ticket.resource.bytes.len();
-            if *held == 0 {
+        if let Some((bytes, tickets)) = self.bytes.get_mut(conversation) {
+            *bytes -= ticket.resource.bytes.len();
+            *tickets -= 1;
+            if *tickets == 0 {
                 self.bytes.remove(conversation);
             }
         }
@@ -336,7 +338,10 @@ impl ResourceTicketStore {
     /// What `conversation` holds now, in bytes.
     #[cfg(test)]
     pub(crate) fn held_bytes(&self, conversation: &ConversationId) -> usize {
-        self.lock().bytes.get(conversation).copied().unwrap_or(0)
+        self.lock()
+            .bytes
+            .get(conversation)
+            .map_or(0, |(bytes, _)| *bytes)
     }
 }
 
@@ -354,12 +359,14 @@ impl ResourceTickets for ResourceTicketStore {
         let issued = {
             let mut held = self.lock();
             held.sweep(now, &mut ended);
-            let holding = held
+            let (holding, tickets) = held
                 .bytes
                 .get(resource.conversation_id())
                 .copied()
-                .unwrap_or(0);
-            if holding.saturating_add(resource.bytes.len()) > MAX_HELD_RESOURCE_BYTES {
+                .unwrap_or_default();
+            if holding.saturating_add(resource.bytes.len()) > MAX_HELD_RESOURCE_BYTES
+                || tickets >= MAX_HELD_TICKETS
+            {
                 Err(TicketRefusal::Capacity)
             } else if held.tickets.contains_key(&digest) {
                 // The same 256 bits twice is a random source that is not one.
@@ -367,10 +374,12 @@ impl ResourceTickets for ResourceTicketStore {
                 Err(TicketRefusal::Unavailable)
             } else {
                 let expires_at = now.saturating_add(RESOURCE_TICKET_LIFETIME_MS);
-                *held
+                let (bytes, tickets) = held
                     .bytes
                     .entry(resource.conversation_id().clone())
-                    .or_default() += resource.bytes.len();
+                    .or_default();
+                *bytes += resource.bytes.len();
+                *tickets += 1;
                 held.deadlines.push_back((expires_at, digest));
                 held.tickets.insert(
                     digest,
@@ -412,6 +421,18 @@ impl ResourceTickets for ResourceTicketStore {
                 TicketEnd::AppReleased,
                 &mut ended,
             );
+        }
+        self.report(ended);
+    }
+
+    fn discard(&self, ticket: &str) {
+        let now = self.clock.unix_milliseconds();
+        let mut ended = Vec::new();
+        {
+            let mut held = self.lock();
+            held.sweep(now, &mut ended);
+            // Taken, and not reported: it was never issued on record.
+            held.take(&ResourceTicketDigest::of(ticket.as_bytes()));
         }
         self.report(ended);
     }

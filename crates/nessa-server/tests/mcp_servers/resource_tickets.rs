@@ -526,3 +526,48 @@ async fn ends_sent_to_a_channel_arrive_and_a_closed_channel_does_not_stop_cleanu
     store.release_conversation(&conversation(CONVERSATION));
     assert_eq!(store.held_bytes(&conversation(CONVERSATION)), 0);
 }
+
+#[test]
+fn a_conversation_holds_at_most_its_count_of_tickets_whatever_their_size() {
+    let fixture = Fixture::new();
+    let mount = app("call-1", "mount-1");
+    let mut tickets: Vec<_> = (0..MAX_HELD_TICKETS)
+        .map(|_| {
+            fixture
+                .store
+                .issue(held(CONVERSATION, mount.clone(), b""))
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        fixture.store.issue(held(CONVERSATION, mount.clone(), b"")),
+        Err(TicketRefusal::Capacity)
+    );
+    assert!(fixture
+        .store
+        .issue(held(OTHER_CONVERSATION, mount.clone(), b""))
+        .is_ok());
+    // One redeemed: room for one more.
+    assert!(fixture
+        .store
+        .redeem(tickets.pop().unwrap().as_bytes())
+        .is_some());
+    assert!(fixture.store.issue(held(CONVERSATION, mount, b"")).is_ok());
+}
+
+#[test]
+fn a_discarded_ticket_is_refused_and_its_end_is_not_reported() {
+    let fixture = Fixture::new();
+    let mount = app("call-1", "mount-1");
+    let ticket = fixture
+        .store
+        .issue(held(CONVERSATION, mount, b"bytes"))
+        .unwrap();
+    fixture.store.discard(&ticket);
+    assert!(fixture.store.redeem(ticket.as_bytes()).is_none());
+    assert_eq!(fixture.store.held_bytes(&conversation(CONVERSATION)), 0);
+    // Nor when its deadline passes.
+    fixture.clock.advance(RESOURCE_TICKET_LIFETIME_MS);
+    fixture.store.sweep();
+    assert!(fixture.ends.take().is_empty());
+}

@@ -2267,6 +2267,10 @@ impl ConversationService {
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let permission_id =
                 PermissionId::new(&permission).map_err(|_| ConversationError::InvalidInput)?;
+            // Malformed input is refused before the conversation is opened
+            // (`malformed_controls_do_not_open_a_dormant_owned_provider`).
+            let option_id = PermissionOptionId::new(option.as_str())
+                .map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
             // An app's review first: it is the gateway's own, not the agent's.
             match live
@@ -2277,8 +2281,6 @@ impl ConversationService {
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
                 ReviewAnswer::NotAnAppReview => {}
             }
-            let option_id =
-                PermissionOptionId::new(option).map_err(|_| ConversationError::InvalidInput)?;
             let answer = live
                 .agent
                 .answer_permission(PermissionAnswer {

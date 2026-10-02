@@ -6,8 +6,8 @@ mod resource_ticket;
 mod session_token;
 mod stand_in;
 pub use app_call::{
-    admit_resource_read, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal,
-    MAX_APP_ARGUMENTS_BYTES, MAX_APP_RESULT_BYTES,
+    admit_app, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal, MAX_APP_ARGUMENTS_BYTES,
+    MAX_APP_RESULT_BYTES,
 };
 pub use resource_ticket::{resource_ticket, ResourceTicketDigest};
 pub use session_token::{session_token, TokenDigest, SESSION_VARIABLE};

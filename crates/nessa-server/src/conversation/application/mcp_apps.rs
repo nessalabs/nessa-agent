@@ -225,12 +225,17 @@ pub trait ResourceTickets: Send + Sync {
     /// Let go of everything held for the one mount `app` of
     /// `conversation`. Idempotent.
     fn release_app(&self, conversation: &ConversationId, app: &McpAppRef);
+    /// Let go of `ticket` unredeemed and unreported: its issue could not be
+    /// recorded, so it was never handed out and has no history to end.
+    fn discard(&self, ticket: &str);
 }
 
 /// How long a resource ticket can be redeemed.
 pub const RESOURCE_TICKET_LIFETIME_MS: u64 = 60_000;
 /// The most a conversation may hold behind tickets at once.
 pub const MAX_HELD_RESOURCE_BYTES: usize = 16 * 1024 * 1024;
+/// The most tickets a conversation may hold at once, whatever their size.
+pub const MAX_HELD_TICKETS: usize = 64;
 
 /// Why an app's call was refused, or failed once sent: one protocol
 /// `mcp_` code each. [`Self::code`] is how audit names it.

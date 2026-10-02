@@ -127,6 +127,8 @@ impl McpApps for Apps {
 struct Audit {
     records: Mutex<Vec<McpAppAuditRecord>>,
     failing: AtomicBool,
+    /// Fails every record from this many taken on, when set.
+    failing_after: Mutex<Option<usize>>,
 }
 impl Audit {
     fn phases(&self) -> Vec<McpAppAuditPhase> {
@@ -140,7 +142,13 @@ impl Audit {
 }
 impl McpAppAudit for Audit {
     fn record(&self, record: McpAppAuditRecord) -> ConversationFuture<'_, ()> {
-        let failing = self.failing.load(Ordering::SeqCst);
+        let taken = self.records.lock().unwrap().len();
+        let failing = self.failing.load(Ordering::SeqCst)
+            || self
+                .failing_after
+                .lock()
+                .unwrap()
+                .is_some_and(|after| taken >= after);
         if !failing {
             self.records.lock().unwrap().push(record);
         }
@@ -159,6 +167,7 @@ struct Tickets {
     issued: Mutex<Vec<HeldResource>>,
     released_apps: Mutex<Vec<McpAppRef>>,
     released_conversations: AtomicUsize,
+    discarded: Mutex<Vec<String>>,
     full: AtomicBool,
 }
 impl ResourceTickets for Tickets {
@@ -174,6 +183,9 @@ impl ResourceTickets for Tickets {
     }
     fn release_app(&self, _: &ConversationId, app: &McpAppRef) {
         self.released_apps.lock().unwrap().push(app.clone());
+    }
+    fn discard(&self, ticket: &str) {
+        self.discarded.lock().unwrap().push(ticket.into());
     }
 }
 
@@ -844,7 +856,7 @@ async fn a_resource_is_read_once_and_held_behind_a_ticket_on_record() {
     assert_eq!(resource.prefers_border, Some(true));
     let issued = fixture.tickets.issued.lock().unwrap().clone();
     assert_eq!(&*issued[0].bytes, b"<p>chart</p>");
-    assert_eq!(issued[0].app, fixture.app(INSTANCE));
+    assert_eq!(issued[0].app(), &fixture.app(INSTANCE));
     let phases = fixture.audit.phases();
     assert_eq!(phases[0], McpAppAuditPhase::Admitted);
     assert_eq!(
@@ -970,4 +982,38 @@ async fn calls_running_are_bounded_across_callers_until_each_task_ends() {
     })
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn a_ticket_whose_issue_cannot_be_recorded_is_discarded_and_never_handed_out() {
+    let fixture = Fixture::new().await;
+    *fixture.apps.resource.lock().unwrap() = Some(Ok(UiResource::new(
+        UiResourceUri::new(URI).unwrap(),
+        "<p/>".into(),
+        UiCsp::default(),
+        UiPermissions::default(),
+        None,
+        None,
+    )
+    .unwrap()));
+    // Admitted and completed are recorded; the issue is not.
+    *fixture.audit.failing_after.lock().unwrap() = Some(2);
+    let read = fixture
+        .service
+        .read_app_resource(
+            fixture.id.clone(),
+            caller("read-resource"),
+            McpAppRead {
+                app: fixture.app(INSTANCE),
+                server: SERVER.into(),
+                uri: URI.into(),
+            },
+        )
+        .await;
+    assert!(matches!(read, Err(ConversationError::Audit)));
+    assert_eq!(fixture.tickets.issued.lock().unwrap().len(), 1);
+    assert_eq!(
+        fixture.tickets.discarded.lock().unwrap().clone(),
+        ["t".repeat(43)]
+    );
 }
