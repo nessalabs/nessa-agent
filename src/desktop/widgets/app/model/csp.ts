@@ -11,10 +11,19 @@
  * restriction, which the spec allows — and what was applied is what the host
  * tells the app it approved (`hostCapabilities.sandbox.csp`).
  *
- * The one owner of the policy: the host writes it into the app's document
- * (`appDocument`), and the sandbox proxy only loads that document.
+ * `frameDomains` is never applied: `frame-src` is always `'none'`, so the
+ * app's frame loads nothing but the document handed over — no nested frame,
+ * and no navigation of its own frame anywhere (#349, design amendment after
+ * review round 2). The app is told: the domains it is told were approved
+ * never list any.
+ *
+ * The one owner of the policy: the host writes it (`cspPolicy`), into the
+ * app's document (`appDocument`) and into the proxy's hands
+ * (`sandbox-resource-ready`), and the proxy applies it to its own document as
+ * given (`sandbox/proxy.html`).
  */
 import { field, isObject, type Json, type JsonObject } from "./json-rpc"
+import { departureTokenSlot, sandboxMethods } from "./sandbox-methods"
 
 /** A source the policy may name: a scheme, a host (perhaps `*.`-prefixed), a port. */
 export interface CspSource {
@@ -29,8 +38,6 @@ export interface AppliedCsp {
   readonly connect: readonly CspSource[]
   /** `script-src`, `style-src`, `img-src`, `font-src`, `media-src`. */
   readonly resource: readonly CspSource[]
-  /** `frame-src`: nested frames. */
-  readonly frame: readonly CspSource[]
   /** `base-uri`. */
   readonly baseUri: readonly CspSource[]
 }
@@ -91,7 +98,6 @@ export function appliedCsp(ui: Json | undefined): AppliedCsp {
   return {
     connect: list(declared, "connectDomains"),
     resource: list(declared, "resourceDomains"),
-    frame: list(declared, "frameDomains"),
     baseUri: list(declared, "baseUriDomains"),
   }
 }
@@ -111,7 +117,8 @@ export function cspPolicy(csp: AppliedCsp): string {
     ["img-src", ["'self'", "data:", ...resource]],
     ["font-src", ["'self'", ...resource]],
     ["media-src", ["'self'", "data:", ...resource]],
-    ["frame-src", or(csp.frame, "'none'")],
+    // Never a declared domain: see the module's documentation.
+    ["frame-src", ["'none'"]],
     ["object-src", ["'none'"]],
     ["base-uri", or(csp.baseUri, "'self'")],
     // Not in the spec's list; a further restriction it allows. An app has no
@@ -126,7 +133,6 @@ export function approvedDomains(csp: AppliedCsp): JsonObject {
   const named: [string, readonly CspSource[]][] = [
     ["connectDomains", csp.connect],
     ["resourceDomains", csp.resource],
-    ["frameDomains", csp.frame],
     ["baseUriDomains", csp.baseUri],
   ]
   return Object.fromEntries(
@@ -137,17 +143,19 @@ export function approvedDomains(csp: AppliedCsp): JsonObject {
 }
 
 /**
- * The method the reporter in an app's document tells the proxy of a blocked
- * load with, in the namespace MCP Apps reserves for host ↔ proxy.
- */
-export const cspViolationMethod = "ui/notifications/sandbox-csp-violation"
-
-/**
- * Runs first in the app's document, before any of its own markup: tells the
- * proxy of each load the policy blocked, by the blocked origin alone. It
- * listens in capture on the window, so it hears a violation before anything
- * the app registers can; the app can send a report of its own, which says
- * only something about itself. Enforcement never depends on it.
+ * Runs first in the app's document, before any of its own markup, with its
+ * listeners registered before any of the app's:
+ *
+ * - each load the policy blocked, by the blocked origin alone, heard in
+ *   capture on the window before anything the app registers can hear it;
+ * - the document going, by any way — a navigation of its frame, refused or
+ *   not, before or after its first `load`; a reload — on `pagehide`, which
+ *   the proxy takes as the app's departure (design L32). It carries the
+ *   token the proxy wrote into its slot (`departureTokenSlot`), as the
+ *   browser delivers it with no sender once the document is gone.
+ *
+ * The app can send either itself; a report says only an origin, and a
+ * departure only ends its own view. Enforcement never depends on them.
  */
 const reporter = `(function () {
   var parentWindow = window.parent;
@@ -155,7 +163,10 @@ const reporter = `(function () {
   window.addEventListener("securitypolicyviolation", function (event) {
     var origin;
     try { origin = new URL(event.blockedURI).origin; } catch (error) { origin = undefined; }
-    post({ jsonrpc: "2.0", method: ${JSON.stringify(cspViolationMethod)}, params: origin && origin !== "null" ? { origin: origin } : {} }, "*");
+    post({ jsonrpc: "2.0", method: ${JSON.stringify(sandboxMethods.cspViolation)}, params: origin && origin !== "null" ? { origin: origin } : {} }, "*");
+  }, true);
+  window.addEventListener("pagehide", function () {
+    post({ jsonrpc: "2.0", method: ${JSON.stringify(sandboxMethods.appLeft)}, params: { token: ${JSON.stringify(departureTokenSlot)} } }, "*");
   }, true);
 })();`
 
@@ -168,8 +179,8 @@ const reporter = `(function () {
  * The proxy applies the same policy to its own document before it makes the
  * frame (`sandbox-resource-ready`'s `policy`), and that is the copy that
  * holds the frame itself: a document's policy governs only what it loads,
- * so this one is gone the moment the app navigates its frame elsewhere,
- * while the proxy's `frame-src` refuses that navigation. This one is kept
+ * so this one would be gone the moment the app navigated its frame
+ * elsewhere, which the proxy's `frame-src 'none'` refuses. This one is kept
  * because the `srcdoc`'s inheriting the proxy's is not yet seen in WebKit.
  *
  * The leading doctype keeps the document in standards mode; an app that

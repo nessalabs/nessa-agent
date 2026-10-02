@@ -1,5 +1,6 @@
 /** The policy an app is loaded under, built only from its `_meta.ui.csp` (#349, Sandbox). */
 import { describe, expect, it } from "vitest"
+import { sandboxMethods } from "./sandbox-methods"
 import {
   appDocument,
   appliedCsp,
@@ -61,7 +62,8 @@ describe("with domains declared", () => {
       expect(policy[directive], directive).toEqual(
         expect.arrayContaining(["https://cdn.jsdelivr.net", "https://*.cloudflare.com"]),
       )
-    expect(policy["frame-src"]).toEqual(["https://www.youtube.com"])
+    // Never a declared frame: the app's frame loads nothing but its document.
+    expect(policy["frame-src"]).toEqual(["'none'"])
     expect(policy["base-uri"]).toEqual(["https://cdn.example.com"])
     expect(policy["default-src"]).toEqual(["'none'"])
   })
@@ -167,5 +169,29 @@ describe("the app's document", () => {
     const meta = document.slice(0, document.indexOf("<script>"))
     expect(meta.match(/"/g)).toHaveLength(4)
     expect(meta).not.toContain("x()")
+  })
+})
+
+describe("frames", () => {
+  it("are never applied nor approved, whatever is declared", () => {
+    const applied = appliedCsp({ csp: { frameDomains: ["https://www.youtube.com"] } })
+    expect(cspPolicy(applied)).toContain("frame-src 'none';")
+    expect(approvedDomains(applied)).toEqual({})
+  })
+})
+
+describe("the reporter", () => {
+  it("says what is blocked and that the document is going, both registered before the app's markup", () => {
+    const document = appDocument("<script>app()</script>", appliedCsp(undefined))
+    const reporterAt = document.indexOf("<script>")
+    for (const said of [
+      'addEventListener("securitypolicyviolation"',
+      sandboxMethods.cspViolation,
+      'addEventListener("pagehide"',
+      sandboxMethods.appLeft,
+    ])
+      expect(document.indexOf(said), said).toBeGreaterThan(reporterAt)
+    for (const said of ['addEventListener("pagehide"', sandboxMethods.appLeft])
+      expect(document.indexOf(said), said).toBeLessThan(document.indexOf("app()"))
   })
 })

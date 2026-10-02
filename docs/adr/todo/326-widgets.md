@@ -217,7 +217,7 @@ frame, and has rows of its own (`app/model/app-view.ts`):
 | --- | --- | --- |
 | loading (its resource read, the proxy loading, the handshake) | its plugin's name, quiet, over the frame not yet shown | the same |
 | live | the frame | the frame |
-| could not be loaded (not an app's resource, a deadline missed, its proxy reloaded under it) | "This app couldn't be loaded" | the same, with close |
+| could not be loaded (not an app's resource, a deadline missed, its proxy reloaded under it, the app's document gone from its frame) | "This app couldn't be loaded" | the same, with close |
 | its server gone when read | "This app's server has stopped" | the same, with close |
 | live, a call found its server gone | the frame, under "This app's server has stopped" | the same |
 | live, its CSP blocked a load | the frame, under "Blocked a connection this app didn't declare: *origins*" | the same |

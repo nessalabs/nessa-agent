@@ -1,8 +1,6 @@
-/** An app's UI resource, from `resources/read` (#349, L1–L2), and what a host draws for a view. */
+/** An app's UI resource, from `resources/read` (#349, L1–L2). */
 import { describe, expect, it } from "vitest"
-import { appDraws, appLines, firstView, type AppViewState } from "./app-view"
 import { appliedCsp } from "./csp"
-import type { FailedReason, Lifecycle } from "./lifecycle"
 import { appMimeType, uiResource } from "./resource"
 
 const uri = "ui://weather-server/dashboard-template"
@@ -62,89 +60,5 @@ describe("the UI resource", () => {
       {},
     ])
       expect(uiResource(result as never, uri), JSON.stringify(result)).toBeUndefined()
-  })
-})
-
-describe("what a host draws for an app view", () => {
-  const initialize = { protocolVersion: "2026-01-26", appName: "App" }
-  const lifecycleOf = (kind: Lifecycle["kind"], failed: FailedReason): Lifecycle => {
-    switch (kind) {
-      case "initializing":
-      case "live":
-      case "ending":
-        return { kind, initialize }
-      case "failed":
-        return { kind, reason: failed }
-      default:
-        return { kind }
-    }
-  }
-  const view = ({
-    lifecycle,
-    failed = "load",
-    ...fields
-  }: Partial<Omit<AppViewState, "lifecycle">> & {
-    lifecycle: Lifecycle["kind"]
-    failed?: FailedReason
-  }): AppViewState => ({
-    ...firstView,
-    ...fields,
-    lifecycle: lifecycleOf(lifecycle, failed),
-  })
-
-  it("the placeholder over a hidden frame while it loads, then the frame", () => {
-    expect(appDraws("pane", view({ lifecycle: "reading" }))).toEqual({
-      frame: "none",
-      waiting: true,
-      notices: [],
-    })
-    for (const lifecycle of ["proxy", "loading", "initializing"] as const)
-      expect(appDraws("inline", view({ lifecycle, frame: true }))).toEqual({
-        frame: "hidden",
-        waiting: true,
-        notices: [],
-      })
-    expect(appDraws("pane", view({ lifecycle: "live", frame: true }))).toEqual({
-      frame: "shown",
-      waiting: false,
-      notices: [],
-    })
-  })
-
-  it("one line for a view that failed, with close where the place has one", () => {
-    expect(appDraws("inline", view({ lifecycle: "failed", failed: "load" }))).toEqual({
-      frame: "none",
-      waiting: false,
-      line: { text: appLines.load, closes: false },
-      notices: [],
-    })
-    expect(
-      appDraws("window", view({ lifecycle: "failed", failed: "server-gone" })).line,
-    ).toEqual({
-      text: appLines.serverGone,
-      closes: true,
-    })
-  })
-
-  it("notices above a live app: its server gone, and what its CSP blocked", () => {
-    expect(
-      appDraws(
-        "pane",
-        view({
-          lifecycle: "live",
-          frame: true,
-          serverGone: true,
-          anyBlocked: true,
-          blocked: ["https://a.example", "https://b.example"],
-        }),
-      ).notices,
-    ).toEqual([
-      appLines.serverGone,
-      `${appLines.blocked}: https://a.example, https://b.example`,
-    ])
-    expect(
-      appDraws("pane", view({ lifecycle: "live", frame: true, anyBlocked: true }))
-        .notices,
-    ).toEqual([appLines.blocked])
   })
 })

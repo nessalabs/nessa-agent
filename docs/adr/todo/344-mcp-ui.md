@@ -102,8 +102,18 @@ spec's directives); nothing declared means no network. The proxy applies it
 to its own document before it makes the app's frame — its `frame-src` is what
 holds the frame when the app navigates it, which a policy inside the app's
 document alone does not (review round 1 on #349 found exactly that escape) —
-and the app's document carries it first as well. Permissions (`camera`, …)
-and `_meta.ui.domain` are not granted.
+and the app's document carries it first as well. `frameDomains` is not
+applied: `frame-src` is always `'none'`, so the app's frame loads nothing but
+its own document — no nested frame, no navigation of its own frame anywhere —
+and the app is told so in the domains it is told were approved. A nested
+frame needs an origin per app, and Tauri's navigation policy to tell a
+frame's load from the window's (it would hand a declared frame to the
+person's browser); round 2 on #349 showed what a declared frame lets an app's
+frame become. When the app's document goes anyway — a navigation refused, a
+reload — its reporter says so on `pagehide`, with a token the proxy wrote
+into that document alone, and the proxy removes the frame and the host
+fails the view. Permissions (`camera`, …) and `_meta.ui.domain` are not
+granted.
 
 What the sandbox does not hold, and is not claimed to: CSP does not govern
 WebRTC, so an app can reach a STUN or TURN host it did not declare; a server

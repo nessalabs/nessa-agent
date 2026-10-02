@@ -1,6 +1,12 @@
 /** The lifecycle rows of the design table on #349, one at least one test. */
 import { describe, expect, it } from "vitest"
-import { advance, firstState, type Lifecycle, type LifecycleEvent } from "./lifecycle"
+import {
+  advance,
+  firstState,
+  frameOn,
+  type Lifecycle,
+  type LifecycleEvent,
+} from "./lifecycle"
 import type { Initialize } from "./messages"
 
 const initialize: Initialize = { protocolVersion: "2026-01-26", appName: "App" }
@@ -35,7 +41,7 @@ describe("the way through", () => {
     let step = advance(firstState, { kind: "read", outcome: "html" })
     expect(step).toEqual({
       state: { kind: "proxy" },
-      effects: [{ kind: "create-proxy" }, { kind: "deadline", for: "proxy" }],
+      effects: [{ kind: "deadline", for: "proxy" }],
     })
     step = advance(step.state, { kind: "proxy-ready" })
     expect(step).toEqual({
@@ -86,7 +92,7 @@ describe("what fails", () => {
     for (const kind of ["proxy", "loading", "initializing"] as const)
       expect(advance(states[kind], { kind: "deadline" }), kind).toEqual({
         state: { kind: "failed", reason: "load" },
-        effects: [{ kind: "remove-frame" }],
+        effects: [],
       })
   })
 
@@ -94,7 +100,7 @@ describe("what fails", () => {
     for (const kind of ["loading", "initializing", "live", "ending"] as const)
       expect(advance(states[kind], { kind: "proxy-ready" }), kind).toEqual({
         state: { kind: "failed", reason: "load" },
-        effects: [{ kind: "remove-frame" }],
+        effects: [],
       })
   })
 })
@@ -104,7 +110,7 @@ describe("the app leaving its frame", () => {
     for (const kind of ["loading", "initializing", "live", "ending"] as const)
       expect(advance(states[kind], { kind: "app-left" }), kind).toEqual({
         state: { kind: "failed", reason: "load" },
-        effects: [{ kind: "remove-frame" }],
+        effects: [],
       })
     for (const kind of ["reading", "proxy"] as const)
       expect(advance(states[kind], { kind: "app-left" }).state, kind).toBe(states[kind])
@@ -160,5 +166,14 @@ describe("what is ignored", () => {
           expect(step.effects, `${state.kind} ${event.kind}`).toEqual([])
         } else expect(step.state, `${state.kind} ${event.kind}`).not.toBe(state)
       }
+  })
+})
+
+describe("the frame", () => {
+  it("is on the page from the resource read to the app's end, and only then", () => {
+    const on = Object.values(states)
+      .filter(frameOn)
+      .map((state) => state.kind)
+    expect(on).toEqual(["proxy", "loading", "initializing", "live", "ending"])
   })
 })

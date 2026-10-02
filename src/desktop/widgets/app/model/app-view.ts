@@ -5,7 +5,7 @@
  */
 import { closesIn } from "../../model/host-table"
 import type { WidgetPlace } from "../../model/widget-state"
-import { firstState, type Lifecycle } from "./lifecycle"
+import { firstState, frameOn, type Lifecycle } from "./lifecycle"
 
 /** How many blocked origins a view keeps to name; a later one is not named. */
 export const blockedOrigins = 8
@@ -14,8 +14,6 @@ export const blockedOrigins = 8
 export interface AppViewState {
   /** Where it is in its lifecycle, why it failed included. */
   readonly lifecycle: Lifecycle
-  /** Whether the sandbox proxy's frame is on the page. */
-  readonly frame: boolean
   /** Inline only: the height the app asked for (`size-changed`), clamped. */
   readonly height?: number
   /** Origins the CSP blocked a load from, in the order seen. */
@@ -28,7 +26,6 @@ export interface AppViewState {
 
 export const firstView: AppViewState = {
   lifecycle: firstState,
-  frame: false,
   blocked: [],
   anyBlocked: false,
   serverGone: false,
@@ -77,7 +74,7 @@ export function appDraws(place: WidgetPlace, view: AppViewState): AppDraws {
       : []),
   ]
   return {
-    frame: !view.frame ? "none" : live ? "shown" : "hidden",
+    frame: !frameOn(lifecycle) ? "none" : live ? "shown" : "hidden",
     waiting: !live && lifecycle.kind !== "gone",
     notices,
   }

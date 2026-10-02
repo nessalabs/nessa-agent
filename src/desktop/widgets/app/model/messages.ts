@@ -20,7 +20,7 @@ import {
   type JsonObject,
   type RequestId,
 } from "./json-rpc"
-import { cspViolationMethod } from "./csp"
+import { sandboxMethods } from "./sandbox-methods"
 
 /** A display mode, as MCP Apps names them. */
 export type DisplayMode = "inline" | "fullscreen" | "pip"
@@ -73,11 +73,11 @@ export type AppNotification =
     }
   | { readonly method: "ui/notifications/request-teardown" }
   | { readonly method: "notifications/message"; readonly level: string }
-  | { readonly method: "ui/notifications/sandbox-proxy-ready" }
+  | { readonly method: typeof sandboxMethods.proxyReady }
   /** The proxy's: the app's frame loaded a second time, and the proxy removed it. */
-  | { readonly method: "ui/notifications/sandbox-app-left" }
+  | { readonly method: typeof sandboxMethods.appLeft }
   | {
-      readonly method: typeof cspViolationMethod
+      readonly method: typeof sandboxMethods.cspViolation
       /** The blocked origin, when the report named a web origin. */
       readonly origin?: string
     }
@@ -112,26 +112,44 @@ function size(value: Json | undefined): number | undefined | null {
 }
 
 /**
- * Text content blocks, each rebuilt as `{ type: "text", text }`: the one
- * modality the host declares for `ui/message` and `ui/update-model-context`
- * (`hostCapabilities`); any other block makes the whole list unreadable.
+ * The content blocks the host takes in `ui/message` and
+ * `ui/update-model-context`, by type, each with how it is rebuilt from what
+ * the app sent. The one statement of the modalities: what the host declares
+ * (`hostCapabilities.message`, `.updateModelContext`) is these keys, and a
+ * block of any other type makes the whole list unreadable.
  */
-function textBlocks(value: Json | undefined): readonly JsonObject[] | undefined {
+const contentReaders = {
+  text: (block: JsonObject): JsonObject | undefined => {
+    const body = field(block, "text")
+    return typeof body === "string" ? { type: "text", text: body } : undefined
+  },
+} as const satisfies Record<string, (block: JsonObject) => JsonObject | undefined>
+
+/** The modalities the host declares it takes (`McpUiSupportedContentBlockModalities`). */
+export const contentModalities: JsonObject = Object.fromEntries(
+  Object.keys(contentReaders).map((type) => [type, {}]),
+)
+
+function contentBlocks(value: Json | undefined): readonly JsonObject[] | undefined {
   if (!Array.isArray(value)) return undefined
   const out: JsonObject[] = []
   for (const block of value as readonly Json[]) {
-    if (!isObject(block) || field(block, "type") !== "text") return undefined
-    const body = field(block, "text")
-    if (typeof body !== "string") return undefined
-    out.push({ type: "text", text: body })
+    if (!isObject(block)) return undefined
+    const type = field(block, "type")
+    if (typeof type !== "string" || !Object.hasOwn(contentReaders, type)) return undefined
+    const read = contentReaders[type as keyof typeof contentReaders](block)
+    if (read === undefined) return undefined
+    out.push(read)
   }
   return out
 }
 
 /**
  * `value` when it is a web origin exactly as the URL parser writes one
- * (`https://host[:port]`), else `undefined`: a report's origin is shown in
- * the host's chrome, so nothing else of the app's choosing may be.
+ * (`https://host[:port]`), else `undefined`. A report's origin is shown in
+ * the host's chrome: this holds it to an origin's characters and length —
+ * no spaces, no sentence — though the host names, and the app may choose
+ * those, as it may choose what it loads.
  */
 function webOrigin(value: Json | undefined): string | undefined {
   if (typeof value !== "string" || value.length > nameLength) return undefined
@@ -223,7 +241,7 @@ function readRequest(id: RequestId, method: string, params: JsonObject): FromFra
       return uri === undefined || uri.length === 0 ? invalid(id) : ok({ method, uri })
     }
     case "ui/message": {
-      const content = textBlocks(field(params, "content"))
+      const content = contentBlocks(field(params, "content"))
       return field(params, "role") === "user" && content && content.length > 0
         ? ok({ method, content })
         : invalid(id)
@@ -231,7 +249,7 @@ function readRequest(id: RequestId, method: string, params: JsonObject): FromFra
     case "ui/update-model-context": {
       const rawContent = field(params, "content")
       const rawStructured = field(params, "structuredContent")
-      const content = rawContent === undefined ? undefined : textBlocks(rawContent)
+      const content = rawContent === undefined ? undefined : contentBlocks(rawContent)
       if (rawContent !== undefined && content === undefined) return invalid(id)
       if (rawStructured !== undefined && !isObject(rawStructured)) return invalid(id)
       return ok({
@@ -270,8 +288,8 @@ function readNotification(method: string, params: JsonObject): FromFrame {
   switch (method) {
     case "ui/notifications/initialized":
     case "ui/notifications/request-teardown":
-    case "ui/notifications/sandbox-proxy-ready":
-    case "ui/notifications/sandbox-app-left":
+    case sandboxMethods.proxyReady:
+    case sandboxMethods.appLeft:
       return ok({ method })
     case "ui/notifications/size-changed": {
       const width = size(field(params, "width"))
@@ -287,7 +305,7 @@ function readNotification(method: string, params: JsonObject): FromFrame {
       const level = text(field(params, "level"), 32)
       return level === undefined ? { kind: "ignored" } : ok({ method, level })
     }
-    case cspViolationMethod: {
+    case sandboxMethods.cspViolation: {
       const origin = webOrigin(field(params, "origin"))
       return ok(origin === undefined ? { method } : { method, origin })
     }

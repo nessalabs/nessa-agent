@@ -18,8 +18,13 @@
   frame) are heard; nothing is relayed before the document; methods under
   `ui/notifications/sandbox-` are the host's and this proxy's — none is
   relayed from the host to the app, and of the app's only the CSP reporter's
-  is passed on. What its own policy blocks, it reports the same way.
-  `verification/desktop/scripts/mcp-apps.mjs --only escape` holds each.
+  is passed on; and the reporter's word that the app's document is going —
+  carrying the token this proxy minted for the frame and wrote into that
+  document alone, as the browser no longer names the sender of a document
+  that has gone — after which nothing more is relayed and the frame is
+  removed. What its own policy blocks, it reports the same way.
+  `verification/desktop/scripts/mcp-apps.mjs --only
+  escape-navigate,escape-refresh,forge` holds each.
 -->
 <html>
   <head>
@@ -53,12 +58,38 @@
           return
         }
         var host = window.parent
+        // The names `app/model/sandbox-methods.ts` states; `serve.test.ts`
+        // holds this file to each of them.
         var reserved = "ui/notifications/sandbox-"
-        var reporter = "ui/notifications/sandbox-csp-violation"
+        var proxyReady = "ui/notifications/sandbox-proxy-ready"
+        var resourceReady = "ui/notifications/sandbox-resource-ready"
+        var cspViolation = "ui/notifications/sandbox-csp-violation"
+        var appLeft = "ui/notifications/sandbox-app-left"
+        var tokenSlot = "__nessa_departure_token__"
+        // Minted for this frame, and written into its document's reporter
+        // alone: the one way a departure notice is known to be the app's own
+        // once its document is gone and the browser names no sender.
+        // (`getRandomValues`, not `randomUUID`: a custom scheme's page need
+        // not be a secure context.)
+        var token = Array.prototype.map
+          .call(crypto.getRandomValues(new Uint8Array(16)), function (byte) {
+            return (byte + 256).toString(16).slice(1)
+          })
+          .join("")
         // The host's origin, from its first message; the app's frame, once made.
         var hostOrigin = null
         var app = null
         var left = false
+
+        // The app's document is going — its reporter says so on `pagehide`,
+        // before anything of the app's — and what comes after it in this
+        // frame is not the app: nothing more is relayed either way, the frame
+        // is removed, the host told.
+        function leave() {
+          left = true
+          app.remove()
+          host.postMessage({ jsonrpc: "2.0", method: appLeft, params: {} }, hostOrigin)
+        }
 
         function methodOf(data) {
           return data !== null &&
@@ -74,7 +105,7 @@
             if (app === null) {
               // The first thing the host says is the document; nothing is
               // relayed before it.
-              if (method !== "ui/notifications/sandbox-resource-ready") return
+              if (method !== resourceReady) return
               var params = event.data.params
               if (params === null || typeof params !== "object") return
               var html = params.html
@@ -98,7 +129,7 @@
                 host.postMessage(
                   {
                     jsonrpc: "2.0",
-                    method: reporter,
+                    method: cspViolation,
                     params: origin && origin !== "null" ? { origin: origin } : {},
                   },
                   hostOrigin,
@@ -107,26 +138,9 @@
               app = document.createElement("iframe")
               app.setAttribute("sandbox", "allow-scripts")
               app.setAttribute("title", "App")
-              app.srcdoc = html
-              // The frame loads once, the document handed over. A second load
-              // is the app gone — its frame navigated, refused or not, or
-              // reloaded — and nothing in it is the app's any more: the frame
-              // is removed, and the host told.
-              var loads = 0
-              app.addEventListener("load", function () {
-                loads += 1
-                if (loads < 2 || left) return
-                left = true
-                app.remove()
-                host.postMessage(
-                  {
-                    jsonrpc: "2.0",
-                    method: "ui/notifications/sandbox-app-left",
-                    params: {},
-                  },
-                  hostOrigin,
-                )
-              })
+              // The reporter's slot comes first in the document, before any
+              // of the app's markup: only it is filled.
+              app.srcdoc = html.replace(tokenSlot, token)
               document.body.appendChild(app)
               return
             }
@@ -136,17 +150,26 @@
             app.contentWindow.postMessage(event.data, "*")
             return
           }
+          if (
+            app !== null &&
+            !left &&
+            methodOf(event.data) === appLeft &&
+            event.data.params !== null &&
+            typeof event.data.params === "object" &&
+            event.data.params.token === token
+          ) {
+            leave()
+            return
+          }
           if (app !== null && !left && event.source === app.contentWindow) {
             var from = methodOf(event.data)
-            if (from !== null && from.indexOf(reserved) === 0 && from !== reporter) return
+            if (from !== null && from.indexOf(reserved) === 0 && from !== cspViolation)
+              return
             host.postMessage(event.data, hostOrigin)
           }
         })
 
-        host.postMessage(
-          { jsonrpc: "2.0", method: "ui/notifications/sandbox-proxy-ready", params: {} },
-          "*",
-        )
+        host.postMessage({ jsonrpc: "2.0", method: proxyReady, params: {} }, "*")
       })()
     </script>
   </body>

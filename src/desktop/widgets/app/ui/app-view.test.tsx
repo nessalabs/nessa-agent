@@ -15,11 +15,8 @@ import type { AppWidgetPlugin, WidgetHost, WidgetPlugin } from "../../ui/plugin"
 import { WidgetAnswerOf } from "../../ui/widget-answer"
 import { WidgetBody } from "../../ui/widget-body"
 import type { McpAppServer } from "../application/ports"
-import {
-  fixtureAppPlugin,
-  fixtureWidget,
-  fixtureServerPort,
-} from "../fixture/fixture-plugin"
+import { fixtureAppPlugin, fixtureServerPort } from "../fixture/fixture-plugin"
+import { fixtureWidget } from "../fixture/fixture-widgets"
 import { appLines } from "../model/app-view"
 
 const sandbox = {

@@ -19,8 +19,10 @@ export const sandboxMetaName = "nessa-app-sandbox"
 
 /**
  * The proxy for a window whose host is `host` (`src/host`'s kinds): the
- * page's own listener in a browser; the scheme in the desktop app — as an
- * `http` host on the one host that is neither macOS nor Linux, Windows.
+ * page's own listener in a browser; the scheme in the desktop app, which
+ * Tauri serves as an `http` host on Windows — `other`, the one host Nessa's
+ * desktop app runs on that is neither macOS nor Linux. The addresses are
+ * `src-tauri/src/app_sandbox.rs`'s, held to it by its test.
  */
 export function sandboxFor(
   host: HostKind,

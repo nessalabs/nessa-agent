@@ -78,8 +78,10 @@ export const css = {
   sampleCard: "[data-sample-card]", // the sample trail's own card
   sampleView: "[data-sample-view]", // a sample widget's view; its value is the widget's id
   sampleStep: "[data-sample-step]", // a step of the trail, which opens its detail
-
   sampleDetail: "[data-sample-detail]", // the trail's open detail
+
+  sampleAccessory: "[data-sample-accessory]", // the sample plugin's accessory in its session's header
+  sampleSize: "[data-sample-size]", // the place's size as the sample view was told it, "<width>x<height>"
 
   // MCP Apps (ADR 344, #349) and the fixture app the sample workspace registers (src/desktop/widgets/app/fixture/)
   appFrame: "[data-app-frame]", // an app's sandbox proxy frame; its value is the place it is drawn in
@@ -88,8 +90,7 @@ export const css = {
   appNotice: ".widget-app-notice", // class: a notice above a running app
   fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
   fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
-  sampleAccessory: "[data-sample-accessory]", // the sample plugin's accessory in its session's header
-  sampleSize: "[data-sample-size]", // the place's size as the sample view was told it, "<width>x<height>"
+  fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode
 
   // Quick switcher (⌘K, ⌘\\)
   switcherField: '[role="dialog"] input', // the switcher's search field
@@ -327,11 +328,19 @@ export const names = {
     mode: "data-fixture-mode",
     input: "data-fixture-input",
     result: "data-fixture-result",
+    context: "data-fixture-context",
   },
+  /** A channel's "Show all" in the sidebar, behind which its older sessions are. */
+  showAll: /^Show all \d+$/,
   /** The line for an app the host cannot show (`app-view.ts`, `appLines.load`). */
   appLoadLine: "This app couldn't be loaded",
   /** The notice above an app whose CSP blocked a load (`app-view.ts`, `appLines`). */
   blockedNotice: "Blocked a connection this app didn't declare: https://example.com",
+  /** Every notice the host may put above an app (`appLines`): its words, and an origin. */
+  appNotices: [
+    /^This app's server has stopped$/,
+    /^Blocked a connection this app didn't declare(: [a-z]+:\/\/[^\s,]+(, [a-z]+:\/\/[^\s,]+)*)?$/,
+  ],
   openWidget: "Open",
   openInWindow: "Open in Window",
   closePane: "Close Pane",
@@ -363,7 +372,7 @@ export const harmlessConsole = [
   // The fixture MCP App asks for a page its CSP does not declare, on purpose
   // (`mcp-apps.mjs --only csp`): the engine reports the refusal it is checked for.
   // Its navigations of its own frame are refused by the proxy's policy, and
-  // reported against the proxy's page (`--only escape`).
+  // reported against the proxy's page (`--only escape-navigate,escape-refresh`).
   {
     text: /Content Security Policy|Refused to (connect|frame)/i,
     url: /^(about:srcdoc|https?:\/\/127\.0\.0\.1:\d+\/proxy\.html)?$/,

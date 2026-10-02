@@ -1,5 +1,5 @@
 /** Sample sessions in Nessa Labs and Personal. */
-import { fixtureWidget } from "../../../widgets/app/fixture/fixture-plugin"
+import { fixtureWidget } from "../../../widgets/app/fixture/fixture-widgets"
 import { sampleWidgets } from "../../../widgets/fixture/sample-widgets"
 import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import {

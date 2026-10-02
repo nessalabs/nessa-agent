@@ -60,7 +60,7 @@ async function onSample(browser, { url, layout }) {
   const row = page.getByText(names.appSession, { exact: true }).first()
   await row.waitFor({ timeout: 3000 }).catch(() => {})
   // The sidebar lists a channel's latest few; the rest are behind Show all.
-  for (const more of await page.getByText(/^Show all \d+$/).all()) {
+  for (const more of await page.getByText(names.showAll).all()) {
     if (await row.count()) break
     await more.click()
   }
@@ -108,14 +108,14 @@ async function output(frame, id, pending = "", timeout = 5000) {
   await frame
     .waitForFunction(
       ([id, pending]) => {
-        const text = document.getElementById(id)?.textContent ?? ""
+        const text = document.querySelector(id)?.textContent ?? ""
         return text !== "" && text !== pending
       },
       [id, pending],
       { timeout },
     )
     .catch(() => {})
-  return frame.evaluate((id) => document.getElementById(id)?.textContent ?? "", id)
+  return frame.evaluate((id) => document.querySelector(id)?.textContent ?? "", id)
 }
 
 const rect = (element) =>
@@ -188,7 +188,7 @@ async function openPane(page, failures) {
   await appState(app, "live")
   await app.click(css.fixtureControl("fullscreen"))
   await paneCountIs(page, before + 1)
-  const answer = await output(app, "mode")
+  const answer = await output(app, css.fixtureOutput("mode"))
   if (answer !== 'ok: {"mode":"inline"}')
     failures.push(`the card's fullscreen request was answered ${answer}, expected inline`)
   return expectLive(page, "pane", "fullscreen", failures)
@@ -197,7 +197,16 @@ async function openPane(page, failures) {
 const checks = {
   inline: async (page) => {
     const failures = []
-    const { app, box } = await expectLive(page, "inline", "inline", failures)
+    const { app, box, said } = await expectLive(page, "inline", "inline", failures)
+    // The host context it was told: the page's theme and its tokens.
+    const told = JSON.parse(said.context ?? "{}")
+    const theme = await page.evaluate(() =>
+      document.documentElement.classList.contains("dark") ? "dark" : "light",
+    )
+    if (told.theme !== theme)
+      failures.push(`the app was told theme ${told.theme}, not ${theme}`)
+    if (!told.styles?.variables?.["--color-text-primary"])
+      failures.push(`the app was told no text colour: ${JSON.stringify(told.styles)}`)
     const height = await app.evaluate(() => document.documentElement.scrollHeight)
     await until(
       page,
@@ -209,7 +218,7 @@ const checks = {
     const drawn = await rect(await page.$(css.appFrameIn("inline")))
     if (Math.abs(drawn.h - height) > 1)
       failures.push(`the card's frame is ${drawn.h}px tall; the app said ${height}px`)
-    return { frame: box, drawn, appHeight: height, failures }
+    return { frame: box, drawn, appHeight: height, told: told.styles, failures }
   },
 
   pane: async (page) => {
@@ -258,14 +267,14 @@ const checks = {
     const { app } = await appFrame(page, "inline")
     await appState(app, "live")
     await app.click(css.fixtureControl("call-allowed"))
-    const allowed = await output(app, "call")
+    const allowed = await output(app, css.fixtureOutput("call"))
     if (
       allowed !==
       'ok: {"content":[{"type":"text","text":"Refreshed"}],"structuredContent":{"refreshed":{"times":1}}}'
     )
       failures.push(`the allowed tool was answered ${allowed}`)
     await app.click(css.fixtureControl("call-hidden"))
-    const hidden = await output(app, "call", allowed)
+    const hidden = await output(app, css.fixtureOutput("call"), allowed)
     if (hidden !== `error: ${names.hiddenToolRefused}`)
       failures.push(`the hidden tool was answered ${hidden}`)
     return { allowed, hidden, failures }
@@ -276,7 +285,7 @@ const checks = {
     const { app } = await appFrame(page, "inline")
     await appState(app, "live")
     await app.click(css.fixtureControl("fetch"))
-    const fetched = await output(app, "fetch", "fetching")
+    const fetched = await output(app, css.fixtureOutput("fetch"), "fetching")
     if (fetched !== "blocked") failures.push(`the undeclared fetch was ${fetched}`)
     const notice = page.locator(css.appNotice, { hasText: names.blockedNotice })
     await notice
@@ -369,10 +378,9 @@ const checks = {
     const said = await appState(app, "live", 1000)
     if (said.state !== "live") failures.push(`the app is ${said.state} after forging`)
     const notices = await page.locator(css.appNotice).allInnerTexts()
-    if (notices.some((text) => /sign in|evil/i.test(text)))
-      failures.push(
-        `the app's words reached the host's chrome: ${JSON.stringify(notices)}`,
-      )
+    for (const notice of notices)
+      if (!names.appNotices.some((line) => line.test(notice)))
+        failures.push(`a notice that is not the host's own reached its chrome: ${notice}`)
     return { notices, failures }
   },
 

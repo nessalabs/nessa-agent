@@ -53,12 +53,10 @@ export type LifecycleEvent =
 
 /** What the bridge does for a transition, in order. */
 export type LifecycleEffect =
-  | { readonly kind: "create-proxy" }
   | { readonly kind: "send-document" }
   | { readonly kind: "answer-initialize" }
   | { readonly kind: "tell-call" }
   | { readonly kind: "send-teardown" }
-  | { readonly kind: "remove-frame" }
   | { readonly kind: "close-place" }
   /** A deadline for the state entered; every state change clears the one before. */
   | { readonly kind: "deadline"; readonly for: "proxy" | "initialize" | "teardown" }
@@ -69,6 +67,26 @@ export interface Step {
 }
 
 export const firstState: Lifecycle = { kind: "reading" }
+
+/**
+ * Whether the proxy's frame is on the page in `state`: from the resource
+ * read to the app's end. The one statement of it — the view draws the frame
+ * by it, and the bridge posts only while it holds.
+ */
+export function frameOn(state: Lifecycle): boolean {
+  switch (state.kind) {
+    case "proxy":
+    case "loading":
+    case "initializing":
+    case "live":
+    case "ending":
+      return true
+    case "reading":
+    case "failed":
+    case "gone":
+      return false
+  }
+}
 
 const stay = (state: Lifecycle): Step => ({ state, effects: [] })
 
@@ -83,7 +101,7 @@ export function advance(state: Lifecycle, event: LifecycleEvent): Step {
       if (event.outcome === "html")
         return {
           state: { kind: "proxy" },
-          effects: [{ kind: "create-proxy" }, { kind: "deadline", for: "proxy" }],
+          effects: [{ kind: "deadline", for: "proxy" }],
         }
       return {
         state: {
@@ -103,7 +121,7 @@ export function advance(state: Lifecycle, event: LifecycleEvent): Step {
       if (state.kind === "reading") return stay(state)
       return {
         state: { kind: "failed", reason: "load" },
-        effects: [{ kind: "remove-frame" }],
+        effects: [],
       }
     case "app-left":
       // The app's document is no longer the one handed over: a navigation of
@@ -111,7 +129,7 @@ export function advance(state: Lifecycle, event: LifecycleEvent): Step {
       if (state.kind === "reading" || state.kind === "proxy") return stay(state)
       return {
         state: { kind: "failed", reason: "load" },
-        effects: [{ kind: "remove-frame" }],
+        effects: [],
       }
     case "initialize":
       if (state.kind !== "loading") return stay(state)
@@ -132,7 +150,7 @@ export function advance(state: Lifecycle, event: LifecycleEvent): Step {
         case "initializing":
           return {
             state: { kind: "failed", reason: "load" },
-            effects: [{ kind: "remove-frame" }],
+            effects: [],
           }
         case "ending":
           return { state: { kind: "gone" }, effects: [{ kind: "close-place" }] }

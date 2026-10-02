@@ -14,6 +14,7 @@
 import {
   createWidgetRegistry,
   fixtureAppPlugin,
+  platformFor,
   readPageContext,
   samplePlugin,
   type DesktopWidgetRegistry,
@@ -79,7 +80,7 @@ export function createDesktopDependencies(
 /** Where this window draws MCP Apps, as the host decides it. */
 interface AppsOptions {
   readonly sandbox: SandboxOrigin | undefined
-  readonly platform: "web" | "desktop"
+  readonly platform: ReturnType<typeof platformFor>
 }
 
 function widgetRegistry(

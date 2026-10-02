@@ -4,7 +4,8 @@
  * one tool call, by the execution and tool ids that name it. The one
  * statement of both: the transcript names a call's widget with them
  * (`workspace/model/transcript.ts`, `toolWidget`), and an app plugin's id is
- * derived from its server here (`appPlugin`), never given beside it.
+ * derived from its server (`appPluginId`, which `appPlugin` builds every
+ * app plugin with).
  */
 import type { WidgetRef } from "../../model/widget-ref"
 

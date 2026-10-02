@@ -22,17 +22,8 @@ import type {
 import type { PageContext } from "../model/host-context"
 import { appMimeType } from "../model/resource"
 import { appPlugin } from "../ui/app-plugin"
-import { appWidget } from "../model/app-ref"
 import { fixtureAppHtml } from "./fixture-app"
-
-/** The fixture server's name, as the gateway would name it. */
-export const fixtureServer = "nessa-fixture"
-
-/** The UI resource its tool declares. */
-export const fixtureResourceUri = "ui://nessa-fixture/app.html"
-
-/** The widget its one call is drawn as. */
-export const fixtureWidget = appWidget(fixtureServer, "fixture-execution", "fixture-call")
+import { fixtureResourceUri, fixtureServer, fixtureWidget } from "./fixture-widgets"
 
 /** The tools it answers an app for, and the one it refuses as hidden. */
 export const fixtureTools = {

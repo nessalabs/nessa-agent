@@ -65,7 +65,7 @@ pub fn respond(method: &Method, path: &str) -> Response<Cow<'static, [u8]>> {
 mod tests {
     use tauri::http::{header, Method, StatusCode};
 
-    use super::respond;
+    use super::{respond, HTTP_HOST, PROXY_PATH, SCHEME};
 
     #[test]
     fn the_proxy_is_served_as_html_and_never_cached() {
@@ -80,6 +80,28 @@ mod tests {
         assert!(body.contains("ui/notifications/sandbox-proxy-ready"));
         // The app's frame is sandboxed without allow-same-origin.
         assert!(body.contains(r#"app.setAttribute("sandbox", "allow-scripts")"#));
+    }
+
+    /// The window and the browser build spell the proxy's address from these
+    /// constants, not their own: this is what holds them to it.
+    #[test]
+    fn every_other_spelling_of_the_address_is_this_one() {
+        let origins = include_str!("../../src/desktop/widgets/app/adapters/dom/sandbox-origin.ts");
+        for spelled in [
+            format!("{SCHEME}://localhost{PROXY_PATH}"),
+            format!("{SCHEME}://localhost\""),
+            format!("http://{HTTP_HOST}{PROXY_PATH}"),
+            format!("http://{HTTP_HOST}\""),
+        ] {
+            assert!(
+                origins.contains(&spelled),
+                "sandbox-origin.ts lacks {spelled}"
+            );
+        }
+        let listener = include_str!("../../src/desktop/widgets/app/sandbox/serve.ts");
+        assert!(listener.contains(&format!("\"{PROXY_PATH}\"")));
+        let config = include_str!("../tauri.conf.json");
+        assert!(config.contains(&format!("frame-src {SCHEME}: http://{HTTP_HOST};")));
     }
 
     #[test]

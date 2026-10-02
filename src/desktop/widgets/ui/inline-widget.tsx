@@ -58,7 +58,11 @@ function InlineCard({
       ) : draws.kind === "waiting" ? (
         <WidgetWaiting name={draws.name} />
       ) : draws.kind === "line" ? (
-        <WidgetLine place="inline" text={draws.text} closes={false} onClose={() => {}} />
+        <WidgetLine
+          text={draws.text}
+          closes={draws.closes}
+          onClose={() => host.close()}
+        />
       ) : null}
     </div>
   )

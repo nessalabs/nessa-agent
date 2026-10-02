@@ -7,7 +7,6 @@
  */
 import { Button } from "@nessa-ui/react/button"
 import { EmptyState } from "@nessa-ui/react/empty-state"
-import type { WidgetPlace } from "../model/widget-state"
 
 export function WidgetWaiting({ name, className }: { name: string; className?: string }) {
   return (
@@ -20,29 +19,30 @@ export function WidgetWaiting({ name, className }: { name: string; className?: s
   )
 }
 
+/**
+ * One line, with close when `closes` (`closesIn`, the table's rule): a place
+ * with chrome of its own draws it centred, with its close; a card in a
+ * message, which has none, as plain text.
+ */
 export function WidgetLine({
-  place,
   text,
   closes,
   onClose,
 }: {
-  place: WidgetPlace
   text: string
   closes: boolean
   onClose: () => void
 }) {
-  if (place === "inline") return <p className="widget-line-inline">{text}</p>
+  if (!closes) return <p className="widget-line-inline">{text}</p>
   return (
     <EmptyState
       variant="compact"
       className="widget-line"
       title={text}
       action={
-        closes ? (
-          <Button size="sm" variant="ghost" onClick={onClose}>
-            Close
-          </Button>
-        ) : undefined
+        <Button size="sm" variant="ghost" onClick={onClose}>
+          Close
+        </Button>
       }
     />
   )

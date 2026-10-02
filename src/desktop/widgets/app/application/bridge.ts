@@ -12,7 +12,8 @@
  * address its server calls go to — the session and the server — is the
  * view's own, never anything the app says.
  */
-import { appDocument, approvedDomains, cspPolicy, cspViolationMethod } from "../model/csp"
+import { appDocument, approvedDomains, cspPolicy } from "../model/csp"
+import { sandboxMethods } from "../model/sandbox-methods"
 import { appHostContext, changedContext, inlineMaxHeight } from "../model/host-context"
 import {
   errorCodes,
@@ -27,11 +28,17 @@ import {
 import {
   advance,
   firstState,
+  frameOn,
   type Lifecycle,
   type LifecycleEffect,
   type LifecycleEvent,
 } from "../model/lifecycle"
-import type { AppRequest, FromFrame, Initialize } from "../model/messages"
+import {
+  contentModalities,
+  type AppRequest,
+  type FromFrame,
+  type Initialize,
+} from "../model/messages"
 import { requestMode } from "../model/places"
 import { uiResource, type UiResource } from "../model/resource"
 import {
@@ -119,7 +126,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   }
 
   const send = (message: Outgoing) => {
-    if (!gone() && view.frame) options.post(message)
+    if (frameOn(lifecycle)) options.post(message)
   }
 
   const hostContext = () => appHostContext(place, context, ports.page(), call.definition)
@@ -134,8 +141,8 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
       ...(ports.downloads ? { downloadFile: {} } : {}),
       ...(ports.conversation
         ? {
-            message: { text: {} },
-            updateModelContext: { text: {}, structuredContent: {} },
+            message: { ...contentModalities },
+            updateModelContext: { ...contentModalities, structuredContent: {} },
           }
         : {}),
     }
@@ -158,13 +165,10 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
 
   function run(effect: LifecycleEffect, answering?: RequestId) {
     switch (effect.kind) {
-      case "create-proxy":
-        show({ frame: true })
-        return
       case "send-document":
         if (resource)
           send(
-            notify("ui/notifications/sandbox-resource-ready", {
+            notify(sandboxMethods.resourceReady, {
               html: appDocument(resource.html, resource.csp),
               policy: cspPolicy(resource.csp),
             }),
@@ -189,9 +193,6 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         return
       case "send-teardown":
         send(request(teardownId, "ui/resource-teardown", {}))
-        return
-      case "remove-frame":
-        show({ frame: false })
         return
       case "close-place":
         options.host.close()
@@ -371,9 +372,9 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
       case "notification": {
         const note = message.notification
         switch (note.method) {
-          case "ui/notifications/sandbox-proxy-ready":
+          case sandboxMethods.proxyReady:
             return step({ kind: "proxy-ready" })
-          case "ui/notifications/sandbox-app-left":
+          case sandboxMethods.appLeft:
             return step({ kind: "app-left" })
           case "ui/notifications/initialized":
             return step({ kind: "initialized" })
@@ -386,7 +387,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
               // An app may say its size as often as it likes; only a change draws.
               return height === view.height ? undefined : show({ height })
             }
-          case cspViolationMethod: {
+          case sandboxMethods.cspViolation: {
             if (lifecycle.kind === "reading" || lifecycle.kind === "proxy") return
             const { origin } = note
             const known =
@@ -439,6 +440,10 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   return {
     receive,
     setCall(next) {
+      // One view is one call, at one address: a call of another session or
+      // resource is not this view's, and is not told to it.
+      if (next.sessionId !== address.sessionId || next.resourceUri !== call.resourceUri)
+        return console.warn(`[mcp app ${options.server}] another call for this view`)
       call = next
       tellCall()
     },

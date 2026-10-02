@@ -95,7 +95,7 @@ function AppFrame({
       created.remove()
       if (bridge.current === created) bridge.current = undefined
     }
-  }, [plugin, place])
+  }, [plugin, place, call.sessionId, call.resourceUri])
 
   useEffect(() => bridge.current?.setCall(call), [call])
   useEffect(() => bridge.current?.setContext(context), [context])
@@ -138,7 +138,6 @@ function AppFrame({
       ) : null}
       {draws.line ? (
         <WidgetLine
-          place={place}
           text={draws.line.text}
           closes={draws.line.closes}
           onClose={() => host.close()}

@@ -4,7 +4,7 @@
  */
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { cspViolationMethod } from "../model/csp"
+import { departureTokenSlot, sandboxMethods } from "../model/sandbox-methods"
 import { sandboxMetaName } from "../adapters/dom/sandbox-origin"
 import { sandboxResponse, withMeta } from "./serve"
 
@@ -24,6 +24,8 @@ describe("the listener", () => {
       ["GET", "/"],
       ["GET", "/desktop.html"],
       ["GET", "/proxy.html/"],
+      ["GET", "//["],
+      ["GET", "/%2e%2e/proxy.html"],
       ["GET", "/src/desktop/widgets/app/sandbox/proxy.html"],
       ["POST", "/proxy.html"],
       [undefined, "/proxy.html"],
@@ -49,12 +51,7 @@ describe("the proxy", () => {
   const text = proxy.toString("utf8")
 
   it("speaks the methods the host listens for", () => {
-    for (const method of [
-      "ui/notifications/sandbox-proxy-ready",
-      "ui/notifications/sandbox-resource-ready",
-      "ui/notifications/sandbox-app-left",
-      cspViolationMethod,
-    ])
+    for (const method of [...Object.values(sandboxMethods), departureTokenSlot])
       expect(text, method).toContain(`"${method}"`)
   })
 

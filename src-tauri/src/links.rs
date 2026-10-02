@@ -67,13 +67,15 @@
 //!
 //! The sandbox frame is that one route, opened on purpose: its document is
 //! the proxy, which holds no link of the model's, and the app inside it is
-//! someone else's HTML. An app navigating its own frame is refused by the
-//! proxy's own `frame-src` (the app's CSP, `src/desktop/widgets/app/model/
-//! csp.ts`) before it reaches anything — in Chromium, where it is checked
-//! (`verification/desktop/scripts/mcp-apps.mjs --only escape`). Whether
-//! WebKit refuses it before this policy runs is not yet seen; if it does not,
-//! this policy would hand an `http`, `https` or `mailto` URL the app chose to
-//! the OS, with no gesture of the person's (#349, open question 3).
+//! someone else's HTML. The app's policy has `frame-src 'none'` and applies
+//! to the proxy's document too (`src/desktop/widgets/app/model/csp.ts`), so
+//! the app can frame nothing and cannot navigate its own frame: each is
+//! refused before it reaches anything — in Chromium, where it is checked
+//! (`mcp-apps.mjs --only escape-navigate,escape-refresh` under
+//! `verification/desktop/scripts/`). Whether WebKit refuses it before this
+//! policy runs is not yet seen; if it does not, this policy would hand an
+//! `http`, `https` or `mailto` URL the app chose to the OS, with no gesture
+//! of the person's (#349, open question 3).
 //!
 //! A dropped URL is the other way a page can be made to navigate, and the page
 //! stops that itself in `src/panel/adapters/use-drop-navigation-guard.ts`. One

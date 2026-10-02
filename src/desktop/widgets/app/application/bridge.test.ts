@@ -9,13 +9,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { fixtureAppHtml } from "../fixture/fixture-app"
-import {
-  fixtureCall,
-  fixtureResourceUri,
-  fixtureServerPort,
-} from "../fixture/fixture-plugin"
+import { fixtureCall, fixtureServerPort } from "../fixture/fixture-plugin"
+import { fixtureResourceUri } from "../fixture/fixture-widgets"
 import { frameTransport, type FrameTransport } from "../adapters/dom/frame-transport"
 import { appLines, type AppViewState } from "../model/app-view"
+import { frameOn } from "../model/lifecycle"
 import { errorCodes, type JsonObject, type Outgoing } from "../model/json-rpc"
 import type { AppCall, CallPhase } from "../model/tool-call"
 import type { HostContext, OpenPlace, WidgetPlace } from "../../model/widget-state"
@@ -205,13 +203,13 @@ describe("the handshake", () => {
   it("L1, L4: reads the resource over its session, then hands the proxy the document, policy first", async () => {
     const read = vi.fn(fixtureServerPort().readResource)
     const app = harness({ server: { ...fixtureServerPort(), readResource: read } })
-    expect(app.bridge.view().frame).toBe(false)
+    expect(frameOn(app.bridge.view().lifecycle)).toBe(false)
     await flush()
     expect(read).toHaveBeenCalledWith(
       { sessionId: "session-a", server: "weather" },
       fixtureResourceUri,
     )
-    expect(app.bridge.view()).toMatchObject({ lifecycle: { kind: "proxy" }, frame: true })
+    expect(app.bridge.view()).toMatchObject({ lifecycle: { kind: "proxy" } })
     expect(app.take()).toEqual([])
     app.say({
       jsonrpc: "2.0",
@@ -297,7 +295,11 @@ describe("the handshake", () => {
     const [answer] = app.take() as unknown as {
       result: { hostCapabilities: JsonObject }
     }[]
-    expect(answer!.result.hostCapabilities).toMatchObject({
+    expect(answer!.result.hostCapabilities).toEqual({
+      serverTools: {},
+      serverResources: {},
+      logging: {},
+      sandbox: { permissions: {}, csp: {} },
       openLinks: {},
       downloadFile: {},
       message: { text: {} },
@@ -452,7 +454,6 @@ describe("what fails", () => {
     await flush()
     expect(app.bridge.view()).toMatchObject({
       lifecycle: { kind: "failed", reason: "load" },
-      frame: false,
     })
     for (const answer of [
       { kind: "failed" },
@@ -506,7 +507,6 @@ describe("what fails", () => {
     expect(read).not.toHaveBeenCalled()
     expect(app.bridge.view()).toMatchObject({
       lifecycle: { kind: "failed", reason: "load" },
-      frame: false,
     })
   })
 
@@ -528,7 +528,6 @@ describe("what fails", () => {
       app.deadline()
       expect(app.bridge.view(), stage).toMatchObject({
         lifecycle: { kind: "failed", reason: "load" },
-        frame: false,
       })
       // Nothing more reaches a frame that is gone.
       app.take()
@@ -553,7 +552,6 @@ describe("what fails", () => {
     })
     expect(app.bridge.view()).toMatchObject({
       lifecycle: { kind: "failed", reason: "load" },
-      frame: false,
     })
     expect(app.take()).toEqual([])
   })
@@ -566,7 +564,6 @@ describe("the app leaving its frame", () => {
     app.say({ jsonrpc: "2.0", method: "ui/notifications/sandbox-app-left", params: {} })
     expect(app.bridge.view()).toMatchObject({
       lifecycle: { kind: "failed", reason: "load" },
-      frame: false,
     })
     app.say({ jsonrpc: "2.0", id: 1, method: "ping" })
     expect(app.take()).toEqual([])
@@ -1035,6 +1032,29 @@ describe("the call and the context, live", () => {
     ])
   })
 
+  it("a call of another session or resource is not this view's, and is not told to it", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const app = harness({ phase: { kind: "running", arguments: { a: 1 } } })
+    await live(app)
+    const done = { kind: "done", arguments: { a: 1 }, result: { content: [] } } as const
+    app.bridge.setCall({ ...fixtureCall("session-b"), phase: done })
+    app.bridge.setCall({
+      ...fixtureCall("session-a"),
+      resourceUri: "ui://other",
+      phase: done,
+    })
+    expect(app.take()).toEqual([])
+    expect(warn).toHaveBeenCalledTimes(2)
+    app.bridge.setCall({ ...fixtureCall("session-a"), phase: done })
+    expect(app.take()).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "ui/notifications/tool-result",
+        params: { content: [] },
+      },
+    ])
+  })
+
   it("L13: a context change says only what changed", async () => {
     const app = harness()
     await live(app)
@@ -1133,7 +1153,7 @@ describe("the end", () => {
       ),
     )
     await flush()
-    expect(app.bridge.view()).toMatchObject({ lifecycle: { kind: "gone" }, frame: false })
+    expect(app.bridge.view()).toMatchObject({ lifecycle: { kind: "gone" } })
   })
 
   it("L24, L25, O5: removed while a call is pending: its answer is not posted, nor anything after", async () => {

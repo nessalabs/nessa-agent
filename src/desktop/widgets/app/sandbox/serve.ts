@@ -39,7 +39,9 @@ export function sandboxResponse(
   url: string | undefined,
   proxy: Buffer,
 ): { status: number; headers: Record<string, string>; body: Buffer | string } {
-  const path = new URL(url ?? "/", "http://sandbox").pathname
+  // Compared as text, never parsed: a request target that is not a URL is
+  // one more thing that is not the proxy.
+  const path = (url ?? "").split("?", 1)[0]
   if (method !== "GET" || path !== proxyPath)
     return { status: 404, headers: { "Content-Type": "text/plain" }, body: "Not found" }
   return {

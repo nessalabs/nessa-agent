@@ -54,7 +54,6 @@ export function WidgetBody({
         <WidgetWaiting name={draws.name} />
       ) : draws.kind === "line" ? (
         <WidgetLine
-          place={place}
           text={draws.text}
           closes={draws.closes}
           onClose={() => host.close()}
