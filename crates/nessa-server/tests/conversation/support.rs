@@ -579,6 +579,9 @@ pub(crate) struct ProviderFactory {
     pub(crate) mode_started: Notify,
     pub(crate) mode_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) open_calls: AtomicUsize,
+    /// The SDK session each open named: what a host keys its MCP grants to.
+    pub(crate) opened_sessions:
+        Mutex<Vec<Option<nessa_sdk::domain::agent_execution::sessions::SessionId>>>,
     pub(crate) open_failure: Mutex<Option<AgentError>>,
     pub(crate) opening: Notify,
     pub(crate) open_gate: Mutex<Option<Receiver<()>>>,
@@ -940,7 +943,8 @@ impl AgentProvider for Provider {
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
-            let (_, restore, _control) = request.into_parts();
+            let (session, restore, _control) = request.into_parts();
+            self.factory.opened_sessions.lock().unwrap().push(session);
             self.factory.open_calls.fetch_add(1, Ordering::SeqCst);
             self.factory.opening.notify_one();
             let gate = self.factory.open_gate.lock().unwrap().take();

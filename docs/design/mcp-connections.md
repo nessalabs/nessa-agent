@@ -135,6 +135,7 @@ end of input (Nessa's own shell server) still does.
 | Change notices held for a stand-in or a session's list | 16 | the stand-in is sent all three `*/list_changed`; the list is read again |
 | Tool names whose visibility a session remembers | 4096 | only the names the list asked latest gave are kept (a list answered late cannot evict a later one's), then none if that list alone passes it, and a name not remembered is hidden; tools paged past it are callable only from the latest pages |
 | Live grants | one per open provider session | — |
+| Sessions a grant remembers | its open ones, and those ended since its last opening | dropped as the next opens; all taken when it is revoked |
 | Open sessions | not bounded here | each is a harness's stand-in, started by a process of the gateway's own user |
 
 ## Failures are typed
@@ -218,7 +219,7 @@ One per provider open of an SDK session (a conversation's, or a warm-up's).
 | — | the SDK opens a provider session for `S`: new, resumed, or warm-up | Live | a token minted; its digest registered as `S`; each stand-in of the open carries it |
 | Live | the harness process restarts inside that provider session | Live | the same token: the same open |
 | Live | a hello names its token | Live | a session opens, owned by (`S`, this grant) |
-| Live | the provider session ends: closed, deleted, stopped, retired, shut down, warm-up done, or its open fails | Revoked | the token is refused; the grant's open sessions are closed (stdin, 2 s, the process group); a session still opening under it is refused when its `initialize` is answered — the revocation and its registration share one lock — and one asked for after it launches nothing; with no runtime to close on, or one shutting down, the process groups are killed at once |
+| Live | the provider session ends: closed, deleted, stopped, retired, shut down, warm-up done, or its open fails | Revoked | the token is refused; the grant's open sessions are closed (stdin, 2 s, the process group); a session still opening under it is refused when its `initialize` is answered — the revocation and its registration share the grant's own lock — and one asked for after it launches nothing; with no runtime to close on, or one shutting down, the process groups are killed at once |
 | Revoked | a hello names its token | Revoked | refused `unknown-session` |
 | Live | `S` is opened again (resumed) | Live, beside the new one | the new open's stand-ins carry the new token; the view reads `S`'s newest session; this one is revoked when its provider session ends |
 | — | the gateway restarts | none | every old token is refused; each conversation gets a new one when it opens |

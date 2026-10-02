@@ -167,8 +167,16 @@ fn said(text: &str) -> UserMessage {
     UserMessage::text_only(PromptText::new(text).unwrap())
 }
 fn projection() -> Projection {
+    projection_for("conversation")
+}
+
+/// A conversation id as the gateway makes them: what an MCP tool's UI is
+/// looked up under (`conversation_session`).
+const MCP_CONVERSATION: &str = "00000000-0000-4000-8000-0000000000aa";
+
+fn projection_for(conversation: &str) -> Projection {
     Projection::new(
-        "conversation".into(),
+        conversation.into(),
         ConversationCapabilities {
             queue: true,
             steer: true,
@@ -1398,17 +1406,21 @@ struct ListedUis {
     /// The conversation whose session lists it, as its SDK session is named.
     conversation: String,
     uri: Mutex<Option<String>>,
+    /// Every session the view asked about.
+    asked: Mutex<Vec<SessionId>>,
 }
 impl ListedUis {
     fn of(conversation: &str, uri: Option<String>) -> Self {
         Self {
             conversation: conversation.into(),
             uri: Mutex::new(uri),
+            asked: Mutex::default(),
         }
     }
 }
 impl McpToolUis for ListedUis {
     fn resource_uri(&self, session: &SessionId, call: &McpTool) -> Option<UiResourceUri> {
+        self.asked.lock().unwrap().push(session.clone());
         if session.as_str() != self.conversation {
             return None;
         }
@@ -1432,8 +1444,8 @@ fn mcp_event(id: &str, server: &str, tool: &str) -> ExecutionEvent {
 
 #[test]
 fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
-    let listed = Arc::new(ListedUis::of("conversation", None));
-    let mut projection = projection().with_tool_uis(listed.clone());
+    let listed = Arc::new(ListedUis::of(MCP_CONVERSATION, None));
+    let mut projection = projection_for(MCP_CONVERSATION).with_tool_uis(listed.clone());
     let snapshot = completed_snapshot(
         "execution",
         vec![
@@ -1522,7 +1534,7 @@ fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
 #[test]
 fn committed_mcp_ui_enrichment_remains_inside_the_complete_view_budget() {
     let uri = format!("ui://{}", "a".repeat(2043));
-    let listed = Arc::new(ListedUis::of("conversation", Some(uri.clone())));
+    let listed = Arc::new(ListedUis::of(MCP_CONVERSATION, Some(uri.clone())));
     let events = (0..16)
         .map(|index| {
             event(ExecutionUpdate::Tool(
@@ -1540,7 +1552,7 @@ fn committed_mcp_ui_enrichment_remains_inside_the_complete_view_budget() {
         })
         .collect();
     let snapshot = completed_snapshot("execution", events);
-    let mut projection = projection().with_tool_uis(listed);
+    let mut projection = projection_for(MCP_CONVERSATION).with_tool_uis(listed);
     assert!(projection.replace_committed(
         &committed("incarnation", 1, 1, 1, Some(&snapshot)),
         &[],
@@ -1616,7 +1628,7 @@ async fn service_committed_and_cold_pending_mode_views_preserve_cached_mcp_ui() 
     let audit = Arc::new(RecordingModeAudit::default());
     let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     let listed = Arc::new(ListedUis::of(
-        &id.to_string(),
+        crate::conversation::application::conversation_session(&id).as_str(),
         Some("ui://charts/show.html".into()),
     ));
     let service = service_with_cached_tool_uis(
@@ -1683,12 +1695,30 @@ async fn service_committed_and_cold_pending_mode_views_preserve_cached_mcp_ui() 
     // view must therefore use the service's committed, read-only constructor.
     audit.fail_application_once.store(true, Ordering::SeqCst);
     let opens = provider.open_calls.load(Ordering::SeqCst);
-    let cold = service_with_cached_tool_uis(storage, repository, provider.clone(), audit, listed);
+    let cold =
+        service_with_cached_tool_uis(storage, repository, provider.clone(), audit, listed.clone());
     let pending = cold.read(id, caller("pending-ui")).await.unwrap();
     let cold_uri = pending.tools[0].mcp.as_ref().unwrap().resource_uri.clone();
     let later_opens = provider.open_calls.load(Ordering::SeqCst);
     cold.shutdown().await.unwrap();
     assert_eq!(live_uri.as_deref(), Some("ui://charts/show.html"));
+    // The view asks about the very session the agent was opened in — the
+    // one its MCP grants are issued for — and no other.
+    let opened: Vec<_> = provider
+        .opened_sessions
+        .lock()
+        .unwrap()
+        .iter()
+        .flatten()
+        .cloned()
+        .collect();
+    assert!(!opened.is_empty());
+    let asked = listed.asked.lock().unwrap().clone();
+    assert!(!asked.is_empty());
+    assert!(
+        asked.iter().all(|session| opened.contains(session)),
+        "{asked:?} vs {opened:?}"
+    );
     assert_eq!(cold_uri.as_deref(), Some("ui://charts/show.html"));
     assert_eq!(
         later_opens, opens,

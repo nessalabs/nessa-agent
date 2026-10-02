@@ -106,6 +106,18 @@ pub async fn write_line(
     output.flush().await
 }
 
+/// Why, and with what message, a stand-in whose session could not open is
+/// refused. An opening refused [`McpError::Closed`] had its grant revoked
+/// while it opened — the only reason `open` gives it — so it is as stale as a
+/// token refused at the door; anything else, its server could not be made
+/// ready.
+pub(crate) fn opening_refused(error: McpError) -> (StandInRefusal, String) {
+    match error {
+        McpError::Closed => (StandInRefusal::UnknownSession, NO_CONVERSATION.into()),
+        error => (StandInRefusal::Unavailable, said(&error.to_string())),
+    }
+}
+
 /// The gateway's side of the relay socket.
 pub struct Relay {
     servers: McpServers,
@@ -161,17 +173,9 @@ impl Relay {
         // harness session's, ended with it or with its grant.
         let session = match self.servers.open(&hello.server, owner).await {
             Ok(session) => session,
-            // Its grant was revoked while it opened: as stale as a token
-            // refused at the door.
-            Err(McpError::Closed) => {
-                let message = NO_CONVERSATION;
-                let answer = refused(StandInRefusal::UnknownSession, message.into());
-                let _ = write_line(&mut output, &answer).await;
-                return;
-            }
             Err(error) => {
-                let answer = refused(StandInRefusal::Unavailable, said(&error.to_string()));
-                let _ = write_line(&mut output, &answer).await;
+                let (reason, message) = opening_refused(error);
+                let _ = write_line(&mut output, &refused(reason, message)).await;
                 return;
             }
         };

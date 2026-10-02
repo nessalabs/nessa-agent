@@ -38,7 +38,9 @@ pub enum McpError {
     Busy,
     /// The MCP client is shutting down.
     Stopped,
-    /// The session was closed: its harness session ended.
+    /// The session was closed: its harness session ended, it was closed, or
+    /// the grant it was opened under was revoked — which is also what an
+    /// opening under a revoked grant is refused with.
     Closed,
 }
 impl fmt::Display for McpError {

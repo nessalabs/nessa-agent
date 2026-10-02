@@ -8,6 +8,7 @@ use nessa_sdk::application::agent_execution::{
         InvocationRecord, InvocationSchedulingEvent, SessionSnapshot, SubmissionAcknowledgement,
     },
 };
+use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationKind, SchedulingCause, SubmissionMode},
     prompts::{PromptText, UserMessage},

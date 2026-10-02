@@ -1,3 +1,4 @@
+use super::session_key::conversation_session;
 use super::{
     locks::ConversationLocks,
     projection::{bound_view, clipped, Projection, MAX_TEXT},
@@ -54,7 +55,7 @@ use nessa_sdk::domain::agent_execution::{
     },
     prompts::{ImageReference, LinkedFile, PromptText, UserMessage},
     questions::{QuestionChoice, QuestionId},
-    sessions::{ExecutionSessionId, SessionId},
+    sessions::ExecutionSessionId,
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use std::{
@@ -1038,7 +1039,7 @@ impl ConversationService {
                                     });
                                 }
                             };
-                            let session_id = SessionId::new(id.to_string()).expect("UUID session key");
+                            let session_id = conversation_session(&id);
                             let manager = SessionManager::open(
                                 Some(session_id),
                                 service.inner.storage.clone(),
@@ -1478,7 +1479,7 @@ impl ConversationService {
             return Err(error);
         }
         let live = self.resolve(&id, &caller).await?;
-        let session_id = SessionId::new(id.to_string()).expect("conversation UUID session key");
+        let session_id = conversation_session(&id);
         let committed = self
             .inner
             .storage
@@ -1561,7 +1562,7 @@ impl ConversationService {
             .and_then(|slot| slot.value.get())
             .and_then(|result| result.as_ref().ok())
             .cloned();
-        let session_id = SessionId::new(id.to_string()).expect("conversation UUID session key");
+        let session_id = conversation_session(id);
         let committed = self
             .inner
             .storage
@@ -2937,7 +2938,7 @@ impl ConversationService {
         &self,
         id: &ConversationId,
     ) -> Result<Option<Box<dyn SessionStorageLease>>, StorageError> {
-        let session = SessionId::new(id.to_string()).expect("UUID session key");
+        let session = conversation_session(id);
         let deadline = Instant::now() + self.inner.deletion_budgets.history_lease;
         loop {
             match self.inner.storage.open_existing(session.clone()).await {
@@ -2966,7 +2967,7 @@ impl ConversationService {
         let decided = record.deletion().ok_or(ConversationError::Metadata)?;
         let read = match lease {
             Some(lease) => {
-                let key = SessionId::new(record.id().to_string()).expect("UUID session key");
+                let key = conversation_session(record.id());
                 match SessionSnapshot::load_saved(lease, &key)
                     .await
                     .map_err(ConversationError::Storage)?

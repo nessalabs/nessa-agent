@@ -124,8 +124,9 @@ fn worker_error(error: ReadWorkerError) -> RecordReadError {
 }
 
 fn session_id(admitted: &ReceiverReadScope) -> Result<SessionId, RecordReadError> {
-    SessionId::new(admitted.conversation_id.to_string())
-        .map_err(|_| RecordReadError::InvalidRequest)
+    Ok(crate::conversation::application::conversation_session(
+        &admitted.conversation_id,
+    ))
 }
 
 #[cfg(test)]
