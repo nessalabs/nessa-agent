@@ -46,6 +46,16 @@ export interface AppCall {
   readonly phase: CallPhase
 }
 
+/**
+ * Which view a call is drawn in: its session, its execution and tool ids, and
+ * its resource. A call that differs in any of these is another view's — the
+ * bridge does not tell it (`setCall`) and its place draws a new view
+ * (`app-view.tsx`) — the one statement of it.
+ */
+export function callView(call: AppCall): string {
+  return JSON.stringify([call.sessionId, call.executionId, call.toolId, call.resourceUri])
+}
+
 /** What the view has been told of its call. */
 export interface CallTold {
   /** The last partial arguments sent, as JSON text, so the same one is not sent twice. */

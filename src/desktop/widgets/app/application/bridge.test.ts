@@ -1000,6 +1000,16 @@ describe("the mount and its release (#384)", () => {
     expect(signals.every((signal) => signal.aborted)).toBe(true)
   })
 
+  it("M2: a view that never asked its server anything — no sandbox — has no mount to release", async () => {
+    const { released, server } = releasing()
+    const app = harness({ server, ports: { sandbox: undefined } })
+    await flush()
+    expect(app.bridge.view().lifecycle).toEqual({ kind: "failed", reason: "load" })
+    app.bridge.remove()
+    await flush()
+    expect(released).toEqual([])
+  })
+
   it("M5: a release that fails is logged, and the view stays gone", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {})
     const { server } = releasing({ release: () => Promise.reject(new Error("closed")) })

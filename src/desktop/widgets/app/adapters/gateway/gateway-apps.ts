@@ -4,7 +4,8 @@
  * registered while the window runs, its server port over `client.mcpApps`
  * (`mcp-app-server.ts`) and its calls read from the views (`app-calls.ts`).
  * The workspace's gateway source (#248) hands each view's tools to `observe`,
- * as it makes the transcript's widget parts from them.
+ * as it makes the transcript's widget parts from them, and a conversation that
+ * goes to `forget`.
  */
 import type { ConversationTool, McpAppsApi } from "@nessa/client"
 import type { DesktopWidgetRegistry } from "../../../ui/plugin"
@@ -20,6 +21,8 @@ export type SharedAppPorts = Omit<McpAppPorts, "calls" | "server">
 export interface GatewayApps {
   /** What a conversation's view now says of its tools (`GatewayAppCalls.observe`). */
   observe(conversationId: string, tools: readonly ConversationTool[]): void
+  /** The conversation is gone: its apps' calls with it (`GatewayAppCalls.forget`). */
+  forget(conversationId: string): void
 }
 
 export function gatewayApps(options: {
@@ -44,5 +47,6 @@ export function gatewayApps(options: {
         )
       }
     },
+    forget: (conversationId) => calls.forget(conversationId),
   }
 }

@@ -45,6 +45,7 @@ import {
 import { requestMode } from "../model/places"
 import { uiResource, type UiResource } from "../model/resource"
 import {
+  callView,
   nothingTold,
   toolNotifications,
   type AppCall,
@@ -139,6 +140,20 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   const gone = () => lifecycle.kind === "gone"
   // Aborted when the mount is released: a read in flight fetches nothing more.
   const mount = new AbortController()
+  // Whether this mount asked the server anything: one that never did has
+  // nothing to release (M2).
+  let asked = false
+  // This mount's requests to its server, each at its own address.
+  const toServer = {
+    readResource(uri: string) {
+      asked = true
+      return ports.server.readResource(address, uri, mount.signal)
+    },
+    callTool(tool: string, args: JsonObject) {
+      asked = true
+      return ports.server.callTool(address, tool, args)
+    },
+  }
   let cancelReadAgain: (() => void) | undefined
   const initialized = () => lifecycle.kind === "live" || lifecycle.kind === "ending"
 
@@ -251,9 +266,10 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
       !mount.signal.aborted
     ) {
       mount.abort()
-      ports.server.release(address).catch((error: unknown) => {
-        console.error("An MCP App's release failed", error)
-      })
+      if (asked)
+        ports.server.release(address).catch((error: unknown) => {
+          console.error("An MCP App's release failed", error)
+        })
     }
     show({})
     for (const effect of next.effects) run(effect, answering)
@@ -328,15 +344,13 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
       case "tools/call":
         return settle(
           id,
-          ports.server.callTool(address, message.tool, message.arguments),
+          toServer.callTool(message.tool, message.arguments),
           (answer) => answerServer(id, answer),
           ports.server.callWithin,
         )
       case "resources/read":
-        return settle(
-          id,
-          ports.server.readResource(address, message.uri, mount.signal),
-          (answer) => answerServer(id, answer),
+        return settle(id, toServer.readResource(message.uri), (answer) =>
+          answerServer(id, answer),
         )
       case "ui/message": {
         const conversation = ports.conversation
@@ -467,8 +481,8 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   if (ports.sandbox) readResource(busyReads)
   else step({ kind: "read", outcome: "unloadable" })
   function readResource(reads: number) {
-    ports.server
-      .readResource(address, call.resourceUri, mount.signal)
+    toServer
+      .readResource(call.resourceUri)
       .catch((error: unknown) => {
         console.error("An MCP App port failed", error)
         return { kind: "failed" } as const
@@ -500,12 +514,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     setCall(next) {
       // One view is one call, at one address: a call of another session,
       // identity or resource is not this view's, and is not told to it.
-      if (
-        next.sessionId !== address.sessionId ||
-        next.executionId !== address.app.executionId ||
-        next.toolId !== address.app.toolId ||
-        next.resourceUri !== call.resourceUri
-      )
+      if (callView(next) !== callView(call))
         return console.warn(`[mcp app ${options.server}] another call for this view`)
       call = next
       tellCall()

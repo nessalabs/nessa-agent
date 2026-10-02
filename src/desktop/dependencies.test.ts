@@ -59,7 +59,7 @@ describe("the window's widget plugins", () => {
     ).toBeUndefined()
   })
 
-  it("register a real server's app through the gateway, only with a gateway and where apps are drawn (#384)", () => {
+  it("register a real server's app through the gateway, only given both a gateway and apps (#384)", () => {
     const gateway = { mcpApps: {} as McpAppsApi }
     const apps = { sandbox: undefined, platform: "web" } as const
     expect(
@@ -89,6 +89,33 @@ describe("the window's widget plugins", () => {
       kind: "app",
       server: "mcptest",
     })
+  })
+
+  it("give a real server's app mount ids of the protocol's form, whatever ids the workspace is given", () => {
+    const { widgets, gatewayApps } = createDesktopDependencies({
+      workspace: fakeSource(),
+      newId: () => "id-1",
+      gateway: { mcpApps: {} as McpAppsApi },
+      apps: { sandbox: undefined, platform: "web" },
+    })
+    gatewayApps?.observe("0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d", [
+      {
+        executionId: "run",
+        toolId: "call-1",
+        title: "show_chart",
+        kind: "other",
+        status: "running",
+        details: "",
+        input: "",
+        mcp: { server: "mcptest", tool: "show_chart", resourceUri: "ui://t/chart.html" },
+      },
+    ])
+    const plugin = widgets.plugin(appPluginId("mcptest"))
+    expect(plugin?.kind).toBe("app")
+    if (plugin?.kind !== "app") return
+    expect(plugin.ports.newId()).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    )
   })
 
   it("leave the fixture app out beside a gateway, whose servers' apps it could stand in for", () => {

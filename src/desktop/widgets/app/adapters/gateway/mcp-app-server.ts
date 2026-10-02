@@ -13,10 +13,12 @@
  * goes no further than that call: nothing here keeps, logs or returns it
  * (`mcp-app-server.test.ts`, "the ticket").
  *
- * A request outside the gateway's bounds — arguments past 32 KiB, a tool name
- * or URI too long — is the client's to refuse, before anything is sent (its
- * documented `TypeError`); it is the app's request that is refused, in one
- * place (A2). A read whose mount was released fetches nothing more (R6).
+ * Arguments past the client's published bound (`MAX_MCP_ARGUMENTS_BYTES`) are
+ * refused before anything is sent (A2): the one bound the app controls that a
+ * review is held to. Any other `TypeError` the client throws — an address the
+ * host built, a name past its bound — is a fault, logged, never told to the
+ * app as its own refusal. A read whose mount was released fetches nothing more
+ * (R6).
  *
  * `callTool` and `readResource` settle with an outcome whatever the client
  * throws, so the bridge never mistakes one for a fault of this adapter
@@ -25,8 +27,10 @@
  */
 import {
   ConversationErrorCode,
+  MAX_MCP_ARGUMENTS_BYTES,
   MCP_APP_CALL_DEADLINE_MS,
   NessaMcpAppError,
+  NessaMcpResourceError,
   type McpAppsApi,
   type McpReadResourceResult,
 } from "@nessa/client"
@@ -106,19 +110,16 @@ const refusalWords: Record<Refusal, { tool: string; resource: string }> = {
     resource: "This app may not read that resource",
   },
   "too-large": {
-    tool: "The request is outside the gateway's bounds",
-    resource: "The request is outside the gateway's bounds",
+    tool: `The arguments are larger than ${MAX_MCP_ARGUMENTS_BYTES / 1024} KiB`,
+    resource: "The request is too large",
   },
 }
 
 const failed: ServerAnswer = { kind: "failed" }
+const utf8 = new TextEncoder()
 
 /** The port's answer for what a call threw: a refusal, a server gone, or a failure. */
 function answerFor(error: unknown, asked: "tool" | "resource"): ServerAnswer {
-  // The client's refusal of a request outside the schema's bounds, made
-  // before anything is sent: the app asked for too much (A2).
-  if (error instanceof TypeError)
-    return { kind: "refused", reason: refusalWords["too-large"][asked] }
   // The client narrows the gateway's code to the ones this build knows, or
   // none (`conversationErrorCode`): a code that is not one is no key here.
   if (!(error instanceof NessaMcpAppError) || error.code === undefined) {
@@ -183,13 +184,18 @@ export function gatewayAppServer(mcpApps: McpAppsApi): McpAppServer {
     callWithin: MCP_APP_CALL_DEADLINE_MS,
 
     async callTool(address: AppAddress, tool: string, args: JsonObject) {
+      const argumentsJson = JSON.stringify(args)
+      // The client's published bound, as the client counts it, so the app is
+      // told before anything is sent (A2, gate 13: consumed, not retyped).
+      if (utf8.encode(argumentsJson).byteLength > MAX_MCP_ARGUMENTS_BYTES)
+        return { kind: "refused", reason: refusalWords["too-large"].tool }
       try {
         const { resultJson } = await mcpApps.callTool(
           address.sessionId,
           address.app,
           address.server,
           tool,
-          JSON.stringify(args),
+          argumentsJson,
         )
         // The client believes only one JSON object here (`mcpCallToolResult`).
         return { kind: "ok", result: JSON.parse(resultJson) as JsonObject }
@@ -224,7 +230,8 @@ export function gatewayAppServer(mcpApps: McpAppsApi): McpAppServer {
         // Used, expired, released, not the bytes described, or unreachable:
         // the app is not loaded (R4). The error never holds the ticket; an
         // abort is the mount's own end, not a fault.
-        if (!signal.aborted) console.error("An MCP App's resource was not fetched", error)
+        if (!(error instanceof NessaMcpResourceError && error.code === "aborted"))
+          console.error("An MCP App's resource was not fetched", error)
         return failed
       }
       const text = decoded(bytes)

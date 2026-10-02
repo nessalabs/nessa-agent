@@ -266,7 +266,8 @@ writing the full defaults on first launch is buying.
   it (`app/sandbox/`, served
   in the desktop app by `src-tauri/src/app_sandbox.rs`); the view the hosts
   draw (`app/ui/`); and a fixture server's app (`app/fixture/`). How an app's
-  widgets are named — `mcp:` and the server, and the call's two identities —
+  widgets are named — `mcp:` and the server, and the call's session, execution
+  and tool ids —
   is stated once, in `app/model/app-ref.ts`, which the transcript uses. It
   knows no plugin and imports no other vertical. The workspace draws the
   chrome around the hosts and carries out their callbacks with its own

@@ -51,8 +51,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly widgets: DesktopWidgetRegistry
   /**
    * Where a gateway source reports each conversation view's tools, so the
-   * apps of their servers are registered and their calls read; absent with
-   * no gateway, or where no app can be drawn.
+   * apps of their servers are registered and their calls read, and each
+   * conversation that goes; absent unless both a gateway and `apps` are given.
    */
   readonly gatewayApps?: GatewayApps
 }

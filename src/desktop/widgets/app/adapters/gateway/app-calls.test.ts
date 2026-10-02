@@ -175,22 +175,41 @@ describe("the calls of each server", () => {
     })
   })
 
-  it("C11: a call gone from its conversation's view is forgotten, and its readers told", () => {
+  it("C11: a call the view no longer reports — evicted by later tools — keeps its last state, and no one is told", () => {
     const calls = gatewayAppCalls()
     const port = calls.forServer("mcptest")
     const told = vi.fn()
     port.subscribe(id, told)
     calls.observe(conversationId, [tool()])
-    expect(calls.observe(conversationId, [])).toEqual([])
-    expect(port.read(id)).toEqual({ kind: "missing" })
-    expect(told).toHaveBeenCalledTimes(2)
+    const first = port.read(id)
+    // The gateway keeps its latest tools: sixteen more push the app's out.
+    const later = Array.from({ length: 16 }, (_, n) => {
+      const { mcp: _mcp, ...plain } = tool({ toolId: `later-${n}` })
+      return plain
+    })
+    expect(calls.observe(conversationId, later)).toEqual([])
+    expect(port.read(id)).toBe(first)
+    expect(told).toHaveBeenCalledTimes(1)
   })
 
-  it("C11: another conversation's view forgets nothing of this one's", () => {
+  it("C11: a conversation forgotten takes its calls, and their readers are told; another's stay", () => {
+    const other = "9f8e7d6c-5b4a-4c3d-8e2f-1a0b9c8d7e6f"
     const calls = gatewayAppCalls()
+    const port = calls.forServer("mcptest")
+    const told = vi.fn()
+    port.subscribe(id, told)
     calls.observe(conversationId, [tool()])
-    calls.observe("9f8e7d6c-5b4a-4c3d-8e2f-1a0b9c8d7e6f", [])
-    expect(calls.forServer("mcptest").read(id).kind).toBe("known")
+    calls.observe(other, [tool()])
+    calls.forget(other)
+    expect(port.read(id).kind).toBe("known")
+    expect(told).toHaveBeenCalledTimes(1)
+    calls.forget(conversationId)
+    calls.forget(conversationId)
+    expect(port.read(id)).toEqual({ kind: "missing" })
+    expect(told).toHaveBeenCalledTimes(2)
+    // Seen again, it is known again.
+    calls.observe(conversationId, [tool()])
+    expect(port.read(id).kind).toBe("known")
   })
 
   it("C7: a stopped subscription is not told", () => {

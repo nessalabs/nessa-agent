@@ -8,6 +8,7 @@
  */
 import {
   ConversationErrorCode,
+  MAX_MCP_ARGUMENTS_BYTES,
   MCP_APP_CALL_DEADLINE_MS,
   NessaMcpAppError,
   NessaMcpResourceError,
@@ -117,22 +118,32 @@ describe("tools/call", () => {
     })
   })
 
-  it("A2: a request outside the schema's bounds is the client's to refuse before sending, and the app's refusal", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {})
-    // What the client throws, before anything is sent, for arguments past
-    // MAX_MCP_ARGUMENTS_BYTES, or a tool name or URI past its bound.
-    const outside = () =>
-      Promise.reject(new TypeError("Arguments must contain at most 32768 UTF-8 bytes"))
-    const server = gatewayAppServer(
-      fakeApps({ callTool: vi.fn(outside), readResource: vi.fn(outside) }),
+  it("A2: arguments past the client's published bound, in UTF-8 bytes, are refused before anything is sent", async () => {
+    const apps = fakeApps()
+    const server = gatewayAppServer(apps)
+    // `{"a":"…"}` is 8 bytes around the text; "é" is two bytes in one character.
+    const fits = { a: "é".repeat((MAX_MCP_ARGUMENTS_BYTES - 8) / 2) }
+    expect(new TextEncoder().encode(JSON.stringify(fits)).byteLength).toBe(
+      MAX_MCP_ARGUMENTS_BYTES,
     )
-    const refused = {
+    expect((await server.callTool(address, "t", fits)).kind).toBe("ok")
+    expect(await server.callTool(address, "t", { a: `${fits.a}x` })).toEqual({
       kind: "refused",
-      reason: "The request is outside the gateway's bounds",
-    }
-    expect(await server.callTool(address, "t", { a: "x" })).toEqual(refused)
-    expect(await server.readResource(address, uri, live())).toEqual(refused)
-    expect(error).not.toHaveBeenCalled()
+      reason: `The arguments are larger than ${MAX_MCP_ARGUMENTS_BYTES / 1024} KiB`,
+    })
+    expect(apps.callTool).toHaveBeenCalledTimes(1)
+  })
+
+  it("A11: any other TypeError the client throws is a fault of the host's, logged — never the app's refusal", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const thrown = () =>
+      Promise.reject(new TypeError("Conversation ID must be a canonical lowercase UUID"))
+    const server = gatewayAppServer(
+      fakeApps({ callTool: vi.fn(thrown), readResource: vi.fn(thrown) }),
+    )
+    expect(await server.callTool(address, "t", {})).toEqual({ kind: "failed" })
+    expect(await server.readResource(address, uri, live())).toEqual({ kind: "failed" })
+    expect(error).toHaveBeenCalledTimes(2)
   })
 
   it.each([
@@ -142,10 +153,7 @@ describe("tools/call", () => {
     [ConversationErrorCode.McpToolNotForApp, "This app may not use that tool"],
     [ConversationErrorCode.McpServerMismatch, "This app may not use that tool"],
     [ConversationErrorCode.McpAppUnknown, "This app may not use that tool"],
-    [
-      ConversationErrorCode.McpRequestTooLarge,
-      "The request is outside the gateway's bounds",
-    ],
+    [ConversationErrorCode.McpRequestTooLarge, "The arguments are larger than 32 KiB"],
   ])("A3–A7: %s is refused with the gateway's reason", async (code, reason) => {
     const server = gatewayAppServer(
       fakeApps({ callTool: vi.fn(() => Promise.reject(refusal(code))) }),
@@ -321,7 +329,6 @@ describe("resources/read and the ticket", () => {
     "not_found",
     "unavailable",
     "integrity",
-    "aborted",
     "timeout",
     "unreachable",
     "unexpected_response",
@@ -403,6 +410,23 @@ describe("a read whose mount is released (R6)", () => {
     mount.abort()
     expect(await read).toEqual({ kind: "failed" })
     expect(error).not.toHaveBeenCalled()
+  })
+
+  it("R4, R6: bytes that fail their check as the mount is released are still a fault, and logged", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const mount = new AbortController()
+    const apps = fakeApps({
+      fetchResource: vi.fn(() => {
+        mount.abort()
+        return Promise.reject(new NessaMcpResourceError("integrity", 200))
+      }),
+    })
+    expect(await gatewayAppServer(apps).readResource(address, uri, mount.signal)).toEqual(
+      {
+        kind: "failed",
+      },
+    )
+    expect(error).toHaveBeenCalledTimes(1)
   })
 })
 
