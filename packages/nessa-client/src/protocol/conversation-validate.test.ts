@@ -320,6 +320,23 @@ describe("conversation view agreement", () => {
       { kind: "app", server: "charts", tool: "delete_rows" },
     ])
       expect(() => conversationView(withOrigin(origin), "conversation")).not.toThrow()
+    // An app asks from a tool call that has finished; the agent only while
+    // its execution runs.
+    const finished = (origin: unknown) => {
+      const value = withOrigin(origin)
+      const message = value.messages.find((each) => each.executionId === "running")!
+      message.status = "completed"
+      return value
+    }
+    expect(() =>
+      conversationView(
+        finished({ kind: "app", server: "charts", tool: "delete_rows" }),
+        "conversation",
+      ),
+    ).not.toThrow()
+    expect(() => conversationView(finished({ kind: "harness" }), "conversation")).toThrow(
+      "not running",
+    )
     for (const origin of [
       undefined,
       {},

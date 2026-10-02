@@ -389,7 +389,9 @@ export function conversationView(value: unknown, expected: string): Conversation
     if (permissionIds.has(permissionKey))
       throw new Error("Conversation response repeats a permission")
     const status = messageStatuses.get(permission.executionId as string)
-    if (status !== undefined && status !== "running")
+    // The agent asks while its execution runs. An app asks whenever it is
+    // shown, naming its own tool call, which has normally finished.
+    if (kind === "harness" && status !== undefined && status !== "running")
       throw new Error("Permission execution is not running")
     if (status === undefined && !item.truncated)
       throw new Error("Permission execution is missing its message")

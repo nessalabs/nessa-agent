@@ -785,7 +785,7 @@ export const ConversationPermissionOriginKind = {
 } as const
 export type ConversationPermissionOriginKind =
   (typeof ConversationPermissionOriginKind)[keyof typeof ConversationPermissionOriginKind]
-/** Who asked for this review. For harness, the review's executionId and toolId are the agent's tool call being reviewed. For app, they are the app's identity — the tool call whose UI it is — and server and tool name the tool the app asked to call (required for app, absent for harness). Answer either kind with conversation.answer or conversation.cancel. */
+/** Who asked for this review. For harness, the review's executionId and toolId are the agent's tool call being reviewed. For app, they are the app's identity — the tool call whose UI it is, which has normally finished — and server and tool name the tool the app asked to call (required for app, absent for harness). A harness review is shown only while its execution runs; an app review while the app waits on it, whatever its tool call's state. Answer either kind with conversation.answer or conversation.cancel. */
 export interface ConversationPermissionOrigin {
   /** Who asked. */
   kind: ConversationPermissionOriginKind
