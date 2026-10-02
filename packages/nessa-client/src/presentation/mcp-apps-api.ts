@@ -1,18 +1,14 @@
 import { NessaConversationControlError } from "../application/conversation-mutation-error.js"
 import { requestWithin, type RequestTimer } from "../application/gateway-http.js"
-import {
-  MCP_APP_CALL_DEADLINE_MS,
-  MCP_APP_READ_DEADLINE_MS,
-  NessaMcpAppError,
-} from "../application/mcp-app-call.js"
+import { NessaMcpAppError } from "../application/mcp-app-call.js"
 import {
   NessaMcpResourceError,
-  RESOURCE_DEADLINE_MS,
   type McpResourceTransport,
 } from "../application/mcp-resource-fetch.js"
 import type { RequestDeadline, RpcRequester } from "../application/session-port.js"
 import {
   bounds,
+  mcpAppTiming,
   ProductMethod,
   type ConversationMutationResult,
   type McpAppReference,
@@ -36,17 +32,31 @@ import {
 import type { ConversationActionOptions } from "./conversation-api.js"
 
 /**
- * How long {@link McpAppsApi}'s calls can take, in milliseconds: `callTool`
- * and `readResource` wait at least this long — longer when the client is
- * configured for longer — and `fetchResource` exactly this long. A host that
- * bounds an app's request waits as long, so that it never drops an answer the
- * gateway is still bound to send. Derived from the protocol's
- * `x-mcpAppTiming` and the ticket's lifetime; nothing else spells them.
+ * The longest each of {@link McpAppsApi}'s calls can take the gateway, in
+ * milliseconds, as the protocol publishes it (`x-mcpAppTiming`, and the
+ * ticket's lifetime); nothing else spells them. A host that bounds an app's
+ * request by these never drops an answer the gateway is still bound to send.
  */
 export const mcpAppDeadlines = Object.freeze({
-  callToolMs: MCP_APP_CALL_DEADLINE_MS,
-  readResourceMs: MCP_APP_READ_DEADLINE_MS,
-  fetchResourceMs: RESOURCE_DEADLINE_MS,
+  /**
+   * `callTool`: a destructive tool's review waits for the person, then the
+   * call has its budget, and the client's allowance covers audit writes, the
+   * response and scheduling. The client waits at least this long — longer
+   * when it is configured for longer — since giving up sooner would drop an
+   * answer the gateway still sends, and would not withdraw the review: only
+   * `releaseApp`, or the socket closing, does.
+   */
+  callToolMs: mcpAppTiming.callDeadlineMs,
+  /**
+   * `readResource`: the server's budget for the read, and the client's
+   * allowance. The client waits at least this long, as for `callTool`.
+   */
+  readResourceMs: mcpAppTiming.readDeadlineMs,
+  /**
+   * `fetchResource`: the ticket's own lifetime. The client gives up on the
+   * request after this long; checking the bytes' SHA-256 follows.
+   */
+  fetchResourceMs: bounds.mcpResourceTicketMs,
 })
 
 /** What `mcp.readResource` said the bytes are: the size and SHA-256 `fetchResource` holds them to. */
@@ -77,8 +87,9 @@ export type McpAppsApi = {
    * `destructiveHint` is not false, so a tool with no annotations is — waits
    * first for the person's approval, as a review in the conversation's
    * `permissions` with `origin: {kind: "app", server, tool}`. The call is
-   * answered when they answer, when the review expires after 5 minutes, or
-   * when it is withdrawn; this client waits that long for it. At most 4 app
+   * answered when they answer, when the review expires
+   * (`x-mcpAppTiming.reviewMs`), or when it is withdrawn; this client waits
+   * for it (`mcpAppDeadlines.callToolMs`). At most 4 app
    * calls run at once per socket; past that they are refused
    * `temporarily_unavailable`.
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
@@ -111,7 +122,8 @@ export type McpAppsApi = {
   /**
    * Read a resource of the app's own server: once, held by the gateway as
    * exactly those bytes, and described with a ticket to fetch them. The server
-   * has 10 s to answer the read; this client waits that and its allowance
+   * has its budget to answer the read (`x-mcpAppTiming.readMs`); this client
+   * waits that and its allowance
    * (`mcpAppDeadlines.readResourceMs`).
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
    * @param app - The app asking: its tool call and this mount of it.
@@ -121,7 +133,7 @@ export type McpAppsApi = {
    * @returns What the bytes are — always an MCP App's HTML, at most 4 MiB —
    * with the CSP and permissions the app asked for, and a `ticket` for
    * `fetchResource`: secret, single use, and redeemable for `expiresInMs`
-   * (60 s). Never log it or put it in a URL.
+   * Never log it or put it in a URL.
    * @throws TypeError for arguments outside the schema's bounds, before
    * anything is sent; otherwise {@link NessaMcpAppError}, with `uncertain`
    * false for a refusal made before anything reached the server, such as
@@ -148,7 +160,8 @@ export type McpAppsApi = {
    * request; otherwise {@link NessaMcpResourceError}: `not_found` (the route's
    * one refusal: unknown, used, expired or released), `unavailable` (the
    * redemption could not be audited), `integrity` (bytes that are not the
-   * ones described), `aborted`, `timeout` (no answer within 60 s),
+   * ones described), `aborted`, `timeout` (no answer within
+   * `mcpAppDeadlines.fetchResourceMs`),
    * `unreachable`, or `unexpected_response`.
    */
   fetchResource: (

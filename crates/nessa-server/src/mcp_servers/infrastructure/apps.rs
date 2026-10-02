@@ -73,3 +73,7 @@ pub(crate) fn failure(error: McpError) -> McpAppFailure {
         | McpError::InvalidConfiguration => McpAppFailure::SessionEnded,
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "../../../tests/mcp_servers/session_apps.rs"]
+mod tests;

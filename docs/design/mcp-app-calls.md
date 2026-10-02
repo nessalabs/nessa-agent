@@ -55,7 +55,7 @@ a stand-in presents is never taken as naming a conversation.
 | — | admitted, destructive, the conversation already ended | — | `Withdrawn(ConversationEnded)`; `mcp_cancelled` |
 | Waiting | the person allows | Sending | `Approved`, by that person and their request |
 | Waiting | the person denies, or cancels the review | — | `Denied`, by that person; `mcp_approval_denied` |
-| Waiting | 5 minutes with no answer | — | `Expired`, by the system; `mcp_approval_expired` |
+| Waiting | `x-mcpAppTiming.reviewMs` with no answer | — | `Expired`, by the system; `mcp_approval_expired` |
 | Waiting | the caller goes (its socket closes) | — | `Withdrawn(RequestCancelled)`, by the app; `mcp_cancelled` |
 | Waiting | `mcp.releaseApp` for its mount | — | `Withdrawn(AppTornDown)`, by the app; `mcp_cancelled` |
 | Waiting | the conversation closes, is deleted or stopped | — | `Withdrawn(ConversationEnded)`, by the system; `mcp_cancelled` |
@@ -64,7 +64,7 @@ a stand-in presents is never taken as naming a conversation.
 | Sending | past 56 KiB | — | `Completed(Failed(mcp_result_too_large))` |
 | Sending | a JSON-RPC error | — | `Completed(Failed(mcp_remote_error))`; its code and message as details |
 | Sending | an answer that is no MCP answer | — | `Completed(Failed(mcp_remote_error))`, no details |
-| Sending | no answer in 60 s | — | `Completed(Failed(mcp_timed_out))` |
+| Sending | no answer within `x-mcpAppTiming.callMs` | — | `Completed(Failed(mcp_timed_out))` |
 | Sending | the session ends | — | `Completed(Failed(mcp_session_unavailable))` |
 | Sending | the caller goes | Sending | the call finishes on its own task and is recorded; the answer goes nowhere |
 | any | a record cannot be written | — | `audit_unavailable`; the step it would have recorded is not taken |
@@ -84,7 +84,7 @@ none is taken for an agent's.
 | refused as a tool call is (app, server, session) | the same codes |
 | a URI that is no `ui://` resource | `Refused(invalid_request)` |
 | read, and not an app's HTML | `Completed(Failed(mcp_app_unknown))` |
-| no answer in 10 s (`x-mcpAppTiming.readMs`) | `Completed(Failed(mcp_timed_out))` |
+| no answer within `x-mcpAppTiming.readMs` | `Completed(Failed(mcp_timed_out))` |
 | read | `Completed(Answered)`, then `TicketIssued{digest, size, sha256}`; the ticket answered |
 | no room to hold it: 16 MiB or 64 tickets per conversation | `Completed(Failed(temporarily_unavailable))` |
 | the issue cannot be recorded | the ticket is discarded, unreported; `audit_unavailable` |
@@ -93,10 +93,10 @@ none is taken for an agent's.
 
 | Event | Effect, and what is recorded |
 | --- | --- |
-| `GET /mcp-resources` with it, within 60 s | `TicketRedeemed`, by the app, recorded before the bytes are served |
+| `GET /mcp-resources` with it, within its lifetime (`expiresInMs`) | `TicketRedeemed`, by the app, recorded before the bytes are served |
 | redeemed, and that cannot be recorded | `503`, nothing served, the ticket spent |
 | redeemed again, expired, released, never issued | the same empty `404` |
-| 60 s pass | `TicketExpired`, by the system |
+| its lifetime passes | `TicketExpired`, by the system |
 | its mount released, or its conversation ended | `TicketExpired`, by the system |
 
 ## Lanes

@@ -3,13 +3,9 @@ import { expect, it, vi } from "vitest"
 
 import { NessaConversationControlError } from "../application/conversation-mutation-error.js"
 import type { RequestTimer } from "../application/gateway-http.js"
-import {
-  MCP_APP_CALL_DEADLINE_MS,
-  NessaMcpAppError,
-} from "../application/mcp-app-call.js"
+import { NessaMcpAppError } from "../application/mcp-app-call.js"
 import {
   NessaMcpResourceError,
-  RESOURCE_DEADLINE_MS,
   type McpResourceReply,
   type McpResourceTransport,
 } from "../application/mcp-resource-fetch.js"
@@ -95,11 +91,11 @@ it("calls the app's tool with exactly its arguments, and waits as long as a revi
       tool: "delete_rows",
       argumentsJson: '{"rows":[1]}',
     },
-    { atLeastMs: MCP_APP_CALL_DEADLINE_MS },
+    { atLeastMs: mcpAppDeadlines.callToolMs },
   )
   // The review, the call, and the client's allowance, as the protocol
   // publishes them.
-  expect(MCP_APP_CALL_DEADLINE_MS).toBe(
+  expect(mcpAppDeadlines.callToolMs).toBe(
     mcpAppTiming.reviewMs + mcpAppTiming.callMs + mcpAppTiming.clientAllowanceMs,
   )
 })
@@ -590,7 +586,9 @@ it("fetches the described bytes by ticket and hands them back once they match", 
     signal: expect.any(AbortSignal),
   })
   // An answered fetch leaves no deadline running behind it.
-  expect(clock.pending).toMatchObject([{ ms: RESOURCE_DEADLINE_MS, cancelled: true }])
+  expect(clock.pending).toMatchObject([
+    { ms: mcpAppDeadlines.fetchResourceMs, cancelled: true },
+  ])
   // An empty resource is still a resource.
   const empty = createHash("sha256").update(new Uint8Array()).digest("hex")
   expect(
@@ -673,7 +671,9 @@ it("gives up on a fetch that never answers when its deadline elapses, and aborts
   const pending = failure(
     fetches(get, clock).fetchResource(ticket, { size: html.byteLength, sha256 }),
   )
-  expect(clock.pending).toMatchObject([{ ms: RESOURCE_DEADLINE_MS, cancelled: false }])
+  expect(clock.pending).toMatchObject([
+    { ms: mcpAppDeadlines.fetchResourceMs, cancelled: false },
+  ])
   clock.pending[0]!.elapsed()
   expect(await pending).toMatchObject({ code: "timeout", status: undefined })
   expect(requestSignal?.aborted).toBe(true)

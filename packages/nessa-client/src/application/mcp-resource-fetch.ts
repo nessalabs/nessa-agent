@@ -1,5 +1,4 @@
 import { gatewayHttpOrigin } from "./gateway-http.js"
-import { bounds } from "../generated/product.js"
 
 /** One redemption, as the route needs it. The ticket is a secret: never log it. */
 export type McpResourceRequest = {
@@ -28,14 +27,6 @@ export interface McpResourceTransport {
 }
 
 /**
- * How long one redemption may go unanswered before this client gives up on it:
- * the ticket's own lifetime, as the protocol publishes it. A resource is at
- * most 4 MiB from the gateway this session already talks to, so this is for
- * the request that never answers.
- */
-export const RESOURCE_DEADLINE_MS = bounds.mcpResourceTicketMs
-
-/**
  * Why a resource's bytes were not handed back.
  *
  * - `not_found`: the route's one refusal (404) — the ticket is unknown, used,
@@ -45,7 +36,8 @@ export const RESOURCE_DEADLINE_MS = bounds.mcpResourceTicketMs
  * - `integrity`: an answer whose bytes are not the ones described — their
  *   size or SHA-256 differs. Nothing is rendered from them.
  * - `aborted`: the caller's signal.
- * - `timeout`: no answer within this client's own 60 s deadline.
+ * - `timeout`: no answer within the ticket's lifetime
+ *   (`mcpAppDeadlines.fetchResourceMs`).
  * - `unreachable`: the request failed without an answer.
  * - `unexpected_response`: any other status.
  *

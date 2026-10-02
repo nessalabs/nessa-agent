@@ -4,6 +4,7 @@
 //! conversation service's.
 use super::ConversationFuture;
 use crate::conversation::domain::ConversationId;
+use crate::product_contract::generated::MCP_RESOURCE_TICKET_MS;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::mcp_apps::{ListedTool, UiResource, UiResourceUri};
@@ -232,8 +233,7 @@ pub trait ResourceTickets: Send + Sync {
 
 /// How long a resource ticket can be redeemed: the protocol's
 /// `McpReadResourceResult.expiresInMs`, its one statement.
-pub const RESOURCE_TICKET_LIFETIME_MS: u64 =
-    crate::product_contract::generated::MCP_RESOURCE_TICKET_MS;
+pub const RESOURCE_TICKET_LIFETIME_MS: u64 = MCP_RESOURCE_TICKET_MS;
 /// The most a conversation may hold behind tickets at once.
 pub const MAX_HELD_RESOURCE_BYTES: usize = 16 * 1024 * 1024;
 /// The most tickets a conversation may hold at once, whatever their size.

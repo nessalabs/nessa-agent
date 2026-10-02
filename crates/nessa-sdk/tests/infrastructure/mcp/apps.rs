@@ -10,9 +10,10 @@ use serde_json::json;
 use std::time::Duration;
 
 /// The budgets these tests give a call and a read (the gateway gives the
-/// protocol's).
+/// protocol's). Neither is the SDK's own `REQUEST_TIMEOUT`, so a wait on that
+/// instead of the caller's budget is told apart.
 const CALL: Duration = Duration::from_secs(60);
-const READ: Duration = Duration::from_secs(10);
+const READ: Duration = Duration::from_secs(7);
 
 fn conversation(name: &str) -> SessionId {
     SessionId::new(name).unwrap()
@@ -137,6 +138,28 @@ async fn a_calls_failures_are_the_servers_error_or_its_silence() {
         .server(0)
         .arrived("notifications/cancelled", 1)
         .await;
+}
+
+#[tokio::test]
+async fn a_read_unanswered_within_the_callers_budget_times_out() {
+    let mut behaviour = Behaviour::default();
+    behaviour.silent.insert("resources/read");
+    let (servers, _, clock) = servers(behaviour);
+    let session = servers
+        .open("fixture", McpOwner::new(conversation("a")))
+        .await
+        .unwrap();
+    session.list_tools().await.unwrap();
+    let a = conversation("a");
+    let uri = UiResourceUri::new(CHART).unwrap();
+    let read = servers.read_app_resource(&a, "fixture", &uri, READ);
+    // Only a wait of the caller's budget is let pass; a read waiting on any
+    // other never ends, which the guard reports.
+    let timed_out = clock.passing(|wait| wait.limit() == READ, read);
+    let ended = tokio::time::timeout(Duration::from_secs(5), timed_out)
+        .await
+        .expect("the read waits the caller's budget");
+    assert_eq!(ended.map(|_| ()), Err(McpError::Timeout));
 }
 
 #[tokio::test]

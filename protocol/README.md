@@ -81,13 +81,14 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   approval mode. It is answered with `conversation.answer` or
   `conversation.cancel`.
 - **A waiting call stays pending** until the person answers, or the review
-  expires after 5 minutes (`mcp_approval_expired`), or it is withdrawn
+  expires (`reviewMs`, below; `mcp_approval_expired`), or it is withdrawn
   (`mcp_cancelled`). It is withdrawn when the request is cancelled, the app is
   torn down, or the conversation ends.
 - **The timing is published once**, in the schema's `x-mcpAppTiming`:
-  `reviewMs` (how long a review waits, 5 minutes), `callMs` (how long the
-  server has to answer a call, 60 s), `readMs` (how long it has to answer a
-  resource read, 10 s) and `clientAllowanceMs`. A client waits
+  `reviewMs` (how long a review waits), `callMs` (how long the server has to
+  answer a call), `readMs` (how long it has to answer a resource read) and
+  `clientAllowanceMs`. The schema holds their values; nothing here repeats
+  them. A client waits
   `reviewMs + callMs + clientAllowanceMs` for `mcp.callTool` and
   `readMs + clientAllowanceMs` for `mcp.readResource`. The gateway, the SDK's
   caller and the client read the generated values (`MCP_APP_REVIEW_MS`,

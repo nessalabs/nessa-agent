@@ -408,9 +408,11 @@ impl McpServers {
     }
 
     /// Call the tool `name` with `arguments` over `session`'s own newest open
-    /// session of `server`, within `timeout` (the caller's policy: the
-    /// gateway's is the protocol's `x-mcpAppTiming.callMs`): an MCP App's call,
-    /// on the connection its agent's calls use. The answer is the server's
+    /// session of `server`, within `timeout`: an MCP App's call, on the
+    /// connection its agent's calls use. `timeout` is the caller's policy,
+    /// measured on the clock these servers were made with from this call, and
+    /// covers sending the request as well as its answer; one not answered by
+    /// then — a zero `timeout` included — is cancelled upstream. The answer is the server's
     /// `CallToolResult` as it gave it (`isError` included); which tools an
     /// app may call is the caller's to decide.
     ///
@@ -446,9 +448,8 @@ impl McpServers {
     }
 
     /// Read the MCP App resource `uri` over `session`'s own newest open
-    /// session of `server`, as [`McpSession::read_ui_resource`] does, waiting
-    /// at most `timeout` for its answer: the caller's own budget, as for
-    /// [`Self::call_tool`].
+    /// session of `server`, as [`McpSession::read_ui_resource`] does, within
+    /// `timeout`: the caller's policy, measured as for [`Self::call_tool`].
     ///
     /// # Errors
     ///
