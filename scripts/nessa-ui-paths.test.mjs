@@ -21,7 +21,6 @@ import {
   tsconfigTextViolations,
   withTsconfigPaths,
   writeTsconfigPaths,
-  replaceWhole,
   viteAliases,
 } from "./nessa-ui-paths.mjs"
 
@@ -365,7 +364,7 @@ test("writeTsconfigPaths writes a drifted file once, and a current one not at al
   assert.deepEqual(same.writes, [])
 })
 
-test("writeTsconfigPaths refuses, naming the file and writing nothing, whatever stops it", () => {
+test("writeTsconfigPaths refuses in one line naming the file, whatever stops it", () => {
   for (const [why, file, pattern] of [
     [
       "missing",
@@ -395,46 +394,13 @@ test("writeTsconfigPaths refuses, naming the file and writing nothing, whatever 
     [
       "unwritable",
       memoryFile(utf8("{}"), { writeError: fsError("EACCES") }),
-      /^t\.json cannot be written \(EACCES\)$/,
+      /^t\.json cannot be written \(EACCES\); if it was left partly written, restore it with `git checkout -- t\.json` and run `pnpm ui:paths` again$/,
     ],
   ]) {
     const result = writeTsconfigPaths("t.json", file.io)
     assert.ok("refused" in result, why)
     assert.match(result.refused, pattern, why)
     assert.deepEqual(file.writes, [], why)
-  }
-})
-
-/** A filesystem of named texts for `replaceWhole`, failing where told to. */
-function memoryDisk(files, { failWrite, failRename } = {}) {
-  return {
-    files,
-    writeFileSync: (path, text) => {
-      // A write that fails partway leaves what it got through.
-      if (failWrite) {
-        files.set(path, text.slice(0, 3))
-        throw Object.assign(new Error("EFBIG: too big"), { code: "EFBIG" })
-      }
-      files.set(path, text)
-    },
-    renameSync: (from, to) => {
-      if (failRename) throw Object.assign(new Error("EXDEV"), { code: "EXDEV" })
-      files.set(to, files.get(from))
-      files.delete(from)
-    },
-    rmSync: (path) => void files.delete(path),
-  }
-}
-
-test("replaceWhole replaces the file in one step, or leaves it whole when writing fails partway", () => {
-  const done = memoryDisk(new Map([["t.json", "old"]]))
-  replaceWhole("t.json", "new text", done)
-  assert.deepEqual([...done.files], [["t.json", "new text"]])
-
-  for (const failure of [{ failWrite: true }, { failRename: true }]) {
-    const disk = memoryDisk(new Map([["t.json", "old"]]), failure)
-    assert.throws(() => replaceWhole("t.json", "new text", disk), /EFBIG|EXDEV/)
-    assert.deepEqual([...disk.files], [["t.json", "old"]], JSON.stringify(failure))
   }
 })
 
@@ -457,5 +423,20 @@ test("a refusal is one line, even when the parser quotes the source", () => {
       write: () => {},
     })
     assert.match(result.refused, /^t\.json cannot be read \(\S+\)$/, String(thrown))
+  }
+})
+
+test("what stopped a read is one phrase, whatever was thrown", () => {
+  for (const [thrown, phrase] of [
+    [Object.assign(new Error("x"), { code: "E\nSPLIT  CODE" }), "E SPLIT CODE"],
+    [Object.create(null), "an error with no description"],
+  ]) {
+    const { refused } = writeTsconfigPaths("t.json", {
+      read: () => {
+        throw thrown
+      },
+      write: () => {},
+    })
+    assert.equal(refused, `t.json cannot be read (${phrase})`)
   }
 })

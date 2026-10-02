@@ -244,38 +244,26 @@ export function withTsconfigPaths(text, paths = nessaUiPaths) {
 }
 
 /** What stopped a read or write, as one short phrase, whatever was thrown. */
-const failure = (error) =>
-  String(error?.code ?? error?.message ?? error).replace(/\s+/g, " ")
-
-/**
- * Replaces `file` with `text` whole or not at all: the text goes to a sibling
- * temporary file, which is then renamed over `file` (a rename within one
- * directory replaces it in one step). If writing fails partway, `file` is
- * untouched and the temporary file is removed. The filesystem calls are
- * passed in, so the failure is tested without one.
- *
- * @param {string} file
- * @param {string} text
- * @param {{ writeFileSync: (path: string, text: string) => void, renameSync: (from: string, to: string) => void, rmSync: (path: string, options: { force: true }) => void }} fs
- * @param {string} [temporary]
- */
-export function replaceWhole(file, text, fs, temporary = `${file}.ui-paths.tmp`) {
+function failure(error) {
+  let phrase
   try {
-    fs.writeFileSync(temporary, text)
-    fs.renameSync(temporary, file)
-  } catch (error) {
-    fs.rmSync(temporary, { force: true })
-    throw error
+    phrase = String(error?.code ?? error?.message ?? error)
+  } catch {
+    phrase = "an error with no description"
   }
+  return phrase.replace(/\s+/g, " ")
 }
 
 /**
  * What `pnpm ui:paths` does to `file`, given how to read and write it, so
  * every way it can go is decided here and tested without a filesystem: the
  * bytes must be UTF-8 and a plain JSON object; the file is written only when
- * that changes it. Each refusal is one line naming the file, and the file is
- * left as it was — `write` must replace it whole or not at all
- * (`replaceWhole`), so a write that fails partway leaves it intact.
+ * that changes it. Each refusal is one line naming the file. A refusal before
+ * the write leaves the file as it was. The write itself is in place: one that
+ * fails partway (a full disk) can leave the file partly written, and its
+ * refusal says so and how to recover — `tsconfig.json` is tracked, so git
+ * restores it. Writing in place keeps the file what it is (its mode, a symlink
+ * to it, its links), which a temporary file renamed over it would not.
  *
  * @param {string} file
  * @param {{ read: (file: string) => Uint8Array, write: (file: string, text: string) => void }} io
@@ -306,7 +294,9 @@ export function writeTsconfigPaths(file, { read, write }, paths = nessaUiPaths) 
   try {
     write(file, after)
   } catch (error) {
-    return { refused: `${file} cannot be written (${failure(error)})` }
+    return {
+      refused: `${file} cannot be written (${failure(error)}); if it was left partly written, restore it with \`git checkout -- ${file}\` and run \`pnpm ui:paths\` again`,
+    }
   }
   return { written: true }
 }
