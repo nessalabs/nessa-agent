@@ -297,7 +297,10 @@ not reading the session, which stays unread.
   Try Again rather than being retried on every update, and is forgotten once
   nothing shows the session, and a read of the index again reads every
   conversation on screen again, setting aside a read asked before it; `hooks.ts`,
-  the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/in-memory/` is the
+  the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/gateway/` is the
+  port over the gateway's conversations: a serial poller of `conversation.list`
+  and `conversation.read`, with revisions it mints and the views read into the
+  workspace's types (`gateway-views.ts`). `adapters/in-memory/` is the
   only home of the sample index and the scripted, streamed replies,
   on timers it owns and cancels. `adapters/store/split-panes-source.ts` is
   the workspace as the split panes' source (below). `adapters/dom/` holds what
@@ -404,8 +407,9 @@ entries, and `pnpm app` runs both windows.
 Browser-only preview: `pnpm desktop:dev`, then open
 `http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
 it never terminates another worktree's server. `pnpm app:build` packages the
-window with the panel. The native minimum width is 800px. The workspace's content is sample data until the gateway implements its port, and no layout
-persistence are implemented. Restart `pnpm app` after changing the Tauri
+window with the panel. The native minimum width is 800px. The workspace's content is the sample
+unless the page is opened with `?gateway` (above), and layout persistence is not
+implemented. Restart `pnpm app` after changing the Tauri
 overlay configuration: the CLI watcher can retain the previous merged config.
 
 This follows Tauri's [window customization guide](https://v2.tauri.app/learn/window-customization/)

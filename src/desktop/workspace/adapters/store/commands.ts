@@ -517,8 +517,10 @@ export type AnswerOutcome = "sent" | "refused" | "unknown" | "answering" | "not-
 
 /**
  * A call that failed, as its caller hears it: `refused` when the source said
- * no, `unknown` when no answer came — `unavailable` — and it may have been done
- * all the same; the source's updates will say.
+ * no for good, `unknown` when it is not done now or not known to be —
+ * `unavailable`: no answer came, and it may have been done all the same, or
+ * the source said "not now"; trying again is right, and the source's updates
+ * will say.
  */
 function outcomeOf(reason: WorkspaceFailureReason): "refused" | "unknown" {
   return reason === "unavailable" ? "unknown" : "refused"

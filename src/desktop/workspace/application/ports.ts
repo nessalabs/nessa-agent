@@ -119,8 +119,9 @@ export interface WorkspaceSource {
    * archiving, a consequential call: the source records it — what was asked,
    * who asked it, where it can tell (the gateway's source records its own
    * authenticated caller, not person or agent) — before it carries it out,
-   * and then what became of it, so a refused or failed one is on record too. Resolves once the source has
-   * taken the answer; the conversation that no longer asks reaches
+   * and then what became of it, so a refused or failed one is on record too.
+   * Resolves once the source has taken the answer; the conversation that no
+   * longer asks reaches
    * subscribers as an update — before the call resolves where the source can
    * say it by then (the in-memory source always can), after it otherwise.
    * The window holds the answer as given until that conversation arrives

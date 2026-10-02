@@ -17,7 +17,11 @@
  *   one conversation: an answer applies in the order it was asked, and one
  *   that came after its call timed out is let go.
  * - **Every call settles on its own timer** (`timing.callMs`, from `clock`),
- *   connection included, rejecting `unavailable` when it runs out.
+ *   connection included, rejecting `unavailable` when it runs out; and a
+ *   call that has settled sends nothing consequential afterwards (`dispatch`).
+ * - **A read is only a read.** Only a session's first message opens its
+ *   conversation (`create`); the gateway resolves a conversation for each
+ *   read and message itself.
  * - **Refusals are typed.** The gateway's codes become `WorkspaceSourceError`
  *   reasons (`refusalOf`); a fault that is no answer at all is passed on as
  *   it is, for `failureReason` to log.
@@ -67,7 +71,6 @@ import { agentForProvider } from "../../../model/composer-options"
 import {
   WorkspaceSourceError,
   type ApprovalScope,
-  type OutgoingMessage,
   type WorkspaceSource,
   type WorkspaceUpdate,
 } from "../../application/ports"
@@ -157,10 +160,9 @@ export function gatewaySource(options: {
   const firstSeen = new Map<string, Map<string, number>>()
   // How often each session was taken out: a read asked before its latest removal is let go (S3c).
   const removals = new Map<string, number>()
-  // Conversations the window has read, and so wants kept current.
+  // Conversations the window has read, and so wants kept current. Watching
+  // ends in two places only: `remove`, and the gateway saying it has none (S8).
   const watched = new Set<string>()
-  // Conversations opened on the current connection (`create`), shared by callers.
-  const opened = new Map<string, Promise<void>>()
 
   // Nothing is said after `dispose`, which lets every listener go and admits no new one.
   const emit = (update: WorkspaceUpdate) => {
@@ -178,26 +180,35 @@ export function gatewaySource(options: {
   let gap = false
   const resync = () => {
     gap = false
-    opened.clear()
     emit({ kind: "resync" })
   }
 
-  /** Settles `work` within the call budget, rejecting `unavailable` when it runs out. */
-  const within = <T>(work: () => Promise<T>): Promise<T> =>
+  /**
+   * Settles `work` within the call budget, rejecting `unavailable` when it
+   * runs out. The work may go on after its caller was answered; it is told
+   * whether its call is still open (`live`), and sends nothing consequential
+   * once it is not (`dispatch`, C6).
+   */
+  const within = <T>(work: (live: () => boolean) => Promise<T>): Promise<T> =>
     new Promise<T>((resolve, reject) => {
       if (disposed) return reject(new WorkspaceSourceError("unavailable"))
-      const cancel = clock.after(timing.callMs, () =>
-        reject(new WorkspaceSourceError("unavailable")),
-      )
+      let settled = false
+      const cancel = clock.after(timing.callMs, () => {
+        settled = true
+        reject(new WorkspaceSourceError("unavailable"))
+      })
+      const live = () => !settled && !disposed
       Promise.resolve()
-        .then(work)
+        .then(() => work(live))
         .then(
           (value) => {
+            settled = true
             cancel()
             if (disposed) reject(new WorkspaceSourceError("unavailable"))
             else resolve(value)
           },
           (error: unknown) => {
+            settled = true
             cancel()
             reject(refusalOf(error))
           },
@@ -214,10 +225,9 @@ export function gatewaySource(options: {
       if (current?.client !== connected) return
       if (state.status === "connected") resync()
       else if (state.status === "closed") {
-        // Gone for good: the next call connects again, and opens again on it (C3b).
+        // Gone for good: the next call connects again.
         current.off()
         current = undefined
-        opened.clear()
         gap = true
       }
     })
@@ -269,6 +279,22 @@ export function gatewaySource(options: {
     }
     attempt.then(done, done)
     return attempt
+  }
+
+  /**
+   * Sends one consequential request — an answer, an archive, a create, a
+   * message — on the current client, only while the call that asked for it
+   * is still open: one whose caller was told `unavailable` sends nothing
+   * afterwards (C6). What guards the request runs in `request`, right
+   * before it, never earlier.
+   */
+  const dispatch = async <T>(
+    live: () => boolean,
+    request: (connected: GatewayClient) => Promise<T>,
+  ): Promise<T> => {
+    const connected = await client()
+    if (!live()) throw new WorkspaceSourceError("unavailable")
+    return request(connected)
   }
 
   // Lists run one at a time, and so do reads of one conversation.
@@ -382,45 +408,32 @@ export function gatewaySource(options: {
     return transcript
   }
 
-  /** Reads one conversation in its turn; an answer after its call timed out is let go. */
+  /**
+   * Reads one conversation in its turn; an answer after its call timed out
+   * is let go. One that crossed a removal of its session speaks for a
+   * listing no longer held, so it is not applied: a session held again is
+   * asked again, in the same turn, and only one still taken out answers
+   * `unknown-session` (S3c, S8) — let go is not gone.
+   */
   const read = (sessionId: string): Promise<Transcript> => {
-    const { turn, settled } = inTurn(reading.get(sessionId) ?? Promise.resolve(), () => {
-      const against = rows.get(sessionId)
-      const removed = removals.get(sessionId) ?? 0
-      return within(async () => (await client()).conversation.read(sessionId)).then(
-        (view) => {
-          // Taken out while it was asked: its answer speaks for a session no longer held (S3c).
-          if ((removals.get(sessionId) ?? 0) !== removed)
+    const { turn, settled } = inTurn(
+      reading.get(sessionId) ?? Promise.resolve(),
+      async () => {
+        for (;;) {
+          const against = rows.get(sessionId)
+          const removed = removals.get(sessionId) ?? 0
+          const view = await within(async () =>
+            (await client()).conversation.read(sessionId),
+          )
+          if ((removals.get(sessionId) ?? 0) === removed)
+            return applyRead(sessionId, view, against)
+          if (summaries.get(sessionId)?.removed)
             throw new WorkspaceSourceError("unknown-session")
-          return applyRead(sessionId, view, against)
-        },
-      )
-    })
+        }
+      },
+    )
     reading.set(sessionId, settled)
     return turn
-  }
-
-  /** Opens a conversation on this connection, once; a failed open is tried again next time. */
-  const open = (sessionId: string, start?: OutgoingMessage): Promise<void> => {
-    const known = opened.get(sessionId)
-    if (known) return known
-    const model = start?.model
-    const agent = model && agentForProvider(model.provider)
-    // Its own timer, so a create that never answers does not hold the session's opening (C5).
-    const opening = within(async () => {
-      await (
-        await client()
-      ).conversation.create({
-        conversationId: sessionId,
-        ...(agent ? { agent } : {}),
-        ...(model ? { model: model.modelId } : {}),
-      })
-    })
-    opened.set(sessionId, opening)
-    opening.catch(() => {
-      if (opened.get(sessionId) === opening) opened.delete(sessionId)
-    })
-    return opening
   }
 
   /** Whether a read conversation should be read again this round. */
@@ -495,17 +508,17 @@ export function gatewaySource(options: {
 
   /** Answers a review with the option of `effect` it offers; none offered is not supported. */
   const answer = (sessionId: string, approvalId: string, effect: "allow" | "deny") =>
-    within(async () => {
+    within(async (live) => {
       const permission = await waitingReview(sessionId, approvalId)
       const option = permission.options.find((offered) => offered.effect === effect)
       if (!option) throw new WorkspaceSourceError("not-supported")
-      await (
-        await client()
-      ).conversation.answer(
-        sessionId,
-        permission.executionId,
-        permission.permissionId,
-        option.id,
+      await dispatch(live, (connected) =>
+        connected.conversation.answer(
+          sessionId,
+          permission.executionId,
+          permission.permissionId,
+          option.id,
+        ),
       )
       // Read once more, so the conversation after the answer is said where
       // the gateway has applied it already (`ports.ts`); if that read fails,
@@ -530,8 +543,8 @@ export function gatewaySource(options: {
       }),
     transcript: (sessionId) =>
       within(async () => {
-        watched.add(sessionId)
-        await open(sessionId)
+        // A read is only a read: it opens nothing. One taken out is read, not watched (S8).
+        if (!summaries.get(sessionId)?.removed) watched.add(sessionId)
         return read(sessionId)
       }),
     subscribe(listener) {
@@ -544,34 +557,45 @@ export function gatewaySource(options: {
       }
     },
     send: (message) =>
-      within(async () => {
-        // The gateway keeps a conversation on the model it was created with: a
-        // message asking for another than the one it says it runs is refused
-        // rather than sent on the old one (W8). Not read yet, it cannot be told.
-        const known = knownModel(message.sessionId)
-        if (
-          known &&
-          (known.provider !== message.model.provider ||
-            known.modelId !== message.model.modelId)
-        )
-          throw new WorkspaceSourceError("not-supported")
-        await open(message.sessionId, message.start ? message : undefined)
-        const connected = await client()
-        let sending: Promise<unknown>
-        try {
-          sending = connected.conversation.send(message.sessionId, message.text, [], [], {
-            // The message's id names the same turn however often it is sent.
-            executionId: message.messageId,
-            requestId: message.messageId,
-          })
-        } catch (error) {
-          // The client refuses a message past its bounds before sending it, by
-          // throwing `TypeError` at once (`ConversationApi.send`): sent again, it
-          // is refused again (F5).
-          if (error instanceof TypeError) throw new WorkspaceSourceError("not-supported")
-          throw error
+      within(async (live) => {
+        // Only a first message opens its conversation, on the model chosen for it.
+        if (message.start) {
+          const agent = agentForProvider(message.model.provider)
+          await dispatch(live, (connected) =>
+            connected.conversation.create({
+              conversationId: message.sessionId,
+              ...(agent ? { agent } : {}),
+              model: message.model.modelId,
+            }),
+          )
         }
-        await sending
+        await dispatch(live, (connected) => {
+          // The gateway keeps a conversation on the model it was created with:
+          // a message asking for another than the one it says it runs is
+          // refused rather than sent on the old one, checked here, at the
+          // send (W8). Not read yet, it cannot be told.
+          const known = knownModel(message.sessionId)
+          if (
+            known &&
+            (known.provider !== message.model.provider ||
+              known.modelId !== message.model.modelId)
+          )
+            throw new WorkspaceSourceError("not-supported")
+          try {
+            return connected.conversation.send(message.sessionId, message.text, [], [], {
+              // The message's id names the same turn however often it is sent.
+              executionId: message.messageId,
+              requestId: message.messageId,
+            })
+          } catch (error) {
+            // The client refuses a message past its bounds before sending it,
+            // by throwing `TypeError` at once (`ConversationApi.send`): sent
+            // again, it is refused again (F5).
+            if (error instanceof TypeError)
+              throw new WorkspaceSourceError("not-supported")
+            throw error
+          }
+        })
         watched.add(message.sessionId)
         publish(message.sessionId)
       }),
@@ -586,14 +610,17 @@ export function gatewaySource(options: {
     // The gateway keeps no pin.
     setPinned: () => Promise.reject(new WorkspaceSourceError("not-supported")),
     archive: (sessionId) =>
-      within(async () => {
+      within(async (live) => {
         // In the list's turn, so no list asked before it can list the session again.
         const { turn, settled } = inTurn(listing, async () => {
           // Taken out already, by this window or a list: refused, and asked of nobody (W6b).
           if (summaries.get(sessionId)?.removed)
             throw new WorkspaceSourceError("unknown-session")
-          // Its own timer, so one that never answers does not hold the lists behind it (C5).
-          await within(async () => (await client()).conversation.archive(sessionId))
+          // Its own timer, so one that never answers does not hold the lists
+          // behind it (C5); and sent only while the archive's call is open (C6).
+          await within(() =>
+            dispatch(live, (connected) => connected.conversation.archive(sessionId)),
+          )
           remove(sessionId)
         })
         listing = settled

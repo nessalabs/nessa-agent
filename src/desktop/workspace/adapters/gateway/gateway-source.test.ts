@@ -173,15 +173,12 @@ describe("reads", () => {
     })
   })
 
-  it("R3: opens a conversation, then reads it at its first revision", async () => {
+  it("R3: a read is only a read: it opens nothing, and reads at its first revision", async () => {
     const { gateway, source } = started()
     gateway.views.set("a", view("a"))
     const transcript = await source.transcript("a")
     expect(transcript).toMatchObject({ sessionId: "a", revision: 1 })
-    expect(gateway.calls.map((call) => call.method)).toEqual(["create", "read"])
-    // Opened once per connection.
-    await source.transcript("a")
-    expect(gateway.count("create")).toBe(1)
+    expect(gateway.calls.map((call) => call.method)).toEqual(["read"])
   })
 
   it("R6: the same gateway revision is the same transcript; a new one is the next", async () => {
@@ -522,6 +519,8 @@ describe("writes", () => {
     gateway.once("send", () => Promise.reject(new NessaConnectionClosedError(1006, "")))
     await expect(source.send(message)).rejects.toMatchObject({ reason: "unavailable" })
     await source.send(message)
+    // A later message opens nothing: the gateway resolves the conversation itself.
+    expect(gateway.count("create")).toBe(0)
     const sends = gateway.calls.filter((call) => call.method === "send")
     expect(sends.map((call) => call.args[4])).toEqual([
       { executionId: "m", requestId: "m" },
@@ -672,7 +671,9 @@ describe("refusals are typed (F)", () => {
     ).toMatchObject({ reason: "not-waiting" })
   })
 
-  it("F3: a refusal asking again cannot change is not supported, never 'no answer'", () => {
+  // A bare NessaRpcError comes only from a list or a read, which the client
+  // wraps in nothing: certain, since a read takes no effect.
+  it("F3: a read refused for good is not supported", () => {
     for (const code of [
       "agent_not_configured",
       "agent_unsupported",
@@ -764,17 +765,6 @@ describe("round 1's rows", () => {
     expect(gateway.count("list")).toBe(lists + 1)
   })
 
-  it("C5: an open that never answers settles, and the next read of the session opens again", async () => {
-    const { gateway, source, advance } = started()
-    gateway.views.set("a", view("a"))
-    gateway.once("create", () => new Promise(() => {}))
-    const first = source.transcript("a").catch((error: unknown) => error)
-    await advance(timing.callMs)
-    expect(await first).toMatchObject({ reason: "unavailable" })
-    await expect(source.transcript("a")).resolves.toMatchObject({ revision: 1 })
-    expect(gateway.count("create")).toBe(2)
-  })
-
   it("W6b: a second archive of a session is refused as unknown, asks nobody, and says no second removal", async () => {
     const { gateway, source, updates, follow } = started()
     gateway.rows.set("a", row("a"))
@@ -847,7 +837,8 @@ describe("round 1's rows", () => {
       initiator: "person",
       start,
     })
-    expect(gateway.count("create")).toBe(1)
+    // Each first message opens (`create` reopens, keeping the model it was created with).
+    expect(gateway.count("create")).toBe(2)
     expect(gateway.count("send")).toBe(2)
   })
 
@@ -994,21 +985,6 @@ describe("round 2's rows", () => {
     )
   })
 
-  it("C3b: after a client closes for good, the next connection opens a conversation again before reading it", async () => {
-    const first = fakeGateway()
-    const second = fakeGateway()
-    let attempts = 0
-    const { source } = started(first, () =>
-      Promise.resolve(++attempts === 1 ? first.client : second.client),
-    )
-    first.views.set("a", view("a"))
-    second.views.set("a", view("a"))
-    await source.transcript("a")
-    first.setState({ status: "closed", error: new Error("gone") })
-    await source.transcript("a")
-    expect(second.calls.map((call) => call.method)).toEqual(["create", "read"])
-  })
-
   it("F4: a refusal for good the client cannot say was refused before it ran may have been done", () => {
     const rpc = (code: string) => new NessaRpcError(code, "message text nobody parses")
     // submission_conflict is not certain before dispatch, by the client's own table.
@@ -1041,6 +1017,154 @@ describe("round 2's rows", () => {
         new NessaConversationControlError("c", "r", "e", rpc("stale_permission"), true),
       ),
     ).toMatchObject({ reason: "not-waiting" })
+  })
+})
+
+describe("the structural change after round 3", () => {
+  it("C6: an approval whose call settled unavailable is never sent, so the person's later answer is the one taken", async () => {
+    const { gateway, source, advance } = started()
+    const asked = permission()
+    const asking = view("a", {
+      revision: "1",
+      messages: [running()],
+      permissions: [asked],
+    })
+    gateway.views.set("a", asking)
+    await source.transcript("a")
+    // A read ahead of the approval's never answers; the approval's own read
+    // starts only when that one times out, and answers after the approval's
+    // call has settled.
+    gateway.once("read", () => new Promise(() => {}))
+    const ownRead = deferred<unknown>()
+    gateway.once("read", () => ownRead.promise)
+    void source.transcript("a").catch(() => undefined)
+    await advance(1_000)
+    const approving = source
+      .approve("a", approvalId(asked), "once", "person")
+      .catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await approving).toMatchObject({ reason: "unavailable" })
+    ownRead.resolve(asking)
+    await flush()
+    expect(gateway.count("answer")).toBe(0)
+    // The person answers again, and that is the answer taken.
+    await source.deny("a", approvalId(asked), "person")
+    expect(
+      gateway.calls
+        .filter((call) => call.method === "answer")
+        .map((call) => call.args[3]),
+    ).toEqual(["opt-b"])
+  })
+
+  it("C6: an archive whose call settled unavailable is never sent", async () => {
+    const { gateway, source, advance } = started()
+    gateway.rows.set("a", row("a"))
+    await source.index()
+    // Two lists ahead of the archive: the second starts when the first times
+    // out, and ends after the archive's call has settled.
+    gateway.once("list", () => new Promise(() => {}))
+    const second = deferred<unknown>()
+    gateway.once("list", () => second.promise)
+    void source.index().catch(() => undefined)
+    void source.index().catch(() => undefined)
+    await advance(1_000)
+    const archiving = source.archive("a", "person").catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await archiving).toMatchObject({ reason: "unavailable" })
+    second.resolve({ conversations: [row("a")], complete: true })
+    await flush()
+    expect(gateway.count("archive")).toBe(0)
+  })
+
+  it("W8: the model is checked at the send, after anything the call waited on", async () => {
+    const { gateway, source } = started()
+    const runs = composerModels[composerModels.length - 1]
+    const other = composerModels.find(
+      (each) => each.modelId !== runs.modelId || each.provider !== runs.provider,
+    )!
+    gateway.views.set("s", view("s", { runtime: runtime(runs.modelId) }))
+    // While the first message's create is on its way, a read says what the conversation runs.
+    gateway.once("create", async (normal) => {
+      await source.transcript("s")
+      return normal()
+    })
+    await expect(
+      source.send({
+        sessionId: "s",
+        messageId: "m",
+        text: "Hi",
+        model: { provider: other.provider, modelId: other.modelId },
+        initiator: "person",
+        start: { channelId: "gateway-conversations", title: "Hi" },
+      }),
+    ).rejects.toMatchObject({ reason: "not-supported" })
+    expect(gateway.count("send")).toBe(0)
+  })
+
+  it("S8: a read let go across a removal is asked again when the session is held again, and the poller keeps following it", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set("a", view("a", { revision: "1", messages: [running()] }))
+    await source.index()
+    await source.transcript("a")
+    follow()
+    const held = deferred<unknown>()
+    gateway.once("read", () => held.promise)
+    await advance(timing.pollMs)
+    gateway.rows.delete("a")
+    await source.index()
+    gateway.rows.set("a", row("a", { running: true }))
+    await source.index()
+    // The window shows it again; then the stale read answers.
+    const shown = source.transcript("a")
+    gateway.views.set("a", view("a", { revision: "2", messages: [running()] }))
+    held.resolve(view("a", { revision: "old", messages: [running()] }))
+    await expect(shown).resolves.toMatchObject({ revision: 2 })
+    gateway.views.set("a", view("a", { revision: "3", messages: [running()] }))
+    await advance(timing.pollMs * 2)
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({ sessionId: "a", revision: 3 }),
+    })
+  })
+
+  it("S8: an approval asked while its session is taken out and listed again is still answered", async () => {
+    const { gateway, source, advance } = started()
+    const asked = permission()
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set(
+      "a",
+      view("a", { revision: "1", messages: [running()], permissions: [asked] }),
+    )
+    await source.index()
+    await source.transcript("a")
+    const held = deferred<unknown>()
+    gateway.once("read", () => held.promise)
+    const approving = source.approve("a", approvalId(asked), "once", "person")
+    await flush()
+    gateway.rows.delete("a")
+    await source.index()
+    gateway.rows.set("a", row("a", { running: true }))
+    await source.index()
+    held.resolve(
+      view("a", { revision: "1", messages: [running()], permissions: [asked] }),
+    )
+    await advance(1)
+    await expect(approving).resolves.toBeUndefined()
+    expect(gateway.count("answer")).toBe(1)
+  })
+
+  it("S8: reading a session taken out does not watch it", async () => {
+    const { gateway, source, follow, advance } = started()
+    gateway.rows.set("a", row("a"))
+    gateway.views.set("a", view("a", { messages: [running()] }))
+    await source.index()
+    gateway.rows.delete("a")
+    await source.index()
+    await source.transcript("a")
+    follow()
+    await advance(timing.pollMs * 3)
+    expect(gateway.count("read")).toBe(1)
   })
 })
 

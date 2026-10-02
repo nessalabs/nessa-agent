@@ -12,10 +12,10 @@ import {
   signOutBrowserSession,
 } from "../session"
 import {
-  createBrowserAuth,
   browserSessionUrl,
+  connectBrowserSession,
+  createBrowserAuth,
 } from "../session/adapters/client/browser-auth"
-import { connectBrowserSession } from "../session/adapters/client/browser-auth"
 import { makeStore } from "../store"
 import type { Environment } from "../env/environment"
 import { maintainBrowserSession } from "../session/adapters/lifecycle/browser-renewal"
