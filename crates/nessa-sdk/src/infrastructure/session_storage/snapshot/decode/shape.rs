@@ -15,6 +15,9 @@ use crate::domain::agent_execution::{
     },
     tools::{FileLocation, ToolContent, MAX_MCP_NAME_BYTES, MAX_STRUCTURED_RESULT_BYTES},
 };
+use crate::infrastructure::session_storage::save_group::{
+    GroupCheckpoint as CheckpointMetadata, MetadataValueKind, SaveIdentity as IdentityMetadata,
+};
 use std::mem::size_of;
 use Shape::*;
 
@@ -29,6 +32,10 @@ const MEDIA_TYPE_BYTES: usize = 16;
 #[derive(Clone, Copy)]
 pub(super) enum Shape {
     Checkpoint,
+    GroupCheckpoint,
+    SaveIdentity,
+    FixedBytes(usize),
+    Number,
     Snapshot,
     Invocations,
     Invocation,
@@ -89,17 +96,32 @@ pub(super) enum Shape {
     Text(usize),
 }
 impl Shape {
+    fn metadata_field(kind: MetadataValueKind) -> Self {
+        match kind {
+            MetadataValueKind::Identity => Self::SaveIdentity,
+            MetadataValueKind::FixedBytes(length) => Self::FixedBytes(length),
+            MetadataValueKind::Number => Self::Number,
+        }
+    }
     pub(super) fn string_limit(self) -> usize {
         match self {
             Self::Text(limit) => limit,
             Self::StorageDiagnostic => ERROR_BYTES,
             Self::Acknowledgement | Self::StorageError | Self::Error => KEY_BYTES,
+            Self::GroupCheckpoint | Self::SaveIdentity | Self::FixedBytes(_) | Self::Number => 0,
             _ => LARGE_STRING,
         }
     }
     pub(super) fn field(self, key: &str) -> Self {
         match (self, key) {
             (Checkpoint, "snapshot") => Snapshot,
+            (Checkpoint, "group") => GroupCheckpoint,
+            (GroupCheckpoint, field) => {
+                CheckpointMetadata::field_kind(field).map_or(Generic, Self::metadata_field)
+            }
+            (SaveIdentity, field) => {
+                IdentityMetadata::field_kind(field).map_or(Generic, Self::metadata_field)
+            }
             (
                 Checkpoint,
                 "receiver" | "origin" | "stream" | "incarnation" | "schema" | "access_epoch",
@@ -218,6 +240,9 @@ impl Shape {
     /// rather than after the record is built.
     pub(super) fn allows(self, key: &str) -> bool {
         match self {
+            GroupCheckpoint => CheckpointMetadata::field_kind(key).is_some(),
+            SaveIdentity => IdentityMetadata::field_kind(key).is_some(),
+            FixedBytes(_) | Number => false,
             Image => matches!(key, "digest" | "media_type" | "size"),
             FileLink => key == "path",
             McpTool => matches!(key, "server" | "tool"),
@@ -233,6 +258,7 @@ impl Shape {
     }
     pub(super) fn element(self) -> Self {
         match self {
+            Self::FixedBytes(_) => Self::Number,
             Self::Invocations => Self::Invocation,
             Self::Events => Self::Event,
             Self::Images => Self::Image,
@@ -250,6 +276,8 @@ impl Shape {
     }
     pub(super) fn array_limit(self) -> usize {
         match self {
+            Self::FixedBytes(length) => length,
+            Self::Number | Self::GroupCheckpoint | Self::SaveIdentity => 0,
             Self::Invocations => SessionSnapshot::MAX_INVOCATIONS,
             Self::Events => MAX_RETAINED_OUTPUT_EVENTS,
             Self::QueueHistory => {

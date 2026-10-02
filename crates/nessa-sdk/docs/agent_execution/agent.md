@@ -266,23 +266,37 @@ preserved when saved. Admissions and consequential lifecycle changes still save
 before successful acknowledgement. Mandatory permission audit remains separate.
 
 The record adapter saves typed SDK decisions in one SQLite stream per session.
-Each complete fact folds into the restored snapshot without invoking the provider.
-An incomplete fact retains its exact bytes for retry by the live writer. After a
-restart, a validated incomplete tail is durably aborted under the exclusive
-lease before restoration; a malformed tail is refused as corruption. A
-pre-existing per-session JSONL history is refused unchanged before a stream is
-created.
+The caller supplies immutable `SessionSaveUnit` boundaries. Before reconciling
+pending writes or appending, the adapter validates every unit's complete
+lifecycle/queue checkpoint, the final observed snapshot, and each encoded body
+bound. A save can span several bounded units; its private continuation becomes
+public only at the original save's durable completion. Unit seals and physical
+aborts do not publish a partially acknowledged save or authorize provider work.
+The adapter preflights one encoded unit at a time, then re-encodes units during
+persistence; the caller's complete typed plan and snapshot remain retained.
 
-Each lease save carries a generation owned by the session manager. If a caller
-stops waiting after a physical write, the manager retains its pending decisions
-and generation. A retry with that generation verifies the completed record and
-acknowledges it without a second append; a valid added suffix continues from
-the committed prefix. The manager advances the generation only when it clears
-pending evidence after a successful save. Later equal observations use separate
-generations and are stored separately. A record writer fences an incomplete
-generation, while a completed receipt remains readable and erasable. A fresh
-writer starts at the initial generation, including the replacement stream
-incarnation installed by Reset on the same lease.
+`SessionStorageLease::load` returns `SessionLoad`: the prior published snapshot,
+the backend-issued save binding, and `Published` or `Unfinished` state. The record
+binding identifies the actual stream, Reset incarnation, published base and save
+generation. A snapshot adapter uses its own incarnation and revisions. Callers
+retain the original binding and exact units across cancellation or a lost reply;
+equal bytes or a restarted counter cannot establish the original save identity.
+A successful `SessionSaveReceipt` must match that binding and full unit count
+before its next binding can authorize subsequent work or clear pending decisions.
+
+An exact retry verifies the original prefix without duplicate append. A valid
+same-generation extension preserves that prefix and completes the added suffix.
+An already completed shorter save stays public while an extension is unfinished,
+but its receipt never acknowledges the extension. After restart, the exclusive
+record lease validates and durably aborts an incomplete physical attempt while
+retaining its original identity/digest for exact retry. Load remains `Unfinished`;
+ordinary initialization, provider work and queue restoration are refused until
+the original caller reconciles the complete plan. Malformed or conflicting
+history is corruption. Reset replaces the incarnation and invalidates old
+bindings; a reopened writer obtains its actual current binding from load.
+A pre-existing per-session JSONL history is refused unchanged before a stream is
+created. The owning order and recovery contract is
+[semantic record writer](../../../../docs/design/semantic-record-writer.md).
 
 `SessionStorageLease::erase` resets the session stream under its exclusive lease
 and drains retired physical records before reporting success. An uncertain reset
@@ -297,7 +311,7 @@ A caller that only means to read or erase what a session saved takes its lease
 with `SessionStorage::open_existing`, which answers `None` without creating a
 session stream for an identity that was never opened. What it
 reads it reads through `SessionSnapshot::load_saved`, which applies the checks
-restoration applies (every relationship in the snapshot, and that it was saved
+restoration applies (published load evidence, every relationship in the snapshot, and that it was saved
 under the session asked for) so a custom adapter cannot hand it another
 session's history. The provider identity is not compared there; only a caller
 holding the configured provider can, and restoration still does.

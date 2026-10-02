@@ -6,6 +6,8 @@
 //!                                                                    │ a session: one server
 //!                                                                    ▼ process, one connection
 //! conversation view ──McpToolUis──▶ ListedToolUis ──tool_ui──────────┘ (open sessions' lists)
+//!
+//! conversation service ──ResourceTickets::issue──▶ ResourceTicketStore ◀──redeem── GET /mcp-resources
 //! ```
 //!
 //! Arrows are calls and bytes. Each stand-in that says hello gets a session of
@@ -15,11 +17,14 @@
 //! given in place of a server (`domain`: the relay arguments and the
 //! configuration digest that keeps a harness's context fingerprint honest),
 //! the socket and the hello in front of it, the `mcp-relay` command, and the
-//! adapter the conversation view asks for a tool's UI. Composition
-//! (`composition::mcp_servers`) builds it and replaces each configured server
-//! with its stand-in before any agent is built. The design, with its state
-//! tables, is `docs/design/mcp-connections.md`.
+//! adapter the conversation view asks for a tool's UI; and, for an MCP App,
+//! the resource tickets it redeems and the route it redeems them at
+//! (`entrypoint`). Composition (`composition::mcp_servers`) builds it and
+//! replaces each configured server with its stand-in before any agent is
+//! built. The design, with its state tables, is
+//! `docs/design/mcp-connections.md`.
 pub mod domain;
+pub mod entrypoint;
 pub mod infrastructure;
 
 #[cfg(all(test, unix))]

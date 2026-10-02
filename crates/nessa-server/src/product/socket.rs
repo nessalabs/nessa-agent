@@ -258,11 +258,19 @@ fn credential_admin_code(error: CredentialAdminError) -> &'static str {
     }
 }
 
+/// How many MCP App calls one socket has running at once; past that each is
+/// refused `temporarily_unavailable` (`protocol/README.md`).
+const APP_CALLS_PER_SOCKET: usize = 4;
+
 #[derive(Clone, Copy)]
 enum ResponseClass {
     Control,
     Ordinary,
     Record,
+    /// An MCP App's call (#348): a destructive one waits minutes on the
+    /// person's review, so app calls have a lane of their own, and held calls
+    /// never take the place of the read and the answer that would end them.
+    App,
 }
 
 impl ResponseClass {
@@ -275,7 +283,11 @@ impl ResponseClass {
             | "conversation.answerQuestion"
             | "conversation.cancel"
             | "conversation.remove"
-            | "conversation.reorder" => Self::Control,
+            | "conversation.reorder"
+            // Releasing an app ends its held calls, so it is never behind
+            // them on the app lane.
+            | "mcp.releaseApp" => Self::Control,
+            "mcp.callTool" | "mcp.readResource" => Self::App,
             "conversation.recordsHead"
             | "conversation.recordsPage"
             | "conversation.catalogueHead"
@@ -488,6 +500,11 @@ where
     let control_slots = Arc::new(Semaphore::new(4));
     let ordinary_slots = Arc::new(Semaphore::new(16));
     let record_slots = Arc::new(Semaphore::new(1));
+    let app_slots = Arc::new(Semaphore::new(APP_CALLS_PER_SOCKET));
+    // An app call still running when the socket goes is cancelled: its
+    // review, if it is waiting on one, is withdrawn rather than left standing
+    // for nobody. One already sent finishes, and is recorded, on its own task.
+    let mut app_calls: Vec<tokio::task::AbortHandle> = Vec::new();
     let mut current_state = interval(state.settings.current_state_interval());
     current_state.set_missed_tick_behavior(MissedTickBehavior::Delay);
     current_state.tick().await;
@@ -525,7 +542,7 @@ where
                 let queued = QueuedResponse { message, _slot: slot, _record_work: record_work };
                 let sent = match class {
                     ResponseClass::Control => control_send.try_send(ControlOutput::Response(Box::new(queued))).is_ok(),
-                    ResponseClass::Ordinary => ordinary_send.try_send(queued).is_ok(),
+                    ResponseClass::Ordinary | ResponseClass::App => ordinary_send.try_send(queued).is_ok(),
                     ResponseClass::Record => record_send.try_send(QueuedRecordResponse::new(queued)).is_ok(),
                 };
                 if !sent { break; }
@@ -597,10 +614,13 @@ where
         let class = ResponseClass::for_method(&frame.method);
         let control = matches!(class, ResponseClass::Control);
         let record = matches!(class, ResponseClass::Record);
+        let app = matches!(class, ResponseClass::App);
         let slots = if control {
             &control_slots
         } else if record {
             &record_slots
+        } else if app {
+            &app_slots
         } else {
             &ordinary_slots
         };
@@ -619,18 +639,24 @@ where
             continue;
         };
         let slot = Arc::new(slot);
+        // An app call's capacity across sockets is the conversation
+        // service's, held by the call's own task until it ends: a permit held
+        // here would be let go when the socket went, while the call ran on.
         let capacity = if control {
-            &state.controls
+            Some(&state.controls)
         } else if record {
-            &state.record_reads
+            Some(&state.record_reads)
+        } else if app {
+            None
         } else if frame.method == "conversation.delete" {
-            &state.deletions
+            Some(&state.deletions)
         } else if frame.method == "attachment.begin" {
-            &state.upload_begins
+            Some(&state.upload_begins)
         } else {
-            &state.requests
+            Some(&state.requests)
         };
-        let Ok(permit) = capacity.clone().try_acquire_owned() else {
+        let permit = capacity.map(|capacity| capacity.clone().try_acquire_owned());
+        let Ok(permit) = permit.transpose() else {
             let response = failure(&frame.id, "temporarily_unavailable");
             let queued = QueuedResponse {
                 message: WireResponse::ordinary(response),
@@ -655,7 +681,7 @@ where
         };
         let request_state = state.clone();
         let request_session = session.clone();
-        requests.push(tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             if matches!(class, ResponseClass::Record) {
                 let (message, record_work) = dispatch_passive_read(
                     &request_state,
@@ -663,7 +689,10 @@ where
                     frame,
                     // The same socket admission survives both response delivery
                     // and physical work, even after a delivered read_timeout (R61).
-                    RecordReadLease::new((permit, slot.clone())),
+                    RecordReadLease::new((
+                        permit.expect("record reads have capacity"),
+                        slot.clone(),
+                    )),
                     read_deadline,
                 )
                 .await;
@@ -673,7 +702,15 @@ where
                 let message = dispatch(&request_state, &request_session, frame).await;
                 (WireResponse::ordinary(message), class, slot, None)
             }
-        }));
+        });
+        if app {
+            app_calls.retain(|call| !call.is_finished());
+            app_calls.push(task.abort_handle());
+        }
+        requests.push(task);
+    }
+    for call in app_calls {
+        call.abort();
     }
     drop(control_send);
     drop(refusal_send);
@@ -833,6 +870,9 @@ async fn dispatch_authorized(
         }
         method if method.starts_with("attachment.") => {
             super::attachment::dispatch(state, session, frame).await
+        }
+        method if method.starts_with("mcp.") => {
+            super::mcp_apps::dispatch(state, session, frame).await
         }
         "server.health" => {
             if frame.params != json!({}) {
@@ -1012,7 +1052,11 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.unarchive"
         | "conversation.delete"
         // Uploading into a conversation is writing to it.
-        | "attachment.begin" => Some("conversation.write"),
+        | "attachment.begin"
+        // An app acts in its conversation, on its caller's behalf.
+        | "mcp.callTool"
+        | "mcp.readResource"
+        | "mcp.releaseApp" => Some("conversation.write"),
         "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
         _ => None,
     }
@@ -1340,7 +1384,7 @@ mod tests {
     };
     use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
     use nessa_sdk::application::agent_execution::sessions::{
-        ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+        ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
     };
     use nessa_sdk::domain::agent_execution::sessions::SessionId;
     use nessa_sdk::infrastructure::session_storage::{
@@ -1739,7 +1783,7 @@ mod tests {
         let provider = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
         writer
             .save_changes(
-                SessionSaveGeneration::initial(),
+                writer.load().await.unwrap().binding().clone(),
                 SessionSnapshot {
                     id: session_id.clone(),
                     provider: provider.clone(),
@@ -1747,11 +1791,12 @@ mod tests {
                     invocations: Vec::new(),
                     queue_history: Vec::new(),
                 },
-                vec![SessionChange::Opened {
+                vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: session_id.clone(),
                     provider,
                     context: ProviderContext::Absent,
-                }],
+                }])
+                .unwrap()],
             )
             .await
             .unwrap();
@@ -1816,36 +1861,51 @@ mod tests {
             panic!("record reply expected")
         };
         let head_json: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(head_json["payload"]["head"], "1");
+        assert_eq!(head_json["payload"]["head"], "2");
         assert_eq!(head_json["payload"]["scope"]["accessEpoch"], "epoch-3");
         drop(lease);
-        let mut page_frame = request("page", "conversation.recordsPage");
-        page_frame.params = serde_json::json!({
-            "conversationId": id.to_string(), "accessEpoch": "3",
-            "request": {
-                "scope": scope_json, "after": "0", "target": "1", "maxRecords": 16,
-                "maxPayloadBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-                "maxRecordBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-            },
-        });
-        let (page_wire, lease) = dispatch_passive_read(
-            &state,
-            &session,
-            page_frame,
-            RecordReadLease::new(()),
-            Instant::now() + PASSIVE_READ_TIMEOUT,
-        )
-        .await;
-        let WireResponse::Record { text, .. } = page_wire else {
-            panic!("record reply expected")
-        };
-        let page_json: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(page_json["payload"]["records"][0]["position"], "1");
-        assert_eq!(
-            page_json["payload"]["request"]["scope"]["accessEpoch"],
-            "epoch-3"
-        );
-        drop(lease);
+        for target in ["1", "2"] {
+            let mut page_frame = request("page", "conversation.recordsPage");
+            page_frame.params = serde_json::json!({
+                "conversationId": id.to_string(), "accessEpoch": "3",
+                "request": {
+                    "scope": scope_json.clone(), "after": "0", "target": target, "maxRecords": 16,
+                    "maxPayloadBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                    "maxRecordBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                },
+            });
+            let (page_wire, lease) = dispatch_passive_read(
+                &state,
+                &session,
+                page_frame,
+                RecordReadLease::new(()),
+                Instant::now() + PASSIVE_READ_TIMEOUT,
+            )
+            .await;
+            if target == "1" {
+                let WireResponse::Ordinary(message) = page_wire else {
+                    panic!("intermediate Unit target must refuse")
+                };
+                let OutgoingMessage::Response(failure) = *message else {
+                    panic!("refusal expected")
+                };
+                assert_eq!(failure.error.unwrap().code, "invalid_request");
+            } else {
+                let WireResponse::Record { text, .. } = page_wire else {
+                    panic!("record reply expected")
+                };
+                let page_json: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(page_json["payload"]["records"].as_array().unwrap().len(), 2);
+                assert_eq!(page_json["payload"]["records"][0]["position"], "1");
+                assert_eq!(page_json["payload"]["records"][1]["position"], "2");
+                assert_eq!(page_json["payload"]["request"]["target"], "2");
+                assert_eq!(
+                    page_json["payload"]["request"]["scope"]["accessEpoch"],
+                    "epoch-3"
+                );
+            }
+            drop(lease);
+        }
         let mut wrong = request("wrong", "conversation.recordsHead");
         wrong.params = serde_json::json!({
             "conversationId": id.to_string(), "accessEpoch": "3",
@@ -3380,4 +3440,5 @@ mod tests {
     }
     include!("../../tests/attachments/gateway.rs");
     include!("../../tests/agent_install/gateway.rs");
+    include!("../../tests/mcp_servers/gateway.rs");
 }

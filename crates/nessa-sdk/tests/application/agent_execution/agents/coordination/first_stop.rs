@@ -1,12 +1,25 @@
 //! A shared cleanup attempt does not supply the cause of newly stopped work.
 use super::*;
-use crate::application::agent_execution::sessions::SessionStorage;
 use crate::domain::agent_execution::sessions::SessionId;
 
 #[tokio::test]
 async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
     for finalized in [false, true] {
-        let (agent, backend) = agent_with_backend().await;
+        let storage = Arc::new(InMemoryStorage::new());
+        let id = SessionId::new("restored-first-stop").unwrap();
+        let backend = Arc::new(Backend::default());
+        let manager = SessionManager::open(
+            Some(id.clone()),
+            storage.clone(),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+        .await
+        .unwrap();
+        let agent = attached_agent(Arc::new(Provider(backend.clone())), manager)
+            .await
+            .unwrap();
         let invocation = agent.inner.invocation.lock().await;
         let queued = agent.enqueue(input(), actor()).await.unwrap();
         let waiting = agent.inner.lifecycle.accept_waiting_work().unwrap();
@@ -50,14 +63,8 @@ async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
             backend.closes.lock().unwrap().is_empty(),
             "physical cleanup remains shared"
         );
-        // Restore the actual saved receipt through the normal storage boundary.
-        let storage = Arc::new(InMemoryStorage::new());
-        let id = SessionId::new("restored-first-stop").unwrap();
-        let mut saved = saved;
-        saved.id = id.clone();
-        let lease = storage.open(id.clone()).await.unwrap();
-        lease.save(saved.clone()).await.unwrap();
-        drop(lease);
+        // Reopen the actual saved cancellation through the original storage owner.
+        drop(agent);
         let restored = SessionManager::open(
             Some(id),
             storage,

@@ -87,3 +87,56 @@ fn a_tool_states_the_mcp_name_and_structured_result_bounds_the_view_keeps() {
         Some(MAX_UI_URI_BYTES as u64)
     );
 }
+
+#[test]
+fn an_app_calls_schema_states_the_bounds_the_gateway_keeps() {
+    use crate::conversation::application::{McpAppError, RESOURCE_TICKET_LIFETIME_MS};
+    use crate::mcp_servers::domain::{MAX_APP_ARGUMENTS_BYTES, MAX_APP_RESULT_BYTES};
+    use nessa_sdk::domain::mcp_apps::MAX_UI_HTML_BYTES;
+    let schema = schema();
+    let defs = &schema["$defs"];
+    let arguments = &defs["McpCallToolParams"]["properties"]["argumentsJson"];
+    assert_eq!(
+        arguments["x-utf8MaxBytes"].as_u64(),
+        Some(MAX_APP_ARGUMENTS_BYTES as u64)
+    );
+    // An app's arguments are shown whole in its review.
+    assert_eq!(
+        arguments["x-utf8MaxBytes"],
+        defs["ConversationPermission"]["properties"]["argumentsJson"]["x-utf8MaxBytes"]
+    );
+    assert_eq!(
+        defs["McpCallToolResult"]["properties"]["resultJson"]["x-utf8MaxBytes"].as_u64(),
+        Some(MAX_APP_RESULT_BYTES as u64)
+    );
+    let read = &defs["McpReadResourceResult"]["properties"];
+    assert_eq!(
+        read["size"]["maximum"].as_u64(),
+        Some(MAX_UI_HTML_BYTES as u64)
+    );
+    assert_eq!(
+        read["expiresInMs"]["const"].as_u64(),
+        Some(RESOURCE_TICKET_LIFETIME_MS)
+    );
+    // Every refusal audit names is a code the protocol carries.
+    let codes = defs["ConversationErrorCode"]["enum"].as_array().unwrap();
+    for error in [
+        McpAppError::AppUnknown,
+        McpAppError::ServerMismatch,
+        McpAppError::ToolNotForApp,
+        McpAppError::RequestTooLarge,
+        McpAppError::SessionUnavailable,
+        McpAppError::ApprovalDenied,
+        McpAppError::ApprovalExpired,
+        McpAppError::Cancelled,
+        McpAppError::ResultTooLarge,
+        McpAppError::TimedOut,
+        McpAppError::Remote(None),
+    ] {
+        assert!(
+            codes.iter().any(|code| code == error.code()),
+            "{}",
+            error.code()
+        );
+    }
+}

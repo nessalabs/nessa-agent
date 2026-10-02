@@ -1,10 +1,13 @@
 //! Prepared construction and attachment ownership use separate observable phases.
 use super::*;
-use nessa_sdk::infrastructure::session_storage::RecordStorage;
+use nessa_sdk::application::agent_execution::sessions::{
+    SessionLoad, SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+};
+use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::{
     future::Future,
     pin::Pin,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::{Context, Poll},
 };
 use tempfile::tempdir;
@@ -184,7 +187,7 @@ struct PanickingStorageLease {
     failure: Arc<Mutex<Option<SavePanic>>>,
 }
 struct PanickingSaveFuture<'a> {
-    backing: StorageFuture<'a, ()>,
+    backing: StorageFuture<'a, SessionSaveReceipt>,
     failure: SavePanic,
 }
 struct PanickingCleanupProvider {
@@ -388,18 +391,23 @@ impl SessionStorage for PanickingStorage {
     }
 }
 impl SessionStorageLease for PanickingStorageLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.backing.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         let Some(failure) = self.failure.lock().unwrap().take() else {
-            return self.backing.save(snapshot);
+            return self.backing.save_changes(binding, snapshot, units);
         };
         if matches!(failure, SavePanic::Construct) {
             panic!("save construction panic");
         }
         Box::pin(PanickingSaveFuture {
-            backing: self.backing.save(snapshot),
+            backing: self.backing.save_changes(binding, snapshot, units),
             failure,
         })
     }
@@ -408,7 +416,7 @@ impl SessionStorageLease for PanickingStorageLease {
     }
 }
 impl Future for PanickingSaveFuture<'_> {
-    type Output = Result<(), StorageError>;
+    type Output = Result<SessionSaveReceipt, StorageError>;
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         if matches!(self.failure, SavePanic::Poll) {
             panic!("save poll panic");
@@ -448,6 +456,95 @@ async fn prepared(
     Agent::prepare(provider, storage.manager().await, audit)
         .await
         .unwrap()
+}
+
+struct ContradictoryRecordLoadStorage {
+    backing: Arc<RecordStorage>,
+    base: u64,
+    generation: u64,
+    saves: Arc<AtomicUsize>,
+}
+struct ContradictoryRecordLoadLease {
+    backing: Box<dyn SessionStorageLease>,
+    base: u64,
+    generation: u64,
+    saves: Arc<AtomicUsize>,
+}
+impl SessionStorage for ContradictoryRecordLoadStorage {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        Box::pin(async move {
+            Ok(Box::new(ContradictoryRecordLoadLease {
+                backing: self.backing.open(id).await?,
+                base: self.base,
+                generation: self.generation,
+                saves: self.saves.clone(),
+            }) as Box<dyn SessionStorageLease>)
+        })
+    }
+}
+impl SessionStorageLease for ContradictoryRecordLoadLease {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
+        Box::pin(async move {
+            let actual = self.backing.load().await?;
+            Ok(SessionLoad::new(
+                actual.snapshot().cloned(),
+                SessionSaveGeneration::new(
+                    actual.binding().backend().clone(),
+                    self.base,
+                    self.generation,
+                ),
+                SessionLoadState::Published,
+            ))
+        })
+    }
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
+        self.saves.fetch_add(1, Ordering::SeqCst);
+        self.backing.save_changes(binding, snapshot, units)
+    }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.backing.erase()
+    }
+}
+
+#[tokio::test]
+async fn contradictory_published_record_load_refuses_before_initial_save_or_provider_open() {
+    for (base, generation) in [(1, 0), (0, 1), (1, 1)] {
+        let directory = tempdir().unwrap();
+        let backing = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+        let saves = Arc::new(AtomicUsize::new(0));
+        let storage = Arc::new(ContradictoryRecordLoadStorage {
+            backing: backing.clone(),
+            base,
+            generation,
+            saves: saves.clone(),
+        });
+        let manager = SessionManager::open(
+            Some(SessionId::new("contradictory-load").unwrap()),
+            storage,
+            Arc::new(RuntimeMessageCommitClock::new()),
+        )
+        .await
+        .unwrap();
+        let provider = TestProvider::new();
+        let result = Agent::prepare(provider.clone(), manager, Arc::new(AcceptingAudit)).await;
+        assert!(matches!(
+            result.as_ref().map_err(|failure| failure.cause()),
+            Err(AgentError::Storage(StorageError::Corrupt(_)))
+        ));
+        assert_eq!(
+            saves.load(Ordering::SeqCst),
+            0,
+            "refusal must precede the initial save, not rely on later writer rejection"
+        );
+        assert!(provider.calls.opens.lock().unwrap().is_empty());
+        drop(result);
+        backing.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]

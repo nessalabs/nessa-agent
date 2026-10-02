@@ -25,6 +25,6 @@ pub const APP_MIME_TYPE: &str = "text/html;profile=mcp-app";
 
 pub use error::McpAppError;
 pub use value_objects::{
-    ListedTool, ToolUi, UiCsp, UiPermissions, UiResource, UiResourceUri, UiVisibility,
+    ListedTool, ToolHints, ToolUi, UiCsp, UiPermissions, UiResource, UiResourceUri, UiVisibility,
     MAX_CSP_SOURCES, MAX_CSP_SOURCE_BYTES, MAX_UI_HTML_BYTES, MAX_UI_URI_BYTES,
 };

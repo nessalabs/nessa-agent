@@ -9,6 +9,7 @@ use crate::attachments_test_support::{
     OTHER_CONVERSATION,
 };
 use axum::body::to_bytes;
+use axum::http::HeaderValue;
 use futures_util::stream;
 use serde_json::Value;
 use std::{

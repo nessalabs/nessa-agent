@@ -120,9 +120,6 @@ impl CommittedTranscript {
             );
         assert_eq!(self.continuation.derived_bytes, expected);
     }
-    pub(crate) fn key(&self, changes: &[SessionChange]) -> Result<records::FactKey, StorageError> {
-        self.continuation.key(changes, self.applied)
-    }
     pub(crate) fn begin_transaction(&self) -> CommittedTransactionState {
         CommittedTransactionState {
             undo: Vec::new(),

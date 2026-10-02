@@ -61,6 +61,69 @@ still starting when its budget expired, so nothing reached the provider and the
 same command is safe to repeat. `agent_not_configured` and `invalid_request`
 reject the command until their cause is addressed.
 
+## An MCP App's calls
+
+An MCP App (ADR 344) reaches its own server through two methods, and its
+host releases it through a third. Each names
+its conversation, the app — the tool call whose UI it is (`McpAppReference`:
+`executionId`, `toolId`) — and the server. Their shapes are
+`McpCallToolParams` / `McpCallToolResult` and `McpReadResourceParams` /
+`McpReadResourceResult` in [product/v1.json](product/v1.json).
+
+- **`mcp.callTool`** calls a tool the conversation's own session last listed
+  with `visibility` including `app`. `argumentsJson` is at most 32 KiB, the most a review shows, and
+  `resultJson`, the server's `CallToolResult` verbatim, at most 56 KiB.
+  `isError: true` is a result, not a refusal.
+- **Destructive tools** wait for approval first. A tool is destructive when
+  `readOnlyHint` is not true and `destructiveHint` is not false, so a tool with
+  no annotations waits. The approval is a review in the conversation's
+  `permissions`, with `origin: {kind: "app", server, tool}`, whatever the
+  approval mode. It is answered with `conversation.answer` or
+  `conversation.cancel`.
+- **A waiting call stays pending** until the person answers, or the review
+  expires after 5 minutes (`mcp_approval_expired`), or it is withdrawn
+  (`mcp_cancelled`). It is withdrawn when the request is cancelled, the app is
+  torn down, or the conversation ends.
+- **`mcp.readResource`** reads a resource of the app's server once and holds
+  exactly those bytes. Its answer says what they are (`mimeType`, `size`,
+  `sha256`, the app's `csp`, `permissions`, `domain`, `prefersBorder`) and
+  gives a `ticket`. The bytes never travel on the socket.
+- **App calls have a lane of their own**, 4 at once per socket, and 32
+  running at once on the gateway, each counted until it ends rather than
+  until its socket goes. Past either they are refused
+  `temporarily_unavailable`, so held calls never stop `conversation.read` or
+  `conversation.answer`.
+- **`mcp.releaseApp`** says the host tore one mount of an app down. Each app
+  reference carries the host's own `instanceId` for its mount, since one tool
+  call can be mounted more than once. The release withdraws that mount's
+  open reviews (their calls answer `mcp_cancelled`) and releases its
+  resource tickets, and is idempotent. It travels on the control lane, never
+  the app lane, so held calls can never stop an app being released.
+- **What a refusal tells the host.** Nothing reached the server for
+  `mcp_app_unknown`, `mcp_server_mismatch`, `mcp_tool_not_for_app`,
+  `mcp_request_too_large`, `mcp_approval_denied`, `mcp_approval_expired` or
+  `mcp_cancelled`; an `mcp_app_unknown` for a resource that is not an app's
+  HTML was read, which changes nothing. The server may have been asked for
+  `mcp_session_unavailable`, `mcp_timed_out`, `mcp_remote_error` (its JSON-RPC
+  error in `McpRemoteErrorDetails`, or no details for an answer that is no
+  MCP answer) or `mcp_result_too_large`.
+
+`GET /mcp-resources`, on the gateway's HTTP listener, serves a held resource,
+as `PUT /attachments` takes an upload:
+- **Redeeming.** The ticket goes in the `x-nessa-resource-ticket` header,
+  never in the URL, and is the whole authority: 256 random bits, single use,
+  valid for 60 s, bound to its conversation and app, and issued only after
+  the socket's policy and audit. The route authenticates nobody else, and has
+  the same origin checks and CORS as `/attachments`.
+- **Refusals.** An unknown, used, expired or wrong-credential ticket gets the
+  same `404` with no body.
+- **The response.** `Content-Type: text/html;profile=mcp-app`,
+  `X-Content-Type-Options: nosniff`, `Cache-Control: no-store` and
+  `Content-Disposition: attachment`.
+- **The host's job.** It fetches the bytes, checks their SHA-256 against
+  `sha256` before rendering, and hands them to its sandbox; the frame never
+  sees the ticket.
+
 Credential lifecycle RPC errors distinguish `credential_conflict`,
 `credential_capacity`, and `credential_not_found` from
 `credential_store_unavailable`. The first three reject the command; they do not
