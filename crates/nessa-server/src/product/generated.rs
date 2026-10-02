@@ -832,7 +832,7 @@ pub struct McpReadResourceResult {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpRemoteErrorDetails {
-    pub code: u64,
+    pub code: i64,
     pub message: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

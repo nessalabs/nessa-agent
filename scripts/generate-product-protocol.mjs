@@ -112,7 +112,9 @@ function type(node, rust) {
       .join(" | ")
   if (node.const !== undefined && !rust) return JSON.stringify(node.const)
   if (node.type === "string") return rust ? "String" : "string"
-  if (node.type === "integer") return rust ? "u64" : "number"
+  // Signed only where the schema admits a negative value, such as a
+  // JSON-RPC error code.
+  if (node.type === "integer") return rust ? (node.minimum < 0 ? "i64" : "u64") : "number"
   if (node.type === "boolean") return rust ? "bool" : "boolean"
   if (node.type === "array")
     return rust ? `Vec<${type(node.items, true)}>` : `${type(node.items, false)}[]`

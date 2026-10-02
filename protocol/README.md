@@ -72,7 +72,7 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
 join the manifest when their routes do (#348).
 
 - **`mcp.callTool`** calls a tool the conversation's own session last listed
-  with `visibility` including `app`. `argumentsJson` is at most 48 KiB, and
+  with `visibility` including `app`. `argumentsJson` is at most 32 KiB, the most a review shows, and
   `resultJson`, the server's `CallToolResult` verbatim, at most 56 KiB.
   `isError: true` is a result, not a refusal.
 - **Destructive tools** wait for approval first. A tool is destructive when
@@ -101,9 +101,11 @@ join the manifest when their routes do (#348).
 - **What a refusal tells the host.** Nothing reached the server for
   `mcp_app_unknown`, `mcp_server_mismatch`, `mcp_tool_not_for_app`,
   `mcp_request_too_large`, `mcp_approval_denied`, `mcp_approval_expired` or
-  `mcp_cancelled`. The server may have been asked for
+  `mcp_cancelled`; an `mcp_app_unknown` for a resource that is not an app's
+  HTML was read, which changes nothing. The server may have been asked for
   `mcp_session_unavailable`, `mcp_timed_out`, `mcp_remote_error` (its JSON-RPC
-  error in `McpRemoteErrorDetails`) or `mcp_result_too_large`.
+  error in `McpRemoteErrorDetails`, or no details for an answer that is no
+  MCP answer) or `mcp_result_too_large`.
 
 `GET /mcp-resources`, on the gateway's HTTP listener, serves a held resource,
 as `PUT /attachments` takes an upload:

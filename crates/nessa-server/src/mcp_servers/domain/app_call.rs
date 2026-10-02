@@ -3,8 +3,9 @@
 //! its server's session listed.
 use nessa_sdk::domain::mcp_apps::ListedTool;
 
-/// The most an app's tool arguments may be, encoded.
-pub const MAX_APP_ARGUMENTS_BYTES: usize = 48 * 1024;
+/// The most an app's tool arguments may be, encoded: the most a review
+/// of the call shows (`ConversationPermission.argumentsJson`).
+pub const MAX_APP_ARGUMENTS_BYTES: usize = 32 * 1024;
 /// The most a tool's answer to an app may be, encoded.
 pub const MAX_APP_RESULT_BYTES: usize = 56 * 1024;
 
