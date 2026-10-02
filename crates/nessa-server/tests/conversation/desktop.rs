@@ -112,6 +112,7 @@ fn an_installation_that_only_knew_one_agent_keeps_starting_on_it() {
             catalog: root.path().join("old-models.json"),
             workspace: data.clone(),
             mcp_servers: vec![],
+            stand_ins: Default::default(),
             selected: None,
             runtimes: HashMap::from([(
                 "codex".into(),
@@ -161,6 +162,7 @@ fn default_workspace_rejects_a_symlinked_ancestor() {
             catalog: root.path().join("old-models.json"),
             workspace: chosen_workspace.clone(),
             mcp_servers: vec![],
+            stand_ins: Default::default(),
             selected: None,
             runtimes: HashMap::from([(
                 "claude".into(),
@@ -241,6 +243,7 @@ fn several_configured_agents_with_no_choice_between_them_is_not_the_desktops_to_
             catalog: root.path().join("old-models.json"),
             workspace: data.clone(),
             mcp_servers: vec![],
+            stand_ins: Default::default(),
             selected: None,
             runtimes: HashMap::from([("claude".into(), runtime()), ("codex".into(), runtime())]),
         }),

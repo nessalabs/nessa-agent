@@ -1718,7 +1718,7 @@ fn a_message_linking_long_paths_gives_way_before_an_ask_does() {
 /// `show` has whatever UI the test sets, nothing else has any.
 struct ListedUis(Mutex<Option<&'static str>>);
 impl McpToolUis for ListedUis {
-    fn resource_uri(&self, call: &McpTool) -> Option<UiResourceUri> {
+    fn resource_uri(&self, _: &SessionId, call: &McpTool) -> Option<UiResourceUri> {
         if (call.server(), call.tool()) != ("charts", "show") {
             return None;
         }

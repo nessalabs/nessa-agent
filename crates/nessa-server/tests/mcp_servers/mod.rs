@@ -12,15 +12,17 @@
 //! ```
 use super::domain::{
     admit, configuration_digest, relay_arguments, StandInRefusal, RELAY_SUBCOMMAND,
+    SESSION_VARIABLE,
 };
 use super::infrastructure::{
-    read_line, relay, write_line, Answer, Hello, ListedToolUis, Refusal, Relay, RelayFailure,
-    HELLO_TIMEOUT, MAX_HELLO_BYTES,
+    read_line, relay, write_line, Answer, ConversationGrants, Hello, ListedToolUis, Refusal, Relay,
+    RelayFailure, HELLO_TIMEOUT, MAX_HELLO_BYTES,
 };
 use crate::conversation::application::McpToolUis;
+use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::infrastructure::{
-    acp::sessions::StdioMcpServer,
+    acp::sessions::{StandInGrant, StandInGrants, StdioMcpServer},
     clock::RuntimeClock,
     mcp::{McpServerLaunch, McpServers},
 };
@@ -43,7 +45,9 @@ fn digest(server: &StdioMcpServer) -> String {
     configuration_digest(&server.command, &server.args)
 }
 
-fn relay_for(servers: Vec<StdioMcpServer>) -> (Arc<Relay>, McpServers) {
+/// The relay for `servers`, the sessions behind it, and the grants it lets
+/// stand-ins through by.
+fn relay_for(servers: Vec<StdioMcpServer>) -> (Arc<Relay>, McpServers, ConversationGrants) {
     let launches = servers
         .iter()
         .map(|server| McpServerLaunch {
@@ -57,7 +61,24 @@ fn relay_for(servers: Vec<StdioMcpServer>) -> (Arc<Relay>, McpServers) {
         .iter()
         .map(|server| (server.name.clone(), digest(server)))
         .collect();
-    (Arc::new(Relay::new(mcp.clone(), digests)), mcp)
+    let grants = ConversationGrants::new(mcp.clone());
+    (
+        Arc::new(Relay::new(mcp.clone(), digests, grants.clone())),
+        mcp,
+        grants,
+    )
+}
+
+/// A grant for `conversation`'s open, and the token its stand-ins carry.
+fn granted(grants: &ConversationGrants, conversation: &str) -> (StandInGrant, String) {
+    let grant = grants.grant(&SessionId::new(conversation).unwrap());
+    let token = grant
+        .environment()
+        .iter()
+        .find(|(name, _)| name == SESSION_VARIABLE)
+        .map(|(_, token)| token.clone())
+        .expect("a token");
+    (grant, token)
 }
 
 #[test]
@@ -137,10 +158,16 @@ fn connect(
     (BufReader::new(read), write)
 }
 
-async fn hello(write: &mut tokio::io::WriteHalf<DuplexStream>, server: &str, configuration: &str) {
+async fn hello(
+    write: &mut tokio::io::WriteHalf<DuplexStream>,
+    server: &str,
+    configuration: &str,
+    session: &str,
+) {
     let hello = Hello {
         server: server.into(),
         configuration: configuration.into(),
+        session: session.into(),
     };
     write_line(write, &hello).await.unwrap();
 }
@@ -148,9 +175,10 @@ async fn hello(write: &mut tokio::io::WriteHalf<DuplexStream>, server: &str, con
 #[tokio::test]
 async fn a_stand_in_for_an_unknown_or_changed_server_is_refused_by_reason() {
     let server = fixture();
-    let (relay, _) = relay_for(vec![server.clone()]);
+    let (relay, _, grants) = relay_for(vec![server.clone()]);
+    let (_grant, token) = granted(&grants, "conversation");
     let (mut read, mut write) = connect(&relay);
-    hello(&mut write, "other", &digest(&server)).await;
+    hello(&mut write, "other", &digest(&server), &token).await;
     assert!(matches!(
         read_line::<Answer>(&mut read).await,
         Some(Answer::Refused {
@@ -159,7 +187,7 @@ async fn a_stand_in_for_an_unknown_or_changed_server_is_refused_by_reason() {
         })
     ));
     let (mut read, mut write) = connect(&relay);
-    hello(&mut write, "fixture", "sha256:old").await;
+    hello(&mut write, "fixture", "sha256:old", &token).await;
     assert!(matches!(
         read_line::<Answer>(&mut read).await,
         Some(Answer::Refused {
@@ -169,6 +197,174 @@ async fn a_stand_in_for_an_unknown_or_changed_server_is_refused_by_reason() {
     ));
 }
 
+/// What a hello naming `token` is answered, for the configured `server`.
+async fn answered(relay: &Arc<Relay>, server: &StdioMcpServer, token: &str) -> Option<Answer> {
+    let (mut read, mut write) = connect(relay);
+    hello(&mut write, &server.name, &digest(server), token).await;
+    read_line::<Answer>(&mut read).await
+}
+
+fn unknown_session(answer: Option<Answer>) -> bool {
+    matches!(
+        answer,
+        Some(Answer::Refused {
+            reason: Refusal::UnknownSession,
+            ..
+        })
+    )
+}
+
+#[tokio::test]
+async fn a_stand_in_without_a_token_the_gateway_issued_is_refused_and_starts_nothing() {
+    let server = fixture();
+    let (relay, mcp, grants) = relay_for(vec![server.clone()]);
+    let (_grant, token) = granted(&grants, "conversation");
+    // None, forged, and one a character off.
+    let mut off = token.clone();
+    off.replace_range(0..1, if token.starts_with('0') { "1" } else { "0" });
+    for forged in [String::new(), "0".repeat(64), off] {
+        assert!(unknown_session(answered(&relay, &server, &forged).await));
+    }
+    // Refused before anything is said of the server, or started for it.
+    let other = StdioMcpServer {
+        name: "other".into(),
+        ..server.clone()
+    };
+    assert!(unknown_session(answered(&relay, &other, "forged").await));
+    assert!(mcp
+        .tool_ui(
+            &SessionId::new("conversation").unwrap(),
+            &McpTool::new("fixture", "show_chart").unwrap()
+        )
+        .is_none());
+}
+
+#[tokio::test]
+async fn a_token_maps_to_the_conversation_it_was_issued_for_while_its_grant_lives() {
+    let (_, _, grants) = relay_for(vec![fixture()]);
+    let (first, token) = granted(&grants, "a");
+    let (_second, other) = granted(&grants, "b");
+    assert_ne!(token, other);
+    assert_eq!(token.len(), 64);
+    assert_eq!(
+        grants.owner(&token).unwrap().session(),
+        &SessionId::new("a").unwrap()
+    );
+    assert_eq!(
+        grants.owner(&other).unwrap().session(),
+        &SessionId::new("b").unwrap()
+    );
+    assert_eq!(grants.live(), 2);
+    // The grant dropped, its token is stale.
+    drop(first);
+    assert_eq!(grants.owner(&token), None);
+    assert_eq!(grants.live(), 1);
+}
+
+#[tokio::test]
+async fn a_revoked_grant_refuses_its_token_and_ends_the_sessions_it_opened() {
+    let server = fixture();
+    let (side, _, grants) = relay_for(vec![server.clone()]);
+    let (grant, token) = granted(&grants, "conversation");
+    let (stand_in, gateway) = tokio::io::duplex(1024 * 1024);
+    let relay_side = side.clone();
+    tokio::spawn(async move { relay_side.serve(gateway).await });
+    let (mut harness_in, input) = tokio::io::duplex(64 * 1024);
+    let (output, harness_out) = tokio::io::duplex(64 * 1024);
+    let configuration = digest(&server);
+    let issued = token.clone();
+    let relayed = tokio::spawn(async move {
+        relay(stand_in, "fixture", &configuration, &issued, input, output).await
+    });
+    let mut answers = BufReader::new(harness_out).lines();
+    let pid = place(&mut harness_in, &mut answers).await;
+    // The conversation's provider session ends: its grant goes.
+    drop(grant);
+    // Its stand-in ends, its server is killed at once, and its token is
+    // refused from now on.
+    assert_eq!(relayed.await.unwrap(), Ok(()));
+    gone(pid).await;
+    assert!(unknown_session(answered(&side, &server, &token).await));
+    drop(harness_in);
+}
+
+#[tokio::test]
+async fn a_resumed_conversation_gets_a_new_session_and_two_conversations_their_own() {
+    let server = fixture();
+    let (side, _, grants) = relay_for(vec![server.clone()]);
+    let (first, a) = granted(&grants, "a");
+    let (_other, b) = granted(&grants, "b");
+    let first_pid = through(&side, &server, &a).await;
+    let other_pid = through(&side, &server, &b).await;
+    assert_ne!(first_pid, other_pid, "each conversation its own server");
+    // Resumed: a new grant, a new token, a new session; the old grant's
+    // session ends with it, the other conversation's does not.
+    let (_resumed, again) = granted(&grants, "a");
+    assert_ne!(again, a);
+    let resumed_pid = through(&side, &server, &again).await;
+    assert_ne!(resumed_pid, first_pid);
+    drop(first);
+    gone(first_pid).await;
+    // SAFETY: signal 0 only asks whether the process exists.
+    assert_eq!(unsafe { libc::kill(other_pid, 0) }, 0);
+    assert_eq!(unsafe { libc::kill(resumed_pid, 0) }, 0);
+}
+
+/// Through the relay with `token`, list and call `where`: the server's pid.
+/// The stand-in is left running, its harness's ends held open.
+async fn through(side: &Arc<Relay>, server: &StdioMcpServer, token: &str) -> libc::pid_t {
+    let (stand_in, gateway) = tokio::io::duplex(1024 * 1024);
+    let relay_side = side.clone();
+    tokio::spawn(async move { relay_side.serve(gateway).await });
+    let (mut harness_in, input) = tokio::io::duplex(64 * 1024);
+    let (output, harness_out) = tokio::io::duplex(64 * 1024);
+    let configuration = digest(server);
+    let token = token.to_owned();
+    tokio::spawn(
+        async move { relay(stand_in, "fixture", &configuration, &token, input, output).await },
+    );
+    let mut answers = BufReader::new(harness_out).lines();
+    let pid = place(&mut harness_in, &mut answers).await;
+    // Held open for the test's life.
+    std::mem::forget((harness_in, answers));
+    pid
+}
+
+/// List, then call `where`, as a harness would: the server's pid.
+async fn place(
+    harness_in: &mut DuplexStream,
+    answers: &mut tokio::io::Lines<BufReader<DuplexStream>>,
+) -> libc::pid_t {
+    let mut answer = Value::Null;
+    for message in [
+        json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {} }),
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }),
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "where" } }),
+    ] {
+        let mut bytes = serde_json::to_vec(&message).unwrap();
+        bytes.push(b'\n');
+        harness_in.write_all(&bytes).await.unwrap();
+        // Each answered before the next is asked: a call before its list is
+        // answered is refused.
+        answer = serde_json::from_str(&answers.next_line().await.unwrap().unwrap()).unwrap();
+    }
+    answer["result"]["structuredContent"]["pid"]
+        .as_i64()
+        .unwrap() as libc::pid_t
+}
+
+/// Until `pid` has exited, within five seconds.
+async fn gone(pid: libc::pid_t) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        // SAFETY: signal 0 only asks whether the process exists.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("process {pid} is still running"));
+}
+
 #[tokio::test]
 async fn a_server_that_cannot_start_refuses_its_stand_in_as_unavailable() {
     let missing = StdioMcpServer {
@@ -176,9 +372,10 @@ async fn a_server_that_cannot_start_refuses_its_stand_in_as_unavailable() {
         command: PathBuf::from("/nonexistent/server"),
         args: vec![],
     };
-    let (relay, _) = relay_for(vec![missing.clone()]);
+    let (relay, _, grants) = relay_for(vec![missing.clone()]);
+    let (_grant, token) = granted(&grants, "conversation");
     let (mut read, mut write) = connect(&relay);
-    hello(&mut write, "missing", &digest(&missing)).await;
+    hello(&mut write, "missing", &digest(&missing), &token).await;
     let Some(Answer::Refused { reason, message }) = read_line::<Answer>(&mut read).await else {
         panic!("refused");
     };
@@ -188,7 +385,7 @@ async fn a_server_that_cannot_start_refuses_its_stand_in_as_unavailable() {
 
 #[tokio::test]
 async fn a_hello_that_is_not_one_bounded_json_line_is_closed_without_an_answer() {
-    let (relay, _) = relay_for(vec![fixture()]);
+    let (relay, _, _) = relay_for(vec![fixture()]);
     for bytes in [
         b"not json\n".to_vec(),
         b"{\"server\":\"fixture\",\"configuration\":\"x\",\"extra\":1}\n".to_vec(),
@@ -196,7 +393,7 @@ async fn a_hello_that_is_not_one_bounded_json_line_is_closed_without_an_answer()
         // A hello that would be read, but only past the bound.
         [
             vec![b' '; MAX_HELLO_BYTES],
-            b"{\"server\":\"fixture\",\"configuration\":\"x\"}\n".to_vec(),
+            b"{\"server\":\"fixture\",\"configuration\":\"x\",\"session\":\"x\"}\n".to_vec(),
         ]
         .concat(),
     ] {
@@ -212,7 +409,7 @@ async fn a_hello_that_is_not_one_bounded_json_line_is_closed_without_an_answer()
 
 #[tokio::test(start_paused = true)]
 async fn a_stand_in_that_never_says_hello_is_closed() {
-    let (relay, _) = relay_for(vec![fixture()]);
+    let (relay, _, _) = relay_for(vec![fixture()]);
     let (mut read, _write) = connect(&relay);
     let mut rest = Vec::new();
     let closed = tokio::io::AsyncReadExt::read_to_end(&mut read, &mut rest);
@@ -251,7 +448,15 @@ async fn the_relay_command_reports_a_refusal() {
         message: "changed".into(),
     };
     let (input, _keep) = tokio::io::duplex(1024);
-    let result = relay(scripted(Some(refused)), "s", "c", input, tokio::io::sink()).await;
+    let result = relay(
+        scripted(Some(refused)),
+        "s",
+        "c",
+        "t",
+        input,
+        tokio::io::sink(),
+    )
+    .await;
     assert_eq!(
         result,
         Err(RelayFailure::Refused {
@@ -265,7 +470,7 @@ async fn the_relay_command_reports_a_refusal() {
 #[tokio::test(start_paused = true)]
 async fn the_relay_command_gives_up_on_a_gateway_that_never_answers() {
     let (input, _keep) = tokio::io::duplex(1024);
-    let result = relay(scripted(None), "s", "c", input, tokio::io::sink()).await;
+    let result = relay(scripted(None), "s", "c", "t", input, tokio::io::sink()).await;
     assert_eq!(result, Err(RelayFailure::NoAnswer));
     assert!(!RelayFailure::Unreachable.to_string().is_empty());
 }
@@ -278,6 +483,7 @@ async fn the_relay_command_copies_both_ways_until_the_gateway_closes() {
         scripted(Some(Answer::Accepted)),
         "s",
         "c",
+        "t",
         input,
         output,
     ));
@@ -298,16 +504,17 @@ async fn the_relay_command_copies_both_ways_until_the_gateway_closes() {
 #[tokio::test]
 async fn a_harness_through_the_relay_gets_a_session_of_its_own() {
     let server = fixture();
-    let (relay_side, mcp) = relay_for(vec![server.clone()]);
+    let (relay_side, mcp, grants) = relay_for(vec![server.clone()]);
+    let (_grant, token) = granted(&grants, "conversation");
+    let conversation = SessionId::new("conversation").unwrap();
     let (stand_in, gateway) = tokio::io::duplex(1024 * 1024);
     tokio::spawn(async move { relay_side.serve(gateway).await });
     let (mut harness_in, input) = tokio::io::duplex(64 * 1024);
     let (output, harness_out) = tokio::io::duplex(64 * 1024);
     let configuration = digest(&server);
-    let relayed =
-        tokio::spawn(
-            async move { relay(stand_in, "fixture", &configuration, input, output).await },
-        );
+    let relayed = tokio::spawn(async move {
+        relay(stand_in, "fixture", &configuration, &token, input, output).await
+    });
     let mut answers = BufReader::new(harness_out).lines();
     let ask = |message: Value| {
         let mut bytes = serde_json::to_vec(&message).unwrap();
@@ -342,22 +549,27 @@ async fn a_harness_through_the_relay_gets_a_session_of_its_own() {
     let pid = place["result"]["structuredContent"]["pid"]
         .as_i64()
         .unwrap() as libc::pid_t;
-    // The view's lookup reads the session's list, once it has been read.
+    // The view's lookup reads the conversation's session's list, once it has
+    // been read; another conversation sees none of it.
     let uis = ListedToolUis(mcp.clone());
     let chart = McpTool::new("fixture", "show_chart").unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while uis.resource_uri(&chart).is_none() {
+        while uis.resource_uri(&conversation, &chart).is_none() {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     })
     .await
     .expect("the session's tools are listed");
     assert_eq!(
-        uis.resource_uri(&chart).unwrap().as_str(),
+        uis.resource_uri(&conversation, &chart).unwrap().as_str(),
         "ui://fixture/chart.html"
     );
     assert_eq!(
-        uis.resource_uri(&McpTool::new("fixture", "remember").unwrap()),
+        uis.resource_uri(&SessionId::new("another").unwrap(), &chart),
+        None
+    );
+    assert_eq!(
+        uis.resource_uri(&conversation, &McpTool::new("fixture", "remember").unwrap()),
         None
     );
     // The harness goes; its stand-in and session end, and the server with them.
@@ -371,7 +583,7 @@ async fn a_harness_through_the_relay_gets_a_session_of_its_own() {
     })
     .await
     .expect("the server ends with its stand-in");
-    assert_eq!(uis.resource_uri(&chart), None);
+    assert_eq!(uis.resource_uri(&conversation, &chart), None);
 }
 
 #[test]

@@ -50,7 +50,7 @@ use crate::core::RunError;
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
     application::agent_execution::providers::ExecutableUseSnapshot,
-    infrastructure::acp::sessions::StdioMcpServer,
+    infrastructure::acp::sessions::{StandInSessions, StdioMcpServer},
 };
 #[cfg(unix)]
 use nessa_sdk::{
@@ -77,6 +77,11 @@ pub(super) struct AgentsConfig {
     pub workspace: PathBuf,
     #[serde(default)]
     pub mcp_servers: Vec<StdioMcpServer>,
+    /// Where each provider open's MCP stand-ins get their session token: the
+    /// gateway's grants once MCP is composed ([`super::mcp_servers`]), none
+    /// before. Never configured.
+    #[serde(skip)]
+    pub stand_ins: StandInSessions,
     /// The agent a conversation runs on when nothing else names one.
     ///
     /// Left out where only one agent is configured, because there is nothing to
@@ -998,6 +1003,7 @@ pub(super) mod build {
             workspace,
             tools_enabled: runtime.tools_enabled,
             mcp_servers: config.mcp_servers.clone(),
+            stand_ins: config.stand_ins.clone(),
             permissions: PermissionOfferPolicy::once_only(),
             // All four from protocol/defaults/agent-startup-budgets.json,
             // which the client compiles in too: a client that gives up before

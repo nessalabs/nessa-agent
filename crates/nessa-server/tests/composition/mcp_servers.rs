@@ -25,6 +25,7 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
         catalog: PathBuf::from("/runtime/models.json"),
         workspace: std::env::temp_dir(),
         mcp_servers: servers,
+        stand_ins: Default::default(),
         selected: None,
         runtimes: HashMap::new(),
     }

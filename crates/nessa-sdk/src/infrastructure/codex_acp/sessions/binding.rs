@@ -227,15 +227,13 @@ impl AgentProvider for CodexAcpProvider {
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
-            let (restore, control) = request.into_parts();
             acp_binding::open(
                 self.process_factory(),
                 self.config.clone(),
                 self.capabilities.clone(),
                 self.profile(),
                 self.audit.clone(),
-                restore,
-                control,
+                request,
             )
             .await
         })

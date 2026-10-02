@@ -16,10 +16,10 @@ use super::agent::{agent_search_path, AgentsConfig};
 use crate::core::RunError;
 use crate::mcp_servers::{
     domain::{configuration_digest, relay_arguments},
-    infrastructure::{bind, BoundRelay, Relay},
+    infrastructure::{bind, BoundRelay, ConversationGrants, Relay},
 };
 use nessa_sdk::infrastructure::{
-    acp::sessions::StdioMcpServer,
+    acp::sessions::{StandInSessions, StdioMcpServer},
     clock::RuntimeClock,
     mcp::{McpServerLaunch, McpServers},
 };
@@ -102,7 +102,8 @@ pub(super) fn stand_ins(
 }
 
 /// Take over `agents`' MCP servers: start nothing yet, bind the relay socket
-/// at `socket` ([`relay_socket`]), and replace each server with its stand-in run by `gateway`.
+/// at `socket` ([`relay_socket`]), replace each server with its stand-in run by `gateway`,
+/// and give each provider open a grant whose token its stand-ins carry.
 /// `None` when no server is configured, or when the socket cannot be bound —
 /// then `agents` is left with no MCP servers, and why is logged.
 ///
@@ -150,9 +151,11 @@ pub(super) async fn compose(
             )
         })
         .collect();
+    let grants = ConversationGrants::new(servers.clone());
     agents.mcp_servers = stand_ins;
+    agents.stand_ins = StandInSessions::granted_by(Arc::new(grants.clone()));
     Ok(Some(McpComposition {
-        relay: Arc::new(Relay::new(servers.clone(), digests)),
+        relay: Arc::new(Relay::new(servers.clone(), digests, grants)),
         servers,
         listener,
     }))

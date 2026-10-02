@@ -128,7 +128,7 @@ impl AcpProfile for ClaudeProfile {
         } else {
             json!([])
         };
-        let servers: Vec<_> = config.mcp_servers.iter().map(|server| json!({"name":server.name,"command":server.command,"args":server.args,"env":[]})).collect();
+        let servers = config.mcp_server_entries();
         let allowed_servers: Vec<_> = config
             .mcp_servers
             .iter()

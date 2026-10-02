@@ -120,7 +120,8 @@ app widgets alike.
   gateway restart ends every session, so a restored conversation's handles
   are gone and the server says so; a server that exits ends its stand-in, as
   when the harness owned it; and which conversation a stand-in belongs to is
-  carried to the gateway by #348, before any app method exists. The SDK and
+  carried to the gateway by a token issued for each open, in the stand-in's
+  environment (#348), before any app method exists. The SDK and
   protocol carry tool identity and `_meta`, which also helps any tool view in
   the transcript.
 - A view like experiments becomes a package with its own release, testable in a

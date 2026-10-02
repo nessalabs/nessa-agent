@@ -140,11 +140,7 @@ impl AcpProfile for CodexProfile {
         // opened from its own configuration, which this binding supplies at
         // launch and verifies below. Only the workspace and the trusted MCP
         // servers belong in the request itself.
-        let servers: Vec<_> = config
-            .mcp_servers
-            .iter()
-            .map(|server| json!({"name":server.name,"command":server.command,"args":server.args,"env":[]}))
-            .collect();
+        let servers = config.mcp_server_entries();
         json!({"cwd":config.workspace,"mcpServers":servers})
     }
 

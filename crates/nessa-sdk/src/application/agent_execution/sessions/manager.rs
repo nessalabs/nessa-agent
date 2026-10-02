@@ -341,7 +341,11 @@ impl SessionManager {
             .expect("prepared session evidence");
         let restore = snapshot.provider_context.recorded().cloned();
         let opening = catch_unwind(AssertUnwindSafe(|| {
-            provider.open(ProviderOpenRequest::new(restore.clone(), control))
+            provider.open(ProviderOpenRequest::new(
+                self.id.clone(),
+                restore.clone(),
+                control,
+            ))
         }));
         let mut opening = match opening {
             Ok(opening) => opening,

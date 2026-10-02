@@ -1,17 +1,19 @@
 //! A real `nessa mcp-relay` process against a relay socket served here, with
 //! a real server behind it ("A session" and "A stand-in" tables): a relay
 //! killed outright still ends its server and everything the server started,
-//! and a relay whose server ends exits at once though its stdin stays open.
+//! a relay whose server ends exits at once though its stdin stays open, and
+//! a relay reads its session token from its environment, never its arguments.
 #![cfg(unix)]
 
+use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::infrastructure::{
-    acp::sessions::StdioMcpServer,
+    acp::sessions::{StandInGrant, StandInGrants, StdioMcpServer},
     clock::RuntimeClock,
     mcp::{McpServerLaunch, McpServers},
 };
 use nessa_server::mcp_servers::{
-    domain::configuration_digest,
-    infrastructure::{bind, Relay},
+    domain::{configuration_digest, SESSION_VARIABLE},
+    infrastructure::{bind, ConversationGrants, Relay},
 };
 use serde_json::{json, Value};
 use std::{
@@ -36,8 +38,9 @@ fn fixture(args: &[&str]) -> StdioMcpServer {
     }
 }
 
-/// A relay socket in `directory` serving `server`, until the runtime ends.
-async fn serve(directory: &Path, server: &StdioMcpServer) -> PathBuf {
+/// A relay socket in `directory` serving `server`, until the runtime ends,
+/// and a conversation's grant with the token its stand-ins carry.
+async fn serve(directory: &Path, server: &StdioMcpServer) -> (PathBuf, StandInGrant, String) {
     // In a directory of its own, created private by `bind`, as the gateway's is.
     let socket = directory.join("relay").join("relay.sock");
     let servers = McpServers::new(
@@ -54,8 +57,11 @@ async fn serve(directory: &Path, server: &StdioMcpServer) -> PathBuf {
         configuration_digest(&server.command, &server.args),
     )]);
     let listener = bind(&socket).await.unwrap();
-    tokio::spawn(Arc::new(Relay::new(servers, configured)).listen(listener));
-    socket
+    let grants = ConversationGrants::new(servers.clone());
+    let grant = grants.grant(&SessionId::new("conversation").unwrap());
+    let token = grant.environment()[0].1.clone();
+    tokio::spawn(Arc::new(Relay::new(servers, configured, grants)).listen(listener));
+    (socket, grant, token)
 }
 
 struct RelayProcess {
@@ -64,8 +70,15 @@ struct RelayProcess {
     output: BufReader<ChildStdout>,
 }
 impl RelayProcess {
-    fn start(socket: &Path, server: &StdioMcpServer) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_nessa"))
+    /// The relay for `server`, its session token in its environment when
+    /// there is one, as a harness gives it.
+    fn start(socket: &Path, server: &StdioMcpServer, token: Option<&str>) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_nessa"));
+        command.env_remove(SESSION_VARIABLE);
+        if let Some(token) = token {
+            command.env(SESSION_VARIABLE, token);
+        }
+        let mut child = command
             .args([
                 "mcp-relay",
                 socket.to_str().unwrap(),
@@ -140,8 +153,10 @@ async fn gone(pid: i64) {
 async fn a_relay_killed_outright_ends_its_server_and_everything_it_started() {
     let directory = tempfile::tempdir().unwrap();
     let server = fixture(&["--child"]);
-    let socket = serve(directory.path(), &server).await;
-    let relay = RelayProcess::start(&socket, &server).listed().await;
+    let (socket, _grant, token) = serve(directory.path(), &server).await;
+    let relay = RelayProcess::start(&socket, &server, Some(&token))
+        .listed()
+        .await;
     let (mut relay, place) = relay.call(1, "where").await;
     let pid = place["result"]["structuredContent"]["pid"]
         .as_i64()
@@ -161,8 +176,10 @@ async fn a_relay_killed_outright_ends_its_server_and_everything_it_started() {
 async fn a_relay_whose_server_ends_exits_though_its_stdin_stays_open() {
     let directory = tempfile::tempdir().unwrap();
     let server = fixture(&[]);
-    let socket = serve(directory.path(), &server).await;
-    let relay = RelayProcess::start(&socket, &server).listed().await;
+    let (socket, _grant, token) = serve(directory.path(), &server).await;
+    let relay = RelayProcess::start(&socket, &server, Some(&token))
+        .listed()
+        .await;
     let (relay, _) = relay.call(1, "where").await;
     let RelayProcess {
         mut child,
@@ -197,14 +214,22 @@ async fn a_relay_whose_server_ends_exits_though_its_stdin_stays_open() {
 async fn a_relay_refused_exits_with_a_failure() {
     let directory = tempfile::tempdir().unwrap();
     let server = fixture(&[]);
-    let socket = serve(directory.path(), &server).await;
+    let (socket, _grant, token) = serve(directory.path(), &server).await;
     let stale = StdioMcpServer {
         args: vec!["/old.py".into()],
-        ..server
+        ..server.clone()
     };
-    let mut relay = RelayProcess::start(&socket, &stale);
-    let status = tokio::task::spawn_blocking(move || relay.child.wait().unwrap())
-        .await
-        .unwrap();
-    assert!(!status.success());
+    // Refused for a changed server, and for a token never given or never
+    // issued.
+    for (configured, token) in [
+        (&stale, Some(token.as_str())),
+        (&server, None),
+        (&server, Some("forged")),
+    ] {
+        let mut relay = RelayProcess::start(&socket, configured, token);
+        let status = tokio::task::spawn_blocking(move || relay.child.wait().unwrap())
+            .await
+            .unwrap();
+        assert!(!status.success());
+    }
 }

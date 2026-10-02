@@ -14,7 +14,8 @@ mod protocol;
 mod sessions;
 mod stand_in;
 
-use super::{McpServers, McpSession};
+use super::{McpOwner, McpServers, McpSession};
+use crate::domain::agent_execution::sessions::SessionId;
 use crate::infrastructure::clock::manual::ManualClock;
 use fixture::{launch, Behaviour, FixtureLauncher};
 use serde_json::Value;
@@ -33,6 +34,16 @@ fn servers(behaviour: Behaviour) -> (McpServers, Arc<FixtureLauncher>, Arc<Manua
     (servers, launcher, clock)
 }
 
+/// The SDK session (a conversation's) test sessions belong to.
+fn conversation() -> SessionId {
+    SessionId::new("conversation").unwrap()
+}
+
+/// Whose test sessions are: [`conversation`], under grant 0.
+fn owner() -> McpOwner {
+    McpOwner::new(conversation(), 0)
+}
+
 /// A session on `fixture` with `behaviour`, with the servers and launcher.
 async fn session(
     behaviour: Behaviour,
@@ -45,7 +56,7 @@ async fn session(
     // Listed, as a harness lists before it calls, unless the test holds lists back.
     let lists = !behaviour.silent.contains("tools/list");
     let (servers, launcher, clock) = servers(behaviour);
-    let session = servers.open("fixture").await.unwrap();
+    let session = servers.open("fixture", owner()).await.unwrap();
     if lists {
         // A test whose lists fail on purpose sees that in its own list.
         let _ = session.list_tools().await;

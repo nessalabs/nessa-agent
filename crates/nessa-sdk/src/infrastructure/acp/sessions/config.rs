@@ -1,6 +1,7 @@
 //! Trusted host configuration for launching and supervising an ACP process.
 #![deny(missing_docs)]
 
+use super::StandInSessions;
 use crate::application::agent_execution::{
     agents::AgentError,
     providers::{ExecutableUseSnapshot, UserImageSource},
@@ -90,6 +91,10 @@ pub struct AcpConfig {
     /// Trusted MCP servers exposed by profiles that support MCP. Empty disables custom tools.
     /// Servers require tools_enabled and share the provider session lifetime.
     pub mcp_servers: Vec<StdioMcpServer>,
+    /// Where each provider open's MCP server processes get their per-open environment: a
+    /// host's grant for the SDK session being opened, held for that provider session's life.
+    /// Excluded from restoration identity, like credentials. Never persisted by the SDK.
+    pub stand_ins: StandInSessions,
     /// Allowed permission decisions offered for provider requests. Provider choices are
     /// restricted to this policy; the selected profile must support every configured scope. An
     /// answer still requires verified caller attribution and audit delivery.
@@ -200,6 +205,28 @@ pub struct AcpConfig {
     pub clock: Arc<dyn Clock>,
 }
 impl AcpConfig {
+    /// The ACP `mcpServers` entries for `session/new` and `session/resume`:
+    /// each trusted server as configured, with this open's environment. The
+    /// one statement of the entry every profile sends.
+    pub(crate) fn mcp_server_entries(&self) -> Vec<serde_json::Value> {
+        let environment: Vec<_> = self
+            .stand_ins
+            .environment()
+            .iter()
+            .map(|(name, value)| serde_json::json!({ "name": name, "value": value }))
+            .collect();
+        self.mcp_servers
+            .iter()
+            .map(|server| {
+                serde_json::json!({
+                    "name": server.name,
+                    "command": server.command,
+                    "args": server.args,
+                    "env": environment,
+                })
+            })
+            .collect()
+    }
     /// The longest an ACP binding's
     /// [`ProviderSessionDeleter::delete_session`](crate::application::agent_execution::providers::ProviderSessionDeleter::delete_session)
     /// takes to answer with these budgets: `launch_timeout` (until

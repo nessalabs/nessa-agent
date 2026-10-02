@@ -143,6 +143,17 @@ fn credential_and_context_keys_must_be_disjoint() {
     ));
 }
 
+/// Grants that give nothing.
+struct NoGrants;
+impl crate::infrastructure::acp::sessions::StandInGrants for NoGrants {
+    fn grant(
+        &self,
+        _: &crate::domain::agent_execution::sessions::SessionId,
+    ) -> crate::infrastructure::acp::sessions::StandInGrant {
+        crate::infrastructure::acp::sessions::StandInGrant::new(Vec::new(), Box::new(()))
+    }
+}
+
 #[test]
 fn fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments() {
     let (_root, config, model) = test_acp_configuration("echo", 16);
@@ -181,6 +192,12 @@ fn fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments()
         .identity(),
         original
     );
+    // A host's grants for its MCP stand-ins are not context: a fresh one
+    // each open never changes what a session resumes as.
+    let mut granted = config.clone();
+    granted.stand_ins =
+        crate::infrastructure::acp::sessions::StandInSessions::granted_by(Arc::new(NoGrants));
+    assert_eq!(provider(granted, &model).identity(), original);
     let mut left = config.clone();
     let mut right = config;
     left.arguments = vec!["ab".into(), "c".into()];

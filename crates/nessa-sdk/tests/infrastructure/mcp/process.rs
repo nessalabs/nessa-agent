@@ -51,7 +51,7 @@ async fn closes(harness: &mut Harness, waiting: u64) {
 /// A session on the fixture whose tools have been listed, as a harness lists
 /// before it calls.
 async fn listed(servers: &McpServers) -> crate::infrastructure::mcp::McpSession {
-    let session = servers.open("fixture").await.unwrap();
+    let session = servers.open("fixture", super::owner()).await.unwrap();
     session.list_tools().await.unwrap();
     session
 }
@@ -99,12 +99,16 @@ async fn gone(pid: i64) {
 #[tokio::test]
 async fn a_configured_server_runs_with_only_what_it_was_given() {
     let (servers, directory) = process(&[]);
-    let session = servers.open("fixture").await.unwrap();
+    let session = servers.open("fixture", super::owner()).await.unwrap();
     let tools = session.list_tools().await.unwrap();
     assert_eq!(tools.len(), 5);
     let chart = McpTool::new("fixture", "show_chart").unwrap();
     assert_eq!(
-        servers.tool_ui(&chart).unwrap().resource_uri().as_str(),
+        servers
+            .tool_ui(&super::conversation(), &chart)
+            .unwrap()
+            .resource_uri()
+            .as_str(),
         "ui://fixture/chart.html"
     );
     let mut harness = Harness::attach(session);
@@ -180,7 +184,7 @@ async fn the_agents_handle_resolves_in_its_own_session_and_dies_with_it() {
         format!("<p>{handle}</p>")
     );
     // Another conversation's session never gave it out.
-    let other = servers.open("fixture").await.unwrap();
+    let other = servers.open("fixture", super::owner()).await.unwrap();
     assert!(matches!(
         other.read_ui_resource(&uri).await,
         Err(McpError::Remote { code: -32002, .. })
@@ -210,7 +214,7 @@ async fn a_server_that_cannot_be_launched_is_a_start_failure() {
     )
     .unwrap();
     assert!(matches!(
-        servers.open("missing").await,
+        servers.open("missing", super::owner()).await,
         Err(McpError::Start(_))
     ));
 }
@@ -287,7 +291,7 @@ async fn every_close_returns_only_once_the_server_is_stopped() {
 #[tokio::test]
 async fn a_session_dropped_without_closing_kills_its_process_group() {
     let (servers, _) = process(&["--ignore-eof", "--child"]);
-    let session = servers.open("fixture").await.unwrap();
+    let session = servers.open("fixture", super::owner()).await.unwrap();
     let pid = i64::from(session.process_id().unwrap());
     // Its child, found as the one process whose parent it is.
     let children = std::process::Command::new("pgrep")

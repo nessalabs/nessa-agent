@@ -24,6 +24,7 @@ fn agents_config() -> AgentsConfig {
         catalog: PathBuf::from("/runtime/models.json"),
         workspace: PathBuf::from("/workspace"),
         mcp_servers: Vec::new(),
+        stand_ins: Default::default(),
         selected: None,
         runtimes: HashMap::new(),
     }

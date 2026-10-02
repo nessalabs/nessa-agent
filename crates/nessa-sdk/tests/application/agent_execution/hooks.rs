@@ -96,7 +96,7 @@ impl AgentProvider for HookProvider {
         capabilities_ref()
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
-        let (restore, _control) = request.into_parts();
+        let (_, restore, _control) = request.into_parts();
         Box::pin(async move {
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(

@@ -244,7 +244,7 @@ impl AgentProvider for TestProvider {
         capabilities_ref()
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
-        let (restore, _control) = request.into_parts();
+        let (_, restore, _control) = request.into_parts();
         Box::pin(async move {
             self.calls.opens.lock().unwrap().push(restore.clone());
             let id =

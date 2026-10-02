@@ -112,11 +112,7 @@ impl AcpProfile for OpencodeProfile {
         // the session from its own configuration and offers the rest as config
         // options, which is what `session_configuration` below then selects.
         // Only the workspace and the trusted MCP servers belong in the request.
-        let servers: Vec<_> = config
-            .mcp_servers
-            .iter()
-            .map(|server| json!({"name":server.name,"command":server.command,"args":server.args,"env":[]}))
-            .collect();
+        let servers = config.mcp_server_entries();
         json!({"cwd":config.workspace,"mcpServers":servers})
     }
 
