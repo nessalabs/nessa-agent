@@ -173,7 +173,7 @@ describe("reads", () => {
     })
   })
 
-  it("R3: a read is only a read: it opens nothing, and reads at its first revision", async () => {
+  it("R3: a read sends no create, and reads at its first revision", async () => {
     const { gateway, source } = started()
     gateway.views.set("a", view("a"))
     const transcript = await source.transcript("a")
@@ -519,7 +519,7 @@ describe("writes", () => {
     gateway.once("send", () => Promise.reject(new NessaConnectionClosedError(1006, "")))
     await expect(source.send(message)).rejects.toMatchObject({ reason: "unavailable" })
     await source.send(message)
-    // A later message opens nothing: the gateway resolves the conversation itself.
+    // A later message sends no create: the gateway resolves the conversation itself.
     expect(gateway.count("create")).toBe(0)
     const sends = gateway.calls.filter((call) => call.method === "send")
     expect(sends.map((call) => call.args[4])).toEqual([
@@ -542,6 +542,8 @@ describe("writes", () => {
       return normal()
     })
     await source.approve("a", approvalId(asked), "once", "person")
+    // Resolved once taken; the conversation after it follows as an update (W3c).
+    await flush()
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
       "a",
       "turn",
@@ -1154,17 +1156,143 @@ describe("the structural change after round 3", () => {
     expect(gateway.count("answer")).toBe(1)
   })
 
-  it("S8: reading a session taken out does not watch it", async () => {
+  it("R8: a session taken out is not read, not sent to, and not followed", async () => {
     const { gateway, source, follow, advance } = started()
     gateway.rows.set("a", row("a"))
     gateway.views.set("a", view("a", { messages: [running()] }))
     await source.index()
-    gateway.rows.delete("a")
-    await source.index()
-    await source.transcript("a")
+    await source.archive("a", "person")
+    await expect(source.transcript("a")).rejects.toMatchObject({
+      reason: "unknown-session",
+    })
+    await expect(
+      source.send({
+        sessionId: "a",
+        messageId: "m",
+        text: "Hi",
+        model,
+        initiator: "person",
+      }),
+    ).rejects.toMatchObject({ reason: "unknown-session" })
     follow()
     await advance(timing.pollMs * 3)
-    expect(gateway.count("read")).toBe(1)
+    expect(gateway.count("read")).toBe(0)
+    expect(gateway.count("send")).toBe(0)
+  })
+
+  it("S9: a session taken out during a round is not read later in that round", async () => {
+    const { gateway, source, follow, advance } = started()
+    for (const id of ["a", "b"]) {
+      gateway.rows.set(id, row(id, { running: true }))
+      gateway.views.set(id, view(id, { messages: [running()] }))
+    }
+    await source.index()
+    await source.transcript("a")
+    await source.transcript("b")
+    follow()
+    // a's read in the round is slow; meanwhile b is archived.
+    const slow = deferred<unknown>()
+    gateway.once("read", () => slow.promise)
+    await advance(timing.pollMs)
+    await source.archive("b", "person")
+    const readsOfB = gateway.calls.filter(
+      (call) => call.method === "read" && call.args[0] === "b",
+    ).length
+    slow.resolve(view("a", { messages: [running()] }))
+    await flush()
+    expect(
+      gateway.calls.filter((call) => call.method === "read" && call.args[0] === "b")
+        .length,
+    ).toBe(readsOfB)
+  })
+
+  it("W3c: an answer taken resolves even while the read after it hangs", async () => {
+    const { gateway, source } = started()
+    const asked = permission()
+    gateway.views.set(
+      "a",
+      view("a", { revision: "1", messages: [running()], permissions: [asked] }),
+    )
+    await source.transcript("a")
+    gateway.once("read", async (normal) => normal())
+    gateway.once("read", () => new Promise(() => {}))
+    await expect(
+      source.approve("a", approvalId(asked), "once", "person"),
+    ).resolves.toBeUndefined()
+    expect(gateway.count("answer")).toBe(1)
+  })
+
+  it("S8: a read crossed by a removal twice answers unknown-session rather than asking forever", async () => {
+    const { gateway, source } = started()
+    gateway.rows.set("a", row("a"))
+    gateway.views.set("a", view("a"))
+    await source.index()
+    const flap = async () => {
+      gateway.rows.delete("a")
+      await source.index()
+      gateway.rows.set("a", row("a"))
+      await source.index()
+    }
+    gateway.once("read", async (normal) => {
+      await flap()
+      return normal()
+    })
+    gateway.once("read", async (normal) => {
+      await flap()
+      return normal()
+    })
+    await expect(source.transcript("a")).rejects.toMatchObject({
+      reason: "unknown-session",
+    })
+    expect(gateway.count("read")).toBe(2)
+  })
+
+  it("C6: a first message whose call settled before the gateway answered sends neither create nor message", async () => {
+    const gateway = fakeGateway()
+    const arriving = deferred<FakeGateway["client"]>()
+    const { source, advance } = started(gateway, () => arriving.promise)
+    void source.index().catch(() => undefined)
+    const sending = source
+      .send({
+        sessionId: "s",
+        messageId: "m",
+        text: "Hi",
+        model,
+        initiator: "person",
+        start: { channelId: "gateway-conversations", title: "Hi" },
+      })
+      .catch((error: unknown) => error)
+    await advance(timing.callMs - 1)
+    expect(await Promise.race([sending, Promise.resolve("pending")])).toBe("pending")
+    // Connected just in time for the connection, too late for this message's call.
+    const ready = gateway.client
+    await advance(1)
+    arriving.resolve(ready)
+    await flush()
+    expect(await sending).toMatchObject({ reason: "unavailable" })
+    expect(gateway.count("create")).toBe(0)
+    expect(gateway.count("send")).toBe(0)
+  })
+
+  it("C6: a message whose create answered after its call settled is not sent", async () => {
+    const { gateway, source, advance } = started()
+    const created = deferred<unknown>()
+    gateway.once("create", () => created.promise)
+    const sending = source
+      .send({
+        sessionId: "s",
+        messageId: "m",
+        text: "Hi",
+        model,
+        initiator: "person",
+        start: { channelId: "gateway-conversations", title: "Hi" },
+      })
+      .catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await sending).toMatchObject({ reason: "unavailable" })
+    created.resolve({ conversationId: "s" })
+    await flush()
+    expect(gateway.count("send")).toBe(0)
   })
 })
 
