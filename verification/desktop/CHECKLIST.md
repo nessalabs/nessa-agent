@@ -154,15 +154,9 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   header held to the top left, and cut to it —
   its title never drawn stretched, any frame — and a drag leaves no pane at a size of its own. _Check:_
   `drag.mjs` (`preview-panes-take-shape`; every drag check's residue).
-- _Harmless, and not a failure:_ WebKit can update running animations in the
-  middle of a read of computed styles, so one read of a title's transforms
-  can take the copy and its content at two moments (about 1 ms apart) and
-  see a stretch that is not drawn. `drag.mjs` reads each title until two
-  reads in a row agree and judges that read; a title truly drawn stretched
-  reads the same every time, and a counter-scale started one frame off fails
-  the check in both engines; a title that never reads steadily fails as
-  unreadable. Before this rule the two stretch checks failed now and then in
-  WebKit, on `main` too; #365 has the runs and the probe.
+- _Harmless, and not a failure:_ a single read of a title's transforms in
+  WebKit that mixes two moments. How the two stretch checks read a title is
+  `recordShapes`' (`drag.mjs`), and why, with the runs and probes, is #365.
 - [ ] **A zone the fit rule refuses offers nothing; a session already on
   screen offers "Go to Pane".** _Check:_ manual (drag a session from the list
   onto four panes; drag an on-screen session).

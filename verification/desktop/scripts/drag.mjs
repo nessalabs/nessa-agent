@@ -249,18 +249,20 @@ async function recordShapes(page) {
       }
       return { sx, sy }
     }
-    // As drawn this frame. WebKit can update running animations in the
-    // middle of a read of computed styles: the read that straddles the
-    // update takes the copy and its content at two moments and sees a title
-    // stretched that is not drawn so (#365: reads of one frame gave
-    // 1.0006×1.0009 over 0ms, then 1.012×0.987 over 1.0ms, then 1.0003×1.0004
-    // over 0ms). So the chain is read until two reads in a row agree, and the
-    // agreed read is the one judged; a title truly drawn stretched — two
-    // animations on two clocks — reads the same every time (a counter-scale
-    // started a frame off fails `copy-takes-slot-shape` in both engines:
-    // #365's probe). A chain that never settles in `steadyReads` reads is
-    // marked `unsteady`, and `stretched` and `restsAs` fail it
-    // (`unsteadily`), so it is never passed for being unreadable.
+    // The scale a title is drawn at in this frame, as near as a read can
+    // tell. WebKit can update running animations in the middle of a read of
+    // computed styles, and the read that straddles the update takes the copy
+    // and its content at two moments, seeing a stretch that is not drawn
+    // (#365 recorded one frame read 1.0006×1.0009, then 1.012×0.987 over
+    // 1.0ms, then 1.0003×1.0004). So the chain is read until two reads in a
+    // row agree, and the agreed read is judged; it may be a moment later
+    // than the frame drawn, which matters only to a stretch that comes and
+    // goes within a frame. What this does not hide, as observed in #365 and
+    // re-run there whenever this changes: a counter-scale started a frame
+    // off still fails `copy-takes-slot-shape` in both engines. A chain that
+    // never settles in `steadyReads` reads is marked `unsteady`, and every
+    // check that judges a title fails it (`unsteadily`): never passed for
+    // being unreadable.
     const steadyReads = 6
     const agree = (a, b) =>
       Math.abs(a.sx - b.sx) <= 0.002 && Math.abs(a.sy - b.sy) <= 0.002
@@ -381,7 +383,6 @@ function oneWaySize(frames, from, to, label) {
   return out
 }
 
-/** Titles drawn stretched — across and down scaled apart — in any frame. */
 /**
  * A title whose transforms never read the same twice in a row in one frame
  * (`recordShapes`): what it is drawn at is unknown, so it is a failure of
@@ -391,6 +392,7 @@ function unsteadily(title, where) {
   return `${where}: ${title.of}'s title never read the same twice in a row (${JSON.stringify(title.unsteady)})`
 }
 
+/** Titles drawn stretched — across and down scaled apart — or not readable, in any frame. */
 function stretched(frames, label) {
   const bad = []
   const unread = []
