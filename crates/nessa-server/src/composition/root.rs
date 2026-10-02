@@ -257,7 +257,7 @@ impl CompositionRoot {
                     super::mcp_servers::RESOURCE_TICKET_SWEEP,
                 ),
             );
-            mcp.servers
+            (mcp.servers, mcp.ticket_recorder)
         });
         #[cfg(not(unix))]
         let _ = mcp;
@@ -361,8 +361,13 @@ impl CompositionRoot {
                     async {
                         // After agents, whose stand-ins end with their servers.
                         #[cfg(unix)]
-                        if let Some(servers) = mcp_servers {
+                        if let Some((servers, recorder)) = mcp_servers {
                             servers.stop().await;
+                            // Last: the conversations' ends released their
+                            // tickets, and each end is recorded before exit.
+                            if let Some(recorder) = recorder {
+                                recorder.finish().await;
+                            }
                         }
                     },
                     Duration::from_secs(30),

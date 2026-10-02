@@ -95,6 +95,72 @@ the app's, on that caller's behalf ([design](../../design/mcp-app-calls.md)).
 desktop is a pane beside the conversation, as ChatGPT's desktop draws it; the
 window place serves a sidebar entry; `pip` is not offered.
 
+**The sandbox** (#349). The window frames a proxy on an origin of its own —
+the `nessa-sandbox` scheme in the desktop app (`http://nessa-sandbox.localhost`
+on Windows), a listener beside the dev server in the browser build — with
+`allow-scripts allow-same-origin`, as the spec requires of the proxy; the
+proxy frames the app's document as `srcdoc` with `allow-scripts` alone, so the
+app's origin is opaque. With `allow-same-origin` there too, every app would
+share the proxy's origin: one app could script another's proxy through
+`top[i]` and drive that app's bridge, and all would share storage. Hosts that
+give each app an origin of its own avoid that; a custom scheme and a dev
+listener cannot give one per server on every platform, so an app here has no
+storage or cookies, and its requests carry `Origin: null`. An origin per
+server is the change that would allow more. The CSP is written from the
+parsed parts of `_meta.ui.csp` alone (with `form-action 'none'` beside the
+spec's directives); nothing declared means no network. The proxy applies it
+to its own document before it makes the app's frame — its `frame-src` is what
+holds the frame when the app navigates it, which a policy inside the app's
+document alone does not (review round 1 on #349 found exactly that escape) —
+and the app's document carries it first as well. `frameDomains` is not
+applied: `frame-src` is always `'none'`, so the app's frame loads nothing but
+its own document — a nested frame loads nothing but inline content, and no
+navigation of its own frame goes anywhere — and the app is told so in the
+domains it is told were approved. A nested frame needs an origin per app, and Tauri's navigation policy to tell a
+frame's load from the window's (it would hand a declared frame to the
+person's browser); round 2 on #349 showed what a declared frame lets an app's
+frame become. When the app's document goes anyway — a navigation refused, a
+reload, a rewritten document — the proxy knows it by which document the
+frame holds, not by its `load` events alone (WebKit fires one for a move to
+a fragment, and both for going back across one): the reporter, first in
+every document, mints an id the document cannot read and says it at once
+and in answer to each numbered check the browser delivers from the proxy
+(never one the app dispatches), with the token the proxy wrote into the
+reporter alone.
+The proxy pins the first; another named, or a `load` of the frame whose
+latest check that one does not answer within the host's initialize
+deadline, is the app's departure. The proxy then stops relaying, removes
+the frame and tells the host, which fails the view. The reporter's word on
+`pagehide` says it sooner while the app leaves it in place; the guarantee
+is not its (round 3 on #349 erased it with `document.open()`). An
+`about:srcdoc` document resolves a link to a fragment against the proxy's
+URL, which the policy refuses, so the reporter keeps such links in their
+document. Permissions (`camera`, …) and
+`_meta.ui.domain` are not granted.
+
+What the sandbox does not hold, and is not claimed to: CSP does not govern
+WebRTC, so an app can reach a STUN or TURN host it did not declare; a server
+may declare a loopback domain (`http://127.0.0.1:…`), as the spec allows for
+an app in development, and its app then reaches that local service, with
+`Origin: null`; and in the desktop app, whether WebKit refuses an app's
+navigation of its own frame (by the proxy's `frame-src`) before Tauri's
+navigation policy would hand the URL to the person's browser is not yet seen
+(`src-tauri/src/links.rs`). The app speaks for itself: a document it opens
+and never closes fires no `load`, so is never checked, nor is one that holds
+its own first load back; and a move to
+a fragment by its own script (`location.href = "#x"`, `location.assign`)
+resolves against the proxy's URL like a link, which the reporter cannot
+intercept, and ends its view (an app sets `location.hash`).
+
+**Teardown.** The host sends `ui/resource-teardown` and waits for the answer
+(or a deadline) where it ends an app itself and the place stays: an app in a
+pane or the window asking to go. When a person closes the place — a pane's
+close, ⌘W, the window left — the frame goes with it at once: an iframe's
+document is discarded when it leaves the page and reloaded if it is moved, so
+nothing sent then could be delivered, and none is sent. That is the one place
+the host does not do what the spec says it SHOULD (wait for the answer);
+honouring it would mean holding frames outside the places that draw them.
+
 **Nessa's own views ship as extensions.** A research view such as experiments
 is an MCP server with an MCP App in nessa-extensions, held to nessa-agent's
 coding standards, published separately, and usable in any MCP Apps host. It
@@ -145,6 +211,24 @@ app widgets alike.
   directory; the `openai/*` extensions Nessa chooses to support.
 - Work: #346, #347, #348, #349 in nessa-agent; nessa-extensions #1–#7. Part of
   #345.
+
+## Evidence (#349)
+
+- **The bridge**, in jsdom, through the real frame transport and the spec's
+  own messages: `widgets/app/application/bridge.test.ts`, one test at least
+  per row and ordering of the design table on #349; the parsing, the CSP, the
+  places, the host context, the lifecycle and the tool call's notifications
+  each under `widgets/app/model/`; the hosts drawing an app,
+  `widgets/app/ui/app-view.test.tsx`.
+- **In a real browser**: `verification/desktop/scripts/mcp-apps.mjs`, with
+  the fixture app (`widgets/app/fixture/`) — it renders inline, in a pane and
+  in the window; `tools/call` is answered, and refused for a hidden tool; a
+  request its CSP does not declare is blocked; its origin is opaque; it is
+  torn down on close (`verification/desktop/CHECKLIST.md` › _MCP Apps_).
+- **The desktop app's scheme** serves the proxy and nothing else
+  (`src-tauri/src/app_sandbox.rs`), and the navigation policy lets the proxy
+  and the app's `srcdoc` load in a frame (`links.rs`). Not driven by a script:
+  the scripts run the browser build.
 
 ## What each harness passes through ACP
 

@@ -1,11 +1,18 @@
 /**
  * Composition registers the sample widget plugin only beside the sample
- * workspace, whose session its widgets belong to; a window on another source
- * starts with the plugins it is given, and two under one id stop it.
+ * workspace, whose session its widgets belong to, and the fixture MCP App
+ * there only where apps are drawn; a window on another source starts with
+ * the plugins it is given, and two under one id stop it.
  */
 import { describe, expect, it } from "vitest"
 import { createDesktopDependencies } from "./dependencies"
-import { samplePlugin, samplePluginId, WidgetRegistryError } from "./widgets"
+import {
+  appPluginId,
+  fixtureServer,
+  samplePlugin,
+  samplePluginId,
+  WidgetRegistryError,
+} from "./widgets"
 import { fakeSource } from "./workspace/testing"
 
 describe("the window's widget plugins", () => {
@@ -30,5 +37,23 @@ describe("the window's widget plugins", () => {
     expect(() =>
       createDesktopDependencies({ workspace: fakeSource(), widgets: [named, named] }),
     ).toThrow(WidgetRegistryError)
+  })
+
+  it("register the fixture MCP App beside the sample workspace, only where apps are drawn", () => {
+    const fixtureApp = appPluginId(fixtureServer)
+    expect(createDesktopDependencies().widgets.plugin(fixtureApp)).toBeUndefined()
+    const { widgets } = createDesktopDependencies({
+      apps: { sandbox: undefined, platform: "web" },
+    })
+    expect(widgets.plugin(fixtureApp)).toMatchObject({
+      kind: "app",
+      server: fixtureServer,
+    })
+    expect(
+      createDesktopDependencies({
+        workspace: fakeSource(),
+        apps: { sandbox: undefined, platform: "web" },
+      }).widgets.plugin(fixtureApp),
+    ).toBeUndefined()
   })
 })

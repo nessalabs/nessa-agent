@@ -8,11 +8,13 @@
 import { useRef } from "react"
 import { Button } from "@nessa-ui/react/button"
 import { useHostContext } from "../adapters/dom/host-context"
+import { AppView } from "../app/ui/app-view"
 import { hostDraws } from "../model/host-table"
 import type { WidgetRef } from "../model/widget-ref"
 import type { WidgetAnswer } from "../model/widget-state"
 import type { WidgetHost, WidgetPlugin } from "./plugin"
 import { offeredBy, WidgetAnswerOf } from "./widget-answer"
+import { WidgetLine, WidgetWaiting } from "./widget-line"
 import "./widgets.css"
 
 export function InlineWidget({ widget, host }: { widget: WidgetRef; host: WidgetHost }) {
@@ -42,7 +44,9 @@ function InlineCard({
   const View = plugin?.kind === "native" ? plugin.views.inline : undefined
   return (
     <div ref={card} className="widget-inline" data-widget-inline={draws.kind}>
-      {draws.kind === "view" && View ? (
+      {draws.kind === "view" && plugin?.kind === "app" ? (
+        <AppView plugin={plugin} id={id} place="inline" host={host} context={context} />
+      ) : draws.kind === "view" && View ? (
         <View id={id} place="inline" host={host} context={context} />
       ) : draws.kind === "row" ? (
         <div className="widget-inline-row">
@@ -52,11 +56,13 @@ function InlineCard({
           </Button>
         </div>
       ) : draws.kind === "waiting" ? (
-        <p className="widget-waiting" role="status">
-          {draws.name}
-        </p>
+        <WidgetWaiting name={draws.name} />
       ) : draws.kind === "line" ? (
-        <p className="widget-line-inline">{draws.text}</p>
+        <WidgetLine
+          text={draws.text}
+          closes={draws.closes}
+          onClose={() => host.close()}
+        />
       ) : null}
     </div>
   )
