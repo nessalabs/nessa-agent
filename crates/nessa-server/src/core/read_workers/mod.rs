@@ -12,7 +12,3 @@
 //! Arrows are calls. Cancelled observers leave the original physical owners live.
 mod workers;
 pub(crate) use workers::{ReadWorkerError, ReadWorkers};
-
-#[cfg(test)]
-#[path = "../../../tests/core/read_workers.rs"]
-mod tests;

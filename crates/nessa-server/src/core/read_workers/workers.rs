@@ -1,7 +1,5 @@
 use std::panic;
 use std::panic::AssertUnwindSafe;
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{Builder, JoinHandle};
 use tokio::sync::watch::Receiver;
@@ -13,15 +11,13 @@ pub(crate) enum ReadWorkerError {
     WorkerPanicked,
 }
 pub(crate) struct ReadWorkers {
-    pub(crate) state: Mutex<ReadWorkerState>,
-    #[cfg(test)]
-    pub(crate) joining: AtomicUsize,
+    state: Mutex<ReadWorkerState>,
 }
-pub(crate) struct ReadWorkerState {
-    pub(crate) closed: bool,
-    pub(crate) joins: Vec<JoinHandle<()>>,
+struct ReadWorkerState {
+    closed: bool,
+    joins: Vec<JoinHandle<()>>,
     failure: Option<ReadWorkerError>,
-    pub(crate) drain: Option<Receiver<Option<Result<(), ReadWorkerError>>>>,
+    drain: Option<Receiver<Option<Result<(), ReadWorkerError>>>>,
 }
 impl ReadWorkerState {
     fn admit(&self) -> Result<(), ReadWorkerError> {
@@ -55,8 +51,6 @@ impl ReadWorkers {
                 failure: None,
                 drain: None,
             }),
-            #[cfg(test)]
-            joining: AtomicUsize::new(0),
         })
     }
     pub(crate) fn admit(&self) -> Result<(), ReadWorkerError> {
@@ -115,8 +109,6 @@ impl ReadWorkers {
                     tokio::task::spawn_blocking(move || {
                         let mut panicked = false;
                         for join in joins {
-                            #[cfg(test)]
-                            owner.joining.fetch_add(1, Ordering::SeqCst);
                             panicked |= join.join().is_err();
                         }
                         let result = {
@@ -143,3 +135,7 @@ impl ReadWorkers {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/core/read_workers.rs"]
+mod tests;

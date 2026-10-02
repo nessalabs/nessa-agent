@@ -20,6 +20,8 @@ impl TestReadGate {
         while !*open {
             open = self.released.wait(open).unwrap();
         }
+        // Panic models physical work failure, not poisoning the fixture gate.
+        drop(open);
         assert!(!self.panic_after_release, "injected read worker panic");
     }
 
@@ -144,4 +146,81 @@ async fn cancelled_read_waiter_panic_fences_without_reaping() {
 #[tokio::test]
 async fn cancelled_read_result_drop_panic_fences_without_reaping() {
     cancelled_read_panic_fences_without_reaping(true).await;
+}
+
+#[tokio::test]
+async fn shutdown_joins_later_gated_work_after_panic_and_cancelled_waiter() {
+    let workers = ReadWorkers::new();
+    let failed_gate = Arc::new(TestReadGate {
+        entered: Notify::new(),
+        panic_after_release: true,
+        open: Mutex::new(false),
+        released: Condvar::new(),
+    });
+    let held_gate = Arc::new(TestReadGate {
+        entered: Notify::new(),
+        panic_after_release: false,
+        open: Mutex::new(false),
+        released: Condvar::new(),
+    });
+    struct ReleaseGate(Arc<TestReadGate>);
+    impl Drop for ReleaseGate {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+    let _failed_release = ReleaseGate(failed_gate.clone());
+    let _held_release = ReleaseGate(held_gate.clone());
+    let failed = {
+        let workers = workers.clone();
+        let gate = failed_gate.clone();
+        tokio::spawn(async move { workers.run("first-failed-read", move || gate.wait()).await })
+    };
+    tokio::time::timeout(Duration::from_secs(10), failed_gate.entered.notified())
+        .await
+        .unwrap();
+    let finished = Arc::new(AtomicUsize::new(0));
+    let held = {
+        let workers = workers.clone();
+        let gate = held_gate.clone();
+        let finished = finished.clone();
+        tokio::spawn(async move {
+            workers
+                .run("later-held-read", move || {
+                    gate.wait();
+                    finished.fetch_add(1, Ordering::SeqCst);
+                })
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), held_gate.entered.notified())
+        .await
+        .unwrap();
+    failed_gate.release();
+    let fault = failed.await.unwrap();
+    let mut first = Box::pin(workers.shutdown());
+    let first_pending =
+        std::future::poll_fn(|cx| Poll::Ready(matches!(first.as_mut().poll(cx), Poll::Pending)))
+            .await;
+    drop(first);
+    let mut second = Box::pin(workers.shutdown());
+    let second_pending =
+        std::future::poll_fn(|cx| Poll::Ready(matches!(second.as_mut().poll(cx), Poll::Pending)))
+            .await;
+    let before_release = finished.load(Ordering::SeqCst);
+    held_gate.release();
+    let shutdown = second.await;
+    held.await.unwrap().unwrap();
+    assert_eq!(fault, Err(ReadWorkerError::WorkerPanicked));
+    assert!(
+        first_pending && second_pending,
+        "cancelled wait retains the later physical join"
+    );
+    assert_eq!(before_release, 0);
+    assert_eq!(finished.load(Ordering::SeqCst), 1);
+    assert_eq!(shutdown, Err(ReadWorkerError::WorkerPanicked));
+    assert_eq!(
+        workers.shutdown().await,
+        Err(ReadWorkerError::WorkerPanicked)
+    );
 }
