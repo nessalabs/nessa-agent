@@ -4,7 +4,8 @@
 //! each ended exactly once — allowed, denied, expired, or withdrawn.
 use super::mcp_apps::{McpAppRef, McpAppWithdrawal};
 use super::view::{
-    ConversationPermission, ConversationPermissionOption, ConversationPermissionOrigin,
+    ConversationPermission, ConversationPermissionOption, ConversationPermissionOptionEffect,
+    ConversationPermissionOrigin,
 };
 use std::{
     collections::BTreeMap,
@@ -126,10 +127,12 @@ impl AppReviews {
                 ConversationPermissionOption {
                     id: ALLOW.into(),
                     label: "Allow".into(),
+                    effect: ConversationPermissionOptionEffect::Allow,
                 },
                 ConversationPermissionOption {
                     id: DENY.into(),
                     label: "Deny".into(),
+                    effect: ConversationPermissionOptionEffect::Deny,
                 },
             ],
             origin: ConversationPermissionOrigin::App {

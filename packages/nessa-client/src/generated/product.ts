@@ -470,7 +470,16 @@ export interface ConversationPermissionOption {
   id: string
   /** Provider label for this option. */
   label: string
+  /** What choosing this option decides for the reviewed request, as the gateway's domain classified the provider's offer: allow it, or deny it. A surface picks an option by this, never by its label or identifier. */
+  effect: ConversationPermissionOptionEffect
 }
+/** Whether a permission option allows or denies the reviewed request. Persistent choices are never offered, so neither value reaches beyond this one request. */
+export const ConversationPermissionOptionEffect = {
+  Allow: "allow",
+  Deny: "deny",
+} as const
+export type ConversationPermissionOptionEffect =
+  (typeof ConversationPermissionOptionEffect)[keyof typeof ConversationPermissionOptionEffect]
 /** A pending review with its complete offered choices. */
 export interface ConversationPermission {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */

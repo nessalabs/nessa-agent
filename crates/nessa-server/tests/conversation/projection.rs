@@ -1,6 +1,6 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 use super::projection::{bound_view, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES};
-use super::view::ConversationTranscriptState;
+use super::view::{ConversationPermissionOptionEffect, ConversationTranscriptState};
 use super::{
     retained_view, ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
     ConversationAttachmentEvidenceFailureCode, ConversationCaller, ConversationCapabilities,
@@ -959,6 +959,66 @@ fn committed_partial_progress_cannot_be_replaced_by_an_older_complete_read() {
         ConversationTranscriptState::Partial
     );
     assert!(!projection.read().capabilities.permissions);
+}
+
+#[test]
+fn a_review_says_what_each_offered_option_decides() {
+    let options = PermissionOptions::new(
+        vec![
+            PermissionOption::new(
+                PermissionOptionId::new("first").unwrap(),
+                "Not like this",
+                PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+            )
+            .unwrap(),
+            PermissionOption::new(
+                PermissionOptionId::new("second").unwrap(),
+                "Go ahead",
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+            )
+            .unwrap(),
+        ],
+        &PermissionOfferPolicy::once_only(),
+    )
+    .unwrap();
+    let ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        options,
+    })]);
+    let mut projection = projection();
+    projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        Some(&ExecutionId::new("execution").unwrap()),
+    );
+    projection.transcript_state(ConversationTranscriptState::Complete);
+    let view = projection.read();
+    let offered: Vec<_> = view.permissions[0]
+        .options
+        .iter()
+        .map(|option| (option.id.as_str(), option.effect))
+        .collect();
+    // The effect is the domain's decision, whatever the label or the order.
+    assert_eq!(
+        offered,
+        [
+            ("first", ConversationPermissionOptionEffect::Deny),
+            ("second", ConversationPermissionOptionEffect::Allow),
+        ]
+    );
 }
 
 #[test]

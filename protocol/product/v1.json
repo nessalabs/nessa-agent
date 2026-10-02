@@ -1043,9 +1043,18 @@
           "maxLength": 2048,
           "x-utf8MaxBytes": 2048,
           "description": "Provider label for this option."
+        },
+        "effect": {
+          "$ref": "#/$defs/ConversationPermissionOptionEffect",
+          "description": "What choosing this option decides for the reviewed request, as the gateway's domain classified the provider's offer: allow it, or deny it. A surface picks an option by this, never by its label or identifier."
         }
       },
-      "required": ["id", "label"]
+      "required": ["id", "label", "effect"]
+    },
+    "ConversationPermissionOptionEffect": {
+      "type": "string",
+      "description": "Whether a permission option allows or denies the reviewed request. Persistent choices are never offered, so neither value reaches beyond this one request.",
+      "enum": ["allow", "deny"]
     },
     "ConversationPermission": {
       "type": "object",

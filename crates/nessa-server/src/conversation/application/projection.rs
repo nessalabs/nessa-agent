@@ -3,8 +3,9 @@ use super::view::{
     ConversationCapabilities, ConversationLifecycle, ConversationLifecyclePhase,
     ConversationMcpTool, ConversationMessage, ConversationMessageStatus, ConversationPart,
     ConversationPending, ConversationPendingMode, ConversationPermission,
-    ConversationPermissionOption, ConversationPermissionOrigin, ConversationQuestion,
-    ConversationTool, ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
+    ConversationQuestion, ConversationTool, ConversationTranscriptState, ConversationView,
+    MAX_STRUCTURED_CONTENT_BYTES,
 };
 use super::{McpToolUis, NoMcpToolUis};
 use crate::conversation::domain::ConversationId;
@@ -587,6 +588,7 @@ impl Projection {
                 .map(|option| ConversationPermissionOption {
                     id: option.id().as_str().into(),
                     label: option.label().into(),
+                    effect: ConversationPermissionOptionEffect::from(option.decision().effect()),
                 })
                 .collect(),
         };
