@@ -95,6 +95,10 @@ struct Session {
     /// The server's answer to `initialize`, given to the harness as its own.
     initialized: Arc<Value>,
     process: Mutex<Option<ServerProcess>>,
+    /// Set once the process taken from `process` has been stopped — or
+    /// dropped, which kills its group — so a close that found it already
+    /// taken waits for that, not for nothing.
+    stopped: watch::Sender<bool>,
     /// The tools as this session last listed them; `None` until a list has
     /// finished.
     tools: RwLock<Option<Arc<Listed>>>,
@@ -128,6 +132,7 @@ impl Drop for Owner {
     fn drop(&mut self) {
         // Dropping the process kills its group.
         drop(self.0.close_now(McpError::Closed));
+        self.0.stopped.send_replace(true);
     }
 }
 impl Drop for Session {
@@ -258,6 +263,8 @@ impl McpServers {
                 server: server.to_owned(),
                 connection,
                 initialized: Arc::new(initialized),
+                // A server with no process of its own is stopped already.
+                stopped: watch::channel(process.is_none()).0,
                 process: Mutex::new(process),
                 tools: RwLock::new(None),
                 visibility: Arc::default(),
@@ -418,15 +425,34 @@ impl McpSession {
 
     /// Close the session: calls waiting on it end with
     /// [`McpError::Closed`], the server's stdin is closed, and a server still
-    /// running two seconds later is killed with its process group.
+    /// running two seconds later is killed with its process group. Returns
+    /// once the server is stopped, whichever close — this one, another
+    /// clone's, or [`McpServers::stop`] — is stopping it.
     pub async fn close(&self) {
         close(self.owner.0.clone(), McpError::Closed).await;
     }
 }
 
+/// Close `session` and return once its server is stopped. The close that
+/// takes the process stops it; any other waits for that one to finish.
 async fn close(session: Arc<Session>, cause: McpError) {
+    let mut stopped = session.stopped.subscribe();
     if let Some(process) = session.close_now(cause) {
+        // Said stopped however this ends: finished, or cancelled with the
+        // process dropped, which kills its group.
+        let _said = Stopped(&session.stopped);
         process.stop().await;
+        return;
+    }
+    // The session holds the sender, so this ends.
+    let _ = stopped.wait_for(|stopped| *stopped).await;
+}
+
+/// Says a session's server is stopped when dropped.
+struct Stopped<'a>(&'a watch::Sender<bool>);
+impl Drop for Stopped<'_> {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
     }
 }
 

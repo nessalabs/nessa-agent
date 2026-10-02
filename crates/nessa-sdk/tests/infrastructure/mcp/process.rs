@@ -63,12 +63,29 @@ async fn call(harness: &mut Harness, id: u64, name: &str) -> Value {
     harness.next().await.expect("an answer")
 }
 
-fn alive(pid: i64) -> bool {
+/// Whether `pid` exists at all, an exit status not yet collected included:
+/// what a process this side started and must reap is checked with.
+fn exists(pid: i64) -> bool {
     // SAFETY: signal 0 only asks whether the process exists.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
-/// Until `pid` is gone, within five seconds.
+/// Whether `pid` is still running: a zombie is not. A descendant killed with
+/// its group is reaped by whatever adopted it, which in a container may be
+/// never.
+fn alive(pid: i64) -> bool {
+    if !exists(pid) {
+        return false;
+    }
+    let state = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let state = String::from_utf8_lossy(&state.stdout);
+    !state.trim().is_empty() && !state.trim_start().starts_with('Z')
+}
+
+/// Until `pid` is no longer running, within five seconds.
 async fn gone(pid: i64) {
     tokio::time::timeout(Duration::from_secs(5), async {
         while alive(pid) {
@@ -230,7 +247,41 @@ async fn a_closed_session_has_no_server_process_left_once_close_returns() {
     // It ignores its closed stdin: killed after the grace, and reaped before
     // close returns, so nothing of it is left — not even an exit status.
     session.close().await;
-    assert!(!alive(pid), "process {pid} is left after close returned");
+    assert!(!exists(pid), "process {pid} is left after close returned");
+}
+
+#[tokio::test]
+async fn every_close_returns_only_once_the_server_is_stopped() {
+    let (servers, _) = process(&["--ignore-eof"]);
+    let session = listed(&servers).await;
+    let pid = i64::from(session.process_id().unwrap());
+    // One close takes the server and waits out its grace; another, racing
+    // it, finds it taken and must wait too.
+    let first = tokio::spawn({
+        let session = session.clone();
+        async move { session.close().await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let started = std::time::Instant::now();
+    session.close().await;
+    assert!(!exists(pid), "process {pid} is left after the second close");
+    assert!(
+        started.elapsed() >= Duration::from_secs(1),
+        "it did not wait"
+    );
+    first.await.unwrap();
+    // As does stopping every session while one is closing.
+    let (servers, _) = process(&["--ignore-eof"]);
+    let session = listed(&servers).await;
+    let pid = i64::from(session.process_id().unwrap());
+    let closing = tokio::spawn({
+        let session = session.clone();
+        async move { session.close().await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    servers.stop().await;
+    assert!(!exists(pid), "process {pid} is left after stop returned");
+    closing.await.unwrap();
 }
 
 #[tokio::test]

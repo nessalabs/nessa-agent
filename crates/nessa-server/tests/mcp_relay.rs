@@ -109,9 +109,20 @@ impl RelayProcess {
     }
 }
 
+/// Whether `pid` is still running: a zombie is not. A descendant killed with
+/// its group is reaped by whatever adopted it, which in a container may be
+/// never.
 fn alive(pid: i64) -> bool {
     // SAFETY: signal 0 only asks whether the process exists.
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
+        return false;
+    }
+    let state = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let state = String::from_utf8_lossy(&state.stdout);
+    !state.trim().is_empty() && !state.trim_start().starts_with('Z')
 }
 
 async fn gone(pid: i64) {
