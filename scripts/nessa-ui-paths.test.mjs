@@ -4,9 +4,11 @@ import { test } from "node:test"
 
 import {
   nessaUiPaths,
+  sharedTypes,
   tsconfigPathViolations,
   tsconfigPaths,
   tsconfigTextViolations,
+  withTsconfigPaths,
   viteAliases,
 } from "./nessa-ui-paths.mjs"
 
@@ -88,19 +90,21 @@ test("a specifier's punctuation is matched literally", () => {
   assert.equal(alias.find.test("@a.b/y"), true)
 })
 
-test("tsconfig's paths are the table's: a prefix becomes p*, a whole specifier stays whole", () => {
+test("tsconfig's paths are the table's, then the shared types: a prefix becomes p*, a whole specifier stays whole", () => {
   assert.deepEqual(tsconfigPaths([{ specifier: "@x/", directory: "d/" }]), {
     "@x/*": ["./node_modules/@nessa-ui/react/src/d/*"],
+    ...sharedTypes,
   })
   assert.deepEqual(
     tsconfigPaths([{ specifier: "@x/y", directory: "d/y", whole: true }]),
     {
       "@x/y": ["./node_modules/@nessa-ui/react/src/d/y"],
+      ...sharedTypes,
     },
   )
 })
 
-test("the repository's tsconfig.json agrees with the table", () => {
+test("the repository's tsconfig.json is what the table writes", () => {
   const tsconfig = JSON.parse(
     readFileSync(new URL("../tsconfig.json", import.meta.url), "utf8"),
   )
@@ -118,16 +122,62 @@ test("tsconfig disagreeing with the table is reported: an entry missing, or else
     /maps "@nessa-ui\/react\/\*" to \["\.\/elsewhere\/\*"\]/,
   )
 
-  assert.equal(tsconfigPathViolations(undefined).length, nessaUiPaths.length)
+  assert.equal(
+    tsconfigPathViolations(undefined).length,
+    nessaUiPaths.length + Object.keys(sharedTypes).length,
+  )
+  for (const violation of tsconfigPathViolations(missing))
+    assert.match(violation, /run `pnpm ui:paths`/)
 })
 
-test("entries the table does not have are not read", () => {
-  const withOthers = {
-    ...tsconfigPaths(),
-    react: ["./node_modules/@types/react"],
-    "@/app/*": ["./src/app/*"],
+test("any entry the table does not write is reported, whatever it is", () => {
+  const agreed = tsconfigPaths()
+  for (const [key, targets] of [
+    // A package name Vite and Vitest resolve another way (to its build).
+    ["@nessa-ui/react", ["./node_modules/@nessa-ui/react/src/index.ts"]],
+    // An alias that only type imports would use, which no build would load.
+    ["@ui/*", ["./node_modules/@nessa-ui/react/src/components/*"]],
+    // The app's own, leading nowhere near the design system.
+    ["@/app/*", ["./src/app/*"]],
+  ]) {
+    const violations = tsconfigPathViolations({ ...agreed, [key]: targets })
+    assert.equal(violations.length, 1, key)
+    assert.match(
+      violations[0],
+      new RegExp(`has "${key.replace(/[*/]/g, "\\$&")}", which .* does not write`),
+    )
   }
-  assert.deepEqual(tsconfigPathViolations(withOthers), [])
+})
+
+test("the shared types are required too", () => {
+  const { react: _react, ...withoutReact } = tsconfigPaths()
+  assert.match(tsconfigPathViolations(withoutReact).join("\n"), /has no "react"/)
+})
+
+test("the writer sets paths from the table and keeps everything else", () => {
+  const before = JSON.stringify(
+    {
+      extends: "./base.json",
+      compilerOptions: { strict: true, paths: { "@ui/*": ["./x/*"] } },
+      include: ["src"],
+    },
+    null,
+    2,
+  )
+  const after = withTsconfigPaths(before)
+  const written = JSON.parse(after)
+  assert.equal(written.extends, "./base.json")
+  assert.equal(written.compilerOptions.strict, true)
+  assert.deepEqual(written.include, ["src"])
+  assert.deepEqual(written.compilerOptions.paths, tsconfigPaths())
+  assert.deepEqual(tsconfigTextViolations(after), [])
+  assert.equal(withTsconfigPaths(after), after)
+  assert.ok(after.endsWith("}\n"))
+})
+
+test("the repository's tsconfig.json is exactly what the writer makes of it", () => {
+  const text = readFileSync(new URL("../tsconfig.json", import.meta.url), "utf8")
+  assert.equal(withTsconfigPaths(text), text)
 })
 
 test("a key inherited from Object.prototype is not read as an entry", () => {

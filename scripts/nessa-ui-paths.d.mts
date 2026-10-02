@@ -12,6 +12,7 @@ export interface NessaUiPath {
 
 export const nessaUiPaths: readonly NessaUiPath[]
 export const linkedSourceRoot: string
+export const sharedTypes: Readonly<Record<string, readonly string[]>>
 
 export function viteAliases(
   sourceRoot: string,
@@ -29,3 +30,5 @@ export function tsconfigTextViolations(
   text: string,
   paths?: readonly NessaUiPath[],
 ): string[]
+
+export function withTsconfigPaths(text: string, paths?: readonly NessaUiPath[]): string

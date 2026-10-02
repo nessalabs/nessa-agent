@@ -189,6 +189,7 @@ and `just release` there.
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm ui:check` | Confirm the vendored UI matches `nessa-ui-revision` (offline, runs before `typecheck`, `dev`, `build`, `test`) |
 | `pnpm ui:types` | Reconcile the vendored UI with `nessa-ui-revision` |
+| `pnpm ui:paths` | Write `tsconfig.json`'s `paths` from the design system's path table (`scripts/nessa-ui-paths.mjs`) |
 
 ### Desktop verification
 
@@ -569,10 +570,10 @@ The app imports the package's source, not its build: a component by
 not export, such as the shared size observer, by `@nessa-ui/react/lib/<name>`.
 One table, `scripts/nessa-ui-paths.mjs`, maps each of these to the package's
 source. `vite.config.ts` and `vitest.config.ts` build their aliases from it.
-`tsconfig.json` cannot import it, so `pnpm architecture` fails when one of
-the table's entries is missing from its `paths` or points elsewhere. To add a
-path, add it to the table, then to `tsconfig.json` as the check's message
-says.
+`tsconfig.json` cannot import it, so its `paths` are written from it by
+`pnpm ui:paths`, and `pnpm architecture` fails when they are anything else —
+an entry missing, pointing elsewhere, or added by hand. To change a path,
+change the table and run `pnpm ui:paths`.
 
 The composer requires the shared Markdown AST extension and on-demand math/diagram
 renderers in the pinned UI revision. To reconcile a managed clone with that pin:

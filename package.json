@@ -46,6 +46,7 @@
     "check": "pnpm frontend:check && pnpm agents:check && pnpm server:fmt:check && pnpm server:clippy && pnpm server:test && pnpm auth:fmt:check && pnpm auth:clippy && pnpm auth:test && pnpm sdk:check && pnpm mcp:check && pnpm database:check && pnpm images:check && pnpm desktop:check",
     "ui:check": "node scripts/ensure-nessa-ui.mjs --check",
     "ui:types": "node scripts/ensure-nessa-ui.mjs --update",
+    "ui:paths": "node scripts/nessa-ui-paths.mjs --write",
     "tauri": "tauri",
     "app": "node scripts/desktop/dev.mjs",
     "app:build": "node scripts/desktop/build.mjs",

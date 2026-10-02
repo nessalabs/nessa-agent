@@ -6,8 +6,9 @@
  * `paths`), Vite, and Vitest. They were three hand-kept copies, and they had
  * already parted: Vitest sent `@nessa-ui/react/app-shell` to a components
  * directory that does not exist. Now Vite and Vitest build their aliases from
- * this table, and `scripts/check-architecture.mjs` fails when `tsconfig.json`,
- * which cannot import code, disagrees with it (`tsconfigPathViolations`).
+ * this table. `tsconfig.json` cannot import code, so its `paths` are written
+ * from it (`pnpm ui:paths`), and `scripts/check-architecture.mjs` fails when
+ * they are not exactly what that writes (`tsconfigPathViolations`).
  *
  * Each rule maps an import prefix to a directory of the package's `src/`:
  *
@@ -28,6 +29,9 @@
  * `nessa-ui-paths.d.mts`'s.
  */
 
+import { readFileSync, writeFileSync } from "node:fs"
+import { fileURLToPath, pathToFileURL } from "node:url"
+
 /** @typedef {import("./nessa-ui-paths.d.mts").NessaUiPath} NessaUiPath */
 
 /** @type {readonly NessaUiPath[]} */
@@ -43,6 +47,18 @@ export const nessaUiPaths = [
   { specifier: "@/lib/", directory: "lib/" },
   { specifier: "@/provider/", directory: "provider/" },
 ]
+
+/**
+ * The other entries `tsconfig.json`'s `paths` holds, and why: the vendored
+ * checkout carries its own `@types/react`, so without these TypeScript reads
+ * React's types twice — once for the app, once for the design system's source
+ * — and the two do not assign to each other (155 errors when removed). They
+ * are TypeScript's half of Vite's `dedupe: ["react", "react-dom"]`.
+ */
+export const sharedTypes = {
+  react: ["./node_modules/@types/react"],
+  "react-dom": ["./node_modules/@types/react-dom"],
+}
 
 /**
  * The package's `src/` as its `node_modules` link reaches it, from the project
@@ -77,35 +93,31 @@ export function viteAliases(sourceRoot, paths = nessaUiPaths) {
 }
 
 /**
- * The entries `tsconfig.json`'s `compilerOptions.paths` must hold for the
- * table: a prefix `p` becomes `p*`.
+ * `tsconfig.json`'s `compilerOptions.paths`, whole: the table's entries (a
+ * prefix `p` becomes `p*`), then `sharedTypes`.
  *
  * @param {readonly NessaUiPath[]} [paths]
  * @returns {Record<string, string[]>}
  */
 export function tsconfigPaths(paths = nessaUiPaths) {
-  return Object.fromEntries(
+  const table = Object.fromEntries(
     mostSpecificFirst(paths).map(({ specifier, directory, whole }) =>
       whole
         ? [specifier, [`${linkedSourceRoot}/${directory}`]]
         : [`${specifier}*`, [`${linkedSourceRoot}/${directory}*`]],
     ),
   )
+  return { ...table, ...sharedTypes }
 }
 
+const regenerate =
+  "run `pnpm ui:paths`, which writes them from scripts/nessa-ui-paths.mjs"
+
 /**
- * How `tsconfig.json`'s `compilerOptions.paths` disagrees with the table: one
- * of the table's entries missing, or pointing elsewhere. Empty when they
- * agree. Entries the table does not have (`react`, `react-dom`) are not
- * read. Such an entry is caught only by its use: when its key is nothing Vite
- * or Vitest can resolve, an import through it that reaches either fails
- * there. Three cases pass unnoticed, and are accepted:
- *
- * - an import that never reaches them — `import type`, an import used only as
- *   a type (elided under `isolatedModules`), a file no entry or test loads;
- * - a key they resolve another way, such as a package name (`react`, or the
- *   bare `@nessa-ui/react`, which they load from its build): TypeScript then
- *   reads types from one place while the app runs another.
+ * How `tsconfig.json`'s `compilerOptions.paths` differs from `tsconfigPaths()`:
+ * an entry missing, pointing elsewhere, or there that it does not write — any
+ * key at all, so an alias only TypeScript knew cannot pass unnoticed. Empty
+ * when they are the same.
  *
  * @param {Record<string, unknown> | undefined} actual
  * @param {readonly NessaUiPath[]} [paths]
@@ -119,13 +131,19 @@ export function tsconfigPathViolations(actual, paths = nessaUiPaths) {
     const want = JSON.stringify(targets)
     if (!Object.hasOwn(given, key)) {
       violations.push(
-        `tsconfig.json paths has no "${key}"; scripts/nessa-ui-paths.mjs maps it to ${want}`,
+        `tsconfig.json paths has no "${key}" (wants ${want}); ${regenerate}`,
       )
     } else if (JSON.stringify(given[key]) !== want) {
       violations.push(
-        `tsconfig.json paths maps "${key}" to ${JSON.stringify(given[key])}; scripts/nessa-ui-paths.mjs maps it to ${want}`,
+        `tsconfig.json paths maps "${key}" to ${JSON.stringify(given[key])}, not ${want}; ${regenerate}`,
       )
     }
+  }
+  for (const key of Object.keys(given)) {
+    if (!Object.hasOwn(expected, key))
+      violations.push(
+        `tsconfig.json paths has "${key}", which scripts/nessa-ui-paths.mjs does not write; add it there, or run `pnpm ui:paths` to drop it`,
+      )
   }
   return violations
 }
@@ -149,4 +167,25 @@ export function tsconfigTextViolations(text, paths = nessaUiPaths) {
     ]
   }
   return tsconfigPathViolations(tsconfig?.compilerOptions?.paths, paths)
+}
+
+/**
+ * `tsconfig.json`'s text with its `paths` written from the table and the rest
+ * kept as it was, formatted as `JSON.stringify` with two spaces.
+ *
+ * @param {string} text
+ * @param {readonly NessaUiPath[]} [paths]
+ * @returns {string}
+ */
+export function withTsconfigPaths(text, paths = nessaUiPaths) {
+  const tsconfig = JSON.parse(text)
+  tsconfig.compilerOptions = { ...tsconfig.compilerOptions, paths: tsconfigPaths(paths) }
+  return `${JSON.stringify(tsconfig, null, 2)}\n`
+}
+
+// `pnpm ui:paths`: write `tsconfig.json`'s paths from the table.
+const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+if (invoked && process.argv.includes("--write")) {
+  const file = fileURLToPath(new URL("../tsconfig.json", import.meta.url))
+  writeFileSync(file, withTsconfigPaths(readFileSync(file, "utf8")))
 }
