@@ -17,6 +17,8 @@ use crate::{
 use event_stream::{Cursor, EventRuntime, StreamKey};
 use nessa_sync::replication::domain::Id;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 
 pub(super) struct RecordWriter {
     id: SessionId,
@@ -33,6 +35,8 @@ pub(super) struct RecordWriter {
     blocked: bool,
     receipt: Option<SessionSaveReceipt>,
     changes: Option<RecordChanges>,
+    #[cfg(test)]
+    measurements: Arc<Mutex<WriterWork>>,
 }
 impl RecordWriter {
     pub(super) async fn replay<R: EventRuntime>(
@@ -60,6 +64,8 @@ impl RecordWriter {
             blocked: false,
             receipt: None,
             changes: None,
+            #[cfg(test)]
+            measurements: Arc::default(),
         };
         loop {
             match stream_fact::read_next_fact(reader, &writer.stream, &writer.cursor)
@@ -229,19 +235,30 @@ impl RecordWriter {
         // append/reconciliation occurs until all units and the final state pass.
         SessionSaveUnit::validate_plan(base, units, observed)?;
         let mut headers = Vec::with_capacity(units.len());
+        #[cfg(test)]
+        {
+            *self.measurements.lock().unwrap() = WriterWork {
+                metadata_capacity: headers.capacity() * size_of::<Header>(),
+                ..WriterWork::default()
+            };
+        }
         let mut chain = EMPTY_CHAIN;
         for (index, unit) in units.iter().enumerate() {
-            let payload = snapshot::encode_semantic_batch(unit.changes())?;
-            super::save_group::validate_unit_payload(&payload)?;
+            let payload = self.encode_payload(EncodingPhase::Preflight, unit)?;
+            super::save_group::validate_unit_payload(payload.bytes.as_slice())?;
             let ordinal = u64::try_from(index).map_err(|_| corrupt("save unit count exhausted"))?;
-            let header = Header::unit(identity.clone(), ordinal, chain, &payload);
-            chain = header.chain(payload.len() as u64);
+            let header = Header::unit(identity.clone(), ordinal, chain, payload.bytes.as_slice());
+            chain = header.chain(payload.bytes.len() as u64);
             headers.push(header);
         }
         if observed.id != self.id {
             return Err(corrupt("semantic decisions disagree with observed session"));
         }
         let terminal = completion_for_prefix(&identity, &headers, chain, units.len())?;
+        #[cfg(test)]
+        {
+            self.measurements.lock().unwrap().terminal_capacity = terminal.body.capacity();
+        }
         // Compare original committed bytes in one sequential bounded read, not
         // a retained copy of every earlier unit or digest-only equivalence.
         let mut through = Cursor::new(self.stream.clone(), original.base());
@@ -254,7 +271,7 @@ impl RecordWriter {
                 FactRead::Complete { fact, cursor } => {
                     match fact.key.kind() {
                         FactKind::SaveUnit => {
-                            if !matches_unit(units, &headers, confirmed, &fact)? {
+                            if !self.matches_unit(units, &headers, confirmed, &fact)? {
                                 return Err(corrupt(
                                     "confirmed save unit changed or was truncated",
                                 ));
@@ -276,7 +293,13 @@ impl RecordWriter {
                     digest,
                 } => {
                     let expected = if key.kind() == FactKind::SaveUnit {
-                        encode_unit(units, &headers, confirmed)?
+                        self.encode_unit(
+                            EncodingPhase::Comparison,
+                            units,
+                            &headers,
+                            confirmed,
+                            None,
+                        )?
                     } else if key.kind() == FactKind::SaveComplete {
                         let prefix = usize::try_from(key.ordinal())
                             .map_err(|_| corrupt("aborted completion count exhausted"))?;
@@ -301,7 +324,7 @@ impl RecordWriter {
         }
         if let Some(pending) = self.pending.as_ref() {
             if pending.key.kind() == FactKind::SaveUnit
-                && !matches_unit(units, &headers, confirmed, pending)?
+                && !self.matches_unit(units, &headers, confirmed, pending)?
             {
                 return Err(corrupt("pending save unit changed before reconciliation"));
             }
@@ -333,6 +356,8 @@ impl RecordWriter {
             self.binding = Some(original.clone());
         }
         if self.pending.is_some() {
+            #[cfg(test)]
+            self.sample_buffers(0, 0);
             let pending = self.pending.as_ref().expect("retained original fact");
             let cursor = stream_fact::commit_fact(runtime, &self.stream, &self.cursor, pending)
                 .await
@@ -350,11 +375,13 @@ impl RecordWriter {
             let fact = if index == units.len() {
                 terminal.clone()
             } else {
-                encode_unit(units, &headers, index)?
+                self.encode_unit(EncodingPhase::Persistence, units, &headers, index, None)?
                     .ok_or_else(|| corrupt("save unit disappeared from immutable plan"))?
             };
             self.unfinished = true;
             self.pending = Some(fact);
+            #[cfg(test)]
+            self.sample_buffers(0, 0);
             let pending = self.pending.as_ref().expect("installed exact bytes");
             let cursor = stream_fact::commit_fact(runtime, &self.stream, &self.cursor, pending)
                 .await
@@ -385,35 +412,185 @@ fn completion_for_prefix(
     })
 }
 
-fn encode_unit(
-    units: &[SessionSaveUnit],
-    headers: &[Header],
-    index: usize,
-) -> Result<Option<FramedFact>, StorageError> {
-    let (Some(unit), Some(header)) = (units.get(index), headers.get(index)) else {
-        return Ok(None);
-    };
-    let payload = snapshot::encode_semantic_batch(unit.changes())?;
-    super::save_group::validate_unit_payload(&payload)?;
-    if Sha256::digest(&payload).as_slice() != header.payload {
-        return Err(corrupt(
-            "immutable save unit encoding changed after preflight",
-        ));
-    }
-    Ok(Some(FramedFact {
-        key: FactKey::new(FactKind::SaveUnit, None, header.ordinal)
-            .ok_or_else(|| corrupt("invalid save unit identity"))?,
-        body: header.encode(&payload),
-    }))
+#[derive(Clone, Copy)]
+enum EncodingPhase {
+    Preflight,
+    Persistence,
+    Comparison,
 }
 
-fn matches_unit(
-    units: &[SessionSaveUnit],
-    headers: &[Header],
-    index: usize,
-    fact: &FramedFact,
-) -> Result<bool, StorageError> {
-    Ok(encode_unit(units, headers, index)?.as_ref() == Some(fact))
+// The payload owns the actual codec output. Test observations follow that same
+// allocation's lifetime, without affecting storage or retry authority.
+struct EncodedPayload {
+    bytes: Vec<u8>,
+    #[cfg(test)]
+    measurements: Arc<Mutex<WriterWork>>,
+}
+#[cfg(test)]
+impl Drop for EncodedPayload {
+    fn drop(&mut self) {
+        let mut work = self.measurements.lock().unwrap();
+        work.live_payloads -= 1;
+        work.live_payload_capacity -= self.bytes.capacity();
+    }
+}
+
+impl RecordWriter {
+    fn encode_payload(
+        &self,
+        _phase: EncodingPhase,
+        unit: &SessionSaveUnit,
+    ) -> Result<EncodedPayload, StorageError> {
+        #[cfg(test)]
+        {
+            self.measurements.lock().unwrap().attempts[_phase.index()] += 1;
+        }
+        let bytes = snapshot::encode_semantic_batch(unit.changes())?;
+        #[cfg(test)]
+        {
+            let mut work = self.measurements.lock().unwrap();
+            work.completed[_phase.index()] += 1;
+            work.encoded_bytes[_phase.index()] += bytes.len();
+            work.largest_payload_capacity = work.largest_payload_capacity.max(bytes.capacity());
+            work.live_payloads += 1;
+            work.live_payload_capacity += bytes.capacity();
+            work.peak_live_payloads = work.peak_live_payloads.max(work.live_payloads);
+            work.peak_live_payload_capacity = work
+                .peak_live_payload_capacity
+                .max(work.live_payload_capacity);
+        }
+        let payload = EncodedPayload {
+            bytes,
+            #[cfg(test)]
+            measurements: self.measurements.clone(),
+        };
+        #[cfg(test)]
+        self.sample_buffers(0, 0);
+        Ok(payload)
+    }
+
+    fn encode_unit(
+        &self,
+        phase: EncodingPhase,
+        units: &[SessionSaveUnit],
+        headers: &[Header],
+        index: usize,
+        _comparison: Option<&FramedFact>,
+    ) -> Result<Option<FramedFact>, StorageError> {
+        let (Some(unit), Some(header)) = (units.get(index), headers.get(index)) else {
+            return Ok(None);
+        };
+        let payload = self.encode_payload(phase, unit)?;
+        super::save_group::validate_unit_payload(payload.bytes.as_slice())?;
+        if Sha256::digest(&payload.bytes).as_slice() != header.payload {
+            return Err(corrupt(
+                "immutable save unit encoding changed after preflight",
+            ));
+        }
+        let key = FactKey::new(FactKind::SaveUnit, None, header.ordinal)
+            .ok_or_else(|| corrupt("invalid save unit identity"))?;
+        let body = header.encode(payload.bytes.as_slice());
+        #[cfg(test)]
+        {
+            // A comparison against self.pending borrows the original allocation;
+            // it is not another physical read buffer. Both references are live.
+            let physical = _comparison
+                .filter(|fact| {
+                    self.pending
+                        .as_ref()
+                        .is_none_or(|pending| !std::ptr::eq(*fact, pending))
+                })
+                .map_or(0, |fact| fact.body.capacity());
+            self.sample_buffers(body.capacity(), physical);
+        }
+        Ok(Some(FramedFact { key, body }))
+    }
+
+    fn matches_unit(
+        &self,
+        units: &[SessionSaveUnit],
+        headers: &[Header],
+        index: usize,
+        fact: &FramedFact,
+    ) -> Result<bool, StorageError> {
+        Ok(self
+            .encode_unit(EncodingPhase::Comparison, units, headers, index, Some(fact))?
+            .as_ref()
+            == Some(fact))
+    }
+
+    #[cfg(test)]
+    fn sample_buffers(&self, envelope: usize, physical: usize) {
+        let mut work = self.measurements.lock().unwrap();
+        let sample = WriterBuffers {
+            metadata: work.metadata_capacity,
+            terminal: work.terminal_capacity,
+            pending: self.pending.as_ref().map_or(0, |fact| fact.body.capacity()),
+            physical_comparison: physical,
+            encoded_payload: work.live_payload_capacity,
+            encoded_envelope: envelope,
+        };
+        work.largest_pending_capacity = work.largest_pending_capacity.max(sample.pending);
+        work.largest_physical_capacity = work.largest_physical_capacity.max(physical);
+        work.largest_envelope_capacity = work.largest_envelope_capacity.max(envelope);
+        if sample.total() > work.peak_buffers.total() {
+            work.peak_buffers = sample;
+        }
+        if physical != 0 && sample.pending != 0 && envelope != 0 {
+            work.pending_comparison_buffers = sample;
+        }
+    }
+}
+
+#[cfg(test)]
+impl EncodingPhase {
+    fn index(self) -> usize {
+        match self {
+            Self::Preflight => 0,
+            Self::Persistence => 1,
+            Self::Comparison => 2,
+        }
+    }
+}
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+struct WriterWork {
+    attempts: [usize; 3],
+    completed: [usize; 3],
+    encoded_bytes: [usize; 3],
+    live_payloads: usize,
+    live_payload_capacity: usize,
+    peak_live_payloads: usize,
+    peak_live_payload_capacity: usize,
+    largest_payload_capacity: usize,
+    largest_envelope_capacity: usize,
+    largest_pending_capacity: usize,
+    largest_physical_capacity: usize,
+    metadata_capacity: usize,
+    terminal_capacity: usize,
+    peak_buffers: WriterBuffers,
+    pending_comparison_buffers: WriterBuffers,
+}
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+struct WriterBuffers {
+    metadata: usize,
+    terminal: usize,
+    pending: usize,
+    physical_comparison: usize,
+    encoded_payload: usize,
+    encoded_envelope: usize,
+}
+#[cfg(test)]
+impl WriterBuffers {
+    fn total(&self) -> usize {
+        self.metadata
+            + self.terminal
+            + self.pending
+            + self.physical_comparison
+            + self.encoded_payload
+            + self.encoded_envelope
+    }
 }
 
 fn binding(
@@ -480,11 +657,524 @@ mod tests {
     };
     use event_stream::{
         infrastructure::{SqliteOptions, SqliteStore},
-        EventConfig, EventReader, EventSink, NewEvent, PageLimits, Payload, PersistenceProfile,
-        Runtime, RuntimeConfig, StreamId,
+        AppendReceipt, Bounds, EventConfig, EventReader, EventSink, NewEvent, Page, PageLimits,
+        Payload, PersistenceProfile, Runtime, RuntimeConfig, ShutdownReport, StreamId,
+        SubscriptionOptions,
     };
     use rusqlite::{params, Connection};
-    use std::{path::Path, time::Duration};
+    use std::{future::Future, path::Path, pin::Pin, time::Duration};
+
+    #[derive(Clone, Debug, Default)]
+    struct RuntimeWork {
+        bounds: usize,
+        reads: usize,
+        returned_records: usize,
+        returned_accounted_bytes: usize,
+        appends: usize,
+        confirmed_appends: usize,
+    }
+    struct MeasuredRuntime {
+        runtime: Runtime<SqliteStore>,
+        work: Mutex<RuntimeWork>,
+    }
+    type RuntimeFuture<'a, T> = Pin<Box<dyn Future<Output = event_stream::Result<T>> + Send + 'a>>;
+    impl EventReader for MeasuredRuntime {
+        fn create_stream<'a, 'b, 'f>(&'a self, id: &'b StreamId) -> RuntimeFuture<'f, StreamKey>
+        where
+            'a: 'f,
+            'b: 'f,
+            Self: 'f,
+        {
+            Box::pin(self.runtime.create_stream(id))
+        }
+        fn find_stream<'a, 'b, 'f>(
+            &'a self,
+            id: &'b StreamId,
+        ) -> RuntimeFuture<'f, Option<StreamKey>>
+        where
+            'a: 'f,
+            'b: 'f,
+            Self: 'f,
+        {
+            Box::pin(self.runtime.find_stream(id))
+        }
+        fn bounds<'a, 'b, 'f>(&'a self, stream: &'b StreamKey) -> RuntimeFuture<'f, Bounds>
+        where
+            'a: 'f,
+            'b: 'f,
+            Self: 'f,
+        {
+            Box::pin(async move {
+                self.work.lock().unwrap().bounds += 1;
+                self.runtime.bounds(stream).await
+            })
+        }
+        fn read_after<'a, 'b, 'c, 'f>(
+            &'a self,
+            after: &'b Cursor,
+            limits: PageLimits,
+            through: Option<&'c Cursor>,
+        ) -> RuntimeFuture<'f, Page>
+        where
+            'a: 'f,
+            'b: 'f,
+            'c: 'f,
+            Self: 'f,
+        {
+            Box::pin(async move {
+                self.work.lock().unwrap().reads += 1;
+                let page = self.runtime.read_after(after, limits, through).await?;
+                let mut work = self.work.lock().unwrap();
+                work.returned_records += page.records.len();
+                work.returned_accounted_bytes += page
+                    .records
+                    .iter()
+                    .map(|record| record.event.accounted_bytes())
+                    .sum::<usize>();
+                Ok(page)
+            })
+        }
+    }
+    impl EventSink for MeasuredRuntime {
+        fn append<'a, 'b, 'f>(
+            &'a self,
+            stream: &'b StreamKey,
+            event: NewEvent,
+        ) -> RuntimeFuture<'f, AppendReceipt>
+        where
+            'a: 'f,
+            'b: 'f,
+            Self: 'f,
+        {
+            Box::pin(async move {
+                self.work.lock().unwrap().appends += 1;
+                let receipt = self.runtime.append(stream, event).await?;
+                self.work.lock().unwrap().confirmed_appends += 1;
+                Ok(receipt)
+            })
+        }
+    }
+    impl EventRuntime for MeasuredRuntime {
+        type Subscription = <Runtime<SqliteStore> as EventRuntime>::Subscription;
+        fn try_append<'a, 'b, 'f>(
+            &'a self,
+            stream: &'b StreamKey,
+            event: NewEvent,
+        ) -> RuntimeFuture<'f, AppendReceipt>
+        where
+            'a: 'f,
+            'b: 'f,
+            Self: 'f,
+        {
+            Box::pin(self.runtime.try_append(stream, event))
+        }
+        fn subscribe<'a, 'b, 'f>(
+            &'a self,
+            stream: &'b StreamKey,
+            options: SubscriptionOptions,
+        ) -> RuntimeFuture<'f, Self::Subscription>
+        where
+            'a: 'f,
+            'b: 'f,
+            Self: 'f,
+        {
+            Box::pin(self.runtime.subscribe(stream, options))
+        }
+        fn shutdown<'a, 'f>(&'a self, deadline: Duration) -> RuntimeFuture<'f, ShutdownReport>
+        where
+            'a: 'f,
+            Self: 'f,
+        {
+            Box::pin(self.runtime.shutdown(deadline))
+        }
+    }
+    impl MeasuredRuntime {
+        async fn open(database: &Path) -> Self {
+            Self {
+                runtime: Runtime::open(
+                    SqliteOptions::new(database.to_path_buf()),
+                    RuntimeConfig {
+                        events: EventConfig {
+                            max_bytes: super::super::record::MAX_STORED_RECORD_BYTES,
+                            minimum_persistence: PersistenceProfile::ProcessRestart,
+                        },
+                        ..RuntimeConfig::default()
+                    },
+                )
+                .await
+                .unwrap(),
+                work: Mutex::default(),
+            }
+        }
+        fn reset_work(&self) {
+            *self.work.lock().unwrap() = RuntimeWork::default();
+        }
+    }
+    fn small_plan(inputs: usize) -> (SessionSnapshot, Vec<SessionSaveUnit>) {
+        let mut candidate = snapshot::checkpoint::history_fixture(0);
+        candidate.invocations = (0..inputs)
+            .map(|index| InvocationRecord {
+                target_event_offset: None,
+                submission: SubmissionMode::Immediate,
+                request: ExecutionRequest {
+                    execution_id: ExecutionId::new(format!("input-{index}")).unwrap(),
+                    user_message: UserMessage::text_only(PromptText::new("small input").unwrap()),
+                    estimated_input_tokens: 1,
+                    reserved_output_tokens: 1,
+                },
+                actor: ActionContext::new("user", "fixture", "send").unwrap(),
+                acknowledgement: SubmissionAcknowledgement::Pending,
+                events: Vec::new(),
+                scheduling: Vec::new(),
+                cancellation: None,
+                provider_report: None,
+                local_cancellation: None,
+                local_outcome: None,
+                result: None,
+            })
+            .collect();
+        let units = std::iter::once(SessionChange::Opened {
+            id: candidate.id.clone(),
+            provider: candidate.provider.clone(),
+            context: candidate.provider_context.clone(),
+        })
+        .chain(
+            candidate
+                .invocations
+                .iter()
+                .cloned()
+                .map(|record| SessionChange::InputAccepted(Box::new(record))),
+        )
+        .map(|change| SessionSaveUnit::new(vec![change]).unwrap())
+        .collect();
+        (candidate, units)
+    }
+    async fn fresh_measured_writer(runtime: &MeasuredRuntime) -> RecordWriter {
+        let id = SessionId::new("conversation").unwrap();
+        let stream = runtime
+            .create_stream(&StreamId::new(id.as_str()).unwrap())
+            .await
+            .unwrap();
+        RecordWriter::replay(runtime, id, stream).await.unwrap()
+    }
+    fn measured_work(writer: &RecordWriter, runtime: &MeasuredRuntime, row: &str) -> WriterWork {
+        let work = writer.measurements.lock().unwrap().clone();
+        let io = runtime.work.lock().unwrap().clone();
+        tracing::info!(row, writer = ?work, runtime = ?io, "writer acceptance measurement");
+        assert_eq!(work.live_payloads, 0);
+        assert_eq!(work.live_payload_capacity, 0);
+        assert_eq!(work.peak_live_payloads, 1);
+        assert_eq!(
+            work.peak_live_payload_capacity,
+            work.largest_payload_capacity
+        );
+        assert!(work.largest_payload_capacity > 0);
+        assert!(work.peak_buffers.total() > 0);
+        work
+    }
+
+    #[tokio::test]
+    async fn writer_small_units_measure_preflight_persistence_and_exact_retry() {
+        let _diagnostics = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
+                .without_time()
+                .finish(),
+        );
+        for inputs in [0, 1, 7, 31] {
+            let directory = tempfile::tempdir().unwrap();
+            let runtime = MeasuredRuntime::open(&directory.path().join("work.sqlite3")).await;
+            let mut writer = fresh_measured_writer(&runtime).await;
+            let original = writer.readable_snapshot().unwrap().binding().clone();
+            let (candidate, units) = small_plan(inputs);
+            runtime.reset_work();
+            let receipt = writer
+                .save(&runtime, original.clone(), &candidate, &units)
+                .await
+                .unwrap();
+            let work = measured_work(&writer, &runtime, "W1/W2");
+            assert_eq!(work.attempts, [units.len(), units.len(), 0]);
+            assert_eq!(work.completed, work.attempts);
+            assert_eq!(work.metadata_capacity, units.len() * size_of::<Header>());
+            assert_eq!(work.encoded_bytes[0], work.encoded_bytes[1]);
+            assert_eq!(work.encoded_bytes[2], 0);
+            assert_eq!(
+                work.largest_pending_capacity,
+                work.largest_envelope_capacity
+            );
+            let io = runtime.work.lock().unwrap().clone();
+            assert_eq!(io.appends, units.len() + 1);
+            assert_eq!(io.confirmed_appends, io.appends);
+            assert_eq!(io.bounds, 2 * (units.len() + 1));
+            assert_eq!(io.reads, units.len() + 1);
+            let cursor = writer.cursor.clone();
+            assert_eq!(
+                writer.readable_snapshot().unwrap().snapshot(),
+                Some(&candidate)
+            );
+            // Discard the genuine successful answer; the next call knows only
+            // its original immutable binding/plan, not an invented partial fact.
+            runtime.reset_work();
+            assert_eq!(
+                writer
+                    .save(&runtime, original, &candidate, &units)
+                    .await
+                    .unwrap(),
+                receipt
+            );
+            let retry = measured_work(&writer, &runtime, "W4");
+            assert_eq!(retry.attempts, [units.len(), 0, units.len()]);
+            assert_eq!(retry.completed, retry.attempts);
+            assert_eq!(retry.encoded_bytes[0], retry.encoded_bytes[2]);
+            assert_eq!(
+                retry.largest_physical_capacity,
+                retry.largest_envelope_capacity
+            );
+            assert_eq!(retry.largest_pending_capacity, 0);
+            assert_eq!(writer.cursor, cursor);
+            assert_eq!(runtime.work.lock().unwrap().appends, 0);
+            assert!(
+                runtime
+                    .shutdown(Duration::from_secs(5))
+                    .await
+                    .unwrap()
+                    .closed
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn writer_one_new_unit_does_not_encode_prior_generation_history() {
+        let _diagnostics = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
+                .without_time()
+                .finish(),
+        );
+        for inputs in [0, 8, 64] {
+            let directory = tempfile::tempdir().unwrap();
+            let runtime = MeasuredRuntime::open(&directory.path().join("history.sqlite3")).await;
+            let mut writer = fresh_measured_writer(&runtime).await;
+            let (prior, prior_units) = small_plan(inputs);
+            writer
+                .save(
+                    &runtime,
+                    writer.readable_snapshot().unwrap().binding().clone(),
+                    &prior,
+                    &prior_units,
+                )
+                .await
+                .unwrap();
+            let change = SessionChange::ProviderContext {
+                before: ProviderContext::Absent,
+                after: ProviderContext::Recorded(ExecutionSessionId::new("small-context").unwrap()),
+            };
+            let candidate =
+                records::fold_changes(Some(&prior), std::slice::from_ref(&change)).unwrap();
+            let units = [SessionSaveUnit::new(vec![change]).unwrap()];
+            runtime.reset_work();
+            writer
+                .save(
+                    &runtime,
+                    writer.readable_snapshot().unwrap().binding().clone(),
+                    &candidate,
+                    &units,
+                )
+                .await
+                .unwrap();
+            let work = measured_work(&writer, &runtime, "W3");
+            assert_eq!(work.attempts, [1, 1, 0]);
+            assert_eq!(work.completed, work.attempts);
+            assert_eq!(work.metadata_capacity, size_of::<Header>());
+            assert_eq!(work.largest_physical_capacity, 0);
+            let io = runtime.work.lock().unwrap().clone();
+            assert_eq!(
+                (io.appends, io.confirmed_appends, io.bounds, io.reads),
+                (2, 2, 4, 2)
+            );
+            assert_eq!(
+                writer.readable_snapshot().unwrap().snapshot(),
+                Some(&candidate)
+            );
+            assert!(
+                runtime
+                    .shutdown(Duration::from_secs(5))
+                    .await
+                    .unwrap()
+                    .closed
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn writer_pending_unit_measurement_retains_original_allocation_during_comparison() {
+        let _diagnostics = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
+                .without_time()
+                .finish(),
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("pending.sqlite3");
+        let runtime = MeasuredRuntime::open(&database).await;
+        let mut writer = fresh_measured_writer(&runtime).await;
+        let original = writer.readable_snapshot().unwrap().binding().clone();
+        let (candidate, units) = small_plan(2);
+        let connection = Connection::open(&database).unwrap();
+        connection.execute_batch("CREATE TRIGGER refuse_second BEFORE INSERT ON event_records WHEN NEW.offset=X'0000000000000002' BEGIN SELECT RAISE(ABORT, 'fixture unit refusal'); END;").unwrap();
+        runtime.reset_work();
+        assert!(matches!(
+            writer
+                .save(&runtime, original.clone(), &candidate, &units)
+                .await,
+            Err(StorageError::Io(_))
+        ));
+        let first = measured_work(&writer, &runtime, "W5 first refusal");
+        assert_eq!(first.attempts, [3, 2, 0]);
+        let pending = writer.pending.as_ref().unwrap();
+        let pointer = pending.body.as_ptr();
+        let capacity = pending.body.capacity();
+        let bytes = pending.body.clone();
+        runtime.reset_work();
+        assert!(matches!(
+            writer
+                .save(&runtime, original.clone(), &candidate, &units)
+                .await,
+            Err(StorageError::Io(_))
+        ));
+        let retry = measured_work(&writer, &runtime, "W5 retained refusal");
+        assert_eq!(retry.attempts, [3, 0, 2]);
+        assert_eq!(retry.completed, retry.attempts);
+        let pending = writer.pending.as_ref().unwrap();
+        assert_eq!(
+            (pending.body.as_ptr(), pending.body.capacity()),
+            (pointer, capacity)
+        );
+        assert_eq!(pending.body, bytes);
+        let overlap = &retry.pending_comparison_buffers;
+        assert_eq!(overlap.pending, capacity);
+        assert!(overlap.physical_comparison > 0);
+        assert!(overlap.encoded_payload > 0);
+        assert!(overlap.encoded_envelope > 0);
+        assert_eq!(overlap.metadata, 3 * size_of::<Header>());
+        assert_eq!(overlap.terminal, HEADER_BYTES);
+        assert_eq!(
+            writer.readable_snapshot().unwrap().state(),
+            SessionLoadState::Unfinished
+        );
+        connection
+            .execute_batch("DROP TRIGGER refuse_second")
+            .unwrap();
+        runtime.reset_work();
+        writer
+            .save(&runtime, original, &candidate, &units)
+            .await
+            .unwrap();
+        let completed = measured_work(&writer, &runtime, "W5 successful recovery");
+        assert_eq!(completed.attempts, [3, 1, 2]);
+        assert_eq!(completed.completed, completed.attempts);
+        assert_eq!(
+            writer.readable_snapshot().unwrap().snapshot(),
+            Some(&candidate)
+        );
+        assert!(writer.pending.is_none());
+        assert_eq!(runtime.work.lock().unwrap().confirmed_appends, 3);
+        assert!(
+            runtime
+                .shutdown(Duration::from_secs(5))
+                .await
+                .unwrap()
+                .closed
+        );
+    }
+
+    #[tokio::test]
+    async fn writer_large_explicit_plan_measures_individual_buffers_and_exact_retry() {
+        let _diagnostics = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
+                .without_time()
+                .finish(),
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = MeasuredRuntime::open(&directory.path().join("large.sqlite3")).await;
+        let mut writer = fresh_measured_writer(&runtime).await;
+        let original = writer.readable_snapshot().unwrap().binding().clone();
+        let candidate = snapshot::checkpoint::history_fixture(41);
+        let units: Vec<_> = std::iter::once(SessionChange::Opened {
+            id: candidate.id.clone(),
+            provider: candidate.provider.clone(),
+            context: candidate.provider_context.clone(),
+        })
+        .chain(
+            candidate
+                .invocations
+                .iter()
+                .cloned()
+                .map(|record| SessionChange::InputAccepted(Box::new(record))),
+        )
+        .map(|change| SessionSaveUnit::new(vec![change]).unwrap())
+        .collect();
+        assert!(
+            candidate
+                .invocations
+                .iter()
+                .map(|record| record.request.user_message.text_str().len())
+                .sum::<usize>()
+                > stream_fact::MAX_BODY_BYTES
+        );
+        let indivisible = SessionSaveUnit::new(
+            units
+                .iter()
+                .flat_map(|unit| unit.changes().iter().cloned())
+                .collect(),
+        )
+        .unwrap();
+        runtime.reset_work();
+        assert!(matches!(
+            writer
+                .save(&runtime, original.clone(), &candidate, &[indivisible])
+                .await,
+            Err(StorageError::TooLarge)
+        ));
+        assert_eq!(writer.measurements.lock().unwrap().attempts, [1, 0, 0]);
+        assert_eq!(runtime.work.lock().unwrap().appends, 0);
+        runtime.reset_work();
+        let receipt = writer
+            .save(&runtime, original.clone(), &candidate, &units)
+            .await
+            .unwrap();
+        let work = measured_work(&writer, &runtime, "W7 persistence");
+        assert_eq!(work.attempts, [42, 42, 0]);
+        assert_eq!(work.completed, work.attempts);
+        assert!(work.encoded_bytes[0] > stream_fact::MAX_BODY_BYTES);
+        assert!(work.largest_payload_capacity < stream_fact::MAX_BODY_BYTES);
+        assert_eq!(work.metadata_capacity, 42 * size_of::<Header>());
+        runtime.reset_work();
+        assert_eq!(
+            writer
+                .save(&runtime, original, &candidate, &units)
+                .await
+                .unwrap(),
+            receipt
+        );
+        let retry = measured_work(&writer, &runtime, "W7 exact retry");
+        assert_eq!(retry.attempts, [42, 0, 42]);
+        assert_eq!(retry.completed, retry.attempts);
+        assert!(retry.largest_physical_capacity > 0);
+        assert_eq!(runtime.work.lock().unwrap().appends, 0);
+        assert_eq!(
+            writer.readable_snapshot().unwrap().snapshot(),
+            Some(&candidate)
+        );
+        assert!(
+            runtime
+                .shutdown(Duration::from_secs(5))
+                .await
+                .unwrap()
+                .closed
+        );
+    }
 
     fn replace_fixture_row(database: &Path, offset: u64, event: &NewEvent) {
         let connection = Connection::open(database).unwrap();
