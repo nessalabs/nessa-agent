@@ -567,7 +567,11 @@ against the pin. A stale or missing `.vendor` then fails with one message naming
 The app imports the package's source, not its build: a component by
 `@nessa-ui/react/<component>`, and a registry library the package's entry does
 not export, such as the shared size observer, by `@nessa-ui/react/lib/<name>`.
-`tsconfig.json`, `vite.config.ts` and `vitest.config.ts` each map them.
+One table, `scripts/nessa-ui-paths.mjs`, maps each of these to the package's
+source. `vite.config.ts` and `vitest.config.ts` build their aliases from it.
+`tsconfig.json` cannot import it, so `pnpm architecture` fails when its
+`paths` disagree. To add a path, add it to the table, then to `tsconfig.json`
+as the check's message says.
 
 The composer requires the shared Markdown AST extension and on-demand math/diagram
 renderers in the pinned UI revision. To reconcile a managed clone with that pin:

@@ -25,6 +25,7 @@ import {
   workspaceRustSourceRoots,
 } from "./architecture/rust-boundaries.mjs"
 import { withoutComments } from "./architecture/without-comments.mjs"
+import { tsconfigPathViolations } from "./nessa-ui-paths.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const src = join(root, "src")
@@ -459,6 +460,14 @@ for (const boundary of portableRuntimeBoundaries) {
       "runtime incarnation identity is portable health evidence; do not hide it behind a target cfg",
     )
   }
+}
+
+// TypeScript cannot import the design system's path table the way Vite and
+// Vitest do, so its copy in `tsconfig.json` is held to the table here.
+{
+  const file = join(root, "tsconfig.json")
+  const paths = JSON.parse(readFileSync(file, "utf8")).compilerOptions?.paths
+  for (const violation of tsconfigPathViolations(paths)) fail(file, violation)
 }
 
 // A script rather than product source, so it is read by path rather than by

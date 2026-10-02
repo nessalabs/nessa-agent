@@ -2,6 +2,8 @@ import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { defineConfig } from "vitest/config"
 
+import { viteAliases } from "./scripts/nessa-ui-paths.mjs"
+
 const designSystemEditorDependencies = existsSync(resolve("node_modules/@nessa-ui/react"))
   ? [
       "@nessa-ui/react > @tiptap/core",
@@ -22,25 +24,10 @@ const designSystemEditorDependencies = existsSync(resolve("node_modules/@nessa-u
 export default defineConfig({
   resolve: {
     dedupe: ["react", "react-dom"],
-    alias: [
-      // The registry libraries, such as the shared size observer, which the
-      // package's entry does not export. Before the components' rule, which
-      // would otherwise claim them.
-      {
-        find: /^@nessa-ui\/react\/lib\/(.*)$/,
-        replacement: resolve("node_modules/@nessa-ui/react/src/lib/$1"),
-      },
-      // One rule rather than a list of subpaths added as each test needed one.
-      // The list is why "a component that imports the design system cannot be
-      // tested" was believed: the ninth subpath was simply missing, and the
-      // resolution error read like a limitation. `vite.config.ts` has resolved
-      // the whole namespace with this regex all along.
-      {
-        find: /^@nessa-ui\/react\/(.*)$/,
-        replacement: resolve("node_modules/@nessa-ui/react/src/components/$1"),
-      },
-      { find: "@", replacement: resolve("node_modules/@nessa-ui/react/src") },
-    ],
+    // The design system's import paths, from the one table
+    // (`scripts/nessa-ui-paths.mjs`) that `vite.config.ts` uses too, against
+    // the source as the `node_modules` link reaches it.
+    alias: viteAliases(resolve("node_modules/@nessa-ui/react/src")),
   },
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "packages/**/*.test.ts"],
