@@ -117,8 +117,9 @@ The current SDK recovers submissions by `execution_id` and compares saved
 request, actor and submission mode. ADR 0008 describes a mutation `requestId`
 and an accepted `turnId`; old issue wording and namespace assumptions do not
 resolve this implementation difference. The command producer settles lookup
-identity, immutable operation/target/bytes/origin and accepted-turn mapping
-before outbox or native mutation activation. No second receipt journal is added.
+identity, immutable operation/target/input fingerprint/origin and accepted-turn
+mapping before outbox or native mutation activation. No second receipt journal
+is added.
 
 ADR 0008 owns the
 [request namespace, binding and acceptance contract](../adr/todo/0008-agent-client-api.md#identity-durability-and-failure-behavior).
@@ -130,8 +131,12 @@ was changed while consumer sequences still entered the target coordinator
 directly. The corrected diagrams show the principal control-stream owner before
 target acceptance, including message, prompt, steering, Stop, creation and restart.
 ADR 0008's state table requires real competing-target and competing-operation
-tests through affected consumers. These are producer acceptance gates still to
-implement; a consistent diagram or documentation-only CI does not prove them.
+tests through affected consumers. A fourth finding exposed content retention
+outside the deletion owner: the canonical binding now retains non-content
+fingerprints, while target records own erasable input/configuration. ADR 0008
+also requires deletion/reopen and pending-creation tests across those actual
+sources. These are producer acceptance gates still to implement; a consistent
+diagram or documentation-only CI does not prove them.
 
 Command admission is not the complete writer inventory. Queued runs, provider
 callbacks, audit writes and deletion work can survive a command's return.

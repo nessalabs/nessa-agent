@@ -278,8 +278,10 @@ stream implementation or an interface for every library feature.
   must be checked using the original append identity.
 - Saved records never change and are ordered within one stream incarnation
   (one lifetime of that stream). Return typed errors for another incarnation,
-  a cursor ahead of the store, or missing history. Keep receipt and duplicate-
-  detection history for the store's lifetime; no automatic retention cleanup.
+  a cursor ahead of the store, or missing history. Request identity/retention
+  follows [ADR 0008's binding owner](../adr/todo/0008-agent-client-api.md#request-bindings-retain-identity-not-conversation-content),
+  with conversation erasure owned by [ADR 182](../adr/done/182-conversation-deletion.md).
+  Ordinary capacity pressure does not silently evict history.
 - The library handles the change from replay to live delivery. Test that writes
   during this changeover cause no gaps or reordering. Do not combine a separate
   history query and event bus. Notifications may be combined into one wakeup

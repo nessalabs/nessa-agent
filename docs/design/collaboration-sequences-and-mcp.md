@@ -59,14 +59,23 @@ sequenceDiagram
     I->>K: Resolve creation through ADR 0008
     Note over I,K: New creation saves binding, acceptance and IDs together
     K-->>I: Committed new or original creation acceptance
-    alt New confirmed creation
-        I->>R: Apply accepted creation
-        R->>P: Initialize configured provider
-        P-->>R: Actual supported features
-        R->>K: Save creation outcome
-        R-->>G: Creation ID and readiness
-    else Existing creation
-        I-->>G: Original creation ID and saved readiness
+    alt New creation or explicit exact retry of original pending creation
+        I->>R: Reconcile original creation ID with supplied matching configuration
+        R->>S: Resolve or reconcile target configuration through ADR 0008
+        S-->>R: Confirmed target configuration, deleted, or unresolved
+        R->>K: Resolve original initialization progress
+        K-->>R: Not started, original attempt evidence, or unresolved
+        alt Configuration confirmed, target allowed, initialization established not started
+            R->>P: Initialize configured provider under original supervised creation
+            P-->>R: Actual supported features
+            R->>K: Save non-content creation outcome
+            R-->>G: Creation ID and readiness
+        else Deleted, unresolved, or initialization may have started
+            R-->>G: Original identity and deleted, pending, or recovered outcome
+            Note over R,P: Reconcile original attempt, pending alone never repeats initialization
+        end
+    else Existing finished creation or read-only lookup
+        I-->>G: Original creation ID and saved readiness without initialization
     end
     G-->>A: conversationId C
     B->>G: Authenticated conversation.get(C)

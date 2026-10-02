@@ -854,9 +854,9 @@ network attempt. Keep `requestId` as the single mutation-ID name in SDK and wire
 contracts, and do not embed one ID inside another.
 
 The mutation namespace is `(principal, requestId)`. Its first durable binding
-fixes the operation, target, canonical input and verified origin. Reusing that
-identity with different bound facts conflicts; changing the operation or target
-does not select a different receipt. Lookup is authorized for that principal and
+fixes the operation, target, a non-content fingerprint of the canonical input,
+and verified origin. Reusing that identity with different bound facts conflicts;
+changing the operation or target does not select a different receipt. Lookup is authorized for that principal and
 does not disclose another principal's binding or acceptance.
 
 This namespace covers the conversation-runtime mutations defined here.
@@ -887,11 +887,16 @@ The SDK routes a command through these owners in order:
 
 1. Validate the caller, operation, target, canonical input and origin. Resolve
    `(principal, requestId)` in the principal's committed control stream. An
-   existing binding must match all those facts. For a new identity, commit that
-   immutable binding before target admission; retries keep its event ID and
-   bytes. Binding alone is not acceptance and cannot start a provider.
-2. Resolve acceptance for that exact bound command from the target's committed
-   records before allocating a turn or checking whether a new turn can start.
+   existing binding must match the operation, target, input fingerprint and
+   verified origin. For a new identity, commit that non-content immutable binding
+   before target admission; retries keep its event ID and bytes. The supplied
+   input remains owned by this attempt until target acceptance. Binding alone
+   is not acceptance and cannot start a provider.
+2. Respect the target's deletion fence under
+   [ADR 182](../done/182-conversation-deletion.md), then resolve acceptance for
+   that exact bound command from the target's committed records before allocating
+   a turn or checking whether a new turn can start. Erased acceptance evidence
+   does not establish an available target or permission to recreate it.
    A **receipt** is the saved acceptance response. An identical accepted retry
    returns it. A bound command with incomplete or unavailable acceptance evidence
    remains unresolved. Read-only lookup never admits or dispatches work.
@@ -907,10 +912,34 @@ The SDK routes a command through these owners in order:
    never reaches the caller.
 
 A crash after binding but before acceptance preserves the original target and
-input as a bound unresolved command. An explicit exact retry reconciles that
-same command; lookup does not turn uncertainty into a new invocation. Restoring
-the principal binding source precedes new admission, including commands competing
+input fingerprint as a bound unresolved command. The original input cannot be
+reconstructed from the binding: an explicit exact retry supplies it and matches
+its fingerprint before reconciling that same command. Lookup does not turn
+uncertainty into a new invocation. Restoring the principal binding source precedes
+new admission, including commands competing
 for the same request identity across different conversations.
+
+### Request bindings retain identity, not conversation content
+
+The principal control stream retains only request identity, operation, target,
+verified attribution and a fixed-size collision-resistant fingerprint of the
+validated canonical command facts. It must not store prompt/message text, steering
+or interaction-answer content, file contents, or creation configuration in raw
+or losslessly encoded form. ADR 0008's command producer owns the one canonical
+fingerprint construction and comparison; its concrete canonical encoding and
+equality/conflict tests must be settled before source implementation. A fingerprint
+supports equality/conflict detection. It is not an encrypted backup, authorization,
+or proof of erasure, and no dictionary-attack secrecy is claimed.
+
+Content-bearing acceptance and configuration records belong to the target
+conversation's primary stream. Its deletion owner erases them through
+[ADR 182](../done/182-conversation-deletion.md). Retained request identity and
+permitted audit attribution remain for the store lifetime and survive that erasure;
+the original content-bearing receipt need not. A retry against a deleted target returns the target's deleted
+meaning or a binding conflict, rather than reconstructing erased input, returning
+its old content, or initializing another provider. Read-only lookup also respects
+that fence. No second receipt/content store or control-stream redaction journal
+is introduced.
 
 | Request binding / acceptance ordering | Required result | Owning implementation evidence to establish |
 | --- | --- | --- |
@@ -923,7 +952,12 @@ for the same request identity across different conversations.
 | Next explicit retry arrives after revocation | Host refuses before SDK binding or target admission | Same host/consumer fixture, denied retry with no new binding, acceptance or provider effect |
 | Acceptance saved; response lost | Original turn/receipt returned; no repeated provider work | Committed acceptance lookup and real lost-reply test |
 | Acceptance lookup incomplete or source unavailable | Unresolved/unavailable; read-only lookup performs no admission or dispatch | Bounded committed reader and provider-free lookup test |
-| Creation before target stream exists | Binding and acceptance saved together in control stream | Creation producer and restart/uncertain-write test |
+| Creation before target stream exists | Non-content binding, acceptance and IDs saved together in control stream; target configuration must commit before provider initialization | Creation producer and separate-control/target commit barriers, lost-reply and restart tests |
+| Control-stream creation acceptance saved; target configuration missing or uncertain | Pending creation; no provider initialization or reconstructed input. Matching explicit retry reconciles the original configuration under its original IDs; read-only lookup performs no effects | Actual two-source crash/reopen test through existing-pending creation retry; no provider effect before confirmed target configuration |
+| Creation initialization may already have started | Reconcile its original saved progress and supervised attempt; pending readiness alone cannot authorize another initialization | Real lost-start/outcome/restart test with one original provider attempt or an honest unresolved result |
+| Conversation deleted after prompt/message/steer/answer acceptance | Target content erased through ADR 182; principal stream retains identity/fingerprint and permitted attribution only | Actual sensitive-marker persistence scan after delete/reopen across both sources, including compound input and creation configuration |
+| Exact or conflicting old request retried after target deletion | Preserve identity/conflict meaning; deleted target remains fenced even though its content/receipt was erased | Real deletion/admission race and reopened same-ID/different-input tests with no new acceptance, provider effect or resurrection |
+| Conversation erasure incomplete or uncertain | Preserve ADR 182's incomplete-erasure result; fingerprints do not prove content removal | Actual failed-erasure/retry test and physical persistence inspection |
 
 The producer tests must enter through both affected command consumers with one
 principal/request ID and different targets or operations. Gate both contenders
@@ -981,15 +1015,26 @@ resolves acceptance and interaction races; duplicate-record detection alone cann
 
 Creation needs a record before the conversation's own stream exists. Process
 creation requests through the same principal request namespace. Save its binding,
-acceptance, allocated IDs and unchanging origin together in that principal's
-**control stream** before initializing
-the provider. Rebuild the conversation index from these records. Later turn and
-provider records go in the conversation's **primary stream**.
+non-content acceptance response, allocated IDs and unchanging origin together in
+that principal's **control stream**. Rebuild the conversation index from these
+records. Content-bearing creation configuration then commits in the conversation's
+**primary stream** before initializing the provider. If that second commit is
+missing or uncertain, creation remains pending; an explicit matching retry supplies
+the original configuration, and initialization waits for confirmed target content.
+A restored creation cannot infer that configuration from its fingerprint. Its
+target deletion fence still prevents initialization. An explicit exact retry of
+an existing pending creation enters that same configuration reconciliation with
+its original IDs. Read-only lookup performs no such effects. If initialization
+may already have started, reconcile its original saved progress and supervised
+attempt; pending readiness alone does not authorize another initialization.
+Later turn and provider records also go in the primary stream.
 
-Save creation progress and outcome too, so retries find the same pending or
-finished creation instead of initializing another provider. Control records are
-internal and do not appear in public transcripts. Both streams use the same record
-infrastructure, but there is no transaction or ordering across them. Restore
+Save non-content creation progress and outcome too, so retries find the same
+pending or finished creation instead of initializing another provider. Raw
+configuration and content-bearing failure diagnostics stay with target records;
+control records use typed status and permitted identity metadata. Control records
+are internal and do not appear in public transcripts. Both streams use the same
+record infrastructure, but there is no transaction or ordering across them. Restore
 creation state before accepting work after restart.
 
 [ADR 0009](0009-reusable-event-stream-crate.md) must verify this behavior using a
