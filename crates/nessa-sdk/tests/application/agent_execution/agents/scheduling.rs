@@ -322,3 +322,41 @@ async fn explicit_close_precedes_unclaimed_automatic_failure_settlement() {
     }
     agent.inner.lifecycle.complete_stop(&attempt).await;
 }
+
+// An attachment starts the runner whether or not anything is queued. Holding
+// the scheduler lock stops that runner at its first wait; on this
+// current-thread runtime one yield polls it that far. A runner that took the
+// invocation slot before finding the queue empty turned this direct invoke into
+// Busy, which is how `dispatch_save_panic_does_not_inherit_previous_close_actor`
+// hung (#366). Unattached, the invoke must instead reach the lifecycle's own
+// refusal.
+#[tokio::test]
+async fn an_idle_queue_runner_leaves_the_invocation_slot_to_a_direct_invoke() {
+    // No queued input reaches settlement here, so this audit never panics.
+    let audit = Arc::new(SettlementPanickingAudit::default());
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit).await;
+    let mut scheduler = agent.inner.scheduler.lock().await;
+    agent.start_runner(&mut scheduler);
+    tokio::task::yield_now().await;
+
+    let invoked = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        agent.invoke(request("direct-beside-idle-runner"), actor()),
+    )
+    .await
+    .expect("direct invoke stalled beside an idle runner");
+    assert!(
+        matches!(invoked, Err(AgentError::AttachmentUnavailable(_))),
+        "{invoked:?}"
+    );
+
+    drop(scheduler);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while agent.inner.scheduler.lock().await.running {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("idle runner did not exit");
+    assert!(agent.inner.invocation.try_lock().is_ok());
+}

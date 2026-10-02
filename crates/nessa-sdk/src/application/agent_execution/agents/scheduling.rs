@@ -886,6 +886,18 @@ impl Agent {
 
     async fn run_queue(&self) {
         loop {
+            // Take the invocation slot only for work: an idle runner holding it
+            // turns a direct `invoke` into Busy with nothing to overlap. This
+            // check, `running` and admission share the scheduler lock, so an
+            // admission after it starts a new runner. The orderings and their
+            // tests are in docs/agent_execution/scheduling.md (#366).
+            {
+                let mut scheduler = self.inner.scheduler.lock().await;
+                if scheduler.queue.is_empty() && scheduler.pending.is_empty() {
+                    scheduler.running = false;
+                    return;
+                }
+            }
             // Wait for a direct invocation without removing pending work: close
             // can still cancel every waiting item and prevent automatic restart.
             let _active = self.inner.invocation.lock().await;
