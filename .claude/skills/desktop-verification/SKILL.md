@@ -22,6 +22,7 @@ This skill is how to use them; it restates neither.
 | drag and drop, `drop.ts`, `drag.ts`, pane headers | `drag.mjs` |
 | keys, `focus.ts`, panes being added/closed/focused, dialogs, the overview | `focus.mjs` |
 | widgets: `src/desktop/widgets/`, a widget's pane or the window, Escape for the widget in front, the edge peek's Escape | `widgets.mjs` |
+| MCP Apps: `src/desktop/widgets/app/`, the sandbox proxy, `src-tauri/src/app_sandbox.rs` | `mcp-apps.mjs` |
 | widths: approval card, composer (its thinking control too), column titles, Settings sidebar | `responsive.mjs --shots <dir>` |
 | `index.html`'s load fallback, the panel's stage and window size | `load-fallback.mjs` |
 | motion, FLIP, rendering, selectors, anything on the budget's list, or a perf claim | `perf-budget.mjs` (production build) |

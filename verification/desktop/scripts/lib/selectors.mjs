@@ -79,8 +79,18 @@ export const css = {
   sampleView: "[data-sample-view]", // a sample widget's view; its value is the widget's id
   sampleStep: "[data-sample-step]", // a step of the trail, which opens its detail
   sampleDetail: "[data-sample-detail]", // the trail's open detail
+
   sampleAccessory: "[data-sample-accessory]", // the sample plugin's accessory in its session's header
   sampleSize: "[data-sample-size]", // the place's size as the sample view was told it, "<width>x<height>"
+
+  // MCP Apps (ADR 344, #349) and the fixture app the sample workspace registers (src/desktop/widgets/app/fixture/)
+  appFrame: "[data-app-frame]", // an app's sandbox proxy frame; its value is the place it is drawn in
+  appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, pane, window
+  appView: "[data-app-view]", // an app's view; its value is the view's lifecycle
+  appNotice: ".widget-app-notice", // class: a notice above a running app
+  fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
+  fixtureState: (state) => `body[data-fixture-state="${state}"]`, // the fixture app saying where it is
+  fixtureOutput: (name) => `#${name}`, // what the fixture app heard back: call, fetch, mode
 
   // Quick switcher (⌘K, ⌘\\)
   switcherField: '[role="dialog"] input', // the switcher's search field
@@ -308,6 +318,29 @@ export const names = {
   widgetSession: "Widget hosts, every state",
   /** The channel the sample session is in. */
   widgetChannel: "design-system",
+  /** The sample session (in-memory source) whose conversation carries the fixture MCP App's call. */
+  appSession: "An MCP App, in its sandbox",
+  /** What the fixture server refuses its hidden tool with (`fixture-plugin.ts`). */
+  hiddenToolRefused: "fixture_secret is not available to apps",
+  /** What the fixture app says on its body (`fixture-app.ts`), by the field it says it in. */
+  fixtureSays: {
+    state: "data-fixture-state",
+    mode: "data-fixture-mode",
+    input: "data-fixture-input",
+    result: "data-fixture-result",
+    context: "data-fixture-context",
+  },
+  /** A channel's "Show all" in the sidebar, behind which its older sessions are. */
+  showAll: /^Show all \d+$/,
+  /** The line for an app the host cannot show (`app-view.ts`, `appLines.load`). */
+  appLoadLine: "This app couldn't be loaded",
+  /** The notice above an app whose CSP blocked a load (`app-view.ts`, `appLines`). */
+  blockedNotice: "Blocked a connection this app didn't declare: https://example.com",
+  /** Every notice the host may put above an app (`appLines`): its words, and an origin. */
+  appNotices: [
+    /^This app's server has stopped$/,
+    /^Blocked a connection this app didn't declare(: [a-z]+:\/\/[^\s,]+(, [a-z]+:\/\/[^\s,]+)*)?$/,
+  ],
   openWidget: "Open",
   openInWindow: "Open in Window",
   closePane: "Close Pane",
@@ -336,4 +369,30 @@ export const harmlessConsole = [
   // A fresh browser asks for /favicon.ico, which the dev server does not serve.
   // Chrome's message does not name the URL, so both the text and the source are matched.
   { text: /status of 404/i, url: /\/favicon\.ico(\?|$)/ },
+  // The fixture MCP App asks for a page its CSP does not declare, on purpose
+  // (`mcp-apps.mjs --only csp`): the engine reports the refusal it is checked for.
+  // Its navigations of its own frame are refused by the proxy's policy, and
+  // reported against the proxy's page (`--only escape-navigate,escape-refresh,escape-rewrite,departures`).
+  {
+    text: /Content Security Policy|Refused to (connect|frame)/i,
+    url: /^(about:srcdoc|https?:\/\/127\.0\.0\.1:\d+\/proxy\.html)?$/,
+  },
 ]
+
+/** Actual-panel attachment race verification gestures and refusal notices. */
+export const attachmentVerification = {
+  editor: '[contenteditable="true"]',
+  addAttachment: ["button", { name: "Add attachment", exact: true }],
+  addFiles: ["button", { name: "Add files", exact: true }],
+  selectedName: "picked.png",
+  pendingNotice: "Attachments still loading",
+  busyDropNotice: "Still reading files",
+}
+
+/** Setup request-deadline verification fixture and user-facing controls. */
+export const readinessVerification = {
+  checkingButton: "Checking…",
+  retryButton: "Check again",
+  readyObservation: "false:ready",
+  buttons: "button",
+}

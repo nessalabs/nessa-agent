@@ -7,11 +7,13 @@
  * The host's callbacks are shaped after MCP Apps' `ui/*` bridge, so the `app`
  * kind is a translation rather than a second contract: `open(place)` is
  * `ui/request-display-mode` (`inline`, `fullscreen` → `pane`), the host
- * context is `hostContext`. Sending a message and updating the model's
- * context (`ui/message`, `ui/update-model-context`) belong to both kinds and
- * arrive with the `app` host (#349); nothing here offers them yet.
+ * context is `hostContext` (`app/model/host-context.ts`). Sending a message
+ * and updating the model's context (`ui/message`, `ui/update-model-context`)
+ * are an app's through its conversation port (`app/application/ports.ts`);
+ * a native view has not needed them yet.
  */
 import type { ComponentType } from "react"
+import type { McpAppPorts } from "../app/application/ports"
 import type { WidgetRegistry } from "../application/registry"
 import type { WidgetRef } from "../model/widget-ref"
 import type {
@@ -77,14 +79,20 @@ export interface NativeWidgetPlugin {
 }
 
 /**
- * An MCP App, registered while the window runs (ADR 344). Its renderer, the
- * sandboxed frame and the bridge, is #349; until it lands, a host draws one
- * of its widgets as one it cannot show.
+ * An MCP server's app, registered while the window runs (ADR 344): drawn in
+ * a sandboxed frame and spoken to over the `ui/*` bridge (`app/`), in every
+ * place. Its widgets are its tool calls that declared a UI, read from
+ * `ports.calls`; everything its views reach outside the window is in
+ * `ports`.
  */
 export interface AppWidgetPlugin {
   readonly kind: "app"
   readonly id: string
+  /** What the window calls one of its widgets while it is not read: the server's name. */
   readonly name: string
+  /** The MCP server the app belongs to, as the gateway names it. */
+  readonly server: string
+  readonly ports: McpAppPorts
 }
 
 export type WidgetPlugin = NativeWidgetPlugin | AppWidgetPlugin

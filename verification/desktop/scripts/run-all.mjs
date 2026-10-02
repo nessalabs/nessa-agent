@@ -34,6 +34,7 @@ const functional = [
   "committed-transcript",
   "load-fallback",
   "widgets",
+  "mcp-apps",
 ]
 
 const options = cli({

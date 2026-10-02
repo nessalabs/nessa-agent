@@ -361,6 +361,20 @@ Question support is verified
 for the pinned Claude profile with tools enabled; current Codex/OpenCode profiles
 do not offer it.
 
+Question-answer acknowledgement ordering (R3 correction design, before code):
+the provider owns question consumption; the client owns whether a failed
+command offers replay. A failed control preserves its conversation, execution,
+and action IDs, and requires a current read followed by any new deliberate
+answer. It does not recover a question-answer receipt.
+
+| State / event ordering | Owning decision and intended observation | Regression evidence |
+| --- | --- | --- |
+| Offered ask; answer acknowledged | Provider validates and consumes exact ask; client returns correlated mutation acknowledgement. | Client question-answer acknowledgement test; SDK ACP question round trip. |
+| Provider consumes answer; acknowledgement lost | Client returns uncertain `NessaConversationControlError`, retaining conversation/execution/action IDs and exposing no replay. Read shows closed ask; no second answer is sent. | Client lost-question-answer test; SDK consumed-question rejection. |
+| Answer never reaches provider; response lost | Client still reports uncertain control with no replay because it cannot infer consumption. Read shows offered ask; a new deliberate answer uses a new action ID. | Client lost-question-answer test (before-consumption case). |
+| Provider refuses before dispatch | Existing shared typed control refusal owner reports `uncertain: false`, preserving the action identity; no replay is offered. | Client question-answer typed-refusal test. |
+| A correlated success reply is malformed/mismatched | Shared acknowledgement validator rejects it; outcome stays uncertain with no replay. | Client question-answer mismatched acknowledgement test. |
+
 Tests: [allow/deny and audit/write interleavings](../../../crates/nessa-sdk/tests/infrastructure/acp/contracts/permissions/answers.rs),
 [review cancellation and local declines](../../../crates/nessa-sdk/tests/infrastructure/acp/contracts/permissions.rs),
 [domain permission authority](../../../crates/nessa-sdk/tests/domain/agent_execution/permissions/authority.rs),
@@ -990,16 +1004,26 @@ No remote PR status was queried for this mapping pass.
 | Designed limitation | Persistent permission grants, an automatic rule evaluator, in-place model-switch reporting, and MCP resource subscriptions are unavailable on these paths. | SDK capability/permission guide and MCP stand-in tests. |
 | Hypothesis to investigate, not reproduced | A retained warm-up owner may explain later cold-open delay after apparent warm-up failure. | Inspect terminal launch ownership and current-warm-up uncertain-cleanup test before changing readiness handling. |
 | Hypothesis to investigate, not reproduced | Lost permission answer acknowledgement could leave a consumed review while a client still shows its action. | Inspect typed selection state, paired Selected/Written/Failed audit, current view, and answer interleavings; do not resend a tool. |
-| Confirmed source-level contract mismatch; user impact untested | `answerQuestion` uses the client's retryable mutation default, although its API says controls need a fresh read/new deliberate action. The backend consumes the exact ask and does not recover a same-action question-answer receipt. A lost answer followed by `retry()` may therefore produce a stale-ask failure instead of the original outcome. | [Client answerQuestion/mutate](../../../packages/nessa-client/src/presentation/conversation-api.ts), [retry error contract](../../../packages/nessa-client/src/application/conversation-mutation-error.ts), [gateway answer_question](../../../crates/nessa-server/src/conversation/application/service.rs), and [ACP answer_question](../../../crates/nessa-sdk/src/infrastructure/acp/executions/worker.rs). Inspect or add lost-ack coverage; no runtime reproduction claimed. |
+| Confirmed client defect, corrected in this change | `answerQuestion` previously exposed mutation replay after a lost acknowledgement although the provider consumes the exact ask without same-action receipt recovery. It now uses the existing shared control contract: typed uncertainty, retained action/execution identity, no replay, and current-view reconciliation before a new deliberate action. | [Client regression cases](../../../packages/nessa-client/src/presentation/conversation-api.test.ts) failed before the fix (three cases returned `NessaConversationMutationError`) and pass after it; the full conversation suite passes 71 tests. [Shared control error owner](../../../packages/nessa-client/src/application/conversation-mutation-error.ts) and [ACP consumption](../../../crates/nessa-sdk/src/infrastructure/acp/executions/worker.rs). Lost acknowledgements are injected at the real client requester seam; no live vendor/network-fault reproduction claimed. |
 | Hypothesis to investigate, not reproduced | A superseded artifact remaining on disk might be a correct retained-use obligation or failed release/settlement recovery. | Correlate publication preparation, exact terminal/receipt, executable-use generations, and reclamation audit. |
 | Hypothesis to investigate, not reproduced | A missing MCP app may originate in conversation grant/list lifecycle before rendering. | Correlate token owner, configuration digest, session-owned tools list and resource lookup; see extensions UI map for downstream host behavior. |
 | Hypothesis to investigate, not reproduced | Receiver timeout may retain capacity because physical source work has not joined. | Tracked source/lease and cancellation tests; capacity must not be freed from timeout response alone. |
 
-This was source, test-definition, design, and local Git-history tracing only. No
-builds, test suites, live provider calls, installation downloads, restart/crash
-experiments, or user-visible reproductions were run for this document. The named
-tests are inspectable regression evidence, not newly reported passes. No current
-runtime defect is claimed from the hypotheses above. Browser/UI behavior,
+The original map used source, test-definition, design, and local Git-history
+tracing. The R3 correction subsequently ran the real client regression suite:
+71 conversation tests pass; the broader client suite passes 507 of 509 in the
+filesystem sandbox, and its two filesystem privacy failures pass all 39 targeted
+cases with real ownership metadata outside that sandbox. Client typechecking and
+changed-file formatting also pass. The focused SDK library test
+`a_question_reaches_a_host_and_its_answer_reaches_the_agent` also passes: a real
+local ACP fixture receives the accepted content, a second answer of the same
+ask is refused, and the audit retains exactly its Selected/Written pair. This
+executes SDK/provider process/audit layers; the client loss test substitutes its
+requester, so a combined client → gateway → provider lost-ack run remains
+unverified. Other linked tests remain inspectable
+definitions unless explicitly reported here. Live vendor calls, installation
+downloads, restart/crash experiments, and user-visible/network-fault reproductions
+were not run. No defect is claimed from the remaining hypotheses above. Browser/UI behavior,
 attachment conversion and upload, desktop service supervision/update, credentials
 entry, remote provisioning/TLS, writable collaboration, and future provider/tool
 hook proposals belong to other maps or unimplemented scope. Only this Markdown

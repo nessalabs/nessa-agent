@@ -391,6 +391,12 @@ that their combination describes a possible execution.
   remaining limits, and unresolved findings. When external review is requested,
   track its result against the current head; a prior-head approval or a human
   reaction is not an automated approval of later changes.
+- When the external reviewer cannot review the pull request — Codex out of
+  credits or otherwise unavailable, or a review bot declining — the review runs
+  locally instead: a fresh reviewer, given the
+  [required review brief](#required-review-brief), under this gate, at the
+  current head. Its report and its dispositions go on the pull request in the
+  external review's place. An external review that did not run is not a pass.
 
 ## GitHub updates
 

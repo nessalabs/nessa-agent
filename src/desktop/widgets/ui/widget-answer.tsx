@@ -8,9 +8,10 @@
  */
 import { useMemo, type ReactNode } from "react"
 import { useWidgetPlugin } from "../adapters/react/registry-context"
+import { appWidgetState, useAppCall } from "../app/ui/use-app-call"
 import type { WidgetRef } from "../model/widget-ref"
 import type { OfferedPlaces, WidgetAnswer } from "../model/widget-state"
-import type { NativeWidgetPlugin, WidgetPlugin } from "./plugin"
+import type { AppWidgetPlugin, NativeWidgetPlugin, WidgetPlugin } from "./plugin"
 
 type Draw = (answer: WidgetAnswer, plugin: WidgetPlugin | undefined) => ReactNode
 
@@ -35,7 +36,10 @@ export function WidgetAnswerOf({
 }) {
   const plugin = useWidgetPlugin(widget.plugin)
   if (!plugin) return children(unregistered, undefined)
-  if (plugin.kind === "app") return <AppAnswer plugin={plugin} draw={children} />
+  if (plugin.kind === "app")
+    return (
+      <AppAnswer key={keyOf(plugin)} plugin={plugin} id={widget.id} draw={children} />
+    )
   return (
     <NativeAnswer key={keyOf(plugin)} plugin={plugin} id={widget.id} draw={children} />
   )
@@ -58,19 +62,34 @@ function NativeAnswer({
   return draw(answer, plugin)
 }
 
-/** An MCP App's widget, which nothing draws until its renderer lands (#349). */
-function AppAnswer({ plugin, draw }: { plugin: WidgetPlugin; draw: Draw }) {
+/** An MCP App's widget: its tool call, as the conversation holds it. */
+function AppAnswer({
+  plugin,
+  id,
+  draw,
+}: {
+  plugin: AppWidgetPlugin
+  id: string
+  draw: Draw
+}) {
+  const call = useAppCall(plugin, id)
   const answer = useMemo<WidgetAnswer>(
-    () => ({ registered: true, name: plugin.name, state: { kind: "unshowable" } }),
-    [plugin.name],
+    () => ({ registered: true, name: plugin.name, state: appWidgetState(call) }),
+    [plugin.name, call],
   )
   return draw(answer, plugin)
 }
 
 const noPlaces: OfferedPlaces = { inline: false, window: false }
+const everyPlace: OfferedPlaces = { inline: true, window: true }
 
-/** The places beside the pane that a plugin offers a view for; none for one the window lacks. */
+/**
+ * The places beside the pane that a plugin offers a view for; none for one
+ * the window lacks, and every one for an app, which draws the same frame in
+ * each.
+ */
 export function offeredBy(plugin: WidgetPlugin | undefined): OfferedPlaces {
-  if (plugin?.kind !== "native") return noPlaces
+  if (plugin === undefined) return noPlaces
+  if (plugin.kind === "app") return everyPlace
   return { inline: Boolean(plugin.views.inline), window: Boolean(plugin.views.window) }
 }

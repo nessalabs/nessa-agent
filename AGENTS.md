@@ -82,7 +82,8 @@ examples.
 - [Agreement across fields and layers](CODING_STANDARDS.md#agreement-across-fields-and-layers)
   — applied by every review.
 - [Evidence and closure](CODING_STANDARDS.md#evidence-and-closure) — what every
-  review reports against, and how its findings are closed.
+  review reports against, and how its findings are closed; also when an
+  external reviewer (Codex) cannot review, and what replaces it.
 
 The checklist itself stays in the standards document. Do not copy it into a
 review rule, a subagent prompt file, or this file.
