@@ -71,15 +71,21 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
 `McpReadResourceResult` in [product/v1.json](product/v1.json).
 
 - **`mcp.callTool`** calls a tool the conversation's own session last listed
-  with `visibility` including `app`. `argumentsJson` is at most 32 KiB, the most a review shows, and
-  `resultJson`, the server's `CallToolResult` verbatim, at most 56 KiB.
+  with `visibility` including `app`. `argumentsJson` is at most 32 KiB, and
+  is sent as parsed: re-encoded, a duplicate key's last value kept.
+  `resultJson` is the server's `CallToolResult`, re-encoded, at most 56 KiB
+  measured as the JSON string the response carries it in.
   `isError: true` is a result, not a refusal.
 - **Destructive tools** wait for approval first. A tool is destructive when
   `readOnlyHint` is not true and `destructiveHint` is not false, so a tool with
   no annotations waits. The approval is a review in the conversation's
   `permissions`, with `origin: {kind: "app", server, tool}`, whatever the
-  approval mode. It is answered with `conversation.answer` or
-  `conversation.cancel`.
+  approval mode. It shows the arguments as they will be sent. It is answered
+  with `conversation.answer` or `conversation.cancel`. A conversation's open
+  app reviews take at most 16 000 bytes of its view together, 16 at most: a
+  review past that alone is refused `mcp_request_too_large`, and one that
+  does not fit beside those open is refused `temporarily_unavailable`.
+  Allowed, the call is made only if the tool is still listed as it was.
 - **A waiting call stays pending** until the person answers, or the review
   expires after 5 minutes (`mcp_approval_expired`), or it is withdrawn
   (`mcp_cancelled`). It is withdrawn when the request is cancelled — its
@@ -89,7 +95,8 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
 - **How long a call can take** is published as `x-mcpAppCallTiming`:
   `reviewDeadlineMs` (300000) for a review to be answered, then
   `callTimeoutMs` (60000) for the server to answer (`mcp_timed_out`). A
-  client waits at least their sum, plus its own margin, before giving up on
+  client waits at least their sum, plus its own margin — for opening the
+  conversation and for recording each step — before giving up on
   `mcp.callTool`.
 - **`mcp.readResource`** reads a resource of the app's server once and holds
   exactly those bytes. Its answer says what they are (`mimeType`, `size`,
@@ -104,16 +111,24 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   reference carries the host's own `instanceId` for its mount, since one tool
   call can be mounted more than once. The release withdraws that mount's
   open reviews (their calls answer `mcp_cancelled`) and releases its
-  resource tickets, and is idempotent. It travels on the control lane, never
-  the app lane, so held calls can never stop an app being released.
+  resource tickets, and is idempotent. Nothing is opened or issued for that
+  mount again: its later calls answer `mcp_cancelled`. It travels on the
+  control lane, never the app lane, so held calls can never stop an app
+  being released.
 - **What a refusal tells the host.** Nothing reached the server for
   `mcp_app_unknown`, `mcp_server_mismatch`, `mcp_tool_not_for_app`,
-  `mcp_request_too_large`, `mcp_approval_denied`, `mcp_approval_expired` or
-  `mcp_cancelled`; an `mcp_app_unknown` for a resource that is not an app's
-  HTML was read, which changes nothing. The server may have been asked for
+  `mcp_request_too_large`, `mcp_approval_denied`, `mcp_approval_expired`,
+  `mcp_cancelled`, `invalid_request` or `temporarily_unavailable`; an
+  `mcp_app_unknown` for a resource that is not an app's HTML, or an
+  `mcp_cancelled` for one whose mount or conversation ended while it was
+  read, was read, which changes nothing. The server may have been asked for
   `mcp_session_unavailable`, `mcp_timed_out`, `mcp_remote_error` (its JSON-RPC
   error in `McpRemoteErrorDetails`, or no details for an answer that is no
-  MCP answer) or `mcp_result_too_large`.
+  MCP answer, or a code past what a JSON number keeps) or
+  `mcp_result_too_large`. `audit_unavailable` says a step could not be
+  recorded and was not taken — except the last: a call already made whose
+  answer could not be recorded is answered `audit_unavailable` too, its
+  answer withheld.
 
 `GET /mcp-resources`, on the gateway's HTTP listener, serves a held resource,
 as `PUT /attachments` takes an upload:

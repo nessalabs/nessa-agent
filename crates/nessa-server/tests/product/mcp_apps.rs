@@ -44,3 +44,42 @@ fn a_servers_message_is_bounded_in_characters_with_control_characters_as_spaces(
     assert!(bounded.chars().all(|character| character == 'é'));
     assert_eq!(remote_message(&"a".repeat(512)), "a".repeat(512));
 }
+
+#[test]
+fn the_schema_states_the_bounds_these_commands_keep() {
+    use super::{MAX_IDENTITY_BYTES, MAX_REMOTE_CODE, MAX_REMOTE_MESSAGE_CHARS};
+    use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
+    use nessa_sdk::domain::mcp_apps::MAX_UI_URI_BYTES;
+    let schema: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../protocol/product/v1.json"
+    )))
+    .unwrap();
+    let defs = &schema["$defs"];
+    let bytes = |value: &serde_json::Value| value["x-utf8MaxBytes"].as_u64().unwrap() as usize;
+    let call = &defs["McpCallToolParams"]["properties"];
+    assert_eq!(bytes(&call["server"]), MAX_MCP_NAME_BYTES);
+    assert_eq!(bytes(&call["tool"]), MAX_MCP_NAME_BYTES);
+    let app = &defs["McpAppReference"]["properties"];
+    assert_eq!(bytes(&app["executionId"]), MAX_IDENTITY_BYTES);
+    assert_eq!(bytes(&app["toolId"]), MAX_IDENTITY_BYTES);
+    assert_eq!(
+        bytes(&defs["McpReadResourceParams"]["properties"]["uri"]),
+        MAX_UI_URI_BYTES
+    );
+    let remote = &defs["McpRemoteErrorDetails"]["properties"];
+    assert_eq!(
+        remote["message"]["maxLength"].as_u64(),
+        Some(MAX_REMOTE_MESSAGE_CHARS as u64)
+    );
+    assert_eq!(remote["code"]["maximum"].as_i64(), Some(MAX_REMOTE_CODE));
+    assert_eq!(remote["code"]["minimum"].as_i64(), Some(-MAX_REMOTE_CODE));
+}
+
+#[test]
+fn a_reordering_character_is_shown_as_a_space() {
+    assert_eq!(
+        remote_message("a\u{202E}b\u{2066}c\u{2028}d\u{200F}e"),
+        "a b c d e"
+    );
+}

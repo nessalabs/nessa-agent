@@ -72,6 +72,12 @@
 //! Deletes of one conversation, and summary writes of one conversation, are
 //! serialized per conversation (`ConversationLocks`), and a delete that waits
 //! behind another attempt answers from its tombstone without one of its own.
+//!
+//! An MCP App's calls (#348) are the service's too
+//! (`service/app_calls.rs`, `docs/design/mcp-app-calls.md`): each live
+//! conversation's apps — their reviews, and the lock nothing is opened or
+//! issued past once a mount is released or the conversation ended — are
+//! `app_reviews.rs`, and the ports the calls go through `mcp_apps.rs`.
 mod app_reviews;
 // For the agreement test, which holds it to the published `x-mcpAppCallTiming`.
 #[cfg(test)]
@@ -103,10 +109,10 @@ pub use catalogue_read::{
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use mcp_apps::{
-    HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppError,
-    McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef,
-    McpAppWithdrawal, McpApps, ResourceTickets, TicketRefusal, MAX_HELD_RESOURCE_BYTES,
-    MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
+    HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppCode,
+    McpAppError, McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome, McpAppPorts,
+    McpAppRef, McpAppWithdrawal, McpApps, ResourceTickets, TicketEnd, TicketRefusal,
+    MAX_HELD_RESOURCE_BYTES, MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
 };
 pub use passive_read::{
     AdmitPassiveRead, CatalogueReadScope, ReadRefusal, ReceiverAuthority, ReceiverReadScope,

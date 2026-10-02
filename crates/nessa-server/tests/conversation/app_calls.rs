@@ -6,8 +6,11 @@
 //! ticket — and the audit each leaves.
 use super::*;
 use crate::app_call_test_support::{caller, Fixture, INSTANCE, OTHER_INSTANCE, SERVER, URI};
-use crate::conversation::application::app_reviews::{ALLOW, DENY, MAX_OPEN_APP_REVIEWS};
+use crate::conversation::application::app_reviews::{
+    ALLOW, DENY, MAX_APP_REVIEW_BYTES, MAX_OPEN_APP_REVIEWS,
+};
 use crate::conversation::application::mcp_apps::McpAppFailure;
+use crate::conversation::application::mcp_apps::TicketEnd;
 use crate::conversation::application::view::ConversationPermissionOrigin;
 use crate::mcp_servers::domain::MAX_APP_ARGUMENTS_BYTES;
 use nessa_auth::domain::PrincipalId;
@@ -16,6 +19,15 @@ use nessa_sdk::domain::mcp_apps::{ToolHints, UiCsp, UiResource, UiVisibility};
 use serde_json::json;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+
+/// The person behind `caller(action)`, by that request.
+fn person_by(action: &str) -> McpAppInitiator {
+    McpAppInitiator::Person {
+        principal_id: PrincipalId::new("person").unwrap(),
+        surface_id: "panel".into(),
+        request_id: action.into(),
+    }
+}
 
 fn refused(result: Result<impl std::fmt::Debug, ConversationError>) -> McpAppError {
     match result {
@@ -139,7 +151,7 @@ async fn each_policy_refusal_is_its_code_on_record_and_nothing_is_sent() {
     ));
     assert_eq!(
         fixture.audit.phases().last(),
-        Some(&McpAppAuditPhase::Refused("invalid_request"))
+        Some(&McpAppAuditPhase::Refused(McpAppCode::InvalidRequest))
     );
     assert_eq!(fixture.apps.calls(), 0);
     // Exactly at the bound is taken.
@@ -207,9 +219,14 @@ async fn a_destructive_call_waits_on_the_persons_review_and_is_sent_once_allowed
             DENY.into(),
         )
         .await;
+    // Ended, the identity names no app review: the agent's to answer, which
+    // answers it stale itself.
     assert!(matches!(
         again,
-        Err(ConversationError::Agent(AgentError::StalePermission))
+        Err(ConversationError::PermissionAnswer {
+            error: AgentError::StalePermission,
+            ..
+        })
     ));
     assert_eq!(fixture.apps.calls(), 1);
 }
@@ -306,9 +323,12 @@ async fn releasing_one_mount_cancels_only_its_own_calls_and_lets_go_of_its_resou
         .await
         .unwrap();
     assert_eq!(refused(mine.await.unwrap()), McpAppError::Cancelled);
+    // The release is the releaser's: the caller of `mcp.releaseApp`, by its
+    // own request.
+    let releaser = person_by("release");
     assert_eq!(
         fixture.tickets.released_apps.lock().unwrap().clone(),
-        [fixture.app(INSTANCE)]
+        [(fixture.app(INSTANCE), releaser.clone())]
     );
     // The other mount still waits, and is answered as it is answered.
     let left = fixture.app_reviews().await;
@@ -316,13 +336,24 @@ async fn releasing_one_mount_cancels_only_its_own_calls_and_lets_go_of_its_resou
     assert_eq!(left[0].permission_id, other_review.permission_id);
     fixture.answer(&other_review, ALLOW).await;
     other.await.unwrap().unwrap();
-    assert!(fixture.audit.phases().iter().any(|phase| matches!(
-        phase,
-        McpAppAuditPhase::Withdrawn {
-            cause: McpAppWithdrawal::AppTornDown,
-            ..
-        }
-    )));
+    let torn_down: Vec<_> = fixture
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.phase,
+                McpAppAuditPhase::Withdrawn {
+                    cause: McpAppWithdrawal::AppTornDown,
+                    ..
+                }
+            )
+        })
+        .map(|record| record.initiator.clone())
+        .collect();
+    assert_eq!(torn_down, [releaser]);
     // Releasing it again, or a mount with nothing open, is nothing.
     fixture
         .service
@@ -349,12 +380,11 @@ async fn closing_the_conversation_cancels_every_waiting_call_and_its_resources()
     for task in [first, second] {
         assert_eq!(refused(task.await.unwrap()), McpAppError::Cancelled);
     }
+    // Ended by the person who closed it, by their own request.
+    let closer = person_by("close");
     assert_eq!(
-        fixture
-            .tickets
-            .released_conversations
-            .load(Ordering::SeqCst),
-        1
+        *fixture.tickets.released_conversations.lock().unwrap(),
+        std::slice::from_ref(&closer)
     );
     let withdrawals: Vec<_> = fixture
         .audit
@@ -373,10 +403,7 @@ async fn closing_the_conversation_cancels_every_waiting_call_and_its_resources()
         })
         .map(|record| record.initiator.clone())
         .collect();
-    assert_eq!(
-        withdrawals,
-        [McpAppInitiator::System, McpAppInitiator::System]
-    );
+    assert_eq!(withdrawals, [closer.clone(), closer]);
     assert_eq!(fixture.apps.calls(), 0);
 }
 
@@ -474,7 +501,7 @@ async fn a_resource_is_read_once_and_held_behind_a_ticket_on_record() {
         .await
         .unwrap();
     assert_eq!(resource.size, "<p>chart</p>".len());
-    assert_eq!(resource.sha256, hex(&Sha256::digest(b"<p>chart</p>")));
+    assert_eq!(resource.sha256, hex(b"<p>chart</p>"));
     assert_eq!(resource.csp.resource_domains().len(), 1);
     assert_eq!(resource.prefers_border, Some(true));
     let issued = fixture.tickets.issued.lock().unwrap().clone();
@@ -486,7 +513,7 @@ async fn a_resource_is_read_once_and_held_behind_a_ticket_on_record() {
         phases[2],
         McpAppAuditPhase::TicketIssued {
             // Only its digest is ever on record.
-            ticket_digest: hex(&Sha256::digest(resource.ticket.as_bytes())),
+            ticket_digest: ResourceTicketDigest::of(resource.ticket.as_bytes()).to_hex(),
             size: resource.size,
             sha256: resource.sha256.clone()
         }
@@ -539,7 +566,7 @@ async fn a_resource_is_read_once_and_held_behind_a_ticket_on_record() {
     assert_eq!(
         fixture.audit.phases().last(),
         Some(&McpAppAuditPhase::Completed(McpAppOutcome::Failed(
-            "temporarily_unavailable"
+            McpAppCode::TemporarilyUnavailable
         )))
     );
 }
@@ -673,4 +700,351 @@ async fn a_view_holding_an_app_review_has_a_revision_of_its_own() {
     let after = revision().await;
     assert_ne!(after, during);
     assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn a_released_mount_opens_no_review_and_its_tool_is_never_called() {
+    // Released before its destructive call opened its review: the review
+    // never opens, so nobody can allow it and the tool is never called.
+    let fixture = Fixture::new().await;
+    fixture
+        .service
+        .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
+        .await
+        .unwrap();
+    assert_eq!(
+        refused(fixture.call_tool(fixture.call("delete_rows", None)).await),
+        McpAppError::Cancelled
+    );
+    assert!(fixture.app_reviews().await.is_empty());
+    assert_eq!(fixture.apps.calls(), 0);
+    assert!(matches!(
+        fixture.audit.phases().last(),
+        Some(McpAppAuditPhase::Withdrawn {
+            cause: McpAppWithdrawal::AppTornDown,
+            ..
+        })
+    ));
+}
+
+fn page(html: &str) -> UiResource {
+    UiResource::new(
+        UiResourceUri::new(URI).unwrap(),
+        html.into(),
+        UiCsp::default(),
+        UiPermissions::default(),
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+fn read(fixture: &Fixture, instance: &str) -> McpAppRead {
+    McpAppRead {
+        app: fixture.app(instance),
+        server: SERVER.into(),
+        uri: URI.into(),
+    }
+}
+
+#[tokio::test]
+async fn a_resource_read_when_its_conversation_closes_is_never_held() {
+    // The read is with the server when the conversation closes: nothing is
+    // held for it then. It must not be held when the read comes back.
+    let fixture = Fixture::new().await;
+    *fixture.apps.resource.lock().unwrap() = Some(Ok(page("<p/>")));
+    fixture.apps.hold.store(true, Ordering::SeqCst);
+    let reading = {
+        let service = fixture.service.clone();
+        let id = fixture.id.clone();
+        let read = read(&fixture, INSTANCE);
+        tokio::spawn(async move { service.read_app_resource(id, caller("read"), read).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.apps.reads.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    fixture
+        .service
+        .close(fixture.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    fixture.apps.gate.0.add_permits(1);
+    assert_eq!(refused(reading.await.unwrap()), McpAppError::Cancelled);
+    assert!(fixture.tickets.issued.lock().unwrap().is_empty());
+    assert_eq!(
+        fixture.audit.phases().last(),
+        Some(&McpAppAuditPhase::Completed(McpAppOutcome::Failed(
+            McpAppCode::Cancelled
+        )))
+    );
+}
+
+#[tokio::test]
+async fn a_released_mount_is_issued_no_ticket() {
+    let fixture = Fixture::new().await;
+    *fixture.apps.resource.lock().unwrap() = Some(Ok(page("<p/>")));
+    fixture
+        .service
+        .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
+        .await
+        .unwrap();
+    let refused_read = fixture
+        .service
+        .read_app_resource(fixture.id.clone(), caller("read"), read(&fixture, INSTANCE))
+        .await;
+    assert_eq!(refused(refused_read), McpAppError::Cancelled);
+    assert!(fixture.tickets.issued.lock().unwrap().is_empty());
+    // Another mount of the same tool call is its own.
+    fixture
+        .service
+        .read_app_resource(
+            fixture.id.clone(),
+            caller("read"),
+            read(&fixture, OTHER_INSTANCE),
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_ticket_let_go_while_its_issue_was_recorded_ends_on_record_after_it() {
+    let fixture = Fixture::new().await;
+    *fixture.apps.resource.lock().unwrap() = Some(Ok(page("<p/>")));
+    let releaser = person_by("release");
+    *fixture.tickets.ended_first.lock().unwrap() = Some((TicketEnd::AppReleased, releaser.clone()));
+    let refused_read = fixture
+        .service
+        .read_app_resource(fixture.id.clone(), caller("read"), read(&fixture, INSTANCE))
+        .await;
+    assert_eq!(refused(refused_read), McpAppError::Cancelled);
+    let records = fixture.audit.records.lock().unwrap().clone();
+    let phases: Vec<_> = records.iter().map(|record| &record.phase).collect();
+    assert!(matches!(
+        phases[..],
+        [
+            McpAppAuditPhase::Admitted,
+            McpAppAuditPhase::Completed(McpAppOutcome::Answered { .. }),
+            McpAppAuditPhase::TicketIssued { .. },
+            McpAppAuditPhase::TicketEnded {
+                cause: TicketEnd::AppReleased,
+                ..
+            },
+        ]
+    ));
+    // Its end, by whoever ended it, after its issue.
+    assert_eq!(records[3].initiator, releaser);
+    assert!(fixture.tickets.activated.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_allowed_call_whose_approval_cannot_be_recorded_is_not_made() {
+    let fixture = Fixture::new().await;
+    let (task, review) = fixture.held(fixture.call("delete_rows", None)).await;
+    // `ApprovalRequested` is on record; `Approved` will not be.
+    *fixture.audit.failing_after.lock().unwrap() = Some(1);
+    fixture.answer(&review, ALLOW).await;
+    assert!(matches!(task.await.unwrap(), Err(ConversationError::Audit)));
+    assert_eq!(fixture.apps.calls(), 0);
+}
+
+#[tokio::test]
+async fn a_call_made_whose_answer_cannot_be_recorded_is_withheld() {
+    // Sent, so made: the record of its end is what failed, and the answer is
+    // withheld rather than reported unrecorded.
+    let fixture = Fixture::new().await;
+    *fixture.audit.failing_after.lock().unwrap() = Some(1);
+    assert!(matches!(
+        fixture.call_tool(fixture.call("read_rows", None)).await,
+        Err(ConversationError::Audit)
+    ));
+    assert_eq!(fixture.apps.calls(), 1);
+}
+
+#[tokio::test]
+async fn a_tool_changed_during_its_review_is_not_called_once_allowed() {
+    let fixture = Fixture::new().await;
+    let (task, review) = fixture.held(fixture.call("delete_rows", None)).await;
+    // While the person decides, the server lists it for the model only.
+    fixture.apps.list(
+        "delete_rows",
+        Some(UiVisibility::new(true, false)),
+        ToolHints::new(None, None),
+    );
+    fixture.answer(&review, ALLOW).await;
+    assert_eq!(refused(task.await.unwrap()), McpAppError::ToolNotForApp);
+    assert_eq!(fixture.apps.calls(), 0);
+    let phases = fixture.audit.phases();
+    assert!(matches!(
+        phases[phases.len() - 2..],
+        [
+            McpAppAuditPhase::Approved { .. },
+            McpAppAuditPhase::Refused(McpAppCode::ToolNotForApp)
+        ]
+    ));
+}
+
+#[tokio::test]
+async fn what_the_person_is_shown_is_what_is_sent() {
+    // A duplicate key, and a number past what JSON numbers keep: the review
+    // shows the arguments as they will be sent, not as the app wrote them.
+    let fixture = Fixture::new().await;
+    let (task, review) = fixture
+        .held(fixture.call(
+            "delete_rows",
+            Some("{\"rows\":\"none\",\"rows\":\"all\",\"n\":99999999999999999999}"),
+        ))
+        .await;
+    let shown: Value = serde_json::from_str(&review.arguments_json).unwrap();
+    fixture.answer(&review, ALLOW).await;
+    task.await.unwrap().unwrap();
+    let sent = fixture.apps.calls.lock().unwrap()[0].1.clone().unwrap();
+    assert_eq!(shown, sent);
+    assert_eq!(review.arguments_json, sent.to_string());
+    assert_eq!(sent["rows"], "all");
+}
+
+#[tokio::test]
+async fn a_review_past_its_share_of_the_view_is_refused_before_it_is_asked_for() {
+    let fixture = Fixture::new().await;
+    let large = format!("{{\"a\":\"{}\"}}", "x".repeat(MAX_APP_REVIEW_BYTES));
+    assert_eq!(
+        refused(
+            fixture
+                .call_tool(fixture.call("delete_rows", Some(&large)))
+                .await
+        ),
+        McpAppError::RequestTooLarge
+    );
+    // Not asked for: no request on record, no review shown, nothing sent.
+    assert_eq!(
+        fixture.audit.phases(),
+        [McpAppAuditPhase::Refused(McpAppCode::RequestTooLarge)]
+    );
+    assert!(fixture.app_reviews().await.is_empty());
+    // And so a view never loses the app's own tool call to its reviews.
+    let view = fixture
+        .service
+        .read(fixture.id.clone(), caller("read"))
+        .await
+        .unwrap();
+    assert!(view
+        .tools
+        .iter()
+        .any(|tool| tool.tool_id == fixture.tool_id));
+}
+
+#[tokio::test]
+async fn an_answer_is_measured_as_the_wire_carries_it() {
+    // Under the bound as text, past it once every quote in it is escaped
+    // again for the JSON string the wire carries it in.
+    let fixture = Fixture::new().await;
+    let quoted =
+        json!({"content": [{"type": "text", "text": "\"".repeat(MAX_APP_RESULT_BYTES / 3)}]});
+    assert!(quoted.to_string().len() < MAX_APP_RESULT_BYTES);
+    fixture.apps.answers.lock().unwrap().push(Ok(quoted));
+    assert_eq!(
+        refused(fixture.call_tool(fixture.call("read_rows", None)).await),
+        McpAppError::ResultTooLarge
+    );
+}
+
+#[tokio::test]
+async fn a_session_with_nothing_open_or_too_busy_refuses_before_sending() {
+    let fixture = Fixture::new().await;
+    for (failure, error, code) in [
+        (
+            McpAppFailure::NoSession,
+            McpAppError::SessionUnavailable,
+            McpAppCode::SessionUnavailable,
+        ),
+        (
+            McpAppFailure::Busy,
+            McpAppError::Busy,
+            McpAppCode::TemporarilyUnavailable,
+        ),
+    ] {
+        *fixture.apps.listing_fails.lock().unwrap() = Some(failure);
+        assert_eq!(
+            refused(fixture.call_tool(fixture.call("read_rows", None)).await),
+            error
+        );
+        assert_eq!(
+            fixture.audit.phases().last(),
+            Some(&McpAppAuditPhase::Refused(code))
+        );
+    }
+    assert_eq!(fixture.apps.calls(), 0);
+}
+
+#[tokio::test]
+async fn a_stopping_gateway_records_every_waiting_call_before_it_returns() {
+    let fixture = Fixture::new().await;
+    let (task, review) = fixture.held(fixture.call("delete_rows", None)).await;
+    // Each record takes a while to commit: shutdown must wait for it.
+    *fixture.audit.slow.lock().unwrap() = Some(Duration::from_millis(300));
+    fixture.service.shutdown().await.unwrap();
+    // On record already: shutdown waited for the call's task to record it.
+    assert_eq!(
+        fixture
+            .audit
+            .records
+            .lock()
+            .unwrap()
+            .last()
+            .map(|record| (record.phase.clone(), record.initiator.clone())),
+        Some((
+            McpAppAuditPhase::Withdrawn {
+                permission_id: review.permission_id.clone(),
+                cause: McpAppWithdrawal::ConversationEnded,
+            },
+            McpAppInitiator::System
+        ))
+    );
+    assert_eq!(refused(task.await.unwrap()), McpAppError::Cancelled);
+}
+
+#[tokio::test]
+async fn deleting_the_conversation_withdraws_its_waiting_calls_as_the_deleter() {
+    let fixture = Fixture::new().await;
+    let (task, review) = fixture.held(fixture.call("delete_rows", None)).await;
+    // The delete happens; this fixture has no way to erase the provider's own
+    // record of the session, which is all it leaves unfinished.
+    let deleted = fixture
+        .service
+        .delete(fixture.id.clone(), caller("delete"))
+        .await;
+    let stopped = match &deleted {
+        Ok(_) => true,
+        Err(ConversationError::DeletionIncomplete(failures)) => failures.stop.is_none(),
+        Err(_) => false,
+    };
+    assert!(stopped, "{deleted:?}");
+    assert_eq!(refused(task.await.unwrap()), McpAppError::Cancelled);
+    let deleter = person_by("delete");
+    let last = fixture
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        (last.phase, last.initiator),
+        (
+            McpAppAuditPhase::Withdrawn {
+                permission_id: review.permission_id,
+                cause: McpAppWithdrawal::ConversationEnded,
+            },
+            deleter.clone()
+        )
+    );
+    assert_eq!(
+        *fixture.tickets.released_conversations.lock().unwrap(),
+        std::slice::from_ref(&deleter)
+    );
 }

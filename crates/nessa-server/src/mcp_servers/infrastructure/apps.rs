@@ -55,13 +55,18 @@ pub(crate) fn failure(error: McpError) -> McpAppFailure {
         McpError::TooLarge(_) => McpAppFailure::TooLarge,
         McpError::NotAnApp => McpAppFailure::NotAnApp,
         McpError::Malformed(_) | McpError::Handshake(_) => McpAppFailure::Malformed,
-        // Ended, gone, stopped, or too busy to take it: the session cannot
-        // answer this call.
+        // As many requests waiting as it takes: nothing was sent, and it
+        // passes with time.
+        McpError::Busy => McpAppFailure::Busy,
+        // Ended, gone or stopped: the session cannot answer this call.
         McpError::ServerGone
         | McpError::Closed
         | McpError::Stopped
-        | McpError::Busy
         | McpError::Start(_)
         | McpError::InvalidConfiguration => McpAppFailure::SessionEnded,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/mcp_servers/apps.rs"]
+mod tests;

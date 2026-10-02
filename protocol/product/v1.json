@@ -2089,7 +2089,7 @@
           "type": "string",
           "maxLength": 32768,
           "x-utf8MaxBytes": 32768,
-          "description": "The tool's arguments: one JSON object, encoded, at most 32 KiB, the most a review shows (mcp_request_too_large past it, invalid_request if it is not an object). Absent is none."
+          "description": "The tool's arguments: one JSON object, encoded, at most 32 KiB (mcp_request_too_large past it, invalid_request if it is not an object), sent as parsed — re-encoded, a duplicate key's last value kept — and shown so in a destructive tool's review, which may take at most 16 000 bytes of the view (mcp_request_too_large past it). Absent is none."
         }
       },
       "required": ["conversationId", "requestId", "app", "server", "tool"]
@@ -2104,7 +2104,7 @@
           "minLength": 2,
           "maxLength": 57344,
           "x-utf8MaxBytes": 57344,
-          "description": "The MCP CallToolResult exactly as the server answered it — content, structuredContent, isError, _meta — encoded as one JSON object, at most 56 KiB (past it, the call is refused mcp_result_too_large instead). isError true is a result for the app, not a refusal."
+          "description": "The MCP CallToolResult the server answered — content, structuredContent, isError, _meta — re-encoded as one JSON object, at most 56 KiB measured as the JSON string this field is (past it, the call is refused mcp_result_too_large instead). isError true is a result for the app, not a refusal."
         }
       },
       "required": ["resultJson"]

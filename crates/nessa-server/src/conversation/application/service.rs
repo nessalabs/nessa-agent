@@ -2,7 +2,7 @@ use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
     locks::ConversationLocks,
-    mcp_apps::McpAppPorts,
+    mcp_apps::{McpAppInitiator, McpAppPorts},
     projection::{bound_view, clipped, Projection, MAX_TEXT},
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
@@ -129,6 +129,9 @@ const DELETION_RETRY_DELAY: Duration = Duration::from_secs(1);
 /// waiting beyond its own bound
 /// (`agents_asked_at_once_never_exceed_the_bound_and_the_rest_are_left_unfinished`).
 const MAX_AGENTS_ASKED_AT_ONCE: usize = 2;
+/// How long a stopping gateway waits for every MCP App call to record its
+/// last step.
+const APP_CALLS_SETTLE: Duration = Duration::from_secs(10);
 
 /// Authenticated identity and stable logical action supplied by the gateway boundary.
 #[derive(Clone)]
@@ -1231,7 +1234,7 @@ impl ConversationService {
         .map_err(|_| ConversationError::ApprovalModeUncertain)?;
         let slot = self.inner.conversations.lock().await.get(id).cloned();
         if let Some(slot) = slot {
-            self.stop_slot(id, slot, &actor)
+            self.stop_slot(id, slot, &actor, &McpAppInitiator::System)
                 .await
                 .map_err(|_| ConversationError::ApprovalModeUncertain)?;
         }
@@ -2366,7 +2369,7 @@ impl ConversationService {
                 match slot {
                     Some(slot) => {
                         let stopped = service
-                            .stop_slot(&id, slot, &actor)
+                            .stop_slot(&id, slot, &actor, &initiator_of(&actor))
                             .await
                             .map_err(|_| ConversationError::ApprovalModeUncertain);
                         let may_release = stopped.is_ok();
@@ -2377,6 +2380,7 @@ impl ConversationService {
             } else {
                 match service.resolve(&id, &caller).await {
                     Ok(live) => {
+                        service.end_apps(&id, &live, &initiator_of(&actor));
                         let result = live.agent.close(actor).await;
                         if result.is_ok() {
                             live.join_attachment_owner().await;
@@ -2859,8 +2863,9 @@ impl ConversationService {
             // this delete to do it first. Answered as every step after the
             // tombstone is: the delete happened and did not finish
             // (`a_shutdown_ends_a_delete_waiting_to_stop_or_to_lease_and_it_is_left_unfinished`).
+            let ended_by = initiator_of(&actor);
             let stopped = tokio::select! {
-                stopped = self.stop_slot(&id, slot, &actor) => stopped,
+                stopped = self.stop_slot(&id, slot, &actor, &ended_by) => stopped,
                 () = self.retired() => Err(StopFailure::Failed(AgentError::Closed)),
             };
             if let Err(stop) = stopped {
@@ -3286,6 +3291,13 @@ impl ConversationService {
                 Err(ConversationError::RetirementAdmission { cleanup_error })
             }
         };
+        // Each app call runs on a task of its own, and records its last step
+        // there: a review withdrawn as its conversation ended, a call sent
+        // that its server's stop ended. The runtime that ends after this
+        // would cut those records short.
+        if !self.app_calls_finished(APP_CALLS_SETTLE).await {
+            tracing::warn!("MCP App calls were still running when the gateway stopped");
+        }
         // Deletions whose agents were being asked when retirement ended them
         // are still stopping those agents on tasks of their own; the runtime
         // that ends after this would cut them short and leave what they made
@@ -3350,13 +3362,16 @@ impl ConversationService {
         let attempts = slots.into_iter().map(|(id, slot)| async move {
             // Retirement reports every stop as the agent's error: over its
             // budget is a deadline there.
-            self.stop_slot(&id, slot, actor).await.err().map(|stop| {
-                let error = match stop {
-                    StopFailure::OverBudget => AgentError::Deadline,
-                    StopFailure::Failed(error) => error,
-                };
-                (id.to_string(), error)
-            })
+            self.stop_slot(&id, slot, actor, &McpAppInitiator::System)
+                .await
+                .err()
+                .map(|stop| {
+                    let error = match stop {
+                        StopFailure::OverBudget => AgentError::Deadline,
+                        StopFailure::Failed(error) => error,
+                    };
+                    (id.to_string(), error)
+                })
         });
         let failures: Vec<_> = join_all(attempts).await.into_iter().flatten().collect();
         if failures.is_empty() {
@@ -3373,11 +3388,14 @@ impl ConversationService {
     /// error, which means only that cleanup is unconfirmed; the slot and
     /// supervised SDK work remain owned
     /// (`a_close_that_fails_with_a_deadline_of_its_own_is_not_the_stop_budget`).
+    /// Stop the agent of `slot`, its apps ended first by `ended_by` — so
+    /// they end, and on record, even when the stop does not.
     async fn stop_slot(
         &self,
         id: &ConversationId,
         slot: Arc<Slot>,
         actor: &ActionContext,
+        ended_by: &McpAppInitiator,
     ) -> Result<(), StopFailure> {
         let attempt = async {
             loop {
@@ -3386,14 +3404,17 @@ impl ConversationService {
                 ready.as_mut().enable();
                 if let Some(value) = slot.value.get() {
                     return match value {
-                        Ok(live) => match live.agent.close(actor.clone()).await {
-                            Ok(_) => {
-                                live.join_attachment_owner().await;
-                                self.release_slot(id, &slot).await;
-                                Ok(())
+                        Ok(live) => {
+                            self.end_apps(id, live, ended_by);
+                            match live.agent.close(actor.clone()).await {
+                                Ok(_) => {
+                                    live.join_attachment_owner().await;
+                                    self.release_slot(id, &slot).await;
+                                    Ok(())
+                                }
+                                Err(error) => Err(error),
                             }
-                            Err(error) => Err(error),
-                        },
+                        }
                         // One rule for a failed opening: while it may still hold
                         // what it launched, its stop cannot be confirmed.
                         Err(failed) if failed.holds => Err(AgentError::CleanupUncertain),
@@ -3433,13 +3454,11 @@ impl ConversationService {
             owned
         };
         if released {
-            // The conversation ended, however it ended: its apps' waiting
-            // calls are withdrawn, and what was held for them let go.
+            // Ended, however it ended: its apps too. Every stop ends them
+            // first, by whoever stopped it; this is for any other way out,
+            // and does nothing to apps already ended.
             if let Some(Ok(live)) = slot.value.get() {
-                live.app_reviews.end();
-            }
-            if let Some(apps) = &self.inner.mcp_apps {
-                apps.tickets.release_conversation(id);
+                self.end_apps(id, live, &McpAppInitiator::System);
             }
         }
     }
@@ -3463,6 +3482,19 @@ fn waiting_for(failures: &DeletionFailures) -> Option<Waiting> {
     }
     let still_stopping = matches!(failures.stop, Some(StopFailure::OverBudget));
     (still_stopping || failures.history_leased_elsewhere).then_some(Waiting::ForRelease)
+}
+
+/// Who ended a conversation's apps, by the command `actor` took: the
+/// gateway's own actor is the system, anyone else a person.
+fn initiator_of(actor: &ActionContext) -> McpAppInitiator {
+    match nessa_auth::domain::PrincipalId::new(actor.principal_id()) {
+        Ok(principal_id) if actor.principal_id() != "gateway" => McpAppInitiator::Person {
+            principal_id,
+            surface_id: actor.surface_id().to_owned(),
+            request_id: actor.request_id().to_owned(),
+        },
+        _ => McpAppInitiator::System,
+    }
 }
 
 /// Who answered an app's review: the caller of `conversation.answer`.
