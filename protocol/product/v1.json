@@ -7,6 +7,10 @@
     "deliveryTimeoutMs": 30000,
     "clientAllowanceMs": 5000
   },
+  "x-mcpAppCallTiming": {
+    "reviewDeadlineMs": 300000,
+    "callTimeoutMs": 60000
+  },
   "$defs": {
     "SessionChallenge": {
       "type": "object",

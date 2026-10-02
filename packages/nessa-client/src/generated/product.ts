@@ -1314,6 +1314,11 @@ export const passiveReadTiming = {
   clientAllowanceMs: 5000,
   minRequestTimeoutMs: 45000,
 } as const
+/** How long an MCP App's call can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs. */
+export const mcpAppCallTiming = {
+  reviewDeadlineMs: 300000,
+  callTimeoutMs: 60000,
+} as const
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,

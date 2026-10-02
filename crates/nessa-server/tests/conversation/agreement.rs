@@ -140,3 +140,20 @@ fn an_app_calls_schema_states_the_bounds_the_gateway_keeps() {
         );
     }
 }
+
+#[test]
+fn the_schema_publishes_how_long_an_app_call_can_take() {
+    use crate::conversation::application::APP_REVIEW_DEADLINE;
+    use nessa_sdk::infrastructure::mcp::APP_CALL_TIMEOUT;
+    let schema = schema();
+    let timing = &schema["x-mcpAppCallTiming"];
+    // A client waits for both, one after the other; neither may drift.
+    assert_eq!(
+        timing["reviewDeadlineMs"].as_u64(),
+        Some(APP_REVIEW_DEADLINE.as_millis() as u64)
+    );
+    assert_eq!(
+        timing["callTimeoutMs"].as_u64(),
+        Some(APP_CALL_TIMEOUT.as_millis() as u64)
+    );
+}

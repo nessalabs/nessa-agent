@@ -58,6 +58,23 @@ passiveReadTiming.minRequestTimeoutMs =
 if (passiveReadTiming.minRequestTimeoutMs > 2_147_483_647)
   throw new Error("Passive request deadline exceeds the runtime timer range")
 
+// How long an MCP App's call can take the gateway: a review waiting for the
+// person, then the call itself. Policy, published so a client waits that long.
+const appTiming = schema["x-mcpAppCallTiming"]
+const mcpAppCallTiming = {}
+for (const name of ["reviewDeadlineMs", "callTimeoutMs"]) {
+  if (
+    !appTiming ||
+    !Object.hasOwn(appTiming, name) ||
+    !Number.isSafeInteger(appTiming[name]) ||
+    appTiming[name] <= 0
+  )
+    throw new Error(`Invalid MCP App call timing: ${name}`)
+  mcpAppCallTiming[name] = appTiming[name]
+}
+if (Object.keys(appTiming).length !== Object.keys(mcpAppCallTiming).length)
+  throw new Error("MCP App call timing has unknown fields")
+
 const sdkFrames = readFileSync(
   resolve(root, "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"),
   "utf8",
@@ -354,6 +371,9 @@ for (const [name, value] of Object.entries(passiveReadTiming)) {
 ts += `${doc(
   "Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor.",
 )}export const passiveReadTiming = ${JSON.stringify(passiveReadTiming)} as const\n`
+ts += `${doc(
+  "How long an MCP App's call can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs.",
+)}export const mcpAppCallTiming = ${JSON.stringify(mcpAppCallTiming)} as const\n`
 ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",
 )}export const bounds = ${JSON.stringify(bounds)} as const\n`

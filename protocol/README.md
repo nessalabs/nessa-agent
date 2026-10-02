@@ -82,8 +82,15 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   `conversation.cancel`.
 - **A waiting call stays pending** until the person answers, or the review
   expires after 5 minutes (`mcp_approval_expired`), or it is withdrawn
-  (`mcp_cancelled`). It is withdrawn when the request is cancelled, the app is
-  torn down, or the conversation ends.
+  (`mcp_cancelled`). It is withdrawn when the request is cancelled — its
+  socket closes — the app is torn down (`mcp.releaseApp`), or the
+  conversation ends. A client that stops waiting withdraws nothing: the
+  review stays open, and the call is still made if the person allows it.
+- **How long a call can take** is published as `x-mcpAppCallTiming`:
+  `reviewDeadlineMs` (300000) for a review to be answered, then
+  `callTimeoutMs` (60000) for the server to answer (`mcp_timed_out`). A
+  client waits at least their sum, plus its own margin, before giving up on
+  `mcp.callTool`.
 - **`mcp.readResource`** reads a resource of the app's server once and holds
   exactly those bytes. Its answer says what they are (`mimeType`, `size`,
   `sha256`, the app's `csp`, `permissions`, `domain`, `prefersBorder`) and
@@ -117,6 +124,9 @@ as `PUT /attachments` takes an upload:
   the same origin checks and CORS as `/attachments`.
 - **Refusals.** An unknown, used, expired or wrong-credential ticket gets the
   same `404` with no body.
+- **Unrecorded.** A redemption is audited before anything is served. When
+  that record cannot be written the answer is `503` with no body: the ticket
+  is spent and nothing is served. Read the resource again for a new one.
 - **The response.** `Content-Type: text/html;profile=mcp-app`,
   `X-Content-Type-Options: nosniff`, `Cache-Control: no-store` and
   `Content-Disposition: attachment`.
