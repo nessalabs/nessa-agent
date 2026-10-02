@@ -11,8 +11,8 @@ export const sandboxMethods = {
   /**
    * The host → the proxy: the app's document, the policy for the proxy's
    * own, and how long the app's frame has, after each of its loads, to
-   * answer `appCheck` (`checkWithin`, a whole number of milliseconds a timer
-   * can wait: at most 2^31 − 1).
+   * answer `appCheck` (`checkWithin`: milliseconds a timer can wait, a
+   * number in (0, 2^31 − 1]).
    */
   resourceReady: "ui/notifications/sandbox-resource-ready",
   /** The reporter or the proxy → the host: a load the policy refused, by its origin. */

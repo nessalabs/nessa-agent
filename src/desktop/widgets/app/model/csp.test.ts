@@ -193,6 +193,11 @@ describe("the reporter", () => {
       'addEventListener("securitypolicyviolation"',
       sandboxMethods.cspViolation,
       'addEventListener("message"',
+      // answering only a check the browser delivered, read through what it
+      // took before the app ran
+      "event.isTrusted !== true",
+      "apply(sourceOf, event, [])",
+      "apply(stopImmediately, event, [])",
       sandboxMethods.appCheck,
       "stopImmediatePropagation",
       'addEventListener("click"',

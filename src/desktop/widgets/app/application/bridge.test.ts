@@ -231,8 +231,9 @@ describe("the handshake", () => {
     const policy = (ready as unknown as { params: { policy: string } }).params.policy
     expect(policy.startsWith("default-src 'none'; ")).toBe(true)
     expect(html).toContain(`content="${policy}"`)
-    // And how long the app's frame has to load and answer its check (L32):
-    // as long as the host waits for the app to initialize.
+    // And how long the app's frame has, after each of its loads, to answer
+    // the proxy's check (L32): as long as the host waits for the app to
+    // initialize.
     expect(
       (ready as unknown as { params: { checkWithin: number } }).params.checkWithin,
     ).toBe(deadlines.initialize)

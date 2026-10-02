@@ -173,14 +173,23 @@ export function approvedDomains(csp: AppliedCsp): JsonObject {
  *
  * The proxy relies on none of it to know the app is gone, only on its
  * answers (design L32): a document naming itself as another than the first,
- * or a `load` of the frame its document does not answer. The app can send
- * any of these itself; a report says only an origin, and a departure only
- * ends its own view. Enforcement never depends on them.
+ * or a `load` of the frame its document does not answer. It answers only a
+ * check the browser delivered from the proxy, read through what it took
+ * before the app ran, so the app cannot have it answer a check of the app's
+ * own making, nor hear the proxy's. The app can send a report or a
+ * departure itself; a report says only an origin, and a departure only ends
+ * its own view. Enforcement never depends on them.
  */
 const reporter = `(function () {
   var token = ${JSON.stringify(frameTokenSlot)};
   var parentWindow = window.parent;
   var post = parentWindow.postMessage.bind(parentWindow);
+  // Taken now, before any of the app's scripts can replace them, and called
+  // through \`apply\`, never looked up on the event again.
+  var apply = Reflect.apply;
+  var sourceOf = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "source").get;
+  var dataOf = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data").get;
+  var stopImmediately = Event.prototype.stopImmediatePropagation;
   var bytes = crypto.getRandomValues(new Uint8Array(16));
   var documentId = "";
   for (var i = 0; i < bytes.length; i++) documentId += (bytes[i] + 256).toString(16).slice(1);
@@ -193,9 +202,13 @@ const reporter = `(function () {
     post({ jsonrpc: "2.0", method: ${JSON.stringify(sandboxMethods.cspViolation)}, params: origin && origin !== "null" ? { origin: origin } : {} }, "*");
   }, true);
   window.addEventListener("message", function (event) {
-    var data = event.data;
-    if (event.source !== parentWindow || data === null || typeof data !== "object" || data.method !== ${JSON.stringify(sandboxMethods.appCheck)}) return;
-    event.stopImmediatePropagation();
+    // Only a message the browser delivered (an event the app dispatches
+    // itself is not trusted, and \`isTrusted\` is the event's own, past
+    // the app's reach), from the proxy.
+    if (event.isTrusted !== true || apply(sourceOf, event, []) !== parentWindow) return;
+    var data = apply(dataOf, event, []);
+    if (data === null || typeof data !== "object" || data.method !== ${JSON.stringify(sandboxMethods.appCheck)}) return;
+    apply(stopImmediately, event, []);
     here(data.params !== null && typeof data.params === "object" ? data.params.check : undefined);
   }, true);
   window.addEventListener("click", function (event) {

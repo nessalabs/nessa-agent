@@ -376,23 +376,24 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 - [ ] **An app cannot leave its frame for a page without its policy**: sent
   away by script, by `<meta refresh>`, or after rewriting its document
   (`document.open()`, which erases its reporter), its frame's navigation is
-  refused by the proxy's policy (nothing reaches the other site), the frame
-  is taken off the page and the host says it cannot show the app; forged
-  proxy messages change nothing, and a forged report puts none of the app's
-  words in the host's chrome. Sent away with its reporter in place, the host
-  says so within 5 s (the reporter's word on `pagehide`); after a rewrite,
-  once the check its frame's load goes unanswered. _#349 design, L32 and
-  Sandbox._
+  refused by the proxy's policy (nothing reaches the other site). Either the
+  app stays, live, in its own document (WebKit refuses the navigation before
+  it leaves), or the frame is taken off the page and the host says it cannot
+  show the app: within 5 s with its reporter in place (the reporter's word on
+  `pagehide`), and after a rewrite once its frame's load goes unanswered.
+  Forged proxy messages change nothing, and a forged report puts none of the
+  app's words in the host's chrome. _#349 design, L32 and Sandbox._
   _Check:_ `mcp-apps.mjs --only escape-navigate,escape-refresh,escape-rewrite,forge`.
 - [ ] **Every way the app's document is replaced is its departure, and
   nothing else is**: the real proxy, in the host's own frame, handed what the
   host's own builder writes with the host's deadline — another document in
   the frame (a reload, before or after the first load; a rewrite, closed or
-  then sent away; a navigation or `about:blank`; a document with no
+  then sent away; a navigation or `about:blank`, even after the app had its
+  reporter answer checks of its own making; a document with no
   reporter, one answering without the token, or one whose own frame answers
   with it) — reports the app gone once and relays nothing of it after (a
   reloaded document's own scripts included); an app left alone (which never
-  hears the check), its links to a fragment of any kind (`<a>`, `<area>`,
+  hears the check, even having patched the event APIs), its links to a fragment of any kind (`<a>`, `<area>`,
   SVG, in a shadow root, `target="_self"`, a spaced `href`) and its moves to
   one by script (WebKit loads the frame for these), a first load held back,
   going back across a move to a fragment (on a page of its own, where an

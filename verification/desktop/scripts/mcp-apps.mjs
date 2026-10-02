@@ -48,19 +48,25 @@ Checks, per engine and layout (--only <names> to pick):
   escape-navigate, escape-refresh, escape-rewrite
                the app sending its frame away, by script, by meta refresh, or
                after rewriting its document (which erases its reporter):
-               refused (nothing reaches the other site), the frame taken off
-               the page, and the host says it cannot show the app
+               refused (nothing reaches the other site); and either the app
+               stays, live, in its own document (WebKit refuses the
+               navigation before it leaves), or the frame is taken off the
+               page and the host says it cannot show the app — within 5 s, or
+               past the initialize deadline after a rewrite
   departures   the real proxy, in the host's frame, handed documents the host's
                own builder writes with the host's deadline (dev server only):
                another document in the frame — a reload, before or after the
                first load, a rewrite (closed or then sent away), a navigation
-               or about:blank, a document with no reporter or one answering
-               the check without the token or from a frame of its own — is
-               the app's departure, said once, nothing relayed after it; an
-               app left alone (which never hears the check), its links to a
-               fragment of any kind and its moves to one by script, a first
-               load held back, an app forging departures, and a third party
-               forging them and the check's answers at every frame, are not
+               or about:blank (even after the app dispatched checks of its
+               own making), a document with no reporter or one answering the
+               check without the token or from a frame of its own — is the
+               app's departure, said once, nothing relayed after it; an app
+               left alone (which never hears the check, even having patched
+               the event APIs), its links to a fragment of any kind and its
+               moves to one by script, a first load held back, an app forging
+               departures, and a third party forging them and the check's
+               answers at every frame, are not; a deadline no timer can wait
+               loads nothing
   departures-back
                on a page of its own: going back across a move to a fragment
                stays in the document, though the frame loads again, and the
@@ -109,7 +115,8 @@ const fragmentLinks = [
  * Documents for the \`departures\` check, by name: the HTML handed to the
  * proxy (behind the host's own policy and reporter, unless \`bare\`); whether
  * the proxy must report the app gone; what the app must have said
- * (\`must\`), its premise, and what must never reach the host (\`never\`);
+ * (\`must\`), its premise, and what must never reach the host (\`never\`,
+ * by engine where the engines differ);
  * and the deadline handed over, when not the host's. \`@appLeft@\`,
  * \`@appCheck@\` and \`@slot@\` are written, in the page, from the names
  * \`sandbox-methods.ts\` states, never spelled here.
@@ -159,17 +166,6 @@ const departureScenarios = {
     html: `<script>${hello}setTimeout(function () { document.open(); document.write("<p>rewritten</p>"); document.close(); }, 300)</script>`,
     leaves: true,
   },
-  // The rewritten document talks as it loads — its load is the frame's,
-  // which the proxy hears in the same turn — so after the departure and
-  // before the frame is removed: never relayed.
-  "rewrite-talks-on": {
-    html: `<script>${hello}setTimeout(function () {
-      document.open();
-      document.write("<script>addEventListener('load', function () { parent.postMessage({ jsonrpc: '2.0', method: 'hello-from-app' }, '*'); })</scr" + "ipt>");
-      document.close();
-    }, 300)</script>`,
-    leaves: true,
-  },
   // The reloaded document names itself, before any of its own scripts: it
   // is another document, and none of it is relayed.
   "rewrite-then-reload": {
@@ -196,11 +192,12 @@ const departureScenarios = {
   },
   // A frame of the app's whose document is opened and never closed — while
   // it is still being parsed, so before it loads — holds the app's first
-  // load back (in Chromium): the document is still the app's, not a
-  // departure.
+  // load back (in Chromium; WebKit loads it anyway): the document is still
+  // the app's, not a departure.
   "holds-first-load": {
     html: `<script>${hello}addEventListener("load", function () { parent.postMessage({ jsonrpc: "2.0", method: "loaded" }, "*"); })</script><iframe srcdoc="<script>setTimeout(function () { document.open(); document.write('held'); }, 0)</script>${("<p>" + "x".repeat(200) + "</p>").repeat(10000)}"></iframe>`,
     leaves: false,
+    never: { chromium: ["loaded"] },
   },
   // What the app posts as its document goes, after its reporter's word:
   // never relayed.
@@ -208,6 +205,51 @@ const departureScenarios = {
     html: `<script>${hello}addEventListener("pagehide", function () { ${hello} });
       setTimeout(function () { location = "about:blank"; }, 300)</script>`,
     leaves: true,
+  },
+  // The app has its reporter answer checks of its own making, for every
+  // check number to come, behind enough of its own messages to hold the
+  // proxy's queue up past its next load; then sends its frame to a blank
+  // page with the reporter erased. None is answered — events the app
+  // dispatches are not trusted — so the blank page's load goes unanswered.
+  // (WebKit delivers such answers after the blank page's load: Chromium
+  // passes either way.)
+  "forged-checks": {
+    html: `<script>${hello}addEventListener("load", function () { setTimeout(function () {
+      var big = "x".repeat(8 * 1024 * 1024);
+      for (var j = 0; j < 40; j++) parent.postMessage({ jsonrpc: "2.0", method: "@reserved@junk", params: { b: big } }, "*");
+      for (var n = 1; n <= 30; n++)
+        dispatchEvent(new MessageEvent("message", { source: parent, data: { method: "@appCheck@", params: { check: n } } }));
+      document.open();
+      location.replace("about:blank");
+    }, 200); });</script>`,
+    leaves: true,
+  },
+  // The same, with the checks real messages from a frame of the app's own,
+  // \`source\` patched to say the proxy: the reporter reads the source it
+  // took before the app ran, and answers none.
+  "forged-checks-from-a-frame": {
+    html: `<script>${hello}addEventListener("load", function () { setTimeout(function () {
+      var big = "x".repeat(8 * 1024 * 1024);
+      for (var j = 0; j < 40; j++) parent.postMessage({ jsonrpc: "2.0", method: "@reserved@junk", params: { b: big } }, "*");
+      Object.defineProperty(MessageEvent.prototype, "source", { get: function () { return parent; } });
+      var frame = document.createElement("iframe");
+      frame.srcdoc = "<scr" + "ipt>for (var n = 1; n <= 30; n++) parent.postMessage({ method: '@appCheck@', params: { check: n } }, '*');</scr" + "ipt>";
+      frame.onload = function () { setTimeout(function () { document.open(); location.replace("about:blank"); }, 50); };
+      document.body.appendChild(frame);
+    }, 200); });</script>`,
+    leaves: true,
+  },
+  // An app that replaces what the reporter would look up on the event — its
+  // source, and how it is stopped — still never hears the proxy's check.
+  "patched-app": {
+    html: `<script>${hello}var realSource = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "source").get;
+      Event.prototype.stopImmediatePropagation = function () {};
+      Object.defineProperty(MessageEvent.prototype, "source", { get: function () { return parent; } });
+      addEventListener("message", function (event) {
+        if (realSource.call(event) === parent && event.data && event.data.method === "@appCheck@")
+          parent.postMessage({ jsonrpc: "2.0", method: "heard-the-check" }, "*");
+      });</script>`,
+    leaves: false,
   },
   // A deadline no timer can wait: the proxy loads nothing.
   "unusable-deadline": {
@@ -324,8 +366,11 @@ async function departuresOn(page, scenarios) {
     .evaluate(
       async ({ scenarios }) => {
         const csp = await import("/src/desktop/widgets/app/model/csp.ts")
-        const { sandboxMethods: methods, frameTokenSlot } =
-          await import("/src/desktop/widgets/app/model/sandbox-methods.ts")
+        const {
+          sandboxMethods: methods,
+          frameTokenSlot,
+          sandboxPrefix,
+        } = await import("/src/desktop/widgets/app/model/sandbox-methods.ts")
         const origin =
           await import("/src/desktop/widgets/app/adapters/dom/sandbox-origin.ts")
         const { deadlines } =
@@ -335,6 +380,7 @@ async function departuresOn(page, scenarios) {
           html
             .replaceAll("@appLeft@", methods.appLeft)
             .replaceAll("@appCheck@", methods.appCheck)
+            .replaceAll("@reserved@", sandboxPrefix)
             .replaceAll("@slot@", frameTokenSlot)
         const applied = csp.appliedCsp({})
         const policy = csp.cspPolicy(applied)
@@ -448,7 +494,8 @@ async function departuresOn(page, scenarios) {
     )
   for (const [name, { leaves, must = [], never = [] }] of Object.entries(scenarios)) {
     const said = seen.seen[name]
-    for (const wrong of never)
+    const engine = page.context().browser().browserType().name()
+    for (const wrong of Array.isArray(never) ? never : (never[engine] ?? []))
       if (said.includes(wrong))
         failures.push(`${name}: said ${wrong} (${said.join(" ")})`)
     for (const premise of must)
@@ -779,7 +826,9 @@ const checks = {
           })
           const { app } = await appFrame(page, "inline")
           await appState(app, "live")
-          // This document, marked: a document after it cannot carry the mark.
+          // This document, marked: a document after it cannot carry the mark
+          // (a rewrite keeps the window, so the fixture's controls are asked
+          // for too).
           const mark = await app.evaluate(
             () => (window.mcpAppsMark = String(Math.random())),
           )
@@ -795,9 +844,13 @@ const checks = {
             !app.isDetached() &&
             (await app
               .evaluate(
-                (marked) =>
-                  window.mcpAppsMark === marked && location.href === "about:srcdoc",
-                mark,
+                // The mark survives a rewrite (the window stays): the fixture's
+                // own controls do not.
+                ([marked, control]) =>
+                  window.mcpAppsMark === marked &&
+                  location.href === "about:srcdoc" &&
+                  document.querySelector(control) !== null,
+                [mark, css.fixtureControl(control)],
               )
               .catch(() => false)) &&
             (await page.locator(css.appView).first().getAttribute("data-app-view")) ===

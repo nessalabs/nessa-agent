@@ -124,9 +124,11 @@ reload, a rewritten document — the proxy knows it by which document the
 frame holds, not by its `load` events alone (WebKit fires one for a move to
 a fragment; Chromium for going back across one): the reporter, first in
 every document, mints an id the document cannot read and says it at once
-and at each check, with the token the proxy wrote into the reporter alone.
-The proxy pins the first; another named, or a `load` of the frame its
-document does not answer as that one within the host's initialize
+and in answer to each numbered check the browser delivers from the proxy
+(never one the app dispatches), with the token the proxy wrote into the
+reporter alone.
+The proxy pins the first; another named, or a `load` of the frame whose
+latest check that one does not answer within the host's initialize
 deadline, is the app's departure. The proxy then stops relaying, removes
 the frame and tells the host, which fails the view. The reporter's word on
 `pagehide` says it sooner while the app leaves it in place; the guarantee
@@ -143,9 +145,9 @@ an app in development, and its app then reaches that local service, with
 `Origin: null`; and in the desktop app, whether WebKit refuses an app's
 navigation of its own frame (by the proxy's `frame-src`) before Tauri's
 navigation policy would hand the URL to the person's browser is not yet seen
-(`src-tauri/src/links.rs`). The app speaks for itself: it can read its own
-token, so a document it writes and keeps answering for is still its own,
-and one that holds its own first load back is never checked; and a move to
+(`src-tauri/src/links.rs`). The app speaks for itself: a document it opens
+and never closes fires no `load`, so is never checked, nor is one that holds
+its own first load back; and a move to
 a fragment by its own script (`location.href = "#x"`, `location.assign`)
 resolves against the proxy's URL like a link, which the reporter cannot
 intercept, and ends its view (an app sets `location.hash`).
