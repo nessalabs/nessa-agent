@@ -388,19 +388,20 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   nothing else is**: the real proxy, in the host's own frame, handed what the
   host's own builder writes with the host's deadline — another document in
   the frame (a reload, before or after the first load; a rewrite, closed or
-  then sent away; a navigation or `about:blank`, even after the app had its
-  reporter answer checks of its own making; a document with no
-  reporter, one answering without the token, or one whose own frame answers
-  with it) — reports the app gone once and relays nothing of it after (a
-  reloaded document's own scripts included); an app left alone (which never
-  hears the check, even having patched the event APIs), its links to a fragment of any kind (`<a>`, `<area>`,
-  SVG, in a shadow root, `target="_self"`, a spaced `href`) and its moves to
-  one by script (WebKit loads the frame for these), a first load held back,
-  going back across a move to a fragment (on a page of its own, where an
-  answer to an earlier check, coming after a later load, ends no wait), an app
-  forging departures, and a third party forging them and the check's
-  answers at every proxy and app frame, are not; a deadline no timer can
-  wait loads nothing. _#349 design, L32._ _Check:_ `mcp-apps.mjs --only
+  then sent away; a navigation or `about:blank`, even after the app
+  dispatched checks of its own making, or had a frame of its own send them
+  with `source` patched; a document with no reporter, one answering without
+  the token, or one whose own frame answers with it) — reports the app gone
+  once and relays nothing of it after (a reloaded document's own scripts
+  included); an app left alone (which never hears the check, even having
+  patched the event APIs), its links to a fragment of any kind (`<a>`,
+  `<area>`, SVG, in a shadow root, `target="_self"`, a spaced `href`) and its
+  moves to one by script (WebKit loads the frame for these), a first load
+  held back, going back across a move to a fragment (on a page of its own,
+  where an answer to an earlier check, coming after a later load, ends no
+  wait), an app forging departures, and a third party forging them and the
+  check's answers at every proxy and app frame, are not; a deadline no
+  timer can wait loads nothing. _#349 design, L32._ _Check:_ `mcp-apps.mjs --only
   departures,departures-back` (dev server: it imports the host's builder; it
   waits past the initialize deadline).
 - [ ] **It is torn down on close**: a pane's close takes its proxy and app

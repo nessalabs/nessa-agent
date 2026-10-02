@@ -1,8 +1,10 @@
 /**
  * A fixture MCP server's app, with every port in memory: what composition
  * registers beside the sample workspace, so an app can be seen and measured
- * in a real browser (`verification/desktop/scripts/mcp-apps.mjs`) before the
- * gateway's `mcp.readResource` and `mcp.callTool` (#348) are wired.
+ * in a real browser (`verification/desktop/scripts/mcp-apps.mjs`). The
+ * gateway's `mcp.readResource` and `mcp.callTool` (#348) are wired to
+ * `McpAppServer` in #384; the fixture stays for the sample workspace and the
+ * browser checks.
  *
  * It stands in for a server and for the gateway in front of it, and decides
  * nothing for either: `fixture_refresh` answers, `fixture_secret` is refused

@@ -195,8 +195,10 @@ describe("the reporter", () => {
       'addEventListener("message"',
       // answering only a check the browser delivered, read through what it
       // took before the app ran
+      "var apply = Reflect.apply;",
       "event.isTrusted !== true",
       "apply(sourceOf, event, [])",
+      "apply(dataOf, event, [])",
       "apply(stopImmediately, event, [])",
       sandboxMethods.appCheck,
       "stopImmediatePropagation",

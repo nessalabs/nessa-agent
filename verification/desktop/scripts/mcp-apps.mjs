@@ -212,11 +212,12 @@ const departureScenarios = {
   // page with the reporter erased. None is answered — events the app
   // dispatches are not trusted — so the blank page's load goes unanswered.
   // (WebKit delivers such answers after the blank page's load: Chromium
-  // passes either way.)
+  // passes either way. 20 × 8 MiB is about the least that held WebKit's
+  // queue long enough here; 10 × 4 MiB did not.)
   "forged-checks": {
     html: `<script>${hello}addEventListener("load", function () { setTimeout(function () {
       var big = "x".repeat(8 * 1024 * 1024);
-      for (var j = 0; j < 40; j++) parent.postMessage({ jsonrpc: "2.0", method: "@reserved@junk", params: { b: big } }, "*");
+      for (var j = 0; j < 20; j++) parent.postMessage({ jsonrpc: "2.0", method: "@reserved@junk", params: { b: big } }, "*");
       for (var n = 1; n <= 30; n++)
         dispatchEvent(new MessageEvent("message", { source: parent, data: { method: "@appCheck@", params: { check: n } } }));
       document.open();
@@ -230,7 +231,7 @@ const departureScenarios = {
   "forged-checks-from-a-frame": {
     html: `<script>${hello}addEventListener("load", function () { setTimeout(function () {
       var big = "x".repeat(8 * 1024 * 1024);
-      for (var j = 0; j < 40; j++) parent.postMessage({ jsonrpc: "2.0", method: "@reserved@junk", params: { b: big } }, "*");
+      for (var j = 0; j < 20; j++) parent.postMessage({ jsonrpc: "2.0", method: "@reserved@junk", params: { b: big } }, "*");
       Object.defineProperty(MessageEvent.prototype, "source", { get: function () { return parent; } });
       var frame = document.createElement("iframe");
       frame.srcdoc = "<scr" + "ipt>for (var n = 1; n <= 30; n++) parent.postMessage({ method: '@appCheck@', params: { check: n } }, '*');</scr" + "ipt>";

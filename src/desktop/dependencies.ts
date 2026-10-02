@@ -93,7 +93,8 @@ function widgetRegistry(
   const registry = createWidgetRegistry<WidgetPlugin>(
     natives ?? (sample ? [samplePlugin(sampleWidgetSession)] : []),
   )
-  // And the fixture MCP App beside it, until the gateway reports servers with UI (#348).
+  // And the fixture MCP App beside it: real servers' apps reach the window
+  // once `McpAppServer` is wired to the gateway's `client.mcpApps` (#384).
   if (sample && apps)
     registry.register(
       fixtureAppPlugin({

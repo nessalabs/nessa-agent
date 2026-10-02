@@ -122,7 +122,7 @@ person's browser); round 2 on #349 showed what a declared frame lets an app's
 frame become. When the app's document goes anyway — a navigation refused, a
 reload, a rewritten document — the proxy knows it by which document the
 frame holds, not by its `load` events alone (WebKit fires one for a move to
-a fragment; Chromium for going back across one): the reporter, first in
+a fragment, and both for going back across one): the reporter, first in
 every document, mints an id the document cannot read and says it at once
 and in answer to each numbered check the browser delivers from the proxy
 (never one the app dispatches), with the token the proxy wrote into the
