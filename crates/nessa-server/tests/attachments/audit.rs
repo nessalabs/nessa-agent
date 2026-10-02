@@ -1,6 +1,6 @@
 //! What each committed record says, and that it is committed privately.
 use super::*;
-use crate::attachments::domain::TicketLifetime;
+use crate::attachments::domain::{RetiredFrom, TicketLifetime};
 use crate::attachments_test_support::{
     attachment, conversation, digest_of, organization, principal, ManualClock, CONVERSATION,
 };
@@ -126,6 +126,7 @@ fn every_record_names_its_target_transition_cause_initiator_and_request() {
             AttachmentAuditRecord::HoldReverted {
                 hold: hold(),
                 cause: RevertCause::AuditUnconfirmed,
+                was: RetiredFrom::Pending,
             },
             json!({
                 "kind": "attachment_hold_reverted",
@@ -254,6 +255,7 @@ fn every_record_names_its_target_transition_cause_initiator_and_request() {
         let value = record_value(&AttachmentAuditRecord::HoldReverted {
             hold: hold(),
             cause,
+            was: RetiredFrom::Pending,
         });
         assert_eq!(value["cause"], name);
         assert_eq!(value["initiator"], json!({"kind": "automatic"}));
@@ -381,4 +383,27 @@ async fn an_audit_directory_that_is_not_private_or_not_writable_is_a_visible_fai
             .await,
         Err(AuditUnavailable)
     );
+}
+
+#[test]
+fn a_hold_reversal_reports_its_actual_existing_before_state() {
+    for (was, before) in [
+        (RetiredFrom::Pending, "pending"),
+        (RetiredFrom::Held, "held"),
+    ] {
+        let value = record_value(&AttachmentAuditRecord::HoldReverted {
+            hold: hold(),
+            was,
+            cause: RevertCause::ConfirmationFailed,
+        });
+        assert_eq!(
+            value["transition"],
+            json!({"before": before, "after": "absent"})
+        );
+        assert_eq!(value["target"], target(true));
+        assert_eq!(value["initiator"], json!({"kind": "automatic"}));
+        assert_eq!(value["uploadedBy"], uploader());
+        assert_eq!(value["correlationId"], hold().uploaded_by().action_id());
+        assert_eq!(value["cause"], "confirmation_failed");
+    }
 }

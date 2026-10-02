@@ -1,5 +1,5 @@
 use crate::{
-    attachments::domain::{Attachment, Caller, Hold, HoldState, UploadTicket},
+    attachments::domain::{Attachment, Caller, Hold, HoldState, RetiredFrom, UploadTicket},
     conversation::domain::ConversationId,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -60,16 +60,31 @@ pub enum Confirmation {
 }
 
 /// What taking a claim back found.
+/// An absent hold cannot be a successful retirement predecessor: [`RetiredFrom`]
+/// enforces that restriction for both cleanup outcomes.
+///
+/// ```compile_fail,E0308
+/// use nessa_server::attachments::{application::Discard, domain::HoldState};
+/// let outcome = Discard::Discarded { was: HoldState::Absent };
+/// ```
+///
+/// ```compile_fail,E0308
+/// use nessa_server::attachments::{application::Discard, domain::HoldState};
+/// let outcome = Discard::CleanupIncomplete { was: HoldState::Absent };
+/// ```
+#[must_use = "retirement, cleanup and prior-state evidence must be handled"]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Discard {
-    /// The hold this claim wrote was removed, and bytes nothing else holds.
-    Discarded,
+    /// The lifetime this claim owns retired, and unheld-byte cleanup completed.
+    Discarded { was: RetiredFrom },
+    /// The lifetime retired, but its unheld blob cleanup could not complete.
+    CleanupIncomplete { was: RetiredFrom },
     /// Nothing of this claim remains: another upload took the hold over, or a
     /// release removed it. Nothing was touched.
     NotMine,
 }
 
-/// One hold a release removed, and whether it had become usable.
+/// One active hold a release retired, and whether it had become usable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReleasedHold {
     pub hold: Hold,
@@ -84,7 +99,7 @@ pub struct ReleaseReport {
     pub released: Vec<ReleasedHold>,
     /// For each stored digest whose bytes were removed, the last hold on it.
     pub removed: Vec<Hold>,
-    /// Holds that could not be read or removed, and bytes that could not be
+    /// Holds whose retirement was not confirmed, and bytes that could not be
     /// removed or proved unheld. Each is left in place rather than guessed at.
     pub failures: usize,
 }
@@ -138,13 +153,15 @@ pub trait AttachmentStore: Send + Sync {
         &'a self,
         hold: &'a Hold,
         claim: &'a HoldClaim,
+        cause: RevertCause,
     ) -> PortFuture<'a, Discard, StoreUnavailable>;
-    /// Remove every hold of one conversation, pending or usable, and bytes no
-    /// hold remains on.
+    /// Retire each active hold with actual release evidence, retaining identity
+    /// metadata, then clean up bytes no active hold remains on.
     fn release<'a>(
         &'a self,
         organization_id: &'a OrganizationId,
         conversation_id: &'a ConversationId,
+        evidence: &'a ReleaseEvidence,
     ) -> PortFuture<'a, ReleaseReport, StoreUnavailable>;
     /// At most `limit` bytes of the stored file with this digest, by content
     /// alone. `None` when no such bytes are stored.
@@ -279,7 +296,16 @@ pub struct ReleaseEvidence {
     pub requested_at_ms: u64,
 }
 
-/// Why a pending hold was taken back by the upload that wrote it.
+/// Durable cause and verified initiator of one attachment lifetime retirement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RetirementEvidence {
+    /// An explicit conversation release with its actual request evidence.
+    Release(ReleaseEvidence),
+    /// The upload was taken back under its original verified caller/correlation.
+    RevertedUpload { cause: RevertCause, caller: Caller },
+}
+
+/// Why a pending or kept hold was taken back by the upload that wrote it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RevertCause {
     /// Its creation was not acknowledged by the audit sink. The sink may have
@@ -334,8 +360,12 @@ pub enum AttachmentAuditRecord {
     /// A verified upload arrived at a file the conversation already keeps.
     /// The ticket is used; `hold` is the unchanged hold.
     AlreadyHeld { ticket: UploadTicket, hold: Hold },
-    /// A pending hold was taken back by its own upload. Automatic.
-    HoldReverted { hold: Hold, cause: RevertCause },
+    /// A pending or kept hold was taken back by its own upload. Automatic.
+    HoldReverted {
+        hold: Hold,
+        was: RetiredFrom,
+        cause: RevertCause,
+    },
     /// A conversation let go of a stored file.
     HoldReleased {
         hold: Hold,

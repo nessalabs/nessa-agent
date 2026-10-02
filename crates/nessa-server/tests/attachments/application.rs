@@ -1,7 +1,9 @@
 //! The attachment service over doubles: tickets, uploads, normalization,
 //! release, and what reaches the audit port when each of them fails.
 use super::*;
-use crate::attachments::domain::{Caller, HoldState, TicketLimits, TICKET_LIFETIME_MS};
+use crate::attachments::domain::{
+    Caller, HoldState, RetiredFrom, TicketLimits, TICKET_LIFETIME_MS,
+};
 use crate::attachments_test_support::{
     attachment, begin_request, caller, conversation, digest_of, organization, principal,
     ChannelBody, CountingSecrets, FixedOwnership, Fixture, ManualClock, MemoryStore,
@@ -1367,8 +1369,7 @@ async fn a_hold_that_cannot_be_made_usable_is_taken_back_and_said_to_be() {
                 AttachmentAuditRecord::HoldCreated { hold: created },
                 AttachmentAuditRecord::HoldReverted {
                     hold: reverted,
-                    cause: RevertCause::ConfirmationFailed
-                }
+                    cause: RevertCause::ConfirmationFailed, was: RetiredFrom::Pending, }
             ] if created == reverted
         ),
         "{records:?}"
@@ -1811,4 +1812,110 @@ async fn an_upload_finishing_after_its_conversation_was_deleted_keeps_nothing() 
         ),
         "{records:?}"
     );
+}
+
+#[tokio::test]
+async fn a_retired_hold_with_incomplete_blob_cleanup_keeps_the_independent_audit_result() {
+    for refuse_reversal_audit in [false, true] {
+        let fixture = fixture();
+        let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
+        fixture.store.confirm_fails.store(true, Ordering::SeqCst);
+        fixture
+            .store
+            .discard_cleanup_incomplete
+            .store(true, Ordering::SeqCst);
+        let door = fixture.audit.hold_after(1, refuse_reversal_audit);
+        let service = fixture.service.clone();
+        let entered = fixture.audit.entered.notified();
+        let upload = tokio::spawn(async move {
+            service
+                .receive(&ticket, None, ChannelBody::of(BYTES, 64))
+                .await
+        });
+        entered.await;
+        door.send(()).unwrap();
+        let evidence = if refuse_reversal_audit {
+            AuditDelivery::Unavailable
+        } else {
+            AuditDelivery::Recorded
+        };
+        assert_eq!(
+            upload.await.unwrap(),
+            Err(UploadError::Rejected {
+                reason: UploadRejection::StorageUnavailable,
+                evidence,
+            })
+        );
+        assert!(fixture.store.held().is_empty());
+        assert_eq!(fixture.store.pending(), 0);
+        assert_eq!(fixture.store.blob_count(), 1);
+        let records = fixture.audit.taken();
+        if refuse_reversal_audit {
+            assert!(matches!(
+                records.as_slice(),
+                [AttachmentAuditRecord::HoldCreated { .. }]
+            ));
+        } else {
+            assert!(
+                matches!(records.as_slice(), [AttachmentAuditRecord::HoldCreated { hold: created }, AttachmentAuditRecord::HoldReverted { hold: reverted, cause: RevertCause::ConfirmationFailed, was: RetiredFrom::Pending, }] if created == reverted)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn pending_and_held_retirements_preserve_independent_cleanup_and_audit_results() {
+    for retired_from in [RetiredFrom::Pending, RetiredFrom::Held] {
+        for cleanup_incomplete in [false, true] {
+            for refuse_reversal_audit in [false, true] {
+                let fixture = fixture();
+                let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
+                fixture
+                    .store
+                    .confirm_fails
+                    .store(retired_from == RetiredFrom::Pending, Ordering::SeqCst);
+                fixture
+                    .store
+                    .confirm_reply_fails
+                    .store(retired_from == RetiredFrom::Held, Ordering::SeqCst);
+                fixture
+                    .store
+                    .discard_cleanup_incomplete
+                    .store(cleanup_incomplete, Ordering::SeqCst);
+                let door = fixture.audit.hold_after(1, refuse_reversal_audit);
+                door.send(()).unwrap();
+                let evidence = if refuse_reversal_audit {
+                    AuditDelivery::Unavailable
+                } else {
+                    AuditDelivery::Recorded
+                };
+                assert_eq!(
+                    fixture
+                        .service
+                        .receive(&ticket, None, ChannelBody::of(BYTES, 64))
+                        .await,
+                    Err(UploadError::Rejected {
+                        reason: UploadRejection::StorageUnavailable,
+                        evidence
+                    })
+                );
+                assert!(fixture.store.held().is_empty());
+                assert_eq!(fixture.store.pending(), 0);
+                assert_eq!(fixture.store.blob_count(), usize::from(cleanup_incomplete));
+                assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), 3);
+                let records = fixture.audit.taken();
+                if refuse_reversal_audit {
+                    assert!(matches!(
+                        records.as_slice(),
+                        [AttachmentAuditRecord::HoldCreated { .. }]
+                    ));
+                } else {
+                    assert!(
+                        matches!(records.as_slice(), [AttachmentAuditRecord::HoldCreated { hold: created }, AttachmentAuditRecord::HoldReverted { hold: reverted, cause: RevertCause::ConfirmationFailed, was }] if created == reverted && *was == retired_from),
+                        "{records:?}"
+                    );
+                }
+            }
+        }
+    }
 }

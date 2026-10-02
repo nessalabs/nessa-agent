@@ -808,6 +808,13 @@ adapter reads bytes by content through the SDK's image port, and its frame bound
 is derived from the message's image budget. Closing a conversation releases its
 holds, with audit evidence for every transition. See the
 [attachments module map](../crates/nessa-server/src/attachments/mod.rs).
+Local held-registration manifest facts and bounded range reads are implemented
+through `AttachmentArtifacts`, using the shared tracked read-worker owner; their
+retained retirement metadata and later protected-network activation are described
+in [artifact sync](design/artifact-sync.md). The hold domain's `RetiredFrom` supplies
+the Pending/Held predecessor shared by discard results, reversal audit and saved
+retirement. The local port supplies no access grant
+and is not yet wired into composed gateway shutdown.
 
 What happens to an attached file is decided by its type and never by the
 gesture that attached it: an image is uploaded and normalised wherever it came

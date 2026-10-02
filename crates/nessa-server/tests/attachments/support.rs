@@ -7,11 +7,11 @@ use crate::{
             AttachmentLimits, AttachmentService, AttachmentStore, AuditUnavailable, BeginOutcome,
             BeginUpload, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer,
             Kept, NormalizeError, NormalizeFuture, NormalizedImage, Ownership,
-            OwnershipUnavailable, PortFuture, ReceivedBytes, ReleaseReport, ReleasedHold,
-            SecretsUnavailable, StagedUpload, StoreUnavailable, TicketSecrets, UploadBody,
-            UploadInterrupted,
+            OwnershipUnavailable, PortFuture, ReceivedBytes, ReleaseEvidence, ReleaseReport,
+            ReleasedHold, RevertCause, SecretsUnavailable, StagedUpload, StoreUnavailable,
+            TicketSecrets, UploadBody, UploadInterrupted,
         },
-        domain::{Attachment, Hold, HoldState, MediaType},
+        domain::{Attachment, Hold, HoldState, MediaType, RetiredFrom},
     },
     conversation::domain::ConversationId,
 };
@@ -22,7 +22,7 @@ use nessa_auth::{
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -304,11 +304,14 @@ pub(crate) struct MemoryStore {
     pub(crate) unavailable: AtomicBool,
     pub(crate) keep_fails: Arc<AtomicBool>,
     pub(crate) confirm_fails: AtomicBool,
+    /// Confirmation committed Kept, but its caller received an unavailable reply.
+    pub(crate) confirm_reply_fails: AtomicBool,
     /// Stops the work of an upload dead, after its ticket is spent and its
     /// pending hold is written: the one thing no failure path of the store can
     /// report, because nothing is left to report it.
     pub(crate) confirm_panics: AtomicBool,
     pub(crate) discard_fails: AtomicBool,
+    pub(crate) discard_cleanup_incomplete: AtomicBool,
     /// Transfers staged and not yet kept or dropped.
     pub(crate) staged: Arc<AtomicUsize>,
     /// Bytes written to staged transfers, ever.
@@ -327,6 +330,7 @@ struct MemoryState {
     blobs: HashMap<Sha256Digest, Vec<u8>>,
     records: Vec<MemoryRecord>,
     generations: u64,
+    retired_claims: HashSet<(OrganizationId, ConversationId, String)>,
     /// Stored digests whose hold cannot be released.
     stuck: Vec<Sha256Digest>,
 }
@@ -456,6 +460,13 @@ impl AttachmentStore for MemoryStore {
                 return Err(StoreUnavailable);
             }
             let mut state = self.state.lock().unwrap();
+            if state.retired_claims.contains(&(
+                hold.organization_id().clone(),
+                hold.conversation_id().clone(),
+                claim.as_str().to_owned(),
+            )) {
+                return Ok(Confirmation::Gone);
+            }
             let Some(index) = state.position(hold) else {
                 return Ok(Confirmation::Gone);
             };
@@ -472,13 +483,18 @@ impl AttachmentStore for MemoryStore {
                 kept: true,
                 generation: claim.as_str().to_owned(),
             };
-            Ok(Confirmation::Confirmed)
+            if self.confirm_reply_fails.load(Ordering::SeqCst) {
+                Err(StoreUnavailable)
+            } else {
+                Ok(Confirmation::Confirmed)
+            }
         })
     }
     fn discard<'a>(
         &'a self,
         hold: &'a Hold,
         claim: &'a HoldClaim,
+        _cause: RevertCause,
     ) -> PortFuture<'a, Discard, StoreUnavailable> {
         Box::pin(async move {
             if self.discard_fails.load(Ordering::SeqCst) {
@@ -486,10 +502,26 @@ impl AttachmentStore for MemoryStore {
             }
             let mut state = self.state.lock().unwrap();
             match state.position(hold) {
-                Some(index) if state.records[index].generation == claim.as_str() => {
-                    state.records.remove(index);
+                Some(index)
+                    if state.records[index].generation == claim.as_str()
+                        && state.records[index].hold == *hold =>
+                {
+                    let was = if state.records[index].kept {
+                        RetiredFrom::Held
+                    } else {
+                        RetiredFrom::Pending
+                    };
+                    let retired = state.records.remove(index);
+                    state.retired_claims.insert((
+                        retired.hold.organization_id().clone(),
+                        retired.hold.conversation_id().clone(),
+                        retired.generation,
+                    ));
+                    if self.discard_cleanup_incomplete.load(Ordering::SeqCst) {
+                        return Ok(Discard::CleanupIncomplete { was });
+                    }
                     state.remove_unheld(hold.stored().digest());
-                    Ok(Discard::Discarded)
+                    Ok(Discard::Discarded { was })
                 }
                 _ => Ok(Discard::NotMine),
             }
@@ -499,6 +531,7 @@ impl AttachmentStore for MemoryStore {
         &'a self,
         organization_id: &'a OrganizationId,
         conversation_id: &'a ConversationId,
+        _evidence: &'a ReleaseEvidence,
     ) -> PortFuture<'a, ReleaseReport, StoreUnavailable> {
         Box::pin(async move {
             self.check()?;
@@ -516,6 +549,11 @@ impl AttachmentStore for MemoryStore {
                     report.failures += 1;
                     state.records.push(record);
                 } else {
+                    state.retired_claims.insert((
+                        record.hold.organization_id().clone(),
+                        record.hold.conversation_id().clone(),
+                        record.generation.clone(),
+                    ));
                     report.released.push(ReleasedHold {
                         hold: record.hold,
                         was: if record.kept {

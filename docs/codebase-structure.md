@@ -1010,6 +1010,18 @@ for it, and `ImageNormalizer::offers_images` says so before a ticket is issued:
 an `image/*` `attachment.begin` on such a gateway is refused with
 `image_input_unsupported` rather than answered with a ticket for bytes no
 message could name.
+
+`domain/value_objects/artifact_id.rs` derives an immutable held-registration
+identity from its saved minted generation. `application/artifacts.rs` owns the
+local `AttachmentArtifacts` facts/range/drain port and immutable range/byte types.
+`domain/entities/hold.rs` publishes `RetiredFrom`, the Pending/Held predecessor
+consumed by successful discard outcomes, reversal audit and saved retirement.
+`infrastructure/hold_record.rs` owns the typed Pending/Kept/Retired saved codec;
+`store/artifacts.rs` scans exact identities incrementally and archives retirement
+metadata. `store/source.rs` consumes `core::read_workers` with one shared,
+nonwaiting manifest/range slot. The source is local and not composed into protected
+transport or gateway shutdown. State order and remaining activation boundaries
+are owned by [artifact sync](design/artifact-sync.md).
 `src-tauri/src/attachments/` is the desktop half: the file a person picks, as
 a path rather than as bytes. `FilePicker` is the operating system's own dialog,
 `ChosenFiles` is the filesystem — a chosen file's kind, length and bytes —

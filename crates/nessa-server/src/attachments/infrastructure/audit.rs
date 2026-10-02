@@ -86,22 +86,14 @@ fn rejection(reason: UploadRejection) -> &'static str {
     }
 }
 
-fn release_cause(cause: ReleaseCause) -> &'static str {
-    match cause {
-        ReleaseCause::ConversationClosed => "conversation_closed",
-        ReleaseCause::ConversationDeleted => "conversation_deleted",
-    }
+fn release_cause(cause: ReleaseCause) -> Value {
+    serde_json::to_value(super::hold_record::StoredReleaseCause::from(cause))
+        .expect("a release cause is a string")
 }
 
-fn revert_cause(cause: RevertCause) -> &'static str {
-    match cause {
-        RevertCause::AuditUnconfirmed => "audit_unconfirmed",
-        RevertCause::ConfirmationFailed => "confirmation_failed",
-        RevertCause::RemovedBeforeUsable => "removed_before_usable",
-        RevertCause::UploadUnresolved => "upload_unresolved",
-        RevertCause::ConversationDeleted => "conversation_deleted",
-        RevertCause::ConversationNotFound => "conversation_not_found",
-    }
+fn revert_cause(cause: RevertCause) -> Value {
+    serde_json::to_value(super::hold_record::StoredRevertCause::from(cause))
+        .expect("a reversal cause is a string")
 }
 
 fn file(attachment: &Attachment) -> Value {
@@ -162,7 +154,7 @@ fn by_ticket_caller(
 fn released(
     kind: &str,
     before: &str,
-    cause: &str,
+    cause: Value,
     hold: &Hold,
     release: &ReleaseEvidence,
 ) -> Value {
@@ -261,11 +253,11 @@ pub(super) fn record_value(record: &AttachmentAuditRecord) -> Value {
             "heldSinceMs": hold.uploaded_at_ms(),
         }),
         // Nobody asked for this: the upload's own bookkeeping took it back.
-        AttachmentAuditRecord::HoldReverted { hold, cause } => json!({
+        AttachmentAuditRecord::HoldReverted { hold, cause, was } => json!({
             "kind": "attachment_hold_reverted",
             "target": hold_target(hold),
             "transition": {
-                "before": hold_state(HoldState::Pending),
+                "before": hold_state((*was).into()),
                 "after": hold_state(HoldState::Absent),
             },
             "cause": revert_cause(*cause),
@@ -287,7 +279,7 @@ pub(super) fn record_value(record: &AttachmentAuditRecord) -> Value {
             let mut value = released(
                 "attachment_bytes_removed",
                 "stored",
-                "last_hold_released",
+                json!("last_hold_released"),
                 hold,
                 release,
             );
