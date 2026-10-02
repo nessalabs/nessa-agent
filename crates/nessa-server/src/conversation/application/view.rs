@@ -272,11 +272,17 @@ pub struct ConversationTool {
 /// The most bytes of a tool's structured result a view carries. The schema
 /// states it again; `tests/conversation/agreement.rs` holds the two together.
 pub const MAX_STRUCTURED_CONTENT_BYTES: usize = 16384;
-/// An MCP tool's identity, copied from the SDK's validated `McpTool`.
+/// An MCP tool's identity, copied from the SDK's validated `McpTool`, and the
+/// UI resource the tool declared, as its server last listed it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ConversationMcpTool {
     pub server: String,
     pub tool: String,
+    /// The tool's `ui://` resource, filled when the view is read
+    /// ([`McpToolUis`](super::McpToolUis)); absent when the tool has none or
+    /// it is not known.
+    #[serde(rename = "resourceUri", skip_serializing_if = "Option::is_none")]
+    pub resource_uri: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -5,15 +5,16 @@ use super::{
     retained_view, ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
     ConversationAttachmentEvidenceFailureCode, ConversationCaller, ConversationCapabilities,
     ConversationDependencies, ConversationLifecycle, ConversationLifecyclePhase,
-    ConversationLimits, ConversationMessageStatus, ConversationService, ConversationView,
-    PermissionDenialSupport, ProviderSessionErasers, RequestedConversation, SubmissionMode,
-    SubmittedMessage, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationLimits, ConversationMessageStatus, ConversationModeRequest,
+    ConversationModeRequestState, ConversationRepository, ConversationService, ConversationView,
+    McpToolUis, PermissionDenialSupport, ProviderSessionErasers, RequestedConversation,
+    SubmissionMode, SubmittedMessage, MAX_STRUCTURED_CONTENT_BYTES,
 };
-use crate::conversation::domain::ConversationId;
+use crate::conversation::domain::{ConversationApprovalMode, ConversationId};
 use crate::conversation_test_support::{
     fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit,
     MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit,
-    TestClock, Unlisted, DELETION_BUDGETS,
+    RecordingModeAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::application::agent_execution::agents::{AgentError, ProviderDiagnostic};
@@ -51,8 +52,12 @@ use nessa_sdk::domain::agent_execution::sessions::{
 use nessa_sdk::domain::agent_execution::tools::{
     McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus,
 };
-use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
-use std::sync::Arc;
+use nessa_sdk::domain::mcp_apps::UiResourceUri;
+use nessa_sdk::infrastructure::session_storage::{
+    InMemoryStorage, RecordStorage, RuntimeMessageCommitClock,
+};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -1384,4 +1389,292 @@ fn retained_projection_uses_shared_bounds_status_and_injected_revision() {
                 .all(|message| message.status == ConversationMessageStatus::Completed));
         }
     }
+}
+
+/// The tools a server listed, as the view's lookup sees them: `charts`'
+/// `show` has whatever UI the test sets, nothing else has any.
+struct ListedUis(Mutex<Option<String>>);
+impl McpToolUis for ListedUis {
+    fn resource_uri(&self, call: &McpTool) -> Option<UiResourceUri> {
+        if (call.server(), call.tool()) != ("charts", "show") {
+            return None;
+        }
+        self.0
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|uri| UiResourceUri::new(uri.as_str()).unwrap())
+    }
+}
+
+fn mcp_event(id: &str, server: &str, tool: &str) -> ExecutionEvent {
+    event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(ToolCallId::new(id).unwrap(), None, None, None, None, None)
+            .with_mcp_tool(McpTool::new(server, tool).unwrap()),
+    ))
+}
+
+#[test]
+fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
+    let listed = Arc::new(ListedUis(Mutex::new(None)));
+    let mut projection = projection().with_tool_uis(listed.clone());
+    let snapshot = completed_snapshot(
+        "execution",
+        vec![
+            mcp_event("chart", "charts", "show"),
+            mcp_event("report", "charts", "report"),
+            event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+                ToolCallId::new("shell").unwrap(),
+                Some("Shell".into()),
+                None,
+                None,
+                None,
+                None,
+            ))),
+        ],
+    );
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        None
+    ));
+    // Not listed yet: no UI, and the wire says nothing about one.
+    let unknown = projection.read();
+    assert_eq!(unknown.tools[0].mcp.as_ref().unwrap().resource_uri, None);
+    let wire = serde_json::to_value(&unknown.tools[0]).unwrap();
+    assert_eq!(
+        wire["mcp"],
+        serde_json::json!({ "server": "charts", "tool": "show" })
+    );
+
+    // Listed later: the same projection's next read has it, under a new revision.
+    *listed.0.lock().unwrap() = Some("ui://charts/show.html".into());
+    let known = projection.read();
+    let mcp = known.tools[0].mcp.as_ref().unwrap();
+    assert_eq!(mcp.resource_uri.as_deref(), Some("ui://charts/show.html"));
+    assert_eq!(
+        serde_json::to_value(&known.tools[0]).unwrap()["mcp"]["resourceUri"],
+        "ui://charts/show.html"
+    );
+    assert_ne!(known.revision, unknown.revision);
+    assert_eq!(projection.read().revision, known.revision);
+    // A tool without UI, and a tool that is not MCP's, are as they were.
+    assert_eq!(known.tools[1].mcp.as_ref().unwrap().resource_uri, None);
+    assert_eq!(known.tools[2].mcp, None);
+
+    // A committed replacement retains the injected lookup, and later changes
+    // in cached UI metadata revise that committed view without live events.
+    assert!(projection.replace_committed(
+        &committed("incarnation", 2, 2, 2, Some(&snapshot)),
+        &[],
+        None
+    ));
+    assert_eq!(
+        projection.read().tools[0]
+            .mcp
+            .as_ref()
+            .unwrap()
+            .resource_uri
+            .as_deref(),
+        Some("ui://charts/show.html")
+    );
+    let replaced_revision = projection.read().revision;
+    *listed.0.lock().unwrap() = Some("ui://charts/other.html".into());
+    let changed_revision = projection.read().revision;
+    assert_ne!(changed_revision, replaced_revision);
+    *listed.0.lock().unwrap() = None;
+    let removed = projection.read();
+    assert_ne!(removed.revision, changed_revision);
+    assert_eq!(removed.tools[0].mcp.as_ref().unwrap().resource_uri, None);
+    assert_eq!(
+        serde_json::to_value(&removed.tools[0]).unwrap()["mcp"],
+        serde_json::json!({"server":"charts","tool":"show"})
+    );
+    // Without a lookup, no UI.
+    let mut bare = Projection::new("conversation".into(), unknown.capabilities.clone(), None);
+    assert!(bare.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        None
+    ));
+    assert_eq!(
+        bare.read().tools[0].mcp.as_ref().unwrap().resource_uri,
+        None
+    );
+}
+
+#[test]
+fn committed_mcp_ui_enrichment_remains_inside_the_complete_view_budget() {
+    let uri = format!("ui://{}", "a".repeat(2043));
+    let listed = Arc::new(ListedUis(Mutex::new(Some(uri.clone()))));
+    let events = (0..16)
+        .map(|index| {
+            event(ExecutionUpdate::Tool(
+                ToolCallUpdate::new(
+                    ToolCallId::new(format!("tool-{index}")).unwrap(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .with_mcp_tool(McpTool::new("charts", "show").unwrap())
+                .with_content(vec![ToolContent::text("\"".repeat(6000))]),
+            ))
+        })
+        .collect();
+    let snapshot = completed_snapshot("execution", events);
+    let mut projection = projection().with_tool_uis(listed);
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        None
+    ));
+    let enriched = projection.read();
+    assert!(serde_json::to_vec(&enriched).unwrap().len() > MAX_VIEW_BYTES);
+    let bounded = bound_view(enriched);
+    assert!(bounded.truncated);
+    assert!(serde_json::to_vec(&bounded).unwrap().len() <= MAX_VIEW_BYTES);
+    assert!(bounded
+        .tools
+        .iter()
+        .any(|tool| tool.mcp.as_ref().unwrap().resource_uri.as_deref() == Some(uri.as_str())));
+    assert_eq!(
+        snapshot.invocations[0].events.len(),
+        16,
+        "display omission does not rewrite the committed fold"
+    );
+}
+
+fn service_with_cached_tool_uis(
+    storage: Arc<InMemoryStorage>,
+    repository: Arc<MemoryRepository>,
+    provider: Arc<ProviderFactory>,
+    audit: Arc<RecordingModeAudit>,
+    listed: Arc<ListedUis>,
+) -> ConversationService {
+    ConversationService::with_tool_uis(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(provider))),
+            storage,
+            metadata: repository,
+            mode_audit: audit,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+        listed,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn service_committed_and_cold_pending_mode_views_preserve_cached_mcp_ui() {
+    let storage = Arc::new(InMemoryStorage::new());
+    let repository = Arc::new(MemoryRepository::default());
+    let provider = Arc::new(ProviderFactory::default());
+    provider
+        .execution_updates
+        .lock()
+        .unwrap()
+        .push(ExecutionUpdate::Tool(
+            ToolCallUpdate::new(
+                ToolCallId::new("chart").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
+        ));
+    let audit = Arc::new(RecordingModeAudit::default());
+    let listed = Arc::new(ListedUis(Mutex::new(Some("ui://charts/show.html".into()))));
+    let service = service_with_cached_tool_uis(
+        storage.clone(),
+        repository.clone(),
+        provider.clone(),
+        audit.clone(),
+        listed.clone(),
+    );
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(
+            id.clone(),
+            caller("create-ui"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .submit(
+            id.clone(),
+            caller("send-ui"),
+            "ui-request".into(),
+            SubmittedMessage {
+                text: "show".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let live = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let view = service.read(id.clone(), caller("live-ui")).await.unwrap();
+            if view
+                .messages
+                .first()
+                .is_some_and(|message| message.status == ConversationMessageStatus::Completed)
+            {
+                break view;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let live_uri = live.tools[0].mcp.as_ref().unwrap().resource_uri.clone();
+    service.shutdown().await.unwrap();
+    repository
+        .begin_mode_change(ConversationModeRequest {
+            conversation_id: id.clone(),
+            organization_id: OrganizationId::new("org").unwrap(),
+            request_id: "pending-mode-ui".into(),
+            initiator_principal_id: PrincipalId::new("person").unwrap(),
+            initiator_surface_id: "panel".into(),
+            prior: ConversationApprovalMode::Ask,
+            requested: ConversationApprovalMode::Auto,
+            state: ConversationModeRequestState::Pending,
+            application: None,
+            requested_at_ms: 1_700_000_000_124,
+        })
+        .await
+        .unwrap();
+    // Refuse recovery audit before a cold Agent can be resolved; the pending
+    // view must therefore use the service's committed, read-only constructor.
+    audit.fail_application_once.store(true, Ordering::SeqCst);
+    let opens = provider.open_calls.load(Ordering::SeqCst);
+    let cold = service_with_cached_tool_uis(storage, repository, provider.clone(), audit, listed);
+    let pending = cold.read(id, caller("pending-ui")).await.unwrap();
+    let cold_uri = pending.tools[0].mcp.as_ref().unwrap().resource_uri.clone();
+    let later_opens = provider.open_calls.load(Ordering::SeqCst);
+    cold.shutdown().await.unwrap();
+    assert_eq!(live_uri.as_deref(), Some("ui://charts/show.html"));
+    assert_eq!(cold_uri.as_deref(), Some("ui://charts/show.html"));
+    assert_eq!(
+        later_opens, opens,
+        "cold pending view does not open a provider"
+    );
+    assert!(!pending.capabilities.queue);
+    assert!(serde_json::to_vec(&pending).unwrap().len() <= MAX_VIEW_BYTES);
 }

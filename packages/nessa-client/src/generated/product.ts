@@ -520,12 +520,14 @@ export interface ConversationTool {
   /** The call's structured result (MCP structuredContent) as JSON text, when the harness passed it on and it fits; absent otherwise. The result's text stays in details either way. */
   structuredContent?: string
 }
-/** An MCP tool's identity: the server by the name it was configured under, and the tool on it. */
+/** An MCP tool's identity: the server by the name it was configured under, and the tool on it; and the UI the tool declared, when known. */
 export interface ConversationMcpTool {
   /** The MCP server's configured name. Which names are valid is the SDK domain's rule (McpTool); only its byte bound is repeated here, generated for both sides. */
   server: string
   /** The tool's name on that server, under the same rule. */
   tool: string
+  /** The ui:// resource of the tool's MCP App, as the gateway's own connection to the server last listed the tool (no harness passes it through ACP); absent when the tool declared none or it is not known. Which URIs are valid is the SDK domain's rule (UiResourceUri); only its byte bound is repeated here. */
+  resourceUri?: string
 }
 /** Bounded full replacement of the current live conversation view. Polling never implies cancellation or durable streaming storage. */
 export interface ConversationView {
@@ -1218,6 +1220,7 @@ export const bounds = {
   maxListedConversations: 500,
   maxToolStructuredContentBytes: 16384,
   maxMcpNameBytes: 128,
+  maxUiResourceUriBytes: 2048,
 } as const
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",

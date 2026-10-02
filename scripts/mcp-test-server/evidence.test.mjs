@@ -9,6 +9,7 @@ import {
   toolFrames,
   uiMentions,
   viewTools,
+  givenServers,
 } from "./evidence.mjs"
 
 const update = (sessionUpdate, extra = {}) => ({
@@ -328,4 +329,33 @@ test("a signal ends the recorder, and the agent then sees its input close", asyn
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }
+})
+
+test("the servers given to the harness are read from each session it opened", () => {
+  const relay = {
+    name: "mcptest",
+    command: "/nessa",
+    args: ["mcp-relay", "/s", "mcptest", "sha256:a"],
+  }
+  const records = [
+    {
+      direction: "to-agent",
+      frame: { method: "session/new", params: { mcpServers: [{ ...relay, env: [] }] } },
+    },
+    {
+      direction: "to-agent",
+      frame: { method: "session/load", params: { mcpServers: [relay] } },
+    },
+    // What the agent sends, and other methods, are not what it was given.
+    {
+      direction: "from-agent",
+      frame: { method: "session/new", params: { mcpServers: [{ name: "x" }] } },
+    },
+    {
+      direction: "to-agent",
+      frame: { method: "session/prompt", params: { mcpServers: [{ name: "y" }] } },
+    },
+    { direction: "to-agent", frame: { method: "session/new", params: {} } },
+  ]
+  assert.deepEqual(givenServers(records), [relay, relay])
 })

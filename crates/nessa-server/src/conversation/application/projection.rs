@@ -6,12 +6,14 @@ use super::view::{
     ConversationPermissionOption, ConversationQuestion, ConversationTool,
     ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
 };
+use super::{McpToolUis, NoMcpToolUis};
 use crate::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
     sessions::{CommittedSession, CommittedStatus, InvocationRecord, SessionSnapshot},
 };
+use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{ReviewDecline, ReviewDeclineReason, ReviewDeclineStage},
@@ -19,7 +21,7 @@ use nessa_sdk::domain::agent_execution::{
     tools::{ToolContentView, ToolKind, ToolStatus},
 };
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 use uuid::Uuid;
 
 const MAX_MESSAGES: usize = 24;
@@ -67,6 +69,8 @@ pub(super) struct Projection {
     /// Exact local execution identity supplied by Agent for this replacement.
     /// It supplies action locality, never semantic completion or freshness.
     live_here: HashSet<String>,
+    /// Where an MCP call's UI is looked up when the view is read.
+    tool_uis: Arc<dyn McpToolUis>,
 }
 pub(super) fn clipped(value: &str, bytes: usize) -> String {
     let mut end = value.len().min(bytes);
@@ -192,6 +196,7 @@ impl Projection {
             answered_questions: HashSet::new(),
             terminal_executions: HashSet::new(),
             live_here: live_here.clone(),
+            tool_uis: Arc::new(NoMcpToolUis),
             view: ConversationView {
                 selection: None,
                 approval_mode_change: None,
@@ -280,7 +285,8 @@ impl Projection {
             self.view.capabilities.clone(),
             snapshot,
             active,
-        );
+        )
+        .with_tool_uis(self.tool_uis.clone());
         next.epoch = self.epoch;
         next.revision = self.revision;
         next.committed_position = Some((incarnation.into(), position, downloaded, observed_head));
@@ -368,6 +374,12 @@ impl Projection {
             self.view.questions.clear();
             self.view.pending.clear();
         }
+    }
+    /// Look an MCP call's UI up in `tool_uis` when the view is read. A
+    /// projection without one shows no UI.
+    pub fn with_tool_uis(mut self, tool_uis: Arc<dyn McpToolUis>) -> Self {
+        self.tool_uis = tool_uis;
+        self
     }
     fn bump(&mut self) {
         self.revision = self.revision.wrapping_add(1);
@@ -783,6 +795,9 @@ impl Projection {
                     tool.mcp = Some(ConversationMcpTool {
                         server: mcp.server().into(),
                         tool: mcp.tool().into(),
+                        // Filled when the view is read, from the tools as
+                        // last listed: see `read_with_mode_change`.
+                        resource_uri: None,
                     });
                 }
                 if let Some(content) = update.content() {
@@ -903,6 +918,30 @@ impl Projection {
             );
             view.revision = format!("{}:mode:{:x}", view.revision, digest);
             view.approval_mode_change = Some(change);
+        }
+        // Each MCP call's UI, from its server's tools as last listed: a tool's
+        // declaration is the server's, not the call's, and no harness passes it
+        // through ACP (ADR 344). Filled here, before the byte budget below, and
+        // folded into the revision, so a window holding this revision holds
+        // these URIs: a list read after the call still reaches the window.
+        let mut drawn = Sha256::new();
+        let mut any = false;
+        for tool in &mut view.tools {
+            let Some(mcp) = &mut tool.mcp else { continue };
+            mcp.resource_uri = McpTool::new(mcp.server.as_str(), mcp.tool.as_str())
+                .ok()
+                .and_then(|call| self.tool_uis.resource_uri(&call))
+                .map(|uri| uri.as_str().to_owned());
+            if let Some(uri) = &mcp.resource_uri {
+                any = true;
+                for part in [&tool.execution_id, &tool.tool_id, uri] {
+                    drawn.update((part.len() as u64).to_be_bytes());
+                    drawn.update(part.as_bytes());
+                }
+            }
+        }
+        if any {
+            view.revision = format!("{}:ui:{:x}", view.revision, drawn.finalize());
         }
         // A review or an ask is offered only while its execution is running:
         // nothing else is waiting on an answer, and the client refuses a view

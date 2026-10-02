@@ -489,12 +489,13 @@ The panel's webview is a stage larger than its window, pinned to the window's
 bottom right (`src/panel/adapters/panel-frame.ts`); before the frontend
 mounts, `index.html` shows the fallback on that stage.
 
-- [ ] **The avatar and "Loading" sit inside the visible window, centred in it
-  once the host reports its size**, on the default frame, a short configured
+- [ ] **The painted avatar and "Loading" sit inside the visible window; their
+  layout boxes are centred in it once the host reports its size**, on the default frame, a short configured
   height, a narrow panel and setup; with the size pending or refused, or the
   frontend never loading, they stay inside the bottom-right 320 × 320; nothing
   paints over the title, the page does not scroll, and nothing animates with
-  reduced motion. _Check:_ `load-fallback.mjs` (runs the real frontend against
+  reduced motion. The breathing avatar stays centred on its layout box; its
+  full-size and minimum-size paint are both checked. _Check:_ `load-fallback.mjs` (runs the real frontend against
   a fake host whose startup never answers and which fakes `panel_size`).
 
 ## Console errors

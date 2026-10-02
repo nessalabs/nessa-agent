@@ -74,6 +74,11 @@ pub enum ShutdownFailure {
     ConversationsUnreported {
         readers: Result<(), PassiveReaderShutdownFailure>,
     },
+    /// Reader and conversation outcomes are known; MCP stop remains unknown.
+    ServersUnreported {
+        readers: Result<(), PassiveReaderShutdownFailure>,
+        conversations: Result<(), ConversationError>,
+    },
     /// Readers failed and conversation cleanup succeeded.
     Readers(PassiveReaderShutdownFailure),
     /// Readers succeeded and conversation cleanup failed.
@@ -89,6 +94,7 @@ impl Display for ShutdownFailure {
         match self {
             Self::ReadersUnreported { outcomes } => write!(f, "passive reader physical drain unreported: {outcomes:?}; conversation cleanup not started"),
             Self::ConversationsUnreported { readers } => write!(f, "passive reader cleanup: {readers:?}; conversation cleanup unreported"),
+            Self::ServersUnreported { readers, conversations } => write!(f, "passive reader cleanup: {readers:?}; conversation cleanup: {conversations:?}; MCP stop unreported"),
             Self::Readers(error) => write!(f, "passive reader cleanup: {error:?}"),
             Self::Conversations(error) => write!(f, "conversation cleanup: {error}"),
             Self::Both { readers, conversations } => write!(f, "passive reader cleanup: {readers:?}; conversation cleanup: {conversations}"),

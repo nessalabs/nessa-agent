@@ -51,6 +51,9 @@ mod attachments;
 
 mod desktop;
 
+#[cfg(unix)]
+mod mcp_servers;
+
 mod provisioning;
 
 #[cfg(unix)]

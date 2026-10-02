@@ -17,7 +17,7 @@ use std::{
 };
 
 /// Trusted stdio MCP server. This is host configuration, never model-supplied input.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StdioMcpServer {
     /// Unique ASCII server name (letters, digits, hyphen, underscore; at most 64 bytes).
@@ -27,6 +27,35 @@ pub struct StdioMcpServer {
     /// Ordered UTF-8 arguments. Never put credentials here; these enter the context fingerprint.
     #[serde(default)]
     pub args: Vec<String>,
+}
+impl StdioMcpServer {
+    /// Whether every server in `servers` can be launched as configured, under
+    /// a name of its own: names unique, ASCII letters, digits, `-` and `_`,
+    /// 1–64 bytes, no `__` (a harness joins server and tool with it); an
+    /// absolute UTF-8 executable; at most 64 arguments of at most 8192 bytes,
+    /// none holding NUL. The one statement of the rule: an ACP binding
+    /// ([`AcpConfig`]) and the MCP client
+    /// ([`McpServers`](crate::infrastructure::mcp::McpServers)) both ask it.
+    pub fn all_valid(servers: &[StdioMcpServer]) -> bool {
+        let mut names = HashSet::new();
+        servers.iter().all(|server| {
+            !server.name.is_empty()
+                && server.name.len() <= 64
+                && !server.name.contains("__")
+                && server
+                    .name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                && names.insert(&server.name)
+                && server.command.is_absolute()
+                && server.command.to_str().is_some()
+                && server.args.len() <= 64
+                && server
+                    .args
+                    .iter()
+                    .all(|arg| arg.len() <= 8192 && !arg.contains('\0'))
+        })
+    }
 }
 
 /// Host-owned launch configuration. Environment is explicit, never inherited by
@@ -196,28 +225,10 @@ impl AcpConfig {
                 "at most 16 MCP servers; MCP requires tools enabled".into(),
             ));
         }
-        let mut names = HashSet::new();
-        for server in &self.mcp_servers {
-            if server.name.is_empty()
-                || server.name.len() > 64
-                || server.name.contains("__")
-                || !server
-                    .name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                || !names.insert(&server.name)
-                || !server.command.is_absolute()
-                || server.command.to_str().is_none()
-                || server.args.len() > 64
-                || server
-                    .args
-                    .iter()
-                    .any(|arg| arg.len() > 8192 || arg.contains('\0'))
-            {
-                return Err(AgentError::Configuration(
-                    "invalid MCP server name, executable or arguments".into(),
-                ));
-            }
+        if !StdioMcpServer::all_valid(&self.mcp_servers) {
+            return Err(AgentError::Configuration(
+                "invalid MCP server name, executable or arguments".into(),
+            ));
         }
         if !cfg!(unix) {
             return Err(AgentError::Unsupported("native ACP process supervision requires Unix; Windows needs an owned Job Object adapter".into()));

@@ -75,6 +75,32 @@ impl CompositionRoot {
             } => super::cli::online(true, credential_file, ttl_seconds),
             Command::Doctor { credential_file } => super::cli::online(false, credential_file, None),
             Command::InstallAgent { agent } => super::install_command::execute(&agent).await,
+            #[cfg(unix)]
+            Command::McpRelay {
+                socket,
+                server,
+                configuration,
+            } => {
+                let ended =
+                    crate::mcp_servers::infrastructure::run(&socket, &server, &configuration).await;
+                // Exits here rather than returning: the harness's stdin is read
+                // on a blocking thread nothing can cancel, and the runtime
+                // would wait for it on the way out — leaving a relay whose
+                // server has ended alive for as long as the harness keeps its
+                // stdin open. Its stdout was flushed when the relay ended.
+                let status = match ended {
+                    Ok(()) => 0,
+                    Err(failure) => {
+                        tracing::error!(%failure, "MCP stand-in ended without serving");
+                        1
+                    }
+                };
+                std::process::exit(status)
+            }
+            #[cfg(not(unix))]
+            Command::McpRelay { .. } => {
+                Err(RunError::Agent("MCP stand-ins require Unix sockets".into()))
+            }
         }
     }
 
@@ -110,6 +136,7 @@ impl CompositionRoot {
             record_reader,
             catalogue_reader,
             warm_ups,
+            mcp,
         } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle).await?;
         let conversations = product.conversations.clone();
         // Shared with the retirement below, which asks whether any of them may
@@ -218,6 +245,15 @@ impl CompositionRoot {
         for warm_up in warm_ups.iter() {
             warm_up.start();
         }
+        // Stand-ins reach their servers through the relay from here on; each
+        // opens a session, and a server process, of its own.
+        #[cfg(unix)]
+        let mcp_servers = mcp.map(|mcp| {
+            tokio::spawn(mcp.relay.listen(mcp.listener));
+            mcp.servers
+        });
+        #[cfg(not(unix))]
+        let _ = mcp;
         // Deletions a tombstone says did not finish — interrupted by the last
         // run's exit, or stopped short — are finished now, in the background:
         // a deletion that cannot finish is reported, never a reason to hold up
@@ -300,10 +336,6 @@ impl CompositionRoot {
         let slot = report.clone();
         let (served, cleanup) =
             serve_with_cleanup(listener, router, shutdown_signal(), async move {
-                let Some(service) = conversations else {
-                    record_shutdown(&slot, ShutdownReport::Confirmed);
-                    return;
-                };
                 passive_cleanup(
                     &slot,
                     async {
@@ -318,7 +350,14 @@ impl CompositionRoot {
                             None => Ok(()),
                         }
                     },
-                    async { service.shutdown().await },
+                    conversations.map(|service| async move { service.shutdown().await }),
+                    async {
+                        // After agents, whose stand-ins end with their servers.
+                        #[cfg(unix)]
+                        if let Some(servers) = mcp_servers {
+                            servers.stop().await;
+                        }
+                    },
                     Duration::from_secs(30),
                 )
                 .await;
@@ -372,28 +411,35 @@ fn serve_outcome(
 /// What the joined cleanup owner has established so far.
 #[derive(Debug)]
 enum ShutdownReport {
-    /// All owners confirmed cleanup, or no cleanup began.
+    /// Reader/conversation outcomes succeeded and MCP stop returned under its
+    /// existing unit-returning contract; no separate MCP confirmation is inferred.
     Confirmed,
     /// Callback has not yet published reader evidence.
     Unreported,
     /// The report retains each result as it is observed, including deadline evidence.
     ReadersPending(PassiveReaderOutcomes),
-    /// Both physical drains completed; conversation cleanup has not reported.
+    /// Both physical drains completed; conversation cleanup has not returned.
     ConversationsPending {
         readers: Result<(), PassiveReaderShutdownFailure>,
+    },
+    /// Reader and conversation outcomes are known; MCP stop has not returned.
+    ServersPending {
+        readers: Result<(), PassiveReaderShutdownFailure>,
+        conversations: Result<(), ConversationError>,
     },
     /// All cleanup owners returned; at least one failed.
     Failed(ShutdownFailure),
 }
 
-/// Own reader drain, conversation cleanup, and their report together.
+/// Own reader drain, conversation/MCP cleanup, and their report together.
 /// Each pending stage publishes known evidence before its next await. The final
 /// synchronous publication consumes that evidence rather than cloning errors.
 async fn passive_cleanup(
     slot: &Mutex<ShutdownReport>,
     record: impl Future<Output = Result<(), RecordReadError>>,
     catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
-    conversations: impl Future<Output = Result<(), ConversationError>>,
+    conversations: Option<impl Future<Output = Result<(), ConversationError>>>,
+    servers: impl Future<Output = ()>,
     deadline: Duration,
 ) {
     record_shutdown(
@@ -441,10 +487,28 @@ async fn passive_cleanup(
             readers: outcomes.into_result(),
         };
     }
-    let conversations = conversations.await;
+    let conversations = match conversations {
+        Some(conversations) => conversations.await,
+        None => Ok(()),
+    };
+    {
+        let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        let ShutdownReport::ConversationsPending { readers } =
+            std::mem::replace(&mut *report, ShutdownReport::Unreported)
+        else {
+            unreachable!()
+        };
+        *report = ShutdownReport::ServersPending {
+            readers,
+            conversations,
+        };
+    }
+    servers.await;
     let mut report = slot.lock().unwrap_or_else(PoisonError::into_inner);
-    let ShutdownReport::ConversationsPending { readers } =
-        std::mem::replace(&mut *report, ShutdownReport::Unreported)
+    let ShutdownReport::ServersPending {
+        readers,
+        conversations,
+    } = std::mem::replace(&mut *report, ShutdownReport::Unreported)
     else {
         unreachable!()
     };
@@ -504,6 +568,13 @@ fn shutdown_result(report: &Mutex<ShutdownReport>) -> Result<(), RunError> {
         ShutdownReport::ConversationsPending { readers } => {
             Some(ShutdownFailure::ConversationsUnreported { readers })
         }
+        ShutdownReport::ServersPending {
+            readers,
+            conversations,
+        } => Some(ShutdownFailure::ServersUnreported {
+            readers,
+            conversations,
+        }),
         // `Confirmed` returned above; named rather than wildcarded so a new
         // report has to say what it means instead of inheriting "said nothing".
         ShutdownReport::Unreported | ShutdownReport::Confirmed => None,
@@ -554,12 +625,190 @@ impl crate::desktop_runtime::application::BackgroundWork for StartupWarmUps {
 mod tests {
     use super::*;
     use crate::env::{MockEnv, Stage, STAGE};
+    use std::future::Ready;
     use std::io::Result as IoResult;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::Poll;
     use tokio::net::TcpListener;
     use tokio::sync::oneshot::Sender;
     use tokio::sync::{oneshot, Notify};
+
+    async fn mcp_cleanup_stage(conversation_failure: bool) {
+        let report = Arc::new(Mutex::new(ShutdownReport::Unreported));
+        let entered = Arc::new(Notify::new());
+        let (release, gate) = oneshot::channel();
+        let task_report = report.clone();
+        let task_entered = entered.clone();
+        let task = tokio::spawn(async move {
+            let conversations = if conversation_failure {
+                Some(std::future::ready(Err(ConversationError::Audit)))
+            } else {
+                None::<Ready<Result<(), ConversationError>>>
+            };
+            passive_cleanup(
+                &task_report,
+                async { Ok(()) },
+                async { Ok(()) },
+                conversations,
+                async {
+                    task_entered.notify_one();
+                    gate.await.unwrap();
+                },
+                Duration::from_secs(30),
+            )
+            .await;
+        });
+        let entered = tokio::time::timeout(Duration::from_secs(1), entered.notified())
+            .await
+            .is_ok();
+        let pending = match &*report.lock().unwrap() {
+            ShutdownReport::ServersPending {
+                readers: Ok(()),
+                conversations,
+            } => {
+                if conversation_failure {
+                    matches!(conversations, Err(ConversationError::Audit))
+                } else {
+                    conversations.is_ok()
+                }
+            }
+            _ => false,
+        };
+        let unfinished = !task.is_finished();
+        let released = release.send(()).is_ok();
+        task.await.unwrap();
+        assert!(
+            entered,
+            "MCP stop must run even without conversations or after conversation failure"
+        );
+        assert!(
+            released,
+            "MCP stage must remain held until explicitly released"
+        );
+        assert!(
+            pending,
+            "MCP stage publishes and retains the known conversation outcome"
+        );
+        assert!(unfinished, "MCP drain remains joined");
+        let report = report.lock().unwrap();
+        if conversation_failure {
+            assert!(matches!(
+                &*report,
+                ShutdownReport::Failed(ShutdownFailure::Conversations(ConversationError::Audit))
+            ));
+        } else {
+            assert!(matches!(&*report, ShutdownReport::Confirmed));
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_drain_is_joined_without_conversations() {
+        mcp_cleanup_stage(false).await;
+    }
+
+    #[tokio::test]
+    async fn conversation_failure_waits_for_mcp_drain_before_publication() {
+        mcp_cleanup_stage(true).await;
+    }
+
+    fn assert_unreported_servers(
+        report: &Mutex<ShutdownReport>,
+        reader_failure: bool,
+        conversation_failure: bool,
+    ) {
+        let Err(RunError::Shutdown(Some(ShutdownFailure::ServersUnreported {
+            readers,
+            conversations,
+        }))) = shutdown_result(report)
+        else {
+            panic!("MCP stage must retain known cleanup results")
+        };
+        assert_eq!(readers.is_err(), reader_failure);
+        if let Err(readers) = readers {
+            assert_eq!(
+                readers.outcomes().record(),
+                Some(&Err(RecordReadError::WorkerPanicked))
+            );
+            assert_eq!(readers.outcomes().catalogue(), Some(&Ok(())));
+        }
+        if conversation_failure {
+            assert!(matches!(conversations, Err(ConversationError::Audit)));
+        } else {
+            assert!(conversations.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_drain_panic_retains_known_cleanup_outcomes() {
+        for reader_failure in [false, true] {
+            for conversation_failure in [true, false] {
+                let report = Arc::new(Mutex::new(ShutdownReport::Unreported));
+                let task_report = report.clone();
+                let task = tokio::spawn(async move {
+                    passive_cleanup(
+                        &task_report,
+                        async {
+                            if reader_failure {
+                                Err(RecordReadError::WorkerPanicked)
+                            } else {
+                                Ok(())
+                            }
+                        },
+                        async { Ok(()) },
+                        Some(async {
+                            if conversation_failure {
+                                Err(ConversationError::Audit)
+                            } else {
+                                Ok(())
+                            }
+                        }),
+                        async { panic!("MCP drain fault") },
+                        Duration::from_secs(30),
+                    )
+                    .await;
+                });
+                assert!(task.await.unwrap_err().is_panic());
+                assert_unreported_servers(&report, reader_failure, conversation_failure);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_mcp_drain_retains_known_cleanup_outcomes() {
+        for reader_failure in [false, true] {
+            for conversation_failure in [true, false] {
+                let report = Mutex::new(ShutdownReport::Unreported);
+                {
+                    let stop = passive_cleanup(
+                        &report,
+                        async {
+                            if reader_failure {
+                                Err(RecordReadError::WorkerPanicked)
+                            } else {
+                                Ok(())
+                            }
+                        },
+                        async { Ok(()) },
+                        Some(async {
+                            if conversation_failure {
+                                Err(ConversationError::Audit)
+                            } else {
+                                Ok(())
+                            }
+                        }),
+                        std::future::pending(),
+                        Duration::from_secs(30),
+                    );
+                    tokio::pin!(stop);
+                    assert!(
+                        std::future::poll_fn(|cx| Poll::Ready(stop.as_mut().poll(cx).is_pending()))
+                            .await
+                    );
+                }
+                assert_unreported_servers(&report, reader_failure, conversation_failure);
+            }
+        }
+    }
 
     #[tokio::test]
     async fn shutdown_stops_connection_admission_before_a_blocked_reader_drains() {
@@ -614,10 +863,11 @@ mod tests {
                         Ok(())
                     },
                     async { Ok(()) },
-                    async {
+                    Some(async {
                         cleaned.store(true, Ordering::SeqCst);
                         Ok(())
-                    },
+                    }),
+                    async {},
                     Duration::from_secs(30),
                 )
                 .await;
@@ -663,7 +913,8 @@ mod tests {
                     &slot,
                     async { Ok(()) },
                     async { Ok(()) },
-                    async { Ok(()) },
+                    Some(async { Ok(()) }),
+                    async {},
                     Duration::from_secs(30),
                 )
                 .await;
@@ -698,14 +949,15 @@ mod tests {
                         &report,
                         std::future::ready(record),
                         std::future::ready(catalogue.clone()),
-                        async {
+                        Some(async {
                             cleaned.store(true, Ordering::SeqCst);
                             if conversation_fails {
                                 Err(ConversationError::Audit)
                             } else {
                                 Ok(())
                             }
-                        },
+                        }),
+                        async {},
                         Duration::from_secs(30),
                     )
                     .await;
@@ -752,10 +1004,11 @@ mod tests {
                     waiting.await.unwrap();
                     Err(CatalogueReadError::WorkerPanicked)
                 },
-                async {
+                Some(async {
                     cleanup.store(true, Ordering::SeqCst);
                     Err(ConversationError::Audit)
-                },
+                }),
+                async {},
                 Duration::from_secs(30),
             )
             .await
@@ -796,10 +1049,11 @@ mod tests {
                         &report,
                         std::future::ready(result),
                         std::future::pending(),
-                        async {
+                        Some(async {
                             cleaned.store(true, Ordering::SeqCst);
                             Ok(())
-                        },
+                        }),
+                        async {},
                         Duration::from_secs(30),
                     );
                     tokio::pin!(stop);
@@ -839,7 +1093,8 @@ mod tests {
                     &report,
                     std::future::pending(),
                     std::future::pending(),
-                    std::future::ready(Ok(())),
+                    Some(std::future::ready(Ok(()))),
+                    async {},
                     Duration::from_secs(30),
                 );
                 tokio::pin!(stop);
@@ -875,7 +1130,8 @@ mod tests {
                     &report,
                     std::future::ready(result),
                     std::future::ready(Ok(())),
-                    std::future::pending(),
+                    Some(std::future::pending()),
+                    async {},
                     Duration::from_secs(30),
                 );
                 tokio::pin!(stop);
@@ -910,7 +1166,8 @@ mod tests {
                 Ok(())
             },
             std::future::ready(Ok(())),
-            std::future::ready(Ok(())),
+            Some(std::future::ready(Ok(()))),
+            async {},
             Duration::from_secs(30),
         )
         .await;
@@ -938,7 +1195,8 @@ mod tests {
                         CatalogueReadError::IdentityChanged,
                     )))
                 },
-                std::future::pending(),
+                Some(std::future::pending()),
+                async {},
                 Duration::from_secs(30),
             );
             tokio::pin!(stop);
@@ -977,7 +1235,8 @@ mod tests {
             &report,
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
-            std::future::ready(Ok(())),
+            Some(std::future::ready(Ok(()))),
+            async {},
             Duration::ZERO,
         )
         .await;
@@ -1094,7 +1353,8 @@ mod tests {
             &confirmed,
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
-            std::future::ready(Ok(())),
+            Some(std::future::ready(Ok(()))),
+            async {},
             Duration::from_secs(30),
         )
         .await;
@@ -1105,7 +1365,8 @@ mod tests {
             &failed,
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
-            std::future::ready(Err(ConversationError::Audit)),
+            Some(std::future::ready(Err(ConversationError::Audit))),
+            async {},
             Duration::from_secs(30),
         )
         .await;

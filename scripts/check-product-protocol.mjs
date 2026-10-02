@@ -165,6 +165,10 @@ const mcpName = "😀".repeat(32)
 for (const valid of [
   tool,
   { ...tool, mcp: { server: mcpName, tool: mcpName } },
+  {
+    ...tool,
+    mcp: { server: "charts", tool: "show", resourceUri: `ui://${"😀".repeat(510)}abc` },
+  },
   { ...tool, structuredContent: "😀".repeat(4096) },
 ]) {
   if (!validateTool(valid))
@@ -174,7 +178,12 @@ for (const invalid of [
   { ...tool, mcp: { server: "", tool: "show" } },
   { ...tool, mcp: { server: "charts" } },
   { ...tool, mcp: { server: `${mcpName}a`, tool: "show" } },
-  { ...tool, mcp: { server: "charts", tool: "show", resourceUri: "ui://x" } },
+  {
+    ...tool,
+    mcp: { server: "charts", tool: "show", resourceUri: `ui://${"😀".repeat(510)}abcd` },
+  },
+  { ...tool, mcp: { server: "charts", tool: "show", resourceUri: "" } },
+  { ...tool, mcp: { server: "charts", tool: "show", other: "x" } },
   { ...tool, structuredContent: `${"😀".repeat(4096)}a` },
   { ...tool, structuredContent: { rows: 2 } },
 ]) {
