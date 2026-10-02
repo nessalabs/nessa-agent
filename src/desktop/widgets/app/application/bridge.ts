@@ -62,7 +62,8 @@ export const deadlines = {
   initialize: 15_000,
   /** For the app to answer `ui/resource-teardown`. */
   teardown: 3_000,
-  /** For a port to answer one of the app's requests. */
+  /** For a port to answer one of the app's requests (the server's own
+   * calls wait as long as it says: `McpAppServer.answersWithin`). */
   request: 60_000,
 } as const
 
@@ -116,7 +117,17 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   const pending = new Map<RequestId, () => void>()
   let logged = 0
 
-  const address: ServerAddress = { sessionId: call.sessionId, server: options.server }
+  // One view is one mount: its id is minted once, and every call and the
+  // release carry it.
+  const address: ServerAddress = {
+    sessionId: call.sessionId,
+    server: options.server,
+    app: {
+      executionId: call.executionId,
+      toolId: call.toolId,
+      instanceId: ports.mountId(),
+    },
+  }
   const gone = () => lifecycle.kind === "gone"
   const initialized = () => lifecycle.kind === "live" || lifecycle.kind === "ending"
 
@@ -222,6 +233,8 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     }
     show({})
     for (const effect of next.effects) run(effect, answering)
+    // The mount is let go once, after everything else it did (L23′, L24′).
+    if (lifecycle.kind === "gone") ports.server.release(address)
   }
 
   function answerServer(id: RequestId, answer: ServerAnswer) {
@@ -244,7 +257,12 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
    * port's answer after that is dropped. `send` posts nothing once the view
    * is gone.
    */
-  function settle<T>(id: RequestId, work: Promise<T>, answer: (value: T) => void) {
+  function settle<T>(
+    id: RequestId,
+    work: Promise<T>,
+    answer: (value: T) => void,
+    within: number = deadlines.request,
+  ) {
     const settled = () => {
       if (!pending.has(id)) return false
       pending.get(id)?.()
@@ -253,7 +271,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     }
     pending.set(
       id,
-      ports.timers.after(deadlines.request, () => {
+      ports.timers.after(within, () => {
         if (settled()) send(refuse(id, errorCodes.internal, "The request timed out"))
       }),
     )
@@ -286,10 +304,14 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
           id,
           ports.server.callTool(address, message.tool, message.arguments),
           (answer) => answerServer(id, answer),
+          ports.server.answersWithin.callTool,
         )
       case "resources/read":
-        return settle(id, ports.server.readResource(address, message.uri), (answer) =>
-          answerServer(id, answer),
+        return settle(
+          id,
+          ports.server.readResource(address, message.uri),
+          (answer) => answerServer(id, answer),
+          ports.server.answersWithin.readResource,
         )
       case "ui/message": {
         const conversation = ports.conversation
@@ -419,6 +441,11 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   if (ports.sandbox) readResource()
   else step({ kind: "read", outcome: "unloadable" })
   function readResource() {
+    // Not answered in the server's time, the app cannot be loaded (L1′); an
+    // answer after that changes nothing, the view having failed.
+    const cancel = ports.timers.after(ports.server.answersWithin.readResource, () => {
+      if (!gone()) step({ kind: "read", outcome: "unloadable" })
+    })
     ports.server
       .readResource(address, call.resourceUri)
       .catch((error: unknown) => {
@@ -426,6 +453,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         return { kind: "failed" } as const
       })
       .then((answer) => {
+        cancel()
         if (gone()) return
         if (answer.kind === "ok") resource = uiResource(answer.result, call.resourceUri)
         step({

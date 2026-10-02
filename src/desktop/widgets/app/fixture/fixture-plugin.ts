@@ -25,7 +25,14 @@ import type { PageContext } from "../model/host-context"
 import { appMimeType } from "../model/resource"
 import { appPlugin } from "../ui/app-plugin"
 import { fixtureAppHtml } from "./fixture-app"
-import { fixtureResourceUri, fixtureServer, fixtureWidget } from "./fixture-widgets"
+import { deadlines } from "../application/bridge"
+import {
+  fixtureExecutionId,
+  fixtureResourceUri,
+  fixtureServer,
+  fixtureToolId,
+  fixtureWidget,
+} from "./fixture-widgets"
 
 /** The tools it answers an app for, and the one it refuses as hidden. */
 export const fixtureTools = {
@@ -56,6 +63,10 @@ export function fixtureServerPort(html = fixtureAppHtml): McpAppServer {
         }
       return { kind: "refused", reason: `${tool} is not available to apps` }
     },
+    // It holds no review and no resource for a mount.
+    release: () => {},
+    // In memory, it answers at once: the host's own bound will do.
+    answersWithin: { callTool: deadlines.request, readResource: deadlines.request },
   }
 }
 
@@ -67,6 +78,8 @@ export function fixtureCall(sessionId: string): AppCall {
   }
   return {
     sessionId,
+    executionId: fixtureExecutionId,
+    toolId: fixtureToolId,
     tool: "show_fixture",
     definition: { name: "show_fixture", inputSchema: { type: "object" } },
     resourceUri: fixtureResourceUri,
@@ -80,6 +93,7 @@ export function fixtureAppPlugin(options: {
   readonly sandbox: SandboxOrigin | undefined
   readonly timers: Timers
   readonly page: () => PageContext
+  readonly mountId: () => string
 }): AppWidgetPlugin {
   const known: CallRead = { kind: "known", call: fixtureCall(options.sessionId) }
   const missing: CallRead = { kind: "missing" }
@@ -93,6 +107,7 @@ export function fixtureAppPlugin(options: {
     ...(options.sandbox ? { sandbox: options.sandbox } : {}),
     hostInfo: { name: "Nessa", version: "fixture" },
     page: options.page,
+    mountId: options.mountId,
   }
   return appPlugin({ server: fixtureServer, name: "Fixture", ports })
 }

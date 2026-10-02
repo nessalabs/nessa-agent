@@ -24,7 +24,7 @@ import {
   teardownId,
   type AppBridge,
 } from "./bridge"
-import type { McpAppPorts, McpAppServer, ServerAnswer } from "./ports"
+import type { McpAppPorts, McpAppServer, ServerAddress, ServerAnswer } from "./ports"
 
 const sandbox = {
   url: "http://127.0.0.1:9999/proxy.html",
@@ -69,6 +69,14 @@ interface Harness {
 }
 
 let harnesses: Harness[] = []
+/** The one mount id the harness's ports mint. */
+const mountId = "0b1e8f7c-5d2a-4e6b-9c3f-1a2b3c4d5e6f"
+/** Where the harness's view sends its server calls: its session, its server, its mount. */
+const address = {
+  sessionId: "session-a",
+  server: "weather",
+  app: { executionId: "fixture-execution", toolId: "fixture-call", instanceId: mountId },
+}
 
 function harness(
   options: {
@@ -109,6 +117,7 @@ function harness(
       timeZone: "UTC",
       platform: "desktop",
     }),
+    mountId: () => mountId,
     ...options.ports,
   }
   // The transport is made before the bridge posts anything, as the view's frame is.
@@ -205,10 +214,7 @@ describe("the handshake", () => {
     const app = harness({ server: { ...fixtureServerPort(), readResource: read } })
     expect(frameOn(app.bridge.view().lifecycle)).toBe(false)
     await flush()
-    expect(read).toHaveBeenCalledWith(
-      { sessionId: "session-a", server: "weather" },
-      fixtureResourceUri,
-    )
+    expect(read).toHaveBeenCalledWith(address, fixtureResourceUri)
     expect(app.bridge.view()).toMatchObject({ lifecycle: { kind: "proxy" } })
     expect(app.take()).toEqual([])
     app.say({
@@ -656,13 +662,7 @@ describe("a live app's requests", () => {
       },
     })
     await flush()
-    expect(calls).toEqual([
-      [
-        { sessionId: "session-a", server: "weather" },
-        "get_weather",
-        { location: "New York" },
-      ],
-    ])
+    expect(calls).toEqual([[address, "get_weather", { location: "New York" }]])
     expect(app.take()).toEqual([
       { jsonrpc: "2.0", id: 11, result: { content: [{ type: "text", text: "72" }] } },
     ])
@@ -1154,7 +1154,11 @@ describe("the end", () => {
     app.bridge.remove()
     read.resolve(
       await fixtureServerPort().readResource(
-        { sessionId: "", server: "" },
+        {
+          sessionId: "",
+          server: "",
+          app: { executionId: "", toolId: "", instanceId: mountId },
+        },
         fixtureResourceUri,
       ),
     )
@@ -1177,5 +1181,120 @@ describe("the end", () => {
     app.say({ jsonrpc: "2.0", id: 2, method: "ping" })
     expect(app.take()).toEqual([])
     expect(app.timers.every((timer) => timer.cancelled)).toBe(true)
+  })
+})
+
+describe("the server's own time, and the mount (#384)", () => {
+  /** A server answering in its own time, and recording each mount it lets go. */
+  function timedServer(overrides: Partial<McpAppServer> = {}) {
+    const released: ServerAddress[] = []
+    const server: McpAppServer = {
+      ...fixtureServerPort(),
+      release: (address) => void released.push(address),
+      answersWithin: { callTool: 370_000, readResource: 120_000 },
+      ...overrides,
+    }
+    return { server, released }
+  }
+
+  it("L1′: a read not answered in the server's time cannot be loaded, and its late answer is dropped", async () => {
+    const read = deferred<ServerAnswer>()
+    const { server } = timedServer({ readResource: () => read.promise })
+    const app = harness({ server })
+    expect(app.timers.filter((t) => !t.cancelled).map((t) => t.ms)).toEqual([120_000])
+    app.deadline()
+    expect(app.bridge.view().lifecycle).toEqual({ kind: "failed", reason: "load" })
+    read.resolve(await fixtureServerPort().readResource(address, fixtureResourceUri))
+    await flush()
+    expect(app.bridge.view().lifecycle).toEqual({ kind: "failed", reason: "load" })
+    expect(app.take()).toEqual([])
+  })
+
+  it("L1′: a read answered in time cancels its deadline", async () => {
+    const app = harness({ server: timedServer().server })
+    await flush()
+    expect(app.bridge.view().lifecycle.kind).toBe("proxy")
+    expect(
+      app.timers.filter((t) => t.ms === 120_000).every((timer) => timer.cancelled),
+    ).toBe(true)
+  })
+
+  it("L14′, L14″: tools/call and resources/read wait as long as the server says", async () => {
+    const pending = deferred<ServerAnswer>()
+    const { server } = timedServer({
+      callTool: () => pending.promise,
+      readResource: (_address, uri) =>
+        uri === fixtureResourceUri
+          ? fixtureServerPort().readResource(address, uri)
+          : pending.promise,
+    })
+    const app = harness({ server })
+    await live(app)
+    app.say({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "t" } })
+    app.say({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "resources/read",
+      params: { uri: "ui://x/y" },
+    })
+    expect(app.timers.filter((t) => !t.cancelled).map((t) => t.ms)).toEqual([
+      370_000, 120_000,
+    ])
+  })
+
+  it("L23′: a mount let go once, by its own id, when its teardown ends it", async () => {
+    const { server, released } = timedServer()
+    const app = harness({ server, place: "pane" })
+    await live(app)
+    app.say({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" })
+    expect(released).toEqual([])
+    app.say({ jsonrpc: "2.0", id: teardownId, result: {} })
+    expect(released).toEqual([address])
+    app.bridge.remove()
+    expect(released).toEqual([address])
+  })
+
+  it("L24′: a mount let go once when its place is removed, whatever state it was in", async () => {
+    for (const reach of ["reading", "live", "failed"] as const) {
+      const read = deferred<ServerAnswer>()
+      const { server, released } = timedServer(
+        reach === "reading" ? { readResource: () => read.promise } : {},
+      )
+      const app = harness({ server })
+      if (reach === "live") await live(app)
+      if (reach === "failed") {
+        await flush()
+        app.deadline()
+      }
+      app.bridge.remove()
+      app.bridge.remove()
+      expect(released, reach).toEqual([address])
+    }
+  })
+
+  it("one view, one mount: each bridge mints its own id and keeps it", async () => {
+    const ids = [
+      "0b1e8f7c-5d2a-4e6b-9c3f-000000000001",
+      "0b1e8f7c-5d2a-4e6b-9c3f-000000000002",
+    ]
+    const seen: string[] = []
+    for (const id of ids) {
+      const calls: ServerAddress[] = []
+      const { server, released } = timedServer({
+        callTool: async (to) => {
+          calls.push(to)
+          return { kind: "ok", result: {} }
+        },
+      })
+      const app = harness({ server, ports: { mountId: () => id } })
+      await live(app)
+      app.say({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "t" } })
+      await flush()
+      app.bridge.remove()
+      expect(calls.map((to) => to.app.instanceId)).toEqual([id])
+      expect(released.map((to) => to.app.instanceId)).toEqual([id])
+      seen.push(calls[0]!.app.instanceId)
+    }
+    expect(new Set(seen).size).toBe(2)
   })
 })

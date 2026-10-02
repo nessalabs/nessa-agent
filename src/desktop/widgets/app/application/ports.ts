@@ -32,10 +32,24 @@ export type ServerAnswer =
   | { readonly kind: "server-gone" }
   | { readonly kind: "failed" }
 
-/** Which session's connection to which server a call goes over. */
+/**
+ * One mount of an app: the tool call it is the UI of, and the host's own id
+ * for this mount (`McpAppReference`). One call can be mounted more than once
+ * — inline and in a pane — and again after it was torn down; the gateway
+ * keeps reviews and tickets per mount.
+ */
+export interface AppMount {
+  readonly executionId: string
+  readonly toolId: string
+  /** A lowercase UUID, minted once per view (`McpAppPorts.mountId`). */
+  readonly instanceId: string
+}
+
+/** Which session's connection to which server a call goes over, and for which mount. */
 export interface ServerAddress {
   readonly sessionId: string
   readonly server: string
+  readonly app: AppMount
 }
 
 /** The MCP server an app belongs to, over the gateway's connection for its session (#346, #348). */
@@ -44,6 +58,17 @@ export interface McpAppServer {
   readResource(address: ServerAddress, uri: string): Promise<ServerAnswer>
   /** `tools/call` (`CallToolResult`). */
   callTool(address: ServerAddress, tool: string, args: JsonObject): Promise<ServerAnswer>
+  /**
+   * The mount is gone: its open reviews are withdrawn (their calls answer
+   * as cancelled) and its resources released. Fire and forget; idempotent.
+   */
+  release(address: ServerAddress): void
+  /**
+   * How long, in milliseconds, the bridge waits on each before it answers
+   * that the request timed out. The server's own: a call may wait on the
+   * person's review, which the bridge must not cut short.
+   */
+  readonly answersWithin: { readonly callTool: number; readonly readResource: number }
 }
 
 /** What the conversation holds of the call a widget names. */
@@ -113,4 +138,6 @@ export interface McpAppPorts {
   readonly hostInfo: { readonly name: string; readonly version: string }
   /** What the page says of itself now: its style variables, time zone and platform. */
   readonly page: () => PageContext
+  /** A fresh lowercase UUID for one mount of an app (`AppMount.instanceId`). */
+  readonly mountId: () => string
 }

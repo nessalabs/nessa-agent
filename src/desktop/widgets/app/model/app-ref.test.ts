@@ -24,6 +24,7 @@ describe("an app's widgets", () => {
       sandbox: undefined,
       timers: { after: () => () => {} },
       page: () => ({ styles: {}, timeZone: "UTC", platform: "web" }),
+      mountId: () => crypto.randomUUID(),
     }).ports
     const plugin = appPlugin({ server: "charts", name: "Charts", ports })
     expect(plugin.id).toBe(appPluginId(plugin.server))
