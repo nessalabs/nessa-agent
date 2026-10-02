@@ -933,7 +933,12 @@ async fn physical_response(peer: &mut TestPeer, id: &str, method: &str, params: 
     };
     serde_json::from_str(&text).unwrap()
 }
-async fn physical_read_timeout_retains_socket_admission(catalogue: bool) {
+async fn held_physical_session() -> (
+    ProductRouteState,
+    AuthenticatedSession,
+    ConversationId,
+    Arc<HeldPhysicalRead>,
+) {
     let (state, authority) = fixture(MembershipRole::Member);
     authority.snapshot.lock().unwrap().credential = Credential::new(
         CredentialId::new("credential").unwrap(),
@@ -984,6 +989,11 @@ async fn physical_read_timeout_retains_socket_admission(catalogue: bool) {
         Duration::from_secs(120),
     )
     .unwrap();
+    (state, session, id, source)
+}
+
+async fn physical_read_timeout_retains_socket_admission(catalogue: bool) {
+    let (state, session, id, source) = held_physical_session().await;
     let capacity = state.record_reads.clone();
     let (socket, mut peer) = test_socket(None);
     let first = tokio::spawn(run_authenticated(socket, state.clone(), session.clone()));
@@ -1058,4 +1068,289 @@ async fn record_physical_read_timeout_retains_socket_admission() {
 #[tokio::test(start_paused = true)]
 async fn catalogue_physical_read_timeout_retains_socket_admission() {
     physical_read_timeout_retains_socket_admission(true).await;
+}
+
+// Observe receive-side selection without exposing or replacing production lanes.
+// This counter does not establish the resulting queue. Final typed delivery and
+// deadline effects prove admission routing after selection.
+struct ObservedAdmissionSocket {
+    socket: TestSocket,
+    busy_inputs: Arc<AtomicUsize>,
+    control_inputs: Arc<AtomicUsize>,
+    // Install backpressure only after the initial timeout is physically flushed.
+    after_initial_flush: Option<Receiver<()>>,
+}
+impl Stream for ObservedAdmissionSocket {
+    type Item = Result<Message, axum::Error>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let next = Pin::new(&mut self.socket).poll_next(cx);
+        if let Poll::Ready(Some(Ok(Message::Text(text)))) = &next {
+            let frame: Value = serde_json::from_str(text).unwrap();
+            if frame["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("control-"))
+            {
+                self.control_inputs.fetch_add(1, Ordering::SeqCst);
+            }
+            if frame["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("busy"))
+            {
+                self.busy_inputs.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        next
+    }
+}
+impl Sink<Message> for ObservedAdmissionSocket {
+    type Error = Error;
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.socket).poll_ready(cx)
+    }
+    fn start_send(mut self: Pin<&mut Self>, message: Message) -> Result<(), Self::Error> {
+        Pin::new(&mut self.socket).start_send(message)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let flushed = Pin::new(&mut self.socket).poll_flush(cx);
+        if matches!(flushed, Poll::Ready(Ok(()))) && self.after_initial_flush.is_some() {
+            self.socket.gate = self.after_initial_flush.take();
+        }
+        flushed
+    }
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.socket).poll_close(cx)
+    }
+}
+
+fn passive_request(peer: &TestPeer, id: &str, method: &str, params: &Value) {
+    peer.input
+        .send(Ok(Message::Text(
+            json!({"type":"req","id":id,"method":method,"params":params})
+                .to_string()
+                .into(),
+        )))
+        .unwrap();
+}
+
+async fn wait_for_count(count: &AtomicUsize, expected: usize) {
+    // Yield keeps paused Tokio time from auto-advancing while admission runs.
+    for _ in 0..1000 {
+        if count.load(Ordering::SeqCst) == expected {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("admission did not reach {expected}");
+}
+
+const PASSIVE_METHODS: [&str; 5] = [
+    "conversation.recordsHead",
+    "conversation.recordsPage",
+    "conversation.catalogueHead",
+    "conversation.catalogueManifest",
+    "conversation.catalogueResolve",
+];
+
+async fn slot_busy_passive_refusal(method: &str, stalled: bool, overflow: bool) -> bool {
+    let (state, session, id, source) = held_physical_session().await;
+    let capacity = state.record_reads.clone();
+    let (release, gate) = tokio::sync::oneshot::channel();
+    let (socket, mut peer) = test_socket(None);
+    let busy_inputs = Arc::new(AtomicUsize::new(0));
+    let control_inputs = Arc::new(AtomicUsize::new(0));
+    let socket = ObservedAdmissionSocket {
+        socket,
+        busy_inputs: busy_inputs.clone(),
+        control_inputs: control_inputs.clone(),
+        after_initial_flush: if stalled { Some(gate) } else { None },
+    };
+    let task = tokio::spawn(run_authenticated(socket, state, session));
+    let params = json!({"conversationId":id.to_string(),"receiverId":"receiver","accessEpoch":"3"});
+    let initial =
+        physical_response(&mut peer, "initial", "conversation.recordsHead", &params).await;
+    // Discard the already completed timeout write's physical marker.
+    peer.writing.try_recv().unwrap();
+    wait_for_count(&source.calls, 1).await;
+    let mut control_started = false;
+    if stalled {
+        // One control is physically writing and three remain queued: every
+        // existing control slot is occupied before the passive retry arrives.
+        for index in 0..4 {
+            passive_request(
+                &peer,
+                &format!("control-{index}"),
+                "conversation.close",
+                &json!({}),
+            );
+        }
+        wait_for_count(&control_inputs, 4).await;
+        // Awaiting a ready notification does not advance the paused clock.
+        for _ in 0..1000 {
+            if peer.writing.try_recv().is_ok() {
+                control_started = true;
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+    passive_request(&peer, "busy", method, &params);
+    wait_for_count(&busy_inputs, 1).await;
+    if overflow {
+        // Let the writer capture the first refusal as its pending item. With a
+        // stalled control send, the second fills the one-item record channel;
+        // the third triggers bounded teardown, leaving a fourth input unread.
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+        passive_request(&peer, "busy-2", method, &params);
+        wait_for_count(&busy_inputs, 2).await;
+        passive_request(&peer, "busy-3", method, &params);
+        wait_for_count(&busy_inputs, 3).await;
+        passive_request(&peer, "busy-4", method, &params);
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+    }
+    let received = busy_inputs.load(Ordering::SeqCst);
+    let mut response = None;
+    let ended_at_deadline;
+    if stalled {
+        tokio::time::advance(Duration::from_secs(31)).await;
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+        ended_at_deadline = task.is_finished();
+    } else {
+        response = Some(
+            timeout(Duration::from_secs(1), peer.output.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+        ended_at_deadline = false;
+    }
+    let calls = source.calls.load(Ordering::SeqCst);
+    let retained = capacity.available_permits();
+    // Release and join even if the original implementation failed the deadline.
+    source.release_and_join();
+    if stalled && !task.is_finished() {
+        task.abort();
+    }
+    drop(peer.input);
+    let _ = task.await;
+    drop(release);
+    assert_eq!(initial["id"], "initial");
+    assert_eq!(initial["error"]["code"], "read_timeout");
+    assert_eq!(
+        received,
+        if overflow { 3 } else { 1 },
+        "record-lane overflow must stop receiving further retries"
+    );
+    assert_eq!(calls, 1, "busy {method} must not enter either source");
+    assert_eq!(
+        retained, 3,
+        "delivery teardown preserves physical ownership"
+    );
+    assert_eq!(
+        capacity.available_permits(),
+        4,
+        "physical join releases capacity"
+    );
+    if stalled {
+        assert!(
+            control_started,
+            "control saturation must include an unfinished physical write"
+        );
+        assert!(
+            peer.output.try_recv().is_err(),
+            "stalled transport wrote no late frame"
+        );
+    } else {
+        let Message::Text(text) = response.unwrap() else {
+            panic!("response expected")
+        };
+        let response: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(response["id"], "busy");
+        assert_eq!(
+            response["error"]["code"], "temporarily_unavailable",
+            "{method}"
+        );
+    }
+    ended_at_deadline
+}
+
+#[tokio::test(start_paused = true)]
+async fn authenticated_slot_busy_passive_refusals_expire_during_control_saturation() {
+    let mut completed = Vec::new();
+    for method in PASSIVE_METHODS {
+        completed.push(slot_busy_passive_refusal(method, true, false).await);
+    }
+    assert_eq!(
+        completed,
+        vec![true; 5],
+        "all five passive refusals must own a deadline after the initial timeout was delivered"
+    );
+}
+#[tokio::test(start_paused = true)]
+async fn authenticated_slot_busy_passive_refusals_deliver_on_ready_transport() {
+    for method in PASSIVE_METHODS {
+        slot_busy_passive_refusal(method, false, false).await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn authenticated_slot_busy_passive_refusal_overflow_stops_admission() {
+    assert!(slot_busy_passive_refusal("conversation.recordsHead", true, true).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn slotless_record_refusal_expires_under_continuously_ready_controls() {
+    let (control_send, controls) = mpsc::channel(4);
+    let (_refusal_send, refusals) = mpsc::channel(1);
+    let (_ordinary_send, ordinary) = mpsc::channel(16);
+    let (record_send, records) = mpsc::channel(1);
+    record_send
+        .send(QueuedRecordResponse::refusal(failure(
+            "busy",
+            "temporarily_unavailable",
+        )))
+        .await
+        .unwrap();
+    let lane = ReadyLane::Control(control_send, Arc::new(Semaphore::new(2)));
+    lane.refill();
+    let ready = Arc::new(Notify::new());
+    let writes = Arc::new(AtomicUsize::new(0));
+    let records_written = Arc::new(AtomicUsize::new(0));
+    let socket = ReadySocket {
+        lane,
+        writes: writes.clone(),
+        records_written: records_written.clone(),
+        ready: ready.clone(),
+    };
+    let (sink, _incoming) = socket.split();
+    let writer = tokio::spawn(write_authenticated(
+        sink,
+        controls,
+        refusals,
+        ordinary,
+        records,
+        Duration::from_secs(60),
+    ));
+    ready.notified().await;
+    assert!(writes.load(Ordering::SeqCst) >= 64);
+    tokio::time::advance(RECORD_SEND_TIMEOUT + Duration::from_millis(1)).await;
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    let ended = writer.is_finished();
+    if !ended {
+        writer.abort();
+    }
+    let _ = writer.await;
+    drop(record_send);
+    assert!(
+        ended,
+        "continuously ready controls must not starve slotless passive refusal expiry"
+    );
+    assert_eq!(records_written.load(Ordering::SeqCst), 0);
 }

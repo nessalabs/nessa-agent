@@ -222,7 +222,7 @@ polls incoming frames, expiry and current authority while the writer awaits
 network readiness. It never awaits a queue slot or write. Keep existing command
 permits and detached command supervision; record reads have their separate four
 permits and one-per-socket slot. Reserve four response slots for admitted controls and sixteen for ordinary
-responses per socket, plus one small refusal slot; a record uses its own slot.
+responses per socket, plus one small generic refusal slot; a record uses its own admission slot. A passive slot-busy refusal needs no admission permit and consumes the existing bounded record delivery lane and its deadline (R62).
 The authenticated receive owner polls periodic authority refresh and one deferred
 input check independently of request completion, writer termination and expiry.
 Each deferred input retains its own fresh check; no periodic result authorizes it.
@@ -235,10 +235,10 @@ read lease: it is released only when both owners finish, including a delivered
 read_timeout whose physical source is still running (R61). No second admission
 ledger is introduced. The four global record permits cover source work and pending delivery together:
 transfer the permit to the encoded response, releasing only after both physical
-work and delivery/drop have ended. Thus at most 512 KiB of encoded record
-responses can be retained globally, apart from bounded codec scratch buffers. Physical response priority is control, refusal, ordinary,
+work and delivery/drop have ended. Thus at most 512 KiB of admitted encoded record
+response payloads can be retained globally, apart from bounded codec scratch buffers and the per-socket refused-delivery positions below. Physical response priority is control, refusal, ordinary,
 then record. The writer observes the record lane independently of that priority,
-retaining at most its existing one-slot response locally. Its original absolute
+retaining at most one pending record-lane response locally. Its original absolute
 30-second encoded-response deadline governs queued delivery as well as physical
 record sending. The writer polls that deadline during selection and during a
 higher-priority send or close, including a record arriving after that write began.
@@ -246,9 +246,10 @@ Expiry abandons the sink and drops delivery ownership; it does not interleave a
 second frame with an unfinished frame or extend the deadline by an ordinary write
 timeout. R46–R48 enforce these orderings. Physical source completion and joins
 retain their existing owner and are not inferred from delivery teardown.
-Bound total queued bytes by per-class slot count times its published response
-ceiling; reserve slots before admission and retain them until write/drop. Refusal
-traffic must not form another unbounded queue: when no refusal slot is available,
+At most one admitted large passive response per socket still owns that physical/admission slot. The record writer can additionally retain up to three small slot-busy refusals across its active send, pending item and one-item channel, with fewer refusals when an admitted response occupies those same positions. Each refusal retains a decoded correlation ID bounded by the existing inbound frame byte guard and fixed temporarily_unavailable error fields. Busy admission precedes dispatch validation, so the valid-ID schema limit is not a retained-memory bound here. Serialization may temporarily expand escaped text before the existing ordinary encoded-response ceiling is checked; the inbound representation bound still makes that allocation finite. No second byte policy or read permit is introduced. Later FIFO deadlines cannot extend retention beyond an earlier response closing the sink.
+Bound admitted queued bytes by per-class slot count times its published response
+ceiling, plus the bounded generic refusal lane and the three record-delivery positions described above using their inbound-derived retained representation bounds. Reserve slots before source admission and retain them until write/drop. Refusal
+traffic must not form another unbounded queue: when the applicable refusal lane is full,
 close the socket while already admitted controls retain their owners.
 
 Thus same-socket Stop can be received, authorized and dispatched during a stalled
@@ -414,6 +415,7 @@ refusals. Amend this table before adding a newly discovered ordering.
 | R59 | The development echo substitute admits its first message, an identical replay, or another message | Initial creation publishes complete_empty with no messages. Admitting a message publishes complete with the corresponding message evidence; an identical replay preserves that complete view and revision, and a distinct message advances both evidence and revision. The scenario port regression reads the actual substitute through each transition; this does not claim a gateway or wire decoding effect. |
 | R60 | A valid passive source finishes while periodic refresh, correlatable malformed input, or ordinary input awaits current authority | The socket polls one periodic refresh and one deferred-input authority check independently of completed requests, writer termination and credential expiry. Each input retains its own fresh check before refusal or command admission; a periodic result is not reused for input authorization. A completed passive response reaches its existing delivery owner while authority is pending, so a ready sink delivers and a stalled sink expires/releases its lease under the original 30-second delivery deadline even with a valid 60-second handshake setting. Enforcers: `successful_read_during_held_authority` and its six `completed_record_*_authority` tests, `held_input_authority_does_not_suspend_credential_expiry`, and `periodic_authority_cannot_authorize_deferred_input` in `tests/product/socket/writer.rs`. Regression crosses all three waits, successful source completion, pending input with no premature effects, ready/stalled sink and owner termination. Later incoming controls can remain behind a deferred input; this row does not promise bypassing that input. |
 | R61 | Record or catalogue source remains physically active after read_timeout delivery; the same socket retries, another socket reads, and the original worker later completes | The existing one-per-socket permit remains in the physical lease as well as delivery ownership. Repeated same-socket attempts refuse temporarily_unavailable without consuming more global permits or invoking another source; another socket can use remaining global capacity. Physical completion and delivery/drop together release the slot, permitting a later read. Disconnect does not release physical ownership. Success still retains delivery ownership until send/drop; authority refusals before source handoff release normally. Enforcers: `record_physical_read_timeout_retains_socket_admission` and `catalogue_physical_read_timeout_retains_socket_admission` in `tests/product/socket/writer.rs`, with real gated threads and explicit joins, plus existing source cancellation/join and writer expiry tests. |
+| R62 | After the initial read_timeout has actually been delivered, its passive source still retains the per-socket slot; a later request for any of the five passive methods is refused while control responses are queued or a control write is stalled | Slot-busy passive refusals enter the existing QueuedRecordResponse owner without a fabricated socket/global permit or physical read lease. The existing absolute delivery deadline applies before physical selection and during a higher-priority write. Ready transport delivers the correlated temporarily_unavailable refusal without another source call; stalled control delivery ends the writer at that refusal deadline while the original physical lease remains retained. The shared record channel has one item, the writer one pending item and one active physical send: at most three small permit-free refusals can coexist, or fewer when an admitted response occupies those positions. Later FIFO deadlines cannot outlive an earlier response closing the sink. Overflow keeps the existing receive-owner teardown; this is not an unlimited queued-retry guarantee. Enforcers: authenticated_slot_busy_passive_refusals_expire_during_control_saturation and authenticated_slot_busy_passive_refusals_deliver_on_ready_transport in tests/product/socket/writer.rs, across all five methods; authenticated_slot_busy_passive_refusal_overflow_stops_admission holds overflow teardown, and slotless_record_refusal_expires_under_continuously_ready_controls holds continuously ready priority. Existing physical cancellation/join tests remain separate evidence. |
 
 
 Explicit receiver reset is a receiver administration operation outside these two

@@ -311,13 +311,34 @@ impl WireResponse {
 
 // The lane owns its lifetime, including ordinary wire refusals of passive reads.
 struct QueuedRecordResponse {
-    response: QueuedResponse,
+    message: WireResponse,
+    _slot: Option<Arc<OwnedSemaphorePermit>>,
+    _record_work: Option<RecordReadLease>,
     deadline: Instant,
 }
 impl QueuedRecordResponse {
     fn new(response: QueuedResponse) -> Self {
+        Self::owned(
+            response.message,
+            Some(response._slot),
+            response._record_work,
+        )
+    }
+
+    // A refused admission owns delivery only, never a fabricated read permit.
+    fn refusal(message: OutgoingMessage) -> Self {
+        Self::owned(WireResponse::ordinary(message), None, None)
+    }
+
+    fn owned(
+        message: WireResponse,
+        slot: Option<Arc<OwnedSemaphorePermit>>,
+        record_work: Option<RecordReadLease>,
+    ) -> Self {
         Self {
-            response,
+            message,
+            _slot: slot,
+            _record_work: record_work,
             deadline: Instant::now() + RECORD_SEND_TIMEOUT,
         }
     }
@@ -345,7 +366,8 @@ async fn write_authenticated<S>(
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin,
 {
     // Moving the record out of its lane observes its original deadline, not a
-    // physical-send priority change. Its slot still bounds queue + local state.
+    // physical-send priority change. The retained-position bound is documented in
+    // docs/design/authorized-record-reads.md, R62.
     let mut pending_record: Option<QueuedRecordResponse> = None;
     loop {
         let deadline = queued_record_deadline(&pending_record);
@@ -583,10 +605,15 @@ where
             &ordinary_slots
         };
         let Ok(slot) = slots.clone().try_acquire_owned() else {
-            if refusal_send
-                .try_send(failure(&frame.id, "temporarily_unavailable"))
-                .is_err()
-            {
+            let response = failure(&frame.id, "temporarily_unavailable");
+            let refused = if record {
+                record_send
+                    .try_send(QueuedRecordResponse::refusal(response))
+                    .is_err()
+            } else {
+                refusal_send.try_send(response).is_err()
+            };
+            if refused {
                 break;
             }
             continue;
@@ -1227,11 +1254,11 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
     socket: &mut S,
     response: QueuedRecordResponse,
 ) -> Result<(), ()> {
-    let QueuedRecordResponse { response, deadline } = response;
-    let QueuedResponse {
+    let QueuedRecordResponse {
         message,
         _slot,
         _record_work,
+        deadline,
     } = response;
     within_deadline(deadline, send_queued(write_timeout, socket, message))
         .await
@@ -2661,14 +2688,14 @@ mod tests {
         let (_release, gate) = tokio::sync::oneshot::channel();
         let (mut stalled, mut stalled_peer) = test_socket(Some(gate));
         let expired = QueuedRecordResponse {
-            response: QueuedResponse {
-                message: WireResponse::record("{}".into()),
-                _slot: Arc::new(Semaphore::new(1))
+            message: WireResponse::record("{}".into()),
+            _slot: Some(
+                Arc::new(Semaphore::new(1))
                     .try_acquire_owned()
                     .unwrap()
                     .into(),
-                _record_work: None,
-            },
+            ),
+            _record_work: None,
             deadline: Instant::now() - Duration::from_millis(1),
         };
         assert!(timeout(
