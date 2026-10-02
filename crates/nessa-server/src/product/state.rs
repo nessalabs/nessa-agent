@@ -6,6 +6,7 @@ use crate::conversation::application::{
     CatalogueReadSource, ConversationRepository, ConversationService, ReceiverAuthority,
     RecordReadSource,
 };
+use crate::mcp_servers::{entrypoint::http::ResourceRoute, infrastructure::ResourceTicketStore};
 use axum::extract::FromRef;
 use nessa_auth::{
     application::{
@@ -63,6 +64,10 @@ pub struct ProductRouteState {
     pub(crate) installs: Arc<Semaphore>,
     pub(crate) agents_catalog: Option<Arc<AgentsListResult>>,
     pub(crate) attachments: Option<AttachmentService>,
+    /// The MCP App resources held behind tickets: issued by the conversation
+    /// service, redeemed at `GET /mcp-resources`. `None` when no MCP server is
+    /// composed, and then that route answers every ticket `404`.
+    pub(crate) resource_tickets: Option<Arc<ResourceTicketStore>>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
     pub(crate) uptime_clock: Arc<dyn crate::app::ports::Clock>,
     pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
@@ -87,6 +92,14 @@ impl FromRef<ProductRouteState> for Arc<SharedAgentReadiness> {
 impl FromRef<ProductRouteState> for UploadRoute {
     fn from_ref(state: &ProductRouteState) -> Self {
         UploadRoute::new(state.attachments.clone())
+    }
+}
+
+/// The resource route is given the ticket store and nothing else, for the
+/// same reason as the upload route: a ticket is all it acts on.
+impl FromRef<ProductRouteState> for ResourceRoute {
+    fn from_ref(state: &ProductRouteState) -> Self {
+        ResourceRoute::new(state.resource_tickets.clone())
     }
 }
 
@@ -143,6 +156,7 @@ impl ProductRouteState {
             agent_installations: None,
             installs: Arc::new(Semaphore::new(1)),
             attachments: None,
+            resource_tickets: None,
             uptime_clock: dependencies.uptime_clock,
             agent_readiness: Arc::new(SharedAgentReadiness::new(dependencies.agent_probe)),
         }
@@ -211,6 +225,14 @@ impl ProductRouteState {
     /// the route that redeems them. Composed only alongside conversations.
     pub fn with_attachments(mut self, service: AttachmentService) -> Self {
         self.attachments = Some(service);
+        self
+    }
+
+    /// Share one resource ticket store between the conversation service that
+    /// issues tickets and the route that redeems them. Composed only with MCP
+    /// servers.
+    pub fn with_resource_tickets(mut self, tickets: Arc<ResourceTicketStore>) -> Self {
+        self.resource_tickets = Some(tickets);
         self
     }
 

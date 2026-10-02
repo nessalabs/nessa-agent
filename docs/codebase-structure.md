@@ -609,12 +609,15 @@ cancellation, `stand_in` for what a harness sees, `servers` for the open
 sessions and their tool lists, `process` for a server's process group, `wire`
 for MCP's JSON), tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
-gateway's `src/mcp_servers/` owns the stand-in rules and the session token
-(`domain`), the relay socket, the `mcp-relay` command, the grants that tie
-each stand-in to its conversation, and the view's tool UI lookup
-(`infrastructure`); `composition/mcp_servers.rs` replaces each configured
-server with its stand-in, and gives the agents the grants, before any agent
-is built. The SDK's ACP binding holds a provider open's grant
+gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
+the resource ticket (`domain`), the relay socket, the `mcp-relay` command, the
+grants that tie each stand-in to its conversation, the store an MCP App's
+resources wait in behind their tickets, and the view's tool UI lookup
+(`infrastructure`), and `GET /mcp-resources`, where a ticket is redeemed
+(`entrypoint`); `composition/mcp_servers.rs` replaces each configured server
+with its stand-in, gives the agents the grants, and builds the ticket store,
+before any agent is built. `PUT /attachments` and `GET /mcp-resources` share
+one origin rule, CORS and preflight (`server/entrypoint/origin.rs`). The SDK's ACP binding holds a provider open's grant
 (`acp/sessions/stand_ins.rs`) and puts its environment in every MCP server
 entry. The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the

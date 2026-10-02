@@ -3380,4 +3380,5 @@ mod tests {
     }
     include!("../../tests/attachments/gateway.rs");
     include!("../../tests/agent_install/gateway.rs");
+    include!("../../tests/mcp_servers/gateway.rs");
 }

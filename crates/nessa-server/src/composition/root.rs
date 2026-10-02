@@ -250,6 +250,13 @@ impl CompositionRoot {
         #[cfg(unix)]
         let mcp_servers = mcp.map(|mcp| {
             tokio::spawn(mcp.relay.listen(mcp.listener));
+            // Ends by itself once the last holder of the store lets go of it.
+            tokio::spawn(
+                crate::mcp_servers::infrastructure::ResourceTicketStore::sweep_periodically(
+                    std::sync::Arc::downgrade(&mcp.resource_tickets),
+                    super::mcp_servers::RESOURCE_TICKET_SWEEP,
+                ),
+            );
             mcp.servers
         });
         #[cfg(not(unix))]
