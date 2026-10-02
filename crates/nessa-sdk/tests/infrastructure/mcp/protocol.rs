@@ -53,13 +53,25 @@ async fn the_handshake_declares_the_mcp_apps_extension_and_lists_the_tools() {
     assert_eq!(tools[1].ui(), None);
     // Kept for the view: the call names `show_chart`, which has a UI.
     let call = McpTool::new("fixture", "show_chart").unwrap();
-    assert_eq!(servers.tool_ui(&call).unwrap().resource_uri(), &chart());
     assert_eq!(
-        servers.tool_ui(&McpTool::new("fixture", "report").unwrap()),
+        servers
+            .tool_ui(&super::conversation(), &call)
+            .unwrap()
+            .resource_uri(),
+        &chart()
+    );
+    assert_eq!(
+        servers.tool_ui(
+            &super::conversation(),
+            &McpTool::new("fixture", "report").unwrap()
+        ),
         None
     );
     assert_eq!(
-        servers.tool_ui(&McpTool::new("other", "show_chart").unwrap()),
+        servers.tool_ui(
+            &super::conversation(),
+            &McpTool::new("other", "show_chart").unwrap()
+        ),
         None
     );
 }
@@ -72,7 +84,7 @@ async fn an_unsupported_version_or_a_refused_initialize_is_a_handshake_failure()
             ..Behaviour::default()
         });
         assert!(matches!(
-            servers.open("fixture").await,
+            servers.open("fixture", super::owner()).await,
             Err(McpError::Handshake(_))
         ));
         // Its process is stopped: the fixture sees its input close.
@@ -84,7 +96,10 @@ async fn an_unsupported_version_or_a_refused_initialize_is_a_handshake_failure()
             version: Some(version),
             ..Behaviour::default()
         });
-        assert!(servers.open("fixture").await.is_ok(), "{version}");
+        assert!(
+            servers.open("fixture", super::owner()).await.is_ok(),
+            "{version}"
+        );
     }
 }
 
@@ -298,7 +313,7 @@ async fn a_server_error_answer_is_remote() {
         })
     );
     assert!(matches!(
-        servers.open("absent").await,
+        servers.open("absent", super::owner()).await,
         Err(McpError::NotConfigured)
     ));
 }
@@ -407,21 +422,25 @@ async fn a_changed_tool_list_is_read_again() {
     let (session, servers, launcher, _) = session(Behaviour::default()).await;
     session.list_tools().await.unwrap();
     let call = McpTool::new("fixture", "later").unwrap();
-    assert_eq!(servers.tool_ui(&call), None);
+    assert_eq!(servers.tool_ui(&super::conversation(), &call), None);
     let server = launcher.server(0);
     server.set_pages(vec![vec![
         json!({ "name": "later", "_meta": { "ui": { "resourceUri": "ui://fixture/later" } } }),
     ]]);
     server.send(json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" }));
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while servers.tool_ui(&call).is_none() {
+        while servers.tool_ui(&super::conversation(), &call).is_none() {
             tokio::task::yield_now().await;
         }
     })
     .await
     .expect("the changed list is read");
     assert_eq!(
-        servers.tool_ui(&call).unwrap().resource_uri().as_str(),
+        servers
+            .tool_ui(&super::conversation(), &call)
+            .unwrap()
+            .resource_uri()
+            .as_str(),
         "ui://fixture/later"
     );
     // A notice about another list is not a reason to list tools.

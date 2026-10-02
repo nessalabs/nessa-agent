@@ -940,7 +940,7 @@ impl AgentProvider for Provider {
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move {
-            let (restore, _control) = request.into_parts();
+            let (_, restore, _control) = request.into_parts();
             self.factory.open_calls.fetch_add(1, Ordering::SeqCst);
             self.factory.opening.notify_one();
             let gate = self.factory.open_gate.lock().unwrap().take();

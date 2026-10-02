@@ -893,8 +893,10 @@ session of its own — the server process and the one connection to it — lists
 its tools with their MCP Apps `_meta.ui`, reads `ui://` resources, and
 forwards the harness's calls over that connection until the stand-in ends, so
 an agent and its app share one upstream session and no two conversations
-share one. The conversation view fills `ConversationTool.mcp.resourceUri` from
-the open sessions' lists when they agree. Design and state tables:
+share one. Each session belongs to the conversation its harness was opened
+for, by a token the gateway issues for that open and revokes when it ends,
+carried in the stand-in's environment. The conversation view fills
+`ConversationTool.mcp.resourceUri` from the conversation's own session's list. Design and state tables:
 [mcp-connections](design/mcp-connections.md).
 The shell tool coordinates an injected Shepherd runner and private process audit
 through its application ports. See the [MCP server](../crates/nessa-mcp/README.md).

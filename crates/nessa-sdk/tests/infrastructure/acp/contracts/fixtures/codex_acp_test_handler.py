@@ -111,7 +111,12 @@ for line in sys.stdin:
         # into /private, so comparing the strings would fail everywhere the
         # workspace is correct but spelled the other way.
         assert pathlib.Path(params["cwd"]).resolve() == root
-        assert params["mcpServers"] == []
+        # In `stand-ins` mode, the MCP server entries each session request
+        # carried, by method, for the test to read back; otherwise none.
+        if mode == "stand-ins":
+            (root / ("mcp-servers-" + method.split("/")[1])).write_text(json.dumps(params["mcpServers"]))
+        else:
+            assert params["mcpServers"] == []
         if method == "session/resume":
             session = params["sessionId"]
             # Named so a test can tell a resumed session from a second new one:

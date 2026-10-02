@@ -10,6 +10,9 @@ pub const RELAY_SUBCOMMAND: &str = "mcp-relay";
 /// exits non-zero, so the harness sees its server fail to start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StandInRefusal {
+    /// Its session token was never issued, or its grant has been revoked: it
+    /// belongs to no open conversation.
+    UnknownSession,
     /// No server is configured under the name it gave.
     UnknownServer,
     /// The server under that name is configured differently now than when the

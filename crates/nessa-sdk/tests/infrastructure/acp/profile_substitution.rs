@@ -51,7 +51,7 @@ use tokio::{sync::oneshot, time::timeout};
 fn no_startup_control() -> ProviderOpenControl {
     ProviderOpenRequest::without_startup_control(None)
         .into_parts()
-        .1
+        .2
 }
 
 #[derive(Default)]
@@ -254,8 +254,7 @@ async fn a_non_claude_profile_uses_shared_sessions_permissions_and_transport() {
             reject_session: false,
         },
         Arc::new(RecordingAudit::default()),
-        None,
-        no_startup_control(),
+        ProviderOpenRequest::without_startup_control(None),
     )
     .await
     .unwrap();
@@ -352,6 +351,137 @@ async fn a_non_claude_profile_uses_shared_sessions_permissions_and_transport() {
         .is_none());
 }
 
+/// Grants that count how many are held, and record the sessions asked for.
+#[derive(Default)]
+struct CountedGrants {
+    asked: std::sync::Mutex<Vec<crate::domain::agent_execution::sessions::SessionId>>,
+    held: Arc<std::sync::atomic::AtomicUsize>,
+}
+struct Released(Arc<std::sync::atomic::AtomicUsize>);
+impl Drop for Released {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+impl super::super::sessions::StandInGrants for CountedGrants {
+    fn grant(
+        &self,
+        session: &crate::domain::agent_execution::sessions::SessionId,
+    ) -> super::super::sessions::StandInGrant {
+        self.asked.lock().unwrap().push(session.clone());
+        self.held.fetch_add(1, Ordering::SeqCst);
+        super::super::sessions::StandInGrant::new(
+            vec![("NESSA_MCP_SESSION".into(), "token".into())],
+            Box::new(Released(self.held.clone())),
+        )
+    }
+}
+
+#[tokio::test]
+async fn an_open_holds_its_sessions_grant_until_the_provider_session_ends() {
+    use crate::domain::agent_execution::sessions::SessionId;
+    let (_root, mut config, capabilities) = profile_setup();
+    let grants = Arc::new(CountedGrants::default());
+    config.stand_ins = super::super::sessions::StandInSessions::granted_by(grants.clone());
+    let open = |session: Option<SessionId>, reject_startup: bool| {
+        let process_config = config.clone();
+        let process = Arc::new(move || {
+            let mut command = tokio::process::Command::new(process_config.executable.executable());
+            command
+                .args(&process_config.arguments)
+                .env_clear()
+                .envs(&process_config.environment)
+                .envs(&process_config.credential_environment)
+                .current_dir(&process_config.workspace);
+            ProcessScope::spawn(command).map_err(Into::into)
+        });
+        binding::open(
+            process,
+            config.clone(),
+            capabilities.clone(),
+            TestAcpProfile {
+                reject_startup,
+                reject_session: false,
+            },
+            Arc::new(RecordingAudit::default()),
+            match session {
+                Some(session) => ProviderOpenRequest::new(session, None, no_startup_control()),
+                None => ProviderOpenRequest::without_startup_control(None),
+            },
+        )
+    };
+    let opened = open(Some(SessionId::new("conversation").unwrap()), false)
+        .await
+        .unwrap();
+    // One grant, for the session opened, held while it lives.
+    assert_eq!(
+        *grants.asked.lock().unwrap(),
+        [SessionId::new("conversation").unwrap()]
+    );
+    assert_eq!(grants.held.load(Ordering::SeqCst), 1);
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(
+            ActionContext::new("tester", "test", "close").unwrap(),
+        ))
+        .await
+        .into_result()
+        .unwrap();
+    // Shut down, but still held by its handles: not revoked early.
+    assert_eq!(grants.held.load(Ordering::SeqCst), 1);
+    drop(opened);
+    assert_eq!(
+        grants.held.load(Ordering::SeqCst),
+        0,
+        "revoked once it ends"
+    );
+    // An open that fails is revoked with it.
+    assert!(open(Some(SessionId::new("failed").unwrap()), true)
+        .await
+        .is_err());
+    assert_eq!(grants.asked.lock().unwrap().len(), 2);
+    assert_eq!(grants.held.load(Ordering::SeqCst), 0);
+    // An open naming no SDK session is granted nothing.
+    let unnamed = open(None, false).await.unwrap();
+    assert_eq!(grants.asked.lock().unwrap().len(), 2);
+    assert_eq!(grants.held.load(Ordering::SeqCst), 0);
+    drop(unnamed);
+}
+
+#[test]
+fn every_mcp_server_entry_carries_the_opens_environment() {
+    use super::super::sessions::{StandInSessions, StdioMcpServer};
+    use crate::domain::agent_execution::sessions::SessionId;
+    let (_root, mut config, _) = profile_setup();
+    config.tools_enabled = true;
+    config.mcp_servers = ["a", "b"]
+        .into_iter()
+        .map(|name| StdioMcpServer {
+            name: name.into(),
+            command: "/bin/server".into(),
+            args: vec!["--x".into()],
+        })
+        .collect();
+    // No grants: an empty environment.
+    assert!(config
+        .mcp_server_entries()
+        .iter()
+        .all(|entry| entry["env"] == json!([])));
+    let grants = Arc::new(CountedGrants::default());
+    let (opened, _grant) =
+        StandInSessions::granted_by(grants).opened(Some(&SessionId::new("conversation").unwrap()));
+    config.stand_ins = opened;
+    let entries = config.mcp_server_entries();
+    assert_eq!(entries.len(), 2);
+    for (entry, name) in entries.iter().zip(["a", "b"]) {
+        assert_eq!(
+            entry,
+            &json!({ "name": name, "command": "/bin/server", "args": ["--x"],
+                     "env": [{ "name": "NESSA_MCP_SESSION", "value": "token" }] })
+        );
+    }
+}
+
 pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabilities) {
     let root = tempfile::tempdir().unwrap();
     let text = ModalitiesDto {
@@ -395,6 +525,7 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         workspace: root.path().to_owned(),
         tools_enabled: true,
         mcp_servers: Vec::new(),
+        stand_ins: crate::infrastructure::acp::sessions::StandInSessions::none(),
         permissions: PermissionOfferPolicy::once_only(),
         launch_timeout: Duration::from_secs(10),
         startup_timeout: Duration::from_secs(10),
@@ -440,8 +571,7 @@ async fn failed_pre_spawn_admission_transfers_exact_release_retry_ownership() {
             reject_session: false,
         },
         Arc::new(RecordingAudit::default()),
-        None,
-        no_startup_control(),
+        ProviderOpenRequest::without_startup_control(None),
     )
     .await
     {
@@ -490,8 +620,7 @@ async fn pre_generation_admission_failure_never_fabricates_cleanup_ownership() {
             reject_session: false,
         },
         Arc::new(RecordingAudit::default()),
-        None,
-        no_startup_control(),
+        ProviderOpenRequest::without_startup_control(None),
     )
     .await
     {
@@ -517,8 +646,7 @@ async fn failed_startup_retains_real_process_until_explicit_cleanup_retry() {
             reject_session: false,
         },
         Arc::new(RecordingAudit::default()),
-        None,
-        no_startup_control(),
+        ProviderOpenRequest::without_startup_control(None),
     )
     .await;
     let error = match result {
@@ -563,8 +691,7 @@ async fn live_close_recovers_real_scope_and_preserves_failed_audit_evidence() {
             reject_session: false,
         },
         Arc::new(RejectAudit),
-        None,
-        no_startup_control(),
+        ProviderOpenRequest::without_startup_control(None),
     )
     .await
     .unwrap();
@@ -703,8 +830,7 @@ async fn failed_restoration_cleanup_is_confirmed_before_a_later_generation_start
             reject_session: false,
         },
         Arc::new(RecordingAudit::default()),
-        None,
-        no_startup_control(),
+        ProviderOpenRequest::without_startup_control(None),
     )
     .await
     .unwrap();
@@ -749,8 +875,7 @@ async fn close_retries_the_failed_restoration_instead_of_the_old_generation() {
             reject_session: false,
         },
         Arc::new(RecordingAudit::default()),
-        None,
-        no_startup_control(),
+        ProviderOpenRequest::without_startup_control(None),
     )
     .await
     .unwrap();
@@ -788,8 +913,7 @@ async fn close_during_restoration_cleanup_keeps_the_current_owner_and_cause() {
             reject_session: false,
         },
         Arc::new(RecordingAudit::default()),
-        None,
-        no_startup_control(),
+        ProviderOpenRequest::without_startup_control(None),
     )
     .await
     .unwrap();
@@ -886,8 +1010,7 @@ async fn dropping_a_failed_restoration_keeps_its_directory_until_confirmed_clean
             reject_session: false,
         },
         Arc::new(RecordingAudit::default()),
-        None,
-        no_startup_control(),
+        ProviderOpenRequest::without_startup_control(None),
     )
     .await
     .unwrap();
@@ -929,8 +1052,7 @@ async fn failed_spawn_with_a_retained_resource_returns_retryable_cleanup() {
             reject_session: false,
         },
         Arc::new(RecordingAudit::default()),
-        None,
-        no_startup_control(),
+        ProviderOpenRequest::without_startup_control(None),
     )
     .await
     {
@@ -1011,8 +1133,7 @@ async fn known_startup_context_retains_audit_and_cleanup_failures_until_retry() 
                 reject_session: true,
             },
             audit.clone(),
-            None,
-            no_startup_control(),
+            ProviderOpenRequest::without_startup_control(None),
         )
         .await
         .err()
@@ -1197,8 +1318,7 @@ async fn losing_open_wait_before_readiness_preserves_handle_loss_cause_and_clean
                     capabilities,
                     profile,
                     opening_audit,
-                    None,
-                    no_startup_control(),
+                    ProviderOpenRequest::without_startup_control(None),
                 )
                 .await
             });
@@ -1270,8 +1390,7 @@ async fn dropping_failed_open_recovery_still_confirms_process_cleanup() {
             reject_session: false,
         },
         Arc::new(RecordingAudit::default()),
-        None,
-        no_startup_control(),
+        ProviderOpenRequest::without_startup_control(None),
     )
     .await
     .err()
@@ -1329,8 +1448,7 @@ async fn a_profile_with_nothing_to_configure_still_has_its_session_held_to_the_f
             modes: modes.clone(),
         },
         Arc::new(RecordingAudit::default()),
-        None,
-        no_startup_control(),
+        ProviderOpenRequest::without_startup_control(None),
     )
     .await
     .unwrap();

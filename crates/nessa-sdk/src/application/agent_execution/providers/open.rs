@@ -2,7 +2,7 @@
 
 use super::{CleanupFuture, CleanupReport, OpenedProviderSession, SessionCloseRequest};
 use crate::application::agent_execution::agents::AgentError;
-use crate::domain::agent_execution::sessions::ExecutionSessionId;
+use crate::domain::agent_execution::sessions::{ExecutionSessionId, SessionId};
 use std::{error::Error, fmt, future::Future, pin::Pin, sync::Arc};
 use tokio::sync::watch;
 
@@ -12,12 +12,21 @@ use tokio::sync::watch;
 /// asks the provider to finish through its existing cleanup owner; it never
 /// transfers resource ownership to this value or permits abandoning the future.
 pub struct ProviderOpenRequest {
+    session: Option<SessionId>,
     restore: Option<ExecutionSessionId>,
     control: ProviderOpenControl,
 }
 impl ProviderOpenRequest {
-    pub(crate) fn new(restore: Option<ExecutionSessionId>, control: ProviderOpenControl) -> Self {
-        Self { restore, control }
+    pub(crate) fn new(
+        session: SessionId,
+        restore: Option<ExecutionSessionId>,
+        control: ProviderOpenControl,
+    ) -> Self {
+        Self {
+            session: Some(session),
+            restore,
+            control,
+        }
     }
 
     /// Construct a direct adapter request without lifecycle startup control.
@@ -25,22 +34,31 @@ impl ProviderOpenRequest {
     /// This is for callers that own the provider operation directly rather than
     /// through [`Agent`](crate::application::agent_execution::agents::Agent).
     /// It exposes no stop sender; [`ProviderOpenControl::wait`] returns `None`
-    /// and the provider continues its normally bounded open operation.
+    /// and the provider continues its normally bounded open operation. It
+    /// names no SDK session, so nothing keyed by one is granted for it.
     pub fn without_startup_control(restore: Option<ExecutionSessionId>) -> Self {
         let (sender, receiver) = watch::channel(None);
         drop(sender);
         Self {
+            session: None,
             restore,
             control: ProviderOpenControl::new(receiver),
         }
     }
 
-    /// Split the requested restoration identity from startup stop observation.
+    /// Split the request into the SDK session it opens for (when it names
+    /// one), the requested restoration identity, and startup stop observation.
     ///
     /// Providers must keep polling their open operation after a stop is observed
     /// and return its actual cleanup result through [`ProviderOpenError`].
-    pub fn into_parts(self) -> (Option<ExecutionSessionId>, ProviderOpenControl) {
-        (self.restore, self.control)
+    pub fn into_parts(
+        self,
+    ) -> (
+        Option<SessionId>,
+        Option<ExecutionSessionId>,
+        ProviderOpenControl,
+    ) {
+        (self.session, self.restore, self.control)
     }
 }
 
@@ -257,7 +275,9 @@ mod tests {
 
     #[tokio::test]
     async fn no_control_sender_disables_wait_without_inventing_a_cause() {
-        let (_, mut control) = ProviderOpenRequest::without_startup_control(None).into_parts();
+        let (session, _, mut control) =
+            ProviderOpenRequest::without_startup_control(None).into_parts();
+        assert_eq!(session, None);
         assert_eq!(control.requested(), None);
         assert_eq!(control.wait().await, None);
     }

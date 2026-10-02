@@ -152,6 +152,84 @@ async fn execute_reopens_the_same_context_and_revives_an_exhausted_event_reader(
     }
 }
 
+/// Grants that count how often they are asked for, and how many are held.
+#[derive(Default)]
+struct CountedGrants {
+    asked: std::sync::atomic::AtomicUsize,
+    held: Arc<std::sync::atomic::AtomicUsize>,
+}
+struct Held(Arc<std::sync::atomic::AtomicUsize>);
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+impl crate::infrastructure::acp::sessions::StandInGrants for CountedGrants {
+    fn grant(
+        &self,
+        _: &crate::domain::agent_execution::sessions::SessionId,
+    ) -> crate::infrastructure::acp::sessions::StandInGrant {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.asked.fetch_add(1, SeqCst);
+        self.held.fetch_add(1, SeqCst);
+        crate::infrastructure::acp::sessions::StandInGrant::new(
+            vec![("NESSA_MCP_SESSION".into(), "token".into())],
+            Box::new(Held(self.held.clone())),
+        )
+    }
+}
+
+#[tokio::test]
+async fn a_relaunch_inside_one_provider_session_keeps_its_grant() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let _process_slot = process_test_slot().await;
+    let (root, mut config, model) = test_acp_configuration("resume-context", 16);
+    let grants = Arc::new(CountedGrants::default());
+    config.stand_ins =
+        crate::infrastructure::acp::sessions::StandInSessions::granted_by(grants.clone());
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    let (_, _, control) = ProviderOpenRequest::without_startup_control(None).into_parts();
+    let request = ProviderOpenRequest::new(
+        crate::domain::agent_execution::sessions::SessionId::new("conversation").unwrap(),
+        None,
+        control,
+    );
+    let opened = binding.open(request).await.unwrap();
+    // Its process ends; the next execution relaunches it in the same
+    // provider session, with the same grant.
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+    assert_eq!(
+        opened.session.execute(prompt("again")).await.into_result(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    let launches: Vec<u32> =
+        serde_json::from_str(&std::fs::read_to_string(root.path().join("launches")).unwrap())
+            .unwrap();
+    assert_eq!(launches.len(), 2, "relaunched");
+    assert_eq!(grants.asked.load(SeqCst), 1, "asked for once");
+    assert_eq!(grants.held.load(SeqCst), 1, "held throughout");
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    drop(opened);
+    assert_eq!(grants.held.load(SeqCst), 0);
+}
+
 #[tokio::test]
 async fn restore_failures_never_create_a_replacement_conversation() {
     let _process_slot = process_test_slot().await;

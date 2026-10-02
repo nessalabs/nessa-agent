@@ -102,6 +102,8 @@ pub(super) fn configure(
             catalog: catalog.clone(),
             workspace: data.join(relative_workspace),
             mcp_servers: vec![],
+            #[cfg(unix)]
+            stand_ins: Default::default(),
             selected: None,
             runtimes: HashMap::new(),
         });

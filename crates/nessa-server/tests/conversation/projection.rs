@@ -1392,14 +1392,30 @@ fn retained_projection_uses_shared_bounds_status_and_injected_revision() {
 }
 
 /// The tools a server listed, as the view's lookup sees them: `charts`'
-/// `show` has whatever UI the test sets, nothing else has any.
-struct ListedUis(Mutex<Option<String>>);
+/// `show` has whatever UI the test sets in the conversation's own session,
+/// nothing else has any, and no other conversation's session has it.
+struct ListedUis {
+    /// The conversation whose session lists it, as its SDK session is named.
+    conversation: String,
+    uri: Mutex<Option<String>>,
+}
+impl ListedUis {
+    fn of(conversation: &str, uri: Option<String>) -> Self {
+        Self {
+            conversation: conversation.into(),
+            uri: Mutex::new(uri),
+        }
+    }
+}
 impl McpToolUis for ListedUis {
-    fn resource_uri(&self, call: &McpTool) -> Option<UiResourceUri> {
+    fn resource_uri(&self, session: &SessionId, call: &McpTool) -> Option<UiResourceUri> {
+        if session.as_str() != self.conversation {
+            return None;
+        }
         if (call.server(), call.tool()) != ("charts", "show") {
             return None;
         }
-        self.0
+        self.uri
             .lock()
             .unwrap()
             .as_ref()
@@ -1416,7 +1432,7 @@ fn mcp_event(id: &str, server: &str, tool: &str) -> ExecutionEvent {
 
 #[test]
 fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
-    let listed = Arc::new(ListedUis(Mutex::new(None)));
+    let listed = Arc::new(ListedUis::of("conversation", None));
     let mut projection = projection().with_tool_uis(listed.clone());
     let snapshot = completed_snapshot(
         "execution",
@@ -1448,7 +1464,7 @@ fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
     );
 
     // Listed later: the same projection's next read has it, under a new revision.
-    *listed.0.lock().unwrap() = Some("ui://charts/show.html".into());
+    *listed.uri.lock().unwrap() = Some("ui://charts/show.html".into());
     let known = projection.read();
     let mcp = known.tools[0].mcp.as_ref().unwrap();
     assert_eq!(mcp.resource_uri.as_deref(), Some("ui://charts/show.html"));
@@ -1479,10 +1495,10 @@ fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
         Some("ui://charts/show.html")
     );
     let replaced_revision = projection.read().revision;
-    *listed.0.lock().unwrap() = Some("ui://charts/other.html".into());
+    *listed.uri.lock().unwrap() = Some("ui://charts/other.html".into());
     let changed_revision = projection.read().revision;
     assert_ne!(changed_revision, replaced_revision);
-    *listed.0.lock().unwrap() = None;
+    *listed.uri.lock().unwrap() = None;
     let removed = projection.read();
     assert_ne!(removed.revision, changed_revision);
     assert_eq!(removed.tools[0].mcp.as_ref().unwrap().resource_uri, None);
@@ -1506,7 +1522,7 @@ fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
 #[test]
 fn committed_mcp_ui_enrichment_remains_inside_the_complete_view_budget() {
     let uri = format!("ui://{}", "a".repeat(2043));
-    let listed = Arc::new(ListedUis(Mutex::new(Some(uri.clone()))));
+    let listed = Arc::new(ListedUis::of("conversation", Some(uri.clone())));
     let events = (0..16)
         .map(|index| {
             event(ExecutionUpdate::Tool(
@@ -1598,7 +1614,11 @@ async fn service_committed_and_cold_pending_mode_views_preserve_cached_mcp_ui() 
             .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
         ));
     let audit = Arc::new(RecordingModeAudit::default());
-    let listed = Arc::new(ListedUis(Mutex::new(Some("ui://charts/show.html".into()))));
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let listed = Arc::new(ListedUis::of(
+        &id.to_string(),
+        Some("ui://charts/show.html".into()),
+    ));
     let service = service_with_cached_tool_uis(
         storage.clone(),
         repository.clone(),
@@ -1606,7 +1626,6 @@ async fn service_committed_and_cold_pending_mode_views_preserve_cached_mcp_ui() 
         audit.clone(),
         listed.clone(),
     );
-    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     service
         .create(
             id.clone(),

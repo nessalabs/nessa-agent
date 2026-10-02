@@ -609,10 +609,14 @@ cancellation, `stand_in` for what a harness sees, `servers` for the open
 sessions and their tool lists, `process` for a server's process group, `wire`
 for MCP's JSON), tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
-gateway's `src/mcp_servers/` owns the stand-in rules (`domain`), the relay
-socket and the `mcp-relay` command, and the view's tool UI lookup
+gateway's `src/mcp_servers/` owns the stand-in rules and the session token
+(`domain`), the relay socket, the `mcp-relay` command, the grants that tie
+each stand-in to its conversation, and the view's tool UI lookup
 (`infrastructure`); `composition/mcp_servers.rs` replaces each configured
-server with its stand-in before any agent is built. The desktop's
+server with its stand-in, and gives the agents the grants, before any agent
+is built. The SDK's ACP binding holds a provider open's grant
+(`acp/sessions/stand_ins.rs`) and puts its environment in every MCP server
+entry. The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
 transcript's `widget` part.
 

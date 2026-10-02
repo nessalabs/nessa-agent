@@ -9,7 +9,7 @@ use super::super::{
     },
     profile::AcpProfile,
 };
-use super::{cleanup::ProcessCleanup, AcpConfig};
+use super::{cleanup::ProcessCleanup, AcpConfig, StandInGrant};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionEvent, ExecutionRequest, PermissionAuthoritySource,
@@ -24,7 +24,7 @@ use crate::application::agent_execution::providers::{
     CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, FailedOpenCauseSource,
     FailedOpenCleanup, ImageInputRefusal, ObservationFailure, ObservationFailureCause,
     OpenedProviderSession, ProviderCleanup, ProviderExecutionFuture, ProviderExecutionReply,
-    ProviderObservationFuture, ProviderOpenControl, ProviderOpenError,
+    ProviderObservationFuture, ProviderOpenControl, ProviderOpenError, ProviderOpenRequest,
     ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
     ProviderOperationResult, ProviderSession, ProviderSessionBackend, ProviderSessionState,
     ResourceCleanup, SessionCloseRequest, SteeringOutcome,
@@ -58,13 +58,21 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     capabilities: EffectiveCapabilities,
     profile: P,
     audit: Arc<dyn ExecutionAudit>,
-    restore: Option<ExecutionSessionId>,
-    mut open_control: ProviderOpenControl,
+    request: ProviderOpenRequest,
 ) -> Result<OpenedProviderSession, ProviderOpenError> {
+    let (session, restore, mut open_control) = request.into_parts();
     config.validate().map_err(|cause| {
         // Validation runs before allocation and returns only Configuration/Unsupported.
         ProviderOpenError::no_resources(cause)
     })?;
+    // This open's grant, held by the factory for as long as the provider
+    // session lives — through every restart of its process — so each of its
+    // MCP server processes gets the same environment, revoked once it ends.
+    let (stand_ins, stand_in_grant) = config.stand_ins.opened(session.as_ref());
+    let config = AcpConfig {
+        stand_ins,
+        ..config
+    };
     let (operation_capabilities, _) = watch::channel(ProviderOperationCapabilities::default());
     let factory = WorkerFactory {
         event_budget: EventQueueBudget::new(),
@@ -77,6 +85,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         audit,
         permission_sequence: Arc::new(AtomicU64::new(0)),
         question_sequence: Arc::new(AtomicU64::new(0)),
+        _stand_in_grant: stand_in_grant,
     };
     let (mut generation, initial_events) = factory.start(restore)?;
     let (ready, stop_selected) = generation.ready_during_open(&mut open_control).await;
@@ -151,6 +160,9 @@ struct WorkerFactory<P> {
     /// are: they outlive any one provider request, including across restarts
     /// of the worker that holds them.
     question_sequence: Arc<AtomicU64>,
+    /// The host's grant for this open, revoked when the factory — and so the
+    /// provider session — is dropped.
+    _stand_in_grant: Option<StandInGrant>,
 }
 impl<P: AcpProfile + Clone> WorkerFactory<P> {
     fn start(

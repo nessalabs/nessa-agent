@@ -1,9 +1,12 @@
 //! `nessa mcp-relay SOCKET SERVER CONFIGURATION`: the stand-in a harness
 //! runs in place of a configured MCP server. It says hello on the relay
-//! socket and then copies bytes: its stdin to the gateway, the gateway's
+//! socket — with the session token its harness gave it in its environment
+//! ([`SESSION_VARIABLE`]) — and then copies bytes: its stdin to the gateway, the gateway's
 //! answers to its stdout. Its stdout is the MCP stream and nothing else;
 //! diagnostics go to stderr.
 use super::relay::{read_line, write_line, Answer, Hello, Refusal, ANSWER_TIMEOUT};
+#[cfg(unix)]
+use crate::mcp_servers::domain::SESSION_VARIABLE;
 use std::fmt;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
@@ -43,10 +46,13 @@ pub async fn run(
     let connection = tokio::net::UnixStream::connect(socket)
         .await
         .map_err(|_| RelayFailure::Unreachable)?;
+    // None is said as empty, which no grant matches.
+    let session = std::env::var(SESSION_VARIABLE).unwrap_or_default();
     relay(
         connection,
         server,
         configuration,
+        &session,
         tokio::io::stdin(),
         tokio::io::stdout(),
     )
@@ -60,6 +66,7 @@ pub async fn relay(
     connection: impl AsyncRead + AsyncWrite + Unpin,
     server: &str,
     configuration: &str,
+    session: &str,
     mut input: impl AsyncRead + Unpin,
     mut output: impl AsyncWrite + Unpin,
 ) -> Result<(), RelayFailure> {
@@ -68,6 +75,7 @@ pub async fn relay(
     let hello = Hello {
         server: server.into(),
         configuration: configuration.into(),
+        session: session.into(),
     };
     write_line(&mut to_gateway, &hello)
         .await
