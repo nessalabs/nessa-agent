@@ -72,6 +72,7 @@
 //! Deletes of one conversation, and summary writes of one conversation, are
 //! serialized per conversation (`ConversationLocks`), and a delete that waits
 //! behind another attempt answers from its tombstone without one of its own.
+mod app_reviews;
 mod catalogue;
 mod catalogue_read;
 mod error;
