@@ -12,9 +12,10 @@
  * entries and the React type redirects its source needs (`sharedPackages`),
  * and nothing else. `scripts/check-architecture.mjs` fails when any entry is
  * missing, points elsewhere, or is not one of those, or when `baseUrl` or
- * `extends` would move them (`tsconfigPathViolations`); the test "the
- * repository's tsconfig.json is exactly what the writer makes of it" holds
- * the file byte for byte, line endings aside. An alias of the app's own
+ * `extends` would move them, or the file is not a plain JSON object
+ * (`tsconfigTextViolations`); the test "the repository's tsconfig.json is
+ * exactly what the writer makes of it" holds the file byte for byte. An alias
+ * of the app's own
  * would be a new decision: it is added here, or this module stops owning
  * `paths` whole.
  *
@@ -56,16 +57,20 @@ export const nessaUiPaths = [
 /**
  * The packages the app and the design system's source must share one copy of.
  * The vendored checkout carries its own, so Vite and Vitest `dedupe` them, and
- * `tsconfig.json`'s `paths` points each at this app's `@types/<name>`:
- * without that TypeScript reads React's types twice — once for the app, once
- * for the design system's source — and the two do not assign to each other
- * (155 errors when removed).
+ * `tsconfig.json`'s `paths` points each, and every subpath of it
+ * (`react/jsx-runtime`, which every TSX file imports), at this app's
+ * `@types/<name>`: without that TypeScript reads React's types twice — once
+ * for the app, once for the design system's source — and the two do not
+ * assign to each other (155 errors when the bare names are removed).
  */
 export const sharedPackages = ["react", "react-dom"]
 
-/** `tsconfig.json`'s redirect of each shared package to this app's types. */
+/** `tsconfig.json`'s redirect of each shared package, and its subpaths, to this app's types. */
 const sharedTypes = Object.fromEntries(
-  sharedPackages.map((name) => [name, [`./node_modules/@types/${name}`]]),
+  sharedPackages.flatMap((name) => [
+    [name, [`./node_modules/@types/${name}`]],
+    [`${name}/*`, [`./node_modules/@types/${name}/*`]],
+  ]),
 )
 
 /**
@@ -91,7 +96,7 @@ const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
  *
  * @param {string} sourceRoot
  * @param {readonly NessaUiPath[]} [paths]
- * @returns {{ find: string | RegExp, replacement: string }[]}
+ * @returns {{ find: RegExp, replacement: string }[]}
  */
 export function viteAliases(sourceRoot, paths = nessaUiPaths) {
   return mostSpecificFirst(paths).map(({ specifier, directory, whole }) => ({
@@ -157,14 +162,41 @@ export function tsconfigPathViolations(actual, paths = nessaUiPaths) {
   return violations
 }
 
-const notPlainJson = (error) =>
-  `tsconfig.json is not plain JSON (${error.message}); scripts/nessa-ui-paths.mjs reads and writes it with JSON, so keep it free of comments and trailing commas`
+const isObject = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+
+const plainJson =
+  "scripts/nessa-ui-paths.mjs reads and writes it with JSON, so keep it a JSON object free of comments and trailing commas"
+
+/**
+ * `tsconfig.json`'s text read as the object the table writes into, with the
+ * byte-order mark it began with, if any (TypeScript accepts one) — or a
+ * sentence saying why it cannot be: not JSON, not an object, or a
+ * `compilerOptions` that is not one.
+ *
+ * @param {string} text
+ * @returns {{ tsconfig: Record<string, unknown>, bom: string } | { problem: string }}
+ */
+function readTsconfig(text) {
+  const bom = text.startsWith("\uFEFF") ? "\uFEFF" : ""
+  let tsconfig
+  try {
+    tsconfig = JSON.parse(text.slice(bom.length))
+  } catch (error) {
+    return { problem: `tsconfig.json is not plain JSON (${error.message}); ${plainJson}` }
+  }
+  if (!isObject(tsconfig))
+    return { problem: `tsconfig.json is not a JSON object; ${plainJson}` }
+  if (Object.hasOwn(tsconfig, "compilerOptions") && !isObject(tsconfig.compilerOptions))
+    return { problem: `tsconfig.json's compilerOptions is not an object; ${plainJson}` }
+  return { tsconfig, bom }
+}
 
 /**
  * `tsconfigPathViolations` for `tsconfig.json`'s text, and the two settings
  * that would move what it holds: `baseUrl` re-roots every path, and `extends`
- * can bring one in. A file that is not plain JSON — the check reads it with
- * `JSON.parse`, having no parser for comments or trailing commas — is
+ * can bring one in. Text that is not a plain JSON object — the check reads it
+ * with `JSON.parse`, having no parser for comments or trailing commas — is
  * reported as such rather than thrown.
  *
  * @param {string} text
@@ -172,51 +204,38 @@ const notPlainJson = (error) =>
  * @returns {string[]}
  */
 export function tsconfigTextViolations(text, paths = nessaUiPaths) {
-  let tsconfig
-  try {
-    tsconfig = JSON.parse(text)
-  } catch (error) {
-    return [notPlainJson(error)]
-  }
+  const read = readTsconfig(text)
+  if ("problem" in read) return [read.problem]
+  const { tsconfig } = read
+  const options = isObject(tsconfig.compilerOptions) ? tsconfig.compilerOptions : {}
   const moved = []
-  if (
-    tsconfig !== null &&
-    typeof tsconfig === "object" &&
-    Object.hasOwn(tsconfig, "extends")
-  )
+  if (Object.hasOwn(tsconfig, "extends"))
     moved.push(
       "tsconfig.json has `extends`, which can bring in a baseUrl or paths that scripts/nessa-ui-paths.mjs does not write; the paths it writes are relative to tsconfig.json alone",
     )
-  const options = tsconfig?.compilerOptions
-  if (
-    options !== null &&
-    typeof options === "object" &&
-    Object.hasOwn(options, "baseUrl")
-  )
+  if (Object.hasOwn(options, "baseUrl"))
     moved.push(
       "tsconfig.json has `baseUrl`, which re-roots every path scripts/nessa-ui-paths.mjs writes; they are relative to tsconfig.json",
     )
-  return [...moved, ...tsconfigPathViolations(options?.paths, paths)]
+  return [...moved, ...tsconfigPathViolations(options.paths, paths)]
 }
 
 /**
  * `tsconfig.json`'s text with its `paths` written from the table and the rest
- * kept as it was, formatted as `JSON.stringify` with two spaces, in the line
- * endings the text already had. Throws a sentence, not a parser's error, when
- * the text is not plain JSON.
+ * kept as it was, formatted as `JSON.stringify` with two spaces: CRLF line
+ * endings if the text had any, LF otherwise, and its byte-order mark if it
+ * had one. Throws a sentence, not a parser's error, when the text is not a
+ * plain JSON object.
  *
  * @param {string} text
  * @param {readonly NessaUiPath[]} [paths]
  * @returns {string}
  */
 export function withTsconfigPaths(text, paths = nessaUiPaths) {
-  let tsconfig
-  try {
-    tsconfig = JSON.parse(text)
-  } catch (error) {
-    throw new Error(notPlainJson(error))
-  }
+  const read = readTsconfig(text)
+  if ("problem" in read) throw new Error(read.problem)
+  const { tsconfig, bom } = read
   tsconfig.compilerOptions = { ...tsconfig.compilerOptions, paths: tsconfigPaths(paths) }
   const eol = text.includes("\r\n") ? "\r\n" : "\n"
-  return `${JSON.stringify(tsconfig, null, 2)}\n`.replaceAll("\n", eol)
+  return bom + `${JSON.stringify(tsconfig, null, 2)}\n`.replaceAll("\n", eol)
 }

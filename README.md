@@ -514,8 +514,9 @@ every launch pays for.
 Types come from the package's source as well (`tsconfig.json`'s `paths`). Its
 source would pull in the copy of React's types under its own `node_modules`, and
 two copies make identical types nominally incompatible, so those `paths` also
-point `react` and `react-dom` at this app's `@types` — the same shared packages
-Vite and Vitest `dedupe` (`sharedPackages` in `scripts/nessa-ui-paths.mjs`).
+point `react` and `react-dom`, and their subpaths such as `react/jsx-runtime`,
+at this app's `@types` — the same shared packages Vite and Vitest `dedupe`
+(`sharedPackages` in `scripts/nessa-ui-paths.mjs`).
 `noUnusedLocals` is off because consuming the design system as source puts its
 files in this program, and its dead locals are not this app's to fix.
 

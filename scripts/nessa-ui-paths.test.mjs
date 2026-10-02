@@ -1,6 +1,16 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { readFileSync } from "node:fs"
+import {
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 
 import {
@@ -16,18 +26,15 @@ import {
 /** Each shared package's types, as `tsconfig.json` points at them. */
 const sharedTypes = {
   react: ["./node_modules/@types/react"],
+  "react/*": ["./node_modules/@types/react/*"],
   "react-dom": ["./node_modules/@types/react-dom"],
+  "react-dom/*": ["./node_modules/@types/react-dom/*"],
 }
 
-/** Where Vite's aliases send `specifier`: the first that matches, as Vite applies them. */
+/** Where Vite's aliases send `specifier`: the first RegExp that matches, applied with String.replace as Vite does. */
 function resolveWith(aliases, specifier) {
   for (const { find, replacement } of aliases) {
-    if (typeof find === "string") {
-      if (specifier === find || specifier.startsWith(`${find}/`))
-        return replacement + specifier.slice(find.length)
-    } else if (find.test(specifier)) {
-      return specifier.replace(find, replacement)
-    }
+    if (find.test(specifier)) return specifier.replace(find, replacement)
   }
   return null
 }
@@ -206,8 +213,11 @@ test("tsconfig.json that is not plain JSON is reported, not thrown", () => {
   )
 })
 
-test("the shared packages are the ones whose types tsconfig redirects", () => {
-  assert.deepEqual(sharedPackages, Object.keys(sharedTypes))
+test("each shared package, and every subpath of it, is redirected to this app's types", () => {
+  assert.deepEqual(
+    sharedPackages.flatMap((name) => [name, `${name}/*`]),
+    Object.keys(sharedTypes),
+  )
   for (const [name, targets] of Object.entries(sharedTypes))
     assert.deepEqual(tsconfigPaths()[name], targets)
 })
@@ -247,14 +257,79 @@ test("the writer refuses text that is not plain JSON with a sentence", () => {
   )
 })
 
-test("pnpm ui:paths leaves the repository's tsconfig.json as it is", () => {
-  const file = new URL("../tsconfig.json", import.meta.url)
-  const before = readFileSync(file, "utf8")
-  const run = spawnSync(
-    process.execPath,
-    [new URL("./write-nessa-ui-paths.mjs", import.meta.url).pathname],
-    { encoding: "utf8" },
+/** A copy of the writer, its table and tsconfig.json in a fresh directory whose name has a space. */
+function scratchCheckout() {
+  const root = mkdtempSync(join(tmpdir(), "nessa ui paths "))
+  const here = (name) => fileURLToPath(new URL(name, import.meta.url))
+  cpSync(here("./nessa-ui-paths.mjs"), join(root, "scripts", "nessa-ui-paths.mjs"))
+  cpSync(
+    here("./write-nessa-ui-paths.mjs"),
+    join(root, "scripts", "write-nessa-ui-paths.mjs"),
   )
-  assert.equal(run.status, 0, run.stderr)
-  assert.equal(readFileSync(file, "utf8"), before)
+  cpSync(here("../tsconfig.json"), join(root, "tsconfig.json"))
+  const run = () =>
+    spawnSync(process.execPath, [join(root, "scripts", "write-nessa-ui-paths.mjs")], {
+      encoding: "utf8",
+      cwd: tmpdir(),
+    })
+  return { root, tsconfig: join(root, "tsconfig.json"), run }
+}
+
+test("the writer, run anywhere, repairs a drifted tsconfig.json and touches a current one not at all", () => {
+  const { root, tsconfig, run } = scratchCheckout()
+  try {
+    const current = readFileSync(tsconfig, "utf8")
+    const drifted = JSON.parse(current)
+    drifted.compilerOptions.paths["@ui/*"] = ["./elsewhere/*"]
+    writeFileSync(tsconfig, JSON.stringify(drifted, null, 2) + "\n")
+    const repaired = run()
+    assert.equal(repaired.status, 0, repaired.stderr)
+    assert.equal(readFileSync(tsconfig, "utf8"), current)
+
+    const written = statSync(tsconfig).mtimeMs
+    const again = run()
+    assert.equal(again.status, 0, again.stderr)
+    assert.equal(statSync(tsconfig).mtimeMs, written)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("the writer refuses a tsconfig.json it cannot use with a sentence, and leaves it as it was", () => {
+  const { root, tsconfig, run } = scratchCheckout()
+  try {
+    for (const text of [
+      "{ // a comment\n}\n",
+      '{ "compilerOptions": "ab" }\n',
+      "[]\n",
+      "null\n",
+    ]) {
+      writeFileSync(tsconfig, text)
+      const refused = run()
+      assert.equal(refused.status, 1, text)
+      assert.match(refused.stderr, /^tsconfig\.json('s compilerOptions)? is not /, text)
+      assert.equal(readFileSync(tsconfig, "utf8"), text)
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a tsconfig.json that is not an object, or whose compilerOptions is not one, is reported as such", () => {
+  assert.match(tsconfigTextViolations("[]").join(""), /is not a JSON object/)
+  assert.match(tsconfigTextViolations("null").join(""), /is not a JSON object/)
+  assert.match(
+    tsconfigTextViolations('{ "compilerOptions": [1, 2] }').join(""),
+    /compilerOptions is not an object/,
+  )
+  assert.throws(
+    () => withTsconfigPaths('{ "compilerOptions": "ab" }'),
+    /compilerOptions is not an object/,
+  )
+})
+
+test("a byte-order mark is accepted, and kept", () => {
+  const text = "\uFEFF" + withTsconfigPaths("{}")
+  assert.deepEqual(tsconfigTextViolations(text), [])
+  assert.equal(withTsconfigPaths(text), text)
 })
