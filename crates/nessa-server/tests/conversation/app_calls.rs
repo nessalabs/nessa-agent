@@ -572,11 +572,16 @@ async fn calls_running_are_bounded_across_callers_until_each_task_ends() {
     for caller in callers {
         let _ = caller.await;
     }
-    // Every caller went; every call is still running, and still counted.
-    assert!(matches!(
-        fixture.call_tool(fixture.call("read_rows", None)).await,
-        Err(ConversationError::Unavailable)
-    ));
+    // Every caller went; every call is still running, and still counted. A
+    // bound that let it in would hold it on the server: a deadline, so that
+    // fails rather than hangs.
+    let again = tokio::time::timeout(
+        Duration::from_secs(5),
+        fixture.call_tool(fixture.call("read_rows", None)),
+    )
+    .await
+    .expect("refused at once, not admitted and held");
+    assert!(matches!(again, Err(ConversationError::Unavailable)));
     fixture.apps.hold.store(false, Ordering::SeqCst);
     fixture.apps.gate.0.add_permits(1);
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -639,4 +644,33 @@ async fn a_ticket_whose_issue_cannot_be_recorded_is_discarded_and_never_handed_o
         fixture.tickets.discarded.lock().unwrap().clone(),
         ["t".repeat(43)]
     );
+}
+
+#[tokio::test]
+async fn a_view_holding_an_app_review_has_a_revision_of_its_own() {
+    // A window holding a revision holds what that revision showed: a review
+    // opening or ending changes it, though nothing in the transcript did.
+    let fixture = Fixture::new().await;
+    let revision = || async {
+        fixture
+            .service
+            .read(fixture.id.clone(), caller("read"))
+            .await
+            .unwrap()
+            .revision
+    };
+    let before = revision().await;
+    let (task, review) = fixture.held(fixture.call("delete_rows", None)).await;
+    let during = revision().await;
+    assert_ne!(during, before);
+    assert_eq!(
+        revision().await,
+        during,
+        "the same reviews, the same revision"
+    );
+    fixture.answer(&review, DENY).await;
+    let _ = task.await;
+    let after = revision().await;
+    assert_ne!(after, during);
+    assert_eq!(after, before);
 }

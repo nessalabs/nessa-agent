@@ -188,3 +188,7 @@ fn remote_message(message: &str) -> String {
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "../../tests/product/mcp_apps.rs"]
+mod tests;
