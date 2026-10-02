@@ -564,6 +564,11 @@ against the pin. A stale or missing `.vendor` then fails with one message naming
 "@nessa-ui/react": "link:.vendor/nessa_ui/packages/react"
 ```
 
+The app imports the package's source, not its build: a component by
+`@nessa-ui/react/<component>`, and a registry library the package's entry does
+not export, such as the shared size observer, by `@nessa-ui/react/lib/<name>`.
+`tsconfig.json`, `vite.config.ts` and `vitest.config.ts` each map them.
+
 The composer requires the shared Markdown AST extension and on-demand math/diagram
 renderers in the pinned UI revision. To reconcile a managed clone with that pin:
 

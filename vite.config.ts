@@ -164,6 +164,9 @@ export default defineConfig({
         find: "@nessa-ui/react/app-shell",
         replacement: `${nessaUi}/composites/app-shell`,
       },
+      // The registry libraries, such as the shared size observer, which the
+      // package's entry does not export.
+      { find: /^@nessa-ui\/react\/lib\//, replacement: `${nessaUi}/lib/` },
       { find: /^@nessa-ui\/react\//, replacement: `${nessaUi}/components/` },
       // The package's own internal alias. Scoped to the three prefixes it
       // actually uses rather than a bare `@`, which would also capture any

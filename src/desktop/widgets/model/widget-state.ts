@@ -50,7 +50,7 @@ export interface HostContext {
   readonly theme: "light" | "dark"
   /** The window's language, as the browser names it: `en-US`. */
   readonly locale: string
-  /** The place's size in CSS pixels; `null` until it is laid out. */
+  /** The place's content box in whole CSS pixels; `null` until it is laid out. */
   readonly size: { readonly width: number; readonly height: number } | null
   /** What of the place the window's own chrome covers, in CSS pixels. */
   readonly safeArea: {

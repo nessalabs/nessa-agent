@@ -32,7 +32,7 @@ function PlaceSize({ context }: { context: WidgetViewProps["context"] }) {
       className="sample-size"
       data-sample-size={size ? `${size.width}x${size.height}` : ""}
     >
-      {size ? `${Math.round(size.width)} × ${Math.round(size.height)}` : "Not laid out"}
+      {size ? `${size.width} × ${size.height}` : "Not laid out"}
     </output>
   )
 }

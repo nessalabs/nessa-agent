@@ -23,6 +23,13 @@ export default defineConfig({
   resolve: {
     dedupe: ["react", "react-dom"],
     alias: [
+      // The registry libraries, such as the shared size observer, which the
+      // package's entry does not export. Before the components' rule, which
+      // would otherwise claim them.
+      {
+        find: /^@nessa-ui\/react\/lib\/(.*)$/,
+        replacement: resolve("node_modules/@nessa-ui/react/src/lib/$1"),
+      },
       // One rule rather than a list of subpaths added as each test needed one.
       // The list is why "a component that imports the design system cannot be
       // tested" was believed: the ninth subpath was simply missing, and the

@@ -341,10 +341,10 @@ scripts drive the sample plugin the sample workspace registers
   drag-over-window`.
 - [ ] **A view is told its place's size**, as the place changes: a card grown
   by its content alone and by a font, a pane after a window resize and a
-  split, the window after a resize — the size in its host context within a
-  pixel of the place's content box. _ADR 326 › The contract_ (the host
-  context). _Check:_ `widgets.mjs --only host-size`; it fails when the
-  observer stops after its first report.
+  split, the window after a resize — the size in its host context in whole
+  pixels, within a pixel of the place's content box. _ADR 326 › The
+  contract_ (the host context). _Check:_ `widgets.mjs --only host-size`; it
+  fails when the observer stops after its first report.
 - [ ] **A widget pane's chrome fits a narrow pane in a short window**, and the
   window's at the same size: no header overflow, the trail and close inside
   it, the body with room. _Check:_ `widgets.mjs --only narrow-short` (1000 ×
