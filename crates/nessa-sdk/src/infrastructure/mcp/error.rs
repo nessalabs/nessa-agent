@@ -38,6 +38,9 @@ pub enum McpError {
     Busy,
     /// The MCP client is shutting down.
     Stopped,
+    /// The SDK session (a conversation's) has no open session of that
+    /// server: its harness has not started one, or it ended.
+    NoSession,
     /// The session was closed: its harness session ended, it was closed, or
     /// the grant it was opened under was revoked — which is also what an
     /// opening under a revoked grant is refused with.
@@ -64,6 +67,7 @@ impl fmt::Display for McpError {
             }
             Self::Busy => f.write_str("too many requests are waiting on the MCP server"),
             Self::Stopped => f.write_str("the MCP client is shutting down"),
+            Self::NoSession => f.write_str("there is no open session of that MCP server here"),
             Self::Closed => f.write_str("the MCP session was closed"),
         }
     }

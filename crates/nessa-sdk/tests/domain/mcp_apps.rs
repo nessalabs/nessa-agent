@@ -2,8 +2,8 @@
 //! resource itself. Each bound and each alphabet is tested at its edge.
 use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::mcp_apps::{
-    ListedTool, McpAppError, ToolUi, UiCsp, UiPermissions, UiResource, UiResourceUri, UiVisibility,
-    MAX_CSP_SOURCES, MAX_CSP_SOURCE_BYTES, MAX_UI_HTML_BYTES, MAX_UI_URI_BYTES,
+    ListedTool, McpAppError, ToolHints, ToolUi, UiCsp, UiPermissions, UiResource, UiResourceUri,
+    UiVisibility, MAX_CSP_SOURCES, MAX_CSP_SOURCE_BYTES, MAX_UI_HTML_BYTES, MAX_UI_URI_BYTES,
 };
 
 fn tool(server: &str, name: &str) -> McpTool {
@@ -254,4 +254,31 @@ fn refusals_say_what_was_refused() {
         assert_eq!(error.to_string(), text);
         let _: &dyn std::error::Error = &error;
     }
+}
+
+#[test]
+fn a_tool_is_destructive_unless_it_says_it_only_reads_or_destroys_nothing() {
+    // MCP's defaults: silence is destructive.
+    for (read_only, destructive, expected) in [
+        (None, None, true),
+        (Some(false), None, true),
+        (None, Some(true), true),
+        (Some(false), Some(true), true),
+        (Some(true), None, false),
+        (None, Some(false), false),
+        (Some(true), Some(true), false),
+        (Some(false), Some(false), false),
+    ] {
+        assert_eq!(
+            ToolHints::new(read_only, destructive).destructive(),
+            expected,
+            "readOnlyHint {read_only:?}, destructiveHint {destructive:?}"
+        );
+    }
+    // A tool listed without hints is destructive; with them, as they say.
+    let listed = ListedTool::new(tool("s", "t"), None);
+    assert!(listed.hints().destructive());
+    let reads = listed.with_hints(ToolHints::new(Some(true), None));
+    assert!(!reads.hints().destructive());
+    assert_eq!(reads.tool(), &tool("s", "t"));
 }

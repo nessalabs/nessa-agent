@@ -3,8 +3,8 @@
 use super::McpError;
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{
-    ListedTool, McpAppError, ToolUi, UiCsp, UiPermissions, UiResource, UiResourceUri, UiVisibility,
-    APP_MIME_TYPE, EXTENSION,
+    ListedTool, McpAppError, ToolHints, ToolUi, UiCsp, UiPermissions, UiResource, UiResourceUri,
+    UiVisibility, APP_MIME_TYPE, EXTENSION,
 };
 use base64::Engine;
 use serde_json::{json, Value};
@@ -71,10 +71,10 @@ pub(crate) fn tools_page(server: &str, result: &Value) -> Result<ToolsPage, McpE
         .filter_map(|tool| {
             let name = tool.get("name")?.as_str()?;
             let identity = McpTool::new(server, name).ok()?;
-            Some(ListedTool::new(
-                identity,
-                tool_ui(tool.pointer("/_meta/ui")),
-            ))
+            Some(
+                ListedTool::new(identity, tool_ui(tool.pointer("/_meta/ui")))
+                    .with_hints(tool_hints(tool.get("annotations"))),
+            )
         })
         .collect();
     let hidden = tools
@@ -106,6 +106,17 @@ fn visibility(declared: Option<&Value>) -> Option<UiVisibility> {
         }
         Some(_) => None,
     }
+}
+
+/// A tool's `annotations`: each hint only when it is a boolean; anything else
+/// is as if unsaid, which the rule reads as the riskier answer.
+fn tool_hints(annotations: Option<&Value>) -> ToolHints {
+    let hint = |name: &str| {
+        annotations
+            .and_then(|each| each.get(name))
+            .and_then(Value::as_bool)
+    };
+    ToolHints::new(hint("readOnlyHint"), hint("destructiveHint"))
 }
 
 fn tool_ui(declared: Option<&Value>) -> Option<ToolUi> {

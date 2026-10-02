@@ -9,6 +9,7 @@
 //!     │                                    ├── list_tools / read_ui_resource
 //!     │                                    └── serve(harness pipes) ──▶ stand_in
 //!     ├── tool_ui (an SDK session's own newest session of the server)
+//!     ├── listed_tool / call_tool / read_app_resource (an MCP App's calls, on that session)
 //!     └── revoke (a grant's sessions closed, none opened under it after)
 //!
 //! Connection: framing (bounded newline JSON-RPC) ─ wire (MCP JSON → domain)
@@ -41,8 +42,8 @@ mod wire;
 
 pub use error::McpError;
 pub use servers::{
-    McpOwner, McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT, MAX_TOOLS,
-    MAX_TOOL_PAGES, REQUEST_TIMEOUT,
+    McpOwner, McpServerLaunch, McpServers, McpSession, APP_CALL_TIMEOUT, INITIALIZE_TIMEOUT,
+    MAX_TOOLS, MAX_TOOL_PAGES, REQUEST_TIMEOUT,
 };
 
 #[cfg(all(test, unix))]

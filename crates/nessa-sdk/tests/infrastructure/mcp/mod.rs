@@ -8,6 +8,7 @@
 //! process  -> McpServers -> ProcessLauncher -> fixtures/server.py
 //! ```
 //! Arrows show what each file drives.
+mod apps;
 mod fixture;
 mod process;
 mod protocol;
