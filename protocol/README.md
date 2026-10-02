@@ -88,9 +88,11 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   exactly those bytes. Its answer says what they are (`mimeType`, `size`,
   `sha256`, the app's `csp`, `permissions`, `domain`, `prefersBorder`) and
   gives a `ticket`. The bytes never travel on the socket.
-- **App calls have a lane of their own**, 4 at once per socket. Past that
-  they are refused `temporarily_unavailable`, so held calls never stop
-  `conversation.read` or `conversation.answer`.
+- **App calls have a lane of their own**, 4 at once per socket, and 32
+  running at once on the gateway, each counted until it ends rather than
+  until its socket goes. Past either they are refused
+  `temporarily_unavailable`, so held calls never stop `conversation.read` or
+  `conversation.answer`.
 - **`mcp.releaseApp`** says the host tore one mount of an app down. Each app
   reference carries the host's own `instanceId` for its mount, since one tool
   call can be mounted more than once. The release withdraws that mount's

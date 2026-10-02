@@ -25,8 +25,12 @@ use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions, UiResourceUri};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, OwnedSemaphorePermit};
 use uuid::Uuid;
+
+/// The most MCP App calls running at once, across every caller. Past it a
+/// call is refused `temporarily_unavailable` before anything is asked.
+pub const MAX_APP_CALLS: usize = 32;
 
 /// An app's `mcp.callTool`.
 #[derive(Clone, Debug)]
@@ -71,12 +75,16 @@ impl ConversationService {
         caller: ConversationCaller,
         call: McpAppCall,
     ) -> Result<String, ConversationError> {
+        let running = self.app_call_permit()?;
         // Dropped with this future: the caller went.
         let (_present, gone) = oneshot::channel::<()>();
         let service = self.clone();
-        tokio::spawn(async move { service.app_tool_call(id, caller, call, gone).await })
-            .await
-            .map_err(|_| ConversationError::Unavailable)?
+        tokio::spawn(async move {
+            let _running = running;
+            service.app_tool_call(id, caller, call, gone).await
+        })
+        .await
+        .map_err(|_| ConversationError::Unavailable)?
     }
 
     /// Read the app resource `read.uri` of the app's own server, and hold
@@ -87,10 +95,14 @@ impl ConversationService {
         caller: ConversationCaller,
         read: McpAppRead,
     ) -> Result<McpAppResource, ConversationError> {
+        let running = self.app_call_permit()?;
         let service = self.clone();
-        tokio::spawn(async move { service.app_resource_read(id, caller, read).await })
-            .await
-            .map_err(|_| ConversationError::Unavailable)?
+        tokio::spawn(async move {
+            let _running = running;
+            service.app_resource_read(id, caller, read).await
+        })
+        .await
+        .map_err(|_| ConversationError::Unavailable)?
     }
 
     /// The host tore the mount `app` down: withdraw its open reviews (their
@@ -122,6 +134,15 @@ impl ConversationService {
             ports.tickets.release_app(&id, &app);
         }
         Ok(())
+    }
+
+    /// One of the [`MAX_APP_CALLS`], for a call's task to hold until it ends.
+    fn app_call_permit(&self) -> Result<OwnedSemaphorePermit, ConversationError> {
+        self.inner
+            .app_calls
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| ConversationError::Unavailable)
     }
 
     async fn app_tool_call(
@@ -532,3 +553,7 @@ pub(super) fn with_app_reviews(
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/conversation/app_calls.rs"]
+mod tests;

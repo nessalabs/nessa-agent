@@ -639,20 +639,24 @@ where
             continue;
         };
         let slot = Arc::new(slot);
+        // An app call's capacity across sockets is the conversation
+        // service's, held by the call's own task until it ends: a permit held
+        // here would be let go when the socket went, while the call ran on.
         let capacity = if control {
-            &state.controls
+            Some(&state.controls)
         } else if record {
-            &state.record_reads
+            Some(&state.record_reads)
         } else if app {
-            &state.app_calls
+            None
         } else if frame.method == "conversation.delete" {
-            &state.deletions
+            Some(&state.deletions)
         } else if frame.method == "attachment.begin" {
-            &state.upload_begins
+            Some(&state.upload_begins)
         } else {
-            &state.requests
+            Some(&state.requests)
         };
-        let Ok(permit) = capacity.clone().try_acquire_owned() else {
+        let permit = capacity.map(|capacity| capacity.clone().try_acquire_owned());
+        let Ok(permit) = permit.transpose() else {
             let response = failure(&frame.id, "temporarily_unavailable");
             let queued = QueuedResponse {
                 message: WireResponse::ordinary(response),
@@ -685,7 +689,10 @@ where
                     frame,
                     // The same socket admission survives both response delivery
                     // and physical work, even after a delivered read_timeout (R61).
-                    RecordReadLease::new((permit, slot.clone())),
+                    RecordReadLease::new((
+                        permit.expect("record reads have capacity"),
+                        slot.clone(),
+                    )),
                     read_deadline,
                 )
                 .await;

@@ -483,6 +483,10 @@ struct Inner {
     tool_uis: Arc<dyn McpToolUis>,
     /// What an MCP App's calls go through; `None` with no MCP servers.
     mcp_apps: Option<McpAppPorts>,
+    /// MCP App calls running, across every caller: each holds one of these
+    /// on its own task until that task ends, so a caller that goes and comes
+    /// back cannot leave calls running past the bound.
+    app_calls: Arc<Semaphore>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -725,6 +729,7 @@ impl ConversationService {
                 retries: Arc::new(DeletionRetries::default()),
                 tool_uis,
                 mcp_apps,
+                app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
             }),
         })
     }
