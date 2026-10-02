@@ -251,9 +251,22 @@ writing the full defaults on first launch is buying.
   host context read from the page (`adapters/`); the plugin contract and the
   hosts — the card in a message, a widget's body in a pane or the window
   (`ui/`); and the sample plugin composition registers while the sample
-  workspace is in use (`fixture/`). It knows no plugin and imports no other
-  vertical. The workspace draws the chrome around the hosts and carries out
-  their callbacks with its own commands. The desktop's verticals depend one
+  workspace is in use (`fixture/`). The `app` kind's renderer is its own
+  responsibility under `app/` (#349): reading a frame's messages into typed
+  copies, the CSP built from `_meta.ui.csp`, display modes onto places, the
+  host context and one view's lifecycle (`app/model/`); the `ui/*` bridge
+  and its ports — the server, the tool calls, the conversation, links,
+  downloads, the timers (`app/application/`); the frame transport, the page's
+  style variables, where the sandbox proxy is and its frame's sandbox flags
+  (`app/adapters/dom/`); the proxy itself and the dev server's listener for
+  it (`app/sandbox/`, served
+  in the desktop app by `src-tauri/src/app_sandbox.rs`); the view the hosts
+  draw (`app/ui/`); and a fixture server's app (`app/fixture/`). How an app's
+  widgets are named — `mcp:` and the server, and the call's two identities —
+  is stated once, in `app/model/app-ref.ts`, which the transcript uses. It
+  knows no plugin and imports no other vertical. The workspace draws the
+  chrome around the hosts and carries out their callbacks with its own
+  commands. The desktop's verticals depend one
   way, widgets ← workspace ← subagents ← experiments, each importing only
   those before it; `scripts/architecture/desktop-verticals.mjs` refuses an
   import against that direction, in every form of import it reads, and the
@@ -617,10 +630,27 @@ cancellation, `stand_in` for what a harness sees, `servers` for the open
 sessions and their tool lists, `process` for a server's process group, `wire`
 for MCP's JSON), tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
-gateway's `src/mcp_servers/` owns the stand-in rules (`domain`), the relay
-socket and the `mcp-relay` command, and the view's tool UI lookup
-(`infrastructure`); `composition/mcp_servers.rs` replaces each configured
-server with its stand-in before any agent is built. The desktop's
+gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
+the resource ticket (`domain`), the relay socket, the `mcp-relay` command, the
+grants that tie each stand-in to its conversation, the store an MCP App's
+resources wait in behind their tickets, and the view's tool UI lookup
+(`infrastructure`), and `GET /mcp-resources`, where a ticket is redeemed
+(`entrypoint`); `composition/mcp_servers.rs` replaces each configured server
+with its stand-in, gives the agents the grants, and builds the ticket store,
+before any agent is built. The policy an MCP App's calls are held to is
+`mcp_servers/domain/app_call.rs`, its session port's adapter
+`mcp_servers/infrastructure/apps.rs`; the calls' flow is the conversation
+service's (`conversation/application/service/app_calls.rs`, with the reviews
+in `app_reviews.rs` and the ports in `mcp_apps.rs`), their audit
+`conversation/infrastructure/mcp_app_audit.rs`, and their wire methods
+`product/mcp_apps.rs` ([design](design/mcp-app-calls.md)). `PUT /attachments` and `GET /mcp-resources` share
+one origin rule, CORS and preflight (`server/entrypoint/origin.rs`); in
+`@nessa/client` they share `application/gateway-http.ts` (the origin, the
+deadline clock, and how one request ends), and an app's calls are
+`presentation/mcp-apps-api.ts` over the `McpResourceTransport` port in
+`application/mcp-resource-fetch.ts` and its `fetch` adapter in `transport/`. The SDK's ACP binding holds a provider open's grant
+(`acp/sessions/stand_ins.rs`) and puts its environment in every MCP server
+entry. The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
 transcript's `widget` part.
 

@@ -485,6 +485,8 @@ export interface ConversationPermission {
   options: ConversationPermissionOption[]
   /** Exact reviewed tool name. */
   toolName: string
+  /** Who asked for this review: the agent or an MCP App. */
+  origin: ConversationPermissionOrigin
   /** Exact original JSON input reviewed by the user; never truncated. */
   argumentsJson: string
 }
@@ -776,7 +778,126 @@ export interface ConversationPart {
   /** Opaque provider message identity; only fragments with the same identity may be combined. */
   messageId?: string
 }
-/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. */
+/** Who asked for a review: the conversation's agent (harness), or an MCP App calling a tool of its own server (app). The agent's approval mode never applies to an app's review. */
+export const ConversationPermissionOriginKind = {
+  Harness: "harness",
+  App: "app",
+} as const
+export type ConversationPermissionOriginKind =
+  (typeof ConversationPermissionOriginKind)[keyof typeof ConversationPermissionOriginKind]
+/** Who asked for this review. For harness, the review's executionId and toolId are the agent's tool call being reviewed. For app, they are the app's identity — the tool call whose UI it is, which has normally finished — and server and tool name the tool the app asked to call (required for app, absent for harness). A harness review is shown only while its execution runs; an app review while the app waits on it, whatever its tool call's state. Answer either kind with conversation.answer or conversation.cancel. */
+export interface ConversationPermissionOrigin {
+  /** Who asked. */
+  kind: ConversationPermissionOriginKind
+  /** For app: the app's server, on which the tool would be called. */
+  server?: string
+  /** For app: the tool the app asked to call. */
+  tool?: string
+}
+/** An MCP App, by the tool call whose UI it is, in its conversation. The gateway checks it is an MCP call of the server the request names, and that its result carried a resourceUri. It is not authenticated beyond the caller's credential: the call is recorded as the app's, on the person's behalf. instanceId names which mount of it is asking. */
+export interface McpAppReference {
+  /** The execution the app's tool call belongs to. */
+  executionId: string
+  /** The app's tool call. */
+  toolId: string
+  /** The host's own UUID for this mount of the app. One tool call can be mounted more than once (inline, in a pane) and again after it was torn down; reviews and tickets are kept per mount, and mcp.releaseApp releases only that one. Policy and audit name the app by executionId and toolId. */
+  instanceId: string
+}
+/** The host tore an app's mount down (mcp.releaseApp): every review that mount has open is withdrawn and its waiting call answered mcp_cancelled, and every resource ticket issued to it is released. Releasing a mount with nothing open succeeds too. Answered with ConversationMutationResult. It travels on the control lane, never the app lane, so held calls can never stop an app being released. */
+export interface McpReleaseAppParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The mount torn down. */
+  app: McpAppReference
+}
+/** An MCP App calls a tool of its own server (mcp.callTool). Allowed only for a tool its conversation's own session last listed with visibility including app. A tool that is destructive — readOnlyHint is not true and destructiveHint is not false, so a tool with no annotations is — first waits for the person's approval in the conversation's permissions, whatever the approval mode; the call is answered when they answer, when the review expires (5 minutes), or when it is withdrawn. App calls travel on a lane of their own, 4 at once per socket; past that they are refused temporarily_unavailable. */
+export interface McpCallToolParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app asking. */
+  app: McpAppReference
+  /** The MCP server's configured name: the app's own server. A call naming any other is refused mcp_server_mismatch. */
+  server: string
+  /** The tool to call on that server. */
+  tool: string
+  /** The tool's arguments: one JSON object, encoded, at most 32 KiB, the most a review shows (mcp_request_too_large past it, invalid_request if it is not an object). Absent is none. */
+  argumentsJson?: string
+}
+/** The tool's answer. */
+export interface McpCallToolResult {
+  /** The MCP CallToolResult exactly as the server answered it — content, structuredContent, isError, _meta — encoded as one JSON object, at most 56 KiB (past it, the call is refused mcp_result_too_large instead). isError true is a result for the app, not a refusal. */
+  resultJson: string
+}
+/** An MCP App reads a resource of its own server (mcp.readResource). The gateway reads it once, holds those bytes, and answers what they are and a ticket that serves exactly them over HTTP (GET /mcp-resources, the ticket in the x-nessa-resource-ticket header): the bytes never travel on the socket. App calls share their own lane, as mcp.callTool's. */
+export interface McpReadResourceParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app asking. */
+  app: McpAppReference
+  /** The MCP server's configured name: the app's own server. A call naming any other is refused mcp_server_mismatch. */
+  server: string
+  /** The resource's URI on that server. */
+  uri: string
+}
+/** The CSP the app asked for (_meta.ui.csp): origins only, each list at most 64 of at most 512 bytes. No network when empty. */
+export interface McpUiCsp {
+  /** connect-src origins. */
+  connectDomains: string[]
+  /** Origins for scripts, styles, images, fonts and media. */
+  resourceDomains: string[]
+  /** frame-src origins. */
+  frameDomains: string[]
+  /** base-uri origins. */
+  baseUriDomains: string[]
+}
+/** What the app asked of the host (_meta.ui.permissions). Each is true only when asked for as {} or true; nothing else is ever granted. */
+export interface McpUiPermissions {
+  /** Asked for camera. */
+  camera: boolean
+  /** Asked for microphone. */
+  microphone: boolean
+  /** Asked for geolocation. */
+  geolocation: boolean
+  /** Asked for clipboardWrite. */
+  clipboardWrite: boolean
+}
+/** What the gateway read, and the ticket for its bytes. The host fetches GET /mcp-resources with the ticket in the x-nessa-resource-ticket header — never in a URL — checks the bytes' SHA-256 against sha256 before rendering, and treats a mismatch as a failure to load. */
+export interface McpReadResourceResult {
+  /** The resource read. */
+  uri: string
+  /** An MCP App's HTML; any other resource is refused mcp_app_unknown. */
+  mimeType: "text/html;profile=mcp-app"
+  /** The bytes' length: at most 4 MiB. */
+  size: number
+  /** Lowercase hex SHA-256 of exactly the bytes the ticket serves. */
+  sha256: string
+  /** Single use, 256 random bits (base64url), valid for expiresInMs, bound to the conversation and the app. It is the whole authority to fetch the bytes, as an upload ticket is: keep it out of URLs and logs. */
+  ticket: string
+  /** How long the ticket can be redeemed. */
+  expiresInMs: 60000
+  /** The CSP the app asked for. */
+  csp: McpUiCsp
+  /** What the app asked of the host. */
+  permissions: McpUiPermissions
+  /** The dedicated origin the app asked for, when it did. */
+  domain?: string
+  /** Whether the app asked for a border, when it said. */
+  prefersBorder?: boolean
+}
+/** The server's own JSON-RPC error, attached to a refusal coded mcp_remote_error. */
+export interface McpRemoteErrorDetails {
+  /** The JSON-RPC error code. */
+  code: number
+  /** The server's message, at most 512 characters, control characters as spaces. */
+  message: string
+}
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's call (mcp.callTool, mcp.readResource): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within 5 minutes; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended; mcp_request_too_large and mcp_result_too_large, past the 32 KiB and 56 KiB bounds; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   AgentUnsupported: "agent_unsupported",
@@ -810,6 +931,17 @@ export const ConversationErrorCode = {
   AttachmentCleanupUnavailable: "attachment_cleanup_unavailable",
   ConversationDeleted: "conversation_deleted",
   ConversationErasureIncomplete: "conversation_erasure_incomplete",
+  McpAppUnknown: "mcp_app_unknown",
+  McpServerMismatch: "mcp_server_mismatch",
+  McpToolNotForApp: "mcp_tool_not_for_app",
+  McpSessionUnavailable: "mcp_session_unavailable",
+  McpApprovalDenied: "mcp_approval_denied",
+  McpApprovalExpired: "mcp_approval_expired",
+  McpCancelled: "mcp_cancelled",
+  McpRequestTooLarge: "mcp_request_too_large",
+  McpResultTooLarge: "mcp_result_too_large",
+  McpTimedOut: "mcp_timed_out",
+  McpRemoteError: "mcp_remote_error",
 } as const
 export type ConversationErrorCode =
   (typeof ConversationErrorCode)[keyof typeof ConversationErrorCode]
@@ -1185,7 +1317,7 @@ export const passiveReadTiming = {
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
-  maxReadyMethods: 29,
+  maxReadyMethods: 32,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
@@ -1221,6 +1353,20 @@ export const bounds = {
   maxToolStructuredContentBytes: 16384,
   maxMcpNameBytes: 128,
   maxUiResourceUriBytes: 2048,
+  mcpAppInstanceIdPattern:
+    "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+  maxMcpArgumentsBytes: 32768,
+  maxMcpResultBytes: 57344,
+  maxMcpResourceUriBytes: 2048,
+  mcpAppMimeType: "text/html;profile=mcp-app",
+  maxMcpResourceBytes: 4194304,
+  mcpResourceDigestPattern: "^[0-9a-f]{64}$",
+  mcpResourceTicketPattern: "^[A-Za-z0-9_-]{43}$",
+  mcpResourceTicketMs: 60000,
+  maxMcpCspDomains: 64,
+  maxMcpCspDomainBytes: 512,
+  maxMcpDomainBytes: 512,
+  maxMcpRemoteMessageCharacters: 512,
 } as const
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
@@ -1253,6 +1399,9 @@ export const ProductMethod = {
   ConversationCatalogueHead: "conversation.catalogueHead",
   ConversationCatalogueManifest: "conversation.catalogueManifest",
   ConversationCatalogueResolve: "conversation.catalogueResolve",
+  McpCallTool: "mcp.callTool",
+  McpReadResource: "mcp.readResource",
+  McpReleaseApp: "mcp.releaseApp",
 } as const
 export const ProductEvent = { SessionChallenge: "session.challenge" } as const
 export const ProductHandshakeMethod = "session.authenticate" as const
@@ -1286,6 +1435,9 @@ export const productReadyMethods = [
   "conversation.catalogueHead",
   "conversation.catalogueManifest",
   "conversation.catalogueResolve",
+  "mcp.callTool",
+  "mcp.readResource",
+  "mcp.releaseApp",
 ] as const
 export const catalogueWireSchemas = {
   RecordScope: {

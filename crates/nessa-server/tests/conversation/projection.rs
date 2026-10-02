@@ -62,6 +62,73 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+/// Preparing an empty session commits Opened before provider attachment. This
+/// must not look like absent history, which the frontend may reclaim on tab close.
+#[tokio::test]
+async fn prepared_empty_history_is_complete_before_provider_attachment_in_both_stores() {
+    let directory = tempfile::tempdir().unwrap();
+    let records = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+    records.initialize().await.unwrap();
+    let stores: [Arc<dyn SessionStorage>; 2] = [Arc::new(InMemoryStorage::new()), records];
+    for storage in stores {
+        let provider = Arc::new(ProviderFactory::default());
+        let (release, gate) = oneshot::channel();
+        *provider.open_gate.lock().unwrap() = Some(gate);
+        let service = ConversationService::new(
+            ConversationDependencies {
+                agents: only(Arc::new(Provider::new(provider))),
+                storage,
+                metadata: Arc::new(MemoryRepository::default()),
+                mode_audit: Arc::new(AcceptingModeAudit),
+                creation_audit: Arc::new(AcceptingCreationAudit),
+                file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                attachments: None,
+                summaries: Arc::new(MemorySummaries::default()),
+                listing: Arc::new(Unlisted),
+                deletion_audit: Arc::new(AcceptingDeletionAudit),
+                provider_sessions: ProviderSessionErasers::default(),
+                deletion_budgets: DELETION_BUDGETS,
+                message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+                clock: Arc::new(TestClock),
+            },
+            ConversationLimits::default(),
+            None,
+        )
+        .unwrap();
+        let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+        service
+            .create(
+                id.clone(),
+                caller("create-empty"),
+                RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+        let view = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let view = service
+                    .read(id.clone(), caller("read-empty"))
+                    .await
+                    .unwrap();
+                if view.transcript_state == ConversationTranscriptState::Complete {
+                    break view;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(view.messages.is_empty());
+        assert!(view.pending.is_empty());
+        assert!(matches!(
+            view.lifecycle.phase,
+            ConversationLifecyclePhase::Starting
+        ));
+        release.send(()).unwrap();
+        service.shutdown().await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn gateway_record_view_waits_for_message_commit() {
     struct HeldClock;
@@ -167,8 +234,16 @@ fn said(text: &str) -> UserMessage {
     UserMessage::text_only(PromptText::new(text).unwrap())
 }
 fn projection() -> Projection {
+    projection_for("conversation")
+}
+
+/// A conversation id as the gateway makes them: what an MCP tool's UI is
+/// looked up under (`conversation_session`).
+const MCP_CONVERSATION: &str = "00000000-0000-4000-8000-0000000000aa";
+
+fn projection_for(conversation: &str) -> Projection {
     Projection::new(
-        "conversation".into(),
+        conversation.into(),
         ConversationCapabilities {
             queue: true,
             steer: true,
@@ -1392,14 +1467,34 @@ fn retained_projection_uses_shared_bounds_status_and_injected_revision() {
 }
 
 /// The tools a server listed, as the view's lookup sees them: `charts`'
-/// `show` has whatever UI the test sets, nothing else has any.
-struct ListedUis(Mutex<Option<String>>);
+/// `show` has whatever UI the test sets in the conversation's own session,
+/// nothing else has any, and no other conversation's session has it.
+struct ListedUis {
+    /// The conversation whose session lists it, as its SDK session is named.
+    conversation: String,
+    uri: Mutex<Option<String>>,
+    /// Every session the view asked about.
+    asked: Mutex<Vec<SessionId>>,
+}
+impl ListedUis {
+    fn of(conversation: &str, uri: Option<String>) -> Self {
+        Self {
+            conversation: conversation.into(),
+            uri: Mutex::new(uri),
+            asked: Mutex::default(),
+        }
+    }
+}
 impl McpToolUis for ListedUis {
-    fn resource_uri(&self, call: &McpTool) -> Option<UiResourceUri> {
+    fn resource_uri(&self, session: &SessionId, call: &McpTool) -> Option<UiResourceUri> {
+        self.asked.lock().unwrap().push(session.clone());
+        if session.as_str() != self.conversation {
+            return None;
+        }
         if (call.server(), call.tool()) != ("charts", "show") {
             return None;
         }
-        self.0
+        self.uri
             .lock()
             .unwrap()
             .as_ref()
@@ -1416,8 +1511,8 @@ fn mcp_event(id: &str, server: &str, tool: &str) -> ExecutionEvent {
 
 #[test]
 fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
-    let listed = Arc::new(ListedUis(Mutex::new(None)));
-    let mut projection = projection().with_tool_uis(listed.clone());
+    let listed = Arc::new(ListedUis::of(MCP_CONVERSATION, None));
+    let mut projection = projection_for(MCP_CONVERSATION).with_tool_uis(listed.clone());
     let snapshot = completed_snapshot(
         "execution",
         vec![
@@ -1448,7 +1543,7 @@ fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
     );
 
     // Listed later: the same projection's next read has it, under a new revision.
-    *listed.0.lock().unwrap() = Some("ui://charts/show.html".into());
+    *listed.uri.lock().unwrap() = Some("ui://charts/show.html".into());
     let known = projection.read();
     let mcp = known.tools[0].mcp.as_ref().unwrap();
     assert_eq!(mcp.resource_uri.as_deref(), Some("ui://charts/show.html"));
@@ -1479,10 +1574,10 @@ fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
         Some("ui://charts/show.html")
     );
     let replaced_revision = projection.read().revision;
-    *listed.0.lock().unwrap() = Some("ui://charts/other.html".into());
+    *listed.uri.lock().unwrap() = Some("ui://charts/other.html".into());
     let changed_revision = projection.read().revision;
     assert_ne!(changed_revision, replaced_revision);
-    *listed.0.lock().unwrap() = None;
+    *listed.uri.lock().unwrap() = None;
     let removed = projection.read();
     assert_ne!(removed.revision, changed_revision);
     assert_eq!(removed.tools[0].mcp.as_ref().unwrap().resource_uri, None);
@@ -1506,7 +1601,7 @@ fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
 #[test]
 fn committed_mcp_ui_enrichment_remains_inside_the_complete_view_budget() {
     let uri = format!("ui://{}", "a".repeat(2043));
-    let listed = Arc::new(ListedUis(Mutex::new(Some(uri.clone()))));
+    let listed = Arc::new(ListedUis::of(MCP_CONVERSATION, Some(uri.clone())));
     let events = (0..16)
         .map(|index| {
             event(ExecutionUpdate::Tool(
@@ -1524,7 +1619,7 @@ fn committed_mcp_ui_enrichment_remains_inside_the_complete_view_budget() {
         })
         .collect();
     let snapshot = completed_snapshot("execution", events);
-    let mut projection = projection().with_tool_uis(listed);
+    let mut projection = projection_for(MCP_CONVERSATION).with_tool_uis(listed);
     assert!(projection.replace_committed(
         &committed("incarnation", 1, 1, 1, Some(&snapshot)),
         &[],
@@ -1598,7 +1693,11 @@ async fn service_committed_and_cold_pending_mode_views_preserve_cached_mcp_ui() 
             .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
         ));
     let audit = Arc::new(RecordingModeAudit::default());
-    let listed = Arc::new(ListedUis(Mutex::new(Some("ui://charts/show.html".into()))));
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let listed = Arc::new(ListedUis::of(
+        crate::conversation::application::conversation_session(&id).as_str(),
+        Some("ui://charts/show.html".into()),
+    ));
     let service = service_with_cached_tool_uis(
         storage.clone(),
         repository.clone(),
@@ -1606,7 +1705,6 @@ async fn service_committed_and_cold_pending_mode_views_preserve_cached_mcp_ui() 
         audit.clone(),
         listed.clone(),
     );
-    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     service
         .create(
             id.clone(),
@@ -1664,12 +1762,30 @@ async fn service_committed_and_cold_pending_mode_views_preserve_cached_mcp_ui() 
     // view must therefore use the service's committed, read-only constructor.
     audit.fail_application_once.store(true, Ordering::SeqCst);
     let opens = provider.open_calls.load(Ordering::SeqCst);
-    let cold = service_with_cached_tool_uis(storage, repository, provider.clone(), audit, listed);
+    let cold =
+        service_with_cached_tool_uis(storage, repository, provider.clone(), audit, listed.clone());
     let pending = cold.read(id, caller("pending-ui")).await.unwrap();
     let cold_uri = pending.tools[0].mcp.as_ref().unwrap().resource_uri.clone();
     let later_opens = provider.open_calls.load(Ordering::SeqCst);
     cold.shutdown().await.unwrap();
     assert_eq!(live_uri.as_deref(), Some("ui://charts/show.html"));
+    // The view asks about the very session the agent was opened in — the
+    // one its MCP grants are issued for — and no other.
+    let opened: Vec<_> = provider
+        .opened_sessions
+        .lock()
+        .unwrap()
+        .iter()
+        .flatten()
+        .cloned()
+        .collect();
+    assert!(!opened.is_empty());
+    let asked = listed.asked.lock().unwrap().clone();
+    assert!(!asked.is_empty());
+    assert!(
+        asked.iter().all(|session| opened.contains(session)),
+        "{asked:?} vs {opened:?}"
+    );
     assert_eq!(cold_uri.as_deref(), Some("ui://charts/show.html"));
     assert_eq!(
         later_opens, opens,

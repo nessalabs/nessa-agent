@@ -162,7 +162,14 @@ for line in sys.stdin:
         # Native approval presets own their asks; explicit Nessa denials stay fixed.
         assert "ask" not in options["settings"]["permissions"]
         assert options["settings"]["disableAllHooks"] is True
-        assert options["settings"]["allowedMcpServers"] == []
+        servers = msg["params"]["mcpServers"]
+        # In `stand-ins` mode, the MCP server entries each session request
+        # carried, by method, for the test to read back; otherwise none.
+        if mode == "stand-ins":
+            record("mcp-servers-" + method.split("/")[1], json.dumps(servers))
+        else:
+            assert servers == []
+        assert options["settings"]["allowedMcpServers"] == [{"serverName": server["name"]} for server in servers]
         response = configs("alias" if mode == "wrong-model" else model, approval_mode)
         if mode.startswith("duplicate-session-"):
             response = duplicate_configs(mode.removeprefix("duplicate-session-"))

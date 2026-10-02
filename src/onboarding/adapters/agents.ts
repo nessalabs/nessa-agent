@@ -41,6 +41,13 @@ function readReport(body: unknown): AgentReadinessReport | undefined {
   return report
 }
 
+// The server bounds its machine probe at five seconds; allow the same budget
+// again for transport and JSON delivery. One timer covers the entire request.
+function scheduleReadinessDeadline(elapsed: () => void): () => void {
+  const timer = setTimeout(elapsed, 10_000)
+  return () => clearTimeout(timer)
+}
+
 /**
  * Ask the gateway which agents could actually start here, over HTTP.
  *
@@ -57,36 +64,63 @@ function readReport(body: unknown): AgentReadinessReport | undefined {
  * not running is a thing the person can fix, and saying "not available" about
  * the agent instead hid that from them.
  */
+
 export function httpAgentReadiness({
   baseUrl,
   fetch = globalThis.fetch,
+  scheduleDeadline = scheduleReadinessDeadline,
 }: {
   /** Where the gateway answers, with no trailing slash. "" is this origin. */
   baseUrl: string
   /** Injected for tests; the page's own `fetch` otherwise. */
   fetch?: typeof globalThis.fetch
+  /** Timer seam: schedule the request deadline and return its cancellation. */
+  scheduleDeadline?: (elapsed: () => void) => () => void
 }): AgentReadinessSource {
   const url = `${baseUrl}${AGENTS_PATH}`
   return {
     async read(): Promise<AgentReadinessAnswer> {
-      let response: Response
+      const controller = new AbortController()
+      let settled = false
+      let cancelDeadline: () => void = () => undefined
+      const timedOut = new Promise<AgentReadinessAnswer>((resolve) => {
+        cancelDeadline = scheduleDeadline(() => {
+          if (settled) return
+          // Publish timeout before abort: body rejection is an unreadable
+          // answer, whereas an expired request has no current answer to give.
+          resolve({ ok: false, reason: "unreachable" })
+          controller.abort()
+        })
+      })
+      const reading = (async (): Promise<AgentReadinessAnswer> => {
+        let response: Response
+        try {
+          response = await fetch(url, {
+            headers: { accept: "application/json" },
+            signal: controller.signal,
+          })
+        } catch {
+          return { ok: false, reason: "unreachable" }
+        }
+        if (!response.ok) return { ok: false, reason: "unreachable" }
+        let body: unknown
+        try {
+          body = await response.json()
+        } catch {
+          return { ok: false, reason: "unreadable" }
+        }
+        const agents = readReport(body)
+        if (!agents) return { ok: false, reason: "unreadable" }
+        return { ok: true, agents }
+      })()
       try {
-        response = await fetch(url, { headers: { accept: "application/json" } })
-      } catch {
-        return { ok: false, reason: "unreachable" }
+        // Abort asks a cooperative transport to stop. The race also bounds a
+        // transport or body implementation that fails to settle after abort.
+        return await Promise.race([reading, timedOut])
+      } finally {
+        settled = true
+        cancelDeadline()
       }
-      // A refusal is as good as silence here: the gateway is up but has no
-      // answer to give, and there is nothing for setup to tell apart.
-      if (!response.ok) return { ok: false, reason: "unreachable" }
-      let body: unknown
-      try {
-        body = await response.json()
-      } catch {
-        return { ok: false, reason: "unreadable" }
-      }
-      const agents = readReport(body)
-      if (!agents) return { ok: false, reason: "unreadable" }
-      return { ok: true, agents }
     },
   }
 }

@@ -1,0 +1,67 @@
+//! An MCP App's calls, answered by the SDK's `McpServers` on the
+//! conversation's own session of each server.
+use crate::conversation::application::{McpAppFailure, McpAppFuture, McpApps};
+use nessa_sdk::domain::agent_execution::sessions::SessionId;
+use nessa_sdk::domain::mcp_apps::{ListedTool, UiResource, UiResourceUri};
+use nessa_sdk::infrastructure::mcp::{McpError, McpServers};
+use serde_json::Value;
+
+/// [`McpApps`] over the gateway's MCP sessions.
+pub struct SessionApps(pub McpServers);
+impl McpApps for SessionApps {
+    fn listed_tool(
+        &self,
+        session: &SessionId,
+        server: &str,
+        name: &str,
+    ) -> Result<Option<ListedTool>, McpAppFailure> {
+        self.0.listed_tool(session, server, name).map_err(failure)
+    }
+    fn call_tool<'a>(
+        &'a self,
+        session: &'a SessionId,
+        server: &'a str,
+        name: &'a str,
+        arguments: Option<Value>,
+    ) -> McpAppFuture<'a, Value> {
+        Box::pin(async move {
+            self.0
+                .call_tool(session, server, name, arguments)
+                .await
+                .map_err(failure)
+        })
+    }
+    fn read_resource<'a>(
+        &'a self,
+        session: &'a SessionId,
+        server: &'a str,
+        uri: &'a UiResourceUri,
+    ) -> McpAppFuture<'a, UiResource> {
+        Box::pin(async move {
+            self.0
+                .read_app_resource(session, server, uri)
+                .await
+                .map_err(failure)
+        })
+    }
+}
+
+/// What an app's call is told of the SDK's failure.
+pub(crate) fn failure(error: McpError) -> McpAppFailure {
+    match error {
+        McpError::NoSession | McpError::NotConfigured => McpAppFailure::NoSession,
+        McpError::Timeout => McpAppFailure::TimedOut,
+        McpError::Remote { code, message } => McpAppFailure::Remote { code, message },
+        McpError::TooLarge(_) => McpAppFailure::TooLarge,
+        McpError::NotAnApp => McpAppFailure::NotAnApp,
+        McpError::Malformed(_) | McpError::Handshake(_) => McpAppFailure::Malformed,
+        // Ended, gone, stopped, or too busy to take it: the session cannot
+        // answer this call.
+        McpError::ServerGone
+        | McpError::Closed
+        | McpError::Stopped
+        | McpError::Busy
+        | McpError::Start(_)
+        | McpError::InvalidConfiguration => McpAppFailure::SessionEnded,
+    }
+}

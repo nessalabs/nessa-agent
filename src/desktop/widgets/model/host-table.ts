@@ -2,7 +2,8 @@
  * What a host draws for a widget in each place (ADR 326's table), and what
  * its chrome calls it. The one statement of that table: every host — the
  * inline card, the widget pane's body, the window — asks it, and draws the
- * answer.
+ * answer. A ready app's view has rows of its own beneath it
+ * (`app/model/app-view.ts`), which keep this table's rule for close.
  *
  * Nothing here retries or pretends to be live (gates 7 and 16): a source
  * that reads again answers `useWidget` again, and the table is asked again.
@@ -28,14 +29,18 @@ export const hostLines = {
   unshowable: "Can't show this here",
 } as const
 
+/** Whether a line drawn in `place` offers close: a place with chrome of its own does, a card in a message does not. */
+export function closesIn(place: WidgetPlace): boolean {
+  return place !== "inline"
+}
+
 /** What a host in `place` draws for `answer`, given the places its plugin offers. */
 export function hostDraws(
   place: WidgetPlace,
   answer: WidgetAnswer,
   offered: OfferedPlaces,
 ): HostDraws {
-  // A place with chrome of its own closes; a card in a message does not.
-  const closes = place !== "inline"
+  const closes = closesIn(place)
   if (!answer.registered) return { kind: "line", text: hostLines.unshowable, closes }
   const { state } = answer
   switch (state.kind) {

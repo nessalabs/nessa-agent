@@ -6,6 +6,8 @@ import { defineConfig, searchForWorkspaceRoot } from "vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
+import { sharedPackages, viteAliases } from "./scripts/nessa-ui-paths.mjs"
+import { appSandbox } from "./src/desktop/widgets/app/sandbox/serve"
 import { gatewayOrigin, parseStage } from "./src/env/gateway-ports"
 import { loadEnvironment } from "./src/env/environment"
 
@@ -71,6 +73,15 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    // The MCP Apps sandbox proxy's own origin, beside the dev server.
+    appSandbox(
+      readFileSync(
+        resolve(
+          dirname(fileURLToPath(import.meta.url)),
+          "src/desktop/widgets/app/sandbox/proxy.html",
+        ),
+      ),
+    ),
     {
       name: "nessa-bundle-stage",
       apply: "build",
@@ -159,23 +170,13 @@ export default defineConfig({
     fs: { allow: [searchForWorkspaceRoot(process.cwd()), dirname(nessaUi)] },
   },
   resolve: {
-    alias: [
-      {
-        find: "@nessa-ui/react/app-shell",
-        replacement: `${nessaUi}/composites/app-shell`,
-      },
-      { find: /^@nessa-ui\/react\//, replacement: `${nessaUi}/components/` },
-      // The package's own internal alias. Scoped to the three prefixes it
-      // actually uses rather than a bare `@`, which would also capture any
-      // `@/…` this app later writes for itself.
-      { find: /^@\/components\//, replacement: `${nessaUi}/components/` },
-      { find: /^@\/lib\//, replacement: `${nessaUi}/lib/` },
-      { find: /^@\/provider\//, replacement: `${nessaUi}/provider/` },
-    ],
+    // The design system's import paths, from the one table
+    // (`scripts/nessa-ui-paths.mjs`), against its source's real path.
+    alias: viteAliases(nessaUi),
     // The linked checkout carries its own React in devDependencies. Without
     // deduping, the app and the library each load a copy and every hook in the
     // library throws.
-    dedupe: ["react", "react-dom"],
+    dedupe: [...sharedPackages],
   },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: {

@@ -17,6 +17,7 @@ export async function launch(engine, options) {
   const type = engines[engine]
   if (!type) throw new CannotRun(`unknown engine ${engine} (chromium or webkit)`)
   const launchOptions = { headless: !options.headed }
+  if (options.env) launchOptions.env = options.env
   if (engine === "chromium") {
     if (options.channel && options.channel !== "bundled")
       launchOptions.channel = options.channel

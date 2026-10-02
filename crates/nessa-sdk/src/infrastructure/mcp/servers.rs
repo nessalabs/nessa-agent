@@ -2,13 +2,14 @@ use super::connection::Connection;
 use super::process::{Launched, Launcher, ProcessLauncher, ServerProcess};
 use super::stand_in::{self, Visibility};
 use super::{wire, McpError};
+use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri};
 use crate::infrastructure::acp::sessions::StdioMcpServer;
 use crate::infrastructure::clock::{within, Clock};
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     ffi::OsString,
     path::PathBuf,
     sync::{Arc, Mutex, RwLock, Weak},
@@ -26,6 +27,8 @@ pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The budget for each of this client's own requests (`tools/list` pages,
 /// `resources/read`). A forwarded request has none from here.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// The budget for a tool an MCP App calls ([`McpServers::call_tool`]).
+pub const APP_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// The most `tools/list` pages read for one list.
 pub const MAX_TOOL_PAGES: usize = 32;
 /// The most tools one server may list.
@@ -45,12 +48,14 @@ pub struct McpServerLaunch {
 /// The configured MCP servers, and every session open on them.
 ///
 /// A session is one server process and the one connection to it, opened for
-/// one harness session ([`McpServers::open`]) and closed when that ends: one
-/// connection per server for each harness session, held here (ADR 344). An
-/// agent's calls and its app's reach the same upstream session; two openings
-/// never share one (`each_opening_is_a_server_process_and_a_session_of_its_own`),
-/// so neither blocks, sees, or outlives the other's. Which conversation an
-/// opening is for is not known here yet (#348). The states and orderings are tabled in
+/// one harness session ([`McpServers::open`]) and closed when that ends, or
+/// when the grant it was opened under is revoked ([`McpServers::revoke`]):
+/// one connection per server for each harness session, held here (ADR 344).
+/// An agent's calls and its app's reach the same upstream session; two
+/// openings never share one
+/// (`each_opening_is_a_server_process_and_a_session_of_its_own`), so neither
+/// blocks, sees, or outlives the other's. Each is owned by the SDK session
+/// (a conversation's) it was opened for ([`McpOwner`]). The states and orderings are tabled in
 /// `docs/design/mcp-connections.md`, and each row has a test in
 /// `tests/infrastructure/mcp/`.
 ///
@@ -71,16 +76,75 @@ struct Inner {
     /// while `stopping` is unset, and `stop` sets it and takes them under the
     /// same lock, so no session opens after a stop has looked.
     live: Mutex<Live>,
-    /// The (server, tool) pairs whose disagreement has been logged, so a view
-    /// read many times logs it once. Bounded by [`MAX_WARNED`].
-    warned: Mutex<HashSet<(String, String)>>,
-    /// How many disagreements have been logged.
-    #[cfg(all(test, unix))]
-    logged: std::sync::atomic::AtomicUsize,
 }
 
-/// The most disagreements remembered as logged; past it, none are logged.
-pub(super) const MAX_WARNED: usize = 1024;
+/// Whose a session is: the SDK session (a conversation's) its harness was
+/// opened for, under one grant of the host's for that open. Each
+/// [`McpOwner::new`] is a grant of its own, shared by its clones; sessions of
+/// one grant are closed together when the host revokes it
+/// ([`McpServers::revoke`]), and none opens under it after.
+#[derive(Clone)]
+pub struct McpOwner {
+    session: SessionId,
+    grant: Arc<Grant>,
+}
+/// One grant. Whether it is revoked and which sessions were opened under it
+/// share one lock, so registering a session (check, then add) and revoking
+/// (set, then take) are each one step: a session either is registered
+/// before the revocation, and is taken by it, or sees it and is refused —
+/// whichever [`McpServers`] it is opened and revoked through.
+#[derive(Default)]
+struct Grant {
+    state: Mutex<GrantState>,
+}
+#[derive(Default)]
+struct GrantState {
+    revoked: bool,
+    /// The sessions opened under it, so revoking it visits only its own.
+    /// Each registration first drops those already ended, so between
+    /// registrations it holds the open ones and those ended since the last.
+    sessions: Vec<Weak<Session>>,
+}
+impl McpOwner {
+    /// A new grant for sessions opened for `session`.
+    pub fn new(session: SessionId) -> Self {
+        Self {
+            session,
+            grant: Arc::default(),
+        }
+    }
+    /// The SDK session these sessions belong to.
+    pub fn session(&self) -> &SessionId {
+        &self.session
+    }
+    /// Whether `other` is this same grant.
+    fn same_grant(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.grant, &other.grant)
+    }
+    fn revoked(&self) -> bool {
+        self.grant.state.lock().expect("grant").revoked
+    }
+    /// How many sessions the grant holds now, ended ones not yet dropped
+    /// among them.
+    #[cfg(all(test, unix))]
+    pub(super) fn held(&self) -> usize {
+        self.grant.state.lock().expect("grant").sessions.len()
+    }
+}
+impl PartialEq for McpOwner {
+    fn eq(&self, other: &Self) -> bool {
+        self.session == other.session && self.same_grant(other)
+    }
+}
+impl Eq for McpOwner {}
+impl std::fmt::Debug for McpOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpOwner")
+            .field("session", &self.session)
+            .field("revoked", &self.revoked())
+            .finish_non_exhaustive()
+    }
+}
 
 #[derive(Default)]
 struct Live {
@@ -91,6 +155,7 @@ struct Live {
 struct Session {
     id: u64,
     server: String,
+    owned_by: McpOwner,
     connection: Arc<Connection>,
     /// The server's answer to `initialize`, given to the harness as its own.
     initialized: Arc<Value>,
@@ -122,6 +187,16 @@ impl Session {
         self.connection.close(cause);
         self.process.lock().expect("process").take()
     }
+    /// Close the connection and kill the process group at once, without the
+    /// grace: dropping the process kills its group. Said stopped only when it
+    /// took the process; a close already stopping it says so itself, once
+    /// it has.
+    fn kill_now(&self, cause: McpError) {
+        if let Some(process) = self.close_now(cause) {
+            drop(process);
+            self.stopped.send_replace(true);
+        }
+    }
 }
 
 /// What every [`McpSession`] clone holds. When the last one goes, the session
@@ -130,9 +205,7 @@ impl Session {
 struct Owner(Arc<Session>);
 impl Drop for Owner {
     fn drop(&mut self) {
-        // Dropping the process kills its group.
-        drop(self.0.close_now(McpError::Closed));
-        self.0.stopped.send_replace(true);
+        self.0.kill_now(McpError::Closed);
     }
 }
 impl Drop for Session {
@@ -179,9 +252,6 @@ impl McpServers {
                 launcher,
                 stopping: watch::channel(false).0,
                 live: Mutex::default(),
-                warned: Mutex::default(),
-                #[cfg(all(test, unix))]
-                logged: std::sync::atomic::AtomicUsize::new(0),
             }),
         })
     }
@@ -191,7 +261,7 @@ impl McpServers {
         self.inner.launches.keys().map(String::as_str)
     }
 
-    /// Open a session on `server`: launch its process and initialize it,
+    /// Open a session on `server` for `owner`: launch its process and initialize it,
     /// within [`INITIALIZE_TIMEOUT`]. Its tools are then listed in the
     /// background, and again whenever it says they changed.
     ///
@@ -200,13 +270,20 @@ impl McpServers {
     /// [`McpError::NotConfigured`], [`McpError::Stopped`], [`McpError::Start`]
     /// when the process cannot be launched, [`McpError::Handshake`] for a
     /// refused or unreadable `initialize` (an unsupported protocol version
-    /// among them), [`McpError::Timeout`], and [`McpError::ServerGone`] for a
-    /// server that ends during it. The process is stopped on each.
-    pub async fn open(&self, server: &str) -> Result<McpSession, McpError> {
+    /// among them), [`McpError::Timeout`], [`McpError::ServerGone`] for a
+    /// server that ends during it, and [`McpError::Closed`] when `owner`'s
+    /// grant is revoked — before it launches anything, or while it opens. The
+    /// process is stopped on each. Nothing else makes it [`McpError::Closed`].
+    pub async fn open(&self, server: &str, owner: McpOwner) -> Result<McpSession, McpError> {
         let inner = &self.inner;
         let launch = inner.launches.get(server).ok_or(McpError::NotConfigured)?;
         if *inner.stopping.borrow() {
             return Err(McpError::Stopped);
+        }
+        // Revoked already: nothing to launch. Revoked from here on is seen
+        // when the session is registered, below.
+        if owner.revoked() {
+            return Err(McpError::Closed);
         }
         let deadline = inner.clock.now() + INITIALIZE_TIMEOUT;
         let Launched {
@@ -257,10 +334,20 @@ impl McpServers {
                 connection.close(McpError::Stopped);
                 return Err(McpError::Stopped);
             }
+            // Revoked while opening: checked, and the session added to the
+            // grant, under the grant's own lock, which `revoke` sets and takes
+            // under — so either it takes this session or this sees it.
+            let grant = owner.grant.clone();
+            let mut granted = grant.state.lock().expect("grant");
+            if granted.revoked {
+                connection.close(McpError::Closed);
+                return Err(McpError::Closed);
+            }
             live.next += 1;
             let session = Arc::new(Session {
                 id: live.next,
                 server: server.to_owned(),
+                owned_by: owner,
                 connection,
                 initialized: Arc::new(initialized),
                 // A server with no process of its own is stopped already.
@@ -271,6 +358,9 @@ impl McpServers {
                 owner: Arc::downgrade(inner),
             });
             live.sessions.insert(session.id, Arc::downgrade(&session));
+            granted.sessions.retain(|each| each.strong_count() > 0);
+            granted.sessions.push(Arc::downgrade(&session));
+            drop(granted);
             session
         };
         // Subscribed before the first list, so a change during it is not missed.
@@ -281,49 +371,149 @@ impl McpServers {
         })
     }
 
-    /// The UI of the tool an observed call names, as the open sessions of its
-    /// server last listed it ([`ListedTool::ui_for`]). `None` when no open
-    /// session of that server has listed its tools yet, and when the sessions
-    /// that have disagree about this tool's UI — then which one the call went
-    /// through is not known here, so none is guessed, and the disagreement is
-    /// logged.
-    pub fn tool_ui(&self, call: &McpTool) -> Option<ToolUi> {
-        let sessions: Vec<Arc<Session>> = {
-            let live = self.inner.live.lock().expect("live sessions");
-            live.sessions.values().filter_map(Weak::upgrade).collect()
-        };
-        let mut declared = sessions
-            .iter()
-            .filter(|session| {
-                session.server == call.server() && session.connection.end_cause().is_none()
-            })
-            .filter_map(|session| {
-                let listed = session.tools.read().expect("tool list").clone()?;
-                Some(ListedTool::ui_for(&listed.tools, call).cloned())
-            });
-        let first = declared.next()?;
-        if declared.any(|other| other != first) {
-            let pair = (call.server().to_owned(), call.tool().to_owned());
-            if first_time(&mut self.inner.warned.lock().expect("warned"), pair) {
-                tracing::warn!(
-                    server = call.server(),
-                    tool = call.tool(),
-                    "open MCP sessions disagree about a tool's UI; no widget is shown for its calls"
-                );
-                #[cfg(all(test, unix))]
-                self.inner
-                    .logged
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-            return None;
-        }
-        first
+    /// The UI of the tool an observed call names, as `session`'s own session
+    /// of its server last listed it ([`ListedTool::ui_for`]): the one of its
+    /// sessions of that server registered last and still open. An SDK session
+    /// holds one provider attachment at a time, so that is the one its harness
+    /// talks to now; while a resumed open and the one it replaces briefly
+    /// overlap, it is the resumed one's once that has said hello. `None` when
+    /// it has none open, or that one has not listed its tools yet.
+    pub fn tool_ui(&self, session: &SessionId, call: &McpTool) -> Option<ToolUi> {
+        let own = self.newest(session, call.server())?;
+        let listed = own.tools.read().expect("tool list").clone()?;
+        ListedTool::ui_for(&listed.tools, call).cloned()
     }
 
-    /// How many disagreements have been logged.
-    #[cfg(all(test, unix))]
-    pub(super) fn disagreements_logged(&self) -> usize {
-        self.inner.logged.load(std::sync::atomic::Ordering::Relaxed)
+    /// The tool `name` exactly as `session`'s own newest open session of
+    /// `server` last listed it, or `None` when that list does not have it —
+    /// or there is no list yet, which an app cannot be acting on.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::NoSession`] when `session` has no open session of
+    /// `server`.
+    pub fn listed_tool(
+        &self,
+        session: &SessionId,
+        server: &str,
+        name: &str,
+    ) -> Result<Option<ListedTool>, McpError> {
+        let own = self.newest(session, server).ok_or(McpError::NoSession)?;
+        let listed = own.tools.read().expect("tool list").clone();
+        Ok(listed.and_then(|listed| {
+            listed
+                .tools
+                .iter()
+                .find(|each| each.tool().tool() == name)
+                .cloned()
+        }))
+    }
+
+    /// Call the tool `name` with `arguments` over `session`'s own newest open
+    /// session of `server`, within [`APP_CALL_TIMEOUT`]: an MCP App's call,
+    /// on the connection its agent's calls use. The answer is the server's
+    /// `CallToolResult` as it gave it (`isError` included); which tools an
+    /// app may call is the caller's to decide.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::NoSession`], [`McpError::Timeout`] (the call is cancelled
+    /// upstream), [`McpError::Remote`] for the server's JSON-RPC error,
+    /// [`McpError::Malformed`] for an answer that is not an object,
+    /// [`McpError::Busy`], and the session's end cause once it has ended.
+    pub async fn call_tool(
+        &self,
+        session: &SessionId,
+        server: &str,
+        name: &str,
+        arguments: Option<Value>,
+    ) -> Result<Value, McpError> {
+        let own = self.newest(session, server).ok_or(McpError::NoSession)?;
+        let mut params = json!({ "name": name });
+        if let Some(arguments) = arguments {
+            params["arguments"] = arguments;
+        }
+        let result = own
+            .connection
+            .request("tools/call", Some(params), APP_CALL_TIMEOUT)
+            .await?;
+        if !result.is_object() {
+            return Err(McpError::Malformed(
+                "a tools/call result that is not an object".into(),
+            ));
+        }
+        Ok(result)
+    }
+
+    /// Read the MCP App resource `uri` over `session`'s own newest open
+    /// session of `server`, as [`McpSession::read_ui_resource`] does.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::NoSession`], and what [`McpSession::read_ui_resource`]
+    /// fails with.
+    pub async fn read_app_resource(
+        &self,
+        session: &SessionId,
+        server: &str,
+        uri: &UiResourceUri,
+    ) -> Result<UiResource, McpError> {
+        let own = self.newest(session, server).ok_or(McpError::NoSession)?;
+        let params = json!({ "uri": uri.as_str() });
+        let result = own
+            .connection
+            .request("resources/read", Some(params), REQUEST_TIMEOUT)
+            .await?;
+        wire::ui_resource(uri, &result)
+    }
+
+    /// `session`'s newest open session of `server`, if it has one.
+    fn newest(&self, session: &SessionId, server: &str) -> Option<Arc<Session>> {
+        self.open_sessions().into_iter().rev().find(|each| {
+            each.owned_by.session() == session
+                && each.server == server
+                && each.connection.end_cause().is_none()
+        })
+    }
+
+    /// The sessions open now, oldest first. Upgraded under the lock and
+    /// handed out of it: a session whose last other reference goes meanwhile
+    /// is dropped by the caller, after the lock is released — its `Drop`
+    /// takes the lock itself.
+    fn open_sessions(&self) -> Vec<Arc<Session>> {
+        let live = self.inner.live.lock().expect("live sessions");
+        live.sessions.values().filter_map(Weak::upgrade).collect()
+    }
+
+    /// Revoke `owner`'s grant: no session opens under it from now on — one
+    /// opening now is refused [`McpError::Closed`] — and each open one is
+    /// closed as its stand-in ending would close it: calls waiting end
+    /// [`McpError::Closed`] at once, the server's stdin is closed, and a
+    /// server still running two seconds later is killed with its process
+    /// group. Returns at once: the connections are closed before it does,
+    /// and stopping the processes runs on the current runtime. Without one,
+    /// the process groups are killed at once, without the grace. On a runtime
+    /// shutting down, which drops what is spawned on it, each is stopped by
+    /// whatever else closes it — its stand-in's end, with the grace, or its
+    /// last handle going, at once.
+    pub fn revoke(&self, owner: &McpOwner) {
+        // Its own sessions only, taken with the flag set in one step under
+        // the grant's lock (see `Grant`), and upgraded — and dropped — after
+        // it is released: see `open_sessions`.
+        let granted = {
+            let mut state = owner.grant.state.lock().expect("grant");
+            state.revoked = true;
+            std::mem::take(&mut state.sessions)
+        };
+        for session in granted.iter().filter_map(Weak::upgrade) {
+            session.connection.close(McpError::Closed);
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => {
+                    runtime.spawn(close(session, McpError::Closed));
+                }
+                Err(_) => session.kill_now(McpError::Closed),
+            }
+        }
     }
 
     /// Close every open session — each harness's stand-in ends, its server's
@@ -346,9 +536,9 @@ impl McpServers {
 
 /// One server process and the one connection to it, for one harness session.
 /// Clones share it; it is closed by [`McpSession::close`], by the end of
-/// [`McpSession::serve`], by [`McpServers::stop`], or by its server ending —
-/// and when the last clone is dropped, it is closed and its process group
-/// killed at once.
+/// [`McpSession::serve`], by [`McpServers::stop`], by [`McpServers::revoke`]
+/// of its grant, or by its server ending — and when the last clone is
+/// dropped, it is closed and its process group killed at once.
 #[derive(Clone)]
 pub struct McpSession {
     owner: Arc<Owner>,
@@ -484,12 +674,6 @@ async fn keep_listed(session: Weak<Session>, mut notices: broadcast::Receiver<Ar
             Err(broadcast::error::RecvError::Closed) => return,
         };
     }
-}
-
-/// Whether `pair`'s disagreement is logged now: the first time it is seen,
-/// while fewer than [`MAX_WARNED`] are remembered.
-pub(super) fn first_time(warned: &mut HashSet<(String, String)>, pair: (String, String)) -> bool {
-    warned.len() < MAX_WARNED && warned.insert(pair)
 }
 
 /// Whether a server's notice says its tools changed. Its other lists

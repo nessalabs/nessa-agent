@@ -1,0 +1,244 @@
+<!doctype html>
+<!--
+  The sandbox proxy for MCP Apps (MCP Apps 2026-01-26, *Sandbox proxy*).
+
+  Served on an origin of its own, never the window's: by a listener of its
+  own in the browser build (`app/sandbox/serve.ts`) and by the
+  `nessa-sandbox` scheme in the desktop app (`src-tauri/src/app_sandbox.rs`).
+  The window frames it with `sandbox="allow-scripts allow-same-origin"`.
+
+  It decides no policy: the host writes it (`app/model/csp.ts`). It says it is
+  ready; it applies the policy the host hands it to its own document, before
+  anything else, so its `frame-src` holds the app's frame wherever the app
+  navigates it; it loads the one document the host hands it into the app's
+  frame, with `sandbox="allow-scripts"` (an opaque origin: the app reaches
+  neither this document, nor any other app's, nor storage), which inherits
+  the policy and carries it too; and it relays messages between the two. What
+  it enforces itself is the relay: only the host (its parent) and the app (its
+  frame) are heard; nothing is relayed before the document; methods under
+  `ui/notifications/sandbox-` are the host's and this proxy's — none is
+  relayed from the host to the app, and of the app's only the CSP reporter's
+  is passed on; and the app's departure, after which nothing more is relayed
+  and the frame is removed. The departure is the proxy's own reading of the
+  frame (design L32). Each document of the frame says which it is — its
+  reporter, first in it, mints an id the document cannot read and says it
+  at once and in answer to each numbered check (only one the browser
+  delivered from this proxy) — and the first is pinned: a document naming
+  itself as another (a reload) is a departure. At every `load` of the frame,
+  heard here where nothing the app runs can reach, the proxy sends a check;
+  a document that does not answer it as the pinned one by the time the host
+  gives (an error page, a blank one, a rewritten one) is a departure. A
+  `load` alone is not one: WebKit fires one for a move to a fragment. Every
+  answer carries the token this proxy minted for the frame and wrote into
+  the reporter alone, as does the reporter's word on `pagehide` (the browser
+  no longer names the sender of a document that has gone), which says it
+  sooner while the app leaves the reporter in place. What its own policy
+  blocks, it reports the same way.
+  `verification/desktop/scripts/mcp-apps.mjs --only
+  escape-navigate,escape-refresh,escape-rewrite,departures,departures-back,forge`
+  holds each.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>App sandbox</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+      }
+      iframe {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      ;(function () {
+        "use strict"
+        // Loaded as a page of its own rather than in a frame — a link to it
+        // followed in the window — it is nothing to look at: back to where
+        // the window was.
+        if (window.parent === window) {
+          history.back()
+          return
+        }
+        var host = window.parent
+        // The names `app/model/sandbox-methods.ts` states; `serve.test.ts`
+        // holds this file to each of them.
+        var reserved = "ui/notifications/sandbox-"
+        var proxyReady = "ui/notifications/sandbox-proxy-ready"
+        var resourceReady = "ui/notifications/sandbox-resource-ready"
+        var cspViolation = "ui/notifications/sandbox-csp-violation"
+        var appLeft = "ui/notifications/sandbox-app-left"
+        var appCheck = "ui/notifications/sandbox-app-check"
+        var tokenSlot = "__nessa_frame_token__"
+        // Minted for this frame, and written into its document's reporter
+        // alone: the one way the check's answer is known to come from a
+        // document of the app's (not an error page, not a blank one), and a
+        // departure notice from this frame once its document is gone and the
+        // browser names no sender. No other frame can read it.
+        // (`getRandomValues`, not `randomUUID`: a custom scheme's page need
+        // not be a secure context.)
+        var token = Array.prototype.map
+          .call(crypto.getRandomValues(new Uint8Array(16)), function (byte) {
+            return (byte + 256).toString(16).slice(1)
+          })
+          .join("")
+        // The host's origin, from its first message; the app's frame, once made.
+        var hostOrigin = null
+        var app = null
+        var left = false
+        // The document the frame first named, and the wait for an answer
+        // to the check sent at its latest load.
+        var pinned = null
+        var checking = null
+        // Which check is the latest: an answer to an earlier one, delivered
+        // after a later load (WebKit), ends no wait.
+        var checks = 0
+
+        // The app's document is gone, or going — another document named, a
+        // check unanswered, or its reporter's word — and what comes after it
+        // in this frame is not the app: nothing more is relayed either way,
+        // the frame is removed, the host told, once. Never from the frame's
+        // own load handler, where removing it takes the renderer down.
+        function leave() {
+          if (left) return
+          left = true
+          clearTimeout(checking)
+          app.remove()
+          host.postMessage({ jsonrpc: "2.0", method: appLeft, params: {} }, hostOrigin)
+        }
+
+        function methodOf(data) {
+          return data !== null &&
+            typeof data === "object" &&
+            typeof data.method === "string"
+            ? data.method
+            : null
+        }
+
+        window.addEventListener("message", function (event) {
+          if (event.source === host) {
+            var method = methodOf(event.data)
+            if (app === null) {
+              // The first thing the host says is the document; nothing is
+              // relayed before it.
+              if (method !== resourceReady) return
+              var params = event.data.params
+              if (params === null || typeof params !== "object") return
+              var html = params.html
+              var policy = params.policy
+              var checkWithin = params.checkWithin
+              if (
+                typeof html !== "string" ||
+                typeof policy !== "string" ||
+                typeof checkWithin !== "number" ||
+                !(checkWithin > 0 && checkWithin <= 2147483647)
+              )
+                return
+              // The policy first, on this document: what it loads from now
+              // on, the app's frame and the frame's every navigation, is held
+              // to it.
+              var meta = document.createElement("meta")
+              meta.setAttribute("http-equiv", "Content-Security-Policy")
+              meta.setAttribute("content", policy)
+              document.head.appendChild(meta)
+              hostOrigin = event.origin
+              window.addEventListener("securitypolicyviolation", function (violation) {
+                var origin
+                try {
+                  origin = new URL(violation.blockedURI).origin
+                } catch (error) {
+                  origin = undefined
+                }
+                host.postMessage(
+                  {
+                    jsonrpc: "2.0",
+                    method: cspViolation,
+                    params: origin && origin !== "null" ? { origin: origin } : {},
+                  },
+                  hostOrigin,
+                )
+              })
+              app = document.createElement("iframe")
+              app.setAttribute("sandbox", "allow-scripts")
+              app.setAttribute("title", "App")
+              // The reporter's slot comes first in the document, before any
+              // of the app's markup: only it is filled.
+              app.srcdoc = html.replace(tokenSlot, token)
+              // The frame's loads, heard here, where nothing the app runs can
+              // remove the listener: at each, the document in the frame must
+              // answer the check as the pinned one within `checkWithin`, or
+              // the app is gone.
+              app.addEventListener("load", function () {
+                if (left) return
+                clearTimeout(checking)
+                checking = setTimeout(leave, checkWithin)
+                checks += 1
+                app.contentWindow.postMessage(
+                  { jsonrpc: "2.0", method: appCheck, params: { check: checks } },
+                  "*",
+                )
+              })
+              document.body.appendChild(app)
+              return
+            }
+            if (event.origin !== hostOrigin || left) return
+            if (method !== null && method.indexOf(reserved) === 0) return
+            // The app's origin is opaque: it can be addressed only as "*".
+            app.contentWindow.postMessage(event.data, "*")
+            return
+          }
+          if (
+            app !== null &&
+            !left &&
+            methodOf(event.data) === appLeft &&
+            event.data.params !== null &&
+            typeof event.data.params === "object" &&
+            event.data.params.token === token
+          ) {
+            leave()
+            return
+          }
+          if (app !== null && !left && event.source === app.contentWindow) {
+            var from = methodOf(event.data)
+            if (from === appCheck) {
+              var said = event.data.params
+              if (
+                said === null ||
+                typeof said !== "object" ||
+                said.token !== token ||
+                typeof said.document !== "string"
+              )
+                return
+              if (pinned === null) pinned = said.document
+              if (said.document !== pinned) {
+                leave()
+                return
+              }
+              // Only an answer to the latest check ends the wait its load
+              // began: the announcement, or an answer to an earlier check,
+              // does nothing.
+              if (said.check !== checks) return
+              clearTimeout(checking)
+              checking = null
+              return
+            }
+            if (from !== null && from.indexOf(reserved) === 0 && from !== cspViolation)
+              return
+            host.postMessage(event.data, hostOrigin)
+          }
+        })
+
+        host.postMessage({ jsonrpc: "2.0", method: proxyReady, params: {} }, "*")
+      })()
+    </script>
+  </body>
+</html>

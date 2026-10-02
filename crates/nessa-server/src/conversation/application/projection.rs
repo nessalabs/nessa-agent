@@ -3,8 +3,8 @@ use super::view::{
     ConversationCapabilities, ConversationLifecycle, ConversationLifecyclePhase,
     ConversationMcpTool, ConversationMessage, ConversationMessageStatus, ConversationPart,
     ConversationPending, ConversationPendingMode, ConversationPermission,
-    ConversationPermissionOption, ConversationQuestion, ConversationTool,
-    ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationPermissionOption, ConversationPermissionOrigin, ConversationQuestion,
+    ConversationTool, ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use super::{McpToolUis, NoMcpToolUis};
 use crate::conversation::domain::ConversationId;
@@ -580,6 +580,7 @@ impl Projection {
             ),
             tool_name: input.name.clone(),
             arguments_json: input.arguments_json.clone(),
+            origin: ConversationPermissionOrigin::Harness,
             options: options
                 .choices()
                 .iter()
@@ -926,11 +927,16 @@ impl Projection {
         // these URIs: a list read after the call still reaches the window.
         let mut drawn = Sha256::new();
         let mut any = false;
+        // The conversation's own SDK session (`conversation_session`).
+        let session = ConversationId::new(&view.conversation_id)
+            .ok()
+            .map(|id| super::conversation_session(&id));
         for tool in &mut view.tools {
             let Some(mcp) = &mut tool.mcp else { continue };
             mcp.resource_uri = McpTool::new(mcp.server.as_str(), mcp.tool.as_str())
                 .ok()
-                .and_then(|call| self.tool_uis.resource_uri(&call))
+                .zip(session.as_ref())
+                .and_then(|(call, session)| self.tool_uis.resource_uri(session, &call))
                 .map(|uri| uri.as_str().to_owned());
             if let Some(uri) = &mcp.resource_uri {
                 any = true;

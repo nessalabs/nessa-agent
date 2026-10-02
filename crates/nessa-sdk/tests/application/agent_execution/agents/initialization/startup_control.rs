@@ -20,7 +20,7 @@ impl AgentProvider for IgnoredStartupControlProvider {
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         let release = self.release.lock().unwrap().take();
         Box::pin(async move {
-            let (restore, control) = request.into_parts();
+            let (_, restore, control) = request.into_parts();
             self.entered.notify_one();
             if let Some(release) = release {
                 let _ = release.await;

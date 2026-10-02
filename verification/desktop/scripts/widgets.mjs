@@ -577,6 +577,8 @@ const checks = {
             if (told === undefined) continue
             if (!at || !told) return false
             const [w, h] = told.split("x").map(Number)
+            // The contract is whole CSS pixels (`HostContext.size`).
+            if (!Number.isInteger(w) || !Number.isInteger(h)) return false
             const style = getComputedStyle(at)
             const box = at.getBoundingClientRect()
             const width =

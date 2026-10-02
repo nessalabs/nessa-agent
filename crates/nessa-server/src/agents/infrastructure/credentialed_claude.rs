@@ -281,6 +281,7 @@ mod tests {
             workspace: root.path().into(),
             tools_enabled: true,
             mcp_servers: Vec::new(),
+            stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions::none(),
             permissions: PermissionOfferPolicy::once_only(),
             launch_timeout: Duration::from_secs(10),
             startup_timeout: Duration::from_secs(10),

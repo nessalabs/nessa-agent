@@ -370,5 +370,62 @@
         "payload": "AQ=="
       }
     ]
-  }
+  },
+  "McpCallToolParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "app": {
+      "executionId": "execution",
+      "toolId": "tool",
+      "instanceId": "6f1d6c0e-8f8c-4a52-9b8e-1f6c3d2a4b5c"
+    },
+    "server": "charts",
+    "tool": "delete_rows",
+    "argumentsJson": "{\"id\":1}"
+  },
+  "McpCallToolResult": {
+    "resultJson": "{\"content\":[{\"type\":\"text\",\"text\":\"deleted\"}],\"isError\":false}"
+  },
+  "McpReadResourceParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "app": {
+      "executionId": "execution",
+      "toolId": "tool",
+      "instanceId": "6f1d6c0e-8f8c-4a52-9b8e-1f6c3d2a4b5c"
+    },
+    "server": "charts",
+    "uri": "ui://charts/view.html"
+  },
+  "McpReadResourceResult": {
+    "uri": "ui://charts/view.html",
+    "mimeType": "text/html;profile=mcp-app",
+    "size": 42,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "ticket": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "expiresInMs": 60000,
+    "csp": {
+      "connectDomains": [],
+      "resourceDomains": ["https://cdn.example.com"],
+      "frameDomains": [],
+      "baseUriDomains": []
+    },
+    "permissions": {
+      "camera": false,
+      "microphone": false,
+      "geolocation": false,
+      "clipboardWrite": true
+    },
+    "prefersBorder": true
+  },
+  "McpReleaseAppParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "app": {
+      "executionId": "execution",
+      "toolId": "tool",
+      "instanceId": "6f1d6c0e-8f8c-4a52-9b8e-1f6c3d2a4b5c"
+    }
+  },
+  "McpRemoteErrorDetails": { "code": -32602, "message": "Invalid params" }
 }

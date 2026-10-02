@@ -19,6 +19,7 @@ use crate::conversation_test_support::{
     MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingDeletionAudit,
     RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
+use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::{
     application::agent_execution::sessions::StorageFuture,
     infrastructure::session_storage::{InMemoryStorage, RecordStorage},
@@ -225,7 +226,7 @@ fn text(value: &str) -> SubmittedMessage {
     }
 }
 fn session(id: &ConversationId) -> SessionId {
-    SessionId::new(id.to_string()).unwrap()
+    crate::conversation::application::conversation_session(id)
 }
 /// A conversation with one completed turn: saved history and a summary.
 async fn talked_in(fixture: &Deleting) -> ConversationId {

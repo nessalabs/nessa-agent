@@ -528,6 +528,31 @@ it.each<ConversationTranscriptState>([
   },
 )
 
+it("detaches a stale prepared-empty complete view after shared work starts", async () => {
+  const close = vi.fn(async () => {})
+  const read = viewSaying(true)
+  let sharedWorkStarted = false
+  const context = await readyToSend({
+    close,
+    read: async (id) => {
+      const view = await read(id)
+      return { ...view, transcriptState: "complete", running: sharedWorkStarted }
+    },
+  })
+  expect(context.current()).toMatchObject({
+    turns: [],
+    remote: { transcriptState: "complete", running: false, pending: [] },
+  })
+  // Another surface admits work after this window's last read. The gateway's
+  // actual prepared-empty state is complete, not the scenario's complete_empty.
+  sharedWorkStarted = true
+  await context.store.dispatch(closeTab("c0"))
+  expect(close).not.toHaveBeenCalled()
+  expect(
+    context.store.getState().conversation.conversations.some((item) => item.id === "c0"),
+  ).toBe(false)
+})
+
 it("retains a truncated confirmed-empty view and closes only its tab", async () => {
   const close = vi.fn(async () => {})
   const read = viewSaying(true)

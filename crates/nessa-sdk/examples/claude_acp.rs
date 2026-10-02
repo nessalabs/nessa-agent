@@ -208,6 +208,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             workspace: workspace.clone(),
             tools_enabled: mode.ends_with("write"),
             mcp_servers: Vec::new(),
+            stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions::none(),
             permissions: PermissionOfferPolicy::once_only(),
             // The launch belongs to the operating system: a runtime written
             // by a fresh install is scanned on its first execution.

@@ -31,7 +31,10 @@
     "agents.install": "AgentInstallParams",
     "conversation.catalogueHead": "ConversationCatalogueHeadParams",
     "conversation.catalogueManifest": "ConversationCatalogueManifestParams",
-    "conversation.catalogueResolve": "ConversationCatalogueResolveParams"
+    "conversation.catalogueResolve": "ConversationCatalogueResolveParams",
+    "mcp.callTool": "McpCallToolParams",
+    "mcp.readResource": "McpReadResourceParams",
+    "mcp.releaseApp": "McpReleaseAppParams"
   },
   "events": {
     "session.challenge": "SessionChallenge"
