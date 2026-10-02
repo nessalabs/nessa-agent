@@ -3,6 +3,7 @@ import { rejectedBeforeDispatch } from "./conversation-mutation-error.js"
 import { NessaRpcError } from "./rpc-error.js"
 import {
   ConversationErrorCode,
+  mcpAppTiming,
   type McpAppReference,
   type McpRemoteErrorDetails,
 } from "../generated/product.js"
@@ -10,14 +11,13 @@ import { mcpRemoteErrorDetails } from "../protocol/mcp-app-validate.js"
 
 /**
  * The longest `mcp.callTool` can take the gateway: a destructive tool's review
- * waits up to 5 minutes for the person, then the call itself up to 60 s, and
- * 10 s more covers audit writes, the response, and scheduling. A client that
+ * waits for the person, then the call itself has its budget, and the client's
+ * allowance covers audit writes, the response, and scheduling. A client that
  * gave up sooner would drop an answer the gateway still sends — and giving up
- * does not withdraw the review, which only the socket closing does. Written out
- * from the gateway's `APP_REVIEW_DEADLINE` and the SDK's `APP_CALL_TIMEOUT`;
- * neither is published in the protocol.
+ * does not withdraw the review, which only the socket closing does. The
+ * protocol publishes each part and their sum (`x-mcpAppTiming`).
  */
-export const MCP_APP_CALL_DEADLINE_MS = 300_000 + 60_000 + 10_000
+export const MCP_APP_CALL_DEADLINE_MS = mcpAppTiming.callDeadlineMs
 
 /**
  * An MCP App's call (`mcp.callTool`, `mcp.readResource`) that did not answer.

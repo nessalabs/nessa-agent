@@ -15,6 +15,7 @@ import {
 } from "../application/mcp-resource-fetch.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { conversationView } from "../protocol/conversation-validate.js"
+import { mcpAppTiming } from "../generated/product.js"
 import { createMcpAppsApi } from "./mcp-apps-api.js"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
@@ -96,8 +97,11 @@ it("calls the app's tool with exactly its arguments, and waits as long as a revi
     },
     { atLeastMs: MCP_APP_CALL_DEADLINE_MS },
   )
-  // Five minutes of review, a minute of call, and a margin.
-  expect(MCP_APP_CALL_DEADLINE_MS).toBe(370_000)
+  // The review, the call, and the client's allowance, as the protocol
+  // publishes them.
+  expect(MCP_APP_CALL_DEADLINE_MS).toBe(
+    mcpAppTiming.reviewMs + mcpAppTiming.callMs + mcpAppTiming.clientAllowanceMs,
+  )
 })
 
 it("leaves out arguments that were not given, rather than sending them as nothing", async () => {

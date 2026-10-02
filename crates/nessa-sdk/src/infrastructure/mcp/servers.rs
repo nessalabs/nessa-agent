@@ -27,8 +27,6 @@ pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The budget for each of this client's own requests (`tools/list` pages,
 /// `resources/read`). A forwarded request has none from here.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-/// The budget for a tool an MCP App calls ([`McpServers::call_tool`]).
-pub const APP_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// The most `tools/list` pages read for one list.
 pub const MAX_TOOL_PAGES: usize = 32;
 /// The most tools one server may list.
@@ -410,7 +408,8 @@ impl McpServers {
     }
 
     /// Call the tool `name` with `arguments` over `session`'s own newest open
-    /// session of `server`, within [`APP_CALL_TIMEOUT`]: an MCP App's call,
+    /// session of `server`, within `timeout` (the caller's policy: the
+    /// gateway's is the protocol's `x-mcpAppTiming.callMs`): an MCP App's call,
     /// on the connection its agent's calls use. The answer is the server's
     /// `CallToolResult` as it gave it (`isError` included); which tools an
     /// app may call is the caller's to decide.
@@ -427,6 +426,7 @@ impl McpServers {
         server: &str,
         name: &str,
         arguments: Option<Value>,
+        timeout: Duration,
     ) -> Result<Value, McpError> {
         let own = self.newest(session, server).ok_or(McpError::NoSession)?;
         let mut params = json!({ "name": name });
@@ -435,7 +435,7 @@ impl McpServers {
         }
         let result = own
             .connection
-            .request("tools/call", Some(params), APP_CALL_TIMEOUT)
+            .request("tools/call", Some(params), timeout)
             .await?;
         if !result.is_object() {
             return Err(McpError::Malformed(

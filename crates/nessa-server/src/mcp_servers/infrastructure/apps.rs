@@ -1,10 +1,12 @@
 //! An MCP App's calls, answered by the SDK's `McpServers` on the
 //! conversation's own session of each server.
 use crate::conversation::application::{McpAppFailure, McpAppFuture, McpApps};
+use crate::product_contract::generated::MCP_APP_CALL_MS;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::mcp_apps::{ListedTool, UiResource, UiResourceUri};
 use nessa_sdk::infrastructure::mcp::{McpError, McpServers};
 use serde_json::Value;
+use std::time::Duration;
 
 /// [`McpApps`] over the gateway's MCP sessions.
 pub struct SessionApps(pub McpServers);
@@ -26,7 +28,13 @@ impl McpApps for SessionApps {
     ) -> McpAppFuture<'a, Value> {
         Box::pin(async move {
             self.0
-                .call_tool(session, server, name, arguments)
+                .call_tool(
+                    session,
+                    server,
+                    name,
+                    arguments,
+                    Duration::from_millis(MCP_APP_CALL_MS),
+                )
                 .await
                 .map_err(failure)
         })

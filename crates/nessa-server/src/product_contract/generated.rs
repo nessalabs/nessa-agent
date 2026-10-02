@@ -154,3 +154,9 @@ impl CatalogueReadErrorCode {
         }
     }
 }
+/// Published MCP App call timing from the product schema, in milliseconds.
+pub const MCP_APP_REVIEW_MS: u64 = 300000;
+/// Published MCP App call timing from the product schema, in milliseconds.
+pub const MCP_APP_CALL_MS: u64 = 60000;
+/// Published lifetime of an MCP App's resource ticket from the product schema, in milliseconds.
+pub const MCP_RESOURCE_TICKET_MS: u64 = 60000;

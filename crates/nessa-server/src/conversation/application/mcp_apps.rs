@@ -230,8 +230,10 @@ pub trait ResourceTickets: Send + Sync {
     fn discard(&self, ticket: &str);
 }
 
-/// How long a resource ticket can be redeemed.
-pub const RESOURCE_TICKET_LIFETIME_MS: u64 = 60_000;
+/// How long a resource ticket can be redeemed: the protocol's
+/// `McpReadResourceResult.expiresInMs`, its one statement.
+pub const RESOURCE_TICKET_LIFETIME_MS: u64 =
+    crate::product_contract::generated::MCP_RESOURCE_TICKET_MS;
 /// The most a conversation may hold behind tickets at once.
 pub const MAX_HELD_RESOURCE_BYTES: usize = 16 * 1024 * 1024;
 /// The most tickets a conversation may hold at once, whatever their size.
