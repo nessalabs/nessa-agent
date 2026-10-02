@@ -794,12 +794,23 @@ export interface ConversationPermissionOrigin {
   /** For app: the tool the app asked to call. */
   tool?: string
 }
-/** An MCP App, by the tool call whose UI it is, in its conversation. The gateway checks it is an MCP call of the server the request names, and that its result carried a resourceUri. It is not authenticated beyond the caller's credential: the call is recorded as the app's, on the person's behalf. */
+/** An MCP App, by the tool call whose UI it is, in its conversation. The gateway checks it is an MCP call of the server the request names, and that its result carried a resourceUri. It is not authenticated beyond the caller's credential: the call is recorded as the app's, on the person's behalf. instanceId names which mount of it is asking. */
 export interface McpAppReference {
   /** The execution the app's tool call belongs to. */
   executionId: string
   /** The app's tool call. */
   toolId: string
+  /** The host's own UUID for this mount of the app. One tool call can be mounted more than once (inline, in a pane) and again after it was torn down; reviews and tickets are kept per mount, and mcp.releaseApp releases only that one. Policy and audit name the app by executionId and toolId. */
+  instanceId: string
+}
+/** The host tore an app's mount down (mcp.releaseApp): every review that mount has open is withdrawn and its waiting call answered mcp_cancelled, and every resource ticket issued to it is released. Releasing a mount with nothing open succeeds too. Answered with ConversationMutationResult. It travels on the control lane, never the app lane, so held calls can never stop an app being released. */
+export interface McpReleaseAppParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The mount torn down. */
+  app: McpAppReference
 }
 /** An MCP App calls a tool of its own server (mcp.callTool). Allowed only for a tool its conversation's own session last listed with visibility including app. A tool that is destructive — readOnlyHint is not true and destructiveHint is not false, so a tool with no annotations is — first waits for the person's approval in the conversation's permissions, whatever the approval mode; the call is answered when they answer, when the review expires (5 minutes), or when it is withdrawn. App calls travel on a lane of their own, 4 at once per socket; past that they are refused temporarily_unavailable. */
 export interface McpCallToolParams {

@@ -1995,7 +1995,7 @@
     "McpAppReference": {
       "type": "object",
       "additionalProperties": false,
-      "description": "An MCP App, by the tool call whose UI it is, in its conversation. The gateway checks it is an MCP call of the server the request names, and that its result carried a resourceUri. It is not authenticated beyond the caller's credential: the call is recorded as the app's, on the person's behalf.",
+      "description": "An MCP App, by the tool call whose UI it is, in its conversation. The gateway checks it is an MCP call of the server the request names, and that its result carried a resourceUri. It is not authenticated beyond the caller's credential: the call is recorded as the app's, on the person's behalf. instanceId names which mount of it is asking.",
       "properties": {
         "executionId": {
           "type": "string",
@@ -2010,9 +2010,42 @@
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
           "description": "The app's tool call."
+        },
+        "instanceId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The host's own UUID for this mount of the app. One tool call can be mounted more than once (inline, in a pane) and again after it was torn down; reviews and tickets are kept per mount, and mcp.releaseApp releases only that one. Policy and audit name the app by executionId and toolId."
         }
       },
-      "required": ["executionId", "toolId"]
+      "required": ["executionId", "toolId", "instanceId"]
+    },
+    "McpReleaseAppParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The host tore an app's mount down (mcp.releaseApp): every review that mount has open is withdrawn and its waiting call answered mcp_cancelled, and every resource ticket issued to it is released. Releasing a mount with nothing open succeeds too. Answered with ConversationMutationResult. It travels on the control lane, never the app lane, so held calls can never stop an app being released.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "app": {
+          "$ref": "#/$defs/McpAppReference",
+          "description": "The mount torn down."
+        }
+      },
+      "required": ["conversationId", "requestId", "app"]
     },
     "McpCallToolParams": {
       "type": "object",

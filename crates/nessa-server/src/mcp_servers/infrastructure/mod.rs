@@ -1,6 +1,7 @@
 //! The relay socket, the `mcp-relay` command on its other end, the grants
 //! that tie each stand-in to its conversation, and the view's tool UI lookup
 //! over the SDK's `McpServers`.
+mod apps;
 mod grants;
 mod relay;
 mod relay_command;
@@ -9,6 +10,7 @@ mod tool_uis;
 #[cfg(all(test, unix))]
 pub(crate) use relay::{opening_refused, said};
 
+pub use apps::SessionApps;
 pub use grants::{ConversationGrants, OsTokens, TokenSource};
 #[cfg(unix)]
 pub use relay::{bind, BoundRelay};

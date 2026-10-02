@@ -63,7 +63,8 @@ reject the command until their cause is addressed.
 
 ## An MCP App's calls
 
-An MCP App (ADR 344) reaches its own server through two methods. Each names
+An MCP App (ADR 344) reaches its own server through two methods, and its
+host releases it through a third. Each names
 its conversation, the app — the tool call whose UI it is (`McpAppReference`:
 `executionId`, `toolId`) — and the server. Their shapes are
 `McpCallToolParams` / `McpCallToolResult` and `McpReadResourceParams` /
@@ -91,6 +92,12 @@ join the manifest when their routes do (#348).
 - **App calls have a lane of their own**, 4 at once per socket. Past that
   they are refused `temporarily_unavailable`, so held calls never stop
   `conversation.read` or `conversation.answer`.
+- **`mcp.releaseApp`** says the host tore one mount of an app down. Each app
+  reference carries the host's own `instanceId` for its mount, since one tool
+  call can be mounted more than once. The release withdraws that mount's
+  open reviews (their calls answer `mcp_cancelled`) and releases its
+  resource tickets, and is idempotent. It travels on the control lane, never
+  the app lane, so held calls can never stop an app being released.
 - **What a refusal tells the host.** Nothing reached the server for
   `mcp_app_unknown`, `mcp_server_mismatch`, `mcp_tool_not_for_app`,
   `mcp_request_too_large`, `mcp_approval_denied`, `mcp_approval_expired` or

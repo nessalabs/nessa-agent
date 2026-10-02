@@ -763,6 +763,14 @@ pub struct ConversationPermissionOrigin {
 pub struct McpAppReference {
     pub execution_id: String,
     pub tool_id: String,
+    pub instance_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpReleaseAppParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub app: McpAppReference,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

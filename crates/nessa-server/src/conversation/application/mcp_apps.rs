@@ -10,11 +10,14 @@ use nessa_sdk::domain::mcp_apps::{ListedTool, UiResource, UiResourceUri};
 use serde_json::Value;
 use std::{future::Future, pin::Pin, sync::Arc};
 
-/// An app, by the tool call whose UI it is, in its conversation.
+/// One mount of an app: the tool call whose UI it is, in its conversation,
+/// and the host's own id for this mount of it. Policy and audit name the app
+/// by its tool call; reviews and tickets are kept per mount.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct McpAppRef {
     pub execution_id: String,
     pub tool_id: String,
+    pub instance_id: String,
 }
 
 /// Why an app's conversation session could not answer.
@@ -221,6 +224,9 @@ pub trait ResourceTickets: Send + Sync {
     /// Let go of everything held for `conversation`: its tickets are
     /// refused from now on.
     fn release_conversation(&self, conversation: &ConversationId);
+    /// Let go of everything held for the one mount `app` of
+    /// `conversation`. Idempotent.
+    fn release_app(&self, conversation: &ConversationId, app: &McpAppRef);
 }
 
 /// How long a resource ticket can be redeemed.
