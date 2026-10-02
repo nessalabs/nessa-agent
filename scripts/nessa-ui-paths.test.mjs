@@ -1,11 +1,14 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import {
+  chmodSync,
   cpSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
@@ -394,7 +397,7 @@ test("writeTsconfigPaths refuses in one line naming the file, whatever stops it"
     [
       "unwritable",
       memoryFile(utf8("{}"), { writeError: fsError("EACCES") }),
-      /^t\.json cannot be written \(EACCES\); if it was left partly written, restore it with `git checkout -- t\.json` and run `pnpm ui:paths` again$/,
+      /^t\.json cannot be written \(EACCES\); if that happened partway through, it may be partly written — look at its diff before restoring it from git, which also drops uncommitted edits$/,
     ],
   ]) {
     const result = writeTsconfigPaths("t.json", file.io)
@@ -438,5 +441,26 @@ test("what stopped a read is one phrase, whatever was thrown", () => {
       write: () => {},
     })
     assert.equal(refused, `t.json cannot be read (${phrase})`)
+  }
+})
+
+test("pnpm ui:paths writes through a symlinked tsconfig.json and keeps its mode", () => {
+  const { root, tsconfig, run } = scratchCheckout()
+  try {
+    const current = readFileSync(tsconfig, "utf8")
+    const drifted = JSON.parse(current)
+    drifted.compilerOptions.paths["@ui/*"] = ["./elsewhere/*"]
+    const target = join(root, "real-tsconfig.json")
+    writeFileSync(target, JSON.stringify(drifted, null, 2) + "\n")
+    chmodSync(target, 0o640)
+    rmSync(tsconfig)
+    symlinkSync(target, tsconfig)
+    const result = run()
+    assert.equal(result.status, 0, result.stderr)
+    assert.ok(lstatSync(tsconfig).isSymbolicLink())
+    assert.equal(readFileSync(target, "utf8"), current)
+    assert.equal(statSync(target).mode & 0o777, 0o640)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })

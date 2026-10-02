@@ -260,10 +260,12 @@ function failure(error) {
  * bytes must be UTF-8 and a plain JSON object; the file is written only when
  * that changes it. Each refusal is one line naming the file. A refusal before
  * the write leaves the file as it was. The write itself is in place: one that
- * fails partway (a full disk) can leave the file partly written, and its
- * refusal says so and how to recover — `tsconfig.json` is tracked, so git
- * restores it. Writing in place keeps the file what it is (its mode, a symlink
- * to it, its links), which a temporary file renamed over it would not.
+ * fails partway (a full disk) can leave the file partly written, and one that
+ * fails to open it (read-only) writes nothing; the refusal cannot tell which,
+ * so it says to look before restoring — restoring it from git also discards
+ * any uncommitted edit to it. Writing in place keeps the file what it is (its
+ * mode, a symlink to it, its links), which a temporary file renamed over it
+ * would not.
  *
  * @param {string} file
  * @param {{ read: (file: string) => Uint8Array, write: (file: string, text: string) => void }} io
@@ -295,7 +297,7 @@ export function writeTsconfigPaths(file, { read, write }, paths = nessaUiPaths) 
     write(file, after)
   } catch (error) {
     return {
-      refused: `${file} cannot be written (${failure(error)}); if it was left partly written, restore it with \`git checkout -- ${file}\` and run \`pnpm ui:paths\` again`,
+      refused: `${file} cannot be written (${failure(error)}); if that happened partway through, it may be partly written — look at its diff before restoring it from git, which also drops uncommitted edits`,
     }
   }
   return { written: true }
