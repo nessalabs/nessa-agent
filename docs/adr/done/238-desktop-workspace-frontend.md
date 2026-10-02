@@ -127,7 +127,8 @@ counter. The window never writes one and shows nothing where the source says
 nothing — a line of only whitespace says nothing either, the one rule for
 which is the model's (`nowLine`), the line otherwise shown as it was sent;
 the in-memory source writes one at each beat of its scripts and in
-its sample data, and the gateway will generate it (#248). An update at a
+its sample data; the gateway's source (#248) sends none, since the gateway's
+list says no such line, and the window shows none for it. An update at a
 revision the source could not have sent is let go, and logged where it is
 received (`followWorkspace`, `loadWorkspace`); the reducers stay pure.
 
@@ -1027,13 +1028,14 @@ Watch for:
 Remaining — the one list of what this record leaves open; the
 [index](../README.md) summarises it. Each is its own issue:
 
-- **The gateway's `WorkspaceSource`**
-  ([#248](https://github.com/nessalabs/nessa-agent/issues/248)). The window runs on the in-memory
-  source; attaching the backend is one adapter implementing the port
-  (`application/ports.ts`), composed in `src/desktop/dependencies.ts` in its
-  place, with the port's guarantees: every call settles on a timeout of its
-  own, refusals are typed, each replacement carries its revision, and the
-  stream says `resync` when it reconnects or finds a gap.
+- **The desktop app's own window on the gateway**
+  ([#248](https://github.com/nessalabs/nessa-agent/issues/248), its design
+  question 3). The gateway's `WorkspaceSource` is `adapters/gateway/`,
+  composed in `src/desktop/dependencies.ts` when the window is given a way
+  to connect; a browser preview opened with `?gateway` is. The app's own
+  window still shows the in-memory sample: its host hands the gateway
+  credential to the panel and setup windows only, and widening that is the
+  host's decision.
 - **nessa_ui's icon contract, and an icon slot on its access mode**
   ([nessa_ui#101](https://github.com/nessalabs/nessa_ui/issues/101)). The icon
   provider in `src/desktop/ui/icons/` mirrors `NessaIconProvider` until

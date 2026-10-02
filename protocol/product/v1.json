@@ -1053,7 +1053,7 @@
     },
     "ConversationPermissionOptionEffect": {
       "type": "string",
-      "description": "Whether a permission option allows or denies the reviewed request. Persistent choices are never offered, so neither value reaches beyond this one request.",
+      "description": "Whether a permission option allows or denies the reviewed request. Only options that decide that one request are offered: the gateway offers no review with a choice that reaches further.",
       "enum": ["allow", "deny"]
     },
     "ConversationPermission": {

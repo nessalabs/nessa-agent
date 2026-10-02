@@ -219,7 +219,8 @@ writing the full defaults on first launch is buying.
   opaque key), `application/` (the
   `WorkspaceSource` port and pure use cases over the workspace's state),
   `adapters/` (the Redux slice, commands, effects, typed hooks, selectors and
-  the split panes' source in `store/`; the in-memory source in `in-memory/`;
+  the split panes' source in `store/`; the gateway's source and its mapping
+  of conversation views in `gateway/`; the in-memory source in `in-memory/`;
   focus, Escape for the widget in front (`widget-escape.ts`), the panes'
   room, what the workspace adds to a drag, keys and the clock in `dom/`; the
   host callbacks each place gives a widget's view in

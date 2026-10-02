@@ -389,10 +389,13 @@ underneath; restore (or Escape) reveals the previous widths and open states.
 Hidden workspace/navigation panels are inert and resize separators are hidden.
 The right toggle exits this mode and closes the panel.
 
-The workspace layouts read the desktop store, a projection of the in-memory
-`WorkspaceSource` described above; the window has no backend connection yet,
-and the pane arrangement is not kept between launches (the chosen layout is,
-as a stored preference).
+The workspace layouts read the desktop store, a projection of one
+`WorkspaceSource`: the gateway's conversations (`adapters/gateway/`, #248)
+when the window is given a way to connect — today a browser preview opened
+with `?gateway` — and the in-memory sample otherwise, which is what the
+desktop app's own window still shows until its host hands it a gateway
+credential. The pane arrangement is not kept between launches (the chosen
+layout is, as a stored preference).
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
 entries, and `pnpm app` runs both windows.
 

@@ -234,8 +234,9 @@ pub struct ConversationPermissionOption {
     /// picks an option by this, never by its label or identifier.
     pub effect: ConversationPermissionOptionEffect,
 }
-/// Whether an option allows or denies the reviewed request; persistent
-/// choices are never offered (`permission_options`), so neither reaches past it.
+/// Whether an option allows or denies the reviewed request. Only an option
+/// deciding that one request is published: the projection offers no review
+/// with another (`projection.rs`, "a review reaching beyond its request").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationPermissionOptionEffect {

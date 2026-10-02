@@ -13,6 +13,7 @@ import {
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
 import { WorkspaceSourceError, type WorkspaceUpdate } from "../../application/ports"
+import { composerModels } from "../../../model/composer-options"
 import { messageText } from "../../model/transcript"
 import { testStore } from "../../testing"
 import { followWorkspace, loadWorkspace, sendMessage } from "../store/commands"
@@ -102,7 +103,7 @@ const running = (id = "turn") => ({
 })
 
 describe("reads", () => {
-  it("R1: lists every conversation in one section and channel, each at its first revision", async () => {
+  it("C1, R1: connected, lists every conversation in one section and channel, each at its first revision", async () => {
     const { gateway, source } = started()
     gateway.rows.set("a", row("a", { running: true }))
     gateway.rows.set("b", row("b", { title: null, preview: null }))
@@ -438,7 +439,8 @@ describe("the stream", () => {
 
   it("S5: a watched conversation the gateway no longer holds stops being read, and is no gap", async () => {
     const { gateway, source, updates, follow, advance } = started()
-    gateway.views.set("a", view("a"))
+    // Live, so it would be read every round (S7) if it stayed watched.
+    gateway.views.set("a", view("a", { messages: [running()] }))
     await source.transcript("a")
     gateway.views.delete("a")
     follow()
@@ -660,9 +662,23 @@ describe("refusals are typed (F)", () => {
     ).toMatchObject({ reason: "not-waiting" })
   })
 
-  it("F3: any other code, an unknown one, or no answer is unavailable", () => {
+  it("F3: a refusal asking again cannot change is not supported, never 'no answer'", () => {
+    for (const code of [
+      "agent_not_configured",
+      "agent_unsupported",
+      "conversations_not_configured",
+      "model_unavailable",
+      "invalid_request",
+      "submission_conflict",
+    ])
+      expect(refusalOf(rpc(code))).toMatchObject({ reason: "not-supported" })
+  })
+
+  it("F3: a code for what may yet be done, an unknown one, or no answer is unavailable", () => {
     for (const error of [
       rpc("temporarily_unavailable"),
+      rpc("conversation_capacity"),
+      rpc("submission_unresolved"),
       rpc("a_code_nobody_taught_this_build"),
       new NessaConnectionClosedError(1006, ""),
       new NessaConversationControlError("c", "r", "e", new Error("lost"), false),
@@ -675,6 +691,224 @@ describe("refusals are typed (F)", () => {
     const fault = new Error("Invalid conversation response")
     gateway.once("list", () => Promise.reject(fault))
     await expect(source.index()).rejects.toBe(fault)
+  })
+})
+
+describe("round 1's rows", () => {
+  it("R7: a read answered after a newer list is filed against the row it was asked under, so the change is read", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    // A running turn whose reply is streaming text: no activity, so only the row says it runs.
+    const streaming = (revision: string) =>
+      view("a", {
+        revision,
+        messages: [
+          {
+            ...running(),
+            parts: [{ offset: 0, kind: "text", text: "Work", toolId: "", noticeId: "" }],
+          },
+        ],
+      })
+    gateway.rows.set("a", row("a", { running: true, updatedAtMs: 1 }))
+    gateway.views.set("a", streaming("1"))
+    await source.index()
+    await source.transcript("a")
+    follow()
+    // The round's read is slow; meanwhile the turn ends and an index applies the newer row.
+    const slow = deferred<unknown>()
+    gateway.once("read", () => slow.promise)
+    await advance(timing.pollMs)
+    gateway.rows.set("a", row("a", { running: false, updatedAtMs: 2 }))
+    await source.index()
+    gateway.views.set(
+      "a",
+      view("a", {
+        revision: "3",
+        messages: [
+          {
+            ...running(),
+            status: "completed",
+            parts: [{ offset: 0, kind: "text", text: "Done", toolId: "", noticeId: "" }],
+          },
+        ],
+      }),
+    )
+    // The slow read answers with the running snapshot it was asked for.
+    slow.resolve(streaming("2"))
+    await advance(timing.pollMs * 3)
+    const last = updates.filter((update) => update.kind === "transcript").pop()
+    expect(last).toMatchObject({ transcript: { revision: 3 } })
+  })
+
+  it("C5: an archive that never answers settles, and the lists behind it still go", async () => {
+    const { gateway, source, advance } = started()
+    gateway.rows.set("a", row("a"))
+    await source.index()
+    gateway.once("archive", () => new Promise(() => {}))
+    const archived = source.archive("a", "person").catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await archived).toMatchObject({ reason: "unavailable" })
+    const lists = gateway.count("list")
+    await expect(source.index()).resolves.toMatchObject({ sessions: [expect.anything()] })
+    expect(gateway.count("list")).toBe(lists + 1)
+  })
+
+  it("C5: an open that never answers settles, and the next read of the session opens again", async () => {
+    const { gateway, source, advance } = started()
+    gateway.views.set("a", view("a"))
+    gateway.once("create", () => new Promise(() => {}))
+    const first = source.transcript("a").catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await first).toMatchObject({ reason: "unavailable" })
+    await expect(source.transcript("a")).resolves.toMatchObject({ revision: 1 })
+    expect(gateway.count("create")).toBe(2)
+  })
+
+  it("W6b: a second archive of a session is refused as unknown, asks nobody, and says no second removal", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set("a", row("a"))
+    await source.index()
+    follow()
+    const outcomes = await Promise.allSettled([
+      source.archive("a", "person"),
+      source.archive("a", "agent"),
+    ])
+    expect(outcomes[0].status).toBe("fulfilled")
+    expect(outcomes[1]).toMatchObject({
+      status: "rejected",
+      reason: { reason: "unknown-session" },
+    })
+    expect(gateway.count("archive")).toBe(1)
+    expect(kinds(updates)).toEqual(["session-removed"])
+  })
+
+  it("W8: a message asking an existing session for another model is refused, and nothing is sent", async () => {
+    const { gateway, source } = started()
+    const started_ = { channelId: "gateway-conversations", title: "Hi" }
+    await source.send({
+      sessionId: "s",
+      messageId: "m1",
+      text: "Hi",
+      model,
+      initiator: "person",
+      start: started_,
+    })
+    const other = { provider: "openai", modelId: "gpt-5" }
+    await expect(
+      source.send({
+        sessionId: "s",
+        messageId: "m2",
+        text: "Again",
+        model: other,
+        initiator: "person",
+      }),
+    ).rejects.toMatchObject({ reason: "not-supported" })
+    expect(gateway.count("send")).toBe(1)
+    // The same model goes.
+    await source.send({
+      sessionId: "s",
+      messageId: "m3",
+      text: "Again",
+      model,
+      initiator: "person",
+    })
+    expect(gateway.count("send")).toBe(2)
+  })
+
+  it("W8: an unknown model cannot be compared, so the message goes", async () => {
+    const { gateway, source } = started()
+    gateway.views.set("a", view("a"))
+    await source.transcript("a")
+    await source.send({
+      sessionId: "a",
+      messageId: "m",
+      text: "Hi",
+      model: { provider: "openai", modelId: "gpt-5" },
+      initiator: "person",
+    })
+    expect(gateway.count("send")).toBe(1)
+  })
+
+  it("S7: a watched conversation no list names is read while live, and not once at rest", async () => {
+    const { gateway, source, follow, advance } = started()
+    gateway.views.set("live", view("live", { messages: [running()] }))
+    gateway.views.set("rest", view("rest"))
+    await source.transcript("live")
+    await source.transcript("rest")
+    follow()
+    await advance(timing.pollMs * 3)
+    const readsOf = (id: string) =>
+      gateway.calls.filter((call) => call.method === "read" && call.args[0] === id).length
+    expect(readsOf("live")).toBe(4)
+    expect(readsOf("rest")).toBe(1)
+  })
+
+  it("W3b: an answer taken whose read after fails still resolves, and the next list resyncs", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    const asked = permission()
+    gateway.views.set(
+      "a",
+      view("a", { revision: "1", messages: [running()], permissions: [asked] }),
+    )
+    await source.transcript("a")
+    follow()
+    gateway.once("read", async (normal) => normal())
+    gateway.once("read", () => Promise.reject(new NessaConnectionClosedError(1006, "")))
+    await expect(
+      source.approve("a", approvalId(asked), "once", "person"),
+    ).resolves.toBeUndefined()
+    expect(gateway.count("answer")).toBe(1)
+    await advance(timing.pollMs)
+    expect(updates).toContainEqual({ kind: "resync" })
+  })
+})
+
+describe("round 1's ownership rows", () => {
+  it("S3b: a session listed again after its removal is not said to wait on the person from its old read", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set(
+      "a",
+      view("a", { messages: [running()], permissions: [permission()] }),
+    )
+    await source.index()
+    await source.transcript("a")
+    follow()
+    gateway.rows.delete("a")
+    await advance(timing.pollMs)
+    gateway.rows.set("a", row("a"))
+    await advance(timing.pollMs)
+    const relisted = updates.filter((update) => update.kind === "session").pop()
+    expect(relisted).toMatchObject({ session: { id: "a", status: "idle" } })
+  })
+
+  it("a summary is said again when what its conversation runs on comes to be known", async () => {
+    const { gateway, source, updates, follow } = started()
+    const listed = composerModels[composerModels.length - 1]
+    gateway.rows.set("a", row("a"))
+    await source.index()
+    follow()
+    gateway.views.set(
+      "a",
+      view("a", {
+        runtime: {
+          model: listed.modelId,
+          provider: "x",
+          workspace: "/",
+          agent: "x",
+          modelName: "x",
+          contextWindowTokens: 1,
+          reasoning: false,
+        },
+      }),
+    )
+    await source.transcript("a")
+    expect(updates).toContainEqual({
+      kind: "session",
+      session: expect.objectContaining({
+        revision: 2,
+        model: { provider: listed.provider, modelId: listed.modelId },
+      }),
+    })
   })
 })
 

@@ -72,42 +72,49 @@ export function summaryFrom(
   }
 }
 
+type Said = Omit<SessionSummary, "revision">
+
+/**
+ * How each field of a summary is compared: a total table, so a field added to
+ * `SessionSummary` does not compile until it says how it is compared.
+ */
+const sameField: {
+  readonly [K in keyof Required<Said>]: (a: Said[K], b: Said[K]) => boolean
+} = {
+  id: Object.is,
+  channelId: Object.is,
+  title: Object.is,
+  model: (a, b) => a.provider === b.provider && a.modelId === b.modelId,
+  status: Object.is,
+  startedAt: Object.is,
+  updatedAt: Object.is,
+  preview: Object.is,
+  now: Object.is,
+  pinned: Object.is,
+  unread: Object.is,
+}
+
 /** Whether two summaries say the same, revisions aside. */
-export function sameSummary(
-  a: Omit<SessionSummary, "revision">,
-  b: Omit<SessionSummary, "revision">,
-): boolean {
-  return (
-    a.id === b.id &&
-    a.channelId === b.channelId &&
-    a.title === b.title &&
-    a.model.provider === b.model.provider &&
-    a.model.modelId === b.model.modelId &&
-    a.status === b.status &&
-    a.startedAt === b.startedAt &&
-    a.updatedAt === b.updatedAt &&
-    a.preview === b.preview &&
-    a.now === b.now &&
-    a.pinned === b.pinned &&
-    a.unread === b.unread
+export function sameSummary(a: Said, b: Said): boolean {
+  return (Object.keys(sameField) as (keyof Said)[]).every((key) =>
+    (sameField[key] as (x: unknown, y: unknown) => boolean)(a[key], b[key]),
   )
 }
 
-/**
- * The model a session runs on, as best the adapter knows it: the one the
- * window sent its message with; else the catalogue's entry for the model the
- * gateway says it runs; else, knowing nothing, the composer's default — a
- * guess, said here because the gateway's list names no model.
- */
-export function modelFor(
-  sent: ModelRef | undefined,
-  view: ConversationView | undefined,
-): ModelRef {
-  if (sent) return sent
+/** The catalogue's entry for the model a view says its conversation runs on, if it lists one. */
+export function runningModel(view: ConversationView | undefined): ModelRef | undefined {
   const running = view?.runtime?.model
   const listed = composerModels.find((model) => model.modelId === running)
-  if (listed) return { provider: listed.provider, modelId: listed.modelId }
-  return defaultModel() ?? { provider: "", modelId: running ?? "" }
+  return listed && { provider: listed.provider, modelId: listed.modelId }
+}
+
+/**
+ * The model a session's summary names: the one it is known to run on (the
+ * adapter's `knownModel`), else, knowing nothing, the composer's default — a
+ * guess, said here because the gateway's list names no model.
+ */
+export function modelFor(known: ModelRef | undefined): ModelRef {
+  return known ?? defaultModel() ?? { provider: "", modelId: "" }
 }
 
 /**
@@ -238,9 +245,15 @@ export function transcriptFrom(
       parts: [{ kind: "text", text: waiting.text }],
     })
   }
+  // What runs is the tool and its exact input, which the gateway offers a
+  // review only when it can show whole; why is the provider's title for it.
   const asked = view.permissions[0]
   const approval: Approval | null = asked
-    ? { id: approvalId(asked), command: asked.title, reason: asked.toolName }
+    ? {
+        id: approvalId(asked),
+        command: `${asked.toolName} ${asked.argumentsJson}`,
+        reason: asked.title,
+      }
     : null
   return { sessionId: view.conversationId, messages, activity, approval, revision }
 }

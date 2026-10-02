@@ -473,7 +473,7 @@ export interface ConversationPermissionOption {
   /** What choosing this option decides for the reviewed request, as the gateway's domain classified the provider's offer: allow it, or deny it. A surface picks an option by this, never by its label or identifier. */
   effect: ConversationPermissionOptionEffect
 }
-/** Whether a permission option allows or denies the reviewed request. Persistent choices are never offered, so neither value reaches beyond this one request. */
+/** Whether a permission option allows or denies the reviewed request. Only options that decide that one request are offered: the gateway offers no review with a choice that reaches further. */
 export const ConversationPermissionOptionEffect = {
   Allow: "allow",
   Deny: "deny",

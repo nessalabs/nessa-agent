@@ -38,9 +38,9 @@ use nessa_sdk::domain::agent_execution::executions::{
     QueueMutation, SchedulingCause,
 };
 use nessa_sdk::domain::agent_execution::permissions::{
-    PermissionCancellationReason, PermissionDecision, PermissionEffect, PermissionId,
-    PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
-    PermissionScope,
+    PermissionApplicationId, PermissionCancellationReason, PermissionDecision, PermissionEffect,
+    PermissionId, PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
+    PermissionScope, PermissionSessionId,
 };
 use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::questions::{
@@ -962,6 +962,55 @@ fn committed_partial_progress_cannot_be_replaced_by_an_older_complete_read() {
 }
 
 #[test]
+fn a_review_reaching_beyond_its_request_is_not_offered() {
+    let scoped = PermissionDecision::new(
+        PermissionEffect::Allow,
+        PermissionScope::session(
+            PermissionApplicationId::new("app").unwrap(),
+            PermissionSessionId::new("session").unwrap(),
+        ),
+    );
+    let options = PermissionOptions::new(
+        vec![PermissionOption::new(
+            PermissionOptionId::new("always").unwrap(),
+            "Allow for this session",
+            scoped.clone(),
+        )
+        .unwrap()],
+        &PermissionOfferPolicy::new(vec![scoped]).unwrap(),
+    )
+    .unwrap();
+    let ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
+        id,
+        tool_id,
+        observation,
+        input,
+        options,
+    })]);
+    let mut projection = projection();
+    projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        Some(&ExecutionId::new("execution").unwrap()),
+    );
+    projection.transcript_state(ConversationTranscriptState::Complete);
+    let view = projection.read();
+    // Its allow would read as one for this request alone: no choice is offered.
+    assert!(view.permissions.is_empty());
+    assert!(view.interaction_view_error.is_some());
+}
+
+#[test]
 fn a_review_says_what_each_offered_option_decides() {
     let options = PermissionOptions::new(
         vec![
@@ -1011,6 +1060,10 @@ fn a_review_says_what_each_offered_option_decides() {
         .iter()
         .map(|option| (option.id.as_str(), option.effect))
         .collect();
+    // On the wire as the schema names it.
+    let wire = serde_json::to_value(&view.permissions[0].options).unwrap();
+    assert_eq!(wire[0]["effect"], "deny");
+    assert_eq!(wire[1]["effect"], "allow");
     // The effect is the domain's decision, whatever the label or the order.
     assert_eq!(
         offered,

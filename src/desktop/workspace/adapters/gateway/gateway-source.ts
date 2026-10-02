@@ -25,11 +25,18 @@
  *   (the client reconnected, or a new one was made after the last closed),
  *   and on the first list that answers after a poll failed.
  * - **What the gateway does not keep**: pins and "always" answers are
- *   refused as `not-supported`; there is no unread mark, so `markRead` has
- *   nothing to do. Nor does it take an initiator: it records each answer
- *   and archive as this window's authenticated caller, and cannot tell the
- *   person from an agent dispatching the same command — a gap in the record
- *   the in-memory source keeps, said here until the protocol carries it.
+ *   refused as `not-supported`, and so is a message asking a conversation
+ *   for another model than the one it was created on; there is no unread
+ *   mark, so `markRead` has nothing to do. Nor does it take an initiator: it
+ *   records each answer and archive as this window's authenticated caller,
+ *   and cannot tell the person from an agent dispatching the same command —
+ *   a gap in the record the in-memory source keeps, said here until the
+ *   protocol carries it.
+ * - **What it cannot see without reading**: a list row says whether a
+ *   conversation runs, not whether it waits on the person, so a summary says
+ *   `needs-you` only for a conversation the window has read; and a question
+ *   the agent asks (`view.questions`) has no place in the workspace's model
+ *   and is not shown.
  *
  * It owns the client it connects (`connect`), and `dispose` closes it.
  */
@@ -68,6 +75,7 @@ import {
   gatewaySection,
   modelFor,
   reviewOf,
+  runningModel,
   sameSummary,
   summaryFrom,
   transcriptFrom,
@@ -99,9 +107,9 @@ export interface GatewayTiming {
 }
 
 /**
- * Longer than the client's own 30-second request timeout, so its typed
- * answer arrives first when there is one; the adapter's timer is for a call
- * that gets none.
+ * The adapter's own budget for each call, whatever the client is doing: a
+ * call of several requests (a send is `create` then `send`) shares it, and
+ * one still waiting on the client when it runs out settles `unavailable`.
  */
 export const defaultGatewayTiming: GatewayTiming = { callMs: 35_000, pollMs: 1_000 }
 
@@ -143,8 +151,8 @@ export function gatewaySource(options: {
   const reads = new Map<string, Read>()
   // When each message was first seen, per session: the gateway's view has no times.
   const firstSeen = new Map<string, Map<string, number>>()
-  // The model the window sent each session's message with.
-  const sentModels = new Map<string, ModelRef>()
+  // The model each session the window began was created on.
+  const startModels = new Map<string, ModelRef>()
   // Conversations the window has read, and so wants kept current.
   const watched = new Set<string>()
   // Conversations opened on the current connection (`create`), shared by callers.
@@ -266,8 +274,10 @@ export function gatewaySource(options: {
     return { turn, settled: turn.then(noop, noop) }
   }
 
-  const modelOf = (sessionId: string) =>
-    modelFor(sentModels.get(sessionId), reads.get(sessionId)?.view)
+  /** The model a session is known to run on: the one it was begun with here, or the one the gateway says. */
+  const knownModel = (sessionId: string) =>
+    startModels.get(sessionId) ?? runningModel(reads.get(sessionId)?.view)
+  const modelOf = (sessionId: string) => modelFor(knownModel(sessionId))
 
   /**
    * Says a session's summary again from everything known of it, at its next
@@ -298,6 +308,8 @@ export function gatewaySource(options: {
     if (held) summaries.set(sessionId, { summary: held.summary, removed: true })
     rows.delete(sessionId)
     watched.delete(sessionId)
+    // Its last read goes with it: listed again, nothing it said then speaks for it.
+    reads.delete(sessionId)
     emit({ kind: "session-removed", sessionId, revision })
   }
 
@@ -339,17 +351,26 @@ export function gatewaySource(options: {
     }
   }
 
-  /** Applies a read: a changed view is the conversation's next count, and is said. */
-  const applyRead = (sessionId: string, view: ConversationView): Transcript => {
+  /**
+   * Applies a read: a changed view is the conversation's next count, and is
+   * said. It is filed against the row held when it was asked (`against`), not
+   * one a list brought while it was on its way: a change that row says is
+   * then still unread, and the next round reads it (R7).
+   */
+  const applyRead = (
+    sessionId: string,
+    view: ConversationView,
+    against: ConversationSummary | undefined,
+  ): Transcript => {
     const held = reads.get(sessionId)
     if (held && held.view.revision === view.revision) {
-      reads.set(sessionId, { ...held, against: rows.get(sessionId) })
+      reads.set(sessionId, { ...held, against })
       return held.transcript
     }
     const revision = (transcriptCounts.get(sessionId) ?? 0) + 1
     transcriptCounts.set(sessionId, revision)
     const transcript = transcriptFrom(view, revision, seenIn(sessionId))
-    reads.set(sessionId, { view, transcript, against: rows.get(sessionId) })
+    reads.set(sessionId, { view, transcript, against })
     emit({ kind: "transcript", transcript })
     // The summary follows what the read says: an approval waiting, the model it runs on.
     publish(sessionId)
@@ -358,11 +379,12 @@ export function gatewaySource(options: {
 
   /** Reads one conversation in its turn; an answer after its call timed out is let go. */
   const read = (sessionId: string): Promise<Transcript> => {
-    const { turn, settled } = inTurn(reading.get(sessionId) ?? Promise.resolve(), () =>
-      within(async () => (await client()).conversation.read(sessionId)).then((view) =>
-        applyRead(sessionId, view),
-      ),
-    )
+    const { turn, settled } = inTurn(reading.get(sessionId) ?? Promise.resolve(), () => {
+      const against = rows.get(sessionId)
+      return within(async () => (await client()).conversation.read(sessionId)).then(
+        (view) => applyRead(sessionId, view, against),
+      )
+    })
     reading.set(sessionId, settled)
     return turn
   }
@@ -373,15 +395,16 @@ export function gatewaySource(options: {
     if (known) return known
     const model = start?.model
     const agent = model && agentForProvider(model.provider)
-    const opening = client()
-      .then((connected) =>
-        connected.conversation.create({
-          conversationId: sessionId,
-          ...(agent ? { agent } : {}),
-          ...(model ? { model: model.modelId } : {}),
-        }),
-      )
-      .then(noop)
+    // Its own timer, so a create that never answers does not hold the session's opening (C5).
+    const opening = within(async () => {
+      await (
+        await client()
+      ).conversation.create({
+        conversationId: sessionId,
+        ...(agent ? { agent } : {}),
+        ...(model ? { model: model.modelId } : {}),
+      })
+    })
     opened.set(sessionId, opening)
     opening.catch(() => {
       if (opened.get(sessionId) === opening) opened.delete(sessionId)
@@ -393,9 +416,11 @@ export function gatewaySource(options: {
   const stale = (sessionId: string): boolean => {
     const last = reads.get(sessionId)
     const row = rows.get(sessionId)
-    // Not listed yet — just begun — or never read: read it.
-    if (!last || !row) return true
-    if (row.running || last.transcript.approval || last.transcript.activity) return true
+    if (!last) return true
+    const live = Boolean(last.transcript.approval || last.transcript.activity)
+    // Not listed — just begun, or past an incomplete list: read while it is live (S7).
+    if (!row) return live
+    if (row.running || live) return true
     return (
       last.against?.updatedAtMs !== row.updatedAtMs ||
       last.against.running !== row.running
@@ -471,8 +496,9 @@ export function gatewaySource(options: {
         permission.permissionId,
         option.id,
       )
-      // Resolves once the conversation that no longer asks is said; if that
-      // read fails, the answer still stands, and the next list resyncs.
+      // Read once more, so the conversation after the answer is said where
+      // the gateway has applied it already (`ports.ts`); if that read fails,
+      // the answer still stands, and the next list resyncs (W3b).
       await read(sessionId).catch(() => {
         gap = true
       })
@@ -508,7 +534,16 @@ export function gatewaySource(options: {
     },
     send: (message) =>
       within(async () => {
-        sentModels.set(message.sessionId, message.model)
+        // The gateway keeps a conversation on the model it was created with: a
+        // message asking for another is refused rather than sent on the old one (W8).
+        const known = message.start ? undefined : knownModel(message.sessionId)
+        if (
+          known &&
+          (known.provider !== message.model.provider ||
+            known.modelId !== message.model.modelId)
+        )
+          throw new WorkspaceSourceError("not-supported")
+        if (message.start) startModels.set(message.sessionId, message.model)
         await open(message.sessionId, message.start ? message : undefined)
         await (
           await client()
@@ -522,7 +557,8 @@ export function gatewaySource(options: {
       }),
     approve: (sessionId: string, approvalId: string, scope: ApprovalScope) =>
       scope === "always"
-        ? // The gateway never offers a persistent answer (ADR 344's offer policy).
+        ? // No option the gateway shows reaches past its request: the projection
+          // offers no review with one (`projection.rs`, nessa-server).
           Promise.reject(new WorkspaceSourceError("not-supported"))
         : answer(sessionId, approvalId, "allow"),
     deny: (sessionId, approvalId) => answer(sessionId, approvalId, "deny"),
@@ -532,7 +568,11 @@ export function gatewaySource(options: {
       within(async () => {
         // In the list's turn, so no list asked before it can list the session again.
         const { turn, settled } = inTurn(listing, async () => {
-          await (await client()).conversation.archive(sessionId)
+          // Taken out already, by this window or a list: refused, and asked of nobody (W6b).
+          if (summaries.get(sessionId)?.removed)
+            throw new WorkspaceSourceError("unknown-session")
+          // Its own timer, so one that never answers does not hold the lists behind it (C5).
+          await within(async () => (await client()).conversation.archive(sessionId))
           remove(sessionId)
         })
         listing = settled
@@ -580,15 +620,69 @@ export function refusalOf(error: unknown): unknown {
   return error
 }
 
-/** A conversation code as the workspace's reason. */
+/**
+ * A conversation code as the workspace's reason, answered for every code: a
+ * `switch` with a declared return does not compile until the next code the
+ * gateway adds is answered (gate 11). `unavailable` is kept for what may yet
+ * be done, or may have been — `failure.ts`'s meaning — and never for a refusal
+ * that asking again cannot change, which is `not-supported`.
+ */
 function reasonFor(code: ConversationErrorCode): WorkspaceFailureReason {
   switch (code) {
+    // The gateway holds no such conversation for this caller, or it was deleted.
     case ConversationErrorCode.ConversationNotFound:
     case ConversationErrorCode.ConversationDeleted:
       return "unknown-session"
+    // The review was answered, withdrawn, or never asked.
     case ConversationErrorCode.StalePermission:
       return "not-waiting"
-    default:
+    // Refused for good, whatever the timing: the gateway cannot do this here,
+    // or this window asked it wrongly, and asking again changes nothing.
+    case ConversationErrorCode.AgentNotConfigured:
+    case ConversationErrorCode.AgentUnsupported:
+    case ConversationErrorCode.ConversationsNotConfigured:
+    case ConversationErrorCode.ModelUnavailable:
+    case ConversationErrorCode.ImageInputUnsupported:
+    case ConversationErrorCode.ApprovalModeUnavailable:
+    case ConversationErrorCode.UnknownMethod:
+    case ConversationErrorCode.InvalidRequest:
+    case ConversationErrorCode.SubmissionConflict:
+      return "not-supported"
+    // Not done now, or not known to be: busy, starting, stopped, storage or
+    // audit that did not answer, an outcome the gateway could not settle.
+    case ConversationErrorCode.ApprovalModeNotApplied:
+    case ConversationErrorCode.ApprovalModeUncertain:
+    case ConversationErrorCode.ApprovalRequestConflict:
+    case ConversationErrorCode.TurnRunning:
+    case ConversationErrorCode.ConversationCapacity:
+    case ConversationErrorCode.ConversationClosed:
+    case ConversationErrorCode.ConversationConfigurationChanged:
+    case ConversationErrorCode.ConversationStateUnreadable:
+    case ConversationErrorCode.ConversationStorageUnavailable:
+    case ConversationErrorCode.TemporarilyUnavailable:
+    case ConversationErrorCode.AuditUnavailable:
+    case ConversationErrorCode.SubmissionUnresolved:
+    case ConversationErrorCode.AgentStartupDeadline:
+    case ConversationErrorCode.AgentOperationFailed:
+    case ConversationErrorCode.AttachmentNotFound:
+    case ConversationErrorCode.AttachmentUnavailable:
+    case ConversationErrorCode.AttachmentCapacity:
+    case ConversationErrorCode.AttachmentStorageUnavailable:
+    case ConversationErrorCode.AttachmentCleanupUnavailable:
+    case ConversationErrorCode.ConversationErasureIncomplete:
+      return "unavailable"
+    // An MCP App's own calls; this source makes none, so none is its answer.
+    case ConversationErrorCode.McpAppUnknown:
+    case ConversationErrorCode.McpServerMismatch:
+    case ConversationErrorCode.McpToolNotForApp:
+    case ConversationErrorCode.McpSessionUnavailable:
+    case ConversationErrorCode.McpApprovalDenied:
+    case ConversationErrorCode.McpApprovalExpired:
+    case ConversationErrorCode.McpCancelled:
+    case ConversationErrorCode.McpRequestTooLarge:
+    case ConversationErrorCode.McpResultTooLarge:
+    case ConversationErrorCode.McpTimedOut:
+    case ConversationErrorCode.McpRemoteError:
       return "unavailable"
   }
 }

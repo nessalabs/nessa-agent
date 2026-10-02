@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { host } from "../host"
 import { environmentFromVite } from "../env/vite"
-import { browserSessionUrl, connectDevSession } from "../session"
+import { connectBrowserSession, createBrowserAuth } from "../session"
 import { createDesktopDependencies } from "./dependencies"
 import { gatewayRequested } from "./model/workspace-backend"
 import { makeDesktopStore } from "./store"
@@ -22,16 +22,21 @@ import "./styles.css"
 // gateway's conversations, over the session this origin signed in to;
 // otherwise the window shows the sample (`model/workspace-backend.ts`).
 const environment = environmentFromVite()
-const gateway =
-  host.kind === "browser" && gatewayRequested(window.location.search)
-    ? () =>
-        connectDevSession({
-          stage: environment.stage,
-          clientId: "nessa-browser",
-          surfaceKind: "desktop",
-          browserUrl: browserSessionUrl(window.location.href, environment.stage),
-        }).then((session) => session.client)
-    : undefined
+const browserGateway = host.kind === "browser" && gatewayRequested(window.location.search)
+// This origin's sign-in, as the panel's browser surface keeps it.
+const auth = browserGateway
+  ? createBrowserAuth(window.fetch.bind(window), window.sessionStorage)
+  : undefined
+const gateway = auth
+  ? () =>
+      connectBrowserSession({
+        auth,
+        stage: environment.stage,
+        clientId: "nessa-browser",
+        surfaceKind: "desktop",
+        pageUrl: window.location.href,
+      }).then((session) => session.client)
+  : undefined
 const dependencies = createDesktopDependencies({
   gateway,
   apps: {

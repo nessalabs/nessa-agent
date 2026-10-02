@@ -10,6 +10,7 @@ import {
   modelFor,
   replyId,
   reviewOf,
+  runningModel,
   summaryFrom,
   transcriptFrom,
 } from "./gateway-views"
@@ -245,11 +246,11 @@ describe("a conversation view as a transcript", () => {
             executionId: "e/1",
             permissionId: "p%2",
             toolId: "t1",
-            title: "Run rm -rf build",
+            title: "Tool permission",
             options: [{ id: "a", label: "Allow", effect: "allow" }],
             toolName: "bash",
             origin: { kind: "harness" },
-            argumentsJson: "{}",
+            argumentsJson: '{"command":"rm -rf build"}',
           },
         ],
       }),
@@ -257,8 +258,9 @@ describe("a conversation view as a transcript", () => {
       at,
     )
     expect(transcript.approval).toMatchObject({
-      command: "Run rm -rf build",
-      reason: "bash",
+      // The exact input approved, whatever the provider titles the review.
+      command: 'bash {"command":"rm -rf build"}',
+      reason: "Tool permission",
     })
     expect(reviewOf(transcript.approval!.id)).toEqual({
       executionId: "e/1",
@@ -293,26 +295,32 @@ describe("a list row as a summary", () => {
 })
 
 describe("the model a session runs on", () => {
-  it("is the one sent with, else the catalogue's for what the gateway runs, else the default", () => {
-    const sent = { provider: "openai", modelId: "gpt-5" }
-    expect(modelFor(sent, view("c", { runtime: undefined }))).toBe(sent)
+  it("is the catalogue's entry for what the gateway runs, or none it does not list", () => {
     // A model the catalogue lists, whichever it is: the catalogue is the SDK's.
     const listed = composerModels[composerModels.length - 1]
-    const runs = view("c", {
-      runtime: {
-        model: listed.modelId,
-        provider: "codex",
-        workspace: "/",
-        agent: "codex",
-        modelName: "GPT-5",
-        contextWindowTokens: 1,
-        reasoning: true,
-      },
-    })
-    expect(modelFor(undefined, runs)).toEqual({
+    const runs = (model: string) =>
+      view("c", {
+        runtime: {
+          model,
+          provider: "codex",
+          workspace: "/",
+          agent: "codex",
+          modelName: "Some model",
+          contextWindowTokens: 1,
+          reasoning: true,
+        },
+      })
+    expect(runningModel(runs(listed.modelId))).toEqual({
       provider: listed.provider,
       modelId: listed.modelId,
     })
-    expect(modelFor(undefined, undefined)).toEqual(defaultModel())
+    expect(runningModel(runs("a-model-no-catalogue-lists"))).toBeUndefined()
+    expect(runningModel(view("c", { runtime: undefined }))).toBeUndefined()
+  })
+
+  it("is said as the known one, else the composer's default", () => {
+    const known = { provider: "openai", modelId: "gpt-5" }
+    expect(modelFor(known)).toBe(known)
+    expect(modelFor(undefined)).toEqual(defaultModel())
   })
 })

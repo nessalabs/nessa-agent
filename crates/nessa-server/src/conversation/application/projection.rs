@@ -17,7 +17,7 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
-    permissions::{ReviewDecline, ReviewDeclineReason, ReviewDeclineStage},
+    permissions::{PermissionScope, ReviewDecline, ReviewDeclineReason, ReviewDeclineStage},
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
 };
@@ -560,6 +560,19 @@ impl Projection {
             || serde_json::from_str::<serde_json::Value>(&input.arguments_json).is_err()
         {
             self.view.interaction_view_error = Some("The complete tool input cannot be displayed safely; this review has no actionable choices in this view.".into());
+            self.view.truncated = true;
+            return;
+        }
+        // An option says what it decides (`effect`), not how far it reaches. Live
+        // offers decide one request (`once_only`, and the ACP parser admits no
+        // persistent kind); a restored one that reached further would read as
+        // one that does not, so its review is not offered here.
+        if options
+            .choices()
+            .iter()
+            .any(|option| *option.decision().scope() != PermissionScope::request())
+        {
+            self.view.interaction_view_error = Some("This review offers a choice beyond this one request, which this view cannot show; this review has no actionable choices in this view.".into());
             self.view.truncated = true;
             return;
         }

@@ -1,8 +1,8 @@
 /**
  * What the workspace needs from whoever holds the sessions: the one port a
- * backend implements to attach. Today `adapters/in-memory/` implements it with
- * sample data and scripted replies; the gateway will implement it next, and
- * no view changes when it does.
+ * backend implements to attach. `adapters/gateway/` implements it over the
+ * gateway's conversations, and `adapters/in-memory/` with sample data and
+ * scripted replies; no view knows which.
  *
  * Every answer is the workspace's own types. Updates arrive as replacements —
  * a session's whole summary, a transcript's whole current state — each with
@@ -118,8 +118,12 @@ export interface WorkspaceSource {
    * Allows, or refuses, what a session's agent waits to run. Like pinning and
    * archiving, a consequential call: the source records it — what was asked,
    * who asked it — before it carries it out, and then what became of it, so a
-   * refused or failed one is on record too. Resolves once the conversation
-   * that no longer asks has reached subscribers.
+   * refused or failed one is on record too. Resolves once the source has
+   * taken the answer; the conversation that no longer asks reaches
+   * subscribers as an update — before the call resolves where the source can
+   * say it by then (the in-memory source always can), after it otherwise.
+   * The window holds the answer as given until that conversation arrives
+   * (`withTranscript` in `workspace-state.ts`).
    */
   approve(
     sessionId: string,
