@@ -22,9 +22,10 @@
  *
  * Order is not part of the table: the derivers put a whole specifier and a
  * longer prefix ahead of a shorter one, so `lib/` is never claimed by the
- * components' rule. It imports nothing: the architecture check imports it on
- * bare Node with no `node_modules`, and that check's own import rule reads this
- * file to hold it so. Its types are `nessa-ui-paths.d.mts`'s.
+ * components' rule. The architecture check imports this on bare Node with no
+ * `node_modules`, so it may import only Node's builtins and its neighbours —
+ * held by that check's own import rule, which reads this file. Its types are
+ * `nessa-ui-paths.d.mts`'s.
  */
 
 /** @typedef {import("./nessa-ui-paths.d.mts").NessaUiPath} NessaUiPath */
@@ -96,8 +97,11 @@ export function tsconfigPaths(paths = nessaUiPaths) {
  * How `tsconfig.json`'s `compilerOptions.paths` disagrees with the table: one
  * of the table's entries missing, or pointing elsewhere. Empty when they
  * agree. Entries the table does not have (`react`, `react-dom`) are not
- * read: an alias only TypeScript knew would not resolve in Vite or Vitest,
- * so an import through it fails there rather than passing unnoticed.
+ * read. An alias only TypeScript knew would not resolve in Vite or Vitest, so
+ * an import through it that reaches either fails there. One that never
+ * reaches them — `import type`, an import used only as a type (elided under
+ * `isolatedModules`), a file no entry or test loads — is not caught, and is
+ * accepted: it changes no module the app or its tests load.
  *
  * @param {Record<string, unknown> | undefined} actual
  * @param {readonly NessaUiPath[]} [paths]
