@@ -93,7 +93,7 @@ const rejectionCode = (cause: unknown): ConversationErrorCode | undefined =>
  * and attachment codes are all raised before `enqueue` returns a receipt, and
  * startup ends before anything reaches the provider.
  */
-function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
+export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
   switch (code) {
     case ConversationErrorCode.AgentNotConfigured:
     case ConversationErrorCode.AgentUnsupported:

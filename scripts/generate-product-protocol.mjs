@@ -207,6 +207,9 @@ function agreeing(name, values) {
   return first
 }
 const image = schema.$defs.ImageAttachment.properties
+const mcpCall = schema.$defs.McpCallToolParams.properties
+const mcpRead = schema.$defs.McpReadResourceParams.properties
+const mcpResource = schema.$defs.McpReadResourceResult.properties
 const linked = schema.$defs.LinkedFile.properties
 // Named for what a reader of the client says, not for the schema's field paths.
 const catalogueDecimalFields = [
@@ -296,9 +299,42 @@ const bounds = {
   maxMcpNameBytes: agreeing("MCP server and tool name bytes", [
     schema.$defs.ConversationMcpTool.properties.server["x-utf8MaxBytes"],
     schema.$defs.ConversationMcpTool.properties.tool["x-utf8MaxBytes"],
+    mcpCall.server["x-utf8MaxBytes"],
+    mcpCall.tool["x-utf8MaxBytes"],
+    mcpRead.server["x-utf8MaxBytes"],
   ]),
   maxUiResourceUriBytes:
     schema.$defs.ConversationMcpTool.properties.resourceUri["x-utf8MaxBytes"],
+  mcpAppInstanceIdPattern: schema.$defs.McpAppReference.properties.instanceId.pattern,
+  // What an app may send is what its review can show: one bound, stated twice.
+  maxMcpArgumentsBytes: agreeing("app arguments and review bytes", [
+    mcpCall.argumentsJson["x-utf8MaxBytes"],
+    schema.$defs.ConversationPermission.properties.argumentsJson["x-utf8MaxBytes"],
+  ]),
+  maxMcpResultBytes:
+    schema.$defs.McpCallToolResult.properties.resultJson["x-utf8MaxBytes"],
+  maxMcpResourceUriBytes: agreeing("app resource URI bytes", [
+    mcpRead.uri["x-utf8MaxBytes"],
+    mcpResource.uri["x-utf8MaxBytes"],
+  ]),
+  mcpAppMimeType: mcpResource.mimeType.const,
+  maxMcpResourceBytes: mcpResource.size.maximum,
+  mcpResourceDigestPattern: mcpResource.sha256.pattern,
+  mcpResourceTicketPattern: mcpResource.ticket.pattern,
+  mcpResourceTicketMs: mcpResource.expiresInMs.const,
+  maxMcpCspDomains: agreeing(
+    "app CSP list lengths",
+    Object.values(schema.$defs.McpUiCsp.properties).map((list) => list.maxItems),
+  ),
+  maxMcpCspDomainBytes: agreeing(
+    "app CSP origin bytes",
+    Object.values(schema.$defs.McpUiCsp.properties).map(
+      (list) => list.items["x-utf8MaxBytes"],
+    ),
+  ),
+  maxMcpDomainBytes: mcpResource.domain["x-utf8MaxBytes"],
+  maxMcpRemoteMessageCharacters:
+    schema.$defs.McpRemoteErrorDetails.properties.message.maxLength,
 }
 for (const name of [
   "maxAuthCredentialCharacters",

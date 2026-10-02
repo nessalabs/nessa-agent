@@ -16,6 +16,11 @@ import type { ProductSessionReady } from "../protocol/product-types.js"
 import { attachmentUploadUrl } from "../application/attachment-upload.js"
 import type { AttachmentUploadRequest } from "../application/attachment-upload.js"
 import { fetchAttachmentUpload } from "../transport/attachment-upload.js"
+import {
+  mcpResourceUrl,
+  type McpResourceRequest,
+} from "../application/mcp-resource-fetch.js"
+import { fetchMcpResource } from "../transport/mcp-resource-fetch.js"
 import { waitForSocketOpen, WireSession } from "../transport/index.js"
 import { nodeGatewayEndpointSource } from "../transport/local-gateway-endpoint.js"
 
@@ -164,8 +169,18 @@ export async function establishManagedSession(
         ).put(request)
       },
     },
-    // The real clock for an upload's deadline; tests of the API pass their own.
-    uploadTimer: (ms: number, elapsed: () => void) => {
+    // An app's resources come from the same gateway, on the same terms.
+    resources: {
+      get(request: McpResourceRequest) {
+        const url = managed.url
+        if (!url) return Promise.reject(new Error("Session is not connected"))
+        return fetchMcpResource(mcpResourceUrl(url), (target, init) =>
+          globalThis.fetch(target, init),
+        ).get(request)
+      },
+    },
+    // The real clock for those requests' deadlines; tests of the APIs pass their own.
+    httpTimer: (ms: number, elapsed: () => void) => {
       const timer = setTimeout(elapsed, ms)
       return () => clearTimeout(timer)
     },

@@ -5,8 +5,8 @@ import {
   UPLOAD_DEADLINE_MS,
   type AttachmentUploadReply,
   type AttachmentUploadTransport,
-  type UploadTimer,
 } from "../application/attachment-upload.js"
+import { type RequestTimer } from "../application/gateway-http.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { asImageAttachment } from "../protocol/attachment-validate.js"
 import { createAttachmentApi } from "./attachment-api.js"
@@ -27,7 +27,7 @@ const noReference = { digest: null, mimeType: null, size: null }
 /** A deadline clock the test fires by hand. Nothing here waits. */
 function manualTimer() {
   const pending: { ms: number; elapsed: () => void; cancelled: boolean }[] = []
-  const timer: UploadTimer = (ms, elapsed) => {
+  const timer: RequestTimer = (ms, elapsed) => {
     const entry = { ms, elapsed, cancelled: false }
     pending.push(entry)
     return () => {
@@ -307,7 +307,7 @@ it("gives up as upload_timeout when the timer is already out of budget, sending 
   // the event loop passes first: a clock a test drives by hand, or one whose
   // budget is already spent, calls it while `timer` is still running.
   const cancelled: boolean[] = []
-  const now: UploadTimer = (_ms, elapsed) => {
+  const now: RequestTimer = (_ms, elapsed) => {
     elapsed()
     return () => cancelled.push(true)
   }

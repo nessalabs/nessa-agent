@@ -617,7 +617,11 @@ resources wait in behind their tickets, and the view's tool UI lookup
 (`entrypoint`); `composition/mcp_servers.rs` replaces each configured server
 with its stand-in, gives the agents the grants, and builds the ticket store,
 before any agent is built. `PUT /attachments` and `GET /mcp-resources` share
-one origin rule, CORS and preflight (`server/entrypoint/origin.rs`). The SDK's ACP binding holds a provider open's grant
+one origin rule, CORS and preflight (`server/entrypoint/origin.rs`); in
+`@nessa/client` they share `application/gateway-http.ts` (the origin, the
+deadline clock, and how one request ends), and an app's calls are
+`presentation/mcp-apps-api.ts` over the `McpResourceTransport` port in
+`application/mcp-resource-fetch.ts` and its `fetch` adapter in `transport/`. The SDK's ACP binding holds a provider open's grant
 (`acp/sessions/stand_ins.rs`) and puts its environment in every MCP server
 entry. The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
