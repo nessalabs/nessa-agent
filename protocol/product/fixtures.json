@@ -114,6 +114,7 @@
     },
     "truncated": false,
     "queueComplete": true,
+    "transcriptState": "complete",
     "title": "Flights to Lisbon",
     "questions": [
       {
@@ -310,5 +311,64 @@
     "version": "0.3.257",
     "downloaded": true,
     "cleanupPending": false
+  },
+  "ConversationRecordsHeadParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "accessEpoch": "3",
+    "receiverId": "receiver"
+  },
+  "ConversationRecordsHeadResult": {
+    "scope": {
+      "receiver": "receiver",
+      "origin": "gateway",
+      "stream": "00000000-0000-4000-8000-000000000001",
+      "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "schema": "nessa.physical-frame.v1",
+      "accessEpoch": "epoch-3"
+    },
+    "head": "1"
+  },
+  "ConversationRecordsPageParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "accessEpoch": "3",
+    "request": {
+      "scope": {
+        "receiver": "receiver",
+        "origin": "gateway",
+        "stream": "00000000-0000-4000-8000-000000000001",
+        "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "schema": "nessa.physical-frame.v1",
+        "accessEpoch": "epoch-3"
+      },
+      "after": "0",
+      "target": "1",
+      "maxRecords": 16,
+      "maxPayloadBytes": 65546,
+      "maxRecordBytes": 65546
+    }
+  },
+  "ConversationRecordsPageResult": {
+    "request": {
+      "scope": {
+        "receiver": "receiver",
+        "origin": "gateway",
+        "stream": "00000000-0000-4000-8000-000000000001",
+        "incarnation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "schema": "nessa.physical-frame.v1",
+        "accessEpoch": "epoch-3"
+      },
+      "after": "0",
+      "target": "1",
+      "maxRecords": 16,
+      "maxPayloadBytes": 65546,
+      "maxRecordBytes": 65546
+    },
+    "records": [
+      {
+        "position": "1",
+        "id": "record-1",
+        "payload": "AQ=="
+      }
+    ]
   }
 }

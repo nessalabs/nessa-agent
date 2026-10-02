@@ -7,12 +7,16 @@
 //! else's; the store that keeps both answers it in one question.
 //! `ConversationCatalogue` reads the same metadata for a linked receiver in
 //! finite creation-key pages. It owns no second copy of metadata or progress.
-//! A bounded read projection consumes SDK observations independently of sockets.
+//! A bounded replacement projection reads independently committed SDK records;
+//! broadcast observations only prompt refresh and may supply local activity.
+//! `retained_view` consumes that same bounded projection for an offline validated
+//! fold, with injected revision identity and no action controls.
 //! Service -> ConversationAttachments: a message may refer only to images this
 //! conversation uploaded, and closing the conversation lets them go.
 //! Passive read admission -> current auth, durable receiver binding, then
-//! ownership repository. It never opens an Agent or a record source; #296/#297
-//! supply bounded source transport after admission.
+//! ownership repository. It never opens an Agent or a record source.
+//! `record_read` admits each physical head or page against fresh authority
+//! before resolving SDK identity or opening a source.
 //! Service -> ConversationFileLinkAudit: a message may also point at files on
 //! this machine by path. Nothing is uploaded and nothing is held for those, so
 //! what is recorded is who pointed the agent at them.
@@ -69,19 +73,26 @@
 //! serialized per conversation (`ConversationLocks`), and a delete that waits
 //! behind another attempt answers from its tombstone without one of its own.
 mod catalogue;
+mod catalogue_read;
 mod error;
 mod locks;
 mod passive_read;
 mod ports;
 mod projection;
+pub(crate) use projection::retained_view;
 mod provider_sessions;
+mod record_read;
 mod retries;
 mod service;
 mod view;
 pub use crate::conversation::domain::ReceiverBinding;
 pub use catalogue::{
-    CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
-    CatalogueValue, ConversationCatalogue,
+    CatalogueDescriptor, CatalogueHead, CatalogueKey, CatalogueMetadata, CatalogueMetadataError,
+    CataloguePage, CataloguePageRequest, CatalogueValue, ConversationCatalogue,
+};
+pub use catalogue_read::{
+    CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
+    CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use passive_read::{
@@ -101,6 +112,10 @@ pub use ports::{
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
+};
+pub use record_read::{
+    ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,
+    RecordReadOperation, RecordReadResponse, RecordReadSource, RecordReadValue,
 };
 pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
@@ -145,3 +160,10 @@ mod linked_file_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/listing.rs"]
 mod listing_tests;
+
+pub(crate) use passive_read::{passive_read_selector, validate_passive_read_selector};
+pub(crate) use record_read::validate_record_selector;
+
+pub(crate) use catalogue_read::validate_catalogue_selector;
+
+pub(crate) use view::ConversationTranscriptState;

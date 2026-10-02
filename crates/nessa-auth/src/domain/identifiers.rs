@@ -6,7 +6,8 @@
 //! the text it carries and not the buffer it happened to arrive in.
 use super::DomainError;
 
-const MAX_VALUE_LENGTH: usize = 256;
+/// Maximum UTF-8 bytes in any opaque identifier or action.
+pub const MAX_IDENTIFIER_BYTES: usize = 256;
 
 fn validate(value: String, field: &'static str) -> Result<Box<str>, DomainError> {
     if value.is_empty() {
@@ -27,7 +28,7 @@ fn validate(value: String, field: &'static str) -> Result<Box<str>, DomainError>
             reason: "must not contain control characters",
         });
     }
-    if value.len() > MAX_VALUE_LENGTH {
+    if value.len() > MAX_IDENTIFIER_BYTES {
         return Err(DomainError::InvalidValue {
             field,
             reason: "is too long",
@@ -111,14 +112,14 @@ mod tests {
     #[test]
     fn bounds_are_utf8_bytes_rather_than_characters() {
         // Multibyte text reaches the limit in fewer characters than bytes.
-        let exact = "é".repeat(MAX_VALUE_LENGTH / 2);
-        assert_eq!(exact.len(), MAX_VALUE_LENGTH);
+        let exact = "é".repeat(MAX_IDENTIFIER_BYTES / 2);
+        assert_eq!(exact.len(), MAX_IDENTIFIER_BYTES);
         // Retention is the other test's subject; `repeat` already returns an
         // exactly sized buffer, so asserting it here would prove nothing.
         let identifier = CredentialId::new(exact.clone()).unwrap();
-        assert_eq!(identifier.as_str().len(), MAX_VALUE_LENGTH);
+        assert_eq!(identifier.as_str().len(), MAX_IDENTIFIER_BYTES);
         assert!(CredentialId::new(exact + "é").is_err());
-        assert!(CredentialId::new("a".repeat(MAX_VALUE_LENGTH)).is_ok());
-        assert!(CredentialId::new("a".repeat(MAX_VALUE_LENGTH + 1)).is_err());
+        assert!(CredentialId::new("a".repeat(MAX_IDENTIFIER_BYTES)).is_ok());
+        assert!(CredentialId::new("a".repeat(MAX_IDENTIFIER_BYTES + 1)).is_err());
     }
 }

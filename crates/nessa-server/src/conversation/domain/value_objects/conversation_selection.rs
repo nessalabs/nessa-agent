@@ -6,10 +6,13 @@
 pub struct ConversationModelId(String);
 
 impl ConversationModelId {
+    /// Maximum UTF-8 bytes in a persisted model identity.
+    pub const MAX_BYTES: usize = 256;
+
     pub fn new(value: impl Into<String>) -> Result<Self, &'static str> {
         let value = value.into();
         if value.is_empty()
-            || value.len() > 256
+            || value.len() > Self::MAX_BYTES
             || value.trim() != value
             || value.chars().any(char::is_control)
         {
@@ -32,6 +35,9 @@ pub enum ConversationApprovalMode {
 }
 
 impl ConversationApprovalMode {
+    /// Every supported persisted approval mode.
+    pub const ALL: &[Self] = &[Self::Ask, Self::Auto, Self::Full];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ask => "ask",
@@ -41,11 +47,9 @@ impl ConversationApprovalMode {
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "ask" => Some(Self::Ask),
-            "auto" => Some(Self::Auto),
-            "full" => Some(Self::Full),
-            _ => None,
-        }
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|mode| mode.as_str() == value)
     }
 }

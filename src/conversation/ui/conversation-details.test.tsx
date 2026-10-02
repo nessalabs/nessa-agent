@@ -37,6 +37,7 @@ function attached(
     tools: [],
     pending: [],
     queueComplete: true,
+    transcriptState: "complete",
     truncated: false,
     capabilities: {
       queue: true,

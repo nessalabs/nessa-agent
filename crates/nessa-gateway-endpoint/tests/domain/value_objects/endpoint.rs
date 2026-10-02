@@ -15,6 +15,9 @@ fn identity_requires_a_canonical_process_incarnation() {
 fn endpoint_accepts_only_a_bound_loopback_socket() {
     let loopback = GatewayEndpoint::new("ws://127.0.0.1:9123".into(), identity()).unwrap();
     assert_eq!(loopback.web_socket_url(), "ws://127.0.0.1:9123");
+    assert_eq!(loopback.socket_address(), "127.0.0.1:9123".parse().unwrap());
+    let ipv6 = GatewayEndpoint::new("ws://[::1]:9123".into(), identity()).unwrap();
+    assert_eq!(ipv6.socket_address(), "[::1]:9123".parse().unwrap());
     assert!(GatewayEndpoint::new("ws://127.0.0.1:0".into(), identity()).is_err());
     assert!(GatewayEndpoint::new("ws://127.0.0.1".into(), identity()).is_err());
     assert!(GatewayEndpoint::new("ws://127.0.0.1:9123/".into(), identity()).is_err());

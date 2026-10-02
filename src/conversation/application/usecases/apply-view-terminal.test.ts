@@ -17,6 +17,7 @@ const providerFailure = (revision: string): ConversationView => ({
   revision,
   truncated: false,
   queueComplete: true,
+  transcriptState: "complete",
   lifecycle: { phase: "absent" },
   messages: [
     {

@@ -3,6 +3,7 @@ import type {
   ApprovalModeChoice,
   ConversationCapabilities,
   ConversationRuntime,
+  ConversationTranscriptState,
   ImageReference,
   LinkedFile,
 } from "../model"
@@ -25,6 +26,8 @@ export type ConversationView = {
   conversationId: string
   revision: string
   queueComplete: boolean
+  /** Physical committed history status, separate from the bounded display window. */
+  transcriptState: ConversationTranscriptState
   truncated: boolean
   messages: {
     executionId: string
@@ -96,7 +99,7 @@ export type ConversationView = {
       message: string
     }
   }
-  permissionViewError?: string
+  interactionViewError?: string
 }
 
 /** Stable logical identities survive an uncertain acknowledgement and explicit retry. */

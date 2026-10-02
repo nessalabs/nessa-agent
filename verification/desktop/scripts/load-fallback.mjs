@@ -88,12 +88,37 @@ function fakeHost(host) {
   }
 }
 
-async function measure(page) {
+async function measure(page, phase = null) {
   return page.evaluate(
-    ([message, mark, title]) => {
+    async ([message, mark, title, phase]) => {
+      const messageElement = document.querySelector(message)
+      const markElement = document.querySelector(mark)
+      const markAnimation = document
+        .getAnimations()
+        .find((animation) => animation.effect?.target === markElement)
+      const timing = markAnimation?.effect?.getTiming()
+      const phaseMilliseconds =
+        phase !== null && typeof timing?.duration === "number"
+          ? timing.delay + timing.duration * phase
+          : null
+      if (phaseMilliseconds !== null && markAnimation) {
+        markAnimation.pause()
+        await markAnimation.ready
+        markAnimation.currentTime = phaseMilliseconds
+        await new Promise(requestAnimationFrame)
+      }
       const rect = (selector) => {
         const r = document.querySelector(selector).getBoundingClientRect()
         return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+      }
+      const messageRect = rect(message)
+      // offset geometry belongs to the fixed grid, unaffected by breathing.
+      // Its integer rounding is below the existing one-pixel alignment bound.
+      const markLayout = {
+        left: messageRect.left + markElement.offsetLeft,
+        top: messageRect.top + markElement.offsetTop,
+        right: messageRect.left + markElement.offsetLeft + markElement.offsetWidth,
+        bottom: messageRect.top + markElement.offsetTop + markElement.offsetHeight,
       }
       const t = rect(title)
       const covering = document.elementFromPoint(
@@ -101,7 +126,15 @@ async function measure(page) {
         (t.top + t.bottom) / 2,
       )
       return {
-        message: rect(message),
+        message: messageRect,
+        markLayout,
+        markLayoutOwned: markElement.offsetParent === messageElement,
+        markAnimationPresent: Boolean(markAnimation),
+        phase,
+        phaseMilliseconds,
+        keyframeOffsets: markAnimation?.effect
+          ?.getKeyframes()
+          .map((frame) => frame.computedOffset),
         mark: rect(mark),
         title: t,
         text: document.querySelector(message).textContent.trim(),
@@ -112,7 +145,7 @@ async function measure(page) {
           document.documentElement.scrollHeight > innerHeight,
       }
     },
-    [css.loadMessage, css.loadMark, css.loadTitle],
+    [css.loadMessage, css.loadMark, css.loadTitle, phase],
   )
 }
 
@@ -132,9 +165,9 @@ function check(scenario, m) {
     : { left: 0, top: 0, right: stage.width, bottom: stage.height }
   const content = {
     left: Math.min(m.mark.left, m.title.left),
-    top: m.mark.top,
+    top: Math.min(m.mark.top, m.title.top),
     right: Math.max(m.mark.right, m.title.right),
-    bottom: m.title.bottom,
+    bottom: Math.max(m.mark.bottom, m.title.bottom),
   }
   const inside =
     content.left >= clip.left - 0.5 &&
@@ -145,9 +178,31 @@ function check(scenario, m) {
     failures.push(
       `avatar and title ${JSON.stringify(content)} are not inside the visible window ${JSON.stringify(clip)}`,
     )
+  const layout = {
+    left: Math.min(m.markLayout.left, m.title.left),
+    top: Math.min(m.markLayout.top, m.title.top),
+    right: Math.max(m.markLayout.right, m.title.right),
+    bottom: Math.max(m.markLayout.bottom, m.title.bottom),
+  }
+  if (!m.markLayoutOwned)
+    failures.push("the fixed message grid does not own the mark's layout")
+  const markCentre = {
+    dx: (m.mark.left + m.mark.right - m.markLayout.left - m.markLayout.right) / 2,
+    dy: (m.mark.top + m.mark.bottom - m.markLayout.top - m.markLayout.bottom) / 2,
+  }
+  if (Math.abs(markCentre.dx) > 1 || Math.abs(markCentre.dy) > 1)
+    failures.push(
+      `the painted mark left its layout centre by ${markCentre.dx.toFixed(1)}, ${markCentre.dy.toFixed(1)}`,
+    )
+  if (m.phase !== null && !m.markAnimationPresent)
+    failures.push("the loading mark has no breathing animation to sample")
+  if (m.phase !== null && m.phaseMilliseconds === null)
+    failures.push("the loading mark has no numeric animation duration to sample")
+  if (m.phase !== null && !m.keyframeOffsets?.includes(m.phase))
+    failures.push(`the loading mark has no breathing keyframe at phase ${m.phase}`)
   if (scenario.centred) {
-    const dx = (content.left + content.right) / 2 - (clip.left + clip.right) / 2
-    const dy = (content.top + content.bottom) / 2 - (clip.top + clip.bottom) / 2
+    const dx = (layout.left + layout.right) / 2 - (clip.left + clip.right) / 2
+    const dy = (layout.top + layout.bottom) / 2 - (clip.top + clip.bottom) / 2
     if (Math.abs(dx) > 1 || Math.abs(dy) > 1)
       failures.push(
         `off centre of the visible window by ${dx.toFixed(1)}, ${dy.toFixed(1)}`,
@@ -156,7 +211,7 @@ function check(scenario, m) {
   if (m.text !== "Loading") failures.push(`says ${JSON.stringify(m.text)}, not "Loading"`)
   if (!m.titleOnTop) failures.push("something paints over the title")
   if (m.overflow) failures.push("the page scrolls")
-  return { failures, measured: { clip, content } }
+  return { failures, measured: { clip, content, layout, markCentre } }
 }
 
 await main(
@@ -235,16 +290,39 @@ await main(
                     )
                   else await page.waitForLoadState("networkidle")
                   await page.evaluate(() => new Promise(requestAnimationFrame))
-                  const m = await measure(page)
-                  const result = check(scenario, m)
+                  // Sample the full-size and midpoint breathing keyframes;
+                  // containment must not depend on when the page becomes ready. Only the mark's animation
+                  // is paused; other fallback animations retain their behavior.
+                  const samples = []
+                  for (const phase of motion === "reduce" ? [null] : [0, 0.5]) {
+                    const m = await measure(page, phase)
+                    samples.push({
+                      phase,
+                      milliseconds: m.phaseMilliseconds,
+                      keyframeOffsets: m.keyframeOffsets,
+                      ...check(scenario, m),
+                      animations: m.animations,
+                    })
+                  }
+                  const result = {
+                    failures: samples.flatMap((sample) =>
+                      sample.failures.map((failure) =>
+                        sample.phase === null
+                          ? failure
+                          : `at phase ${sample.phase} (${sample.milliseconds}ms): ${failure}`,
+                      ),
+                    ),
+                    measured: samples[0].measured,
+                    samples,
+                  }
                   if (holding && held.size === 0)
                     result.failures.push("no frontend script was held back")
                   if (!(await page.$(css.loadMark)))
                     result.failures.push("the frontend replaced the fallback")
                   result.failures.push(...errors)
-                  if (motion === "reduce" && m.animations !== 0)
+                  if (motion === "reduce" && samples[0].animations !== 0)
                     result.failures.push(
-                      `${m.animations} animations run with reduced motion`,
+                      `${samples[0].animations} animations run with reduced motion`,
                     )
                   return result
                 } finally {

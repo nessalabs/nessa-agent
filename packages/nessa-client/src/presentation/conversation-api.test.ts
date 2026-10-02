@@ -49,6 +49,7 @@ const view: ConversationView = {
   lifecycle: { phase: "attached" },
   truncated: false,
   queueComplete: true,
+  transcriptState: "complete",
 }
 it("passes a fixed model and initial mode only on creation", async () => {
   const request = vi.fn().mockResolvedValue({ conversationId })
@@ -483,6 +484,7 @@ it("accepts bounded omissions and the intentional pending-message overlap", asyn
     ...view,
     truncated: true,
     queueComplete: false,
+    transcriptState: "complete",
     messages: [
       {
         executionId: "steer",
@@ -539,6 +541,7 @@ it("accepts bounded omissions and the intentional pending-message overlap", asyn
   await expect(api.read(conversationId)).resolves.toMatchObject({
     truncated: true,
     queueComplete: false,
+    transcriptState: "complete",
   })
 })
 it("rejects a response acknowledging a different execution or action", async () => {

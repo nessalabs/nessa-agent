@@ -26,7 +26,9 @@ use crate::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::rusqlite::{params, Connection};
 use nessa_sdk::{
-    application::agent_execution::sessions::{SessionStorage, SessionStorageLease, StorageFuture},
+    application::agent_execution::sessions::{
+        CommittedSession, SessionStorage, SessionStorageLease, StorageFuture,
+    },
     domain::agent_execution::sessions::SessionId,
     infrastructure::session_storage::InMemoryStorage,
 };
@@ -49,6 +51,9 @@ struct CountingStorage {
     opens: AtomicUsize,
 }
 impl SessionStorage for CountingStorage {
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        self.inner.read_committed(id)
+    }
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
         self.opens.fetch_add(1, Ordering::SeqCst);
         self.inner.open(id)

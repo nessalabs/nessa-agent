@@ -154,6 +154,9 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   header held to the top left, and cut to it —
   its title never drawn stretched, any frame — and a drag leaves no pane at a size of its own. _Check:_
   `drag.mjs` (`preview-panes-take-shape`; every drag check's residue).
+- _Harmless, and not a failure:_ a single read of a title's transforms in
+  WebKit that mixes two moments. How the two stretch checks read a title is
+  `recordShapes`' (`drag.mjs`), and why, with the runs and probes, is #365.
 - [ ] **A zone the fit rule refuses offers nothing; a session already on
   screen offers "Go to Pane".** _Check:_ manual (drag a session from the list
   onto four panes; drag an on-screen session).
@@ -489,12 +492,13 @@ The panel's webview is a stage larger than its window, pinned to the window's
 bottom right (`src/panel/adapters/panel-frame.ts`); before the frontend
 mounts, `index.html` shows the fallback on that stage.
 
-- [ ] **The avatar and "Loading" sit inside the visible window, centred in it
-  once the host reports its size**, on the default frame, a short configured
+- [ ] **The painted avatar and "Loading" sit inside the visible window; their
+  layout boxes are centred in it once the host reports its size**, on the default frame, a short configured
   height, a narrow panel and setup; with the size pending or refused, or the
   frontend never loading, they stay inside the bottom-right 320 × 320; nothing
   paints over the title, the page does not scroll, and nothing animates with
-  reduced motion. _Check:_ `load-fallback.mjs` (runs the real frontend against
+  reduced motion. The breathing avatar stays centred on its layout box; its
+  full-size and minimum-size paint are both checked. _Check:_ `load-fallback.mjs` (runs the real frontend against
   a fake host whose startup never answers and which fakes `panel_size`).
 
 ## Console errors
@@ -507,3 +511,20 @@ mounts, `index.html` shows the fallback on that stage.
   kept in the JSON as `harmless`). Vite's `[vite] connecting…` / HMR
   messages are logs, not errors. A reload caused by another edit landing on
   the dev server mid-run is not a finding — re-run.
+
+## Committed transcript controls
+
+- [ ] **Unconfirmed history has one notice and no offered controls.**
+  _Check:_ `committed-transcript.mjs` mounts the production conversation controls
+  and `applyView`; covers partial, stale, unknown and not loaded, complete empty,
+  complete without live attachment, and complete with offered authority, including
+  re-enable after incomplete history. Server projection tests own execution identity.
+  Fixture map: [conversation verification](../conversation/README.md).
+
+- [ ] **Empty display does not authorize saved-tab omission or gateway close.**
+  _Check:_ `committed-transcript.mjs` feeds published view states through the actual
+  decoder, Redux read projection, saved-tab selection and close thunk. Partial,
+  not loaded, stale, unknown and complete-zero preserve one saved reference and
+  dispatch zero gateway closes; confirmed complete-empty permits omission and one
+  close. A truncated complete-empty view still preserves the reference. Both
+  engines and all three widths assert the original local tab closes in every case.

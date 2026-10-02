@@ -7,7 +7,9 @@
 //!
 //! Re-exported at `crate::core::RunError`.
 
+use super::ShutdownFailure;
 use crate::browser_session::adapters::JournalOpenError;
+#[cfg(test)]
 use crate::conversation::application::ConversationError;
 use crate::env::EnvironmentError;
 use nessa_auth::adapters::local::LocalStoreError;
@@ -50,11 +52,13 @@ pub enum RunError {
         source: io::Error,
     },
     Serve(io::Error),
-    /// Conversations did not confirm cleanup and audit delivery on the way down.
+    /// Composed owners did not confirm cleanup on the way down. A missing
+    /// outcome records an interrupted callback; typed failures retain reader
+    /// drain/deadline and conversation cleanup causes independently.
     /// The HTTP server itself finished; this is what shutdown could not prove.
     /// `None` means shutdown never reported at all — unknown, which is its own
     /// fact and not the same as a reported failure.
-    Shutdown(Option<ConversationError>),
+    Shutdown(Option<ShutdownFailure>),
 }
 
 impl RunError {
@@ -275,7 +279,9 @@ mod tests {
 
     #[test]
     fn an_unconfirmed_shutdown_says_which_kind_it_was() {
-        let reported = RunError::Shutdown(Some(ConversationError::Audit));
+        let reported = RunError::Shutdown(Some(ShutdownFailure::Conversations(
+            ConversationError::Audit,
+        )));
         assert!(reported.to_string().contains("did not confirm all cleanup"));
         // The typed failure is the source, so a caller can match on it.
         assert!(std::error::Error::source(&reported).is_some());

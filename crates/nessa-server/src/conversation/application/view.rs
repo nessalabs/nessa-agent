@@ -1,12 +1,15 @@
 use crate::agents::domain::AgentId;
 use crate::conversation::domain::ConversationApprovalMode;
 use nessa_sdk::{
-    application::agent_execution::providers::{
-        CompactionReportingCapability, ElicitationForwardingCapability,
-        IncomingElicitationCapability, ModelSwitchReportingCapability,
-        NativeHookSuppressionCapability, OperationCapabilities, PermissionDeferralCapability,
-        PermissionDenialCapability, PolicyCloseSessionCapability, PolicyEndTurnCapability,
-        PreToolPolicyCapability,
+    application::agent_execution::{
+        providers::{
+            CompactionReportingCapability, ElicitationForwardingCapability,
+            IncomingElicitationCapability, ModelSwitchReportingCapability,
+            NativeHookSuppressionCapability, OperationCapabilities, PermissionDeferralCapability,
+            PermissionDenialCapability, PolicyCloseSessionCapability, PolicyEndTurnCapability,
+            PreToolPolicyCapability,
+        },
+        sessions::CommittedViewState,
     },
     domain::agent_execution::prompts::{ImageReference, LinkedFile},
 };
@@ -44,13 +47,40 @@ pub struct ConversationView {
     pub truncated: bool,
     /// Whether the bounded view contains every currently waiting identity.
     pub queue_complete: bool,
+    /// Completeness of the committed transcript independently of display limits.
+    pub transcript_state: ConversationTranscriptState,
+    /// Why whole pending interactions were omitted from the bounded display.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub permission_view_error: Option<String>,
+    pub interaction_view_error: Option<String>,
     /// The name the gateway gave the conversation from its first message —
     /// the same title `conversation.list` shows, from the same summary — or
     /// `None` before anything was said. Always on the wire, as `null` then.
     pub title: Option<String>,
 }
+/// Product status of the last physical committed read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationTranscriptState {
+    NotLoaded,
+    Partial,
+    CompleteEmpty,
+    Complete,
+    Stale,
+    Unknown,
+}
+impl From<CommittedViewState> for ConversationTranscriptState {
+    fn from(state: CommittedViewState) -> Self {
+        match state {
+            CommittedViewState::NotLoaded => Self::NotLoaded,
+            CommittedViewState::Partial => Self::Partial,
+            CommittedViewState::CompleteEmpty => Self::CompleteEmpty,
+            CommittedViewState::Complete => Self::Complete,
+            CommittedViewState::Stale => Self::Stale,
+            CommittedViewState::Unknown => Self::Unknown,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationApprovalModeChangeView {
@@ -264,6 +294,19 @@ pub struct ConversationCapabilities {
     /// The opened agent advertised image input and this gateway can supply the bytes.
     pub image_input: bool,
     pub agent_features: ConversationAgentFeatures,
+}
+
+impl ConversationCapabilities {
+    pub(crate) fn read_only() -> Self {
+        Self {
+            queue: false,
+            steer: false,
+            resume: false,
+            permissions: false,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        }
+    }
 }
 
 /// User-visible support facts for provider transport and Nessa policy integration.

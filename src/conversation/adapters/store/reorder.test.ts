@@ -23,6 +23,7 @@ function view(ids: string[]): ConversationView {
     revision: ids.join(","),
     truncated: false,
     queueComplete: true,
+    transcriptState: "complete",
     messages: [],
     permissions: [],
     questions: [],

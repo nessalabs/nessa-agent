@@ -2,6 +2,7 @@ export { AGENT_HUES, AGENT_ICON_TONE, AGENT_ICON_WASH, AGENT_SEED } from "./iden
 export { conversationInTabs, emptyTabs, type ConversationTabs } from "./tabs"
 export {
   conversation,
+  conversationHistoryEmpty,
   conversationSelectionOpen,
   type AssistantTurn,
   type BusyConversation,
@@ -13,6 +14,7 @@ export {
   type Conversation,
   type ConversationCapabilities,
   type ConversationRuntime,
+  type ConversationTranscriptState,
   type IdleConversation,
   type Phase,
   type ReadFailure,

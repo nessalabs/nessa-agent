@@ -1,10 +1,12 @@
 //! Generated from protocol/product/v1.json. Do not edit.
 //! Bounds are validated at the transport boundary; these are payload types only.
 #![allow(dead_code)]
+use crate::product_contract::generated::SessionCloseReason;
 use nessa_auth::application::dto::{
     CredentialGrantDto, CredentialMetadataDto, MembershipInputDto, PrincipalInputDto,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionChallenge {
@@ -82,70 +84,6 @@ pub struct CredentialListResult {
 pub struct CredentialRevokeResult {
     pub credential_id: String,
     pub revision: u64,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionCloseReason {
-    AuthenticationFailed,
-    CredentialRevoked,
-    CredentialExpired,
-    AuthorizationLost,
-    ProtocolIncompatible,
-    HandshakeTimeout,
-    TemporaryUnavailable,
-    GatewayRestarting,
-    GatewayOverloaded,
-    ServerShutdown,
-    TransportInterrupted,
-}
-impl SessionCloseReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::AuthenticationFailed => "authentication_failed",
-            Self::CredentialRevoked => "credential_revoked",
-            Self::CredentialExpired => "credential_expired",
-            Self::AuthorizationLost => "authorization_lost",
-            Self::ProtocolIncompatible => "protocol_incompatible",
-            Self::HandshakeTimeout => "handshake_timeout",
-            Self::TemporaryUnavailable => "temporary_unavailable",
-            Self::GatewayRestarting => "gateway_restarting",
-            Self::GatewayOverloaded => "gateway_overloaded",
-            Self::ServerShutdown => "server_shutdown",
-            Self::TransportInterrupted => "transport_interrupted",
-        }
-    }
-}
-impl SessionCloseReason {
-    pub fn web_socket_code(self) -> u16 {
-        match self {
-            Self::AuthenticationFailed => 4001,
-            Self::CredentialRevoked => 4002,
-            Self::CredentialExpired => 4003,
-            Self::AuthorizationLost => 4004,
-            Self::ProtocolIncompatible => 4005,
-            Self::HandshakeTimeout => 4006,
-            Self::TemporaryUnavailable => 4010,
-            Self::GatewayRestarting => 1012,
-            Self::GatewayOverloaded => 1013,
-            Self::ServerShutdown => 1000,
-            Self::TransportInterrupted => 1006,
-        }
-    }
-    pub fn retryable(self) -> bool {
-        match self {
-            Self::AuthenticationFailed => false,
-            Self::CredentialRevoked => false,
-            Self::CredentialExpired => false,
-            Self::AuthorizationLost => false,
-            Self::ProtocolIncompatible => false,
-            Self::HandshakeTimeout => true,
-            Self::TemporaryUnavailable => true,
-            Self::GatewayRestarting => true,
-            Self::GatewayOverloaded => true,
-            Self::ServerShutdown => false,
-            Self::TransportInterrupted => true,
-        }
-    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -600,8 +538,9 @@ pub struct ConversationView {
     pub lifecycle: ConversationLifecycle,
     pub truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission_view_error: Option<String>,
+    pub interaction_view_error: Option<String>,
     pub queue_complete: bool,
+    pub transcript_state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<ConversationRuntime>,
     pub title: Option<String>,
@@ -1023,7 +962,390 @@ impl InstallableAgent {
         }
     }
 }
-/// Published agent installation request bound from the product schema.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordScope {
+    pub receiver: String,
+    pub origin: String,
+    pub stream: String,
+    pub incarnation: String,
+    pub schema: String,
+    pub access_epoch: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordPageRequest {
+    pub scope: RecordScope,
+    pub after: String,
+    pub target: String,
+    pub max_records: u64,
+    pub max_payload_bytes: u64,
+    pub max_record_bytes: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordWireRecord {
+    pub position: String,
+    pub id: String,
+    pub payload: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationRecordsHeadParams {
+    pub conversation_id: String,
+    pub access_epoch: String,
+    pub receiver_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationRecordsHeadResult {
+    pub scope: RecordScope,
+    pub head: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationRecordsPageParams {
+    pub conversation_id: String,
+    pub access_epoch: String,
+    pub request: RecordPageRequest,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationRecordsPageResult {
+    pub request: RecordPageRequest,
+    pub records: Vec<RecordWireRecord>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CatalogueEntryKey {
+    pub creation: String,
+    pub id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CatalogueDescriptor {
+    pub key: CatalogueEntryKey,
+    pub revision: String,
+    pub deleted: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CataloguePass {
+    pub scope: RecordScope,
+    pub completed: String,
+    pub boundary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<CatalogueEntryKey>,
+    pub generation: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CatalogueManifestRequest {
+    pub pass: CataloguePass,
+    pub max_entries: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCatalogueHeadParams {
+    pub receiver_id: String,
+    pub access_epoch: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCatalogueHeadResult {
+    pub scope: RecordScope,
+    pub head: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCatalogueManifestParams {
+    pub request: CatalogueManifestRequest,
+    pub access_epoch: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCatalogueManifestResult {
+    pub request: CatalogueManifestRequest,
+    pub entries: Vec<CatalogueDescriptor>,
+    pub has_more: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCatalogueResolveParams {
+    pub pass: CataloguePass,
+    pub descriptor: CatalogueDescriptor,
+    pub max_payload_bytes: u64,
+    pub access_epoch: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCatalogueResolveResult {
+    pub pass: CataloguePass,
+    pub descriptor: CatalogueDescriptor,
+    pub entry: CatalogueDescriptor,
+    pub payload: String,
+}
+/// Published bound from the product schema.
+pub const MAX_AUTH_CREDENTIAL_CHARACTERS: usize = 16384;
+/// Published bound from the product schema.
+pub const MAX_PRODUCT_CLIENT_ID_CHARACTERS: usize = 256;
+/// Published bound from the product schema.
 pub const MIN_AGENT_INSTALL_REQUEST_ID_CHARACTERS: usize = 1;
-/// Published agent installation request bound from the product schema.
+/// Published bound from the product schema.
 pub const MAX_AGENT_INSTALL_REQUEST_ID_BYTES: usize = 256;
+/// Published bound from the product schema.
+pub const MAX_PHYSICAL_RECORD_PAYLOAD_BYTES: usize = 65546;
+/// Published bound from the product schema.
+pub const MAX_RECORD_PAGE_RECORDS: usize = 16;
+/// Published bound from the product schema.
+pub const MAX_RECORD_PAGE_PAYLOAD_BYTES: usize = 65546;
+/// Published bound from the product schema.
+pub const MAX_RECORD_RESPONSE_BYTES: usize = 131072;
+/// Published passive read timing from the product schema, in milliseconds.
+pub const PASSIVE_READ_TIMEOUT_MS: u64 = 10000;
+/// Published passive read timing from the product schema, in milliseconds.
+pub const PASSIVE_DELIVERY_TIMEOUT_MS: u64 = 30000;
+/// Published passive read timing from the product schema, in milliseconds.
+pub const PASSIVE_CLIENT_ALLOWANCE_MS: u64 = 5000;
+/// Published passive read timing from the product schema, in milliseconds.
+pub const PASSIVE_MIN_REQUEST_TIMEOUT_MS: u64 = 45000;
+pub mod product_method {
+    pub const SESSION_AUTHENTICATE: &str = "session.authenticate";
+    pub const AUTH_SESSION: &str = "auth.session";
+    pub const SERVER_HEALTH: &str = "server.health";
+    pub const CREDENTIAL_ISSUE: &str = "credential.issue";
+    pub const CREDENTIAL_LIST: &str = "credential.list";
+    pub const CREDENTIAL_REVOKE: &str = "credential.revoke";
+    pub const CONVERSATION_CREATE: &str = "conversation.create";
+    pub const CONVERSATION_READ: &str = "conversation.read";
+    pub const CONVERSATION_RECORDS_HEAD: &str = "conversation.recordsHead";
+    pub const CONVERSATION_RECORDS_PAGE: &str = "conversation.recordsPage";
+    pub const CONVERSATION_LIST: &str = "conversation.list";
+    pub const CONVERSATION_SEND: &str = "conversation.send";
+    pub const CONVERSATION_STEER: &str = "conversation.steer";
+    pub const CONVERSATION_REMOVE: &str = "conversation.remove";
+    pub const CONVERSATION_ANSWER: &str = "conversation.answer";
+    pub const CONVERSATION_ANSWER_QUESTION: &str = "conversation.answerQuestion";
+    pub const CONVERSATION_CANCEL: &str = "conversation.cancel";
+    pub const CONVERSATION_CLOSE: &str = "conversation.close";
+    pub const CONVERSATION_ARCHIVE: &str = "conversation.archive";
+    pub const CONVERSATION_UNARCHIVE: &str = "conversation.unarchive";
+    pub const CONVERSATION_DELETE: &str = "conversation.delete";
+    pub const CONVERSATION_REORDER: &str = "conversation.reorder";
+    pub const ATTACHMENT_BEGIN: &str = "attachment.begin";
+    pub const AGENTS_LIST: &str = "agents.list";
+    pub const CONVERSATION_SET_APPROVAL_MODE: &str = "conversation.setApprovalMode";
+    pub const AGENTS_INSTALL_OPTIONS: &str = "agents.installOptions";
+    pub const AGENTS_INSTALL: &str = "agents.install";
+    pub const CONVERSATION_CATALOGUE_HEAD: &str = "conversation.catalogueHead";
+    pub const CONVERSATION_CATALOGUE_MANIFEST: &str = "conversation.catalogueManifest";
+    pub const CONVERSATION_CATALOGUE_RESOLVE: &str = "conversation.catalogueResolve";
+}
+pub mod product_event {
+    pub const SESSION_CHALLENGE: &str = "session.challenge";
+}
+pub(crate) fn wire_shape_session_challenge(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("minVersion").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_u64()
+                .is_some_and(|number| number <= 9007199254740991)
+        }) && object.get("maxVersion").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_u64()
+                .is_some_and(|number| number <= 9007199254740991)
+        }) && object.get("nonce").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object.get("expiresAt").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_u64()
+                .is_some_and(|number| number <= 9007199254740991)
+        }) && object
+            .keys()
+            .all(|key| ["minVersion", "maxVersion", "nonce", "expiresAt"].contains(&key.as_str()))
+    })
+}
+pub(crate) fn wire_shape_product_client_metadata(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("id").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object.keys().all(|key| ["id"].contains(&key.as_str()))
+    })
+}
+pub(crate) fn wire_shape_session_authenticate_params(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("minVersion").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_u64()
+                .is_some_and(|number| number <= 9007199254740991)
+        }) && object.get("maxVersion").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_u64()
+                .is_some_and(|number| number <= 9007199254740991)
+        }) && object.get("nonce").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object.get("credential").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 16384)
+        }) && object.get("client").is_some_and(|field| {
+            let _ = field;
+            wire_shape_product_client_metadata(field)
+        }) && object.keys().all(|key| {
+            ["minVersion", "maxVersion", "nonce", "credential", "client"].contains(&key.as_str())
+        })
+    })
+}
+pub(crate) fn wire_shape_product_resource(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("organizationId").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object.get("id").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object
+            .keys()
+            .all(|key| ["organizationId", "id"].contains(&key.as_str()))
+    })
+}
+pub(crate) fn wire_shape_product_grant(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("action").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object.get("resource").is_some_and(|field| {
+            let _ = field;
+            wire_shape_product_resource(field)
+        }) && object
+            .keys()
+            .all(|key| ["action", "resource"].contains(&key.as_str()))
+    })
+}
+pub(crate) fn wire_shape_product_session_ready(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("version").is_some_and(|field| {
+            let _ = field;
+            field.as_u64() == Some(1)
+        }) && object.get("gatewayId").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object.get("principalId").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object.get("organizationId").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object.get("membershipId").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object.get("credentialId").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object.get("audienceId").is_some_and(|field| {
+            let _ = field;
+            field
+                .as_str()
+                .is_some_and(|text| text.chars().count() >= 1 && text.chars().count() <= 256)
+        }) && object.get("expiresAt").is_some_and(|field| {
+            let _ = field;
+            field.is_null()
+                || field
+                    .as_u64()
+                    .is_some_and(|number| number <= 9007199254740991)
+        }) && object.get("grants").is_some_and(|field| {
+            let _ = field;
+            field.as_array().is_some_and(|items| {
+                items.len() <= 16 && items.iter().all(wire_shape_product_grant)
+            })
+        }) && object.get("methods").is_some_and(|field| {
+            let _ = field;
+            field.as_array().is_some_and(|items| {
+                items.len() <= 29
+                    && items.iter().all(|item| {
+                        let _ = item;
+                        item.is_string()
+                    })
+            })
+        }) && object.keys().all(|key| {
+            [
+                "version",
+                "gatewayId",
+                "principalId",
+                "organizationId",
+                "membershipId",
+                "credentialId",
+                "audienceId",
+                "expiresAt",
+                "grants",
+                "methods",
+            ]
+            .contains(&key.as_str())
+        })
+    })
+}
+pub const PRODUCT_HANDSHAKE_METHOD: &str = "session.authenticate";
+pub const PRODUCT_READY_METHODS: &[&str] = &[
+    "auth.session",
+    "server.health",
+    "credential.issue",
+    "credential.list",
+    "credential.revoke",
+    "conversation.create",
+    "conversation.read",
+    "conversation.recordsHead",
+    "conversation.recordsPage",
+    "conversation.list",
+    "conversation.send",
+    "conversation.steer",
+    "conversation.remove",
+    "conversation.answer",
+    "conversation.answerQuestion",
+    "conversation.cancel",
+    "conversation.close",
+    "conversation.archive",
+    "conversation.unarchive",
+    "conversation.delete",
+    "conversation.reorder",
+    "attachment.begin",
+    "agents.list",
+    "conversation.setApprovalMode",
+    "agents.installOptions",
+    "agents.install",
+    "conversation.catalogueHead",
+    "conversation.catalogueManifest",
+    "conversation.catalogueResolve",
+];
+pub const PRODUCT_VERSION: u64 = 1;
+pub const PRODUCT_SESSION_PATH: &str = "/session";

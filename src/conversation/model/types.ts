@@ -1,6 +1,9 @@
 import type { ImageReference } from "./attachments"
 import type { MessageContent } from "./content"
 
+export type ConversationTranscriptState =
+  "not_loaded" | "partial" | "complete_empty" | "complete" | "stale" | "unknown"
+
 export type AgentFeatures = {
   permissionDenial: "unknown" | "unsupported" | "supported_for_offered_permission_reviews"
   nativeHookSuppression: "unknown" | "unsupported" | "supported_for_user_configured_hooks"
@@ -334,8 +337,9 @@ type ConversationState = {
       }
     }
     queueComplete: boolean
+    transcriptState: ConversationTranscriptState
     truncated: boolean
-    permissionViewError?: string
+    interactionViewError?: string
   }
 }
 export type IdleConversation = ConversationState & { phase: "idle" }
@@ -350,4 +354,19 @@ export type Phase = Conversation["phase"]
 
 export function conversation(id: string): IdleConversation {
   return { id, title: "New chat", turns: [], phase: "idle", draft: [] }
+}
+
+/**
+ * Empty display alone cannot establish empty committed history. Saved-tab and
+ * automatic-close consumers use this decision; attachments store tests exercise
+ * confirmed-empty and incomplete published views before either effect.
+ */
+export function conversationHistoryEmpty(
+  item: Pick<Conversation, "remote" | "turns">,
+): boolean {
+  return (
+    item.remote?.transcriptState === "complete_empty" &&
+    !item.remote.truncated &&
+    item.turns.length === 0
+  )
 }

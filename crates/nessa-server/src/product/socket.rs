@@ -1,66 +1,58 @@
-use super::generated::{SessionCloseReason, SessionTermination};
-use super::{state::ProductRouteState, wire::*};
-use crate::browser_session::{
-    application::{invalidation_reason, BrowserSessionVerifier, ReadBrowserSession},
-    domain::value_objects::RemovalReason,
+#[cfg(test)]
+use super::generated::wire_shape_product_session_ready;
+use super::generated::{
+    SessionTermination, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
+    PRODUCT_VERSION,
 };
+use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
+use super::state::ProductRouteState;
+use super::wire::*;
+use crate::browser_session::application::{
+    invalidation_reason, BrowserSessionVerifier, ReadBrowserSession,
+};
+use crate::browser_session::domain::value_objects::RemovalReason;
+use crate::conversation::application::{ReadRefusal, RecordReadLease};
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
+use crate::product_contract::generated::{RecordReadErrorCode, SessionCloseReason};
 use crate::protocol::{
     health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
     ResponseFrame, MAX_PAYLOAD_BYTES,
 };
 use axum::extract::ws::{CloseFrame, Message};
-use futures_util::{stream::FuturesUnordered, Sink, SinkExt, Stream, StreamExt};
-use nessa_auth::{
-    application::{
-        authorization::AuthorizeAction,
-        credential_admin::{
-            CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest,
-            ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
-        },
-        dto::{CredentialGrantDto, MembershipRoleDto, MembershipStateDto, ResourceDto},
-        ports::{AccessError, AccessSnapshot, CredentialEvidence, Decision, SessionEvidence},
-        session::{AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession},
-    },
-    domain::{Action, CredentialId},
+use axum::Error;
+use futures_util::stream::{FuturesUnordered, SplitSink};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use nessa_auth::application::authorization::AuthorizeAction;
+use nessa_auth::application::credential_admin::{
+    CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
+    RevokeCredentialOutcome, RevokeCredentialRequest,
 };
+use nessa_auth::application::dto::{
+    CredentialGrantDto, MembershipRoleDto, MembershipStateDto, ResourceDto,
+};
+use nessa_auth::application::ports::{
+    AccessError, AccessSnapshot, CredentialEvidence, Decision, SessionEvidence,
+};
+use nessa_auth::application::session::{
+    AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession,
+};
+use nessa_auth::domain::{Action, CredentialId};
 use serde_json::json;
+use std::future::{poll_fn, Future};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::Poll;
 use std::time::Duration;
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{interval, timeout, timeout_at, Instant, MissedTickBehavior};
 use uuid::Uuid;
-
-const PRODUCT_METHODS: &[&str] = &[
-    "auth.session",
-    "server.health",
-    "credential.issue",
-    "credential.list",
-    "credential.revoke",
-    "agents.list",
-    "agents.installOptions",
-    "agents.install",
-    "conversation.create",
-    "conversation.setApprovalMode",
-    "conversation.read",
-    "conversation.list",
-    "conversation.send",
-    "conversation.steer",
-    "conversation.remove",
-    "conversation.reorder",
-    "conversation.answer",
-    "conversation.answerQuestion",
-    "conversation.cancel",
-    "conversation.close",
-    "conversation.archive",
-    "conversation.unarchive",
-    "conversation.delete",
-    "attachment.begin",
-];
 
 /// Run one mandatory-authentication product session.
 pub async fn handle_socket<S>(mut socket: S, state: ProductRouteState)
 where
-    S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin,
+    S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
 {
     let deadline = Instant::now() + state.settings.handshake_timeout();
     let nonce = Uuid::new_v4().to_string();
@@ -101,12 +93,7 @@ where
                 )
                 .await;
             }
-            let reason = match code {
-                "protocol_incompatible" => SessionCloseReason::ProtocolIncompatible,
-                "temporarily_unavailable" => SessionCloseReason::TemporaryUnavailable,
-                "handshake_timeout" => SessionCloseReason::HandshakeTimeout,
-                _ => SessionCloseReason::AuthenticationFailed,
-            };
+            let reason = authentication_close_reason(code);
             close_session(state.settings.write_timeout(), &mut socket, reason).await;
             return;
         }
@@ -155,7 +142,7 @@ async fn receive_authentication<S>(
     deadline: Instant,
 ) -> Result<(String, AuthenticatedSession), (String, &'static str)>
 where
-    S: Stream<Item = Result<Message, axum::Error>> + Unpin,
+    S: Stream<Item = Result<Message, Error>> + Unpin,
 {
     let Some(Ok(Message::Text(text))) = socket.next().await else {
         return Err((String::new(), "unauthorized"));
@@ -170,7 +157,7 @@ where
     if frame.kind != "req"
         || frame.id.is_empty()
         || frame.id.len() > 256
-        || frame.method != "session.authenticate"
+        || frame.method != PRODUCT_HANDSHAKE_METHOD
     {
         return Err((frame.id, "authentication_required"));
     }
@@ -271,13 +258,236 @@ fn credential_admin_code(error: CredentialAdminError) -> &'static str {
     }
 }
 
-async fn run_authenticated<S>(
-    mut socket: S,
-    state: ProductRouteState,
-    session: AuthenticatedSession,
+#[derive(Clone, Copy)]
+enum ResponseClass {
+    Control,
+    Ordinary,
+    Record,
+}
+
+impl ResponseClass {
+    fn for_method(method: &str) -> Self {
+        match method {
+            "conversation.close"
+            | "conversation.archive"
+            | "conversation.unarchive"
+            | "conversation.answer"
+            | "conversation.answerQuestion"
+            | "conversation.cancel"
+            | "conversation.remove"
+            | "conversation.reorder" => Self::Control,
+            "conversation.recordsHead"
+            | "conversation.recordsPage"
+            | "conversation.catalogueHead"
+            | "conversation.catalogueManifest"
+            | "conversation.catalogueResolve" => Self::Record,
+            _ => Self::Ordinary,
+        }
+    }
+}
+
+struct QueuedResponse {
+    message: WireResponse,
+    _slot: Arc<OwnedSemaphorePermit>,
+    // For record replies, this remains owned through the final physical send.
+    // The read adapter must not return it until its non-entered source thread
+    // has finished and joined the SDK worker, including after caller timeout.
+    _record_work: Option<RecordReadLease>,
+}
+
+enum WireResponse {
+    Ordinary(Box<OutgoingMessage>),
+    Record { text: String },
+}
+
+impl WireResponse {
+    fn ordinary(message: OutgoingMessage) -> Self {
+        Self::Ordinary(Box::new(message))
+    }
+    fn record(text: String) -> Self {
+        Self::Record { text }
+    }
+}
+
+// The lane owns its lifetime, including ordinary wire refusals of passive reads.
+struct QueuedRecordResponse {
+    message: WireResponse,
+    _slot: Option<Arc<OwnedSemaphorePermit>>,
+    _record_work: Option<RecordReadLease>,
+    deadline: Instant,
+}
+impl QueuedRecordResponse {
+    fn new(response: QueuedResponse) -> Self {
+        Self::owned(
+            response.message,
+            Some(response._slot),
+            response._record_work,
+        )
+    }
+
+    // A refused admission owns delivery only, never a fabricated read permit.
+    fn refusal(message: OutgoingMessage) -> Self {
+        Self::owned(WireResponse::ordinary(message), None, None)
+    }
+
+    fn owned(
+        message: WireResponse,
+        slot: Option<Arc<OwnedSemaphorePermit>>,
+        record_work: Option<RecordReadLease>,
+    ) -> Self {
+        Self {
+            message,
+            _slot: slot,
+            _record_work: record_work,
+            deadline: Instant::now() + RECORD_SEND_TIMEOUT,
+        }
+    }
+}
+
+enum ControlOutput {
+    Response(Box<QueuedResponse>),
+    Close(SessionCloseReason),
+}
+
+enum WriterResponse {
+    Record(Box<QueuedRecordResponse>),
+    Queued(Box<QueuedResponse>),
+    Refusal(Box<OutgoingMessage>),
+}
+
+async fn write_authenticated<S>(
+    mut sink: SplitSink<S, Message>,
+    mut controls: Receiver<ControlOutput>,
+    mut refusals: Receiver<OutgoingMessage>,
+    mut ordinary: Receiver<QueuedResponse>,
+    mut records: Receiver<QueuedRecordResponse>,
+    write_timeout: Duration,
 ) where
-    S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin,
+    S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin,
 {
+    // Moving the record out of its lane observes its original deadline, not a
+    // physical-send priority change. The retained-position bound is documented in
+    // docs/design/authorized-record-reads.md, R62.
+    let mut pending_record: Option<QueuedRecordResponse> = None;
+    loop {
+        let deadline = queued_record_deadline(&pending_record);
+        let next = tokio::select! {
+            biased;
+            () = wait_for_record_deadline(deadline), if deadline.is_some() => break,
+            Some(response) = records.recv(), if pending_record.is_none() => {
+                pending_record = Some(response);
+                continue;
+            },
+            Some(control) = controls.recv() => match control {
+                ControlOutput::Response(response) => Some(Ok(WriterResponse::Queued(response))),
+                ControlOutput::Close(reason) => Some(Err(reason)),
+            },
+            Some(response) = refusals.recv() => Some(Ok(WriterResponse::Refusal(Box::new(response)))),
+            Some(response) = ordinary.recv() => Some(Ok(WriterResponse::Queued(Box::new(response)))),
+            () = std::future::ready(()), if pending_record.is_some() =>
+                Some(Ok(WriterResponse::Record(Box::new(pending_record.take().expect("pending record selected"))))),
+            else => None,
+        };
+        let writing = async {
+            match next {
+                Some(Ok(WriterResponse::Record(response))) => {
+                    send_record_queued(write_timeout, &mut sink, *response)
+                        .await
+                        .is_ok()
+                }
+                Some(Ok(WriterResponse::Queued(response))) => {
+                    let QueuedResponse {
+                        message,
+                        _slot,
+                        _record_work,
+                    } = *response;
+                    send_queued(write_timeout, &mut sink, message).await.is_ok()
+                }
+                Some(Ok(WriterResponse::Refusal(message))) => {
+                    send(write_timeout, &mut sink, *message).await.is_ok()
+                }
+                Some(Err(reason)) => {
+                    close_session(write_timeout, &mut sink, reason).await;
+                    false
+                }
+                None => false,
+            }
+        };
+        tokio::pin!(writing);
+        loop {
+            let deadline = queued_record_deadline(&pending_record);
+            tokio::select! {
+                biased;
+                // Abandon this sink; a second frame must not follow a cancelled
+                // physical write. Also observe a record arriving during it.
+                () = wait_for_record_deadline(deadline), if deadline.is_some() => return,
+                Some(response) = records.recv(), if pending_record.is_none() =>
+                    pending_record = Some(response),
+                succeeded = &mut writing => {
+                    if !succeeded { return; }
+                    break;
+                },
+            }
+        }
+    }
+}
+
+fn queued_record_deadline(response: &Option<QueuedRecordResponse>) -> Option<Instant> {
+    response.as_ref().map(|response| response.deadline)
+}
+
+async fn wait_for_record_deadline(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
+// Tokio polls the inner future before its timer. Gate each continuation before
+// it can admit source work or emit a frame, then reject completion at expiry.
+async fn within_deadline<F: Future>(deadline: Instant, work: F) -> Option<F::Output> {
+    tokio::pin!(work);
+    let guarded = poll_fn(|context| {
+        if Instant::now() >= deadline {
+            Poll::Ready(None)
+        } else {
+            work.as_mut().poll(context).map(Some)
+        }
+    });
+    timeout_at(deadline, guarded)
+        .await
+        .ok()
+        .flatten()
+        .filter(|_| Instant::now() < deadline)
+}
+
+enum AuthenticatedInput {
+    Request(RequestFrame),
+    Refusal(OutgoingMessage),
+}
+
+type AuthorityCheck<'a> = Pin<Box<dyn Future<Output = Option<AccessError>> + Send + 'a>>;
+
+async fn run_authenticated<S>(socket: S, state: ProductRouteState, session: AuthenticatedSession)
+where
+    S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
+{
+    let (sink, mut incoming) = socket.split();
+    let (control_send, control_receive) = mpsc::channel(4);
+    let (refusal_send, refusal_receive) = mpsc::channel(1);
+    let (ordinary_send, ordinary_receive) = mpsc::channel(16);
+    let (record_send, record_receive) = mpsc::channel(1);
+    let mut writer = tokio::spawn(write_authenticated(
+        sink,
+        control_receive,
+        refusal_receive,
+        ordinary_receive,
+        record_receive,
+        state.settings.write_timeout(),
+    ));
+    let control_slots = Arc::new(Semaphore::new(4));
+    let ordinary_slots = Arc::new(Semaphore::new(16));
+    let record_slots = Arc::new(Semaphore::new(1));
     let mut current_state = interval(state.settings.current_state_interval());
     current_state.set_missed_tick_behavior(MissedTickBehavior::Delay);
     current_state.tick().await;
@@ -295,27 +505,64 @@ async fn run_authenticated<S>(
         }
     };
     tokio::pin!(expiry);
-    // Slow provider preparation cannot hold permission or close commands behind it.
-    // Tasks own admitted operations after a socket disappears; capacity is bounded.
+    // Admission retains a response slot through the physical write, so a stalled
+    // sink does not stop this owner from receiving or dispatching controls.
     let mut requests = FuturesUnordered::new();
+    let mut writer_finished = false;
+    let mut refresh: Option<AuthorityCheck<'_>> = None;
+    let mut input_check: Option<AuthorityCheck<'_>> = None;
+    let mut pending_input: Option<AuthenticatedInput> = None;
     loop {
-        tokio::select! {
-            Some(response) = requests.next(), if !requests.is_empty() => {
-                let Ok(response) = response else { break };
-                if send(state.settings.write_timeout(), &mut socket, response).await.is_err() { break; }
-            }
-            _ = &mut expiry => {
-                close_session(state.settings.write_timeout(), &mut socket, SessionCloseReason::CredentialExpired).await;
+        // Authority checks suspend only their own admission. Request completion,
+        // delivery teardown and expiry retain independently polled owners (R60).
+        let admitted = tokio::select! {
+            _ = &mut writer => {
+                writer_finished = true;
                 break;
             }
-            _ = current_state.tick() => {
-                if let Some(error) = current_session_error(&state, &session).await {
-                    close_session(state.settings.write_timeout(), &mut socket, close_reason(error)).await;
+            Some(result) = requests.next(), if !requests.is_empty() => {
+                let Ok((message, class, slot, record_work)) = result else { break };
+                let queued = QueuedResponse { message, _slot: slot, _record_work: record_work };
+                let sent = match class {
+                    ResponseClass::Control => control_send.try_send(ControlOutput::Response(Box::new(queued))).is_ok(),
+                    ResponseClass::Ordinary => ordinary_send.try_send(queued).is_ok(),
+                    ResponseClass::Record => record_send.try_send(QueuedRecordResponse::new(queued)).is_ok(),
+                };
+                if !sent { break; }
+                None
+            }
+            _ = &mut expiry => {
+                let _ = control_send.try_send(ControlOutput::Close(SessionCloseReason::CredentialExpired));
+                break;
+            }
+            error = async { refresh.as_mut().expect("refresh selected while pending").await }, if refresh.is_some() => {
+                refresh = None;
+                if let Some(error) = error {
+                    let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
                     break;
                 }
+                None
             }
-            incoming = socket.next() => {
-                let Some(Ok(message)) = incoming else { break };
+            _ = current_state.tick(), if refresh.is_none() => {
+                refresh = Some(Box::pin(current_session_error(&state, &session)));
+                None
+            }
+            error = async { input_check.as_mut().expect("input check selected while pending").await }, if input_check.is_some() => {
+                input_check = None;
+                if let Some(error) = error {
+                    let _ = control_send.try_send(ControlOutput::Close(close_reason(error)));
+                    break;
+                }
+                match pending_input.take().expect("input check owns one input") {
+                    AuthenticatedInput::Request(frame) => Some((frame, Instant::now())),
+                    AuthenticatedInput::Refusal(response) => {
+                        if refusal_send.try_send(response).is_err() { break; }
+                        None
+                    }
+                }
+            }
+            message = incoming.next(), if pending_input.is_none() => {
+                let Some(Ok(message)) = message else { break };
                 let Message::Text(text) = message else {
                     if matches!(message, Message::Close(_)) { break; }
                     continue;
@@ -325,57 +572,176 @@ async fn run_authenticated<S>(
                     Ok(frame) => frame,
                     Err(_) => {
                         let Some(response) = correlatable_invalid_request(&text) else { continue };
-                        if let Some(error) = current_session_error(&state, &session).await {
-                            close_session(state.settings.write_timeout(), &mut socket, close_reason(error)).await;
-                            break;
-                        }
-                        if send(state.settings.write_timeout(), &mut socket, response).await.is_err() { break; }
+                        pending_input = Some(AuthenticatedInput::Refusal(response));
+                        input_check = Some(Box::pin(current_session_error(&state, &session)));
                         continue;
                     },
                 };
-                if let Some(error) = current_session_error(&state, &session).await {
-                    close_session(state.settings.write_timeout(), &mut socket, close_reason(error)).await;
-                    break;
-                }
-                // Admission authorizes one operation against committed state.
-                // Its response may finish after revocation; the next request
-                // and idle liveness check observe the new revision.
-                let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.archive" | "conversation.unarchive" | "conversation.answer" | "conversation.answerQuestion" | "conversation.cancel" | "conversation.remove" | "conversation.reorder");
-                if requests.len() >= if control { 20 } else { 16 } {
-                    if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
-                    continue;
-                }
-                // Detached commands retain a shared permit through completion,
-                // so reconnecting cannot accumulate unlimited admitted tasks.
-                // Controls have separate capacity from reads and provider opens,
-                // and so does beginning an upload: it opens no provider, so it
-                // does not wait behind a conversation that is starting, and its
-                // own storage and audit work never takes a control's place.
-                // A delete is not a control: it can take minutes and launch
-                // an agent, so it has capacity of its own and never takes a
-                // control's place.
-                let capacity = if control {
-                    &state.controls
-                } else if frame.method == "conversation.delete" {
-                    &state.deletions
-                } else if frame.method == "attachment.begin" {
-                    &state.upload_begins
+                let record = matches!(ResponseClass::for_method(&frame.method), ResponseClass::Record);
+                if record {
+                    Some((frame, Instant::now()))
                 } else {
-                    &state.requests
-                };
-                let Ok(permit) = capacity.clone().try_acquire_owned() else {
-                    if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
-                    continue;
-                };
-                let request_state = state.clone();
-                let request_session = session.clone();
-                requests.push(tokio::spawn(async move {
-                    let _permit = permit;
-                    dispatch(&request_state, &request_session, frame).await
-                }));
+                    // Every deferred input asks current authority independently;
+                    // periodic refresh cannot authorize an input. Later inputs
+                    // wait behind this one without accumulating another queue.
+                    pending_input = Some(AuthenticatedInput::Request(frame));
+                    input_check = Some(Box::pin(current_session_error(&state, &session)));
+                    None
+                }
             }
-        }
+        };
+        let Some((frame, received_at)) = admitted else {
+            continue;
+        };
+        let read_deadline = received_at + PASSIVE_READ_TIMEOUT;
+        let class = ResponseClass::for_method(&frame.method);
+        let control = matches!(class, ResponseClass::Control);
+        let record = matches!(class, ResponseClass::Record);
+        let slots = if control {
+            &control_slots
+        } else if record {
+            &record_slots
+        } else {
+            &ordinary_slots
+        };
+        let Ok(slot) = slots.clone().try_acquire_owned() else {
+            let response = failure(&frame.id, "temporarily_unavailable");
+            let refused = if record {
+                record_send
+                    .try_send(QueuedRecordResponse::refusal(response))
+                    .is_err()
+            } else {
+                refusal_send.try_send(response).is_err()
+            };
+            if refused {
+                break;
+            }
+            continue;
+        };
+        let slot = Arc::new(slot);
+        let capacity = if control {
+            &state.controls
+        } else if record {
+            &state.record_reads
+        } else if frame.method == "conversation.delete" {
+            &state.deletions
+        } else if frame.method == "attachment.begin" {
+            &state.upload_begins
+        } else {
+            &state.requests
+        };
+        let Ok(permit) = capacity.clone().try_acquire_owned() else {
+            let response = failure(&frame.id, "temporarily_unavailable");
+            let queued = QueuedResponse {
+                message: WireResponse::ordinary(response),
+                _slot: slot,
+                _record_work: None,
+            };
+            let sent = if control {
+                control_send
+                    .try_send(ControlOutput::Response(Box::new(queued)))
+                    .is_ok()
+            } else if record {
+                record_send
+                    .try_send(QueuedRecordResponse::new(queued))
+                    .is_ok()
+            } else {
+                ordinary_send.try_send(queued).is_ok()
+            };
+            if !sent {
+                break;
+            }
+            continue;
+        };
+        let request_state = state.clone();
+        let request_session = session.clone();
+        requests.push(tokio::spawn(async move {
+            if matches!(class, ResponseClass::Record) {
+                let (message, record_work) = dispatch_passive_read(
+                    &request_state,
+                    &request_session,
+                    frame,
+                    // The same socket admission survives both response delivery
+                    // and physical work, even after a delivered read_timeout (R61).
+                    RecordReadLease::new((permit, slot.clone())),
+                    read_deadline,
+                )
+                .await;
+                (message, class, slot, record_work)
+            } else {
+                let _permit = permit;
+                let message = dispatch(&request_state, &request_session, frame).await;
+                (WireResponse::ordinary(message), class, slot, None)
+            }
+        }));
     }
+    drop(control_send);
+    drop(refusal_send);
+    drop(ordinary_send);
+    drop(record_send);
+    if !writer_finished {
+        let _ = writer.await;
+    }
+}
+
+async fn dispatch_passive_read(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    lease: RecordReadLease,
+    deadline: Instant,
+) -> (WireResponse, Option<RecordReadLease>) {
+    let request_id = frame.id.clone();
+    let reading = async move {
+        let (current, _) = match current_identity_inner(state, session).await {
+            Ok(current) => current,
+            Err(error) => return (passive_access_failure(&frame.id, error), None),
+        };
+        if frame.kind != "req" || frame.id.is_empty() || frame.id.len() > 256 {
+            return (
+                WireResponse::ordinary(failure(&frame.id, "invalid_request")),
+                None,
+            );
+        }
+        if let Err(error) = ensure_browser_session_present(state, &current).await {
+            return (passive_access_failure(&frame.id, error), None);
+        }
+        let request_id = frame.id.clone();
+        let result = if matches!(
+            frame.method.as_str(),
+            "conversation.catalogueHead"
+                | "conversation.catalogueManifest"
+                | "conversation.catalogueResolve"
+        ) {
+            super::catalogue_read::dispatch(state, &current, frame, lease)
+                .await
+                .map_err(|code| code.as_str())
+        } else {
+            super::record_read::dispatch(state, &current, frame, lease)
+                .await
+                .map_err(|code| code.as_str())
+        };
+        match result {
+            Ok((text, lease)) => (WireResponse::record(text), Some(lease)),
+            Err(code) => (WireResponse::ordinary(failure(&request_id, code)), None),
+        }
+    };
+    let result = within_deadline(deadline, reading).await;
+    result.unwrap_or_else(|| {
+        (
+            WireResponse::ordinary(failure(&request_id, "read_timeout")),
+            None,
+        )
+    })
+}
+
+fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse {
+    let code = if ReadRefusal::from(error) == ReadRefusal::Unverifiable {
+        RecordReadErrorCode::Unverifiable
+    } else {
+        RecordReadErrorCode::Unauthorized
+    };
+    WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
 async fn dispatch(
@@ -390,7 +756,7 @@ async fn dispatch(
     if frame.kind != "req" || frame.id.is_empty() || frame.id.len() > 256 {
         return failure(&frame.id, "invalid_request");
     }
-    if frame.method == "session.authenticate" {
+    if frame.method == PRODUCT_HANDSHAKE_METHOD {
         return failure(&frame.id, "already_authenticated");
     }
     if frame.method == "auth.session" {
@@ -626,6 +992,7 @@ pub(super) fn success<T: serde::Serialize>(request_id: &str, payload: &T) -> Out
 fn action_for_method(method: &str) -> Option<&'static str> {
     match method {
         "server.health" | "agents.list" | "agents.installOptions" => Some("server.read"),
+        "conversation.recordsHead" | "conversation.recordsPage" | "conversation.catalogueHead" | "conversation.catalogueManifest" | "conversation.catalogueResolve" => Some("conversation.read"),
         "agents.install"
         | "conversation.create"
         | "conversation.setApprovalMode"
@@ -690,7 +1057,7 @@ fn session_ready(
         state.gateway_id().as_str(),
         session,
         grants,
-        PRODUCT_METHODS
+        PRODUCT_READY_METHODS
             .iter()
             .map(|method| (*method).to_owned())
             .collect(),
@@ -854,10 +1221,48 @@ async fn send<S: Sink<Message> + Unpin>(
     message: OutgoingMessage,
 ) -> Result<(), ()> {
     let text = message.to_wire_text().map_err(|_| ())?;
+    if text.len() > MAX_PAYLOAD_BYTES as usize {
+        return Err(());
+    }
     timeout(write_timeout, socket.send(Message::Text(text.into())))
         .await
         .map_err(|_| ())?
         .map_err(|_| ())
+}
+
+async fn send_queued<S: Sink<Message> + Unpin>(
+    write_timeout: Duration,
+    socket: &mut S,
+    message: WireResponse,
+) -> Result<(), ()> {
+    match message {
+        WireResponse::Ordinary(message) => send(write_timeout, socket, *message).await,
+        WireResponse::Record { text } => {
+            if text.len() > MAX_RECORD_RESPONSE_BYTES {
+                return Err(());
+            }
+            socket
+                .send(Message::Text(text.into()))
+                .await
+                .map_err(|_| ())
+        }
+    }
+}
+
+async fn send_record_queued<S: Sink<Message> + Unpin>(
+    write_timeout: Duration,
+    socket: &mut S,
+    response: QueuedRecordResponse,
+) -> Result<(), ()> {
+    let QueuedRecordResponse {
+        message,
+        _slot,
+        _record_work,
+        deadline,
+    } = response;
+    within_deadline(deadline, send_queued(write_timeout, socket, message))
+        .await
+        .ok_or(())?
 }
 
 fn close_reason(error: AccessError) -> SessionCloseReason {
@@ -895,7 +1300,96 @@ async fn close_session<S: Sink<Message> + Unpin>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::generated::{
+        ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
+        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    };
+    use super::super::passive_read::wire::encode_response;
+    use super::super::state::SessionSettings;
     use super::*;
+    use crate::agents::domain::AgentId;
+    use crate::agents_test_support::StubAgentProbe;
+    use crate::app::ports::Clock as UptimeClock;
+    use crate::browser_session::application::SessionStore;
+    use crate::browser_session::domain::value_objects::{
+        BrowserSessionOrigin, BrowserSessionState,
+    };
+    use crate::conversation::application::{
+        ConversationRepository, ReadRefusal, ReceiverAuthority, ReceiverBinding, ReceiverReadScope,
+        RecordReadError, RecordReadFuture, RecordReadOperation, RecordReadResponse,
+        RecordReadSource,
+    };
+    use crate::conversation::domain::{
+        Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
+    };
+    use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
+    use crate::product::ProductDependencies;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    use conversation_support::MemoryRepository;
+    use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
+    use nessa_auth::application::credential_admin::CredentialAdmin;
+    use nessa_auth::application::dto::CredentialMetadataDto;
+    use nessa_auth::application::ports::{
+        AccessReader, AccessSnapshot, Clock, CredentialVerifier, PolicyEvaluator, PortFuture,
+        VerifiedCredential,
+    };
+    use nessa_auth::domain::{
+        AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipId,
+        MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
+    };
+    use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
+    use nessa_sdk::application::agent_execution::sessions::{
+        ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+    };
+    use nessa_sdk::domain::agent_execution::sessions::SessionId;
+    use nessa_sdk::infrastructure::session_storage::{
+        RecordStorage, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES as SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    };
+    use nessa_sync::replication::domain::Id;
+    use serde_json::Value;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+    use tokio::runtime::Handle;
+    use uuid::Uuid;
+
+    struct RecordBinding;
+    impl ReceiverAuthority for RecordBinding {
+        fn resolve<'a>(
+            &'a self,
+            _: &'a CredentialId,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Ok(Some(ReceiverBinding {
+                    receiver_id: "receiver".into(),
+                    credential_id: CredentialId::new("credential").unwrap(),
+                    organization_id: OrganizationId::new("organization").unwrap(),
+                    owner_id: PrincipalId::new("principal").unwrap(),
+                    access_epoch: 3,
+                    active: true,
+                }))
+            })
+        }
+    }
+
+    struct RecordAdmissionSpy(AtomicU64);
+    impl RecordReadSource for RecordAdmissionSpy {
+        fn read<'a>(
+            &'a self,
+            _: ReceiverReadScope,
+            _: RecordReadOperation,
+            _: RecordReadLease,
+        ) -> RecordReadFuture<'a, RecordReadResponse> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(RecordReadError::TemporarilyUnavailable) })
+        }
+    }
+    mod writer {
+        include!("../../tests/product/socket/writer.rs");
+    }
     mod browser_sessions {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -905,7 +1399,7 @@ mod tests {
 
     #[test]
     fn every_manifest_method_has_one_runtime_dispatch_path() {
-        let manifest: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        let manifest: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../protocol/product/manifest.json"
         )))
@@ -916,11 +1410,11 @@ mod tests {
             .keys()
             .map(String::as_str)
             .collect::<std::collections::BTreeSet<_>>();
-        let runtime = std::iter::once("session.authenticate")
-            .chain(PRODUCT_METHODS.iter().copied())
+        let runtime = std::iter::once(PRODUCT_HANDSHAKE_METHOD)
+            .chain(PRODUCT_READY_METHODS.iter().copied())
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(advertised, runtime);
-        for method in PRODUCT_METHODS {
+        for method in PRODUCT_READY_METHODS {
             if *method == "auth.session" {
                 continue;
             }
@@ -954,34 +1448,13 @@ mod tests {
         }
     }
 
-    use crate::{
-        agents_test_support::StubAgentProbe,
-        app::ports::Clock as UptimeClock,
-        browser_session::{
-            application::SessionStore,
-            domain::value_objects::{BrowserSessionOrigin, BrowserSessionState},
-        },
-        product::ProductDependencies,
-    };
-    use nessa_auth::{
-        adapters::cedar::CedarPolicyEvaluator,
-        application::{
-            credential_admin::CredentialAdmin,
-            dto::CredentialMetadataDto,
-            ports::{
-                AccessReader, AccessSnapshot, Clock, CredentialVerifier, PolicyEvaluator,
-                PortFuture, VerifiedCredential,
-            },
-        },
-        domain::{
-            AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipId,
-            MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
-        },
-    };
-    use std::sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
-    };
+    #[test]
+    fn record_queue_metadata_stays_within_its_captured_send_fields() {
+        let record_fields = std::mem::size_of::<String>() + std::mem::size_of::<Instant>();
+        assert!(
+            std::mem::size_of::<WireResponse>() <= record_fields + std::mem::size_of::<usize>()
+        );
+    }
 
     struct Authority {
         snapshot: Mutex<AccessSnapshot>,
@@ -1137,7 +1610,7 @@ mod tests {
         }
     }
 
-    fn issue_params() -> serde_json::Value {
+    fn issue_params() -> Value {
         json!({
             "requestId": "issue",
             "principal": {"id": "reader", "kind": "integration"},
@@ -1235,6 +1708,170 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admitted_record_route_uses_owner_scope_and_real_physical_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("conversations");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let conversations =
+            Arc::new(LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap());
+        let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+        conversations
+            .create(
+                Conversation::new(
+                    id.clone(),
+                    OrganizationId::new("organization").unwrap(),
+                    PrincipalId::new("principal").unwrap(),
+                    "panel".into(),
+                    "create".into(),
+                    1,
+                    AgentId::Claude,
+                    ConversationModelId::new("model").unwrap(),
+                    ConversationApprovalMode::Ask,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
+        storage.initialize().await.unwrap();
+        let session_id = SessionId::new(id.to_string()).unwrap();
+        let writer = storage.open(session_id.clone()).await.unwrap();
+        let provider = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
+        writer
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                SessionSnapshot {
+                    id: session_id.clone(),
+                    provider: provider.clone(),
+                    provider_context: ProviderContext::Absent,
+                    invocations: Vec::new(),
+                    queue_history: Vec::new(),
+                },
+                vec![SessionChange::Opened {
+                    id: session_id.clone(),
+                    provider,
+                    context: ProviderContext::Absent,
+                }],
+            )
+            .await
+            .unwrap();
+        let origin = Id::new("gateway-resource").unwrap();
+        let identity = storage
+            .record_identity(&session_id, origin.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        let sid = |value: &str| Id::new(value).unwrap();
+        let scope = identity.scope(sid("receiver"), sid("epoch-3"));
+        let scope_json = serde_json::json!({
+            "receiver": scope.receiver().as_str(),
+            "origin": scope.origin().as_str(),
+            "stream": scope.stream().as_str(),
+            "incarnation": scope.incarnation().as_str(),
+            "schema": scope.schema().as_str(),
+            "accessEpoch": scope.access_epoch().as_str(),
+        });
+        let (state, authority) = fixture(MembershipRole::Member);
+        {
+            let mut snapshot = authority.snapshot.lock().unwrap();
+            snapshot.credential = Credential::new(
+                CredentialId::new("credential").unwrap(),
+                PrincipalId::new("principal").unwrap(),
+                OrganizationId::new("organization").unwrap(),
+                AudienceId::new("gateway").unwrap(),
+                100,
+                200,
+                vec![Grant::new(
+                    Action::new("conversation.read").unwrap(),
+                    Resource::new(
+                        OrganizationId::new("organization").unwrap(),
+                        ResourceId::new("gateway-resource").unwrap(),
+                    ),
+                )],
+            )
+            .unwrap();
+        }
+        let source = Arc::new(NessaRecordReadSource::new(
+            storage.clone(),
+            origin,
+            Handle::current(),
+        ));
+        let state = state
+            .with_passive_read(Arc::new(RecordBinding), conversations)
+            .with_record_source(source.clone());
+        let session = authenticate(&state).await;
+        let mut head_frame = request("head", "conversation.recordsHead");
+        head_frame.params = serde_json::json!({
+            "conversationId": id.to_string(), "accessEpoch": "3", "receiverId": "receiver",
+        });
+        let (head_wire, lease) = dispatch_passive_read(
+            &state,
+            &session,
+            head_frame,
+            RecordReadLease::new(()),
+            Instant::now() + PASSIVE_READ_TIMEOUT,
+        )
+        .await;
+        let WireResponse::Record { text, .. } = head_wire else {
+            panic!("record reply expected")
+        };
+        let head_json: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(head_json["payload"]["head"], "1");
+        assert_eq!(head_json["payload"]["scope"]["accessEpoch"], "epoch-3");
+        drop(lease);
+        let mut page_frame = request("page", "conversation.recordsPage");
+        page_frame.params = serde_json::json!({
+            "conversationId": id.to_string(), "accessEpoch": "3",
+            "request": {
+                "scope": scope_json, "after": "0", "target": "1", "maxRecords": 16,
+                "maxPayloadBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                "maxRecordBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+            },
+        });
+        let (page_wire, lease) = dispatch_passive_read(
+            &state,
+            &session,
+            page_frame,
+            RecordReadLease::new(()),
+            Instant::now() + PASSIVE_READ_TIMEOUT,
+        )
+        .await;
+        let WireResponse::Record { text, .. } = page_wire else {
+            panic!("record reply expected")
+        };
+        let page_json: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(page_json["payload"]["records"][0]["position"], "1");
+        assert_eq!(
+            page_json["payload"]["request"]["scope"]["accessEpoch"],
+            "epoch-3"
+        );
+        drop(lease);
+        let mut wrong = request("wrong", "conversation.recordsHead");
+        wrong.params = serde_json::json!({
+            "conversationId": id.to_string(), "accessEpoch": "3",
+            "receiverId": "wrong",
+        });
+        let (failure, _) = dispatch_passive_read(
+            &state,
+            &session,
+            wrong,
+            RecordReadLease::new(()),
+            Instant::now() + PASSIVE_READ_TIMEOUT,
+        )
+        .await;
+        let WireResponse::Ordinary(message) = failure else {
+            panic!("ordinary refusal expected")
+        };
+        let OutgoingMessage::Response(failure) = *message else {
+            panic!("refusal expected")
+        };
+        assert_eq!(failure.error.unwrap().code, "wrong_receiver");
+        source.shutdown().await.unwrap();
+        drop(writer);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn health_uses_real_cedar_and_current_membership() {
         let (state, authority) = fixture(MembershipRole::Member);
         let session = authenticate(&state).await;
@@ -1287,6 +1924,380 @@ mod tests {
     impl AccessReader for UnavailableAccess {
         fn read<'a>(&'a self, _: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
             Box::pin(async { Err(AccessError::Unavailable) })
+        }
+    }
+
+    struct PendingRecordAuthority;
+    impl AccessReader for PendingRecordAuthority {
+        fn read<'a>(&'a self, _: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    struct RecoveringRecordAuthority {
+        authority: Arc<Authority>,
+        first_failure: AccessError,
+        reads: AtomicU64,
+    }
+    impl AccessReader for RecoveringRecordAuthority {
+        fn read<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+            Box::pin(async move {
+                if self.reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(self.first_failure)
+                } else {
+                    self.authority.read(id).await
+                }
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn passive_socket_preserves_retryable_authority_failures() {
+        for (error, expected) in [
+            (AccessError::Unavailable, "unverifiable"),
+            (AccessError::StaleRevision, "unverifiable"),
+            (AccessError::InvalidCredential, "unauthorized"),
+            (AccessError::CredentialRevoked, "unauthorized"),
+            (AccessError::CredentialExpired, "unauthorized"),
+            (AccessError::InactiveMembership, "unauthorized"),
+            (AccessError::IdentityMismatch, "unauthorized"),
+            (AccessError::Unsupported, "unverifiable"),
+        ] {
+            for method in [
+                "conversation.recordsHead",
+                "conversation.recordsPage",
+                "conversation.catalogueHead",
+                "conversation.catalogueManifest",
+                "conversation.catalogueResolve",
+            ] {
+                let (mut state, authority) = fixture(MembershipRole::Member);
+                let session = authenticate(&state).await;
+                state.access = Arc::new(RecoveringRecordAuthority {
+                    authority,
+                    first_failure: error,
+                    reads: AtomicU64::new(0),
+                });
+                state.record_source = Some(Arc::new(UnreachableRecordSource));
+                state.settings = SessionSettings::new(
+                    Duration::from_secs(20),
+                    Duration::from_secs(5),
+                    Duration::from_secs(30),
+                )
+                .unwrap();
+                let permits = state.record_reads.clone();
+                let available = permits.available_permits();
+                let (socket, mut peer) = test_socket(None);
+                let task = tokio::spawn(run_authenticated(socket, state, session));
+                let mut responses = Vec::new();
+                for id in ["outage", "recovered"] {
+                    peer.input
+                        .send(Ok(Message::Text(
+                            json!({"type":"req", "id":id, "method":method, "params":{}})
+                                .to_string()
+                                .into(),
+                        )))
+                        .unwrap();
+                    responses.push(timeout(Duration::from_secs(1), peer.output.recv()).await);
+                }
+                drop(peer.input);
+                timeout(Duration::from_secs(1), task)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                for (received, id, code) in [
+                    (responses.remove(0), "outage", expected),
+                    (responses.remove(0), "recovered", "invalid_request"),
+                ] {
+                    let Message::Text(text) = received.unwrap().unwrap() else {
+                        panic!("correlated read refusal expected")
+                    };
+                    let value: Value = serde_json::from_str(&text).unwrap();
+                    assert_eq!(value["id"], id);
+                    assert_eq!(value["error"]["code"], code, "{error:?}, {method}");
+                }
+                assert_eq!(permits.available_permits(), available);
+            }
+        }
+    }
+
+    struct CountingRecordAuthority {
+        authority: Arc<Authority>,
+        reads: AtomicU64,
+        first_read_delay: Duration,
+    }
+    impl AccessReader for CountingRecordAuthority {
+        fn read<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+            Box::pin(async move {
+                let read = self.reads.fetch_add(1, Ordering::SeqCst);
+                if read == 0 && !self.first_read_delay.is_zero() {
+                    tokio::time::sleep(self.first_read_delay).await;
+                }
+                self.authority.read(id).await
+            })
+        }
+    }
+
+    struct UnreachableRecordSource;
+    impl RecordReadSource for UnreachableRecordSource {
+        fn read<'a>(
+            &'a self,
+            _: ReceiverReadScope,
+            _: RecordReadOperation,
+            _: RecordReadLease,
+        ) -> RecordReadFuture<'a, RecordReadResponse> {
+            panic!("pending authority must not reach record metadata/source");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn record_phase_deadline_includes_current_authority_before_source_admission() {
+        for before_dispatch in [Duration::ZERO, Duration::from_secs(9)] {
+            let (mut state, _) = fixture(MembershipRole::Member);
+            let session = authenticate(&state).await;
+            state.access = Arc::new(PendingRecordAuthority);
+            state.record_source = Some(Arc::new(UnreachableRecordSource));
+            let permits = Arc::new(Semaphore::new(1));
+            let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
+            let start = Instant::now();
+            tokio::time::advance(before_dispatch).await;
+            let (response, lease) = dispatch_passive_read(
+                &state,
+                &session,
+                request("deadline", "conversation.recordsHead"),
+                lease,
+                start + PASSIVE_READ_TIMEOUT,
+            )
+            .await;
+            assert_eq!(Instant::now() - start, PASSIVE_READ_TIMEOUT);
+            assert!(lease.is_none());
+            assert_eq!(permits.available_permits(), 1);
+            let WireResponse::Ordinary(message) = response else {
+                panic!("ordinary refusal expected")
+            };
+            let OutgoingMessage::Response(response) = *message else {
+                panic!("timeout refusal expected")
+            };
+            assert_eq!(response.error.unwrap().code, "read_timeout");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn socket_passive_read_uses_one_deadline_for_slow_authority() {
+        for method in [
+            "conversation.recordsHead",
+            "conversation.recordsPage",
+            "conversation.catalogueHead",
+            "conversation.catalogueManifest",
+            "conversation.catalogueResolve",
+        ] {
+            let (mut state, _) = fixture(MembershipRole::Member);
+            let session = authenticate(&state).await;
+            state.access = Arc::new(PendingRecordAuthority);
+            state.record_source = Some(Arc::new(UnreachableRecordSource));
+            // Isolate frame admission from the separate periodic socket check.
+            state.settings = SessionSettings::new(
+                Duration::from_secs(20),
+                Duration::from_secs(5),
+                Duration::from_secs(30),
+            )
+            .unwrap();
+            let permits = state.record_reads.clone();
+            let available = permits.available_permits();
+            let (socket, mut peer) = test_socket(None);
+            let start = Instant::now();
+            let task = tokio::spawn(run_authenticated(socket, state, session));
+            peer.input
+                .send(Ok(Message::Text(
+                    json!({
+                        "type": "req", "id": "deadline", "method": method, "params": {}
+                    })
+                    .to_string()
+                    .into(),
+                )))
+                .unwrap();
+            let result = timeout(Duration::from_secs(11), peer.output.recv()).await;
+            task.abort();
+            let _ = task.await;
+            let Message::Text(text) = result
+                .expect("passive refusal must arrive within its read budget")
+                .expect("socket must return a refusal")
+            else {
+                panic!("correlated read refusal expected")
+            };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["id"], "deadline");
+            assert_eq!(value["error"]["code"], "read_timeout");
+            assert_eq!(Instant::now() - start, PASSIVE_READ_TIMEOUT);
+            assert_eq!(permits.available_permits(), available);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expired_passive_read_does_not_poll_ready_authority() {
+        for method in [
+            "conversation.recordsHead",
+            "conversation.recordsPage",
+            "conversation.catalogueHead",
+            "conversation.catalogueManifest",
+            "conversation.catalogueResolve",
+        ] {
+            for (elapsed, code, reads) in [
+                (9, "invalid_request", 1),
+                (10, "read_timeout", 0),
+                (11, "read_timeout", 0),
+            ] {
+                let (mut state, authority) = fixture(MembershipRole::Member);
+                let session = authenticate(&state).await;
+                let authority = Arc::new(CountingRecordAuthority {
+                    authority,
+                    reads: AtomicU64::new(0),
+                    first_read_delay: Duration::ZERO,
+                });
+                state.access = authority.clone();
+                state.record_source = Some(Arc::new(UnreachableRecordSource));
+                let permits = Arc::new(Semaphore::new(1));
+                let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
+                let deadline = Instant::now() + PASSIVE_READ_TIMEOUT;
+                tokio::time::advance(Duration::from_secs(elapsed)).await;
+                let (response, lease) = dispatch_passive_read(
+                    &state,
+                    &session,
+                    request("expired", method),
+                    lease,
+                    deadline,
+                )
+                .await;
+                let WireResponse::Ordinary(message) = response else {
+                    panic!("ordinary refusal expected")
+                };
+                let OutgoingMessage::Response(response) = *message else {
+                    panic!("correlated refusal expected")
+                };
+                assert_eq!(response.id, "expired");
+                assert_eq!(response.error.unwrap().code, code);
+                assert_eq!(authority.reads.load(Ordering::SeqCst), reads);
+                assert!(lease.is_none());
+                assert_eq!(permits.available_permits(), 1);
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn passive_read_ready_result_at_expiry_is_a_timeout() {
+        let (mut state, authority) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let authority = Arc::new(CountingRecordAuthority {
+            authority,
+            reads: AtomicU64::new(0),
+            first_read_delay: PASSIVE_READ_TIMEOUT,
+        });
+        state.access = authority.clone();
+        state.record_source = Some(Arc::new(UnreachableRecordSource));
+        let permits = Arc::new(Semaphore::new(1));
+        let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
+        let start = Instant::now();
+        let (response, lease) = dispatch_passive_read(
+            &state,
+            &session,
+            request("ready", "conversation.recordsHead"),
+            lease,
+            start + PASSIVE_READ_TIMEOUT,
+        )
+        .await;
+        let WireResponse::Ordinary(message) = response else {
+            panic!("ordinary refusal expected")
+        };
+        let OutgoingMessage::Response(response) = *message else {
+            panic!("correlated timeout expected")
+        };
+        assert_eq!(response.id, "ready");
+        assert_eq!(response.error.unwrap().code, "read_timeout");
+        assert_eq!(Instant::now() - start, PASSIVE_READ_TIMEOUT);
+        assert_eq!(authority.reads.load(Ordering::SeqCst), 1);
+        assert!(lease.is_none());
+        assert_eq!(permits.available_permits(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn authority_ready_at_read_deadline_does_not_admit_source_work() {
+        for delay in [0, 9, 10, 11] {
+            let (state, authority) = fixture(MembershipRole::Member);
+            authority.snapshot.lock().unwrap().credential = Credential::new(
+                CredentialId::new("credential").unwrap(),
+                PrincipalId::new("principal").unwrap(),
+                OrganizationId::new("organization").unwrap(),
+                AudienceId::new("gateway").unwrap(),
+                100,
+                200,
+                vec![Grant::new(
+                    Action::new("conversation.read").unwrap(),
+                    Resource::new(
+                        OrganizationId::new("organization").unwrap(),
+                        ResourceId::new("gateway-resource").unwrap(),
+                    ),
+                )],
+            )
+            .unwrap();
+            let session = authenticate(&state).await;
+            let authority = Arc::new(CountingRecordAuthority {
+                authority,
+                reads: AtomicU64::new(0),
+                first_read_delay: Duration::from_secs(delay),
+            });
+            let repository = Arc::new(MemoryRepository::default());
+            let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+            repository.records.lock().unwrap().insert(
+                id.clone(),
+                Conversation::new(
+                    id.clone(),
+                    OrganizationId::new("organization").unwrap(),
+                    PrincipalId::new("principal").unwrap(),
+                    "panel".into(),
+                    "create".into(),
+                    1,
+                    AgentId::Claude,
+                    ConversationModelId::new("model").unwrap(),
+                    ConversationApprovalMode::Ask,
+                )
+                .unwrap(),
+            );
+            let source = Arc::new(RecordAdmissionSpy(AtomicU64::new(0)));
+            let mut state = state
+                .with_passive_read(Arc::new(RecordBinding), repository)
+                .with_record_source(source.clone());
+            state.access = authority;
+            let permits = Arc::new(Semaphore::new(1));
+            let lease = RecordReadLease::new(permits.clone().try_acquire_owned().unwrap());
+            let mut frame = request("admission", "conversation.recordsHead");
+            frame.params =
+                json!({"conversationId":id.to_string(),"accessEpoch":"3","receiverId":"receiver"});
+            let start = Instant::now();
+            let (response, lease) =
+                dispatch_passive_read(&state, &session, frame, lease, start + PASSIVE_READ_TIMEOUT)
+                    .await;
+            let WireResponse::Ordinary(message) = response else {
+                panic!("ordinary refusal expected")
+            };
+            let OutgoingMessage::Response(response) = *message else {
+                panic!("correlated refusal expected")
+            };
+            assert_eq!(response.id, "admission");
+            assert_eq!(
+                response.error.unwrap().code,
+                if delay < 10 {
+                    "temporarily_unavailable"
+                } else {
+                    "read_timeout"
+                }
+            );
+            assert_eq!(
+                source.0.load(Ordering::SeqCst),
+                u64::from(delay < 10),
+                "authority delay {delay}"
+            );
+            assert_eq!(Instant::now() - start, Duration::from_secs(delay.min(10)));
+            assert!(lease.is_none());
+            assert_eq!(permits.available_permits(), 1);
         }
     }
 
@@ -1384,6 +2395,11 @@ mod tests {
         let session = authenticate(&state).await;
         let snapshot = current_snapshot(&state, &session).await.unwrap();
         let value = serde_json::to_value(session_ready(&state, &session, &snapshot)).unwrap();
+        assert!(
+            wire_shape_product_session_ready(&value),
+            "producer readiness must satisfy its published schema: {} methods",
+            value["methods"].as_array().unwrap().len()
+        );
         assert_eq!(value["grants"].as_array().unwrap().len(), 2);
         assert!(value["methods"]
             .as_array()
@@ -1396,14 +2412,14 @@ mod tests {
     /// flush is released. Exercises the production session loop without relying
     /// on OS socket-buffer sizes or flooding a real network connection.
     struct TestSocket {
-        incoming: tokio::sync::mpsc::UnboundedReceiver<Result<Message, axum::Error>>,
+        incoming: tokio::sync::mpsc::UnboundedReceiver<Result<Message, Error>>,
         outgoing: tokio::sync::mpsc::UnboundedSender<Message>,
         writing: tokio::sync::mpsc::UnboundedSender<()>,
         gate: Option<tokio::sync::oneshot::Receiver<()>>,
         pending: Vec<Message>,
     }
     impl Stream for TestSocket {
-        type Item = Result<Message, axum::Error>;
+        type Item = Result<Message, Error>;
         fn poll_next(
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
@@ -1452,7 +2468,7 @@ mod tests {
         }
     }
     struct TestPeer {
-        input: tokio::sync::mpsc::UnboundedSender<Result<Message, axum::Error>>,
+        input: tokio::sync::mpsc::UnboundedSender<Result<Message, Error>>,
         output: tokio::sync::mpsc::UnboundedReceiver<Message>,
         writing: tokio::sync::mpsc::UnboundedReceiver<()>,
     }
@@ -1494,6 +2510,301 @@ mod tests {
                 .unwrap()
         }
     }
+    #[tokio::test]
+    async fn queued_control_precedes_ordinary_after_a_stalled_write() {
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let (socket, mut peer) = test_socket(Some(gate));
+        let (sink, _incoming) = socket.split();
+        let (controls_send, controls) = mpsc::channel(4);
+        let (refusals_send, refusals) = mpsc::channel(1);
+        let (ordinary_send, ordinary) = mpsc::channel(16);
+        let (record_send, records) = mpsc::channel(1);
+        let slots = Arc::new(Semaphore::new(3));
+        let response = |id: &str, slot: OwnedSemaphorePermit| QueuedResponse {
+            message: WireResponse::ordinary(success(id, &json!({}))),
+            _slot: Arc::new(slot),
+            _record_work: None,
+        };
+        ordinary_send
+            .send(response(
+                "first",
+                slots.clone().try_acquire_owned().unwrap(),
+            ))
+            .await
+            .unwrap();
+        let writer = tokio::spawn(write_authenticated(
+            sink,
+            controls,
+            refusals,
+            ordinary,
+            records,
+            Duration::from_secs(1),
+        ));
+        peer.writing.recv().await.unwrap();
+        assert_eq!(slots.available_permits(), 2, "in-flight send owns its slot");
+        ordinary_send
+            .send(response(
+                "ordinary",
+                slots.clone().try_acquire_owned().unwrap(),
+            ))
+            .await
+            .unwrap();
+        controls_send
+            .send(ControlOutput::Response(Box::new(response(
+                "control",
+                slots.clone().try_acquire_owned().unwrap(),
+            ))))
+            .await
+            .unwrap();
+        release.send(()).unwrap();
+        for expected in ["first", "control", "ordinary"] {
+            let Message::Text(text) = peer.message().await else {
+                panic!("response expected")
+            };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["id"], expected);
+        }
+        drop(controls_send);
+        drop(ordinary_send);
+        drop(refusals_send);
+        drop(record_send);
+        writer.await.unwrap();
+        assert_eq!(slots.available_permits(), 3);
+    }
+
+    #[tokio::test]
+    async fn maximum_record_frame_keeps_same_socket_control_live_without_raising_ordinary_cap() {
+        let escaped = "\u{0001}".repeat(128);
+        let scope = RecordScope {
+            receiver: escaped.clone(),
+            origin: escaped.clone(),
+            stream: escaped.clone(),
+            incarnation: escaped.clone(),
+            schema: escaped.clone(),
+            access_epoch: escaped.clone(),
+        };
+        let record = encode_response(
+            &"\u{0001}".repeat(256),
+            &ConversationRecordsPageResult {
+                request: RecordPageRequest {
+                    scope,
+                    after: u64::MAX.to_string(),
+                    target: u64::MAX.to_string(),
+                    max_records: 1,
+                    max_payload_bytes: MAX_PHYSICAL_RECORD_PAYLOAD_BYTES as u64,
+                    max_record_bytes: MAX_PHYSICAL_RECORD_PAYLOAD_BYTES as u64,
+                },
+                records: vec![RecordWireRecord {
+                    position: u64::MAX.to_string(),
+                    id: escaped,
+                    payload: STANDARD.encode(vec![0xff; MAX_PHYSICAL_RECORD_PAYLOAD_BYTES]),
+                }],
+            },
+        )
+        .unwrap();
+        assert!(record.len() > MAX_PAYLOAD_BYTES as usize);
+        assert!(record.len() <= super::super::generated::MAX_RECORD_RESPONSE_BYTES);
+
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let (socket, mut peer) = test_socket(Some(gate));
+        let (sink, _incoming) = socket.split();
+        let (control_send, controls) = mpsc::channel(4);
+        let (refusal_send, refusals) = mpsc::channel(1);
+        let (ordinary_send, ordinary) = mpsc::channel(16);
+        let (record_send, records) = mpsc::channel(1);
+        let slots = Arc::new(Semaphore::new(2));
+        let record_capacity = Arc::new(Semaphore::new(1));
+        let writer = tokio::spawn(write_authenticated(
+            sink,
+            controls,
+            refusals,
+            ordinary,
+            records,
+            Duration::from_secs(1),
+        ));
+        record_send
+            .send(QueuedRecordResponse::new(QueuedResponse {
+                message: WireResponse::record(record.clone()),
+                _slot: slots.clone().try_acquire_owned().unwrap().into(),
+                _record_work: Some(RecordReadLease::new(
+                    record_capacity.clone().try_acquire_owned().unwrap(),
+                )),
+            }))
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(1), peer.writing.recv())
+            .await
+            .expect("maximum record starts its physical send")
+            .unwrap();
+        control_send
+            .send(ControlOutput::Response(Box::new(QueuedResponse {
+                message: WireResponse::ordinary(success("control", &json!({}))),
+                _slot: slots.clone().try_acquire_owned().unwrap().into(),
+                _record_work: None,
+            })))
+            .await
+            .unwrap();
+        assert_eq!(slots.available_permits(), 0);
+        assert_eq!(record_capacity.available_permits(), 0);
+        release.send(()).unwrap();
+        let Message::Text(first) = peer.message().await else {
+            panic!("record response expected")
+        };
+        assert_eq!(first.as_str(), record);
+        let Message::Text(second) = peer.message().await else {
+            panic!("control response expected")
+        };
+        let value: Value = serde_json::from_str(&second).unwrap();
+        assert_eq!(value["id"], "control");
+        drop(control_send);
+        drop(refusal_send);
+        drop(ordinary_send);
+        drop(record_send);
+        writer.await.unwrap();
+        assert_eq!(slots.available_permits(), 2);
+        assert_eq!(record_capacity.available_permits(), 1);
+
+        let (mut socket, _peer) = test_socket(None);
+        let oversized_ordinary = success("ordinary", &json!({"body": "x".repeat(record.len())}));
+        assert!(
+            send(Duration::from_secs(1), &mut socket, oversized_ordinary)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn record_send_uses_its_absolute_deadline_and_encoded_ceiling() {
+        let (mut socket, mut peer) = test_socket(None);
+        assert!(send_queued(
+            Duration::from_secs(1),
+            &mut socket,
+            WireResponse::record("x".repeat(MAX_RECORD_RESPONSE_BYTES + 1)),
+        )
+        .await
+        .is_err());
+        assert!(peer.writing.try_recv().is_err());
+
+        let (_release, gate) = tokio::sync::oneshot::channel();
+        let (mut stalled, mut stalled_peer) = test_socket(Some(gate));
+        let expired = QueuedRecordResponse {
+            message: WireResponse::record("{}".into()),
+            _slot: Some(
+                Arc::new(Semaphore::new(1))
+                    .try_acquire_owned()
+                    .unwrap()
+                    .into(),
+            ),
+            _record_work: None,
+            deadline: Instant::now() - Duration::from_millis(1),
+        };
+        assert!(timeout(
+            Duration::from_secs(1),
+            send_record_queued(Duration::from_secs(30), &mut stalled, expired)
+        )
+        .await
+        .expect("expired response settles")
+        .is_err());
+        assert!(stalled_peer.writing.try_recv().is_err());
+        assert!(stalled_peer.output.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ready_record_send_refuses_expired_frames_before_sink_effects() {
+        for refusal in [false, true] {
+            for elapsed in [29, 30, 31] {
+                let (mut socket, mut peer) = test_socket(None);
+                let slots = Arc::new(Semaphore::new(1));
+                let reads = Arc::new(Semaphore::new(1));
+                let response = QueuedRecordResponse::new(QueuedResponse {
+                    message: if refusal {
+                        WireResponse::ordinary(failure("refusal", "read_timeout"))
+                    } else {
+                        WireResponse::record("{\"record\":true}".into())
+                    },
+                    _slot: slots.clone().try_acquire_owned().unwrap().into(),
+                    _record_work: (!refusal)
+                        .then(|| RecordReadLease::new(reads.clone().try_acquire_owned().unwrap())),
+                });
+                let sending = send_record_queued(Duration::from_secs(5), &mut socket, response);
+                tokio::time::advance(Duration::from_secs(elapsed)).await;
+                let result = sending.await;
+                assert_eq!(
+                    result.is_ok(),
+                    elapsed < 30,
+                    "refusal {refusal}, elapsed {elapsed}"
+                );
+                assert_eq!(peer.writing.try_recv().is_ok(), elapsed < 30);
+                assert_eq!(peer.output.try_recv().is_ok(), elapsed < 30);
+                assert_eq!(slots.available_permits(), 1);
+                assert_eq!(reads.available_permits(), 1);
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn timed_out_record_frame_ends_writer_before_any_later_control_frame() {
+        let (_release, gate) = tokio::sync::oneshot::channel();
+        let (socket, mut peer) = test_socket(Some(gate));
+        let (sink, _incoming) = socket.split();
+        let (control_send, controls) = mpsc::channel(4);
+        let (_refusal_send, refusals) = mpsc::channel(1);
+        let (_ordinary_send, ordinary) = mpsc::channel(16);
+        let (record_send, records) = mpsc::channel(1);
+        let slots = Arc::new(Semaphore::new(2));
+        let writer = tokio::spawn(write_authenticated(
+            sink,
+            controls,
+            refusals,
+            ordinary,
+            records,
+            Duration::from_secs(5),
+        ));
+        record_send
+            .send(QueuedRecordResponse::new(QueuedResponse {
+                message: WireResponse::record("{\"type\":\"res\"}".into()),
+                _slot: slots.clone().try_acquire_owned().unwrap().into(),
+                _record_work: None,
+            }))
+            .await
+            .unwrap();
+        peer.writing.recv().await.unwrap();
+        control_send
+            .send(ControlOutput::Response(Box::new(QueuedResponse {
+                message: WireResponse::ordinary(success("control", &json!({}))),
+                _slot: slots.clone().try_acquire_owned().unwrap().into(),
+                _record_work: None,
+            })))
+            .await
+            .unwrap();
+        assert_eq!(slots.available_permits(), 0);
+        tokio::time::advance(RECORD_SEND_TIMEOUT + Duration::from_millis(1)).await;
+        timeout(Duration::from_secs(1), writer)
+            .await
+            .expect("timed-out writer stops instead of sending queued control")
+            .unwrap();
+        assert!(peer.output.try_recv().is_err());
+        assert_eq!(slots.available_permits(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_failed_writer_ends_receive_ownership_without_another_request() {
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let (socket, peer) = test_socket(None);
+        peer.request("health");
+        let TestPeer {
+            input: _still_connected,
+            output,
+            writing: _writing,
+        } = peer;
+        drop(output);
+        let owner = tokio::spawn(run_authenticated(socket, state, session));
+        timeout(Duration::from_secs(1), owner)
+            .await
+            .expect("writer failure ends the authenticated socket owner")
+            .unwrap();
+    }
     #[tokio::test(start_paused = true)]
     async fn crossing_a_wall_second_does_not_reject_an_in_window_authentication() {
         struct MillisecondClock(AtomicU64);
@@ -1513,7 +2824,7 @@ mod tests {
         let Message::Text(challenge) = peer.message().await else {
             panic!("challenge expected")
         };
-        let challenge: serde_json::Value = serde_json::from_str(&challenge).unwrap();
+        let challenge: Value = serde_json::from_str(&challenge).unwrap();
         assert_eq!(challenge["payload"]["expiresAt"], 102);
         tokio::time::advance(Duration::from_millis(500)).await;
         // The old independent seconds check rejected this while its timer still ran.
@@ -1548,7 +2859,7 @@ mod tests {
         let Message::Text(challenge) = peer.message().await else {
             panic!("challenge expected")
         };
-        let challenge: serde_json::Value = serde_json::from_str(&challenge).unwrap();
+        let challenge: Value = serde_json::from_str(&challenge).unwrap();
         let nonce = challenge["payload"]["nonce"].as_str().unwrap();
         peer.input
             .send(Ok(Message::Text(
@@ -1596,7 +2907,7 @@ mod tests {
             let Message::Text(text) = peer.message().await else {
                 panic!("response expected")
             };
-            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["id"], "issue");
             assert_eq!(value["ok"], false);
             assert_eq!(value["error"]["code"], "invalid_request");
@@ -1623,7 +2934,7 @@ mod tests {
         let Message::Text(text) = peer.message().await else {
             panic!("response expected")
         };
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["id"], "after");
         task.abort();
     }
@@ -1645,7 +2956,7 @@ mod tests {
         let Message::Text(text) = peer.message().await else {
             panic!("response expected")
         };
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["error"]["code"], "credential_store_unavailable");
         task.abort();
     }
@@ -1664,7 +2975,7 @@ mod tests {
             panic!("close expected")
         };
         assert_eq!(close.code, 4006);
-        let reason: serde_json::Value = serde_json::from_str(&close.reason).unwrap();
+        let reason: Value = serde_json::from_str(&close.reason).unwrap();
         assert_eq!(reason["code"], "handshake_timeout");
         assert_eq!(reason["retryable"], true);
         task.await.unwrap();
@@ -1699,7 +3010,7 @@ mod tests {
         let Message::Text(text) = message else {
             panic!("expected successful response")
         };
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["id"], id);
         assert_eq!(value["ok"], true);
     }
@@ -1808,6 +3119,124 @@ mod tests {
             _: CredentialId,
         ) -> PortFuture<'a, BrowserSessionState> {
             Box::pin(async { Err(AccessError::Unsupported) })
+        }
+    }
+
+    struct FailingPresenceStore {
+        inner: PresenceStore,
+        reads: AtomicU64,
+        fail_at: u64,
+        error: AccessError,
+    }
+    impl SessionStore for FailingPresenceStore {
+        fn insert<'a>(
+            &'a self,
+            id: String,
+            session: BrowserSessionState,
+            prior: Option<String>,
+            now: u64,
+        ) -> PortFuture<'a, Option<(String, BrowserSessionState)>> {
+            self.inner.insert(id, session, prior, now)
+        }
+        fn get<'a>(&'a self, id: String) -> PortFuture<'a, Option<BrowserSessionState>> {
+            if self.reads.fetch_add(1, Ordering::SeqCst) + 1 == self.fail_at {
+                Box::pin(async { Err(self.error) })
+            } else {
+                self.inner.get(id)
+            }
+        }
+        fn remove<'a>(
+            &'a self,
+            id: String,
+            now: u64,
+            reason: RemovalReason,
+            actor: Option<CredentialId>,
+        ) -> PortFuture<'a, ()> {
+            self.inner.remove(id, now, reason, actor)
+        }
+        fn abandon_login<'a>(
+            &'a self,
+            id: String,
+            prior: Option<(String, BrowserSessionState)>,
+            now: u64,
+        ) -> PortFuture<'a, ()> {
+            self.inner.abandon_login(id, prior, now)
+        }
+        fn renew<'a>(
+            &'a self,
+            id: String,
+            now: u64,
+            credential: CredentialId,
+        ) -> PortFuture<'a, BrowserSessionState> {
+            self.inner.renew(id, now, credential)
+        }
+    }
+
+    #[tokio::test]
+    async fn passive_browser_presence_preserves_retryable_store_failures() {
+        for error in [
+            AccessError::Unavailable,
+            AccessError::StaleRevision,
+            AccessError::Unsupported,
+        ] {
+            // Current identity reads twice; the third read rechecks presence.
+            for fail_at in [3, 1] {
+                for method in [
+                    "conversation.recordsHead",
+                    "conversation.recordsPage",
+                    "conversation.catalogueHead",
+                    "conversation.catalogueManifest",
+                    "conversation.catalogueResolve",
+                ] {
+                    let (mut state, _) = fixture(MembershipRole::Member);
+                    let session = authenticate(&state).await;
+                    let present = Arc::new(AtomicBool::new(true));
+                    let origin = "https://127.0.0.1:1443";
+                    let store = Arc::new(FailingPresenceStore {
+                        inner: PresenceStore {
+                            present: present.clone(),
+                            session: BrowserSessionState::new(
+                                session.context().credential_id().clone(),
+                                BrowserSessionOrigin::new(origin.to_owned()).unwrap(),
+                                100,
+                            )
+                            .unwrap(),
+                        },
+                        reads: AtomicU64::new(0),
+                        fail_at,
+                        error,
+                    });
+                    state.browser_sessions = Some(store.clone());
+                    state.browser_session_id = Some("a".repeat(64));
+                    state.browser_session_origin = Some(origin.to_owned());
+                    state.record_source = Some(Arc::new(UnreachableRecordSource));
+                    let permits = Arc::new(Semaphore::new(1));
+                    let (response, lease) = dispatch_passive_read(
+                        &state,
+                        &session,
+                        request("browser-outage", method),
+                        RecordReadLease::new(permits.clone().try_acquire_owned().unwrap()),
+                        Instant::now() + PASSIVE_READ_TIMEOUT,
+                    )
+                    .await;
+                    let WireResponse::Ordinary(message) = response else {
+                        panic!("ordinary refusal expected")
+                    };
+                    let OutgoingMessage::Response(response) = *message else {
+                        panic!("correlated refusal expected")
+                    };
+                    assert_eq!(response.id, "browser-outage");
+                    assert_eq!(
+                        response.error.unwrap().code,
+                        "unverifiable",
+                        "{error:?}, browser read {fail_at}, {method}"
+                    );
+                    assert_eq!(store.reads.load(Ordering::SeqCst), fail_at);
+                    assert!(present.load(Ordering::SeqCst));
+                    assert!(lease.is_none());
+                    assert_eq!(permits.available_permits(), 1);
+                }
+            }
         }
     }
 
@@ -1943,6 +3372,12 @@ mod tests {
             .unwrap();
     }
     include!("../../tests/conversation/gateway.rs");
+    mod catalogue_receiver {
+        include!("../../tests/conversation/catalogue_receiver/product.rs");
+    }
+    mod record_receiver {
+        include!("../../tests/conversation/record_receiver.rs");
+    }
     include!("../../tests/attachments/gateway.rs");
     include!("../../tests/agent_install/gateway.rs");
 }

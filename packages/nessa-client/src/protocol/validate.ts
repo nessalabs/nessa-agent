@@ -1,3 +1,6 @@
+import { hasUniqueObjectKeys } from "./unique-json.js"
+import { bounds } from "../generated/product.js"
+import { frameScalars, responsePresence } from "../generated/protocol.js"
 import type { EventFrame, Frame, ResFrame } from "./types.js"
 import type { ProductSessionReady, SessionChallenge } from "./product-types.js"
 
@@ -71,7 +74,7 @@ export function assertProductSessionReady(value: unknown): ProductSessionReady {
       throw new Error("session response has invalid grant resource")
     }
   }
-  if (!Array.isArray(value.methods)) {
+  if (!Array.isArray(value.methods) || value.methods.length > bounds.maxReadyMethods) {
     throw new Error("session response has invalid methods")
   }
   const methods = new Set<string>()
@@ -102,16 +105,27 @@ function hasOnlyKeys(
 export function parseResponseFrame(value: unknown): ResFrame | null {
   if (!isRecord(value) || value.type !== "res") return null
   if (!hasOnlyKeys(value, ["type", "id", "ok", "payload", "error"])) return null
-  if (!isNonEmptyString(value.id) || typeof value.ok !== "boolean") return null
+  if (
+    typeof value.id !== "string" ||
+    [...value.id].length < frameScalars.responseIdMinLength ||
+    typeof value.ok !== "boolean"
+  )
+    return null
 
-  if (value.ok) {
-    if (!("payload" in value) || "error" in value) return null
-    return value as unknown as ResFrame
-  }
+  const presence =
+    Number(value.ok) * 4 +
+    Number(Object.hasOwn(value, "payload")) * 2 +
+    Number(Object.hasOwn(value, "error"))
+  if (!responsePresence[presence]) return null
+  if (value.ok) return value as unknown as ResFrame
 
-  if ("payload" in value || !isRecord(value.error)) return null
+  if (!isRecord(value.error)) return null
   if (!hasOnlyKeys(value.error, ["code", "message", "details"])) return null
-  if (!isNonEmptyString(value.error.code)) return null
+  if (
+    typeof value.error.code !== "string" ||
+    [...value.error.code].length < frameScalars.errorCodeMinLength
+  )
+    return null
   if (typeof value.error.message !== "string") return null
   return value as unknown as ResFrame
 }
@@ -121,7 +135,11 @@ export function parseEventFrame(value: unknown): EventFrame | null {
   if (!isRecord(value) || value.type !== "event") return null
   if (!hasOnlyKeys(value, ["type", "event", "payload", "seq", "stateVersion"]))
     return null
-  if (!isNonEmptyString(value.event)) return null
+  if (
+    typeof value.event !== "string" ||
+    [...value.event].length < frameScalars.eventNameMinLength
+  )
+    return null
   if (!("payload" in value)) return null
   if (typeof value.seq !== "number" || value.seq < 0 || !Number.isInteger(value.seq)) {
     return null
@@ -140,6 +158,7 @@ export function parseEventFrame(value: unknown): EventFrame | null {
 export function parseWireMessage(raw: string): Frame | null {
   let value: unknown
   try {
+    if (!hasUniqueObjectKeys(raw)) return null
     value = JSON.parse(raw)
   } catch {
     return null

@@ -60,6 +60,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
         ],
         status: "completed",
       })
+      view.transcriptState = "complete"
       view.revision = String(Number(view.revision) + 1)
     }
     return { executionId: input.executionId, disposition: "queued" }
@@ -112,6 +113,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
           lifecycle: { phase: "attached" },
           truncated: false,
           queueComplete: true,
+          transcriptState: "complete_empty",
         })
       return { conversationId }
     },

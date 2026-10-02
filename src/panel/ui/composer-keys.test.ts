@@ -54,6 +54,7 @@ function view(
     title: null,
     revision,
     queueComplete: true,
+    transcriptState: "complete",
     truncated: false,
     messages: [],
     pending: Array.from({ length: queued }, (_, index) => ({

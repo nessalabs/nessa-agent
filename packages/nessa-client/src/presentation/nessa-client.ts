@@ -13,6 +13,8 @@ import { createAgentsApi, type AgentsApi } from "./agents-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
 import { createCredentialApi, type CredentialApi } from "./credential-api.js"
 import { createAuthApi, type AuthApi } from "./auth-api.js"
+import { createCatalogueReadApi, type CatalogueReadApi } from "./catalogue-read-api.js"
+import { createRecordReadApi, type RecordReadApi } from "./record-read-api.js"
 
 /**
  * Entry point for a connection to the Nessa gateway. Create one with {@link connect},
@@ -55,6 +57,10 @@ export class NessaClient {
   readonly server: ServerApi
   /** Authorized agent conversations, live views, and lifecycle controls. */
   readonly conversation: ConversationApi
+  /** Bounded committed physical records for an authorized receiver. */
+  readonly records: RecordReadApi
+  /** Finite owner catalogue reads under current receiver authority. */
+  readonly catalogue: CatalogueReadApi
   /** Configured agents, models, and provider-specific approval choices. */
   readonly agents: AgentsApi
   /** Stage files into a conversation so a message can refer to them by digest. */
@@ -74,6 +80,8 @@ export class NessaClient {
   ) {
     this.server = createServerApi(wire)
     this.conversation = createConversationApi(wire, newRequestId)
+    this.records = createRecordReadApi(wire)
+    this.catalogue = createCatalogueReadApi(wire)
     this.agents = createAgentsApi(wire)
     this.attachments = createAttachmentApi(wire, upload, newRequestId, uploadTimer)
     this.credentials = createCredentialApi(wire, newRequestId)

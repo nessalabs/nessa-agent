@@ -65,6 +65,7 @@ const view = (id: string, text = ""): ConversationView => ({
   lifecycle: { phase: "attached" },
   truncated: false,
   queueComplete: true,
+  transcriptState: "complete",
 })
 const serverId = (index: number) =>
   `00000000-0000-4000-8000-${index.toString().padStart(12, "0")}`

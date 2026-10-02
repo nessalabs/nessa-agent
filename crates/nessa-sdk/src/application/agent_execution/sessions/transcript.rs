@@ -35,6 +35,28 @@ pub(crate) struct CommittedTransactionState {
     context_witness: Option<(usize, usize)>,
 }
 impl CommittedTranscript {
+    /// Validate the numeric relationship between a physical applied position and
+    /// its committed logical fact count. Each fact advances the position; an
+    /// aborted physical attempt can advance it without adding a fact.
+    /// This pure check does not validate a snapshot or acquire resources.
+    ///
+    /// # Errors
+    /// Returns [`StorageError::Corrupt`] when `facts` exceeds `applied`.
+    ///
+    /// ```
+    /// use nessa_sdk::application::agent_execution::sessions::CommittedTranscript;
+    /// assert!(CommittedTranscript::validate_fact_count(3, 0).is_ok());
+    /// assert!(CommittedTranscript::validate_fact_count(3, 4).is_err());
+    /// ```
+    pub fn validate_fact_count(applied: u64, facts: u64) -> Result<(), StorageError> {
+        if facts > applied {
+            return Err(StorageError::Corrupt(
+                "semantic checkpoint positions disagree".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Last complete semantic fact or aborted attempt position.
     pub fn applied(&self) -> u64 {
         self.applied
@@ -145,10 +167,8 @@ impl CommittedTranscript {
         applied: u64,
         facts: u64,
     ) -> Result<Self, StorageError> {
-        if facts > applied
-            || (facts == 0) != snapshot.is_none()
-            || (applied == 0 && snapshot.is_some())
-        {
+        Self::validate_fact_count(applied, facts)?;
+        if (facts == 0) != snapshot.is_none() || (applied == 0 && snapshot.is_some()) {
             return Err(StorageError::Corrupt(
                 "semantic checkpoint positions disagree".into(),
             ));

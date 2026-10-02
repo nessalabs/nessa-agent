@@ -13,8 +13,20 @@ export const content = {
   widget: "widget",
 }
 
+const committedQuestions = "[data-committed-questions]"
+
 /** CSS selectors, grouped by the part of the window they belong to. */
 export const css = {
+  // Committed conversation production-component fixture
+  historyTabConsumer: "[data-history-tab-consumer]",
+  committedFixture: "[data-committed-fixture]",
+  committedControls: "[data-committed-controls]",
+  committedQuestions,
+  committedQuestionInputs: `${committedQuestions} input[type="radio"]`,
+  committedLimitNotice: "[data-committed-limit-notice]",
+  committedNotice: '[data-committed-controls] [role="status"]',
+  committedActions: "[data-committed-controls] button",
+
   // The window
   surface: "[data-surface]",
   workspace: "[data-workspace]", // carries data-content (see `content`)
@@ -300,6 +312,23 @@ export const names = {
   openInWindow: "Open in Window",
   closePane: "Close Pane",
   closeWindow: "Close",
+}
+
+/** Role and accessible-name selectors for the committed conversation fixture. */
+export const committedRoles = {
+  state: (state, authority) => [
+    "button",
+    { name: authority ? state : "complete without live attachment", exact: true },
+  ],
+  questions: (limited) => [
+    "button",
+    { name: limited ? "questions with display limit" : "questions", exact: true },
+  ],
+  tabHistory: (state, truncated) => [
+    "button",
+    { name: `tabs:${state}${truncated ? ":truncated" : ""}`, exact: true },
+  ],
+  closeHistory: ["button", { name: "Close history tab", exact: true }],
 }
 
 /** Console noise that is known to be harmless (see CHECKLIST.md, "Console errors"). */

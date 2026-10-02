@@ -34,8 +34,11 @@ fn one_agent() -> &'static str {
 fn the_mcp_grants_are_never_configured() {
     // Composition gives the agents their grants; a configuration naming them
     // is refused, and one that does not starts with none.
-    let config: AgentsConfig = serde_json::from_str(one_agent()).unwrap();
-    assert!(format!("{:?}", config.stand_ins).contains("granted: false"));
+    #[cfg(unix)]
+    {
+        let config: AgentsConfig = serde_json::from_str(one_agent()).unwrap();
+        assert!(format!("{:?}", config.stand_ins).contains("granted: false"));
+    }
     for name in ["standIns", "stand_ins"] {
         let mut value: serde_json::Value = serde_json::from_str(one_agent()).unwrap();
         value[name] = serde_json::json!({});

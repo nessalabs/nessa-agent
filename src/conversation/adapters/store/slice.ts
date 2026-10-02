@@ -1,6 +1,7 @@
 import {
   type ApprovalMode,
   contentText,
+  conversationHistoryEmpty,
   conversationSelectionOpen,
   MAX_SENT_PREVIEW_BYTES,
   messageFiles,
@@ -299,9 +300,8 @@ export const closeTab = createAsyncThunk<void, string, ThunkConfig>(
     const remote = current?.remote
     if (
       !current?.serverConversationId ||
-      current.turns.length > 0 ||
+      !conversationHistoryEmpty(current) ||
       !remote ||
-      remote.truncated ||
       remote.running ||
       remote.pending.length > 0
     )

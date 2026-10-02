@@ -1,54 +1,168 @@
 //! Projections are bounded display state, not permission or scheduling authority.
+use super::projection::{bound_view, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES};
+use super::view::ConversationTranscriptState;
 use super::{
-    projection::{clipped, Projection, MAX_TEXT},
-    ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
+    retained_view, ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
     ConversationAttachmentEvidenceFailureCode, ConversationCaller, ConversationCapabilities,
     ConversationDependencies, ConversationLifecycle, ConversationLifecyclePhase,
-    ConversationLimits, ConversationMessageStatus, ConversationPendingMode, ConversationService,
-    McpToolUis, PermissionDenialSupport, ProviderSessionErasers, SubmissionMode, SubmittedMessage,
-    MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationLimits, ConversationMessageStatus, ConversationModeRequest,
+    ConversationModeRequestState, ConversationRepository, ConversationService, ConversationView,
+    McpToolUis, PermissionDenialSupport, ProviderSessionErasers, RequestedConversation,
+    SubmissionMode, SubmittedMessage, MAX_STRUCTURED_CONTENT_BYTES,
 };
-use crate::{
-    conversation::domain::ConversationId,
-    conversation_test_support::{
-        fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit, MemorySummaries, Provider,
-        RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
-    },
+use crate::conversation::domain::{ConversationApprovalMode, ConversationId};
+use crate::conversation_test_support::{
+    fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit,
+    MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit,
+    RecordingModeAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_sdk::domain::mcp_apps::UiResourceUri;
-use nessa_sdk::{
-    application::agent_execution::{
-        agents::{AgentError, ProviderDiagnostic},
-        executions::{
-            ExecutionEvent, ExecutionRequest, ExecutionUpdate,
-            SubmissionMode as InvocationSubmissionMode,
-        },
-        permissions::ActionContext,
-        providers::{
-            ExecutionReport, ObservationFailure, ObservationFailureCause, OperationCapabilities,
-            ProviderExecutionReply, ProviderIdentity, ProviderSessionState,
-        },
-        sessions::{InvocationRecord, SessionSnapshot, SubmissionAcknowledgement},
-        tools::ToolReviewInput,
-    },
-    domain::agent_execution::{
-        executions::{ExecutionId, ExecutionOutcome, MessageChunk, MessageId},
-        permissions::{
-            PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy,
-            PermissionOption, PermissionOptionId, PermissionOptions, PermissionScope,
-            ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
-            ReviewDeclineStage,
-        },
-        prompts::{LinkedFile, PromptText, UserMessage},
-        questions::{
-            AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId, MAX_OPEN_ASK_COST,
-        },
-        sessions::{ExecutionSessionId, ProviderContext, SessionId},
-        tools::{McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
-    },
+use nessa_sdk::application::agent_execution::agents::{AgentError, ProviderDiagnostic};
+use nessa_sdk::application::agent_execution::executions::{
+    ExecutionController, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
+    SubmissionMode as InvocationSubmissionMode,
 };
+use nessa_sdk::application::agent_execution::permissions::{ActionContext, CancellationOrigin};
+use nessa_sdk::application::agent_execution::providers::{
+    ExecutionReport, ObservationFailure, ObservationFailureCause, OperationCapabilities,
+    ProviderExecutionReply, ProviderIdentity, ProviderSessionState,
+};
+use nessa_sdk::application::agent_execution::sessions::{
+    CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus, InvocationRecord,
+    InvocationSchedulingEvent, MessageCommitClock, MessageCommitSleep, QueueHistoryRecord,
+    SessionSnapshot, SessionStorage, SubmissionAcknowledgement,
+};
+use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
+use nessa_sdk::domain::agent_execution::executions::{
+    ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, MessageChunk, MessageId,
+    QueueMutation, SchedulingCause,
+};
+use nessa_sdk::domain::agent_execution::permissions::{
+    PermissionCancellationReason, PermissionDecision, PermissionEffect, PermissionId,
+    PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
+    PermissionScope,
+};
+use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
+use nessa_sdk::domain::agent_execution::questions::{
+    AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId, MAX_OPEN_ASK_COST,
+};
+use nessa_sdk::domain::agent_execution::sessions::{
+    ExecutionSessionId, ProviderContext, SessionId,
+};
+use nessa_sdk::domain::agent_execution::tools::{
+    McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus,
+};
+use nessa_sdk::domain::mcp_apps::UiResourceUri;
+use nessa_sdk::infrastructure::session_storage::{
+    InMemoryStorage, RecordStorage, RuntimeMessageCommitClock,
+};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::oneshot;
+use uuid::Uuid;
+
+#[tokio::test]
+async fn gateway_record_view_waits_for_message_commit() {
+    struct HeldClock;
+    impl MessageCommitClock for HeldClock {
+        fn now(&self) -> Duration {
+            Duration::ZERO
+        }
+        fn sleep_until(&self, _: Duration) -> MessageCommitSleep {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+    storage.initialize().await.unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    provider
+        .execution_updates
+        .lock()
+        .unwrap()
+        .push(ExecutionUpdate::Message(MessageChunk::text(
+            "committed later",
+        )));
+    let (release, gate) = oneshot::channel();
+    *provider.after_updates_gate.lock().unwrap() = Some(gate);
+    let repository = Arc::new(MemoryRepository::default());
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(provider.clone()))),
+            storage: storage.clone(),
+            metadata: repository,
+            mode_audit: Arc::new(AcceptingModeAudit),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(HeldClock),
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(
+            id.clone(),
+            caller("create-record-view"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .submit(
+            id.clone(),
+            caller("send-record-view"),
+            "request".into(),
+            SubmittedMessage {
+                text: "question".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    provider.updates_sent.notified().await;
+    tokio::task::yield_now().await;
+    let before = service
+        .read(id.clone(), caller("before-commit"))
+        .await
+        .unwrap();
+    assert_eq!(before.messages.len(), 1);
+    assert!(before.messages[0].parts.is_empty());
+    release.send(()).unwrap();
+    let after = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let view = service
+                .read(id.clone(), caller("after-commit"))
+                .await
+                .unwrap();
+            if view.messages[0].status == ConversationMessageStatus::Completed {
+                break view;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(after.messages[0]
+        .parts
+        .iter()
+        .map(|part| part.text.as_str())
+        .collect::<String>()
+        .starts_with("committed later"));
+    service.shutdown().await.unwrap();
+    storage.shutdown().await.unwrap();
+}
 fn said(text: &str) -> UserMessage {
     UserMessage::text_only(PromptText::new(text).unwrap())
 }
@@ -65,6 +179,89 @@ fn projection() -> Projection {
         },
         None,
     )
+}
+
+fn committed(
+    incarnation: &str,
+    applied: u64,
+    downloaded: u64,
+    head: u64,
+    snapshot: Option<&SessionSnapshot>,
+) -> CommittedSession {
+    let completeness = if applied < downloaded {
+        CommittedCompleteness::Partial
+    } else if snapshot.is_some() {
+        CommittedCompleteness::Complete
+    } else {
+        CommittedCompleteness::CompleteEmpty
+    };
+    let freshness = if downloaded < head {
+        CommittedFreshness::Stale
+    } else {
+        CommittedFreshness::Current
+    };
+    CommittedSession::new(
+        SessionId::new("conversation").unwrap(),
+        incarnation.into(),
+        applied,
+        downloaded,
+        head,
+        snapshot.cloned(),
+        CommittedStatus::new(completeness, freshness),
+    )
+    .unwrap()
+}
+
+#[test]
+fn incomplete_committed_view_suppresses_controls_even_after_capability_refresh() {
+    let mut projection = projection();
+    projection.replace_committed(&committed("incarnation", 1, 1, 1, None), &[], None);
+    projection.transcript_state(ConversationTranscriptState::Stale);
+    let available = ConversationCapabilities {
+        queue: true,
+        steer: true,
+        resume: true,
+        permissions: true,
+        image_input: false,
+        agent_features: OperationCapabilities::default().into(),
+    };
+    projection.capabilities(available.clone());
+    let stale = projection.read();
+    assert!(!stale.capabilities.queue);
+    assert!(!stale.capabilities.steer);
+    assert!(!stale.capabilities.permissions);
+    assert!(!stale.queue_complete);
+
+    projection.transcript_state(ConversationTranscriptState::CompleteEmpty);
+    projection.capabilities(available);
+    let complete = projection.read();
+    assert!(complete.capabilities.queue);
+    assert!(complete.capabilities.steer);
+    assert!(complete.capabilities.permissions);
+}
+
+#[test]
+fn older_committed_read_cannot_replace_a_newer_terminal_view() {
+    let mut projection = projection();
+    let newer = completed_snapshot(
+        "execution",
+        vec![event(ExecutionUpdate::Finished(
+            ExecutionOutcome::Completed,
+        ))],
+    );
+    projection.replace_committed(&committed("incarnation", 2, 2, 2, Some(&newer)), &[], None);
+    let current = projection.read();
+    assert_eq!(
+        current.messages[0].status,
+        ConversationMessageStatus::Completed
+    );
+    projection.replace_committed(&committed("incarnation", 1, 1, 1, None), &[], None);
+    let after = projection.read();
+    assert_eq!(after.revision, current.revision);
+    assert_eq!(
+        after.messages[0].status,
+        ConversationMessageStatus::Completed
+    );
 }
 fn caller(action: &str) -> ConversationCaller {
     ConversationCaller {
@@ -95,6 +292,7 @@ fn application_absences_project_as_not_implemented() {
 #[test]
 fn capability_changes_advance_the_replacement_revision_once() {
     let mut projection = projection();
+    projection.transcript_state(ConversationTranscriptState::CompleteEmpty);
     let before = projection.read();
     projection.capabilities(before.capabilities.clone());
     assert_eq!(projection.read().revision, before.revision);
@@ -145,19 +343,6 @@ fn lifecycle_diagnostics_are_clipped_at_a_utf8_boundary() {
     assert_eq!(clipped.len(), 2048);
 }
 
-fn decline_event(id: &str, delivery: ReviewDeclineStage) -> ExecutionEvent {
-    let selected = ReviewDeclineObservation::selected(
-        ReviewDeclineId::new(id).unwrap(),
-        ReviewDecline::new(Some("Read"), ReviewDeclineReason::ToolNotReviewable),
-    );
-    event(ExecutionUpdate::ReviewDeclined(
-        if delivery == ReviewDeclineStage::Selected {
-            selected
-        } else {
-            selected.advance(delivery).unwrap()
-        },
-    ))
-}
 fn review(arguments: String) -> ExecutionEvent {
     event(ExecutionUpdate::PermissionRequested {
         id: PermissionId::new("permission").unwrap(),
@@ -208,191 +393,12 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
         }],
     }
 }
-#[test]
-fn encoded_view_is_bounded_even_when_json_escaping_expands_text() {
-    let mut projection = projection();
-    for i in 0..40 {
-        let id = format!("execution-{i}");
-        projection.admitted(
-            &id,
-            &said(&"\u{0001}".repeat(8192)),
-            ConversationPendingMode::Queued,
-        );
-        projection.event(&ExecutionEvent::new(
-            ExecutionId::new(id).unwrap(),
-            ExecutionUpdate::Message(MessageChunk::text("\u{0001}".repeat(8192))),
-        ));
-    }
-    let view = projection.read();
-    assert!(view.truncated);
-    assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
-}
-#[test]
-fn terminal_projection_does_not_reappend_buffered_output_or_reset_on_admission() {
-    let mut projection = projection();
-    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text(
-        "complete",
-    ))));
-    projection.event(&event(ExecutionUpdate::Finished(
-        ExecutionOutcome::Completed,
-    )));
-    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text(
-        "complete",
-    ))));
-    projection.admitted(
-        "execution",
-        &said("question"),
-        ConversationPendingMode::Queued,
-    );
-    let view = projection.read();
-    assert_eq!(
-        view.messages[0]
-            .parts
-            .iter()
-            .filter(|part| part.kind == "text")
-            .map(|part| part.text.as_str())
-            .collect::<String>(),
-        "complete"
-    );
-    assert_eq!(
-        view.messages[0].status,
-        ConversationMessageStatus::Completed
-    );
-    assert!(view.pending.is_empty());
-}
-#[test]
-fn actionable_reviews_preserve_original_input_and_oversized_or_invalid_reviews_have_no_choices() {
-    let original = r#"{"path":"target.txt","content":"exact\ncontent"}"#;
-    let mut valid = projection();
-    valid.event(&review(original.into()));
-    let view = valid.read();
-    assert_eq!(view.permissions[0].arguments_json, original);
-    assert_eq!(view.permissions[0].options[0].id, "allow");
-    for input in [
-        "not json".into(),
-        serde_json::to_string(&"x".repeat(33000)).unwrap(),
-    ] {
-        let mut rejected = projection();
-        rejected.event(&review(input));
-        let view = rejected.read();
-        assert!(view.permissions.is_empty());
-        assert!(view.permission_view_error.is_some());
-    }
-}
-#[test]
-fn observation_overflow_recovers_only_a_still_current_review_across_repeated_reads() {
-    let mut projection = projection();
-    let pending = review("{}".into());
-    projection.event(&pending);
-    projection.lagged();
-    assert!(projection.read().permissions.is_empty());
-    assert!(projection.read().permission_view_error.is_some());
-    let snapshot = review_snapshot(vec![pending]);
-    projection.recover_permissions(Some(&snapshot));
-    assert_eq!(projection.read().permissions.len(), 1);
-    let revision = projection.read().revision;
-    projection.recover_permissions(Some(&snapshot));
-    assert_eq!(projection.read().permissions.len(), 1);
-    assert_eq!(projection.read().revision, revision);
 
-    projection.resolved_permission("execution", "permission");
-    projection.recover_permissions(Some(&snapshot));
-    projection.recover_permissions(Some(&snapshot));
-    assert!(projection.read().permissions.is_empty());
-}
-
-#[test]
-fn uncertain_answer_fences_the_review_from_stale_snapshot_recovery() {
-    let mut projection = projection();
-    let pending = review("{}".into());
-    projection.event(&pending);
-    projection.lagged();
-    projection.uncertain_permission("execution", "permission");
-    projection.recover_permissions(Some(&review_snapshot(vec![pending])));
-    let view = projection.read();
-    assert!(view.permissions.is_empty());
-    assert!(view.permission_view_error.is_some());
-}
-
-#[test]
-fn lagged_terminal_evidence_never_revives_a_review() {
-    let mut projection = projection();
-    let pending = review("{}".into());
-    projection.event(&pending);
-    projection.lagged();
-    projection.recover_permissions(Some(&review_snapshot(vec![
-        pending,
-        event(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)),
-    ])));
-    assert!(projection.read().permissions.is_empty());
-}
-
-#[test]
-fn stale_preterminal_snapshot_cannot_revive_a_finished_review() {
-    let mut projection = projection();
-    let pending = review("{}".into());
-    projection.event(&pending);
-    projection.lagged();
-    let stale = review_snapshot(vec![pending]);
-    projection.event(&event(ExecutionUpdate::Finished(
-        ExecutionOutcome::Cancelled,
-    )));
-    projection.recover_permissions(Some(&stale));
-    projection.recover_permissions(Some(&stale));
-    assert!(projection.read().permissions.is_empty());
-}
-
-fn text_parts(view: &super::ConversationView, id: &str) -> String {
-    view.messages
-        .iter()
-        .find(|message| message.execution_id == id)
-        .unwrap()
-        .parts
-        .iter()
-        .filter(|part| part.kind == "text")
-        .map(|part| part.text.as_str())
-        .collect()
-}
 fn completed_snapshot(id: &str, events: Vec<ExecutionEvent>) -> SessionSnapshot {
     let mut snapshot = review_snapshot(events);
     snapshot.invocations[0].request.execution_id = ExecutionId::new(id).unwrap();
     snapshot.invocations[0].result = Some(Ok(ExecutionOutcome::Completed));
     snapshot
-}
-
-#[test]
-fn provider_diagnostic_survives_receipt_failure_and_snapshot_restoration() {
-    let provider_error = AgentError::Provider {
-        code: -32603,
-        diagnostic: Some(ProviderDiagnostic::new("provider refused the prompt")),
-    };
-    let mut snapshot = review_snapshot(Vec::new());
-    snapshot.invocations[0].provider_report = Some(ExecutionReport::new(
-        Some(Err(provider_error.clone())),
-        None,
-        ProviderSessionState::CleanupRequired,
-    ));
-    snapshot.invocations[0].result = Some(Err(provider_error));
-
-    let expected = "The agent provider reported an error: provider refused the prompt";
-    let mut live = projection();
-    live.settled("execution", Some(&snapshot));
-    live.receipt_failed("execution");
-    assert_eq!(live.read().messages[0].error.as_deref(), Some(expected));
-
-    let restored = Projection::new(
-        "conversation".into(),
-        ConversationCapabilities {
-            queue: true,
-            steer: true,
-            resume: false,
-            permissions: true,
-            image_input: false,
-            agent_features: OperationCapabilities::default().into(),
-        },
-        Some(&snapshot),
-    );
-    assert_eq!(restored.read().messages[0].error.as_deref(), Some(expected));
 }
 
 #[test]
@@ -456,43 +462,7 @@ fn successful_provider_result_with_later_failure_does_not_claim_provider_refusal
     assert!(!error.contains("provider refused"));
 }
 
-#[test]
-fn blank_provider_diagnostic_and_missing_snapshot_use_reachable_generic_notice() {
-    let provider_error = AgentError::Provider {
-        code: -32603,
-        diagnostic: Some(ProviderDiagnostic::new("  \n\t")),
-    };
-    let mut snapshot = review_snapshot(Vec::new());
-    snapshot.invocations[0].provider_report = Some(ExecutionReport::new(
-        Some(Err(provider_error.clone())),
-        None,
-        ProviderSessionState::CleanupRequired,
-    ));
-    snapshot.invocations[0].result = Some(Err(provider_error));
-    let generic = "The turn could not complete all required work.";
-    let restored = Projection::new(
-        "conversation".into(),
-        ConversationCapabilities {
-            queue: true,
-            steer: true,
-            resume: false,
-            permissions: true,
-            image_input: false,
-            agent_features: OperationCapabilities::default().into(),
-        },
-        Some(&snapshot),
-    );
-    assert_eq!(restored.read().messages[0].error.as_deref(), Some(generic));
-
-    let mut without_snapshot = projection();
-    without_snapshot.receipt_failed("execution");
-    assert_eq!(
-        without_snapshot.read().messages[0].error.as_deref(),
-        Some(generic)
-    );
-}
-
-fn assert_partial_tool(view: &super::ConversationView, expected: bool) {
+fn assert_partial_tool(view: &ConversationView, expected: bool) {
     if !expected {
         assert!(view.tools.is_empty());
         return;
@@ -526,7 +496,7 @@ async fn assert_terminal_failure_round_trip(
     *provider.execution_updates.lock().unwrap() = updates;
     let (release_execution, execution_gate) = tokio::sync::oneshot::channel();
     *provider.execution_gate.lock().unwrap() = Some(execution_gate);
-    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     service
         .create(
             id.clone(),
@@ -623,7 +593,7 @@ async fn assert_terminal_failure_round_trip(
             agents: only(Arc::new(Provider::new(provider))),
             storage,
             metadata: repository,
-            mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+            mode_audit: Arc::new(AcceptingModeAudit),
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
@@ -633,9 +603,7 @@ async fn assert_terminal_failure_round_trip(
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: ProviderSessionErasers::default(),
             deletion_budgets: DELETION_BUDGETS,
-            message_commit_clock: Arc::new(
-                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
-            ),
+            message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
         },
         ConversationLimits::default(),
@@ -685,318 +653,18 @@ async fn protocol_failure_after_partial_tool_preserves_observation_across_termin
     .await;
 }
 
-#[test]
-fn lagged_projection_rebuilds_saved_text_from_a_terminal_snapshot_exactly_once() {
-    let mut projection = projection();
-    let chunk = event(ExecutionUpdate::Message(MessageChunk::text("saved answer")));
-    projection.event(&chunk);
-    projection.lagged();
-    // Ambiguous live text is fenced: it has no durable cursor.
-    assert!(text_parts(&projection.read(), "execution").is_empty());
-
-    let snapshot = completed_snapshot(
-        "execution",
-        vec![
-            chunk.clone(),
-            event(ExecutionUpdate::Finished(ExecutionOutcome::Completed)),
-        ],
-    );
-    projection.settled("execution", Some(&snapshot));
-    let view = projection.read();
-    assert_eq!(text_parts(&view, "execution"), "saved answer");
-    assert_eq!(
-        view.messages[0].status,
-        ConversationMessageStatus::Completed
-    );
-
-    // Buffered live chunks draining after settlement must not duplicate it.
-    projection.event(&chunk);
-    assert_eq!(text_parts(&projection.read(), "execution"), "saved answer");
-
-    // The live fence still holds for a later invocation in the same projection,
-    // and its own terminal snapshot recovers its text.
-    let later = ExecutionId::new("later").unwrap();
-    let chunk = ExecutionEvent::new(
-        later.clone(),
-        ExecutionUpdate::Message(MessageChunk::text("later answer")),
-    );
-    projection.admitted("later", &said("question"), ConversationPendingMode::Queued);
-    projection.event(&chunk);
-    assert!(text_parts(&projection.read(), "later").is_empty());
-    projection.settled(
-        "later",
-        Some(&completed_snapshot(
-            "later",
-            vec![
-                chunk,
-                ExecutionEvent::new(
-                    later,
-                    ExecutionUpdate::Finished(ExecutionOutcome::Completed),
-                ),
-            ],
-        )),
-    );
-    assert_eq!(text_parts(&projection.read(), "later"), "later answer");
-}
-
-#[test]
-fn declined_reviews_upsert_by_identity_in_order_and_match_restoration() {
-    let events = vec![
-        decline_event("1", ReviewDeclineStage::Selected),
-        decline_event("1", ReviewDeclineStage::WriteConfirmed),
-        decline_event("2", ReviewDeclineStage::Selected),
-        decline_event("2", ReviewDeclineStage::WriteUnconfirmed),
-        event(ExecutionUpdate::Message(MessageChunk::text("carried on"))),
-        event(ExecutionUpdate::Finished(ExecutionOutcome::Completed)),
-    ];
-    let mut live = projection();
-    for event in &events {
-        live.event(event);
-    }
-    let live_view = live.read();
-    let parts = &live_view.messages[0].parts;
-    assert_eq!(parts.len(), 3);
-    assert_eq!(parts[0].notice_id, "1");
-    assert_eq!(parts[0].offset, 0);
-    assert_eq!(parts[1].notice_id, "2");
-    assert_eq!(parts[1].offset, 2);
-    assert!(parts[1].text.contains("could not confirm writing"));
-    assert_eq!(parts[2].text, "carried on");
-    assert_eq!(parts[2].offset, 4);
-    assert_eq!(
-        live_view.messages[0].status,
-        ConversationMessageStatus::Completed
-    );
-
-    let snapshot = completed_snapshot("execution", events);
-    let restored = Projection::new(
-        "conversation".into(),
-        live_view.capabilities.clone(),
-        Some(&snapshot),
-    )
-    .read();
-    assert_eq!(restored.messages[0].parts, live_view.messages[0].parts);
-    assert_eq!(restored.messages[0].status, live_view.messages[0].status);
-}
-
-#[test]
-fn declined_review_replay_after_lag_preserves_one_final_notice_and_following_text() {
-    let selected = decline_event("1", ReviewDeclineStage::Selected);
-    let confirmed = decline_event("1", ReviewDeclineStage::WriteConfirmed);
-    let text = event(ExecutionUpdate::Message(MessageChunk::text("carried on")));
-    let finished = event(ExecutionUpdate::Finished(ExecutionOutcome::Completed));
-    let events = vec![selected.clone(), confirmed.clone(), text.clone(), finished];
-    let snapshot = completed_snapshot("execution", events.clone());
-    let mut live = projection();
-    live.event(&selected);
-    live.lagged();
-    live.event(&confirmed);
-    live.event(&text);
-    let lagged = live.read();
-    assert!(text_parts(&lagged, "execution").is_empty());
-    assert_eq!(
-        lagged.messages[0]
-            .parts
-            .iter()
-            .filter(|part| part.kind == "local_notice")
-            .count(),
-        1
-    );
-
-    live.settled("execution", Some(&snapshot));
-    let settled = live.read();
-    for buffered in &events {
-        live.event(buffered);
-    }
-    live.settled("execution", Some(&snapshot));
-    let repeated = live.read();
-    let restored = Projection::new(
-        "conversation".into(),
-        settled.capabilities.clone(),
-        Some(&snapshot),
-    )
-    .read();
-    for view in [&settled, &repeated, &restored] {
-        assert_eq!(view.messages.len(), 1);
-        let message = &view.messages[0];
-        assert_eq!(message.parts, settled.messages[0].parts);
-        assert_eq!(message.parts.len(), 2);
-        assert_eq!(message.parts[0].kind, "local_notice");
-        assert_eq!(message.parts[0].notice_id, "1");
-        assert_eq!(message.parts[0].offset, 0);
-        assert!(!message.parts[0].text.contains("has not confirmed"));
-        assert_eq!(message.parts[1].kind, "text");
-        assert_eq!(message.parts[1].offset, 2);
-        assert_eq!(message.parts[1].text, "carried on");
-        assert_eq!(message.event_count, events.len());
-        assert_eq!(message.status, ConversationMessageStatus::Completed);
-        assert!(message.error.is_none());
-        assert!(view.permissions.is_empty());
-        assert!(view.pending.is_empty());
-    }
-    // A recovered turn does not clear the session-wide live-lag warning. A fresh
-    // restored projection has no missed-live-observation history to report.
-    assert!(settled.truncated);
-    assert!(repeated.truncated);
-    assert_eq!(
-        settled.permission_view_error,
-        repeated.permission_view_error
-    );
-    assert!(!restored.truncated);
-    assert!(restored.permission_view_error.is_none());
-}
-
-#[test]
-fn local_notice_append_and_upsert_obey_the_message_text_budget() {
-    let mut projection = projection();
-    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text(
-        "x".repeat((MAX_TEXT * 2) - 8),
-    ))));
-    projection.event(&decline_event("1", ReviewDeclineStage::Selected));
-    projection.event(&decline_event("1", ReviewDeclineStage::WriteUnconfirmed));
-    let view = projection.read();
-    assert!(view.truncated);
-    assert!(
-        view.messages[0]
-            .parts
-            .iter()
-            .map(|part| part.text.len())
-            .sum::<usize>()
-            <= MAX_TEXT * 2
-    );
-    assert_eq!(
-        view.messages[0]
-            .parts
-            .iter()
-            .filter(|part| part.kind == "local_notice")
-            .count(),
-        1
-    );
-}
-
-#[test]
-fn selected_notice_remains_truthful_when_terminal_history_has_no_final_publication() {
-    let events = vec![
-        decline_event("1", ReviewDeclineStage::Selected),
-        event(ExecutionUpdate::Finished(ExecutionOutcome::Completed)),
-    ];
-    let mut live = projection();
-    for event in &events {
-        live.event(event);
-    }
-    let live_view = live.read();
-    let notice = &live_view.messages[0].parts[0];
-    assert!(notice.text.contains("has not confirmed writing"));
-    assert_eq!(
-        live_view.messages[0].status,
-        ConversationMessageStatus::Completed
-    );
-
-    let restored = Projection::new(
-        "conversation".into(),
-        live_view.capabilities.clone(),
-        Some(&completed_snapshot("execution", events)),
-    )
-    .read();
-    assert_eq!(restored.messages[0].parts, live_view.messages[0].parts);
-    assert_eq!(restored.messages[0].status, live_view.messages[0].status);
-}
-
-#[test]
-fn cancellation_does_not_hide_a_separate_receipt_failure() {
-    let mut projection = projection();
-    projection.event(&event(ExecutionUpdate::Finished(
-        ExecutionOutcome::Cancelled,
-    )));
-    projection.receipt_failed("execution");
-    let view = projection.read();
-    assert_eq!(
-        view.messages[0].status,
-        ConversationMessageStatus::Cancelled
-    );
-    assert!(view.messages[0].error.is_some());
-}
-
-#[test]
-fn transcript_truncation_does_not_hide_complete_queue_but_queue_trimming_does() {
-    let mut projection = projection();
-    projection.view.truncated = true;
-    projection.queue_order(&[]);
-    assert!(projection.read().queue_complete);
-    let mut order = Vec::new();
-    for index in 0..64 {
-        let id = format!("waiting-{index}");
-        projection.admitted(
-            &id,
-            &said(&"x".repeat(1024)),
-            ConversationPendingMode::Queued,
-        );
-        order.push(ExecutionId::new(id).unwrap());
-    }
-    projection.queue_order(&order);
-    let view = projection.read();
-    assert!(view.pending.len() < order.len());
-    assert!(!view.queue_complete);
-}
-
-#[test]
-fn pending_and_message_text_agree_through_the_eight_kibibyte_contract() {
-    let mut projection = projection();
-    let text = "😀".repeat(2048);
-
-    projection.admitted("execution", &said(&text), ConversationPendingMode::Queued);
-
-    let view = projection.read();
-    assert_eq!(text.len(), 8192);
-    assert_eq!(view.messages[0].user_text, text);
-    assert_eq!(view.pending[0].text, view.messages[0].user_text);
-    assert!(view.queue_complete);
-    assert!(!view.truncated);
-}
-
-#[test]
-fn tool_details_preserve_whitespace_sparse_updates_and_explicit_clear() {
-    let mut projection = projection();
-    let tool = ToolCallId::new("shell").unwrap();
-    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
-        tool.clone(),
-        Some("Shell".into()),
-        None,
-        Some(ToolStatus::Running),
-        None,
-        Some(vec![ToolContent::text(
-            "  output\n<script>literal</script>",
-        )]),
-    ))));
-    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
-        tool.clone(),
-        None,
-        None,
-        Some(ToolStatus::Completed),
-        None,
-        None,
-    ))));
-    assert_eq!(
-        projection.read().tools[0].details,
-        "  output\n<script>literal</script>"
-    );
-    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
-        tool,
-        None,
-        None,
-        None,
-        None,
-        Some(vec![]),
-    ))));
-    assert_eq!(projection.read().tools[0].details, "");
+fn committed_tool_view(events: &[ExecutionEvent]) -> ConversationView {
+    let snapshot = completed_snapshot("execution", events.to_vec());
+    let capabilities = projection().read().capabilities;
+    bound_view(Projection::new("conversation".into(), capabilities, Some(&snapshot)).read())
 }
 
 #[test]
 fn an_mcp_tool_carries_its_identity_and_structured_result_beside_its_text() {
-    let mut projection = projection();
+    let mut events = Vec::new();
     let tool = ToolCallId::new("chart").unwrap();
     let json = r#"{"rows":[1,2]}"#;
-    projection.event(&event(ExecutionUpdate::Tool(
+    events.push(event(ExecutionUpdate::Tool(
         ToolCallUpdate::new(
             tool.clone(),
             Some("mcp.charts.show".into()),
@@ -1008,7 +676,7 @@ fn an_mcp_tool_carries_its_identity_and_structured_result_beside_its_text() {
         .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
     )));
     // A later update naming nothing keeps the identity.
-    projection.event(&event(ExecutionUpdate::Tool(
+    events.push(event(ExecutionUpdate::Tool(
         ToolCallUpdate::new(
             tool.clone(),
             None,
@@ -1022,7 +690,7 @@ fn an_mcp_tool_carries_its_identity_and_structured_result_beside_its_text() {
             ToolContent::structured(json).unwrap(),
         ]),
     )));
-    let view = projection.read();
+    let view = committed_tool_view(&events);
     let mcp = view.tools[0].mcp.as_ref().unwrap();
     assert_eq!((mcp.server.as_str(), mcp.tool.as_str()), ("charts", "show"));
     assert_eq!(view.tools[0].structured_content.as_deref(), Some(json));
@@ -1037,15 +705,15 @@ fn an_mcp_tool_carries_its_identity_and_structured_result_beside_its_text() {
     // Past the view's bound it is said, not cut; content replaced without one
     // no longer has one.
     let large = format!("\"{}\"", "a".repeat(MAX_STRUCTURED_CONTENT_BYTES));
-    projection.event(&event(ExecutionUpdate::Tool(
+    events.push(event(ExecutionUpdate::Tool(
         ToolCallUpdate::new(tool.clone(), None, None, None, None, None)
             .with_content(vec![ToolContent::structured(large).unwrap()]),
     )));
-    let view = projection.read();
+    let view = committed_tool_view(&events);
     // Left out, not cut; the details are what the text said, here nothing.
     assert_eq!(view.tools[0].structured_content, None);
     assert_eq!(view.tools[0].details, "");
-    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+    events.push(event(ExecutionUpdate::Tool(ToolCallUpdate::new(
         tool,
         None,
         None,
@@ -1053,7 +721,7 @@ fn an_mcp_tool_carries_its_identity_and_structured_result_beside_its_text() {
         None,
         Some(vec![ToolContent::structured(json).unwrap()]),
     ))));
-    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+    events.push(event(ExecutionUpdate::Tool(ToolCallUpdate::new(
         ToolCallId::new("chart").unwrap(),
         None,
         None,
@@ -1061,14 +729,17 @@ fn an_mcp_tool_carries_its_identity_and_structured_result_beside_its_text() {
         None,
         Some(vec![ToolContent::text("plain")]),
     ))));
-    assert_eq!(projection.read().tools[0].structured_content, None);
+    assert_eq!(
+        committed_tool_view(&events).tools[0].structured_content,
+        None
+    );
 }
 
 #[test]
 fn a_structured_result_after_long_text_is_kept_and_the_last_one_reported_wins() {
-    let mut projection = projection();
+    let mut events = Vec::new();
     let json = r#"{"rows":2}"#;
-    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+    events.push(event(ExecutionUpdate::Tool(ToolCallUpdate::new(
         ToolCallId::new("chart").unwrap(),
         None,
         None,
@@ -1082,20 +753,21 @@ fn a_structured_result_after_long_text_is_kept_and_the_last_one_reported_wins() 
             ToolContent::structured(json).unwrap(),
         ]),
     ))));
-    let tool = &projection.read().tools[0];
+    let view = committed_tool_view(&events);
+    let tool = &view.tools[0];
     assert_eq!(tool.structured_content.as_deref(), Some(json));
     assert!(tool.details.ends_with("[Output truncated]"));
 }
 
 #[test]
 fn a_view_past_its_budget_gives_up_structured_results_before_any_message() {
-    let mut projection = projection();
-    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text(
+    let mut events = Vec::new();
+    events.push(event(ExecutionUpdate::Message(MessageChunk::text(
         "Charted.",
     ))));
     let json = format!("\"{}\"", "s".repeat(MAX_STRUCTURED_CONTENT_BYTES - 2));
     for index in 0..3 {
-        projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+        events.push(event(ExecutionUpdate::Tool(ToolCallUpdate::new(
             ToolCallId::new(format!("chart-{index}")).unwrap(),
             None,
             None,
@@ -1107,7 +779,7 @@ fn a_view_past_its_budget_gives_up_structured_results_before_any_message() {
             ]),
         ))));
     }
-    let view = projection.read();
+    let view = committed_tool_view(&events);
     assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
     // Nothing of the history was left out, so the view does not say it was.
     assert!(!view.truncated);
@@ -1126,16 +798,15 @@ fn a_view_past_its_budget_gives_up_structured_results_before_any_message() {
 
 #[test]
 fn a_tool_without_an_mcp_identity_is_written_as_before() {
-    let mut projection = projection();
-    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+    let events = vec![event(ExecutionUpdate::Tool(ToolCallUpdate::new(
         ToolCallId::new("shell").unwrap(),
         Some("Shell".into()),
         None,
         None,
         None,
         Some(vec![ToolContent::text("out")]),
-    ))));
-    let wire = serde_json::to_value(&projection.read().tools[0]).unwrap();
+    )))];
+    let wire = serde_json::to_value(&committed_tool_view(&events).tools[0]).unwrap();
     let mut keys: Vec<_> = wire.as_object().unwrap().keys().cloned().collect();
     keys.sort();
     assert_eq!(
@@ -1150,62 +821,6 @@ fn a_tool_without_an_mcp_identity_is_written_as_before() {
             "toolId"
         ]
     );
-}
-
-#[test]
-fn steering_during_review_keeps_permission_and_shared_response_target() {
-    let mut projection = projection();
-    projection.admitted(
-        "execution",
-        &said("Inspect desktop"),
-        ConversationPendingMode::Queued,
-    );
-    projection.event(&review("{}".into()));
-    for id in ["steer-one", "steer-two"] {
-        projection.admitted(id, &said("Hello"), ConversationPendingMode::Steering);
-        projection.injected(id, "execution");
-    }
-    let pending = projection.read();
-    assert_eq!(pending.permissions.len(), 1);
-    assert!(pending.messages[1..]
-        .iter()
-        .all(|message| message.steering_target.as_deref() == Some("execution")));
-    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text(
-        "Answer including steering",
-    ))));
-    let view = projection.read();
-    assert_eq!(
-        view.messages[0]
-            .parts
-            .iter()
-            .filter(|part| part.kind == "text")
-            .map(|part| part.text.as_str())
-            .collect::<String>(),
-        "Answer including steering"
-    );
-    assert_eq!(view.messages[1].status, ConversationMessageStatus::Injected);
-}
-
-#[test]
-fn ordered_parts_keep_message_identity_and_non_text_observation_offsets() {
-    let mut projection = projection();
-    projection.event(&event(ExecutionUpdate::Message(
-        MessageChunk::text(" First ").with_message_id(MessageId::new("m1").unwrap()),
-    )));
-    projection.event(&review("{}".into()));
-    projection.event(&event(ExecutionUpdate::Message(
-        MessageChunk::text("reply.").with_message_id(MessageId::new("m1").unwrap()),
-    )));
-    projection.event(&event(ExecutionUpdate::Message(
-        MessageChunk::text("Second reply.").with_message_id(MessageId::new("m2").unwrap()),
-    )));
-    let value = serde_json::to_value(projection.read()).unwrap();
-    let message = &value["messages"][0];
-    assert!(message.get("assistantText").is_none());
-    assert_eq!(message["parts"][0]["text"], " First ");
-    assert_eq!(message["parts"][1]["offset"], 2);
-    assert_eq!(message["parts"][1]["messageId"], "m1");
-    assert_eq!(message["parts"][2]["messageId"], "m2");
 }
 
 fn asked(execution: &str, question: &str) -> ExecutionEvent {
@@ -1230,45 +845,6 @@ fn asked(execution: &str, question: &str) -> ExecutionEvent {
         },
     )
 }
-fn closed(execution: &str, question: &str) -> ExecutionEvent {
-    ExecutionEvent::new(
-        ExecutionId::new(execution).unwrap(),
-        ExecutionUpdate::QuestionClosed {
-            id: QuestionId::new(question).unwrap(),
-        },
-    )
-}
-
-#[test]
-fn a_closed_ask_stays_closed_when_it_is_replayed() {
-    // The review reproduced a closure recorded as (question, question) instead
-    // of (execution, question): a replayed ask missed its tombstone and became
-    // answerable again. The execution and question ids differ here, which is
-    // exactly the case that exposed it.
-    let mut projection = projection();
-    projection.event(&asked("execution", "1"));
-    assert_eq!(projection.read().questions.len(), 1);
-    projection.event(&closed("execution", "1"));
-    assert!(projection.read().questions.is_empty());
-    projection.event(&asked("execution", "1"));
-    assert!(
-        projection.read().questions.is_empty(),
-        "a closed ask reopened on replay"
-    );
-}
-
-#[test]
-fn closing_one_executions_ask_leaves_anothers_with_the_same_id_open() {
-    // Removal matched on the question id alone, so closing one execution's ask
-    // took another execution's same-numbered ask with it.
-    let mut projection = projection();
-    projection.event(&asked("first", "1"));
-    projection.event(&asked("second", "1"));
-    projection.event(&closed("first", "1"));
-    let view = projection.read();
-    assert_eq!(view.questions.len(), 1);
-    assert_eq!(view.questions[0].execution_id, "second");
-}
 
 /// The view agrees with what the client checks before it will show it.
 ///
@@ -1276,51 +852,13 @@ fn closing_one_executions_ask_leaves_anothers_with_the_same_id_open() {
 /// pending to one that is queued — or, in a truncated view, to one no longer
 /// shown. The client refuses the whole view otherwise,
 /// so the projection has to agree with it rather than hope the two never meet.
-/// Returns how many asks are offered.
-fn offers_only_running_asks(projection: &mut Projection) -> usize {
-    let view = projection.read();
-    let status = |execution: &str| {
-        view.messages
-            .iter()
-            .find(|message| message.execution_id == execution)
-            .map(|message| message.status)
-    };
-    for execution in view
-        .questions
-        .iter()
-        .map(|question| &question.execution_id)
-        .chain(
-            view.permissions
-                .iter()
-                .map(|permission| &permission.execution_id),
-        )
-    {
-        // Absent is allowed only in a view that says it was truncated.
-        let found = status(execution);
-        assert!(
-            found == Some(ConversationMessageStatus::Running)
-                || (found.is_none() && view.truncated),
-            "{execution}: {found:?}"
-        );
-    }
-    for item in &view.pending {
-        let found = status(&item.execution_id);
-        assert!(
-            found == Some(ConversationMessageStatus::Queued) || (found.is_none() && view.truncated),
-            "{}: {found:?}",
-            item.execution_id
-        );
-    }
-    view.questions.len()
-}
-
 #[test]
 fn an_ask_whose_closure_never_reached_storage_is_not_offered_after_restart() {
     // The gateway stopped with an ask open, so the ask was saved and its
     // closure was not. Restored, the message is unresolved; offering the ask
     // beside it made the client refuse the view on every restart.
     let snapshot = review_snapshot(vec![asked("execution", "1")]);
-    let mut restored = Projection::new(
+    let restored = Projection::new(
         "conversation".into(),
         ConversationCapabilities {
             queue: true,
@@ -1332,429 +870,590 @@ fn an_ask_whose_closure_never_reached_storage_is_not_offered_after_restart() {
         },
         Some(&snapshot),
     );
-    assert_eq!(offers_only_running_asks(&mut restored), 0);
+    assert!(restored.read().questions.is_empty());
 }
 
 #[test]
-fn an_ask_left_open_by_a_failed_execution_is_not_offered_once_it_settles() {
+fn committed_partial_progress_cannot_be_replaced_by_an_older_complete_read() {
     let mut projection = projection();
-    projection.event(&asked("execution", "1"));
-    assert_eq!(offers_only_running_asks(&mut projection), 1);
-    let mut snapshot = review_snapshot(vec![asked("execution", "1")]);
-    snapshot.invocations[0].result = Some(Err(AgentError::Closed));
-    projection.settled("execution", Some(&snapshot));
-    assert_eq!(offers_only_running_asks(&mut projection), 0);
-}
-
-#[test]
-fn an_ask_is_not_offered_beside_a_receipt_that_failed() {
-    // The receipt failed and storage held no result for the execution, so its
-    // message is marked failed without a record passing through: the path the
-    // settle-time rule never saw. A closure arriving after it is ignored.
-    let mut projection = projection();
-    projection.event(&asked("execution", "1"));
-    projection.settled(
-        "execution",
-        Some(&review_snapshot(vec![asked("execution", "1")])),
+    projection.replace_committed(&committed("incarnation", 1, 3, 3, None), &[], None);
+    projection.transcript_state(ConversationTranscriptState::Partial);
+    assert!(!projection.replace_committed(&committed("incarnation", 1, 1, 1, None), &[], None));
+    assert_eq!(
+        projection.read().transcript_state,
+        ConversationTranscriptState::Partial
     );
-    projection.receipt_failed("execution");
-    assert_eq!(offers_only_running_asks(&mut projection), 0);
-    projection.event(&closed("execution", "1"));
-    assert_eq!(offers_only_running_asks(&mut projection), 0);
+    assert!(!projection.read().capabilities.permissions);
 }
 
 #[test]
-fn an_ask_recovered_after_lag_is_offered_by_a_running_message() {
-    // Lag dropped the dispatch and the ask. Recovered from storage, the ask
-    // proves the execution was dispatched and is waiting; hiding it would leave
-    // the agent waiting on a question nobody can see, and showing it beside a
-    // queued message made the client refuse the view.
+fn only_the_exact_live_execution_can_offer_a_committed_interaction() {
     let mut projection = projection();
-    projection.admitted(
-        "execution",
-        &said("message"),
-        ConversationPendingMode::Queued,
+    let snapshot = review_snapshot(vec![asked("execution", "question"), review("{}".into())]);
+    let unrelated = ExecutionId::new("other").unwrap();
+    projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        Some(&unrelated),
     );
-    projection.lagged();
-    projection.recover_permissions(Some(&review_snapshot(vec![asked("execution", "1")])));
-    assert_eq!(offers_only_running_asks(&mut projection), 1);
-    projection.queue_order(&[]);
-    assert_eq!(offers_only_running_asks(&mut projection), 1);
+    projection.transcript_state(ConversationTranscriptState::Complete);
+    assert!(projection.read().questions.is_empty());
+    assert!(projection.read().permissions.is_empty());
+    let exact = ExecutionId::new("execution").unwrap();
+    projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        Some(&exact),
+    );
+    projection.transcript_state(ConversationTranscriptState::Complete);
+    assert_eq!(projection.read().questions.len(), 1);
+    assert_eq!(projection.read().permissions.len(), 1);
+    assert!(!projection.replace_committed(
+        &committed("replacement-incarnation", 2, 2, 2, Some(&snapshot)),
+        &[],
+        Some(&exact)
+    ));
 }
 
-/// Saved turns in order, each settled as completed or left as the gateway
-/// stopped it.
-fn saved_turns(turns: Vec<(&str, Vec<ExecutionEvent>, bool)>) -> SessionSnapshot {
-    let mut snapshot = review_snapshot(vec![]);
-    let template = snapshot.invocations.remove(0);
-    for (id, events, settled) in turns {
+#[test]
+fn committed_rendering_bounds_json_escaping_and_preserves_ordered_part_identity() {
+    let mut snapshot = review_snapshot(vec![
+        event(ExecutionUpdate::Message(
+            MessageChunk::text("quoted \" text")
+                .with_message_id(MessageId::new("response").unwrap()),
+        )),
+        event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+            ToolCallId::new("tool").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ))),
+        event(ExecutionUpdate::Message(MessageChunk::thought("thought"))),
+    ]);
+    let template = snapshot.invocations[0].clone();
+    for index in 1..40 {
         let mut record = template.clone();
-        record.request.execution_id = ExecutionId::new(id).unwrap();
-        record.events = events;
-        if settled {
-            record.result = Some(Ok(ExecutionOutcome::Completed));
-        }
+        let id = ExecutionId::new(index.to_string()).unwrap();
+        record.request.execution_id = id.clone();
+        record.events = vec![ExecutionEvent::new(
+            id,
+            ExecutionUpdate::Message(MessageChunk::text("\"\\\n".repeat(MAX_TEXT))),
+        )];
         snapshot.invocations.push(record);
     }
-    snapshot
-}
-fn restored(snapshot: &SessionSnapshot) -> Projection {
-    Projection::new(
+    let view = Projection::new(
         "conversation".into(),
-        ConversationCapabilities {
-            queue: true,
-            steer: true,
-            resume: false,
-            permissions: true,
-            image_input: false,
-            agent_features: OperationCapabilities::default().into(),
-        },
-        Some(snapshot),
+        projection().view.capabilities,
+        Some(&snapshot),
     )
-}
-
-#[test]
-fn recovery_does_not_bring_back_a_turn_from_before_a_restart() {
-    // An ask left open when the gateway stopped, from a turn now older than
-    // the view shows. Recovery recreated its message as running, offered an ask
-    // nothing in this process could answer, and pushed a real message out.
-    let names: Vec<String> = (0..24).map(|index| format!("done-{index}")).collect();
-    let mut turns = vec![("stale", vec![asked("stale", "1")], false)];
-    turns.extend(names.iter().map(|name| (name.as_str(), vec![], true)));
-    let snapshot = saved_turns(turns);
-    let mut projection = restored(&snapshot);
-    let before: Vec<_> = projection
-        .read()
-        .messages
-        .iter()
-        .map(|message| message.execution_id.clone())
-        .collect();
-    projection.lagged();
-    projection.recover_permissions(Some(&snapshot));
-    let view = projection.read();
-    assert!(view.questions.is_empty());
+    .read();
+    let view = bound_view(view);
+    assert!(view.truncated);
+    assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
+    let first = Projection::new(
+        "conversation".into(),
+        projection().view.capabilities,
+        Some(&review_snapshot(template.events)),
+    )
+    .read();
     assert_eq!(
-        view.messages
-            .iter()
-            .map(|message| message.execution_id.clone())
-            .collect::<Vec<_>>(),
-        before,
-        "no message recreated, none pushed out"
+        first.messages[0].parts[0].message_id.as_deref(),
+        Some("response")
+    );
+    assert_eq!(first.messages[0].parts[1].kind, "tool");
+    assert_eq!(first.messages[0].parts[2].offset, 2);
+}
+
+#[test]
+fn older_observed_head_cannot_reenable_committed_controls() {
+    let mut projection = projection();
+    assert!(projection.replace_committed(&committed("incarnation", 1, 1, 2, None), &[], None));
+    projection.transcript_state(ConversationTranscriptState::Stale);
+    let before = projection.read();
+    if projection.replace_committed(&committed("incarnation", 1, 1, 1, None), &[], None) {
+        projection.transcript_state(ConversationTranscriptState::Complete);
+    }
+    assert_eq!(
+        serde_json::to_value(projection.read()).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+    assert_eq!(
+        projection.read().transcript_state,
+        ConversationTranscriptState::Stale
     );
 }
 
 #[test]
-fn asks_nobody_can_answer_do_not_crowd_out_one_somebody_can() {
-    // Eight unanswerable asks — from turns before a restart, or turns whose
-    // receipts failed — held every open slot while hidden from view, so a live
-    // ask was dropped and its agent waited with nothing on screen.
-    let names: Vec<String> = (0..8).map(|index| format!("stale-{index}")).collect();
-    let snapshot = saved_turns(
-        names
-            .iter()
-            .map(|name| (name.as_str(), vec![asked(name, "1")], false))
-            .collect(),
-    );
-    let mut after_restart = restored(&snapshot);
-    after_restart.lagged();
-    after_restart.recover_permissions(Some(&snapshot));
-    after_restart.admitted("live", &said("go"), ConversationPendingMode::Queued);
-    after_restart.event(&asked("live", "1"));
-    assert_eq!(offers_only_running_asks(&mut after_restart), 1);
-
-    let mut failed_receipts = projection();
-    for name in &names {
-        failed_receipts.event(&asked(name, "1"));
-        failed_receipts.receipt_failed(name);
+fn active_interactions_survive_recent_message_window_without_copying_the_message() {
+    let sibling_ask = event(ExecutionUpdate::QuestionAsked {
+        id: QuestionId::new("question").unwrap(),
+        question: AgentQuestion::new(
+            "Choose the environments",
+            (0..3)
+                .map(|index| {
+                    Question::new(
+                        format!("question_{index}"),
+                        format!("Environment {index}?"),
+                        None,
+                        AnswerShape::One,
+                        vec![AnswerOption::new("staging", "Staging", None).unwrap()],
+                        None,
+                        false,
+                    )
+                    .unwrap()
+                })
+                .collect(),
+        )
+        .unwrap(),
+    });
+    let requested = review("{}".into());
+    let mut snapshot = review_snapshot(vec![sibling_ask, requested.clone()]);
+    snapshot.invocations[0].request.user_message =
+        said(&"x".repeat(ExecutionRequest::MAX_MESSAGE_BYTES));
+    let mut order = Vec::new();
+    for index in 0..25 {
+        let id = ExecutionId::new(format!("queued-{index}")).unwrap();
+        let mut record = review_snapshot(Vec::new()).invocations.remove(0);
+        record.request.execution_id = id.clone();
+        record.submission = InvocationSubmissionMode::Queued;
+        record.scheduling = vec![InvocationSchedulingEvent {
+            kind: InvocationKind::Queued,
+            target: None,
+            before: None,
+            stage: InvocationStage::Queued,
+            cause: SchedulingCause::Submitted,
+            actor: Some(record.actor.clone()),
+        }];
+        snapshot.queue_history.push(QueueHistoryRecord {
+            mutation: QueueMutation::Admitted {
+                id: id.clone(),
+                kind: InvocationKind::Queued,
+            },
+            actor: Some(record.actor.clone()),
+            scheduling_length: Some(1),
+        });
+        snapshot.invocations.push(record);
+        order.push(id);
     }
-    failed_receipts.event(&asked("live", "1"));
-    assert_eq!(offers_only_running_asks(&mut failed_receipts), 1);
-}
-
-/// Twenty-four newer turns push a running turn's message out of the view. Its
-/// review or ask is still waiting, and a truncated view still offers it.
-fn evict_running_execution(projection: &mut Projection) {
-    for index in 0..24 {
-        projection.admitted(
-            &format!("queued-{index}"),
-            &said("later"),
-            ConversationPendingMode::Queued,
-        );
-    }
+    let current = committed("incarnation", 27, 27, 27, Some(&snapshot));
+    let active = ExecutionId::new("execution").unwrap();
+    let mut projection = self::projection();
+    assert!(projection.replace_committed(&current, &order, Some(&active)));
+    projection.transcript_state(ConversationTranscriptState::Complete);
     let view = projection.read();
+    assert!(view.truncated);
     assert!(view
         .messages
         .iter()
         .all(|message| message.execution_id != "execution"));
-    assert!(view.truncated);
-}
-
-#[test]
-fn a_review_whose_message_was_pushed_out_survives_lag_recovery() {
-    // Absent is not the same as before a restart: this turn began here and is
-    // running. Recovery took its absence as death and dropped the review, and
-    // with another turn's review recovered beside it, dropped it silently.
-    let pending = review("{}".into());
-    let mut alone = projection();
-    alone.event(&pending);
-    evict_running_execution(&mut alone);
-    assert_eq!(alone.read().permissions.len(), 1);
-    alone.lagged();
-    alone.recover_permissions(Some(&review_snapshot(vec![pending.clone()])));
-    let view = alone.read();
-    assert_eq!(
-        view.permissions.len(),
-        1,
-        "{:?}",
-        view.permission_view_error
-    );
-    assert_eq!(view.permissions[0].execution_id, "execution");
-
-    let mut beside = projection();
-    beside.event(&pending);
-    for index in 0..23 {
-        beside.admitted(
-            &format!("queued-{index}"),
-            &said("later"),
-            ConversationPendingMode::Queued,
-        );
-    }
-    let other = ExecutionEvent::new(
-        ExecutionId::new("queued-22").unwrap(),
-        pending.update().clone(),
-    );
-    beside.event(&other);
-    beside.admitted("queued-23", &said("later"), ConversationPendingMode::Queued);
-    assert_eq!(beside.read().permissions.len(), 2);
-    beside.lagged();
-    let mut snapshot = review_snapshot(vec![pending]);
-    let mut second = snapshot.invocations[0].clone();
-    second.request.execution_id = ExecutionId::new("queued-22").unwrap();
-    second.events = vec![other];
-    snapshot.invocations.push(second);
-    beside.recover_permissions(Some(&snapshot));
-    assert_eq!(beside.read().permissions.len(), 2);
-}
-
-#[test]
-fn an_ask_lag_dropped_from_a_turn_whose_message_was_pushed_out_is_recovered() {
-    let mut projection = projection();
-    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text(
-        "working",
-    ))));
-    evict_running_execution(&mut projection);
-    // The ask is the event the lag dropped.
-    projection.lagged();
-    projection.recover_permissions(Some(&review_snapshot(vec![asked("execution", "1")])));
-    let view = projection.read();
+    assert!(view.messages.len() <= 24);
     assert_eq!(view.questions.len(), 1);
-    assert_eq!(view.questions[0].execution_id, "execution");
-}
-
-#[test]
-fn a_late_event_does_not_revive_a_turn_whose_receipt_failed() {
-    // An event buffered before the receipt failed, delivered after it, marked
-    // the turn as begun here again; once pushed out of view, lag recovery then
-    // offered an ask the agent had already stopped waiting on.
-    let mut projection = projection();
-    projection.event(&asked("execution", "1"));
-    let snapshot = review_snapshot(vec![asked("execution", "1")]);
-    projection.settled("execution", Some(&snapshot));
-    projection.receipt_failed("execution");
-    projection.event(&event(ExecutionUpdate::Message(MessageChunk::text("late"))));
-    evict_running_execution(&mut projection);
-    projection.lagged();
-    projection.recover_permissions(Some(&snapshot));
-    assert_eq!(offers_only_running_asks(&mut projection), 0);
-}
-
-#[test]
-fn a_retried_submission_does_not_hide_the_ask_its_turn_is_waiting_on() {
-    // Retrying a running turn whose message was pushed out rebuilt the message
-    // as queued, and a queued message offers nothing — the ask vanished while
-    // its agent waited on it.
-    let mut projection = projection();
-    projection.event(&asked("execution", "1"));
-    evict_running_execution(&mut projection);
-    projection.admitted(
-        "execution",
-        &said("message"),
-        ConversationPendingMode::Queued,
-    );
-    assert_eq!(offers_only_running_asks(&mut projection), 1);
-}
-
-/// An ask as hard to carry as its text allows: every string full of the
-/// characters a text format escapes, under the longest identities.
-fn escaped_ask(execution: &str, question: &str, options: usize, bytes: usize) -> ExecutionEvent {
-    let text = |length: usize| "\"\\\n\t".repeat(length.div_ceil(4))[..length].to_owned();
-    ExecutionEvent::new(
-        ExecutionId::new(execution).unwrap(),
-        ExecutionUpdate::QuestionAsked {
-            id: QuestionId::new(question).unwrap(),
-            question: AgentQuestion::new(
-                text(bytes),
-                vec![Question::new(
-                    "k".repeat(64),
-                    text(bytes),
-                    Some(text(bytes)),
-                    AnswerShape::Many,
-                    (0..options)
-                        .map(|index| {
-                            AnswerOption::new(
-                                format!("{index}{}", text(bytes)),
-                                text(bytes),
-                                Some(text(bytes)),
-                            )
-                            .unwrap()
-                        })
-                        .collect(),
-                    Some("f".repeat(64)),
-                    true,
-                )
-                .unwrap()],
-            )
-            .unwrap(),
-        },
-    )
-}
-fn cost(event: &ExecutionEvent) -> usize {
-    let ExecutionUpdate::QuestionAsked { question, .. } = event.update() else {
+    assert_eq!(view.questions[0].questions.len(), 3);
+    assert_eq!(view.permissions.len(), 1);
+    let view = bound_view(view);
+    assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
+    assert!(projection.replace_committed(&current, &order, Some(&active)));
+    assert_eq!(projection.read().questions.len(), 1);
+    assert_eq!(projection.read().permissions.len(), 1);
+    assert!(projection.replace_committed(&current, &order, None));
+    assert!(projection.read().questions.is_empty());
+    assert!(projection.read().permissions.is_empty());
+    assert!(projection.replace_committed(&current, &order, Some(&active)));
+    assert_eq!(projection.read().questions.len(), 1);
+    // The extra record uses the same encoded-byte owner as recent records.
+    // Open ask cost is below the admission owner's40KiB bound; complete
+    // reviews give way before any actual question or answer option is cut.
+    let mut costly = snapshot.clone();
+    costly.invocations[0].events.clear();
+    let mut ask_cost = 0;
+    for index in 0..2 {
+        let question = AgentQuestion::new(
+            "\"".repeat(1024),
+            (0..3)
+                .map(|sibling| {
+                    Question::new(
+                        format!("large_{index}_{sibling}"),
+                        "\"".repeat(1024),
+                        Some("\\".repeat(256)),
+                        AnswerShape::One,
+                        vec![AnswerOption::new(
+                            "staging",
+                            "\"".repeat(1024),
+                            Some("\\".repeat(256)),
+                        )
+                        .unwrap()],
+                        None,
+                        false,
+                    )
+                    .unwrap()
+                })
+                .collect(),
+        )
+        .unwrap();
+        ask_cost += question.carrying_cost();
+        costly.invocations[0]
+            .events
+            .push(event(ExecutionUpdate::QuestionAsked {
+                id: QuestionId::new(format!("large-{index}")).unwrap(),
+                question,
+            }));
+    }
+    assert!(ask_cost <= MAX_OPEN_ASK_COST);
+    for index in 0..8 {
+        let ExecutionUpdate::PermissionRequested {
+            observation,
+            input,
+            options,
+            ..
+        } = review(serde_json::to_string(&"\"".repeat(3000)).unwrap())
+            .update()
+            .clone()
+        else {
+            unreachable!()
+        };
+        costly.invocations[0]
+            .events
+            .push(event(ExecutionUpdate::PermissionRequested {
+                id: PermissionId::new(format!("costly-{index}")).unwrap(),
+                tool_id: ToolCallId::new(format!("costly-tool-{index}")).unwrap(),
+                observation,
+                input,
+                options,
+            }));
+    }
+    let large = committed("incarnation", 27, 27, 27, Some(&costly));
+    let mut bounded = self::projection();
+    assert!(bounded.replace_committed(&large, &order, Some(&active)));
+    bounded.transcript_state(ConversationTranscriptState::Complete);
+    let view = bounded.read();
+    let view = bound_view(view);
+    assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
+    assert_eq!(view.questions.len(), 2);
+    for (index, question) in view.questions.iter().enumerate() {
+        assert_eq!(question.questions.len(), 3);
+        for (sibling, asked) in question.questions.iter().enumerate() {
+            assert_eq!(asked.key, format!("large_{index}_{sibling}"));
+            assert_eq!(asked.prompt.len(), 1024);
+            assert_eq!(asked.options[0].label.len(), 1024);
+        }
+    }
+    assert!(view.permissions.len() < 8);
+    assert!(view.interaction_view_error.is_some());
+    for permission in &view.permissions {
+        assert_eq!(permission.options.len(), 1);
+        assert_eq!(permission.arguments_json.len(), 6002);
+    }
+    let mut owner = ExecutionController::new(ExecutionSessionId::new("provider-session").unwrap());
+    owner.begin_execution(active.clone()).unwrap();
+    let ExecutionUpdate::PermissionRequested {
+        id, input, options, ..
+    } = requested.update()
+    else {
         unreachable!()
     };
-    question.carrying_cost()
+    owner
+        .request_permission(
+            &active,
+            id.clone(),
+            ToolCallUpdate::new(
+                ToolCallId::new("tool").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            input.clone(),
+            options.clone(),
+        )
+        .unwrap();
+    let cancelled = owner
+        .cancel_permission(
+            &active,
+            id,
+            PermissionCancellationReason::provider_withdrawal(),
+            CancellationOrigin::Provider,
+        )
+        .unwrap()
+        .unwrap();
+    snapshot.invocations[0]
+        .events
+        .push(event(ExecutionUpdate::PermissionCancelled(cancelled)));
+    snapshot.invocations[0]
+        .events
+        .push(event(ExecutionUpdate::QuestionClosed {
+            id: QuestionId::new("question").unwrap(),
+        }));
+    let closed = committed("incarnation", 28, 28, 28, Some(&snapshot));
+    assert!(projection.replace_committed(&closed, &order, Some(&active)));
+    assert!(projection.read().questions.is_empty());
+    assert!(projection.read().permissions.is_empty());
+    assert!(projection.replace_committed(&closed, &order, Some(&active)));
+    assert!(projection.read().questions.is_empty());
+    assert!(projection.read().permissions.is_empty());
+    let mut reset = self::projection();
+    assert!(reset.replace_committed(&current, &order, Some(&active)));
+    reset.transcript_state(ConversationTranscriptState::Complete);
+    assert_eq!(reset.read().questions[0].questions.len(), 3);
+    assert_eq!(reset.read().permissions.len(), 1);
 }
 
 #[test]
-fn an_ask_is_never_written_larger_than_it_costs_to_carry() {
-    // The binding admits asks by their carrying cost and the view relies on
-    // it, so the cost must bound what the view actually writes — escapes, the
-    // longest identities and all.
-    let execution = "e".repeat(256);
-    for (options, bytes) in [(1, 1), (4, 64), (32, 16), (2, 1000)] {
-        let mut projection = projection();
-        let ask = escaped_ask(&execution, &"9".repeat(20), options, bytes);
-        projection.event(&ask);
-        let view = projection.read();
-        assert_eq!(view.questions.len(), 1);
-        let written = serde_json::to_vec(&view.questions[0]).unwrap().len();
-        assert!(
-            written <= cost(&ask),
-            "{written} > {} for {options}x{bytes}",
-            cost(&ask)
+fn custom_backend_questions_over_display_budget_remain_semantic_and_atomic() {
+    let execution = ExecutionId::new("execution").unwrap();
+    let mut controller =
+        ExecutionController::new(ExecutionSessionId::new("provider-session").unwrap());
+    controller.begin_execution(execution.clone()).unwrap();
+    let mut events = Vec::new();
+    let mut carry = 0;
+    for index in 0..4 {
+        let question = AgentQuestion::new(
+            "\"".repeat(1024),
+            (0..3)
+                .map(|sibling| {
+                    Question::new(
+                        format!("custom_{index}_{sibling}"),
+                        "\"".repeat(1024),
+                        Some("\\".repeat(256)),
+                        AnswerShape::One,
+                        vec![
+                            AnswerOption::new("yes", "\"".repeat(1024), Some("\\".repeat(256)))
+                                .unwrap(),
+                        ],
+                        None,
+                        false,
+                    )
+                    .unwrap()
+                })
+                .collect(),
+        )
+        .unwrap();
+        carry += question.carrying_cost();
+        events.push(
+            controller
+                .ask_question(
+                    &execution,
+                    QuestionId::new(format!("custom-{index}")).unwrap(),
+                    question,
+                )
+                .unwrap()
+                .event(),
         );
     }
-}
-
-#[test]
-fn every_ask_the_binding_admits_is_offered_whole_within_the_view() {
-    // Eight asks whose costs together fill the binding's budget, beside a
-    // transcript far larger than the view: every ask is still offered, and the
-    // view keeps its bound by giving up everything else first.
-    let mut projection = projection();
-    for index in 0..30 {
-        let execution = format!("chat-{index}");
-        projection.event(&ExecutionEvent::new(
-            ExecutionId::new(execution.as_str()).unwrap(),
-            ExecutionUpdate::Message(MessageChunk::text("x".repeat(4000))),
-        ));
-    }
-    let mut total = 0;
+    assert!(carry > MAX_OPEN_ASK_COST);
     for index in 0..8 {
-        let ask = escaped_ask(&format!("asking-{index}"), "1", 3, 145);
-        total += cost(&ask);
-        projection.event(&ask);
+        let ExecutionUpdate::PermissionRequested { input, options, .. } =
+            review(serde_json::to_string(&"\"".repeat(3000)).unwrap())
+                .update()
+                .clone()
+        else {
+            unreachable!()
+        };
+        events.push(
+            controller
+                .request_permission(
+                    &execution,
+                    PermissionId::new(format!("mixed-review-{index}")).unwrap(),
+                    ToolCallUpdate::new(
+                        ToolCallId::new(format!("mixed-tool-{index}")).unwrap(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                    input,
+                    options,
+                )
+                .unwrap(),
+        );
     }
-    assert!(total <= MAX_OPEN_ASK_COST, "{total}");
-    assert!(
-        total > MAX_OPEN_ASK_COST * 9 / 10,
-        "the budget is nearly spent: {total}"
-    );
+    let snapshot = review_snapshot(events);
+    let complete = committed("incarnation", 5, 5, 5, Some(&snapshot));
+    assert_eq!(complete.snapshot().unwrap().invocations[0].events.len(), 12);
+    let mut projection = self::projection();
+    assert!(projection.replace_committed(&complete, &[], Some(&execution)));
+    projection.transcript_state(ConversationTranscriptState::Complete);
     let view = projection.read();
-    let bytes = serde_json::to_vec(&view).unwrap().len();
-    assert!(bytes <= 60_000, "{bytes} bytes");
-    assert_eq!(view.questions.len(), 8, "no admitted ask is given up");
+    let view = bound_view(view);
+    assert!(view.truncated);
+    assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
+    assert!(!view.questions.is_empty());
+    assert!(view.questions.len() < 4);
+    assert!(view.permissions.len() < 8);
+    assert_eq!(view.transcript_state, ConversationTranscriptState::Complete);
+    assert!(view
+        .interaction_view_error
+        .as_deref()
+        .unwrap()
+        .contains("Use Stop"));
+    assert!(view
+        .interaction_view_error
+        .as_deref()
+        .unwrap()
+        .contains("pending interactions"));
+    for (index, ask) in view.questions.iter().enumerate() {
+        assert_eq!(ask.question_id, format!("custom-{index}"));
+        assert_eq!(ask.questions.len(), 3);
+        for (sibling, question) in ask.questions.iter().enumerate() {
+            assert_eq!(question.key, format!("custom_{index}_{sibling}"));
+            assert_eq!(question.prompt, "\"".repeat(1024));
+            assert_eq!(question.options.len(), 1);
+            assert_eq!(question.options[0].label, "\"".repeat(1024));
+        }
+    }
+    // Renderer omission does not mutate the full committed continuation.
+    assert_eq!(complete.snapshot().unwrap().invocations[0].events.len(), 12);
 }
 
 #[test]
-fn a_message_linking_long_paths_gives_way_before_an_ask_does() {
-    // A running submission linking ten files at the longest path took about
-    // 40 KB the loop could never shed, so beside asks filling their budget the
-    // view broke its bound. What a message linked now gives way, and the asks
-    // stay.
-    let mut projection = projection();
-    let files = (0..10)
+fn retained_projection_uses_shared_bounds_status_and_injected_revision() {
+    let id = ConversationId::new("00000000-0000-0000-0000-000000000001").unwrap();
+    let revision = Uuid::from_u128(1);
+    let mut snapshot = completed_snapshot("first", vec![]);
+    snapshot.id = SessionId::new(id.to_string()).unwrap();
+    snapshot.invocations = (0..25)
         .map(|index| {
-            LinkedFile::new(format!(
-                "/{index}{}",
-                "p".repeat(LinkedFile::MAX_PATH_BYTES - 3)
-            ))
-            .unwrap()
+            let mut record = snapshot.invocations[0].clone();
+            record.request.execution_id = ExecutionId::new(format!("execution-{index}")).unwrap();
+            record.request.user_message = said(&"\"\n😀".repeat(4000));
+            record
         })
         .collect();
-    projection.admitted(
-        "linking",
-        &UserMessage::new(None, vec![], files).unwrap(),
-        ConversationPendingMode::Queued,
-    );
-    projection.event(&ExecutionEvent::new(
-        ExecutionId::new("linking").unwrap(),
-        ExecutionUpdate::Message(MessageChunk::text("reading them")),
-    ));
-    // The execution that linked them is the one asking: one turn runs at a
-    // time, so its message is the last one left for the loop to shrink.
-    for index in 1..=8 {
-        projection.event(&escaped_ask("linking", &index.to_string(), 3, 145));
+    for (completeness, freshness, state) in [
+        (
+            CommittedCompleteness::NotLoaded,
+            CommittedFreshness::Current,
+            ConversationTranscriptState::NotLoaded,
+        ),
+        (
+            CommittedCompleteness::CompleteEmpty,
+            CommittedFreshness::Current,
+            ConversationTranscriptState::CompleteEmpty,
+        ),
+        (
+            CommittedCompleteness::Complete,
+            CommittedFreshness::Current,
+            ConversationTranscriptState::Complete,
+        ),
+        (
+            CommittedCompleteness::Partial,
+            CommittedFreshness::Current,
+            ConversationTranscriptState::Partial,
+        ),
+        (
+            CommittedCompleteness::Partial,
+            CommittedFreshness::Stale,
+            ConversationTranscriptState::Stale,
+        ),
+        (
+            CommittedCompleteness::Complete,
+            CommittedFreshness::Unknown,
+            ConversationTranscriptState::Unknown,
+        ),
+    ] {
+        let snapshot = if matches!(
+            completeness,
+            CommittedCompleteness::NotLoaded | CommittedCompleteness::CompleteEmpty
+        ) {
+            None
+        } else {
+            Some(&snapshot)
+        };
+        let status = CommittedStatus::new(completeness, freshness);
+        let first = retained_view(&id, snapshot, status, revision);
+        let second = retained_view(&id, snapshot, status, revision);
+        assert_eq!(first.conversation_id, id.to_string());
+        assert!(first.revision.starts_with(&revision.to_string()));
+        assert_eq!(first.transcript_state, state);
+        assert_eq!(first.capabilities, ConversationCapabilities::read_only());
+        assert!(
+            !first.capabilities.queue
+                && !first.capabilities.steer
+                && !first.capabilities.resume
+                && !first.capabilities.permissions
+                && !first.capabilities.image_input
+        );
+        assert!(first.permissions.is_empty() && first.questions.is_empty());
+        let bytes = serde_json::to_vec(&first).unwrap();
+        assert!(bytes.len() <= MAX_VIEW_BYTES);
+        assert_eq!(bytes, serde_json::to_vec(&second).unwrap());
+        assert_eq!(first.messages.is_empty(), snapshot.is_none());
+        if snapshot.is_some() {
+            assert!(first.truncated);
+            assert!(first
+                .messages
+                .iter()
+                .all(|message| message.status == ConversationMessageStatus::Completed));
+        }
     }
-    let view = projection.read();
-    assert_eq!(view.messages.len(), 1);
-    let bytes = serde_json::to_vec(&view).unwrap().len();
-    assert!(bytes <= 60_000, "{bytes} bytes");
-    assert_eq!(view.questions.len(), 8, "no admitted ask is given up");
-    assert!(view.truncated);
 }
 
 /// The tools a server listed, as the view's lookup sees them: `charts`'
 /// `show` has whatever UI the test sets in the conversation's own session,
 /// nothing else has any, and no other conversation's session has it.
-struct ListedUis(Mutex<Option<&'static str>>);
+struct ListedUis {
+    /// The conversation whose session lists it, as its SDK session is named.
+    conversation: String,
+    uri: Mutex<Option<String>>,
+}
+impl ListedUis {
+    fn of(conversation: &str, uri: Option<String>) -> Self {
+        Self {
+            conversation: conversation.into(),
+            uri: Mutex::new(uri),
+        }
+    }
+}
 impl McpToolUis for ListedUis {
     fn resource_uri(&self, session: &SessionId, call: &McpTool) -> Option<UiResourceUri> {
-        // The projection's conversation, as its SDK session is named.
-        if session.as_str() != "conversation" {
+        if session.as_str() != self.conversation {
             return None;
         }
         if (call.server(), call.tool()) != ("charts", "show") {
             return None;
         }
-        self.0
+        self.uri
             .lock()
             .unwrap()
-            .map(|uri| UiResourceUri::new(uri).unwrap())
+            .as_ref()
+            .map(|uri| UiResourceUri::new(uri.as_str()).unwrap())
     }
 }
 
-fn mcp_call(projection: &mut Projection, id: &str, server: &str, tool: &str) {
-    projection.event(&event(ExecutionUpdate::Tool(
+fn mcp_event(id: &str, server: &str, tool: &str) -> ExecutionEvent {
+    event(ExecutionUpdate::Tool(
         ToolCallUpdate::new(ToolCallId::new(id).unwrap(), None, None, None, None, None)
             .with_mcp_tool(McpTool::new(server, tool).unwrap()),
-    )));
+    ))
 }
 
 #[test]
 fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
-    let listed = Arc::new(ListedUis(Mutex::new(None)));
+    let listed = Arc::new(ListedUis::of("conversation", None));
     let mut projection = projection().with_tool_uis(listed.clone());
-    mcp_call(&mut projection, "chart", "charts", "show");
-    mcp_call(&mut projection, "report", "charts", "report");
-    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
-        ToolCallId::new("shell").unwrap(),
-        Some("Shell".into()),
-        None,
-        None,
-        None,
-        None,
-    ))));
+    let snapshot = completed_snapshot(
+        "execution",
+        vec![
+            mcp_event("chart", "charts", "show"),
+            mcp_event("report", "charts", "report"),
+            event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+                ToolCallId::new("shell").unwrap(),
+                Some("Shell".into()),
+                None,
+                None,
+                None,
+                None,
+            ))),
+        ],
+    );
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        None
+    ));
     // Not listed yet: no UI, and the wire says nothing about one.
     let unknown = projection.read();
     assert_eq!(unknown.tools[0].mcp.as_ref().unwrap().resource_uri, None);
@@ -1765,7 +1464,7 @@ fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
     );
 
     // Listed later: the same projection's next read has it, under a new revision.
-    *listed.0.lock().unwrap() = Some("ui://charts/show.html");
+    *listed.uri.lock().unwrap() = Some("ui://charts/show.html".into());
     let known = projection.read();
     let mcp = known.tools[0].mcp.as_ref().unwrap();
     assert_eq!(mcp.resource_uri.as_deref(), Some("ui://charts/show.html"));
@@ -1779,18 +1478,222 @@ fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
     assert_eq!(known.tools[1].mcp.as_ref().unwrap().resource_uri, None);
     assert_eq!(known.tools[2].mcp, None);
 
-    // A different UI is a different revision.
-    *listed.0.lock().unwrap() = Some("ui://charts/other.html");
-    assert_ne!(projection.read().revision, known.revision);
-    // Without a lookup, no UI.
-    let mut bare = super::projection::Projection::new(
-        "conversation".into(),
-        unknown.capabilities.clone(),
-        None,
+    // A committed replacement retains the injected lookup, and later changes
+    // in cached UI metadata revise that committed view without live events.
+    assert!(projection.replace_committed(
+        &committed("incarnation", 2, 2, 2, Some(&snapshot)),
+        &[],
+        None
+    ));
+    assert_eq!(
+        projection.read().tools[0]
+            .mcp
+            .as_ref()
+            .unwrap()
+            .resource_uri
+            .as_deref(),
+        Some("ui://charts/show.html")
     );
-    mcp_call(&mut bare, "chart", "charts", "show");
+    let replaced_revision = projection.read().revision;
+    *listed.uri.lock().unwrap() = Some("ui://charts/other.html".into());
+    let changed_revision = projection.read().revision;
+    assert_ne!(changed_revision, replaced_revision);
+    *listed.uri.lock().unwrap() = None;
+    let removed = projection.read();
+    assert_ne!(removed.revision, changed_revision);
+    assert_eq!(removed.tools[0].mcp.as_ref().unwrap().resource_uri, None);
+    assert_eq!(
+        serde_json::to_value(&removed.tools[0]).unwrap()["mcp"],
+        serde_json::json!({"server":"charts","tool":"show"})
+    );
+    // Without a lookup, no UI.
+    let mut bare = Projection::new("conversation".into(), unknown.capabilities.clone(), None);
+    assert!(bare.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        None
+    ));
     assert_eq!(
         bare.read().tools[0].mcp.as_ref().unwrap().resource_uri,
         None
     );
+}
+
+#[test]
+fn committed_mcp_ui_enrichment_remains_inside_the_complete_view_budget() {
+    let uri = format!("ui://{}", "a".repeat(2043));
+    let listed = Arc::new(ListedUis::of("conversation", Some(uri.clone())));
+    let events = (0..16)
+        .map(|index| {
+            event(ExecutionUpdate::Tool(
+                ToolCallUpdate::new(
+                    ToolCallId::new(format!("tool-{index}")).unwrap(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .with_mcp_tool(McpTool::new("charts", "show").unwrap())
+                .with_content(vec![ToolContent::text("\"".repeat(6000))]),
+            ))
+        })
+        .collect();
+    let snapshot = completed_snapshot("execution", events);
+    let mut projection = projection().with_tool_uis(listed);
+    assert!(projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        None
+    ));
+    let enriched = projection.read();
+    assert!(serde_json::to_vec(&enriched).unwrap().len() > MAX_VIEW_BYTES);
+    let bounded = bound_view(enriched);
+    assert!(bounded.truncated);
+    assert!(serde_json::to_vec(&bounded).unwrap().len() <= MAX_VIEW_BYTES);
+    assert!(bounded
+        .tools
+        .iter()
+        .any(|tool| tool.mcp.as_ref().unwrap().resource_uri.as_deref() == Some(uri.as_str())));
+    assert_eq!(
+        snapshot.invocations[0].events.len(),
+        16,
+        "display omission does not rewrite the committed fold"
+    );
+}
+
+fn service_with_cached_tool_uis(
+    storage: Arc<InMemoryStorage>,
+    repository: Arc<MemoryRepository>,
+    provider: Arc<ProviderFactory>,
+    audit: Arc<RecordingModeAudit>,
+    listed: Arc<ListedUis>,
+) -> ConversationService {
+    ConversationService::with_tool_uis(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider::new(provider))),
+            storage,
+            metadata: repository,
+            mode_audit: audit,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+        listed,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn service_committed_and_cold_pending_mode_views_preserve_cached_mcp_ui() {
+    let storage = Arc::new(InMemoryStorage::new());
+    let repository = Arc::new(MemoryRepository::default());
+    let provider = Arc::new(ProviderFactory::default());
+    provider
+        .execution_updates
+        .lock()
+        .unwrap()
+        .push(ExecutionUpdate::Tool(
+            ToolCallUpdate::new(
+                ToolCallId::new("chart").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .with_mcp_tool(McpTool::new("charts", "show").unwrap()),
+        ));
+    let audit = Arc::new(RecordingModeAudit::default());
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let listed = Arc::new(ListedUis::of(
+        &id.to_string(),
+        Some("ui://charts/show.html".into()),
+    ));
+    let service = service_with_cached_tool_uis(
+        storage.clone(),
+        repository.clone(),
+        provider.clone(),
+        audit.clone(),
+        listed.clone(),
+    );
+    service
+        .create(
+            id.clone(),
+            caller("create-ui"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .submit(
+            id.clone(),
+            caller("send-ui"),
+            "ui-request".into(),
+            SubmittedMessage {
+                text: "show".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let live = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let view = service.read(id.clone(), caller("live-ui")).await.unwrap();
+            if view
+                .messages
+                .first()
+                .is_some_and(|message| message.status == ConversationMessageStatus::Completed)
+            {
+                break view;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let live_uri = live.tools[0].mcp.as_ref().unwrap().resource_uri.clone();
+    service.shutdown().await.unwrap();
+    repository
+        .begin_mode_change(ConversationModeRequest {
+            conversation_id: id.clone(),
+            organization_id: OrganizationId::new("org").unwrap(),
+            request_id: "pending-mode-ui".into(),
+            initiator_principal_id: PrincipalId::new("person").unwrap(),
+            initiator_surface_id: "panel".into(),
+            prior: ConversationApprovalMode::Ask,
+            requested: ConversationApprovalMode::Auto,
+            state: ConversationModeRequestState::Pending,
+            application: None,
+            requested_at_ms: 1_700_000_000_124,
+        })
+        .await
+        .unwrap();
+    // Refuse recovery audit before a cold Agent can be resolved; the pending
+    // view must therefore use the service's committed, read-only constructor.
+    audit.fail_application_once.store(true, Ordering::SeqCst);
+    let opens = provider.open_calls.load(Ordering::SeqCst);
+    let cold = service_with_cached_tool_uis(storage, repository, provider.clone(), audit, listed);
+    let pending = cold.read(id, caller("pending-ui")).await.unwrap();
+    let cold_uri = pending.tools[0].mcp.as_ref().unwrap().resource_uri.clone();
+    let later_opens = provider.open_calls.load(Ordering::SeqCst);
+    cold.shutdown().await.unwrap();
+    assert_eq!(live_uri.as_deref(), Some("ui://charts/show.html"));
+    assert_eq!(cold_uri.as_deref(), Some("ui://charts/show.html"));
+    assert_eq!(
+        later_opens, opens,
+        "cold pending view does not open a provider"
+    );
+    assert!(!pending.capabilities.queue);
+    assert!(serde_json::to_vec(&pending).unwrap().len() <= MAX_VIEW_BYTES);
 }

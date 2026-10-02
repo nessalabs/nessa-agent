@@ -784,6 +784,69 @@ mod gateway {
     }
 
     #[tokio::test]
+    async fn same_socket_stalled_response_does_not_hold_close_effect() {
+        let (service, provider, _, _) =
+            conversation_support::fixture(ConversationLimits::default());
+        let state = chat_state().with_conversations(Arc::new(service));
+        let session = chat_session(&state, "owner-phone").await;
+        let id = "00000000-0000-4000-8000-000000000009";
+        assert!(chat_request(
+            &state,
+            &session,
+            "conversation.create",
+            json!({"conversationId":id,"requestId":"create"}),
+        )
+        .await
+        .ok);
+        timeout(Duration::from_secs(1), async {
+            loop {
+                let read = chat_request(
+                    &state,
+                    &session,
+                    "conversation.read",
+                    json!({"conversationId":id}),
+                )
+                .await;
+                if read.payload.as_ref().is_some_and(|value| value["lifecycle"]["phase"] == "attached") {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let (release, gate) = oneshot::channel();
+        let (socket, mut peer) = test_socket(Some(gate));
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        peer.request("slow");
+        timeout(Duration::from_secs(1), peer.writing.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        send_command(
+            &peer,
+            "stop",
+            "conversation.close",
+            json!({"conversationId":id,"requestId":"stop"}),
+        );
+        timeout(Duration::from_secs(1), async {
+            while provider.close_calls.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("close effect must run while the first response is blocked");
+        assert!(peer.output.try_recv().is_err());
+        release.send(()).unwrap();
+        assert_eq!(response(&mut peer).await["id"], "slow");
+        let stop = response(&mut peer).await;
+        assert_eq!(stop["id"], "stop");
+        assert_eq!(stop["ok"], true);
+        drop(peer.input);
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn reads_during_startup_return_without_consuming_control_capacity() {
         let (service, provider, _, _) =
             conversation_support::fixture(ConversationLimits::default());

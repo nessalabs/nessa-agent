@@ -5,6 +5,7 @@
 //! answers to its stdout. Its stdout is the MCP stream and nothing else;
 //! diagnostics go to stderr.
 use super::relay::{read_line, write_line, Answer, Hello, Refusal, ANSWER_TIMEOUT};
+#[cfg(unix)]
 use crate::mcp_servers::domain::SESSION_VARIABLE;
 use std::fmt;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};

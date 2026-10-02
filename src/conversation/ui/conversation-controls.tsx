@@ -28,7 +28,15 @@ export function ConversationControls({
   return (
     <div className="flex flex-col gap-3 text-sm">
       {remote?.truncated ? (
-        <p role="status">Showing the most recent conversation history.</p>
+        <p role="status">Some conversation content is not shown.</p>
+      ) : null}
+      {remote?.transcriptState === "stale" ||
+      remote?.transcriptState === "partial" ||
+      remote?.transcriptState === "not_loaded" ||
+      remote?.transcriptState === "unknown" ? (
+        <p role="status">
+          Conversation history is not confirmed. Recent activity may be missing.
+        </p>
       ) : null}
       {remote?.permissions.map((permission) => (
         <ToolApproval

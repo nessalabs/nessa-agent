@@ -15,49 +15,46 @@ use crate::conversation::domain::{
     Conversation, ConversationDeletion, ConversationId, ConversationSummary, ProviderSessionErasure,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_sdk::{
-    application::{
-        agent_execution::{
-            agents::AgentError,
-            executions::{
-                ExecutionAudit, ExecutionAuditRecord, ExecutionEvent, ExecutionRequest,
-                ExecutionUpdate,
-            },
-            permissions::{
-                PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
-                PermissionResolution, PermissionSelectionState, QuestionAnswer,
-            },
-            providers::{
-                AgentProvider, ApprovalMode, CleanupFuture, CleanupReport, CloseOutcome,
-                ExecutionEventStream, ExecutionReport, ObservationFailure, OpenedProviderSession,
-                ProviderExecutionFuture, ProviderExecutionReply, ProviderIdentity,
-                ProviderObservationFuture, ProviderOpenError, ProviderOpenFuture,
-                ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
-                ProviderOperationFuture, ProviderSession, ProviderSessionBackend,
-                ProviderSessionState, SessionCloseRequest,
-            },
-        },
-        dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto},
-    },
-    domain::{
-        agent_execution::{
-            executions::{ExecutionOutcome, MessageChunk},
-            permissions::{
-                PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy,
-                PermissionOption, PermissionOptionId, PermissionOptions, PermissionScope,
-            },
-            prompts::ImageReference,
-            sessions::ExecutionSessionId,
-            tools::{ToolCallId, ToolObservation},
-        },
-        effective_capabilities::value_objects::{BindingRestrictions, EffectiveCapabilities},
-        model_metadata::{
-            entities::ModelMetadata,
-            value_objects::{Modalities, ModelFeatures},
-        },
-    },
-    infrastructure::session_storage::InMemoryStorage,
+use nessa_sdk::application::agent_execution::agents::AgentError;
+use nessa_sdk::application::agent_execution::executions::{
+    ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionRequest,
+    ExecutionUpdate, PermissionAuthoritySource,
 };
+use nessa_sdk::application::agent_execution::permissions::{
+    PermissionAnswer, PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
+    PermissionSelectionState, QuestionAnswer,
+};
+use nessa_sdk::application::agent_execution::providers::{
+    AgentProvider, ApprovalMode, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
+    ExecutionReport, ObservationFailure, OpenedProviderSession, ProviderExecutionFuture,
+    ProviderExecutionReply, ProviderIdentity, ProviderObservationFuture, ProviderOpenError,
+    ProviderOpenFuture, ProviderOpenRequest, ProviderOperationCapabilities,
+    ProviderOperationFailure, ProviderOperationFuture, ProviderSession, ProviderSessionBackend,
+    ProviderSessionState, SessionCloseRequest,
+};
+use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
+use nessa_sdk::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
+use nessa_sdk::domain::agent_execution::executions::{ExecutionOutcome, MessageChunk};
+use nessa_sdk::domain::agent_execution::permissions::{
+    PermissionAuthority, PermissionAuthorityError, PermissionDecision, PermissionEffect,
+    PermissionId, PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
+    PermissionScope,
+};
+use nessa_sdk::domain::agent_execution::prompts::ImageReference;
+use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
+use nessa_sdk::domain::agent_execution::tools::{ToolCallId, ToolCallUpdate};
+use nessa_sdk::domain::effective_capabilities::value_objects::{
+    BindingRestrictions, EffectiveCapabilities,
+};
+use nessa_sdk::domain::model_metadata::entities::ModelMetadata;
+use nessa_sdk::domain::model_metadata::value_objects::{Modalities, ModelFeatures};
+use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot::Receiver;
+use tokio::sync::{mpsc, oneshot, Notify};
+use uuid::Uuid;
 
 pub(crate) struct AcceptingAudit;
 impl ExecutionAudit for AcceptingAudit {
@@ -68,14 +65,6 @@ impl ExecutionAudit for AcceptingAudit {
         Box::pin(async { Ok(()) })
     }
 }
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
-};
-use tokio::sync::{mpsc, oneshot, Notify};
 
 #[derive(Default)]
 pub(crate) struct MemoryRepository {
@@ -468,7 +457,7 @@ pub(crate) struct MemorySummaries {
     pub(crate) erase_fails: AtomicBool,
     /// Holds the next `load` after it has read, saying so on the first
     /// sender, until the second channel is let go.
-    pub(crate) load_gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+    pub(crate) load_gate: Mutex<Option<(oneshot::Sender<()>, Receiver<()>)>>,
 }
 impl ConversationSummaries for MemorySummaries {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<ConversationSummary>> {
@@ -588,19 +577,21 @@ pub(crate) struct ProviderFactory {
     pub(crate) mode_updates: Mutex<Vec<ApprovalMode>>,
     pub(crate) mode_failure: Mutex<Option<AgentError>>,
     pub(crate) mode_started: Notify,
-    pub(crate) mode_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) mode_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) open_calls: AtomicUsize,
     pub(crate) open_failure: Mutex<Option<AgentError>>,
     pub(crate) opening: Notify,
-    pub(crate) open_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) open_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) executions: Mutex<Vec<String>>,
     pub(crate) execution_started: Notify,
-    pub(crate) execution_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) execution_gate: Mutex<Option<Receiver<()>>>,
     /// One explicit provider settlement used by failure-path projection tests.
     /// Absence keeps the normal completed response below.
     pub(crate) execution_reply: Mutex<Option<ProviderExecutionReply>>,
     /// Valid observations emitted before an explicit settlement fixture.
     pub(crate) execution_updates: Mutex<Vec<ExecutionUpdate>>,
+    pub(crate) updates_sent: Notify,
+    pub(crate) after_updates_gate: Mutex<Option<Receiver<()>>>,
     /// The terminal observation failure paired with `execution_reply`.
     ///
     /// Setting this also ends the observation stream, matching an ACP worker
@@ -609,15 +600,20 @@ pub(crate) struct ProviderFactory {
     /// open and does not model that adapter path.
     pub(crate) execution_observation_failure: Mutex<Option<ObservationFailure>>,
     pub(crate) request_permission: AtomicUsize,
-    pub(crate) permission_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) permission_gate: Mutex<Option<Receiver<()>>>,
+    /// Gate after domain consumption rather than before it.
+    pub(crate) consume_before_answer_gate: AtomicBool,
     pub(crate) answer_started: Notify,
-    pub(crate) answer_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) answer_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) answer_failure: Mutex<Option<(AgentError, PermissionSelectionState)>>,
+    /// Substitute the custom backend seam without changing the domain owner.
+    pub(crate) authority_override:
+        Mutex<Option<Result<Option<PermissionAuthority>, PermissionAuthorityError>>>,
     pub(crate) close_calls: AtomicUsize,
     pub(crate) close_failure: Mutex<Option<AgentError>>,
     pub(crate) close_reports: Mutex<VecDeque<CleanupReport>>,
     pub(crate) close_finished: Notify,
-    pub(crate) close_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) close_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) close_requests: Mutex<Vec<SessionCloseRequest>>,
     /// Whether the agent agreed to take images, and its model can see them.
     pub(crate) image_input: AtomicBool,
@@ -955,14 +951,18 @@ impl AgentProvider for Provider {
                 return Err(ProviderOpenError::no_resources(error));
             }
             let (sender, receiver) = mpsc::unbounded_channel();
+            let session_id = restore
+                .unwrap_or_else(|| ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap());
+            let controller = ExecutionController::new(session_id.clone());
+            let authority = controller.permission_authority_source();
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
-                    restore.unwrap_or_else(|| {
-                        ExecutionSessionId::new(uuid::Uuid::new_v4().to_string()).unwrap()
-                    }),
+                    session_id,
                     Arc::new(Backend {
                         factory: self.factory.clone(),
                         sender: Mutex::new(Some(sender)),
+                        controller: Mutex::new(controller),
+                        authority,
                     }),
                     self.configured_capabilities.clone(),
                 ),
@@ -998,10 +998,22 @@ impl ExecutionEventStream for Events {
     }
 }
 struct Backend {
+    controller: Mutex<ExecutionController>,
+    authority: PermissionAuthoritySource,
     factory: Arc<ProviderFactory>,
     sender: Mutex<Option<mpsc::UnboundedSender<ExecutionEvent>>>,
 }
 impl ProviderSessionBackend for Backend {
+    fn permission_authority(
+        &self,
+    ) -> Result<Option<PermissionAuthority>, PermissionAuthorityError> {
+        self.factory
+            .authority_override
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| self.authority.read())
+    }
     fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async move {
             self.factory.mode_updates.lock().unwrap().push(mode);
@@ -1031,6 +1043,11 @@ impl ProviderSessionBackend for Backend {
     }
     fn execute(&self, request: ExecutionRequest) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            self.controller
+                .lock()
+                .unwrap()
+                .begin_execution(request.execution_id.clone())
+                .unwrap();
             self.factory
                 .executions
                 .lock()
@@ -1055,7 +1072,17 @@ impl ProviderSessionBackend for Backend {
                     .unwrap()
                     .send(ExecutionEvent::new(request.execution_id.clone(), update));
             }
+            self.factory.updates_sent.notify_one();
+            let after_updates = self.factory.after_updates_gate.lock().unwrap().take();
+            if let Some(gate) = after_updates {
+                let _ = gate.await;
+            }
             if let Some(reply) = self.factory.execution_reply.lock().unwrap().take() {
+                self.controller
+                    .lock()
+                    .unwrap()
+                    .finish_execution(&request.execution_id, Ok(ExecutionOutcome::Completed))
+                    .unwrap();
                 if self
                     .factory
                     .execution_observation_failure
@@ -1081,26 +1108,29 @@ impl ProviderSessionBackend for Backend {
                     &PermissionOfferPolicy::once_only(),
                 )
                 .unwrap();
-                let _ = self
-                    .sender
+                let event = self
+                    .controller
                     .lock()
                     .unwrap()
-                    .as_ref()
-                    .unwrap()
-                    .send(ExecutionEvent::new(
-                        request.execution_id.clone(),
-                        ExecutionUpdate::PermissionRequested {
-                            id: PermissionId::new("permission").unwrap(),
-                            tool_id: ToolCallId::new("tool").unwrap(),
-                            observation: ToolObservation::default(),
-                            input:
-                                nessa_sdk::application::agent_execution::tools::ToolReviewInput {
-                                    name: "write_file".into(),
-                                    arguments_json: "{}".into(),
-                                },
-                            options,
+                    .request_permission(
+                        &request.execution_id,
+                        PermissionId::new("permission").unwrap(),
+                        ToolCallUpdate::new(
+                            ToolCallId::new("tool").unwrap(),
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                        ),
+                        ToolReviewInput {
+                            name: "write_file".into(),
+                            arguments_json: "{}".into(),
                         },
-                    ));
+                        options,
+                    )
+                    .unwrap();
+                let _ = self.sender.lock().unwrap().as_ref().unwrap().send(event);
                 let gate = self.factory.permission_gate.lock().unwrap().take();
                 if let Some(gate) = gate {
                     let _ = gate.await;
@@ -1126,9 +1156,14 @@ impl ProviderSessionBackend for Backend {
                 .as_ref()
                 .unwrap()
                 .send(ExecutionEvent::new(
-                    request.execution_id,
+                    request.execution_id.clone(),
                     ExecutionUpdate::Finished(ExecutionOutcome::Completed),
                 ));
+            self.controller
+                .lock()
+                .unwrap()
+                .finish_execution(&request.execution_id, Ok(ExecutionOutcome::Completed))
+                .unwrap();
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(Ok(ExecutionOutcome::Completed)),
                 None,
@@ -1146,9 +1181,26 @@ impl ProviderSessionBackend for Backend {
     }
     fn answer_permission(
         &self,
-        _: PermissionAnswer,
+        answer: PermissionAnswer,
     ) -> ProviderOperationFuture<'_, PermissionResolution> {
         Box::pin(async move {
+            let consume_first = self
+                .factory
+                .consume_before_answer_gate
+                .load(Ordering::SeqCst);
+            if consume_first {
+                self.controller
+                    .lock()
+                    .unwrap()
+                    .answer_permission(answer.clone())
+                    .map_err(|error| {
+                        ProviderOperationFailure::permission_answer(
+                            error,
+                            ProviderSessionState::Usable,
+                            PermissionSelectionState::Pending,
+                        )
+                    })?;
+            }
             self.factory.answer_started.notify_one();
             let gate = self.factory.answer_gate.lock().unwrap().take();
             if let Some(gate) = gate {
@@ -1164,6 +1216,19 @@ impl ProviderSessionBackend for Backend {
                     AgentError::StalePermission,
                     PermissionSelectionState::Pending,
                 ));
+            if selection == PermissionSelectionState::Consumed && !consume_first {
+                self.controller
+                    .lock()
+                    .unwrap()
+                    .answer_permission(answer)
+                    .map_err(|error| {
+                        ProviderOperationFailure::permission_answer(
+                            error,
+                            ProviderSessionState::Usable,
+                            PermissionSelectionState::Pending,
+                        )
+                    })?;
+            }
             Err(ProviderOperationFailure::permission_answer(
                 error,
                 ProviderSessionState::Usable,

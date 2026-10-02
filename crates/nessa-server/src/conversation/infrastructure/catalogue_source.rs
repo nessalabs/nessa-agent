@@ -1,28 +1,27 @@
 //! Bounded synchronous sync-engine reads over the authenticated metadata port.
-//! #260 will supply the network boundary; this adapter accepts only a scope and
-//! caller already chosen by the host, and never opens a writer or provider.
+//! Product catalogue dispatch supplies the authenticated network boundary.
+//! This adapter accepts only a scope and caller already chosen by the host,
+//! and never opens a writer or provider.
 
-use crate::conversation::{
-    application::{
-        CatalogueDescriptor, CatalogueKey, CataloguePageRequest, CatalogueValue,
-        ConversationCaller, ConversationCatalogue, ConversationError,
-    },
-    domain::ConversationId,
+use crate::conversation::application::{
+    CatalogueDescriptor, CataloguePageRequest, CatalogueValue, ConversationCaller,
+    ConversationCatalogue, ConversationError,
 };
-use nessa_sync::replication::{
-    catalogue::{
-        CataloguePass, CatalogueSource, CatalogueSourceError, EntryKey, ManifestEntry,
-        ManifestPage, ManifestRequest, ResolvedEntry, MAX_CATALOGUE_ENTRIES,
-        MAX_CATALOGUE_PAYLOAD_BYTES,
-    },
-    domain::{Id, Scope},
+use crate::conversation::domain::{conversation_catalogue_stream, ConversationId};
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_sync::replication::catalogue::{
+    validate_catalogue_pass, validate_manifest_request, CataloguePass, CatalogueSource,
+    CatalogueSourceError, EntryKey, ManifestEntry, ManifestPage, ManifestRequest, ResolvedEntry,
+    MAX_CATALOGUE_ENTRIES, MAX_CATALOGUE_PAYLOAD_BYTES,
 };
-use sha2::{Digest, Sha256};
-use std::{
-    sync::{mpsc, Arc, Mutex},
-    thread,
-};
-use tokio::runtime::Handle;
+use nessa_sync::replication::domain::{Id, Scope};
+use std::io::Result as IoResult;
+use std::sync::mpsc::{Receiver, RecvError, Sender, SyncSender};
+use std::sync::{mpsc, Arc, Mutex};
+#[cfg(test)]
+use std::thread;
+use std::thread::{Builder as ThreadBuilder, JoinHandle};
+use tokio::runtime::{Builder, Runtime};
 
 const SCHEMA: &str = "nessa.conversation-catalogue.v1";
 const QUEUE_CAPACITY: usize = 32;
@@ -31,103 +30,170 @@ pub fn conversation_catalogue_schema() -> Id {
     Id::new(SCHEMA).expect("fixed schema ID")
 }
 
-/// Stable stream identity for one authenticated organization and principal.
-/// The length prefix prevents two distinct owner pairs from hashing the same
-/// byte sequence; the digest keeps the sync ID within its fixed size bound.
-pub fn conversation_catalogue_stream(caller: &ConversationCaller) -> Id {
-    let organization = caller.organization_id.as_str().as_bytes();
-    let owner = caller.principal_id.as_str().as_bytes();
-    let mut hash = Sha256::new();
-    hash.update((organization.len() as u64).to_be_bytes());
-    hash.update(organization);
-    hash.update(owner);
-    Id::new(format!("conversation-owner:{:x}", hash.finalize())).expect("digest fits sync ID")
-}
-
 enum Command {
-    Head(Scope, mpsc::Sender<Result<u64, CatalogueSourceError>>),
+    Head(Scope, Sender<Result<u64, CatalogueSourceError>>),
     Manifest(
         ManifestRequest,
-        mpsc::Sender<Result<ManifestPage, CatalogueSourceError>>,
+        Sender<Result<ManifestPage, CatalogueSourceError>>,
     ),
     Resolve(
         CataloguePass,
         Id,
         usize,
-        mpsc::Sender<Result<ResolvedEntry, CatalogueSourceError>>,
+        Sender<Result<ResolvedEntry, CatalogueSourceError>>,
     ),
 }
 
-struct Worker {
-    sender: mpsc::SyncSender<Command>,
-    thread: Mutex<Option<thread::JoinHandle<()>>>,
+/// Source refusal and an unexpected physical worker exit have distinct meanings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CatalogueWorkerError {
+    Source(CatalogueSourceError),
+    WorkerPanicked,
 }
 
+struct Worker {
+    state: Mutex<WorkerState>,
+}
+struct WorkerState {
+    sender: Option<SyncSender<Command>>,
+    thread: Option<JoinHandle<()>>,
+    completion: Option<Result<(), CatalogueWorkerError>>,
+}
+impl Worker {
+    fn finish(&self) -> Result<(), CatalogueWorkerError> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(completion) = &state.completion {
+            return completion.clone();
+        }
+        // Closing admission drains the bounded command queue before join returns.
+        drop(state.sender.take());
+        let completion = match state.thread.take() {
+            Some(worker) => worker
+                .join()
+                .map_err(|_| CatalogueWorkerError::WorkerPanicked),
+            _ => Ok(()),
+        };
+        state.completion = Some(completion.clone());
+        completion
+    }
+}
 impl Drop for Worker {
     fn drop(&mut self) {
-        // Closing the sender drains admitted reads. Never join on a Tokio
-        // scheduler thread: the active read may need that very scheduler.
-        let (replacement, receiver) = mpsc::sync_channel(0);
-        drop(receiver);
-        let sender = std::mem::replace(&mut self.sender, replacement);
-        drop(sender);
-        if Handle::try_current().is_err() {
-            if let Some(thread) = self.thread.get_mut().unwrap().take() {
-                let _ = thread.join();
-            }
-        }
+        // The synchronous source owns its physical worker through the last drop.
+        // Product callers explicitly drain on their tracked non-entered thread.
+        let _ = self.finish();
     }
 }
 
-/// Cloneable source bound to one authenticated caller and one exact sync scope.
-/// Call the synchronous trait on a blocking thread. A bounded worker queue and
-/// source-owned Tokio runtime form the execution boundary: metadata reads can
-/// use `spawn_blocking` even when the caller occupies its only blocking slot.
+type CatalogueReadiness = Result<(Scope, Option<u64>), CatalogueSourceError>;
+
+enum SourceScope {
+    Expected(Scope),
+    Discover { receiver: Id, origin: Id, epoch: Id },
+}
+
+/// Cloneable synchronous source over one exact metadata owner and scope.
+/// Construction, reads and drain can block: use a non-entered blocking thread.
+/// The source-owned runtime has its own blocking pool. Last drop closes its
+/// queue and joins its worker; explicit drain additionally preserves join faults.
 #[derive(Clone)]
 pub struct NessaCatalogueSource {
     scope: Scope,
     worker: Arc<Worker>,
 }
-
 impl NessaCatalogueSource {
+    /// Check the schema/owner-stream construction relationship without I/O.
+    pub fn check_scope_identity(
+        organization_id: &OrganizationId,
+        principal_id: &PrincipalId,
+        scope: &Scope,
+    ) -> Result<(), CatalogueSourceError> {
+        if scope.schema() != &conversation_catalogue_schema()
+            || scope.stream() != &conversation_catalogue_stream(organization_id, principal_id)
+        {
+            return Err(CatalogueSourceError::IdentityChanged);
+        }
+        Ok(())
+    }
+
     pub fn new(
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
         scope: Scope,
-    ) -> Result<Self, CatalogueSourceError> {
-        Self::start_with_spawn(
+    ) -> Result<Self, CatalogueWorkerError> {
+        Self::start_with_spawn(catalogue, caller, scope, spawn_worker, make_runtime)
+    }
+
+    /// Capture one actual metadata head and construct its matching sync scope.
+    /// The supplied receiver, origin and opaque epoch are trusted host facts;
+    /// metadata owns the incarnation and revision. No second head is observed.
+    pub fn discover(
+        catalogue: Arc<dyn ConversationCatalogue>,
+        caller: ConversationCaller,
+        receiver: Id,
+        origin: Id,
+        epoch: Id,
+    ) -> Result<(Self, u64), CatalogueWorkerError> {
+        let (source, head) = Self::start_with_identity(
             catalogue,
             caller,
-            scope,
-            |run| {
-                thread::Builder::new()
-                    .name("nessa-catalogue-source".into())
-                    .spawn(run)
+            SourceScope::Discover {
+                receiver,
+                origin,
+                epoch,
             },
-            || {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .max_blocking_threads(1)
-                    .build()
-            },
-        )
+            spawn_worker,
+            make_runtime,
+        )?;
+        Ok((source, head.expect("discovery initializes a captured head")))
     }
 
     fn start_with_spawn(
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
         scope: Scope,
-        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<thread::JoinHandle<()>>,
-        make_runtime: impl FnOnce() -> std::io::Result<tokio::runtime::Runtime> + Send + 'static,
-    ) -> Result<Self, CatalogueSourceError> {
-        if scope.schema() != &conversation_catalogue_schema()
-            || scope.stream() != &conversation_catalogue_stream(&caller)
-        {
-            return Err(CatalogueSourceError::IdentityChanged);
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> IoResult<JoinHandle<()>>,
+        make_runtime: impl FnOnce() -> IoResult<Runtime> + Send + 'static,
+    ) -> Result<Self, CatalogueWorkerError> {
+        Self::start_with_identity(
+            catalogue,
+            caller,
+            SourceScope::Expected(scope),
+            spawn,
+            make_runtime,
+        )
+        .map(|(source, _)| source)
+    }
+
+    fn start_with_identity(
+        catalogue: Arc<dyn ConversationCatalogue>,
+        caller: ConversationCaller,
+        scope: SourceScope,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> IoResult<JoinHandle<()>>,
+        make_runtime: impl FnOnce() -> IoResult<Runtime> + Send + 'static,
+    ) -> Result<(Self, Option<u64>), CatalogueWorkerError> {
+        Self::start_with_readiness(catalogue, caller, scope, spawn, make_runtime, |ready| {
+            ready.recv()
+        })
+    }
+
+    fn start_with_readiness(
+        catalogue: Arc<dyn ConversationCatalogue>,
+        caller: ConversationCaller,
+        scope: SourceScope,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> IoResult<JoinHandle<()>>,
+        make_runtime: impl FnOnce() -> IoResult<Runtime> + Send + 'static,
+        receive: impl FnOnce(
+            Receiver<CatalogueReadiness>,
+        )
+            -> Result<Result<(Scope, Option<u64>), CatalogueSourceError>, RecvError>,
+    ) -> Result<(Self, Option<u64>), CatalogueWorkerError> {
+        if let SourceScope::Expected(scope) = &scope {
+            Self::check_scope_identity(&caller.organization_id, &caller.principal_id, scope)
+                .map_err(CatalogueWorkerError::Source)?;
         }
         let (sender, receiver) = mpsc::sync_channel(QUEUE_CAPACITY);
         let (ready, initialized) = mpsc::sync_channel(1);
-        let expected = scope.clone();
         let worker = spawn(Box::new(move || {
             let runtime = match make_runtime() {
                 Ok(runtime) => runtime,
@@ -136,62 +202,134 @@ impl NessaCatalogueSource {
                     return;
                 }
             };
-            if ready.send(Ok(())).is_err() {
+            let initialized_scope = match scope {
+                SourceScope::Expected(scope) => Ok((scope, None)),
+                SourceScope::Discover {
+                    receiver,
+                    origin,
+                    epoch,
+                } => runtime.block_on(async {
+                    let head = catalogue
+                        .head(&caller.organization_id, &caller.principal_id)
+                        .await
+                        .map_err(map_error)?;
+                    let incarnation = Id::new(head.incarnation)
+                        .map_err(|_| CatalogueSourceError::IdentityChanged)?;
+                    Ok((
+                        Scope::new(
+                            receiver,
+                            origin,
+                            conversation_catalogue_stream(
+                                &caller.organization_id,
+                                &caller.principal_id,
+                            ),
+                            incarnation,
+                            conversation_catalogue_schema(),
+                            epoch,
+                        ),
+                        Some(head.revision),
+                    ))
+                }),
+            };
+            let (expected, head) = match initialized_scope {
+                Ok(value) => value,
+                Err(error) => {
+                    let _ = ready.send(Err(error));
+                    return;
+                }
+            };
+            if ready.send(Ok((expected.clone(), head))).is_err() {
                 return;
             }
             while let Ok(command) = receiver.recv() {
                 match command {
                     Command::Head(scope, reply) => {
-                        let result =
-                            runtime.block_on(read_head(&*catalogue, &caller, &expected, &scope));
-                        let _ = reply.send(result);
+                        let _ = reply.send(runtime.block_on(read_head(
+                            &*catalogue,
+                            &caller,
+                            &expected,
+                            &scope,
+                        )));
                     }
                     Command::Manifest(request, reply) => {
-                        let result = runtime.block_on(read_manifest(
+                        let _ = reply.send(runtime.block_on(read_manifest(
                             &*catalogue,
                             &caller,
                             &expected,
                             &request,
-                        ));
-                        let _ = reply.send(result);
+                        )));
                     }
                     Command::Resolve(pass, id, bound, reply) => {
-                        let result = runtime.block_on(read_resolved(
+                        let _ = reply.send(runtime.block_on(read_resolved(
                             &*catalogue,
                             &caller,
                             &expected,
                             &pass,
                             &id,
                             bound,
-                        ));
-                        let _ = reply.send(result);
+                        )));
                     }
                 }
             }
         }))
-        .map_err(|_| CatalogueSourceError::Unavailable)?;
-        initialized
-            .recv()
-            .map_err(|_| CatalogueSourceError::Unavailable)??;
-        Ok(Self {
-            scope,
-            worker: Arc::new(Worker {
-                sender,
-                thread: Mutex::new(Some(worker)),
-            }),
-        })
+        .map_err(|_| CatalogueWorkerError::Source(CatalogueSourceError::Unavailable))?;
+        let initialized = receive(initialized);
+        match initialized {
+            Ok(Ok((scope, head))) => Ok((
+                Self {
+                    scope,
+                    worker: Arc::new(Worker {
+                        state: Mutex::new(WorkerState {
+                            sender: Some(sender),
+                            thread: Some(worker),
+                            completion: None,
+                        }),
+                    }),
+                },
+                head,
+            )),
+            result => {
+                drop(sender);
+                if worker.join().is_err() {
+                    return Err(CatalogueWorkerError::WorkerPanicked);
+                }
+                Err(CatalogueWorkerError::Source(match result {
+                    Ok(Err(error)) => error,
+                    _ => CatalogueSourceError::Unavailable,
+                }))
+            }
+        }
     }
-
     pub fn scope(&self) -> &Scope {
         &self.scope
     }
-
+    /// Close admission and join the physical worker. Repeated calls share the
+    /// completed result; all clones subsequently refuse new commands.
+    pub fn finish(&self) -> Result<(), CatalogueWorkerError> {
+        self.worker.finish()
+    }
     fn enqueue(&self, command: Command) -> Result<(), CatalogueSourceError> {
         self.worker
+            .state
+            .lock()
+            .unwrap()
             .sender
+            .as_ref()
+            .ok_or(CatalogueSourceError::Unavailable)?
             .try_send(command)
             .map_err(|_| CatalogueSourceError::Unavailable)
     }
+}
+fn spawn_worker(run: Box<dyn FnOnce() + Send>) -> IoResult<JoinHandle<()>> {
+    ThreadBuilder::new()
+        .name("nessa-catalogue-source".into())
+        .spawn(run)
+}
+fn make_runtime() -> IoResult<Runtime> {
+    Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
 }
 
 impl CatalogueSource for NessaCatalogueSource {
@@ -278,34 +416,13 @@ async fn read_manifest(
     if request.pass.scope != *expected {
         return Err(CatalogueSourceError::IdentityChanged);
     }
-    if request.max_entries == 0
-        || request.max_entries > MAX_CATALOGUE_ENTRIES
-        || request.pass.boundary <= request.pass.completed
-        || request.pass.generation == 0
-    {
-        return Err(CatalogueSourceError::InvalidRequest);
-    }
-    let after = request
-        .pass
-        .cursor
-        .as_ref()
-        .map(|key| {
-            Ok(CatalogueKey {
-                creation: key.creation,
-                id: ConversationId::new(key.id.as_str())
-                    .map_err(|_| CatalogueSourceError::InvalidRequest)?,
-            })
-        })
-        .transpose()?;
+    validate_manifest_request(request, MAX_CATALOGUE_ENTRIES)
+        .map_err(|_| CatalogueSourceError::InvalidRequest)?;
     let page = catalogue
         .page(CataloguePageRequest {
             organization: caller.organization_id.clone(),
             owner: caller.principal_id.clone(),
-            incarnation: expected.incarnation().as_str().to_owned(),
-            completed: request.pass.completed,
-            boundary: request.pass.boundary,
-            after,
-            limit: request.max_entries,
+            manifest: request.clone(),
         })
         .await
         .map_err(map_error)?;
@@ -327,6 +444,7 @@ async fn read_resolved(
     if pass.scope != *expected {
         return Err(CatalogueSourceError::IdentityChanged);
     }
+    validate_catalogue_pass(pass).map_err(|_| CatalogueSourceError::InvalidRequest)?;
     if bound == 0 || bound > MAX_CATALOGUE_PAYLOAD_BYTES {
         return Err(CatalogueSourceError::InvalidRequest);
     }
@@ -369,22 +487,7 @@ fn to_entry(descriptor: CatalogueDescriptor) -> ManifestEntry {
 }
 
 fn payload(value: &CatalogueValue) -> Result<Vec<u8>, CatalogueSourceError> {
-    let conversation = &value.conversation;
-    let summary = value.summary.as_ref();
-    serde_json::to_vec(&serde_json::json!({
-        "id": conversation.id().to_string(),
-        "createdAtMs": conversation.creation_requested_at_ms(),
-        "agent": conversation.agent().map(|id| id.name()),
-        "model": conversation.model().as_str(),
-        "approvalMode": conversation.approval_mode().as_str(),
-        "summary": summary.map(|summary| serde_json::json!({
-            "title": summary.title().map(|title| title.as_str()),
-            "preview": summary.preview().map(|preview| preview.as_str()),
-            "updatedAtMs": summary.updated_at_ms(),
-            "archived": summary.archived(),
-        })),
-    }))
-    .map_err(|_| CatalogueSourceError::Unavailable)
+    super::catalogue_payload::encode(value).map_err(|_| CatalogueSourceError::Unavailable)
 }
 
 #[cfg(test)]
@@ -394,3 +497,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/catalogue_receiver.rs"]
 mod receiver_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/catalogue_source/discovery.rs"]
+mod discovery_tests;

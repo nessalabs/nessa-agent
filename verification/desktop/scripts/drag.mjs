@@ -235,10 +235,9 @@ async function recordShapes(page) {
       const r = e.getBoundingClientRect()
       return { x: r.left, y: r.top, w: r.width, h: r.height }
     }
-    // Every transform from the title up, as drawn this frame: the scale it
-    // is drawn at, across and down.
-    const drawnAt = (title) => {
-      const began = performance.now()
+    // Every transform from the title up: the scale it is drawn at, across
+    // and down.
+    const chain = (title) => {
       let sx = 1
       let sy = 1
       for (let e = title; e; e = e.parentElement) {
@@ -248,10 +247,41 @@ async function recordShapes(page) {
         sx *= Math.hypot(m.a, m.b)
         sy *= Math.hypot(m.c, m.d)
       }
-      // How long the reads took: an engine that draws a running animation at
-      // the moment it is read, not the frame's, can read a box and its
-      // content at two moments.
-      return { sx, sy, readMs: performance.now() - began }
+      return { sx, sy }
+    }
+    // The scale a title is drawn at in this frame, as near as a read can
+    // tell. WebKit can update running animations in the middle of a read of
+    // computed styles, and the read that straddles the update takes the copy
+    // and its content at two moments, seeing a stretch that is not drawn
+    // (#365 recorded one frame read 1.0006×1.0009, then 1.012×0.987 over
+    // 1.0ms, then 1.0003×1.0004). So the chain is read until two reads in a
+    // row agree, and the agreed read is judged; it may be a moment later
+    // than the frame drawn, which matters only to a stretch that comes and
+    // goes within a frame. What this does not hide, as observed in #365 and
+    // re-run there whenever this changes: a counter-scale started a frame
+    // off still fails `copy-takes-slot-shape` in both engines. A chain that
+    // never settles in `steadyReads` reads is marked `unsteady`, and every
+    // check that judges a title fails it (`unsteadily`): never passed for
+    // being unreadable.
+    const steadyReads = 6
+    const agree = (a, b) =>
+      Math.abs(a.sx - b.sx) <= 0.002 && Math.abs(a.sy - b.sy) <= 0.002
+    const drawnAt = (title) => {
+      const reads = []
+      let began = performance.now()
+      let read = chain(title)
+      let readMs = performance.now() - began
+      reads.push([read.sx, read.sy, readMs])
+      while (reads.length < steadyReads) {
+        began = performance.now()
+        const next = chain(title)
+        readMs = performance.now() - began
+        reads.push([next.sx, next.sy, readMs])
+        const steady = agree(next, read)
+        read = next
+        if (steady) return { sx: read.sx, sy: read.sy, readMs, reads: reads.length }
+      }
+      return { sx: read.sx, sy: read.sy, readMs, reads: reads.length, unsteady: reads }
     }
     if (!window.__verifyPointerWatched) {
       window.__verifyPointerWatched = true
@@ -353,18 +383,36 @@ function oneWaySize(frames, from, to, label) {
   return out
 }
 
-/** Titles drawn stretched — across and down scaled apart — in any frame. */
+/**
+ * A title whose transforms never read the same twice in a row in one frame
+ * (`recordShapes`): what it is drawn at is unknown, so it is a failure of
+ * its own — never judged, never passed.
+ */
+function unsteadily(title, where) {
+  return `${where}: ${title.of}'s title never read the same twice in a row (${JSON.stringify(title.unsteady)})`
+}
+
+/** Titles drawn stretched — across and down scaled apart — or not readable, in any frame. */
 function stretched(frames, label) {
   const bad = []
+  const unread = []
   for (const f of frames)
     for (const title of f.titles)
-      if (Math.abs(title.sx - title.sy) > 0.02)
+      if (title.unsteady) unread.push(unsteadily(title, `${Math.round(f.t)}ms`))
+      else if (Math.abs(title.sx - title.sy) > 0.02)
         bad.push(
           `${title.of} ${title.sx.toFixed(3)}×${title.sy.toFixed(3)} at ${Math.round(f.t)}ms (read over ${title.readMs.toFixed(1)}ms), zone "${f.zone}"`,
         )
-  return bad.length
-    ? [`${label}: titles drawn stretched in ${bad.length} title-frames, e.g. ${bad[0]}`]
-    : []
+  return [
+    ...(bad.length
+      ? [`${label}: titles drawn stretched in ${bad.length} title-frames, e.g. ${bad[0]}`]
+      : []),
+    ...(unread.length
+      ? [
+          `${label}: titles not readable in ${unread.length} title-frames, e.g. ${unread[0]}`,
+        ]
+      : []),
+  ]
 }
 
 /** Two panes side by side, each tall: the left is carried, the right is aimed at. */
@@ -1103,7 +1151,8 @@ Object.assign(checks, {
           `${label}: the copy is ${px(f.ghost)}, not ${Math.round(slot.w)}×${Math.round(slot.h)}`,
         )
       const title = f.titles.find((t) => t.of === "copy")
-      if (title && (Math.abs(title.sx - 1) > 0.02 || Math.abs(title.sy - 1) > 0.02))
+      if (title?.unsteady) out.push(unsteadily(title, `${label}: at rest`))
+      else if (title && (Math.abs(title.sx - 1) > 0.02 || Math.abs(title.sy - 1) > 0.02))
         out.push(
           `${label}: at rest the copy's title is drawn at ${title.sx.toFixed(3)}×${title.sy.toFixed(3)}, not its own size`,
         )
