@@ -160,8 +160,9 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   see a stretch that is not drawn. `drag.mjs` reads each title until two
   reads in a row agree and judges that read; a title truly drawn stretched
   reads the same every time, and a counter-scale started one frame off fails
-  the check in both engines. Before this rule the two stretch checks failed
-  in about 1 run in 12 in WebKit, on `main` too (#365).
+  the check in both engines; a title that never reads steadily fails as
+  unreadable. Before this rule the two stretch checks failed now and then in
+  WebKit, on `main` too; #365 has the runs and the probe.
 - [ ] **A zone the fit rule refuses offers nothing; a session already on
   screen offers "Go to Pane".** _Check:_ manual (drag a session from the list
   onto four panes; drag an on-screen session).
