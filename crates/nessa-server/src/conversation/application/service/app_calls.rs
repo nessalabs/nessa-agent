@@ -19,9 +19,7 @@ use super::super::mcp_apps::{
     McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef, McpAppWithdrawal,
     TicketRefusal,
 };
-use super::super::projection::{
-    bound_view, bound_view_within, MAX_VIEW_BYTES, UNSHOWN_INTERACTIONS,
-};
+use super::super::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
 use super::super::session_key::conversation_session;
 use super::super::view::{ConversationPermission, ConversationTranscriptState, ConversationView};
 use super::{ConversationCaller, ConversationError, ConversationService, LiveConversation};
@@ -172,27 +170,18 @@ impl ConversationService {
     }
 
     /// The conversation `id` was deleted, and its agent's stop tried: its
-    /// apps, if it has any in this run, take no more work, ever, and keep
-    /// nothing. Kept as that, not removed, so that a release or an opening
-    /// racing the delete cannot build them afresh. One with none is given
-    /// none: its tombstone refuses everything that would.
+    /// apps take no more work, ever, and keep nothing. Kept as that — made
+    /// so if it had none in this run — not removed, so that a release or an
+    /// opening racing the delete finds them deleted, and cannot build them
+    /// afresh.
     pub(super) fn close_apps_for_good(&self, id: &ConversationId) {
-        let apps = self
-            .inner
-            .apps
-            .lock()
-            .expect("conversations' apps")
-            .get(id)
-            .cloned();
-        if let Some(apps) = apps {
-            apps.delete(|| {
-                if let Some(ports) = &self.inner.mcp_apps {
-                    ports
-                        .tickets
-                        .release_conversation(id, &McpAppInitiator::System);
-                }
-            });
-        }
+        self.apps_of(id).delete(|| {
+            if let Some(ports) = &self.inner.mcp_apps {
+                ports
+                    .tickets
+                    .release_conversation(id, &McpAppInitiator::System);
+            }
+        });
     }
 
     /// `by` ended `live`'s conversation: withdraw its apps' reviews, let go
@@ -458,7 +447,8 @@ impl ConversationService {
             return Err(step.refuse_by_system(McpAppError::Cancelled).await);
         }
         step.record(McpAppAuditPhase::Admitted, None).await?;
-        // As it is sent, once more: see `app_tool_call`.
+        // Just before it is handed to the session, once more: see
+        // `app_tool_call`.
         if opening.admit(&read.app).is_err() {
             return Err(step.refuse_by_system(McpAppError::Cancelled).await);
         }
@@ -781,20 +771,24 @@ impl From<AppRefusal> for McpAppError {
     }
 }
 
-/// The view, bounded, with the app reviews open beside it. Room is kept for
-/// them — at most [`MAX_APP_REVIEW_BYTES`] — out of its transcript, tool
-/// calls and queue, which give way first; never out of the agent's own
-/// reviews and questions, which an app's server must not be able to hide.
-/// Should that not make room, the newest app reviews that do not fit wait
-/// unseen, and the view says some interactions are not shown. The
-/// identities of those shown are folded into its revision — 16 hex digits
-/// of the fold keep the revision within its bound — so a window holding
-/// this revision holds these reviews.
+/// The view, bounded, with the app reviews open beside it.
+///
+/// - **What is shown.** The oldest app reviews that fit, beside the view
+///   with all it can give up given up — its transcript, tool calls and
+///   queue, never the agent's own reviews and questions, which an app's
+///   server must not be able to hide. Only as much is given up as the
+///   reviews shown need: none shown, nothing given up for them but the room
+///   of the revision's fold and the notice, which the agent's own reviews
+///   give way for only where they alone fill the view.
+/// - **What is not.** Those that do not fit wait unseen, and the view says
+///   so — unless it already says something more specific of its own.
+/// - **The revision.** Every app review open is folded into it, shown or
+///   not, and how many are shown: any change in which are open or shown
+///   changes it, so a window holding a revision holds what it showed.
+///   16 hex digits of the fold keep the revision within its bound.
 ///
 /// Shown only in a view whose transcript is confirmed complete: the client
 /// refuses one of unconfirmed history that offers any control.
-///
-/// [`MAX_APP_REVIEW_BYTES`]: super::super::app_reviews::MAX_APP_REVIEW_BYTES
 pub(super) fn with_app_reviews(
     view: ConversationView,
     reviews: Vec<ConversationPermission>,
@@ -802,36 +796,63 @@ pub(super) fn with_app_reviews(
     if reviews.is_empty() || view.transcript_state != ConversationTranscriptState::Complete {
         return bound_view(view);
     }
-    // Each review, its comma, and the revision's fold.
-    let room = reviews
+    let fold = ":app:".len() + 16;
+    let sizes: Vec<usize> = reviews
         .iter()
         .map(|review| serde_json::to_vec(review).map_or(usize::MAX, |bytes| bytes.len() + 1))
-        .fold(":app:".len() + 16, usize::saturating_add);
-    let view = bound_view_within(view, MAX_VIEW_BYTES.saturating_sub(room), false);
-    let mut view = bound_view(view);
-    let revision = view.revision.clone();
-    let mut digest = Sha256::new();
-    let mut shown = 0;
-    for review in reviews {
-        let mut fold = digest.clone();
-        fold.update((review.permission_id.len() as u64).to_be_bytes());
-        fold.update(review.permission_id.as_bytes());
-        view.revision = format!("{revision}:app:{}", &hex_of(fold.clone())[..16]);
-        view.permissions.push(review);
-        if serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
-            view.permissions.pop();
-            view.interaction_view_error = Some(UNSHOWN_INTERACTIONS.into());
-            break;
-        }
-        digest = fold;
-        shown += 1;
-    }
-    view.revision = if shown == 0 {
-        revision
+        .collect();
+    // What cannot be given up for them: the view with all it can give up
+    // given up, its interactions kept.
+    let floor = encoded_len(&bound_view_within(view.clone(), 0, false));
+    // The notice, when some go unshown and the view has none of its own.
+    let notice = if view.interaction_view_error.is_none() {
+        serde_json::to_vec(&serde_json::json!({ "interactionViewError": UNSHOWN_APP_REVIEWS }))
+            .map_or(usize::MAX, |bytes| bytes.len())
     } else {
-        format!("{revision}:app:{}", &hex_of(digest)[..16])
+        0
     };
+    // The most of them, oldest first, that fit on that floor.
+    let shown = (0..=reviews.len())
+        .rev()
+        .find(|&count| {
+            let unshown = if count < reviews.len() { notice } else { 0 };
+            sizes[..count]
+                .iter()
+                .fold(floor + fold + unshown, |total, size| {
+                    total.saturating_add(*size)
+                })
+                <= MAX_VIEW_BYTES
+        })
+        .unwrap_or(0);
+    // The fold, and the notice if some go unshown: room the view always
+    // makes, its interactions too where they alone fill it.
+    let always = fold + if shown < reviews.len() { notice } else { 0 };
+    let room = sizes[..shown]
+        .iter()
+        .fold(always, |total, size| total.saturating_add(*size));
+    let view = bound_view_within(view, MAX_VIEW_BYTES.saturating_sub(room), false);
+    let mut view = bound_view_within(view, MAX_VIEW_BYTES.saturating_sub(always), true);
+    let mut digest = Sha256::new();
+    for review in &reviews {
+        digest.update((review.permission_id.len() as u64).to_be_bytes());
+        digest.update(review.permission_id.as_bytes());
+    }
+    digest.update((shown as u64).to_be_bytes());
+    view.revision = format!("{}:app:{}", view.revision, &hex_of(digest)[..16]);
+    if shown < reviews.len() && view.interaction_view_error.is_none() {
+        view.interaction_view_error = Some(UNSHOWN_APP_REVIEWS.into());
+    }
+    view.permissions.extend(reviews.into_iter().take(shown));
     view
+}
+
+/// What a view says of the app reviews it leaves out: they wait, unseen,
+/// until there is room or they end — no Stop of the agent's ends them.
+const UNSHOWN_APP_REVIEWS: &str =
+    "Some requests from apps do not fit this view. They wait until there is room, or expire.";
+
+fn encoded_len(view: &ConversationView) -> usize {
+    serde_json::to_vec(view).map_or(usize::MAX, |bytes| bytes.len())
 }
 
 fn hex_of(digest: Sha256) -> String {

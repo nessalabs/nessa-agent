@@ -1320,7 +1320,7 @@ async fn a_call_still_running_holds_no_reopening_or_deletion_back() {
 #[tokio::test]
 async fn a_mount_released_after_its_call_was_allowed_is_not_sent() {
     // Allowed, and released while the approval was being recorded: checked
-    // once more as it is sent, it is not.
+    // once more just before it is handed to the session, it is not.
     let fixture = Fixture::new().await;
     let (task, review) = fixture.held(fixture.call("delete_rows", None)).await;
     *fixture.audit.slow.lock().unwrap() = Some(Duration::from_millis(300));
@@ -1394,12 +1394,14 @@ async fn a_mount_released_once_its_call_is_sent_finds_it_sent() {
     ));
 }
 
-#[tokio::test]
-async fn an_app_review_never_pushes_the_agents_own_reviews_out_of_view() {
-    // The agent's reviews fill the view: an app's review is the one that
-    // waits unseen, and the view says so — an app's server cannot hide what
-    // the agent is asking.
-    let fixture = Fixture::new().await;
+/// A conversation's view with `agents` of the agent's own reviews, each of
+/// `bytes` arguments, and its read's open app review: the view as the read
+/// has it before its app reviews are added, and that review.
+async fn crowded(
+    fixture: &Fixture,
+    agents: usize,
+    bytes: usize,
+) -> (ConversationView, ConversationPermission) {
     let (_task, review) = fixture
         .held(fixture.call(
             "delete_rows",
@@ -1411,33 +1413,237 @@ async fn an_app_review_never_pushes_the_agents_own_reviews_out_of_view() {
         .read(fixture.id.clone(), caller("read"))
         .await
         .unwrap();
-    let agents: Vec<_> = (0..4)
+    view.permissions = (0..agents)
         .map(|index| ConversationPermission {
             permission_id: format!("agent-{index}"),
-            arguments_json: format!("{{\"a\":\"{}\"}}", "y".repeat(13_000)),
+            arguments_json: format!("{{\"a\":\"{}\"}}", "y".repeat(bytes)),
             origin: ConversationPermissionOrigin::Harness,
             ..review.clone()
         })
         .collect();
-    view.permissions = agents.clone();
     view.interaction_view_error = None;
-    // As the read had it before its app reviews were added.
     view.revision = view.revision.split(":app:").next().unwrap().to_owned();
-    let unshown = view.revision.clone();
-    let shown = with_app_reviews(view, vec![review.clone()]);
+    (view, review)
+}
+
+fn identities(view: &ConversationView) -> Vec<String> {
+    view.permissions
+        .iter()
+        .map(|shown| shown.permission_id.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn an_app_review_never_pushes_the_agents_own_reviews_out_of_view() {
+    // The agent's reviews fill the view: an app's review is the one that
+    // waits unseen, and the view says so — an app's server cannot hide what
+    // the agent is asking.
+    let fixture = Fixture::new().await;
+    let (view, review) = crowded(&fixture, 4, 13_000).await;
+    let agents = identities(&view);
+    let shown = with_app_reviews(view, vec![review]);
     assert!(serde_json::to_vec(&shown).unwrap().len() <= MAX_VIEW_BYTES);
+    assert_eq!(identities(&shown), agents);
     assert_eq!(
-        shown
-            .permissions
+        shown.interaction_view_error.as_deref(),
+        Some(UNSHOWN_APP_REVIEWS)
+    );
+}
+
+#[tokio::test]
+async fn a_hidden_app_review_changes_the_revision_as_a_shown_one_does() {
+    // A window holding a revision holds what it showed: an app review the
+    // view cannot show changes it all the same — its notice, its trimmed
+    // transcript — and its end changes it back.
+    let fixture = Fixture::new().await;
+    let (view, review) = crowded(&fixture, 4, 13_000).await;
+    let without = with_app_reviews(view.clone(), vec![]);
+    let hidden = with_app_reviews(view.clone(), vec![review.clone()]);
+    assert!(!identities(&hidden).contains(&review.permission_id));
+    assert_ne!(hidden.revision, without.revision);
+    assert_eq!(
+        with_app_reviews(view.clone(), vec![]).revision,
+        without.revision
+    );
+    // Shown or not is part of it too: the same review open, shown once
+    // there is room, is another revision again.
+    let roomy = ConversationView {
+        permissions: vec![],
+        ..view
+    };
+    let shown = with_app_reviews(roomy, vec![review.clone()]);
+    assert!(identities(&shown).contains(&review.permission_id));
+    assert_ne!(shown.revision, hidden.revision);
+}
+
+#[tokio::test]
+async fn the_notice_never_takes_a_view_past_its_bound() {
+    // However close to its bound the rest of the view sits, the notice that
+    // some app reviews are not shown is counted before they are chosen.
+    let fixture = Fixture::new().await;
+    let (view, review) = crowded(&fixture, 4, 10_000).await;
+    let mut unshown = 0;
+    for bytes in (10_000..15_000).step_by(7) {
+        let crowded = ConversationView {
+            permissions: view
+                .permissions
+                .iter()
+                .map(|agent| ConversationPermission {
+                    arguments_json: format!("{{\"a\":\"{}\"}}", "y".repeat(bytes)),
+                    ..agent.clone()
+                })
+                .collect(),
+            ..view.clone()
+        };
+        let shown = with_app_reviews(crowded, vec![review.clone()]);
+        assert!(
+            serde_json::to_vec(&shown).unwrap().len() <= MAX_VIEW_BYTES,
+            "{bytes}"
+        );
+        unshown += usize::from(shown.interaction_view_error.is_some());
+    }
+    assert!(unshown > 0, "some were left unshown");
+}
+
+#[tokio::test]
+async fn an_app_review_is_shown_only_where_the_notice_fits_beside_it() {
+    // An app review shown while another waits brings the notice with it:
+    // it is shown only where both fit beside every one of the agent's own,
+    // to the byte — with a transcript to give up, and with none. With none,
+    // nothing is given up, so the view is never called truncated: what it
+    // offers depends on that.
+    let fixture = Fixture::new().await;
+    let (view, review) = crowded(&fixture, 4, 11_800).await;
+    let bare = ConversationView {
+        messages: vec![],
+        tools: vec![],
+        pending: vec![],
+        truncated: false,
+        ..view.clone()
+    };
+    for view in [view, bare] {
+        let agents = identities(&with_app_reviews(view.clone(), vec![]));
+        let floor = serde_json::to_vec(&bound_view_within(view.clone(), 0, false))
+            .unwrap()
+            .len();
+        let empty = serde_json::to_vec(&ConversationPermission {
+            arguments_json: String::new(),
+            ..review.clone()
+        })
+        .unwrap()
+        .len();
+        let room = MAX_VIEW_BYTES - floor - empty;
+        let mut shown_any = false;
+        let mut hidden_any = false;
+        for length in room.saturating_sub(400)..room {
+            let first = ConversationPermission {
+                permission_id: "app-first".into(),
+                arguments_json: "z".repeat(length),
+                ..review.clone()
+            };
+            let shown = with_app_reviews(view.clone(), vec![first, review.clone()]);
+            assert!(
+                serde_json::to_vec(&shown).unwrap().len() <= MAX_VIEW_BYTES,
+                "{length}"
+            );
+            assert!(identities(&shown).starts_with(&agents), "{length}");
+            assert!(!view.messages.is_empty() || !shown.truncated, "{length}");
+            let first_shown = identities(&shown).contains(&"app-first".to_owned());
+            shown_any |= first_shown;
+            hidden_any |= !first_shown;
+        }
+        assert!(shown_any && hidden_any, "the sweep crosses the edge");
+    }
+}
+
+#[tokio::test]
+async fn the_oldest_app_reviews_that_fit_are_shown_and_the_rest_wait() {
+    let fixture = Fixture::new().await;
+    let (view, review) = crowded(&fixture, 4, 11_800).await;
+    let small = |name: &str| ConversationPermission {
+        permission_id: name.into(),
+        arguments_json: "{}".into(),
+        ..review.clone()
+    };
+    let large = ConversationPermission {
+        permission_id: "app-large".into(),
+        ..review.clone()
+    };
+    let open = vec![
+        small("app-first"),
+        small("app-second"),
+        large,
+        small("app-last"),
+    ];
+    let shown = with_app_reviews(view.clone(), open.clone());
+    let ids = identities(&shown);
+    assert!(ids.ends_with(&["app-first".to_owned(), "app-second".to_owned()]));
+    assert!(!ids.contains(&"app-large".to_owned()));
+    // From the first that does not fit on, they wait: oldest first.
+    assert!(!ids.contains(&"app-last".to_owned()));
+    assert_eq!(
+        shown.interaction_view_error.as_deref(),
+        Some(UNSHOWN_APP_REVIEWS)
+    );
+    assert!(serde_json::to_vec(&shown).unwrap().len() <= MAX_VIEW_BYTES);
+    // Every one open is in the revision: one fewer open, another revision,
+    // though the same two are shown.
+    let fewer = with_app_reviews(view, open[..3].to_vec());
+    assert_eq!(identities(&fewer), ids);
+    assert_ne!(fewer.revision, shown.revision);
+}
+
+#[tokio::test]
+async fn an_app_review_that_cannot_be_shown_gives_nothing_up_for_it() {
+    // The agent's reviews leave too little for an app's: it is not shown,
+    // and the transcript is not wiped for it — only the notice's room is
+    // taken, where there is any to take.
+    let fixture = Fixture::new().await;
+    let (view, review) = crowded(&fixture, 4, 11_800).await;
+    let without = with_app_reviews(view.clone(), vec![]);
+    let hidden = with_app_reviews(view, vec![review.clone()]);
+    assert!(!identities(&hidden).contains(&review.permission_id));
+    assert_eq!(hidden.messages.len(), without.messages.len());
+    assert_eq!(
+        hidden
+            .messages
             .iter()
-            .map(|shown| shown.permission_id.clone())
+            .map(|message| message.parts.len())
             .collect::<Vec<_>>(),
-        agents
+        without
+            .messages
             .iter()
-            .map(|agent| agent.permission_id.clone())
+            .map(|message| message.parts.len())
             .collect::<Vec<_>>()
     );
-    assert!(shown.interaction_view_error.is_some());
-    // Not shown, so not in the revision either.
-    assert_eq!(shown.revision, unshown);
+    assert_eq!(hidden.tools.len(), without.tools.len());
+    assert_eq!(hidden.truncated, without.truncated);
+}
+
+#[tokio::test]
+async fn a_conversation_deleted_with_no_apps_in_this_run_has_them_deleted() {
+    // Never opened in this run, then deleted: its apps are made deleted, so a
+    // release or an opening racing the delete finds them so, and cannot
+    // build them afresh.
+    let fixture = Fixture::new().await;
+    let never = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    fixture.service.close_apps_for_good(&never);
+    let apps = fixture.service.apps_of(&never);
+    let opening = apps.begin();
+    assert_eq!(
+        apps.admit(opening, &fixture.app(INSTANCE)),
+        Err(ReviewRefusal::Ended)
+    );
+}
+
+#[tokio::test]
+async fn an_unshown_app_review_never_overwrites_a_more_specific_notice() {
+    let fixture = Fixture::new().await;
+    let (mut view, review) = crowded(&fixture, 4, 11_800).await;
+    view.interaction_view_error = Some("A pending tool review exceeds the display limit.".into());
+    let hidden = with_app_reviews(view, vec![review]);
+    assert_eq!(
+        hidden.interaction_view_error.as_deref(),
+        Some("A pending tool review exceeds the display limit.")
+    );
 }

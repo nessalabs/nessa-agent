@@ -85,11 +85,10 @@ between them.
 
 So nothing is admitted, opened or issued for a mount or an opening once it
 has ended, whatever the interleaving, and nothing is sent once its last
-check finds it ended. A deleted conversation's apps, if it has any in this
-run, are kept as that — ended, and holding nothing — once its agent's stop
-has been tried, so a release or an opening racing the delete cannot build
-them afresh. One with none in this run is given none: its tombstone refuses
-everything that would. A
+check finds it ended. A deleted conversation's apps are kept as that —
+deleted, ended, and holding nothing — once its agent's stop has been
+tried, so a release or an opening racing the delete finds them deleted and
+cannot build them afresh. A
 conversation remembers its last 1024 released mounts. A mount released
 longer ago than that is forgotten: a host gives each mount a fresh
 `instanceId` and never asks in a released one's name, so only a host that
@@ -126,7 +125,9 @@ is opened again.
 | Waiting | the conversation's agent is stopped otherwise — by the desktop, or to recover an approval-mode change that could not be applied — or the gateway stops | — | `Withdrawn(ConversationEnded)`, by the system; `mcp_cancelled` |
 | Waiting | an answer and the deadline at once | — | whichever ended the review first; an answer is never lost to the expiry |
 | Checking | the tool is still listed, for apps, and as destructive as it was | Sending | — |
-| Checking, or admitted not destructive | its mount released or its opening ended since it was admitted, before its last check | — | `Refused(mcp_cancelled)`, by the system; nothing sent |
+| Checking | its mount released or its opening ended since it was admitted, before its last check | — | `Refused(mcp_cancelled)`, by the system; nothing sent |
+| Sending, before its last check (not destructive) | its mount released or its opening ended since it was admitted | — | `Refused(mcp_cancelled)`, by the system; nothing sent |
+| Sending, past its last check | its mount released or its opening ended | Sending | nothing of it ended: it may still reach the server, and its own `Completed` is recorded |
 | Checking | it is not | — | `Refused(mcp_tool_not_for_app)`; nothing sent |
 | Sending | the session cannot take another request now; nothing is sent | — | `Refused(temporarily_unavailable)` |
 | Sending | the server answers within 56 KiB, measured as the JSON string the wire carries | — | `Completed(Answered{isError, bytes})`; the answer, re-encoded |
@@ -152,13 +153,15 @@ not in an app.
 
 An app review is shown only in a view whose transcript is confirmed
 complete: the client refuses a view of unconfirmed history that offers any
-control. Room is kept for app reviews — at most 16 000 bytes together — out
-of the view's transcript, tool calls and queue, which give way first; never
-out of the agent's own reviews and questions, which an app's server must
-not be able to hide. Should that not make room, the newest app reviews that
-do not fit wait unseen — the view says some interactions are not shown —
-and expire if nobody answers them. The view's revision folds in only the app
-reviews it shows.
+control. The oldest app reviews that fit are shown: room for them — at most
+16 000 bytes together — comes out of the view's transcript, tool calls and
+queue, never out of the agent's own reviews and questions, which an app's
+server must not be able to hide; and only as much as the reviews shown need,
+so an app's reviews that cannot be shown give nothing up. From the first that
+does not fit on, they wait unseen — the view says so, unless it already says
+something more specific of its own — and expire if nobody answers them. The
+view's revision folds in every app review open, shown or not, and how many
+are shown, so a window holding a revision holds what it showed.
 
 ### A resource read
 
