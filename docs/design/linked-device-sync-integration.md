@@ -120,13 +120,10 @@ resolve this implementation difference. The command producer settles lookup
 identity, immutable operation/target/bytes/origin and accepted-turn mapping
 before outbox or native mutation activation. No second receipt journal is added.
 
-The selected namespace is principal plus mutation request identity. Reusing that
-identity with a different operation, target, canonical input or verified origin
-conflicts before target admission. Its durable binding and the accepted turn are
-different facts: a crash between them leaves a bound unresolved command, not
-proof of execution. ADR 0008 owns this binding and recovery contract. Its producer
-still needs concrete source interfaces and state/order evidence before changing
-source behavior.
+ADR 0008 owns the
+[request namespace, binding and acceptance contract](../adr/todo/0008-agent-client-api.md#identity-durability-and-failure-behavior).
+The producer still needs concrete source interfaces and state/order evidence
+before changing source behavior; the other feature designs link to that owner.
 
 Command admission is not the complete writer inventory. Queued runs, provider
 callbacks, audit writes and deletion work can survive a command's return.

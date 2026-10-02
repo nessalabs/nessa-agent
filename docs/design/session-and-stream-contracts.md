@@ -130,21 +130,11 @@ ADR 0011 phase B adds `conversation.message` and `message.status`. Credential
 administration already exists under ADR 0010. Finalize signatures in the schema;
 do not add a second attachment API or combined message-and-start operation.
 
-A **mutation** is a command that changes state. Give it a stable `requestId`,
-separate from the RPC ID for each network attempt. Look for duplicates within the
-same principal, operation, and target, comparing canonical input (the standard
-form) and validated caller/surface details. Check an existing receipt before
-allocating IDs or testing whether a new turn would be busy. Identical retries
-return the original acceptance; changed input returns `idempotency_conflict`.
-Every retry still requires current permission.
-
-ADR 0008 saves one acceptance record with the canonical input, origin details,
-allocated IDs, and acceptance response. Save before effects. Build state and
-receipt lookups from these records. Creation uses a control stream for the
-principal before initializing the provider. Later turn records use the
-conversation's primary stream. These streams have no shared transaction or order.
-If an append result is uncertain, check the store using the same event ID/bytes
-before accepting affected new work.
+A mutation uses ADR 0008's
+[identity, binding, acceptance and recovery contract](../adr/todo/0008-agent-client-api.md#identity-durability-and-failure-behavior).
+This stream adapter supplies the committed reads and append outcomes that owner
+requires; concrete producer implementation must establish its state/order table.
+Transport attempt IDs remain part of the wire envelope.
 
 For example, losing the reply after a saved prompt does not mean the prompt
 failed. Checking or retrying with its original `requestId` finds the same turn.

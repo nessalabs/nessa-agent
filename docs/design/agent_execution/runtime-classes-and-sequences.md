@@ -281,6 +281,10 @@ server-surface, or cause fields. Existing read adapters keep their narrower port
 
 ## Start, check capabilities, and save before execution
 
+The proposed sequence consumes ADR 0008's
+[request binding and acceptance owner](../../adr/todo/0008-agent-client-api.md#one-durable-record-source).
+Binding and acceptance can be separate commits as its state table describes.
+
 ```mermaid
 sequenceDiagram
     participant C as Client
@@ -292,7 +296,7 @@ sequenceDiagram
     G->>G: Authorize action and verify context
     Note over C,G: Denial ends before SDK access
     G->>R: Prompt with verified action context
-    R->>R: Look up requestId within actor, operation, and target
+    R->>R: Resolve request binding and acceptance through ADR 0008 owner
     alt Identical accepted request
         R-->>C: Original turnId and receipt
     else New request allowed by policy

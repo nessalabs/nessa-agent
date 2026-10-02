@@ -831,6 +831,10 @@ identity with different bound facts conflicts; changing the operation or target
 does not select a different receipt. Lookup is authorized for that principal and
 does not disclose another principal's binding or acceptance.
 
+This namespace covers the conversation-runtime mutations defined here.
+Credential administration keeps its request-identity owner in
+[ADR 0010](../done/0010-local-authentication.md).
+
 ### One durable record source
 
 Use the external stream library and its verified local adapter for saved

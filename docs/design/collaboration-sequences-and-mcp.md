@@ -267,10 +267,10 @@ Nessa command ID, target, message body, and delivery intent.
 }
 ```
 
-The calls find the same receipt only if they have the same allowed principal,
-operation, target, and canonical input (the agreed standard form). Their transport
-IDs may differ. Keep `request-review-17` after an uncertain result; do not generate
-another ID when retrying the same logical command.
+Both calls resolve through ADR 0008's
+[request binding and receipt contract](../adr/todo/0008-agent-client-api.md#one-durable-record-source).
+Their transport IDs may differ. The example keeps `request-review-17` when
+checking the uncertain result of that command.
 
 A successful MCP result can return the product receipt through its declared
 output schema:

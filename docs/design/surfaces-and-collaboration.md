@@ -28,7 +28,7 @@ keeps its own verified actor and cause, including CLI and server actions.
 | `principalId` | The authenticated caller, identified by the existing credential/membership system |
 | `surfaceId` | The verified origin under ADR 0008, independent of the view currently open |
 | `surfaceInstanceId` | Optional short-lived registration of a particular surface under its caller identity |
-| `requestId` | One state-changing command, identified within its principal, operation, and target; keep it on retries |
+| `requestId` | Command identity defined by [ADR 0008](../adr/todo/0008-agent-client-api.md#identity-durability-and-failure-behavior) |
 | Stream identity/cursor | Position/order in saved history, supplied by the stream library; separate from socket/provider sequences |
 
 Keep provider session IDs inside bindings. To identify a Nessa agent as a source,
@@ -134,12 +134,11 @@ The runtime records their different authorship. Collaboration messages keep thei
 author labels in both the transcript and model input. Authenticating an agent
 message does not turn it into a human instruction, approval, or system policy.
 
-For duplicate detection, compare principal, operation, target, canonical input
-(the agreed standard form), and validated origin. An identical retry returns the
-original acceptance receipt, which never changes. Conflicting retries return
-`idempotency_conflict`. Use `message.status` to read later state and delivery
-evidence. A new credential for the same principal may read that principal's receipt
-if current access permits it. A revoked credential cannot.
+Message mutations consume ADR 0008's
+[request binding and acceptance owner](../adr/todo/0008-agent-client-api.md#one-durable-record-source).
+Use `message.status` to read later message state and delivery evidence. A new
+credential for the same principal may read that principal's receipt if current
+access permits it. A revoked credential cannot.
 
 A receipt proves the message was saved. A closed socket, cancelled MCP response,
 or open target UI proves neither rejection nor model delivery. Keep the original
