@@ -1,6 +1,9 @@
-//! A live conversation's MCP Apps (#348): the reviews their destructive
-//! calls wait on, and the one lock under which nothing is opened or issued
-//! for a mount released or a conversation ended.
+//! A conversation's MCP Apps (#348): the reviews their destructive calls
+//! wait on, and the one lock under which nothing is admitted, opened or
+//! issued for a mount released or an opening ended. Kept by the service for
+//! the conversation, not by its live agent: a release that comes while the
+//! conversation is opening, or before, or across a close, is kept all the
+//! same (`docs/design/mcp-app-calls.md`, "A conversation's apps").
 //!
 //! The reviews are gateway-owned, shown in the conversation's `permissions`
 //! beside the agent's, answered through the same `conversation.answer` and
@@ -91,13 +94,16 @@ struct Pending {
     end: oneshot::Sender<ReviewEnd>,
 }
 
-/// One live conversation's apps.
+/// One conversation's apps, across its openings.
 #[derive(Default)]
 pub struct AppReviews {
     state: Mutex<Reviews>,
 }
 #[derive(Default)]
 struct Reviews {
+    /// The current opening of the conversation's agent: each is a new
+    /// epoch, and each app call is admitted against the one it resolved.
+    epoch: u64,
     /// Open reviews, keyed by the order they were opened in.
     pending: BTreeMap<u64, Pending>,
     next: u64,
@@ -105,7 +111,8 @@ struct Reviews {
     bytes: usize,
     /// The mounts released, newest last, at most [`MAX_RELEASED_MOUNTS`].
     released: VecDeque<McpAppRef>,
-    /// The conversation ended: nothing opens or is issued again.
+    /// The current opening ended: nothing is admitted, opened or issued
+    /// for it again.
     ended: bool,
 }
 impl Reviews {
@@ -120,9 +127,10 @@ impl Reviews {
         self.bytes -= open.bytes;
         Some(open)
     }
-    /// Whether anything may be opened or issued for `app` now.
-    fn live(&self, app: &McpAppRef) -> Result<(), ReviewRefusal> {
-        if self.ended {
+    /// Whether anything may be admitted, opened or issued for `app`, in the
+    /// opening `epoch`, now.
+    fn live(&self, epoch: u64, app: &McpAppRef) -> Result<(), ReviewRefusal> {
+        if self.ended || epoch != self.epoch {
             Err(ReviewRefusal::Ended)
         } else if self.released.contains(app) {
             Err(ReviewRefusal::Released)
@@ -141,12 +149,28 @@ pub struct Waiting {
 }
 
 impl AppReviews {
+    /// A new opening of the conversation's agent: its epoch, which every app
+    /// call that resolves it is admitted against. What was released is
+    /// still released.
+    pub fn begin(&self) -> u64 {
+        let mut state = self.state.lock().expect("app reviews");
+        state.epoch += 1;
+        state.ended = false;
+        state.epoch
+    }
+
+    /// Whether `app` may be admitted in the opening `epoch` now.
+    pub fn admit(&self, epoch: u64, app: &McpAppRef) -> Result<(), ReviewRefusal> {
+        self.state.lock().expect("app reviews").live(epoch, app)
+    }
+
     /// Open the review `permission_id` ([`new_review_id`], taken first so
     /// that its request is on record before it is shown) of `app`'s call to
     /// `tool` on `server` with `arguments_json`; it stands, in the view,
     /// until it ends.
     pub fn open(
         self: &Arc<Self>,
+        epoch: u64,
         permission_id: String,
         app: &McpAppRef,
         server: &str,
@@ -160,7 +184,7 @@ impl AppReviews {
             return Err(ReviewRefusal::TooLarge);
         }
         let mut state = self.state.lock().expect("app reviews");
-        state.live(app)?;
+        state.live(epoch, app)?;
         if state.pending.len() >= MAX_OPEN_APP_REVIEWS || state.bytes + bytes > MAX_APP_REVIEW_BYTES
         {
             return Err(ReviewRefusal::Full);
@@ -184,12 +208,17 @@ impl AppReviews {
         })
     }
 
-    /// Run `issue` for `app`, under the lock its release and the
-    /// conversation's end take: so nothing is issued for a mount released or
-    /// a conversation ended, whatever the interleaving.
-    pub fn issue<T>(&self, app: &McpAppRef, issue: impl FnOnce() -> T) -> Result<T, ReviewRefusal> {
+    /// Run `issue` for `app` in the opening `epoch`, under the lock its
+    /// release and the opening's end take: so nothing is issued for a mount
+    /// released or an opening ended, whatever the interleaving.
+    pub fn issue<T>(
+        &self,
+        epoch: u64,
+        app: &McpAppRef,
+        issue: impl FnOnce() -> T,
+    ) -> Result<T, ReviewRefusal> {
         let state = self.state.lock().expect("app reviews");
-        state.live(app)?;
+        state.live(epoch, app)?;
         Ok(issue())
     }
 
@@ -287,14 +316,14 @@ impl AppReviews {
         }
     }
 
-    /// `by` ended the conversation: withdraw every review open, open and
-    /// issue nothing again, and run `release` under the same lock.
-    /// Idempotent: a second end withdraws nothing, and does not run
-    /// `release`.
-    pub fn end(&self, by: &McpAppInitiator, release: impl FnOnce()) {
+    /// `by` ended the opening `epoch`: withdraw every review open, admit,
+    /// open and issue nothing for it again, and run `release` under the same
+    /// lock. Idempotent: a second end, or the end of an opening already
+    /// gone, withdraws nothing and does not run `release`.
+    pub fn end(&self, epoch: u64, by: &McpAppInitiator, release: impl FnOnce()) {
         let ended = {
             let mut state = self.state.lock().expect("app reviews");
-            if state.ended {
+            if state.ended || epoch != state.epoch {
                 return;
             }
             state.ended = true;

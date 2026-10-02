@@ -2,7 +2,8 @@
 //! `docs/design/mcp-app-calls.md`): a review ends exactly once — allowed or
 //! denied by the person, expired, or withdrawn by its request going, its
 //! mount's release, or its conversation's end, by whoever did it — and
-//! nothing opens or is issued for a mount released or a conversation ended.
+//! nothing is admitted, opens or is issued for a mount released or an
+//! opening ended.
 use super::*;
 use crate::conversation::application::mcp_apps::{McpAppInitiator, McpAppRef, McpAppWithdrawal};
 use nessa_auth::domain::PrincipalId;
@@ -33,12 +34,19 @@ fn releaser() -> McpAppInitiator {
     }
 }
 
+/// The epoch of a conversation's first opening.
+const EPOCH: u64 = 1;
+
+/// A conversation's apps, in its first opening.
 fn reviews() -> Arc<AppReviews> {
-    Arc::new(AppReviews::default())
+    let reviews = Arc::new(AppReviews::default());
+    assert_eq!(reviews.begin(), EPOCH);
+    reviews
 }
 
 fn open(reviews: &Arc<AppReviews>, instance: &str) -> Result<Waiting, ReviewRefusal> {
     reviews.open(
+        EPOCH,
         new_review_id(),
         &app(instance),
         "charts",
@@ -52,6 +60,7 @@ async fn a_review_is_shown_with_its_app_origin_and_ends_as_answered() {
     let reviews = reviews();
     let waiting = reviews
         .open(
+            EPOCH,
             new_review_id(),
             &app("i1"),
             "charts",
@@ -153,7 +162,7 @@ async fn an_ended_review_is_no_longer_the_apps_and_a_wrong_answer_changes_nothin
 fn an_agents_review_is_the_agents_whatever_it_is_named() {
     // An agent names its own reviews: one named as an app's would be is
     // still the agent's, since no app review is open by that name.
-    let reviews = AppReviews::default();
+    let reviews = reviews();
     for name in ["1", "app-1", "app-6f1d6c0e-8f8c-4a52-9b8e-1f6c3d2a4b5c"] {
         assert_eq!(
             reviews.answer("e1", name, ALLOW, person()),
@@ -224,12 +233,12 @@ async fn a_released_mount_opens_and_is_issued_nothing_again() {
     reviews.release_app(&app("i1"), &releaser(), || {});
     assert_eq!(open(&reviews, "i1").err(), Some(ReviewRefusal::Released));
     assert_eq!(
-        reviews.issue(&app("i1"), || "ticket").err(),
+        reviews.issue(EPOCH, &app("i1"), || "ticket").err(),
         Some(ReviewRefusal::Released)
     );
     // Another mount of the same tool call is its own.
     assert!(open(&reviews, "i2").is_ok());
-    assert_eq!(reviews.issue(&app("i2"), || "ticket"), Ok("ticket"));
+    assert_eq!(reviews.issue(EPOCH, &app("i2"), || "ticket"), Ok("ticket"));
 }
 
 #[tokio::test]
@@ -237,10 +246,10 @@ async fn a_conversation_ending_withdraws_every_review_as_whoever_ended_it() {
     let reviews = reviews();
     let first = open(&reviews, "i1").unwrap();
     let second = reviews
-        .open(new_review_id(), &app("i2"), "files", "erase", "{}")
+        .open(EPOCH, new_review_id(), &app("i2"), "files", "erase", "{}")
         .unwrap();
     let mut released = 0;
-    reviews.end(&releaser(), || released += 1);
+    reviews.end(EPOCH, &releaser(), || released += 1);
     assert_eq!(released, 1);
     for waiting in [first, second] {
         assert_eq!(
@@ -253,17 +262,17 @@ async fn a_conversation_ending_withdraws_every_review_as_whoever_ended_it() {
     }
     assert!(reviews.reviews().is_empty());
     // Ended once: a second end releases nothing again.
-    reviews.end(&McpAppInitiator::System, || released += 1);
+    reviews.end(EPOCH, &McpAppInitiator::System, || released += 1);
     assert_eq!(released, 1);
 }
 
 #[tokio::test]
 async fn once_the_conversation_ended_nothing_opens_or_is_issued() {
     let reviews = reviews();
-    reviews.end(&McpAppInitiator::System, || {});
+    reviews.end(EPOCH, &McpAppInitiator::System, || {});
     assert_eq!(open(&reviews, "i1").err(), Some(ReviewRefusal::Ended));
     assert_eq!(
-        reviews.issue(&app("i1"), || "ticket").err(),
+        reviews.issue(EPOCH, &app("i1"), || "ticket").err(),
         Some(ReviewRefusal::Ended)
     );
     assert!(reviews.reviews().is_empty());
@@ -305,44 +314,119 @@ async fn the_open_reviews_take_at_most_their_share_of_the_view() {
     assert!(!fits("app-x", &app("i1"), "charts", "delete_rows", &large));
     assert_eq!(
         reviews
-            .open(new_review_id(), &app("i1"), "charts", "delete_rows", &large)
+            .open(
+                EPOCH,
+                new_review_id(),
+                &app("i1"),
+                "charts",
+                "delete_rows",
+                &large
+            )
             .err(),
         Some(ReviewRefusal::TooLarge)
     );
     // Reviews that fit alone are opened until together they would not.
     let half = format!("{{\"a\":\"{}\"}}", "x".repeat(MAX_APP_REVIEW_BYTES / 2));
     let first = reviews
-        .open(new_review_id(), &app("i1"), "charts", "delete_rows", &half)
+        .open(
+            EPOCH,
+            new_review_id(),
+            &app("i1"),
+            "charts",
+            "delete_rows",
+            &half,
+        )
         .unwrap();
     assert_eq!(
         reviews
-            .open(new_review_id(), &app("i1"), "charts", "delete_rows", &half)
+            .open(
+                EPOCH,
+                new_review_id(),
+                &app("i1"),
+                "charts",
+                "delete_rows",
+                &half
+            )
             .err(),
         Some(ReviewRefusal::Full)
     );
     // An ended review gives its share back.
     drop(first);
     assert!(reviews
-        .open(new_review_id(), &app("i1"), "charts", "delete_rows", &half)
+        .open(
+            EPOCH,
+            new_review_id(),
+            &app("i1"),
+            "charts",
+            "delete_rows",
+            &half
+        )
         .is_ok());
 }
 
 #[test]
 fn a_conversation_remembers_its_last_released_mounts() {
-    let reviews = AppReviews::default();
+    let reviews = reviews();
     for mount in 0..=MAX_RELEASED_MOUNTS {
         reviews.release_app(&app(&mount.to_string()), &releaser(), || {});
     }
     // The newest are remembered; the oldest, one past the bound, is not.
     assert_eq!(
         reviews
-            .issue(&app(&MAX_RELEASED_MOUNTS.to_string()), || ())
+            .issue(EPOCH, &app(&MAX_RELEASED_MOUNTS.to_string()), || ())
             .err(),
         Some(ReviewRefusal::Released)
     );
     assert_eq!(
-        reviews.issue(&app("1"), || ()).err(),
+        reviews.issue(EPOCH, &app("1"), || ()).err(),
         Some(ReviewRefusal::Released)
     );
-    assert_eq!(reviews.issue(&app("0"), || ()), Ok(()));
+    assert_eq!(reviews.issue(EPOCH, &app("0"), || ()), Ok(()));
+}
+
+#[tokio::test]
+async fn an_ended_opening_admits_nothing_and_the_next_opening_is_its_own() {
+    let reviews = reviews();
+    let waiting = open(&reviews, "i1").unwrap();
+    reviews.end(EPOCH, &McpAppInitiator::System, || {});
+    assert!(matches!(
+        waiting.ended(APP_REVIEW_DEADLINE).await,
+        ReviewEnd::Withdrawn { .. }
+    ));
+    assert_eq!(reviews.admit(EPOCH, &app("i1")), Err(ReviewRefusal::Ended));
+    // Opened again: a call that resolved the old opening still admits,
+    // opens and is issued nothing — the new one is another epoch.
+    let next = reviews.begin();
+    assert_ne!(next, EPOCH);
+    assert_eq!(reviews.admit(EPOCH, &app("i1")), Err(ReviewRefusal::Ended));
+    assert_eq!(open(&reviews, "i1").err(), Some(ReviewRefusal::Ended));
+    assert_eq!(
+        reviews.issue(EPOCH, &app("i1"), || ()).err(),
+        Some(ReviewRefusal::Ended)
+    );
+    assert_eq!(reviews.admit(next, &app("i1")), Ok(()));
+    // Ending the old opening again ends nothing of the new one.
+    let mut released = 0;
+    reviews.end(EPOCH, &McpAppInitiator::System, || released += 1);
+    assert_eq!(released, 0);
+    assert_eq!(reviews.admit(next, &app("i1")), Ok(()));
+}
+
+#[test]
+fn a_release_outlasts_the_opening_it_came_in_and_any_before_one() {
+    // Released before any opening, and kept through two.
+    let reviews = AppReviews::default();
+    reviews.release_app(&app("i1"), &releaser(), || {});
+    let first = reviews.begin();
+    assert_eq!(
+        reviews.admit(first, &app("i1")),
+        Err(ReviewRefusal::Released)
+    );
+    reviews.end(first, &McpAppInitiator::System, || {});
+    let second = reviews.begin();
+    assert_eq!(
+        reviews.issue(second, &app("i1"), || ()).err(),
+        Some(ReviewRefusal::Released)
+    );
+    assert_eq!(reviews.admit(second, &app("i2")), Ok(()));
 }

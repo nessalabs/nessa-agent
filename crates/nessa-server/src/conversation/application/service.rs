@@ -394,8 +394,10 @@ struct LiveConversation {
     projection: Mutex<Projection>,
     watched: Mutex<HashSet<String>>,
     attachment_owner: Mutex<Option<JoinHandle<()>>>,
-    /// The reviews its MCP Apps' destructive calls wait on.
+    /// Its MCP Apps' state — the conversation's, kept by the service — and
+    /// the epoch of this opening of it.
     app_reviews: Arc<AppReviews>,
+    app_epoch: u64,
 }
 impl LiveConversation {
     async fn join_attachment_owner(&self) {
@@ -486,6 +488,10 @@ struct Inner {
     tool_uis: Arc<dyn McpToolUis>,
     /// What an MCP App's calls go through; `None` with no MCP servers.
     mcp_apps: Option<McpAppPorts>,
+    /// Each conversation's MCP Apps, kept for the conversation rather than
+    /// its live agent: a release is kept across openings and before one.
+    /// Let go of when the conversation is deleted.
+    apps: std::sync::Mutex<HashMap<ConversationId, Arc<AppReviews>>>,
     /// MCP App calls running, across every caller: each holds one of these
     /// on its own task until that task ends, so a caller that goes and comes
     /// back cannot leave calls running past the bound.
@@ -732,6 +738,7 @@ impl ConversationService {
                 retries: Arc::new(DeletionRetries::default()),
                 tool_uis,
                 mcp_apps,
+                apps: std::sync::Mutex::default(),
                 app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
             }),
         })
@@ -1135,13 +1142,16 @@ impl ConversationService {
                                     workspace: workspace.clone(),
                                 });
                             }
+                            let app_reviews = service.apps_of(&id);
+                            let app_epoch = app_reviews.begin();
                             let live = Arc::new(LiveConversation {
                                 agent,
                                 reserved_output_tokens: configured.reserved_output_tokens,
                                 projection: Mutex::new(projection),
                                 watched: Mutex::new(HashSet::new()),
                                 attachment_owner: Mutex::new(None),
-                                app_reviews: Arc::default(),
+                                app_reviews,
+                                app_epoch,
                             });
                             let attachment = live.clone();
                             let attachment_id = id.clone();
@@ -1564,8 +1574,8 @@ impl ConversationService {
                 _ => false,
             }
         });
-        let mut view = app_calls::with_app_reviews(view, live.app_reviews.reviews());
         view.title = self.title(&id).await;
+        let view = app_calls::with_app_reviews(view, live.app_reviews.reviews());
         self.check_view_access(&id, &caller).await?;
         Ok(bound_view(view))
     }
@@ -2537,6 +2547,8 @@ impl ConversationService {
                     )))
                 }
             };
+            // Tombstoned: nothing names it again, so its apps' state goes.
+            service.forget_apps(&id);
             match service.finish_deletion(record).await {
                 Ok(()) => {
                     // Nothing is left for the worker to carry
@@ -3874,7 +3886,9 @@ fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
 }
 
 mod app_calls;
-pub use app_calls::{McpAppCall, McpAppRead, McpAppResource, MAX_APP_CALLS};
+pub use app_calls::{
+    McpAppCall, McpAppRead, McpAppResource, MAX_APP_CALLS, MAX_RESOURCE_META_BYTES,
+};
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/close_release.rs"]

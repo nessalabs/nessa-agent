@@ -9,9 +9,9 @@ use crate::app_call_test_support::{caller, Fixture, INSTANCE, OTHER_INSTANCE, SE
 use crate::conversation::application::app_reviews::{
     ALLOW, DENY, MAX_APP_REVIEW_BYTES, MAX_OPEN_APP_REVIEWS,
 };
-use crate::conversation::application::mcp_apps::McpAppFailure;
 use crate::conversation::application::mcp_apps::TicketEnd;
-use crate::conversation::application::view::ConversationPermissionOrigin;
+use crate::conversation::application::projection::{bound_view, MAX_VIEW_BYTES};
+use crate::conversation::application::view::{ConversationMessage, ConversationPermissionOrigin};
 use crate::mcp_servers::domain::MAX_APP_ARGUMENTS_BYTES;
 use nessa_auth::domain::PrincipalId;
 use nessa_sdk::application::agent_execution::agents::AgentError;
@@ -703,28 +703,48 @@ async fn a_view_holding_an_app_review_has_a_revision_of_its_own() {
 }
 
 #[tokio::test]
-async fn a_released_mount_opens_no_review_and_its_tool_is_never_called() {
-    // Released before its destructive call opened its review: the review
-    // never opens, so nobody can allow it and the tool is never called.
+async fn a_released_mount_is_admitted_nothing_and_nothing_reaches_its_server() {
+    // Released: its later calls of every kind — destructive or not, a tool
+    // or a resource — are refused before anything is asked of the server,
+    // on record as the system's, the release being the releaser's.
     let fixture = Fixture::new().await;
+    *fixture.apps.resource.lock().unwrap() = Some(Ok(page("<p/>")));
     fixture
         .service
         .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
         .await
         .unwrap();
+    for tool in ["delete_rows", "read_rows"] {
+        assert_eq!(
+            refused(fixture.call_tool(fixture.call(tool, None)).await),
+            McpAppError::Cancelled
+        );
+    }
     assert_eq!(
-        refused(fixture.call_tool(fixture.call("delete_rows", None)).await),
+        refused(
+            fixture
+                .service
+                .read_app_resource(fixture.id.clone(), caller("read"), read(&fixture, INSTANCE))
+                .await
+        ),
         McpAppError::Cancelled
     );
     assert!(fixture.app_reviews().await.is_empty());
     assert_eq!(fixture.apps.calls(), 0);
-    assert!(matches!(
-        fixture.audit.phases().last(),
-        Some(McpAppAuditPhase::Withdrawn {
-            cause: McpAppWithdrawal::AppTornDown,
-            ..
-        })
-    ));
+    assert_eq!(fixture.apps.reads.load(Ordering::SeqCst), 0);
+    let refusals: Vec<_> = fixture
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|record| (record.phase.clone(), record.initiator.clone()))
+        .collect();
+    let refused_so = (
+        McpAppAuditPhase::Refused(McpAppCode::Cancelled),
+        McpAppInitiator::System,
+    );
+    assert_eq!(refusals, vec![refused_so; 3]);
 }
 
 fn page(html: &str) -> UiResource {
@@ -1047,4 +1067,189 @@ async fn deleting_the_conversation_withdraws_its_waiting_calls_as_the_deleter() 
         *fixture.tickets.released_conversations.lock().unwrap(),
         std::slice::from_ref(&deleter)
     );
+}
+
+#[tokio::test]
+async fn a_release_is_kept_across_a_close_and_before_the_conversation_is_open() {
+    let fixture = Fixture::new().await;
+    // Closed, then released while nothing of it is open: kept all the same.
+    fixture
+        .service
+        .close(fixture.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    fixture
+        .service
+        .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
+        .await
+        .unwrap();
+    // A call opens it again, and is refused: the mount stays released.
+    assert_eq!(
+        refused(fixture.call_tool(fixture.call("delete_rows", None)).await),
+        McpAppError::Cancelled
+    );
+    assert!(fixture.app_reviews().await.is_empty());
+    // Another mount of the same tool call is its own.
+    let (task, review) = fixture
+        .held(McpAppCall {
+            app: fixture.app(OTHER_INSTANCE),
+            ..fixture.call("delete_rows", None)
+        })
+        .await;
+    fixture.answer(&review, DENY).await;
+    assert_eq!(refused(task.await.unwrap()), McpAppError::ApprovalDenied);
+}
+
+#[tokio::test]
+async fn a_busy_session_is_refused_and_on_record_as_nothing_sent() {
+    // The session takes no more requests: the call is refused before it is
+    // sent — not recorded as a call made that failed.
+    let fixture = Fixture::new().await;
+    fixture
+        .apps
+        .answers
+        .lock()
+        .unwrap()
+        .push(Err(McpAppFailure::Busy));
+    assert_eq!(
+        refused(fixture.call_tool(fixture.call("read_rows", None)).await),
+        McpAppError::Busy
+    );
+    assert_eq!(
+        fixture.audit.phases(),
+        [
+            McpAppAuditPhase::Admitted,
+            McpAppAuditPhase::Refused(McpAppCode::TemporarilyUnavailable)
+        ]
+    );
+    *fixture.apps.resource.lock().unwrap() = Some(Err(McpAppFailure::Busy));
+    assert_eq!(
+        refused(
+            fixture
+                .service
+                .read_app_resource(fixture.id.clone(), caller("read"), read(&fixture, INSTANCE))
+                .await
+        ),
+        McpAppError::Busy
+    );
+    assert_eq!(
+        fixture.audit.phases().last(),
+        Some(&McpAppAuditPhase::Refused(
+            McpAppCode::TemporarilyUnavailable
+        ))
+    );
+}
+
+#[tokio::test]
+async fn a_resource_no_answer_could_carry_is_refused_and_never_held() {
+    let fixture = Fixture::new().await;
+    let sources = |list: &str| -> Vec<String> {
+        (0..nessa_sdk::domain::mcp_apps::MAX_CSP_SOURCES)
+            .map(|index| format!("https://{list}{index}.{}.example", "x".repeat(400)))
+            .collect()
+    };
+    let csp = UiCsp::new(sources("c"), sources("r"), vec![], vec![]).unwrap();
+    *fixture.apps.resource.lock().unwrap() = Some(Ok(UiResource::new(
+        UiResourceUri::new(URI).unwrap(),
+        "<p/>".into(),
+        csp,
+        UiPermissions::default(),
+        None,
+        None,
+    )
+    .unwrap()));
+    assert_eq!(
+        refused(
+            fixture
+                .service
+                .read_app_resource(fixture.id.clone(), caller("read"), read(&fixture, INSTANCE))
+                .await
+        ),
+        McpAppError::ResultTooLarge
+    );
+    assert!(fixture.tickets.issued.lock().unwrap().is_empty());
+    assert_eq!(
+        fixture.audit.phases().last(),
+        Some(&McpAppAuditPhase::Completed(McpAppOutcome::Failed(
+            McpAppCode::ResultTooLarge
+        )))
+    );
+}
+
+#[tokio::test]
+async fn an_app_review_is_shown_only_beside_a_confirmed_transcript() {
+    // The client refuses a view of unconfirmed history that offers any
+    // control: there, the review waits unseen rather than lose the view.
+    let fixture = Fixture::new().await;
+    let (_task, review) = fixture.held(fixture.call("delete_rows", None)).await;
+    let mut view = fixture
+        .service
+        .read(fixture.id.clone(), caller("read"))
+        .await
+        .unwrap();
+    view.permissions.clear();
+    for state in [
+        ConversationTranscriptState::Partial,
+        ConversationTranscriptState::Stale,
+        ConversationTranscriptState::Unknown,
+        ConversationTranscriptState::NotLoaded,
+    ] {
+        let unconfirmed = ConversationView {
+            transcript_state: state,
+            ..view.clone()
+        };
+        let shown = with_app_reviews(unconfirmed.clone(), vec![review.clone()]);
+        assert!(shown.permissions.is_empty(), "{state:?}");
+        assert_eq!(shown.revision, unconfirmed.revision);
+    }
+    let shown = with_app_reviews(view, vec![review.clone()]);
+    assert_eq!(
+        shown
+            .permissions
+            .iter()
+            .map(|shown| shown.permission_id.as_str())
+            .collect::<Vec<_>>(),
+        [review.permission_id.as_str()]
+    );
+}
+
+#[tokio::test]
+async fn app_reviews_are_the_last_of_a_full_view_to_go() {
+    // A transcript that fills the view by itself: the reviews still show,
+    // and so does the tool call whose app asked — the transcript gives way.
+    let fixture = Fixture::new().await;
+    let (_task, review) = fixture
+        .held(fixture.call(
+            "delete_rows",
+            Some(&format!("{{\"a\":\"{}\"}}", "x".repeat(12_000))),
+        ))
+        .await;
+    let mut view = fixture
+        .service
+        .read(fixture.id.clone(), caller("read"))
+        .await
+        .unwrap();
+    view.permissions.clear();
+    let message = view.messages[0].clone();
+    view.messages = (0..40)
+        .map(|_| ConversationMessage {
+            user_text: "y".repeat(2_000),
+            ..message.clone()
+        })
+        .collect();
+    view.messages.push(message);
+    let shown = bound_view(with_app_reviews(view, vec![review.clone()]));
+    assert!(serde_json::to_vec(&shown).unwrap().len() <= MAX_VIEW_BYTES);
+    assert_eq!(
+        shown
+            .permissions
+            .iter()
+            .map(|shown| shown.permission_id.as_str())
+            .collect::<Vec<_>>(),
+        [review.permission_id.as_str()]
+    );
+    assert!(shown
+        .tools
+        .iter()
+        .any(|tool| tool.tool_id == fixture.tool_id));
 }

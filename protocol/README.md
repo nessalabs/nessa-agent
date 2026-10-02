@@ -101,7 +101,9 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
 - **`mcp.readResource`** reads a resource of the app's server once and holds
   exactly those bytes. Its answer says what they are (`mimeType`, `size`,
   `sha256`, the app's `csp`, `permissions`, `domain`, `prefersBorder`) and
-  gives a `ticket`. The bytes never travel on the socket.
+  gives a `ticket`. The bytes never travel on the socket. A resource whose
+  URI, `csp` and `domain` take more than 48 KiB encoded is refused
+  `mcp_result_too_large`: no answer could carry them.
 - **App calls have a lane of their own**, 4 at once per socket, and 32
   running at once on the gateway, each counted until it ends rather than
   until its socket goes. Past either they are refused
@@ -111,8 +113,10 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   reference carries the host's own `instanceId` for its mount, since one tool
   call can be mounted more than once. The release withdraws that mount's
   open reviews (their calls answer `mcp_cancelled`) and releases its
-  resource tickets, and is idempotent. Nothing is opened or issued for that
-  mount again: its later calls answer `mcp_cancelled`. It travels on the
+  resource tickets, and is idempotent. Nothing is admitted, opened or issued
+  for that mount again — across a close and a reopening, and when the
+  release came before the conversation was open: its later calls answer
+  `mcp_cancelled`. It travels on the
   control lane, never the app lane, so held calls can never stop an app
   being released.
 - **What a refusal tells the host.** Nothing reached the server for
@@ -134,7 +138,7 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
 as `PUT /attachments` takes an upload:
 - **Redeeming.** The ticket goes in the `x-nessa-resource-ticket` header,
   never in the URL, and is the whole authority: 256 random bits, single use,
-  valid for 60 s, bound to its conversation and app, and issued only after
+  valid for at most 60 s from its issue, bound to its conversation and app, and issued only after
   the socket's policy and audit. The route authenticates nobody else, and has
   the same origin checks and CORS as `/attachments`.
 - **Refusals.** An unknown, used, expired or wrong-credential ticket gets the

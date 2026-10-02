@@ -693,3 +693,25 @@ async fn a_stopping_recorder_records_every_end_already_sent() {
     assert_eq!(audit.take().len(), 3);
     drop(store);
 }
+
+#[test]
+fn a_pending_ticket_released_keeps_how_and_by_whom_past_its_deadline() {
+    // Its issue took longer than its lifetime to record: its end is still
+    // the releaser's, not an expiry by the system.
+    let fixture = Fixture::new();
+    let mount = app("call-1", "mount-1");
+    let ticket = fixture
+        .store
+        .issue(held(CONVERSATION, mount.clone(), PAGE))
+        .unwrap();
+    let releaser = app_initiator();
+    fixture
+        .store
+        .release_app(&conversation(CONVERSATION), &mount, &releaser);
+    fixture.clock.advance(RESOURCE_TICKET_LIFETIME_MS * 2);
+    fixture.store.sweep();
+    assert_eq!(
+        fixture.store.activate(&ticket),
+        Err((TicketEnd::AppReleased, releaser))
+    );
+}

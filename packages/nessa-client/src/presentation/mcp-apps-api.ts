@@ -253,8 +253,13 @@ export function createMcpAppsApi(
         throw new TypeError(
           `Resource URI must contain 1-${bounds.maxMcpResourceUriBytes} UTF-8 bytes`,
         )
-      return call(ProductMethod.McpReadResource, { ...command, server, uri }, (value) =>
-        mcpReadResourceResult(value, uri),
+      // The gateway may open the conversation first, and records each step:
+      // no shorter wait than a call's, which a read never outlasts.
+      return call(
+        ProductMethod.McpReadResource,
+        { ...command, server, uri },
+        (value) => mcpReadResourceResult(value, uri),
+        callDeadline,
       )
     },
     async fetchResource(ticket, expected, options = {}) {

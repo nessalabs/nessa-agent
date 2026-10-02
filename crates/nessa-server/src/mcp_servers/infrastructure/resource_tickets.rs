@@ -186,8 +186,9 @@ struct Ticket {
 struct Held {
     tickets: HashMap<ResourceTicketDigest, Ticket>,
     /// Pending tickets that ended before they were made redeemable, how and
-    /// by whom, for [`ResourceTickets::activate`] to answer. Forgotten at
-    /// their deadline.
+    /// by whom, for [`ResourceTickets::activate`] to answer — however long
+    /// their issue took to record. Taken by `activate` or `discard`, which
+    /// the issuer always reaches; at most one per app call running.
     ended_pending: HashMap<ResourceTicketDigest, (TicketEnd, McpAppInitiator)>,
     /// Every ticket issued and not yet past its deadline, in issue order —
     /// which is deadline order, the lifetime being one constant — including
@@ -225,7 +226,6 @@ impl Held {
                 break;
             }
             self.deadlines.pop_front();
-            self.ended_pending.remove(&digest);
             self.end(digest, TicketEnd::Expired, &McpAppInitiator::System, ended);
         }
     }

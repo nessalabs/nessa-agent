@@ -83,3 +83,58 @@ fn a_reordering_character_is_shown_as_a_space() {
         "a b c d e"
     );
 }
+
+#[test]
+fn the_largest_resource_the_gateway_reads_is_answered_within_one_message() {
+    // Its URI, CSP and domain at the bound the conversation service holds
+    // them to, every other field at its largest: one socket message.
+    use crate::conversation::application::MAX_RESOURCE_META_BYTES;
+    use crate::product::generated::{McpReadResourceResult, McpUiCsp, McpUiPermissions};
+    let uri = format!("ui://{}", "u".repeat(2000));
+    let domain = "d".repeat(512);
+    let fixed = serde_json::to_vec(&serde_json::json!({
+        "uri": uri,
+        "connect": Vec::<String>::new(),
+        "resource": Vec::<String>::new(),
+        "frame": Vec::<String>::new(),
+        "baseUri": Vec::<String>::new(),
+        "domain": domain,
+    }))
+    .unwrap()
+    .len();
+    // The rest of the bound, as one list of sources that need escaping.
+    let source = "\"".repeat(100);
+    let encoded = serde_json::to_string(&source).unwrap().len() + 1;
+    let count = (MAX_RESOURCE_META_BYTES - fixed) / encoded;
+    let result = McpReadResourceResult {
+        uri,
+        mime_type: crate::mcp_servers::entrypoint::http::CONTENT_TYPE.into(),
+        size: 4 * 1024 * 1024,
+        sha256: "f".repeat(64),
+        ticket: "t".repeat(43),
+        expires_in_ms: 60_000,
+        csp: McpUiCsp {
+            connect_domains: vec![source; count],
+            resource_domains: vec![],
+            frame_domains: vec![],
+            base_uri_domains: vec![],
+        },
+        permissions: McpUiPermissions {
+            camera: true,
+            microphone: true,
+            geolocation: true,
+            clipboard_write: true,
+        },
+        domain: Some(domain),
+        prefers_border: Some(true),
+    };
+    // The longest request id, every character escaped.
+    let request_id = "\u{1}".repeat(256);
+    let message = super::super::socket::success(&request_id, &result);
+    let text = message.to_wire_text().unwrap();
+    assert!(
+        text.len() <= crate::protocol::MAX_PAYLOAD_BYTES as usize,
+        "{}",
+        text.len()
+    );
+}

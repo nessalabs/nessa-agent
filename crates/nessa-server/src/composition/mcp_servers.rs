@@ -71,8 +71,14 @@ impl TicketRecorder {
     /// conversations, and their apps, have ended.
     pub(super) async fn finish(self) {
         let _ = self.stop.send(());
-        if let Err(error) = self.task.await {
-            tracing::error!(%error, "the MCP App ticket recorder failed");
+        // Bounded, as the app calls' own records are: a record that hangs
+        // must not hold the gateway's exit.
+        match tokio::time::timeout(std::time::Duration::from_secs(10), self.task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!(%error, "the MCP App ticket recorder failed"),
+            Err(_) => tracing::warn!(
+                "MCP App ticket ends were still being recorded when the gateway stopped"
+            ),
         }
     }
 }
