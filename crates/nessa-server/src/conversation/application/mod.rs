@@ -72,10 +72,12 @@
 //! Deletes of one conversation, and summary writes of one conversation, are
 //! serialized per conversation (`ConversationLocks`), and a delete that waits
 //! behind another attempt answers from its tombstone without one of its own.
+mod app_reviews;
 mod catalogue;
 mod catalogue_read;
 mod error;
 mod locks;
+mod mcp_apps;
 mod passive_read;
 mod ports;
 mod projection;
@@ -97,6 +99,12 @@ pub use catalogue_read::{
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
+pub use mcp_apps::{
+    HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppError,
+    McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef,
+    McpAppWithdrawal, McpApps, ResourceTickets, TicketRefusal, MAX_HELD_RESOURCE_BYTES,
+    MAX_HELD_TICKETS, RESOURCE_TICKET_LIFETIME_MS,
+};
 pub use passive_read::{
     AdmitPassiveRead, CatalogueReadScope, ReadRefusal, ReceiverAuthority, ReceiverReadScope,
 };
@@ -122,8 +130,9 @@ pub use record_read::{
 pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
     ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
-    ConversationService, DeletionsLeft, QuestionChoiceInput, RequestedAgent, RequestedConversation,
-    SubmissionMode, MAX_LISTED_CONVERSATIONS,
+    ConversationService, DeletionsLeft, McpAppCall, McpAppRead, McpAppResource,
+    QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode, MAX_APP_CALLS,
+    MAX_LISTED_CONVERSATIONS,
 };
 pub use view::{
     CompactionReportingSupport, ConversationAgentFeatures, ConversationAttachment,
@@ -132,11 +141,12 @@ pub use view::{
     ConversationLifecyclePhase, ConversationLinkedFile, ConversationList, ConversationListEntry,
     ConversationMcpTool, ConversationMessage, ConversationMessageStatus, ConversationPending,
     ConversationPendingMode, ConversationPermission, ConversationPermissionOption,
-    ConversationReorderOutcome, ConversationStartupFailure, ConversationStartupFailureCode,
-    ConversationTool, ConversationView, ElicitationForwardingSupport, IncomingElicitationSupport,
-    ModelSwitchReportingSupport, NativeHookSuppressionSupport, PermissionDeferralSupport,
-    PermissionDenialSupport, PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport,
-    SubmissionReceipt, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationPermissionOrigin, ConversationReorderOutcome, ConversationStartupFailure,
+    ConversationStartupFailureCode, ConversationTool, ConversationView,
+    ElicitationForwardingSupport, IncomingElicitationSupport, ModelSwitchReportingSupport,
+    NativeHookSuppressionSupport, PermissionDeferralSupport, PermissionDenialSupport,
+    PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport, SubmissionReceipt,
+    MAX_STRUCTURED_CONTENT_BYTES,
 };
 
 #[cfg(test)]

@@ -6,12 +6,12 @@ use crate::{
         },
         domain::Attachment,
     },
-    server::entrypoint::origin,
+    server::entrypoint::origin::{self, allowed_origin, with_cors, Allowed},
 };
 use axum::{
     body::{Body, BodyDataStream},
     extract::State,
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -21,9 +21,6 @@ use serde_json::json;
 /// The header that carries a ticket. A header, not a query parameter, so the
 /// secret stays out of access logs, history, and referrers.
 pub const TICKET_HEADER: &str = "x-nessa-upload-ticket";
-
-/// How long a browser may remember the preflight answer, in seconds.
-const PREFLIGHT_MAX_AGE: &str = "600";
 
 /// All the upload route is given: the attachment service, when one is composed.
 /// It has no use for sessions, credentials, or conversations, and cannot reach them.
@@ -165,60 +162,7 @@ fn refusal(status: StatusCode, code: &'static str, evidence: Option<AuditDeliver
 /// header of its own from another origin, which is every upload from the
 /// desktop shell and from the development server.
 pub(crate) async fn handle_preflight(headers: HeaderMap) -> Response {
-    let allowed = allowed_origin(&headers);
-    if matches!(allowed, Allowed::No) {
-        return with_cors(StatusCode::FORBIDDEN.into_response(), allowed);
-    }
-    let mut response = StatusCode::NO_CONTENT.into_response();
-    let answer = response.headers_mut();
-    answer.insert(
-        header::ACCESS_CONTROL_ALLOW_METHODS,
-        HeaderValue::from_static("PUT"),
-    );
-    answer.insert(
-        header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("content-type, x-nessa-upload-ticket"),
-    );
-    answer.insert(
-        header::ACCESS_CONTROL_MAX_AGE,
-        HeaderValue::from_static(PREFLIGHT_MAX_AGE),
-    );
-    with_cors(response, allowed)
-}
-
-/// Every answer varies by origin, a refusal of an origin included, so no cache
-/// hands one origin's answer to another. A trusted page is told it may read it.
-fn with_cors(mut response: Response, allowed: Allowed) -> Response {
-    let headers = response.headers_mut();
-    headers.insert(header::VARY, HeaderValue::from_static("origin"));
-    if let Allowed::Cross(origin) = allowed {
-        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
-    }
-    response
-}
-
-/// Who asked, and whether they may send and read.
-enum Allowed {
-    /// No `Origin`: a native client, not a page.
-    Same,
-    /// A page on an origin this server trusts, echoed back exactly. Never `*`.
-    Cross(HeaderValue),
-    /// A page on any other origin.
-    No,
-}
-
-/// The same rule `/session` applies: a present `Origin` must be one this
-/// server trusts. A ticket is a bearer secret, and a page on another origin
-/// holding one is not a caller this gateway serves.
-fn allowed_origin(headers: &HeaderMap) -> Allowed {
-    let Some(origin) = headers.get(header::ORIGIN) else {
-        return Allowed::Same;
-    };
-    if origin::is_trusted_ws_origin(origin) {
-        Allowed::Cross(origin.clone())
-    } else {
-        Allowed::No
-    }
+    origin::preflight(&headers, "PUT", "content-type, x-nessa-upload-ticket")
 }
 
 /// An HTTP request body as the application's chunk source.

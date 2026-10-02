@@ -85,6 +85,8 @@ pub enum ConversationError {
         selection: PermissionSelectionState,
     },
     Storage(StorageError),
+    /// An MCP App's call refused, or failed once sent.
+    McpApp(super::mcp_apps::McpAppError),
 }
 impl fmt::Display for ConversationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -1,6 +1,8 @@
 use super::session_key::conversation_session;
 use super::{
+    app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
     locks::ConversationLocks,
+    mcp_apps::McpAppPorts,
     projection::{bound_view, clipped, Projection, MAX_TEXT},
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
@@ -389,6 +391,8 @@ struct LiveConversation {
     projection: Mutex<Projection>,
     watched: Mutex<HashSet<String>>,
     attachment_owner: Mutex<Option<JoinHandle<()>>>,
+    /// The reviews its MCP Apps' destructive calls wait on.
+    app_reviews: Arc<AppReviews>,
 }
 impl LiveConversation {
     async fn join_attachment_owner(&self) {
@@ -477,6 +481,12 @@ struct Inner {
     agents_asked: Arc<Semaphore>,
     /// Where a view finds the UI an MCP call's tool declared.
     tool_uis: Arc<dyn McpToolUis>,
+    /// What an MCP App's calls go through; `None` with no MCP servers.
+    mcp_apps: Option<McpAppPorts>,
+    /// MCP App calls running, across every caller: each holds one of these
+    /// on its own task until that task ends, so a caller that goes and comes
+    /// back cannot leave calls running past the bound.
+    app_calls: Arc<Semaphore>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -638,12 +648,32 @@ impl ConversationService {
         Self::with_tool_uis(dependencies, limits, workspace, Arc::new(NoMcpToolUis))
     }
     /// As [`Self::new`], with each MCP call's UI looked up in `tool_uis` when
-    /// a view is read.
+    /// a view is read. No MCP App is admitted: see [`Self::with_mcp_apps`].
     pub fn with_tool_uis(
         dependencies: ConversationDependencies,
         limits: ConversationLimits,
         workspace: Option<String>,
         tool_uis: Arc<dyn McpToolUis>,
+    ) -> Result<Self, ConversationError> {
+        Self::build(dependencies, limits, workspace, tool_uis, None)
+    }
+    /// As [`Self::with_tool_uis`], with MCP Apps' calls answered through
+    /// `apps`.
+    pub fn with_mcp_apps(
+        dependencies: ConversationDependencies,
+        limits: ConversationLimits,
+        workspace: Option<String>,
+        tool_uis: Arc<dyn McpToolUis>,
+        apps: McpAppPorts,
+    ) -> Result<Self, ConversationError> {
+        Self::build(dependencies, limits, workspace, tool_uis, Some(apps))
+    }
+    fn build(
+        dependencies: ConversationDependencies,
+        limits: ConversationLimits,
+        workspace: Option<String>,
+        tool_uis: Arc<dyn McpToolUis>,
+        mcp_apps: Option<McpAppPorts>,
     ) -> Result<Self, ConversationError> {
         let ConversationDependencies {
             agents,
@@ -698,6 +728,8 @@ impl ConversationService {
                 agents_asked: Arc::new(Semaphore::new(MAX_AGENTS_ASKED_AT_ONCE)),
                 retries: Arc::new(DeletionRetries::default()),
                 tool_uis,
+                mcp_apps,
+                app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
             }),
         })
     }
@@ -1106,6 +1138,7 @@ impl ConversationService {
                                 projection: Mutex::new(projection),
                                 watched: Mutex::new(HashSet::new()),
                                 attachment_owner: Mutex::new(None),
+                                app_reviews: Arc::default(),
                             });
                             let attachment = live.clone();
                             let attachment_id = id.clone();
@@ -1528,6 +1561,7 @@ impl ConversationService {
                 _ => false,
             }
         });
+        let mut view = app_calls::with_app_reviews(view, live.app_reviews.reviews());
         view.title = self.title(&id).await;
         self.check_view_access(&id, &caller).await?;
         Ok(bound_view(view))
@@ -2233,9 +2267,20 @@ impl ConversationService {
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let permission_id =
                 PermissionId::new(&permission).map_err(|_| ConversationError::InvalidInput)?;
-            let option_id =
-                PermissionOptionId::new(option).map_err(|_| ConversationError::InvalidInput)?;
+            // Malformed input is refused before the conversation is opened
+            // (`malformed_controls_do_not_open_a_dormant_owned_provider`).
+            let option_id = PermissionOptionId::new(option.as_str())
+                .map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
+            // An app's review first: it is the gateway's own, not the agent's.
+            match live
+                .app_reviews
+                .answer(&execution, &permission, &option, answerer(&caller))
+            {
+                ReviewAnswer::Ended => return Ok(()),
+                ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
+                ReviewAnswer::NotAnAppReview => {}
+            }
             let answer = live
                 .agent
                 .answer_permission(PermissionAnswer {
@@ -2274,6 +2319,14 @@ impl ConversationService {
             let permission_id =
                 PermissionId::new(&permission).map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
+            match live
+                .app_reviews
+                .cancel(&execution, &permission, answerer(&caller))
+            {
+                ReviewAnswer::Ended => return Ok(()),
+                ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
+                ReviewAnswer::NotAnAppReview => {}
+            }
             let _cancellation = live
                 .agent
                 .cancel_permission(PermissionCancellationRequest {
@@ -3371,9 +3424,23 @@ impl ConversationService {
     }
 
     async fn release_slot(&self, id: &ConversationId, slot: &Arc<Slot>) {
-        let mut owners = self.inner.conversations.lock().await;
-        if owners.get(id).is_some_and(|known| Arc::ptr_eq(known, slot)) {
-            owners.remove(id);
+        let released = {
+            let mut owners = self.inner.conversations.lock().await;
+            let owned = owners.get(id).is_some_and(|known| Arc::ptr_eq(known, slot));
+            if owned {
+                owners.remove(id);
+            }
+            owned
+        };
+        if released {
+            // The conversation ended, however it ended: its apps' waiting
+            // calls are withdrawn, and what was held for them let go.
+            if let Some(Ok(live)) = slot.value.get() {
+                live.app_reviews.end();
+            }
+            if let Some(apps) = &self.inner.mcp_apps {
+                apps.tickets.release_conversation(id);
+            }
         }
     }
 }
@@ -3396,6 +3463,15 @@ fn waiting_for(failures: &DeletionFailures) -> Option<Waiting> {
     }
     let still_stopping = matches!(failures.stop, Some(StopFailure::OverBudget));
     (still_stopping || failures.history_leased_elsewhere).then_some(Waiting::ForRelease)
+}
+
+/// Who answered an app's review: the caller of `conversation.answer`.
+fn answerer(caller: &ConversationCaller) -> ReviewAnswerer {
+    ReviewAnswerer {
+        principal_id: caller.principal_id.clone(),
+        surface_id: caller.surface_id.clone(),
+        request_id: caller.action_id.clone(),
+    }
 }
 
 /// An agent slot taken for one ask. Released on drop, however the ask ends,
@@ -3764,6 +3840,9 @@ fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
             })
     })
 }
+
+mod app_calls;
+pub use app_calls::{McpAppCall, McpAppRead, McpAppResource, MAX_APP_CALLS};
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/close_release.rs"]

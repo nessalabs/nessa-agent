@@ -96,17 +96,57 @@ impl ToolUi {
     }
 }
 
+/// What a tool says of its effects (`annotations.readOnlyHint`,
+/// `annotations.destructiveHint`), each `None` when it said nothing. These
+/// are the server's hints, not guarantees; Nessa reads them only to decide
+/// when to ask the person first, and so reads silence as the riskier answer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ToolHints {
+    read_only: Option<bool>,
+    destructive: Option<bool>,
+}
+impl ToolHints {
+    /// The hints as the tool gave them.
+    pub fn new(read_only: Option<bool>, destructive: Option<bool>) -> Self {
+        Self {
+            read_only,
+            destructive,
+        }
+    }
+    /// Whether calling the tool may destroy something: MCP's own defaults,
+    /// under which a tool is destructive unless it says it only reads
+    /// (`readOnlyHint: true`) or says it destroys nothing
+    /// (`destructiveHint: false`). A tool that says nothing is destructive.
+    pub fn destructive(self) -> bool {
+        self.read_only != Some(true) && self.destructive != Some(false)
+    }
+}
+
 /// One tool as its server listed it (`tools/list`): the server and the tool's
-/// own name, exactly as the server spelled it, and its UI when it declared one.
+/// own name, exactly as the server spelled it, its UI when it declared one,
+/// and what it said of its effects.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListedTool {
     tool: McpTool,
     ui: Option<ToolUi>,
+    hints: ToolHints,
 }
 impl ListedTool {
-    /// `tool` as listed, with the UI it declared.
+    /// `tool` as listed, with the UI it declared and no hints.
     pub fn new(tool: McpTool, ui: Option<ToolUi>) -> Self {
-        Self { tool, ui }
+        Self {
+            tool,
+            ui,
+            hints: ToolHints::default(),
+        }
+    }
+    /// This tool, with the hints it gave.
+    pub fn with_hints(self, hints: ToolHints) -> Self {
+        Self { hints, ..self }
+    }
+    /// What the tool said of its effects.
+    pub fn hints(&self) -> ToolHints {
+        self.hints
     }
     /// The server and the tool's name on it.
     pub fn tool(&self) -> &McpTool {

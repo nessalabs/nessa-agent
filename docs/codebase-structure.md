@@ -609,12 +609,25 @@ cancellation, `stand_in` for what a harness sees, `servers` for the open
 sessions and their tool lists, `process` for a server's process group, `wire`
 for MCP's JSON), tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
-gateway's `src/mcp_servers/` owns the stand-in rules and the session token
-(`domain`), the relay socket, the `mcp-relay` command, the grants that tie
-each stand-in to its conversation, and the view's tool UI lookup
-(`infrastructure`); `composition/mcp_servers.rs` replaces each configured
-server with its stand-in, and gives the agents the grants, before any agent
-is built. The SDK's ACP binding holds a provider open's grant
+gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
+the resource ticket (`domain`), the relay socket, the `mcp-relay` command, the
+grants that tie each stand-in to its conversation, the store an MCP App's
+resources wait in behind their tickets, and the view's tool UI lookup
+(`infrastructure`), and `GET /mcp-resources`, where a ticket is redeemed
+(`entrypoint`); `composition/mcp_servers.rs` replaces each configured server
+with its stand-in, gives the agents the grants, and builds the ticket store,
+before any agent is built. The policy an MCP App's calls are held to is
+`mcp_servers/domain/app_call.rs`, its session port's adapter
+`mcp_servers/infrastructure/apps.rs`; the calls' flow is the conversation
+service's (`conversation/application/service/app_calls.rs`, with the reviews
+in `app_reviews.rs` and the ports in `mcp_apps.rs`), their audit
+`conversation/infrastructure/mcp_app_audit.rs`, and their wire methods
+`product/mcp_apps.rs` ([design](design/mcp-app-calls.md)). `PUT /attachments` and `GET /mcp-resources` share
+one origin rule, CORS and preflight (`server/entrypoint/origin.rs`); in
+`@nessa/client` they share `application/gateway-http.ts` (the origin, the
+deadline clock, and how one request ends), and an app's calls are
+`presentation/mcp-apps-api.ts` over the `McpResourceTransport` port in
+`application/mcp-resource-fetch.ts` and its `fetch` adapter in `transport/`. The SDK's ACP binding holds a provider open's grant
 (`acp/sessions/stand_ins.rs`) and puts its environment in every MCP server
 entry. The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
