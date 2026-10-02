@@ -73,7 +73,7 @@ impl McpAppAudit for DurableMcpAppAudit {
             record.app.execution_id,
             record.app.tool_id,
             record.app.instance_id,
-            record.request_id,
+            record.call_id,
             kind,
         ]);
         let id = format!("mcp-app-{}", digest_of(identity.to_string().as_bytes()));
@@ -90,6 +90,7 @@ impl McpAppAudit for DurableMcpAppAudit {
                 },
                 "ask": ask(&record.ask),
             },
+            "callId": record.call_id,
             "requestId": record.request_id,
             "phase": phase,
             "initiator": initiator(&record.initiator),

@@ -21,9 +21,9 @@ use crate::{
     conversation::{
         application::{
             ConversationCaller, ConversationError, ConversationList,
-            ConversationView as ApplicationConversationView, DeletionFailures, QuestionChoiceInput,
-            RequestedAgent, RequestedConversation, SubmissionMode, SubmittedFile, SubmittedImage,
-            SubmittedMessage,
+            ConversationView as ApplicationConversationView, DeletionFailures, McpAppError,
+            QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode,
+            SubmittedFile, SubmittedImage, SubmittedMessage,
         },
         domain::{ConversationApprovalMode, ConversationId},
     },
@@ -464,6 +464,25 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::PermissionAnswer { error, .. } => {
             error_code(&ConversationError::Agent(error.clone()))
         }
+        ConversationError::McpApp(error) => mcp_app_code(error),
+    }
+}
+
+/// The protocol code of an MCP App's refusal. `McpAppError::code` names the
+/// same code in audit; `tests/conversation/agreement.rs` holds them together.
+pub(super) fn mcp_app_code(error: &McpAppError) -> ConversationErrorCode {
+    match error {
+        McpAppError::AppUnknown => ConversationErrorCode::McpAppUnknown,
+        McpAppError::ServerMismatch => ConversationErrorCode::McpServerMismatch,
+        McpAppError::ToolNotForApp => ConversationErrorCode::McpToolNotForApp,
+        McpAppError::RequestTooLarge => ConversationErrorCode::McpRequestTooLarge,
+        McpAppError::SessionUnavailable => ConversationErrorCode::McpSessionUnavailable,
+        McpAppError::ApprovalDenied => ConversationErrorCode::McpApprovalDenied,
+        McpAppError::ApprovalExpired => ConversationErrorCode::McpApprovalExpired,
+        McpAppError::Cancelled => ConversationErrorCode::McpCancelled,
+        McpAppError::ResultTooLarge => ConversationErrorCode::McpResultTooLarge,
+        McpAppError::TimedOut => ConversationErrorCode::McpTimedOut,
+        McpAppError::Remote(_) => ConversationErrorCode::McpRemoteError,
     }
 }
 

@@ -68,36 +68,6 @@ pub trait McpApps: Send + Sync {
     ) -> McpAppFuture<'a, UiResource>;
 }
 
-/// No MCP servers: no conversation has a session of any.
-pub struct NoMcpApps;
-impl McpApps for NoMcpApps {
-    fn listed_tool(
-        &self,
-        _: &SessionId,
-        _: &str,
-        _: &str,
-    ) -> Result<Option<ListedTool>, McpAppFailure> {
-        Err(McpAppFailure::NoSession)
-    }
-    fn call_tool<'a>(
-        &'a self,
-        _: &'a SessionId,
-        _: &'a str,
-        _: &'a str,
-        _: Option<Value>,
-    ) -> McpAppFuture<'a, Value> {
-        Box::pin(async { Err(McpAppFailure::NoSession) })
-    }
-    fn read_resource<'a>(
-        &'a self,
-        _: &'a SessionId,
-        _: &'a str,
-        _: &'a UiResourceUri,
-    ) -> McpAppFuture<'a, UiResource> {
-        Box::pin(async { Err(McpAppFailure::NoSession) })
-    }
-}
-
 /// What an app asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpAppAsk {
@@ -185,7 +155,10 @@ pub enum McpAppAuditPhase {
 pub struct McpAppAuditRecord {
     pub conversation_id: ConversationId,
     pub organization_id: OrganizationId,
-    /// The app's own request, which the steps of one call share.
+    /// The gateway's own identity for this one call, which its steps share:
+    /// the app's request id is its own text, and may come again.
+    pub call_id: String,
+    /// The app's own request.
     pub request_id: String,
     pub app: McpAppRef,
     pub ask: McpAppAsk,
@@ -233,3 +206,63 @@ pub trait ResourceTickets: Send + Sync {
 pub const RESOURCE_TICKET_LIFETIME_MS: u64 = 60_000;
 /// The most a conversation may hold behind tickets at once.
 pub const MAX_HELD_RESOURCE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Why an app's call was refused, or failed once sent: one protocol
+/// `mcp_` code each. [`Self::code`] is how audit names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum McpAppError {
+    AppUnknown,
+    ServerMismatch,
+    ToolNotForApp,
+    RequestTooLarge,
+    SessionUnavailable,
+    ApprovalDenied,
+    ApprovalExpired,
+    Cancelled,
+    ResultTooLarge,
+    TimedOut,
+    /// The server's JSON-RPC error, or `None` for an answer that is no MCP
+    /// answer at all.
+    Remote(Option<(i64, String)>),
+}
+impl McpAppError {
+    /// The protocol code.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::AppUnknown => "mcp_app_unknown",
+            Self::ServerMismatch => "mcp_server_mismatch",
+            Self::ToolNotForApp => "mcp_tool_not_for_app",
+            Self::RequestTooLarge => "mcp_request_too_large",
+            Self::SessionUnavailable => "mcp_session_unavailable",
+            Self::ApprovalDenied => "mcp_approval_denied",
+            Self::ApprovalExpired => "mcp_approval_expired",
+            Self::Cancelled => "mcp_cancelled",
+            Self::ResultTooLarge => "mcp_result_too_large",
+            Self::TimedOut => "mcp_timed_out",
+            Self::Remote(_) => "mcp_remote_error",
+        }
+    }
+}
+impl From<McpAppFailure> for McpAppError {
+    fn from(failure: McpAppFailure) -> Self {
+        match failure {
+            McpAppFailure::NoSession | McpAppFailure::SessionEnded => Self::SessionUnavailable,
+            McpAppFailure::TimedOut => Self::TimedOut,
+            McpAppFailure::Remote { code, message } => Self::Remote(Some((code, message))),
+            McpAppFailure::TooLarge => Self::ResultTooLarge,
+            // A resource that is not an app's: read, and changing nothing.
+            McpAppFailure::NotAnApp => Self::AppUnknown,
+            McpAppFailure::Malformed => Self::Remote(None),
+        }
+    }
+}
+
+/// What an app's calls go through: the conversation's own MCP sessions, the
+/// audit of every step, and the resources held behind tickets. A gateway
+/// with no MCP servers has none, and no app to admit.
+#[derive(Clone)]
+pub struct McpAppPorts {
+    pub apps: Arc<dyn McpApps>,
+    pub audit: Arc<dyn McpAppAudit>,
+    pub tickets: Arc<dyn ResourceTickets>,
+}

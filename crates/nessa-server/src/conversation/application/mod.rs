@@ -100,9 +100,10 @@ pub use catalogue_read::{
 };
 pub use error::{ConversationError, DeletionFailures, StopFailure};
 pub use mcp_apps::{
-    HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppFailure,
-    McpAppFuture, McpAppInitiator, McpAppOutcome, McpAppRef, McpAppWithdrawal, McpApps, NoMcpApps,
-    ResourceTickets, TicketRefusal, MAX_HELD_RESOURCE_BYTES, RESOURCE_TICKET_LIFETIME_MS,
+    HeldResource, McpAppAsk, McpAppAudit, McpAppAuditPhase, McpAppAuditRecord, McpAppError,
+    McpAppFailure, McpAppFuture, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef,
+    McpAppWithdrawal, McpApps, ResourceTickets, TicketRefusal, MAX_HELD_RESOURCE_BYTES,
+    RESOURCE_TICKET_LIFETIME_MS,
 };
 pub use passive_read::{
     AdmitPassiveRead, CatalogueReadScope, ReadRefusal, ReceiverAuthority, ReceiverReadScope,
@@ -129,8 +130,9 @@ pub use record_read::{
 pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
     ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
-    ConversationService, DeletionsLeft, QuestionChoiceInput, RequestedAgent, RequestedConversation,
-    SubmissionMode, MAX_LISTED_CONVERSATIONS,
+    ConversationService, DeletionsLeft, McpAppCall, McpAppRead, McpAppResource,
+    QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode,
+    MAX_LISTED_CONVERSATIONS,
 };
 pub use view::{
     CompactionReportingSupport, ConversationAgentFeatures, ConversationAttachment,

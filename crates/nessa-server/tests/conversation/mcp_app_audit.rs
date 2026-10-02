@@ -41,6 +41,7 @@ fn call(phase: McpAppAuditPhase, initiator: McpAppInitiator) -> McpAppAuditRecor
     McpAppAuditRecord {
         conversation_id: ConversationId::new("00000000-0000-4000-8000-000000000348").unwrap(),
         organization_id: OrganizationId::new("org").unwrap(),
+        call_id: "call-1".into(),
         request_id: "app-request-1".into(),
         app: McpAppRef {
             execution_id: "execution-1".into(),
@@ -93,6 +94,7 @@ async fn an_app_call_records_its_target_ask_initiator_and_request() {
             "ask": {"kind": "call_tool", "server": "weather", "tool": "forecast"},
         })
     );
+    assert_eq!(stored["callId"], "call-1");
     assert_eq!(stored["requestId"], "app-request-1");
     assert_eq!(stored["phase"], json!({"kind": "admitted"}));
     assert_eq!(
@@ -300,7 +302,7 @@ async fn a_retried_step_is_one_record_and_keeps_its_first_observation() {
 }
 
 #[tokio::test]
-async fn another_request_app_mount_or_conversation_is_its_own_record() {
+async fn another_call_app_mount_or_conversation_is_its_own_record() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join("mcp-apps");
     let audit = audit_at(&directory, 1);
@@ -312,7 +314,7 @@ async fn another_request_app_mount_or_conversation_is_its_own_record() {
     // Another request, another app in the same execution, another mount of the
     // same app, another conversation: each is its own step, not a retry.
     let mut other_request = call(McpAppAuditPhase::Admitted, app_initiator());
-    other_request.request_id = "app-request-2".into();
+    other_request.call_id = "call-2".into();
     let mut other_app = call(McpAppAuditPhase::Admitted, app_initiator());
     other_app.app.tool_id = "tool-call-2".into();
     let mut other_mount = call(McpAppAuditPhase::Admitted, app_initiator());
@@ -494,6 +496,7 @@ async fn no_argument_result_or_resource_content_is_stored() {
         "target.ask.kind",
         "target.ask.server",
         "target.ask.tool",
+        "callId",
         "requestId",
         "phase",
         "phase.kind",

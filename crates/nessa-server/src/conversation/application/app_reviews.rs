@@ -8,13 +8,11 @@ use super::view::{
 };
 use std::{
     collections::BTreeMap,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::sync::oneshot;
+use uuid::Uuid;
 
 /// How long an app's review waits for the person.
 pub const APP_REVIEW_DEADLINE: Duration = Duration::from_secs(5 * 60);
@@ -22,6 +20,12 @@ pub const APP_REVIEW_DEADLINE: Duration = Duration::from_secs(5 * 60);
 pub const ALLOW: &str = "allow";
 /// The option that denies it.
 pub const DENY: &str = "deny";
+/// The most app reviews one conversation has open at once, so that with the
+/// agent's own they stay within the 64 a view carries.
+pub const MAX_OPEN_APP_REVIEWS: usize = 16;
+/// What an app review's identity starts with. An agent names its own
+/// reviews, so an app's carries a UUID no agent's will match.
+const APP_REVIEW_PREFIX: &str = "app-";
 
 /// Who answered a review.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,6 +56,15 @@ pub enum ReviewAnswer {
     Ended,
 }
 
+/// Why no review was opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewRefusal {
+    /// [`MAX_OPEN_APP_REVIEWS`] are open already.
+    Full,
+    /// The conversation ended.
+    Ended,
+}
+
 struct Pending {
     review: ConversationPermission,
     app: McpAppRef,
@@ -61,8 +74,23 @@ struct Pending {
 /// One conversation's open app reviews.
 #[derive(Default)]
 pub struct AppReviews {
-    pending: Mutex<BTreeMap<String, Pending>>,
-    next: AtomicU64,
+    state: Mutex<Reviews>,
+}
+#[derive(Default)]
+struct Reviews {
+    /// Open reviews, keyed by the order they were opened in.
+    pending: BTreeMap<u64, Pending>,
+    next: u64,
+    /// The conversation ended: no review opens again.
+    ended: bool,
+}
+impl Reviews {
+    fn key(&self, permission: &str) -> Option<u64> {
+        self.pending
+            .iter()
+            .find(|(_, open)| open.review.permission_id == permission)
+            .map(|(key, _)| *key)
+    }
 }
 
 /// One review's wait. Dropping it before the review ended — the app's
@@ -74,16 +102,18 @@ pub struct Waiting {
 }
 
 impl AppReviews {
-    /// Open a review of `app`'s call to `tool` on `server` with
-    /// `arguments_json`; it stands, in the view, until it ends.
+    /// Open the review `permission_id` ([`new_review_id`], taken first so
+    /// that its request is on record before it is shown) of `app`'s call to
+    /// `tool` on `server` with `arguments_json`; it stands, in the view,
+    /// until it ends.
     pub fn open(
         self: &Arc<Self>,
+        permission_id: String,
         app: &McpAppRef,
         server: &str,
         tool: &str,
         arguments_json: &str,
-    ) -> Waiting {
-        let permission_id = format!("app-{}", self.next.fetch_add(1, Ordering::Relaxed) + 1);
+    ) -> Result<Waiting, ReviewRefusal> {
         let (end, ended) = oneshot::channel();
         let review = ConversationPermission {
             execution_id: app.execution_id.clone(),
@@ -107,26 +137,36 @@ impl AppReviews {
                 tool: tool.to_owned(),
             },
         };
-        self.pending.lock().expect("app reviews").insert(
-            permission_id.clone(),
+        let mut state = self.state.lock().expect("app reviews");
+        if state.ended {
+            return Err(ReviewRefusal::Ended);
+        }
+        if state.pending.len() >= MAX_OPEN_APP_REVIEWS {
+            return Err(ReviewRefusal::Full);
+        }
+        state.next += 1;
+        let key = state.next;
+        state.pending.insert(
+            key,
             Pending {
                 review,
                 app: app.clone(),
                 end,
             },
         );
-        Waiting {
+        Ok(Waiting {
             reviews: self.clone(),
             permission_id,
             ended: Some(ended),
-        }
+        })
     }
 
     /// The reviews open now, oldest first.
     pub fn reviews(&self) -> Vec<ConversationPermission> {
-        self.pending
+        self.state
             .lock()
             .expect("app reviews")
+            .pending
             .values()
             .map(|pending| pending.review.clone())
             .collect()
@@ -140,15 +180,15 @@ impl AppReviews {
         option: &str,
         by: ReviewAnswerer,
     ) -> ReviewAnswer {
-        let mut pending = self.pending.lock().expect("app reviews");
-        let Some(open) = pending.get(permission) else {
-            return if permission.starts_with("app-") {
+        let mut state = self.state.lock().expect("app reviews");
+        let Some(key) = state.key(permission) else {
+            return if is_app_review(permission) {
                 ReviewAnswer::Stale
             } else {
                 ReviewAnswer::NotAnAppReview
             };
         };
-        if open.review.execution_id != execution {
+        if state.pending[&key].review.execution_id != execution {
             return ReviewAnswer::Stale;
         }
         let end = match option {
@@ -156,7 +196,7 @@ impl AppReviews {
             DENY => ReviewEnd::Denied(by),
             _ => return ReviewAnswer::Stale,
         };
-        let open = pending.remove(permission).expect("present");
+        let open = state.pending.remove(&key).expect("present");
         let _ = open.end.send(end);
         ReviewAnswer::Ended
     }
@@ -166,35 +206,69 @@ impl AppReviews {
         self.answer(execution, permission, DENY, by)
     }
 
-    /// End the review `permission` with `end`, when it is still open.
-    fn end(&self, permission: &str, end: ReviewEnd) -> bool {
-        let open = self.pending.lock().expect("app reviews").remove(permission);
-        open.map(|open| open.end.send(end)).is_some()
+    /// Withdraw the review `permission`, when it is still open.
+    pub fn withdraw(&self, permission: &str, cause: McpAppWithdrawal) {
+        self.end_one(permission, ReviewEnd::Withdrawn(cause));
     }
 
-    /// Withdraw every review `app` has open.
+    /// End the review `permission` with `end`, when it is still open.
+    fn end_one(&self, permission: &str, end: ReviewEnd) {
+        let open = {
+            let mut state = self.state.lock().expect("app reviews");
+            state
+                .key(permission)
+                .and_then(|key| state.pending.remove(&key))
+        };
+        if let Some(open) = open {
+            let _ = open.end.send(end);
+        }
+    }
+
+    /// Withdraw every review the mount `app` has open.
     pub fn withdraw_app(&self, app: &McpAppRef, cause: McpAppWithdrawal) {
         let ended: Vec<Pending> = {
-            let mut pending = self.pending.lock().expect("app reviews");
-            let ids: Vec<String> = pending
+            let mut state = self.state.lock().expect("app reviews");
+            let keys: Vec<u64> = state
+                .pending
                 .iter()
                 .filter(|(_, open)| &open.app == app)
-                .map(|(id, _)| id.clone())
+                .map(|(key, _)| *key)
                 .collect();
-            ids.iter().filter_map(|id| pending.remove(id)).collect()
+            keys.iter()
+                .filter_map(|key| state.pending.remove(key))
+                .collect()
         };
         for open in ended {
             let _ = open.end.send(ReviewEnd::Withdrawn(cause));
         }
     }
 
-    /// Withdraw every review open: the conversation ended.
-    pub fn withdraw_all(&self, cause: McpAppWithdrawal) {
-        let ended = std::mem::take(&mut *self.pending.lock().expect("app reviews"));
+    /// The conversation ended: withdraw every review open, and open none
+    /// again — a call admitted just before cannot leave one behind.
+    pub fn end(&self) {
+        let ended = {
+            let mut state = self.state.lock().expect("app reviews");
+            state.ended = true;
+            std::mem::take(&mut state.pending)
+        };
         for (_, open) in ended {
-            let _ = open.end.send(ReviewEnd::Withdrawn(cause));
+            let _ = open
+                .end
+                .send(ReviewEnd::Withdrawn(McpAppWithdrawal::ConversationEnded));
         }
     }
+}
+
+/// A new app review's identity.
+pub fn new_review_id() -> String {
+    format!("{APP_REVIEW_PREFIX}{}", Uuid::new_v4())
+}
+
+/// Whether `permission` is an app review's identity, open or not.
+fn is_app_review(permission: &str) -> bool {
+    permission
+        .strip_prefix(APP_REVIEW_PREFIX)
+        .is_some_and(|id| Uuid::try_parse(id).is_ok())
 }
 
 impl Waiting {
@@ -208,7 +282,8 @@ impl Waiting {
             Err(_) => {
                 // The deadline: end it as expired — unless an answer ended
                 // it first, in which case that answer is what it ended with.
-                self.reviews.end(&self.permission_id, ReviewEnd::Expired);
+                self.reviews
+                    .end_one(&self.permission_id, ReviewEnd::Expired);
                 ended.await
             }
         };
@@ -222,7 +297,7 @@ impl Drop for Waiting {
     fn drop(&mut self) {
         // Still waiting: the app's request went before the review ended.
         if self.ended.is_some() {
-            self.reviews.end(
+            self.reviews.end_one(
                 &self.permission_id,
                 ReviewEnd::Withdrawn(McpAppWithdrawal::RequestCancelled),
             );
