@@ -153,15 +153,18 @@ not in an app.
 
 An app review is shown only in a view whose transcript is confirmed
 complete: the client refuses a view of unconfirmed history that offers any
-control. The oldest app reviews that fit are shown: room for them — at most
-16 000 bytes together — comes out of the view's transcript, tool calls and
-queue, never out of the agent's own reviews and questions, which an app's
-server must not be able to hide; and only as much as the reviews shown need,
-so an app's reviews that cannot be shown give nothing up. From the first that
-does not fit on, they wait unseen — the view says so, unless it already says
-something more specific of its own — and expire if nobody answers them. The
-view's revision folds in every app review open, shown or not, and how many
-are shown, so a window holding a revision holds what it showed.
+control. The agent's own reviews and questions come first, exactly as the
+view shows them with no app review open: an app's server must not be able to
+hide or displace them. The oldest app reviews that fit beside them are shown,
+at most 16 000 bytes together, room made out of the view's transcript, tool
+calls and queue. From the first that does not fit on, they wait unseen and
+expire if nobody answers them. The view says so where that notice fits beside
+the agent's own and the view says nothing more specific of its own; the
+notice's room, too, comes out of the transcript, tool calls and queue. The
+view's revision, an opaque token, is replaced by a digest of it, of every app
+review open, shown or not, and of how many are shown, no longer than the
+revision it replaces: the same on every read of the same state, and changed by
+any change in which are open or shown.
 
 ### A resource read
 

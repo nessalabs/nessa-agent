@@ -116,8 +116,8 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   resource tickets, and is idempotent. Nothing is admitted, opened or issued
   for that mount again — across a close and a reopening, and when the
   release came before the conversation was open: its later calls answer
-  `mcp_cancelled`. A call already handed to the session is not stopped: it
-  may still reach the server, and answers with its own outcome. It travels on the
+  `mcp_cancelled`. An `mcp.callTool` already handed to the session is not
+  stopped: it may still reach the server, and answers with its own outcome. It travels on the
   control lane, never the app lane, so held calls can never stop an app
   being released.
 - **What a refusal tells the host.** Nothing reached the server for

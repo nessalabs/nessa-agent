@@ -773,19 +773,20 @@ impl From<AppRefusal> for McpAppError {
 
 /// The view, bounded, with the app reviews open beside it.
 ///
-/// - **What is shown.** The oldest app reviews that fit, beside the view
-///   with all it can give up given up — its transcript, tool calls and
-///   queue, never the agent's own reviews and questions, which an app's
-///   server must not be able to hide. Only as much is given up as the
-///   reviews shown need: none shown, nothing given up for them but the room
-///   of the revision's fold and the notice, which the agent's own reviews
-///   give way for only where they alone fill the view.
+/// - **What comes first.** The agent's own reviews and questions, exactly
+///   as the view shows them with no app review open: an app's server must
+///   not be able to hide or displace what the agent is asking.
+/// - **What is shown.** The oldest app reviews that fit beside them, room
+///   made out of the view's transcript, tool calls and queue — only as much
+///   as the reviews shown, and the notice, need.
 /// - **What is not.** Those that do not fit wait unseen, and the view says
-///   so — unless it already says something more specific of its own.
-/// - **The revision.** Every app review open is folded into it, shown or
-///   not, and how many are shown: any change in which are open or shown
-///   changes it, so a window holding a revision holds what it showed.
-///   16 hex digits of the fold keep the revision within its bound.
+///   so where that notice fits beside the agent's own and the view says
+///   nothing more specific of its own.
+/// - **The revision.** Replaced by a digest of it, every app review open,
+///   shown or not, and how many are shown: any change in which are open or
+///   shown changes it, so a window holding a revision holds what it showed.
+///   The digest is no longer than the revision it replaces — the view needs
+///   no room for it — and, all hex, never equal to a revision without apps.
 ///
 /// Shown only in a view whose transcript is confirmed complete: the client
 /// refuses one of unconfirmed history that offers any control.
@@ -793,53 +794,60 @@ pub(super) fn with_app_reviews(
     view: ConversationView,
     reviews: Vec<ConversationPermission>,
 ) -> ConversationView {
+    let view = bound_view(view);
     if reviews.is_empty() || view.transcript_state != ConversationTranscriptState::Complete {
-        return bound_view(view);
+        return view;
     }
-    let fold = ":app:".len() + 16;
     let sizes: Vec<usize> = reviews
         .iter()
         .map(|review| serde_json::to_vec(review).map_or(usize::MAX, |bytes| bytes.len() + 1))
         .collect();
-    // What cannot be given up for them: the view with all it can give up
-    // given up, its interactions kept.
-    let floor = encoded_len(&bound_view_within(view.clone(), 0, false));
-    // The notice, when some go unshown and the view has none of its own.
-    let notice = if view.interaction_view_error.is_none() {
-        serde_json::to_vec(&serde_json::json!({ "interactionViewError": UNSHOWN_APP_REVIEWS }))
-            .map_or(usize::MAX, |bytes| bytes.len())
+    let all = sizes
+        .iter()
+        .fold(0, |total: usize, size| total.saturating_add(*size));
+    // What cannot be given up for them: the view with all but its
+    // interactions given up. Where every one fits as it is, no need to look.
+    let floor = if encoded_len(&view).saturating_add(all) <= MAX_VIEW_BYTES {
+        encoded_len(&view)
     } else {
-        0
+        encoded_len(&bound_view_within(view.clone(), 0, false))
     };
+    // The notice, where the view has none of its own and it fits beside
+    // the agent's own.
+    let notice = Some(
+        serde_json::to_vec(&serde_json::json!({ "interactionViewError": UNSHOWN_APP_REVIEWS }))
+            .map_or(usize::MAX, |bytes| bytes.len()),
+    )
+    .filter(|&notice| {
+        view.interaction_view_error.is_none() && floor.saturating_add(notice) <= MAX_VIEW_BYTES
+    });
     // The most of them, oldest first, that fit on that floor.
+    let room_for = |count: usize| {
+        let unshown = if count < reviews.len() {
+            notice.unwrap_or(0)
+        } else {
+            0
+        };
+        sizes[..count]
+            .iter()
+            .fold(unshown, |total, size| total.saturating_add(*size))
+    };
     let shown = (0..=reviews.len())
         .rev()
-        .find(|&count| {
-            let unshown = if count < reviews.len() { notice } else { 0 };
-            sizes[..count]
-                .iter()
-                .fold(floor + fold + unshown, |total, size| {
-                    total.saturating_add(*size)
-                })
-                <= MAX_VIEW_BYTES
-        })
+        .find(|&count| floor.saturating_add(room_for(count)) <= MAX_VIEW_BYTES)
         .unwrap_or(0);
-    // The fold, and the notice if some go unshown: room the view always
-    // makes, its interactions too where they alone fill it.
-    let always = fold + if shown < reviews.len() { notice } else { 0 };
-    let room = sizes[..shown]
-        .iter()
-        .fold(always, |total, size| total.saturating_add(*size));
-    let view = bound_view_within(view, MAX_VIEW_BYTES.saturating_sub(room), false);
-    let mut view = bound_view_within(view, MAX_VIEW_BYTES.saturating_sub(always), true);
+    let mut view = bound_view_within(view, MAX_VIEW_BYTES.saturating_sub(room_for(shown)), false);
     let mut digest = Sha256::new();
+    digest.update((view.revision.len() as u64).to_be_bytes());
+    digest.update(view.revision.as_bytes());
     for review in &reviews {
         digest.update((review.permission_id.len() as u64).to_be_bytes());
         digest.update(review.permission_id.as_bytes());
     }
     digest.update((shown as u64).to_be_bytes());
-    view.revision = format!("{}:app:{}", view.revision, &hex_of(digest)[..16]);
-    if shown < reviews.len() && view.interaction_view_error.is_none() {
+    let digits = view.revision.len().clamp(16, 64);
+    view.revision = hex_of(digest)[..digits].to_owned();
+    if shown < reviews.len() && notice.is_some() {
         view.interaction_view_error = Some(UNSHOWN_APP_REVIEWS.into());
     }
     view.permissions.extend(reviews.into_iter().take(shown));

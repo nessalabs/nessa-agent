@@ -11,7 +11,9 @@ use crate::conversation::application::app_reviews::{
 };
 use crate::conversation::application::mcp_apps::TicketEnd;
 use crate::conversation::application::projection::MAX_VIEW_BYTES;
-use crate::conversation::application::view::{ConversationMessage, ConversationPermissionOrigin};
+use crate::conversation::application::view::{
+    ConversationMessage, ConversationPermissionOrigin, ConversationQuestion,
+};
 use crate::conversation::application::DeletionFailures;
 use crate::mcp_servers::domain::MAX_APP_ARGUMENTS_BYTES;
 use nessa_auth::domain::PrincipalId;
@@ -1422,7 +1424,6 @@ async fn crowded(
         })
         .collect();
     view.interaction_view_error = None;
-    view.revision = view.revision.split(":app:").next().unwrap().to_owned();
     (view, review)
 }
 
@@ -1476,84 +1477,215 @@ async fn a_hidden_app_review_changes_the_revision_as_a_shown_one_does() {
     assert_ne!(shown.revision, hidden.revision);
 }
 
-#[tokio::test]
-async fn the_notice_never_takes_a_view_past_its_bound() {
-    // However close to its bound the rest of the view sits, the notice that
-    // some app reviews are not shown is counted before they are chosen.
-    let fixture = Fixture::new().await;
-    let (view, review) = crowded(&fixture, 4, 10_000).await;
-    let mut unshown = 0;
-    for bytes in (10_000..15_000).step_by(7) {
-        let crowded = ConversationView {
-            permissions: view
-                .permissions
-                .iter()
-                .map(|agent| ConversationPermission {
-                    arguments_json: format!("{{\"a\":\"{}\"}}", "y".repeat(bytes)),
-                    ..agent.clone()
-                })
-                .collect(),
-            ..view.clone()
-        };
-        let shown = with_app_reviews(crowded, vec![review.clone()]);
-        assert!(
-            serde_json::to_vec(&shown).unwrap().len() <= MAX_VIEW_BYTES,
-            "{bytes}"
+/// What every view with app reviews open must hold, against the same view
+/// with none open:
+/// 1. the agent's own reviews and questions are exactly those it shows;
+/// 2. it stays within its bound;
+/// 3. its revision is the same on every read, and differs whenever which
+///    app reviews are open differs;
+/// 4. the notice shows exactly where an app review is hidden, the view says
+///    nothing of its own, and the notice fits beside the agent's own.
+///
+/// Which it was: all shown, some hidden with the notice, or without.
+fn holds(view: &ConversationView, reviews: &[ConversationPermission], case: &str) -> usize {
+    let none = with_app_reviews(view.clone(), vec![]);
+    let with = with_app_reviews(view.clone(), reviews.to_vec());
+    let apps: Vec<String> = reviews.iter().map(|r| r.permission_id.clone()).collect();
+    let (shown, agents): (Vec<String>, Vec<String>) = identities(&with)
+        .into_iter()
+        .partition(|id| apps.contains(id));
+    assert_eq!(agents, identities(&none), "1: reviews, {case}");
+    let questions = |view: &ConversationView| {
+        view.questions
+            .iter()
+            .map(|q| q.question_id.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(questions(&with), questions(&none), "1: questions, {case}");
+    assert!(apps.starts_with(&shown), "oldest first, {case}");
+    assert!(
+        serde_json::to_vec(&with).unwrap().len() <= MAX_VIEW_BYTES,
+        "2: {case}"
+    );
+    assert_eq!(
+        with_app_reviews(view.clone(), reviews.to_vec()).revision,
+        with.revision,
+        "3: the same, {case}"
+    );
+    assert_ne!(with.revision, none.revision, "3: none open, {case}");
+    if let Some((_, fewer)) = reviews.split_last() {
+        assert_ne!(
+            with_app_reviews(view.clone(), fewer.to_vec()).revision,
+            with.revision,
+            "3: one fewer open, {case}"
         );
-        unshown += usize::from(shown.interaction_view_error.is_some());
     }
-    assert!(unshown > 0, "some were left unshown");
+    if let Some((last, rest)) = reviews.split_last() {
+        let other = ConversationPermission {
+            permission_id: format!("{}~", &last.permission_id[1..]),
+            ..last.clone()
+        };
+        let swapped = [rest, &[other]].concat();
+        assert_ne!(
+            with_app_reviews(view.clone(), swapped).revision,
+            with.revision,
+            "3: another open in its place, {case}"
+        );
+    }
+    // Changed, its length not.
+    let mut revision = view.revision.clone();
+    let last = revision.pop().unwrap_or('0');
+    revision.push(if last == '0' { '1' } else { '0' });
+    let changed = ConversationView {
+        revision,
+        ..view.clone()
+    };
+    assert_ne!(
+        with_app_reviews(changed, reviews.to_vec()).revision,
+        with.revision,
+        "3: the view itself changed, {case}"
+    );
+    let fits = {
+        let floor = ConversationView {
+            interaction_view_error: Some(UNSHOWN_APP_REVIEWS.into()),
+            ..bound_view_within(none.clone(), 0, false)
+        };
+        serde_json::to_vec(&floor).unwrap().len() <= MAX_VIEW_BYTES
+    };
+    let noticed = shown.len() < apps.len() && none.interaction_view_error.is_none() && fits;
+    assert_eq!(
+        with.interaction_view_error,
+        if noticed {
+            Some(UNSHOWN_APP_REVIEWS.to_owned())
+        } else {
+            none.interaction_view_error.clone()
+        },
+        "4: {case}"
+    );
+    match (shown.len() < apps.len(), noticed) {
+        (false, _) => 0,
+        (true, true) => 1,
+        (true, false) => 2,
+    }
 }
 
 #[tokio::test]
-async fn an_app_review_is_shown_only_where_the_notice_fits_beside_it() {
-    // An app review shown while another waits brings the notice with it:
-    // it is shown only where both fit beside every one of the agent's own,
-    // to the byte — with a transcript to give up, and with none. With none,
-    // nothing is given up, so the view is never called truncated: what it
-    // offers depends on that.
+async fn app_reviews_never_cost_the_agents_own_however_the_view_is_filled() {
     let fixture = Fixture::new().await;
-    let (view, review) = crowded(&fixture, 4, 11_800).await;
+    let (view, review) = crowded(&fixture, 4, 0).await;
+    let app = |name: String, bytes: usize| ConversationPermission {
+        permission_id: name,
+        arguments_json: "z".repeat(bytes),
+        ..review.clone()
+    };
+    let agent = |index: usize, bytes: usize| ConversationPermission {
+        permission_id: format!("agent-{index}"),
+        arguments_json: "y".repeat(bytes),
+        origin: ConversationPermissionOrigin::Harness,
+        ..review.clone()
+    };
+    // Where the final review found the agent's own given up: their reviews
+    // alone fill the view to within the notice.
+    let mut seen = [0; 3];
+    for bytes in 14_380..14_520 {
+        let crowded = ConversationView {
+            permissions: (0..4).map(|index| agent(index, bytes)).collect(),
+            ..view.clone()
+        };
+        seen[holds(
+            &crowded,
+            &[app("app-0".into(), 15_000)],
+            &format!("agents of {bytes}"),
+        )] += 1;
+    }
+    // Where the first app review fits to the byte, or does not, beside a
+    // view with a transcript to give up and beside one with none.
+    // A revision as the projection makes it, shorter than any digest may be.
+    let agents = ConversationView {
+        permissions: (0..4).map(|index| agent(index, 11_800)).collect(),
+        revision: format!("{}:1", Uuid::nil()),
+        ..view.clone()
+    };
     let bare = ConversationView {
         messages: vec![],
         tools: vec![],
         pending: vec![],
         truncated: false,
-        ..view.clone()
+        ..agents.clone()
     };
-    for view in [view, bare] {
-        let agents = identities(&with_app_reviews(view.clone(), vec![]));
-        let floor = serde_json::to_vec(&bound_view_within(view.clone(), 0, false))
+    for filled in [agents, bare] {
+        let floor = serde_json::to_vec(&bound_view_within(bound_view(filled.clone()), 0, false))
             .unwrap()
             .len();
-        let empty = serde_json::to_vec(&ConversationPermission {
-            arguments_json: String::new(),
-            ..review.clone()
-        })
-        .unwrap()
-        .len();
+        let empty = serde_json::to_vec(&app("app-0".into(), 0)).unwrap().len();
         let room = MAX_VIEW_BYTES - floor - empty;
-        let mut shown_any = false;
-        let mut hidden_any = false;
-        for length in room.saturating_sub(400)..room {
-            let first = ConversationPermission {
-                permission_id: "app-first".into(),
-                arguments_json: "z".repeat(length),
-                ..review.clone()
-            };
-            let shown = with_app_reviews(view.clone(), vec![first, review.clone()]);
-            assert!(
-                serde_json::to_vec(&shown).unwrap().len() <= MAX_VIEW_BYTES,
-                "{length}"
-            );
-            assert!(identities(&shown).starts_with(&agents), "{length}");
-            assert!(!view.messages.is_empty() || !shown.truncated, "{length}");
-            let first_shown = identities(&shown).contains(&"app-first".to_owned());
-            shown_any |= first_shown;
-            hidden_any |= !first_shown;
+        for bytes in room - 300..room + 20 {
+            seen[holds(
+                &filled,
+                &[app("app-0".into(), bytes), app("app-1".into(), 15_000)],
+                &format!("first of {bytes}"),
+            )] += 1;
         }
-        assert!(shown_any && hidden_any, "the sweep crosses the edge");
     }
+    // And a seeded sweep of how a view may be filled: the agent's reviews
+    // and questions, the app reviews open, and the transcript.
+    let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = |below: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % below as u64) as usize
+    };
+    let message = view.messages[0].clone();
+    for case in 0..160 {
+        let messages = match next(3) {
+            0 => view.messages.clone(),
+            1 => vec![],
+            _ => (0..next(60))
+                .map(|_| ConversationMessage {
+                    user_text: "m".repeat(next(3_000)),
+                    ..message.clone()
+                })
+                .collect(),
+        };
+        let filled = ConversationView {
+            truncated: false,
+            messages,
+            permissions: (0..next(6))
+                .map(|index| agent(index, next(15_000)))
+                .collect(),
+            questions: (0..next(3))
+                .map(|index| ConversationQuestion {
+                    execution_id: review.execution_id.clone(),
+                    question_id: format!("question-{index}"),
+                    message: "q".repeat(next(4_000)),
+                    questions: vec![],
+                })
+                .collect(),
+            ..view.clone()
+        };
+        let reviews: Vec<_> = (0..1 + next(5))
+            .map(|index| app(format!("app-{index}"), next(16_000)))
+            .collect();
+        seen[holds(&filled, &reviews, &format!("case {case}"))] += 1;
+    }
+    assert!(
+        seen.iter().all(|&count| count > 0),
+        "every branch: {seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn every_read_of_the_same_app_reviews_has_the_same_revision() {
+    // A window polling a conversation sees no change where there is none,
+    // and sees one when an app review opens.
+    let fixture = Fixture::new().await;
+    let (_first, _) = fixture.held(fixture.call("delete_rows", None)).await;
+    let read = || fixture.service.read(fixture.id.clone(), caller("read"));
+    let once = read().await.unwrap();
+    assert_eq!(read().await.unwrap().revision, once.revision);
+    let (_second, _) = fixture.held(fixture.call("delete_rows", None)).await;
+    assert_ne!(read().await.unwrap().revision, once.revision);
 }
 
 #[tokio::test]
