@@ -50,11 +50,11 @@ fn payload(startup: &ApplicationStartup) -> GatewayStartup {
     }
 }
 
-fn bundled_window(label: &str) -> Result<BundledSurface, String> {
+pub(crate) fn bundled_window(label: &str) -> Result<BundledSurface, String> {
     match label {
         panel::MAIN_WINDOW => Ok(BundledSurface::Main),
         panel::SETUP_WINDOW => Ok(BundledSurface::Setup),
-        _ => Err("Only a bundled Nessa surface can inspect gateway startup".into()),
+        _ => Err("Only a bundled Nessa surface can access the gateway".into()),
     }
 }
 

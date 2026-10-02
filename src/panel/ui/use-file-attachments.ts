@@ -460,7 +460,12 @@ export function useFileAttachments(
       return
     }
     busyRef.current = true
+    pendingConversation.current = targetId
     setReading(true)
+    setPending({
+      conversationId: targetId,
+      files: images.map((image) => ({ name: image.name, mimeType: image.mimeType })),
+    })
     let held: File[]
     try {
       held = await Promise.all(
@@ -475,22 +480,26 @@ export function useFileAttachments(
         }),
       )
     } catch (error) {
+      if (mounted.current) refuse(pickerRefusal(error), targetId)
+      return
+    } finally {
+      pendingConversation.current = null
       busyRef.current = false
       if (mounted.current) {
         setReading(false)
-        refuse(pickerRefusal(error), targetId)
+        setPending(null)
       }
-      return
     }
-    busyRef.current = false
     if (!mounted.current) return
-    setReading(false)
     attach(held, linked, targetId)
   }
 
   async function addImageUrl(url: string) {
-    if (busyRef.current) return
     const targetId = chat.active.id
+    if (busyRef.current) {
+      refuse({ reason: "reading-files" }, targetId)
+      return
+    }
     busyRef.current = true
     pendingConversation.current = targetId
     setReading(true)
@@ -524,9 +533,10 @@ export function useFileAttachments(
     inputRef,
     /**
      * Whether this conversation is waiting on something that has to finish
-     * before a draft can go — an image being fetched from a URL, or a file the
-     * host is still making readable. The composer refuses a send while either
-     * is true, with the words it already has for it.
+     * before a draft can go — selected image bytes being read, an image being
+     * fetched from a URL, or a file the host is still making readable. The
+     * composer refuses a send while any of these is true, with the words it
+     * already has for it.
      */
     isPending: (conversationId: string) =>
       pendingConversation.current === conversationId ||

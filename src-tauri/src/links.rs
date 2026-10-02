@@ -42,6 +42,12 @@
 //! | `http://tauri.localhost` | Linux and Windows, where that protocol is an http host |
 //! | `http://localhost:1420` | the dev server alone, and only in a `tauri dev` build |
 //!
+//! Beside them, the frame an MCP App is drawn in (ADR 344, `app_frame`): the
+//! sandbox proxy on its own scheme ([`app_sandbox::SCHEME`], an http host on
+//! Windows) and the app's document inside it, `about:srcdoc`. Those are not
+//! the app's pages; they are allowed because a frame's load passes through
+//! this policy too, and refusing them would draw no app.
+//!
 //! # Which ways out of the page this actually sees
 //!
 //! The navigation policy is not every exit. Covered on both macOS and Linux:
@@ -54,10 +60,24 @@
 //!
 //! Those are shut elsewhere rather than here, and are recorded so the next
 //! person does not read this module as a complete gate: the CSP sets
-//! `frame-src 'none'` and `form-action 'none'`, and the transcript renders
-//! markdown with no raw HTML, so model output cannot author a `target`, a
-//! `download` or a script that calls `window.open`. A change to either of those
-//! re-opens a route past this file.
+//! `form-action 'none'` and a `frame-src` that names only the MCP Apps sandbox
+//! proxy, and the transcript renders markdown with no raw HTML, so model
+//! output cannot author a `target`, a `download` or a script that calls
+//! `window.open`. A change to either of those re-opens a route past this file.
+//!
+//! The sandbox frame is that one route, opened on purpose: its document is
+//! the proxy, which holds no link of the model's, and the app inside it is
+//! someone else's HTML. The app's policy has `frame-src 'none'` and applies
+//! to the proxy's document too (`src/desktop/widgets/app/model/csp.ts`), so
+//! the app can frame nothing and cannot navigate its own frame: each is
+//! refused before it reaches anything — in the browser build's Chromium,
+//! where it is checked (`mcp-apps.mjs --only
+//! escape-navigate,escape-refresh,escape-rewrite` under
+//! `verification/desktop/scripts/`; its WebKit run is still to come).
+//! Whether WKWebView under Tauri refuses it before this policy runs is not
+//! yet seen; if it does not, this policy would hand an
+//! `http`, `https` or `mailto` URL the app chose to the OS, with no gesture
+//! of the person's (#349, open question 3).
 //!
 //! A dropped URL is the other way a page can be made to navigate, and the page
 //! stops that itself in `src/panel/adapters/use-drop-navigation-guard.ts`. One
@@ -69,6 +89,7 @@ use tauri::{
     Emitter, Runtime, Url, Webview,
 };
 
+use crate::app_sandbox;
 use crate::host::{LinkNotOpened, LINK_NOT_OPENED};
 use crate::platform::{self, Host};
 
@@ -128,6 +149,23 @@ fn own_page(url: &Url, serving: Serving) -> bool {
     }
 }
 
+/// Whether this is the frame an MCP App is drawn in ([`app_sandbox`]): the
+/// sandbox proxy on its own scheme — an `http` host on Windows — or the app's
+/// document inside it, which the proxy loads as `about:srcdoc`.
+///
+/// The navigation policy cannot tell a frame's load from the window's, so a
+/// link to the proxy clicked in the window would load it there too; the proxy
+/// goes back at once when it finds itself the top page
+/// (`src/desktop/widgets/app/sandbox/proxy.html`).
+fn app_frame(url: &Url) -> bool {
+    match (url.scheme(), url.host_str()) {
+        (scheme, Some("localhost")) if scheme == app_sandbox::SCHEME => url.port().is_none(),
+        ("http", Some(host)) if host == app_sandbox::HTTP_HOST => url.port().is_none(),
+        ("about", None) => url.path() == "srcdoc",
+        _ => false,
+    }
+}
+
 /// Where this URL belongs. See the module documentation for the reasoning.
 ///
 /// A `mailto:` is handed over whole, query and all. Some mail clients have
@@ -135,7 +173,7 @@ fn own_page(url: &Url, serving: Serving) -> bool {
 /// alternative — rewriting a person's link before their mail client sees it —
 /// would break the ordinary `?subject=` this is mostly used for.
 pub fn decide(url: &Url, serving: Serving) -> Navigation {
-    if own_page(url, serving) {
+    if own_page(url, serving) || app_frame(url) {
         return Navigation::Allow;
     }
     match url.scheme() {
@@ -379,6 +417,32 @@ mod tests {
             "ipc://localhost/",
         ] {
             assert_eq!(decision(url), Navigation::Refuse, "{url}");
+        }
+    }
+
+    /// The MCP Apps sandbox proxy, and the app document it loads, are frames
+    /// the window draws; only the proxy's own origin and `about:srcdoc` are.
+    #[test]
+    fn an_app_s_sandbox_frame_loads() {
+        for url in [
+            "nessa-sandbox://localhost/proxy.html",
+            "http://nessa-sandbox.localhost/proxy.html",
+            "about:srcdoc",
+        ] {
+            assert_eq!(decision(url), Navigation::Allow, "{url}");
+        }
+        for url in [
+            "nessa-sandbox://localhost:8080/proxy.html",
+            "nessa-sandbox://evil/proxy.html",
+            "about:blank",
+        ] {
+            assert_eq!(decision(url), Navigation::Refuse, "{url}");
+        }
+        for url in [
+            "http://nessa-sandbox.localhost:7420/",
+            "http://nessa-sandbox.localhost.evil.com/",
+        ] {
+            assert_eq!(decision(url), Navigation::HandToBrowser, "{url}");
         }
     }
 

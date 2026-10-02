@@ -10,18 +10,19 @@ use crate::{
     application::agent_execution::{
         providers::ProviderIdentity,
         sessions::{
-            records::{FactKey, FactKind},
-            SessionChange, SessionSaveBackend, SessionSaveGeneration,
+            records::{self, FactKey, FactKind},
+            SessionChange, SessionSaveBackend, SessionSaveGeneration, SessionSaveUnit,
+            SessionSnapshot,
         },
     },
-    domain::agent_execution::sessions::{ProviderContext, SessionId},
+    domain::agent_execution::sessions::{ExecutionSessionId, ProviderContext, SessionId},
     infrastructure::session_storage::RecordStorage,
 };
 use event_stream::{
     AdvanceRetentionFloor, EnableRetryPolicy, EventSink, IncarnationId, LifecycleAction,
     LifecycleOperationId, LifecycleRequest, NewEvent, Payload, RetentionOperationId, StreamId,
 };
-use nessa_sync::replication::domain::{Id, PageRequest, Scope};
+use nessa_sync::replication::domain::{Id, Page, PageRequest, Scope};
 use std::{env, panic, process::Command, sync::atomic::Ordering, thread};
 
 fn sid(value: &str) -> Id {
@@ -108,6 +109,187 @@ async fn append_save(
         runtime.append(stream, frame).await.unwrap();
     }
     runtime.bounds(stream).await.unwrap().tail.offset
+}
+
+// Unlike raw envelope fixtures, these saves pass the canonical semantic fold.
+async fn save_sixteen_publications(storage: &RecordStorage, id: &SessionId) {
+    let lease = storage.open(id.clone()).await.unwrap();
+    let mut binding = lease.load().await.unwrap().binding().clone();
+    let mut snapshot: Option<SessionSnapshot> = None;
+    for generation in 0..16 {
+        let change = if generation == 0 {
+            SessionChange::Opened {
+                id: id.clone(),
+                provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+                context: ProviderContext::Absent,
+            }
+        } else {
+            SessionChange::ProviderContext {
+                before: snapshot.as_ref().unwrap().provider_context.clone(),
+                after: ProviderContext::Recorded(
+                    ExecutionSessionId::new(format!("context-{generation}")).unwrap(),
+                ),
+            }
+        };
+        let next = records::fold_changes(snapshot.as_ref(), std::slice::from_ref(&change)).unwrap();
+        let receipt = lease
+            .save_changes(
+                binding.clone(),
+                next.clone(),
+                vec![SessionSaveUnit::new(vec![change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        binding = receipt.next_for(&binding, 1).unwrap();
+        snapshot = Some(next);
+    }
+    assert_eq!(binding.base(), 32);
+}
+async fn target_page(
+    storage: &RecordStorage,
+    id: &SessionId,
+    target: u64,
+) -> Result<RecordReadStatus<Page>, SourceError> {
+    let mut source = storage
+        .record_source(id, sid("origin"))
+        .await
+        .unwrap()
+        .unwrap();
+    let request = PageRequest {
+        scope: source.scope(sid("receiver"), sid("epoch")),
+        after: 0,
+        target,
+        max_records: 16,
+        max_payload_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+        max_record_bytes: super::super::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    };
+    tokio::task::spawn_blocking(move || {
+        thread::spawn(move || source.bounded_page(&request))
+            .join()
+            .unwrap()
+    })
+    .await
+    .unwrap()
+}
+#[tokio::test]
+async fn shared_discovery_serves_smaller_publication_then_resumes_captured_head() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let id = SessionId::new("shared-smaller").unwrap();
+    save_sixteen_publications(&storage, &id).await;
+    assert_eq!(head(&storage, &id).await, RecordReadStatus::Preparing);
+    assert_eq!(
+        storage
+            .terminal_cache
+            .returned_records
+            .load(Ordering::SeqCst),
+        16
+    );
+    let RecordReadStatus::Ready(page) = target_page(&storage, &id, 20).await.unwrap() else {
+        panic!("the next bounded read reaches the valid publication20")
+    };
+    assert_eq!(page.request.target, 20);
+    assert_eq!(page.records.len(), 16);
+    assert_eq!(page.records.last().unwrap().position, 16);
+    assert_eq!(
+        storage
+            .terminal_cache
+            .returned_records
+            .load(Ordering::SeqCst),
+        20
+    );
+    assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(32));
+    assert_eq!(
+        storage
+            .terminal_cache
+            .returned_records
+            .load(Ordering::SeqCst),
+        32
+    );
+    storage.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn shared_discovery_refuses_intermediate_unit_and_keeps_larger_progress() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let id = SessionId::new("shared-unit").unwrap();
+    save_sixteen_publications(&storage, &id).await;
+    assert_eq!(head(&storage, &id).await, RecordReadStatus::Preparing);
+    assert!(matches!(
+        target_page(&storage, &id, 19).await,
+        Err(SourceError::InvalidRequest)
+    ));
+    assert_eq!(
+        storage
+            .terminal_cache
+            .returned_records
+            .load(Ordering::SeqCst),
+        19
+    );
+    assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(32));
+    assert_eq!(
+        storage
+            .terminal_cache
+            .returned_records
+            .load(Ordering::SeqCst),
+        32
+    );
+    storage.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn shared_discovery_finishes_smaller_capture_before_larger_requests() {
+    for head_first in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+        let id = SessionId::new("shared-larger").unwrap();
+        save_sixteen_publications(&storage, &id).await;
+        assert!(matches!(
+            target_page(&storage, &id, 20).await.unwrap(),
+            RecordReadStatus::Preparing
+        ));
+        assert_eq!(
+            storage
+                .terminal_cache
+                .returned_records
+                .load(Ordering::SeqCst),
+            16
+        );
+        if head_first {
+            assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(20));
+        } else {
+            assert!(matches!(
+                target_page(&storage, &id, 32).await.unwrap(),
+                RecordReadStatus::Preparing
+            ));
+        }
+        assert_eq!(
+            storage
+                .terminal_cache
+                .returned_records
+                .load(Ordering::SeqCst),
+            20
+        );
+        let RecordReadStatus::Ready(page) = target_page(&storage, &id, 32).await.unwrap() else {
+            panic!("larger publication resumes after the original smaller capture")
+        };
+        assert_eq!(page.request.target, 32);
+        assert_eq!(
+            storage
+                .terminal_cache
+                .returned_records
+                .load(Ordering::SeqCst),
+            32
+        );
+        assert_eq!(head(&storage, &id).await, RecordReadStatus::Ready(32));
+        assert_eq!(
+            storage
+                .terminal_cache
+                .returned_records
+                .load(Ordering::SeqCst),
+            32
+        );
+        storage.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]

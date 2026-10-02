@@ -150,11 +150,10 @@ save lineage and publication remain owned by `save_group.rs`.
 
 ## Semantic save units for #292
 
-This is the current implementation contract for the in-progress #292 source
-migration. Oversized-save, killed-child restart, allocation and receiver fixtures
-are authored; their compiler/runtime gates and fresh independent review remain
-pending. The existing #275/#290 evidence is historical, not approval of these
-changed semantics.
+This is the current implementation contract for #292. Gate results and review
+findings are tracked in the issue and pull request evidence chronology. The
+existing #275/#290 evidence applies to its original semantics; it does not
+establish acceptance of these changed semantics.
 
 The caller owns explicit semantic units. A scheduling transition with its queue
 selection/removal, or settlement with terminal scheduling and queue removal, is
@@ -197,7 +196,7 @@ for provider initialization, queue restoration or new command dispatch.
 
 | Row | State and ordering | Required result and fixture boundary |
 | --- | --- | --- |
-| O1 | Any late unit, unit checkpoint or final candidate is invalid; an indivisible unit exceeds 160 MiB | Refuse before pending reconciliation or any append. The encoded unit passes the existing physical body-size owner before decode-budget preflight, so an oversized valid unit reports typed TooLarge rather than malformed content. A size refusal leaves a fresh writer usable. Test actual storage row count, prior load and valid retry. `valid_unit_plan_with_wrong_candidate_never_appends` isolates valid decisions with a contradictory observed snapshot from canonical unit rejection. `late_invalid_unit_never_appends_valid_prefix` separately checks a valid first Unit followed by invalid second Unit. Both refuse with unchanged rows/publication before a valid same-binding retry, so a removed full preflight is tested against the late-prefix row assertion rather than being masked by an earlier candidate case. `explicit_units_publish_one_direct_save_beyond_one_body_bound` first refuses the same candidate as one oversized unit without rows, then saves its caller-owned input units and verifies final receipt/reopen/exact retry (authored; runtime gate pending). |
+| O1 | Any late unit, unit checkpoint or final candidate is invalid; an indivisible unit exceeds 160 MiB | Refuse before pending reconciliation or any append. The encoded unit passes the existing physical body-size owner before decode-budget preflight, so an oversized valid unit reports typed TooLarge rather than malformed content. A size refusal leaves a fresh writer usable. Test actual storage row count, prior load and valid retry. `valid_unit_plan_with_wrong_candidate_never_appends` isolates valid decisions with a contradictory observed snapshot from canonical unit rejection. `late_invalid_unit_never_appends_valid_prefix` separately checks a valid first Unit followed by invalid second Unit. Both refuse with unchanged rows/publication before a valid same-binding retry, so a removed full preflight is tested against the late-prefix row assertion rather than being masked by an earlier candidate case. `explicit_units_publish_one_direct_save_beyond_one_body_bound` first refuses the same candidate as one oversized unit without rows, then saves its caller-owned input units and verifies final receipt/reopen/exact retry. |
 | O2 | An explicit unit seals while the outer save is unfinished | Retain its exact staged bytes and original ownership. `abort_after_private_unit_keeps_prior_public_projection` checks an actual earlier sealed Unit plus a later partial/aborted attempt, so Abort cannot expose already-staged private decisions. Normal load exposes typed unfinished evidence; source head and receiver applied projection remain at the prior completed save. Test actual head and an invented intermediate page target. `save_envelope_refuses_independent_digest_ordinal_chain_and_identity_contradictions` checks newly isolated header/key ordinal, previous-chain, next-prefix and later generation/stream/incarnation clauses against valid linked Unit/Complete controls; the existing `changed_payload_boundary_scope_base_generation_and_count_refuse` owns digest and fresh base/generation/ordinal refusal; its direct envelope cases do not claim source persistence. One generic prefix-count/chain check owns both fresh (count0/empty chain) and later linked units; there are no repeated fresh ordinal/previous predicates. The header0/key1 case isolates physical key agreement while the generic prefix ordinal remains valid. |
 | O2a | Actual admitted product recordsHead/recordsPage uses the tiny current SDK save (one inline Unit plus one inline SaveComplete) | The published head is physical terminal position2, not the old snapshot-only single fact. The actual authenticated owner scope stays epoch-3; invented target1 is only a Unit seal and returns typed invalid_request, while captured target2 returns both dense physical positions1/2. `admitted_record_route_uses_owner_scope_and_real_physical_source` exercises the real store/source/dispatcher and keeps its wrong-receiver refusal. This is a current fixture migration after the full-suite stale-head1 failure, not a production source-bound change. |
 | O3 | Unit acknowledgment is lost or its caller disappears | Original lease/task retains physical work. Exact retry compares original identity, boundaries and bytes, skips confirmed units and resumes missing work. No next generation or provider effect is authorized. |
@@ -205,7 +204,7 @@ for provider initialization, queue restoration or new command dispatch.
 | O3b | Same live writer has a durable Unit and a trigger-refused, absent SaveComplete; caller retries the same binding with a semantically valid changed Opening unit and its matching candidate | Refuse before any replacement completion append. The physical row count stays one, the original load remains unfinished and unpublished, and the committed watch stays clean. The original exact unit/completion retry then publishes once. `record_watch_stays_clean_after_unit_seal_until_original_completion_retry` separates confirmed-unit byte agreement from the later comparison against an already durable completion. |
 | O3c | Existing completed-turn fixture is seeded through the current explicit decision save API | InputAccepted carries no later events, result or local outcome; real Finished observation followed by LocalSettlement records the domain-produced Completed outcome. The final seeded snapshot retains that outcome instead of reusing snapshot-only inferred-success omission. `streamed_chunks_do_not_rescan_prior_turns_and_terminal_invalidates_cached_history` then measures live manager behavior against a valid actual adapter setup, with production validation unchanged. |
 | O3d | Snapshot adapter retries the exact opening, repartitions its confirmed prefix, or extends it with an actual context transition | Use Absent to Recorded with the matching extended candidate, so prefix repartition rejection is independently load-bearing and the exact original prefix plus valid suffix succeeds. Absent to Absent is not an accepted transition. `snapshot_fixture_keeps_exact_receipt_prefix_and_reset_capability` preserves the separate stale receipt and reset-incarnation refusals, then accepts the original opening under the reset binding. |
-| O4 | Child process dies inside a unit or after earlier unit seals | The existing strict physical abort terminates only that physical attempt. Earlier units remain an unfinished save; abort does not publish a partial group. Even before the first unit seals, recovery retains the original start key/full-body digest and refuses ordinary initialization; exact retry checks that bounded evidence before append. Reopen and retry the original binding without duplicate units. Owning regression `killed_child_retains_original_unpublished_unit_retry` kills and reaps the original child after two actual committed physical frames, then checks Unfinished admission, changed-byte refusal, original retry and duplicate-free lost-reply retry (authored; runtime gate pending). |
+| O4 | Child process dies inside a unit or after earlier unit seals | The existing strict physical abort terminates only that physical attempt. Earlier units remain an unfinished save; abort does not publish a partial group. Even before the first unit seals, recovery retains the original start key/full-body digest and refuses ordinary initialization; exact retry checks that bounded evidence before append. Reopen and retry the original binding without duplicate units. Owning regression `killed_child_retains_original_unpublished_unit_retry` kills and reaps the original child after two actual committed physical frames, then checks Unfinished admission, changed-byte refusal, original retry and duplicate-free lost-reply retry. |
 | O5 | All units are durable but completion is absent; completion acknowledgment is lost | Without completion, remain unfinished and append only the missing terminal on exact retry. With a durable completion, restore the original receipt and next-generation binding and acknowledge exact retry without append. |
 | O6 | Same-generation P has a retained unit, and retry extends it to Q | Reconcile P's exact pending unit bytes unchanged, append Q's linked suffix and complete Q. A unit is not marked final. If restart aborts P's incomplete completion attempt, verify that original completion key/count/digest against the unchanged P prefix of Q; the abort does not publish P or require Q's later terminal to have P's digest. If P already has a durable completion, verify its exact prefix envelope and retain P's published meaning; its receipt never acknowledges Q. Test both evidence orders, aborted completion recovery and crash before the first extension unit. |
 | O7 | Changed/truncated/repartitioned retry; wrong base/incarnation; contradictory unit or terminal | Refuse before replacement or new append. Conflicting physical history fences the writer instead of using the prior snapshot to claim that suffix is absent. Published Record load requires absent snapshot/base0/generation0 together, or present snapshot/base>0/generation>0; a completion with empty metadata payload is not an empty semantic save. Reset returns the absent-snapshot form, and Unfinished refuses first. Contradictory evidence refuses before provider initialization. The published-load fixture includes absent snapshot with base1/generation1 to isolate snapshot/base agreement from generation/base agreement. Snapshot adapters are not subject to physical-cursor rules. Their exact retry owner retains the original immutable typed unit prefix; encoded-size/digest preflight drops each temporary unit body before encoding the next, without retaining a second encoded plan. A custom adapter receipt for another binding, a different unit count or impossible next capability refuses before clearing retained decisions or authorizing subsequent effects. `immutable_unit_and_snapshot_receipt_constructor_refuse_each_invalid_capability` owns empty-unit construction and each Snapshot revision pairing against a valid counterpart, without claiming physical persistence. Cached discovery retains a known malformed-tail failure; a repeated head cannot skip it merely because physical framing advanced. A requested older immutable publication may be revalidated independently. |
@@ -220,8 +219,85 @@ for provider initialization, queue restoration or new command dispatch.
 | O8a | Untrusted checkpoint group identity/count/chain fields enter representation preflight before owned typed decoding | The existing Shape/Seed/TokenReader owner routes group and identity objects, admits only their declared keys, bounds the 32-byte and 16-byte arrays before reading an excess element, and gives numeric/fixed-byte slots zero decoded string allowance and no nested maps or nonempty arrays. Owning `checkpoint_group_preflight_refuses_each_independent_unbounded_shape` exercises representation admission directly against an accepted bounded group, then otherwise unchanged JSON with one wrong shape, unknown field or excess element. It establishes early preflight behavior, not cryptographic lineage or total receiver heap; later typed/domain validation remains separate. |
 | O8b | Preflight and typed checkpoint decoding inspect the same metadata fields | `save_group` declares each SaveIdentity/GroupCheckpoint field and Rust type once through its private metadata declaration. Serde derives wire keys/unknown-field refusal from that declaration; the same expansion publishes field resource kinds to Shape. Fixed byte widths derive from the declared array type, and numeric slots retain independent zero-string/no-container preallocation admission. Shape asks this owner for allowed fields and their kinds instead of repeating wire key lists or widths. Existing serialized keys/order/types remain unchanged; declaration agreement and resource admission have separate owning regression assertions. |
 | O9 | Historical page target is an intermediate unit seal, including after discovery-cache eviction | The same group-terminal owner rejects it. Holding current head behind the group is insufficient if direct historical target validation still accepts a physical seal. |
+| O9a | A bounded head has captured through32 and validated16; another page asks for completed20 or intermediate Unit19; alternatively page20 starts before a head or larger page32 | The original cached discovery owner retains its captured ceiling separately from this call's local read ceiling: read at most min(requested target, captured ceiling). Reaching20 returns that same owner's published terminal20 without discarding its retained through32 progress; a later head resumes from20 to32. Reaching Unit19 returns prior publication18, so the page adapter refuses19 while larger discovery can still finish32. When page20 captured first, a head finishes that original captured20 and may advance32 on its next request; a larger requested32 finishes the smaller pass as Preparing and then continues32. No second target ledger or cached publication history is introduced. Each physical call keeps the existing16-record/byte step bound. Owning real public save/source fixtures cover both arrival orders, actual target20 page, Unit19 refusal and larger progress with exact scan counts. |
 | O10 | Reset or erasure overlaps unfinished save; old retry returns afterward | Preserve existing exclusive reset, deletion tombstone and physical cleanup ownership. Replacement incarnation invalidates every old binding; do not translate an old retry into the new initial generation. |
-| O11 | A complete group becomes durable under watch registration or caller loss | Consume the actual PR381 registry owner, retained by the original lease/task. Publish only when a newly verified outer SaveComplete installs its committed candidate/receipt, including lost-ack reconciliation; Unit seals and Abort never notify. An already completed exact retry appends nothing and does not add another notice. Durable Reset publishes before lost reply/replay/cleanup can fail, through that same registry. Admission closure precedes actual held-source join and survives shutdown waiter loss. `record_watch_stays_clean_after_unit_seal_until_original_completion_retry` forces a durable Unit and refused Complete through the real adapter, then checks exact terminal retry and no duplicate notice (authored; gates pending). Advisory hints do not make a unit fresh or authorize an effect. |
+| O11 | A complete group becomes durable under watch registration or caller loss | Consume the actual PR381 registry owner, retained by the original lease/task. Publish only when a newly verified outer SaveComplete installs its committed candidate/receipt, including lost-ack reconciliation; Unit seals and Abort never notify. An already completed exact retry appends nothing and does not add another notice. Durable Reset publishes before lost reply/replay/cleanup can fail, through that same registry. Admission closure precedes actual held-source join and survives shutdown waiter loss. `record_watch_stays_clean_after_unit_seal_until_original_completion_retry` forces a durable Unit and refused Complete through the real adapter, then checks exact terminal retry and no duplicate notice. Advisory hints do not make a unit fresh or authorize an effect. |
+
+### Writer work and retained-buffer acceptance
+
+FULL3 found that correctness fixtures did not measure the writer work promised
+above. The structural correction puts bounded test observations on the existing
+writer and drives its real SQLite runtime. These rows precede their fixtures;
+the dated results below were subsequently compiled and executed on their frozen source.
+
+| Row | Actual workload and ordering | Measurement and correctness acceptance |
+| --- | --- | --- |
+| W1 | Fresh writer, one small Opening unit | One preflight and one persistence encode; no prefix comparison; original published receipt. |
+| W2 | Fresh writer, 2, 8 and 32 caller-owned small units | One preflight and persistence encode per unit; at most one encoded payload retained at a time. Record observed largest payload capacity because identifiers and numeric JSON fields may legitimately vary. Header metadata grows with unit count, independently of payload buffers. |
+| W3 | Completed histories of 0, 8 and 64 inputs, then one new small unit | One new preflight and persistence encode, with no confirmed-prefix comparison of earlier generations. Candidate and validation history remain retained and are excluded from the encoded-buffer claim. |
+| W4 | Completed original multi-unit save; caller discards its real receipt, then retries the exact binding, plan and candidate | Preflight and compare each original Unit; no persistence encoding or append. Attribute the returned physical comparison body concurrently with the encoded comparison payload/envelope; return the original receipt. |
+| W5 | SQLite trigger refuses Unit B after durable A; exact retry while refusal remains, then remove trigger and retry | Retain the original pending B allocation across refusal. Compare A and B before physical reconciliation; attribute original pending B concurrently with the returned physical A body and comparison payload/envelope. Recommitting original B does not encode it for persistence again. Publish once after missing work completes. |
+| W7 | Existing 42-unit history fixture has more than 160 MiB of input; first present it as one indivisible unit, then as its explicit units | Typed TooLarge before rows for the indivisible input. Count each bounded unit's preflight and persistence work, retained payload/envelope and metadata capacities; exact completed retry compares all 42 Units without append. |
+
+These are writer-owned completed-buffer capacities and runtime operation counts,
+not allocator or whole-process peak measurements. They include spare capacity,
+the original retained pending body, a returned decoded physical comparison body,
+the temporary encoded payload and envelope, terminal bytes and fixed-width
+header-vector storage when those allocations actually coexist. Physical codec
+private event/framing/decode temporaries, SQLite/runtime caches, caller-owned unit
+and candidate data, and semantic snapshot/continuation history have separate
+owners and are excluded. A successful serialization is counted separately from
+an attempted codec call that refuses, including the oversized preflight case.
+An extra encode or a genuinely retained second encoded payload must fail the
+owning operation-count/lifetime assertions; deleting an observation hook is not
+proof of real allocation drift. Actual numbers below describe that executed fixture scope.
+
+
+#### Recorded writer measurements — 2 October 2026
+
+Darwin 25.6.0 arm64, Rust 1.99.0 (`b940084d7`), locked SDK library,
+real SQLite runtime, two build jobs and incremental compilation disabled.
+The four named writer measurement fixtures above passed on frozen source
+`36fd7ccc` (manifest identity, with publication ancestor `16629917`). Counts
+are preflight / persistence / exact-prefix comparison; capacities are bytes.
+The metadata column is the actual header Vec capacity, independent of payload.
+
+| Case | Completed encodes | Largest JSON Vec capacity | Largest envelope / physical comparison capacity | Metadata capacity | Actual appends / confirmed |
+| --- | --- | --- | --- | --- | --- |
+| W1, fresh 1 unit | 1 / 1 / 0 | 256 | 269 / 0 | 136 | 2 / 2 |
+| W2, fresh 2 units | 2 / 2 / 0 | 512 | 598 / 0 | 272 | 3 / 3 |
+| W2, fresh 8 units | 8 / 8 / 0 | 512 | 598 / 0 | 1,088 | 9 / 9 |
+| W2, fresh 32 units | 32 / 32 / 0 | 512 | 599 / 0 | 4,352 | 33 / 33 |
+| W3, one new unit after 0, 8 or 64 inputs | 1 / 1 / 0 | 128 | 209 / 0 | 136 | 2 / 2 |
+| W4, exact retry of 1 / 2 / 8 / 32 units | N / 0 / N | 256 / 512 / 512 / 512 | 269 / 598 / 598 / 599, for both buffers | 136 / 272 / 1,088 / 4,352 | 0 / 0 |
+| W5, retained refusal after durable A | 3 / 0 / 2 | 512 | 598 / 269 | 408 | 1 / 0 |
+| W5, recovery of original pending B and missing suffix | 3 / 1 / 2 | 512 | 598 / 269 | 408 | 3 / 3 |
+| W7, fresh 42 units above 160 MiB | 42 / 42 / 0 | 8,388,880 | 4,194,892 / 0 | 5,712 | 2,749 / 2,749 |
+| W7, completed exact retry | 42 / 0 / 42 | 8,388,880 | 4,194,892 / 4,194,892 | 5,712 | 0 / 0 |
+
+All successful cases peaked at one live completed JSON output; none remained
+live when the operation returned. W7 encoded 171,985,119 payload bytes in each
+active phase. Its largest sampled simultaneous named-buffer total was
+12,589,620 bytes for fresh persistence and 16,784,512 for completed retry;
+these exclude the owners/temporaries listed above. The W5 original pending
+allocation stayed at the same address and 598-byte capacity across refusal.
+During physical A comparison it coexisted with a 269-byte returned body,
+256-byte JSON output, 269-byte envelope, 408-byte headers and 136-byte terminal.
+The same candidate presented as one indivisible unit returned typed TooLarge
+with zero append attempts before the explicit 42-unit plan succeeded.
+
+The runtime counts are SDK-facing calls/returned records, not SQLite disk I/O
+or distinct logical facts. W7 fresh persistence read 2,749 returned event
+records in 207 calls; exact retry returned 3,165 in 207 calls and appended
+none. Prefix comparison can return records again from bounded pages. No timing,
+whole heap, codec-private allocation or phone/network result is inferred.
+
+Two deliberate real-work changes were separately compiled: an additional
+persistence encoding failed the owning `[1, 1, 0]` count assertion, and retaining
+actual preflight JSON outputs across the loop failed the one-live-output
+assertion. After full source restoration, the same named fixture passed for
+each change. These probes did not remove instrumentation or manufacture buffers.
+The final full checks, structural review and hosted acceptance remain separate.
 
 The caller's complete candidate is not a retained projection for every unit. Reuse
 the canonical incremental lifecycle/queue validation and account privately staged
