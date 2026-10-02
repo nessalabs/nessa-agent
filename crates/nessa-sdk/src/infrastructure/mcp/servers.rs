@@ -253,8 +253,10 @@ impl McpServers {
     /// [`McpError::NotConfigured`], [`McpError::Stopped`], [`McpError::Start`]
     /// when the process cannot be launched, [`McpError::Handshake`] for a
     /// refused or unreadable `initialize` (an unsupported protocol version
-    /// among them), [`McpError::Timeout`], and [`McpError::ServerGone`] for a
-    /// server that ends during it. The process is stopped on each.
+    /// among them), [`McpError::Timeout`], [`McpError::ServerGone`] for a
+    /// server that ends during it, and [`McpError::Closed`] when `owner`'s
+    /// grant is revoked — before it launches anything, or while it opens. The
+    /// process is stopped on each. Nothing else makes it [`McpError::Closed`].
     pub async fn open(&self, server: &str, owner: McpOwner) -> Result<McpSession, McpError> {
         let inner = &self.inner;
         let launch = inner.launches.get(server).ok_or(McpError::NotConfigured)?;

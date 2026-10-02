@@ -294,6 +294,26 @@ async fn without_a_token_an_opens_stand_ins_are_refused() {
 }
 
 #[test]
+fn an_opening_refused_for_a_revoked_grant_is_unknown_session_and_anything_else_unavailable() {
+    use super::infrastructure::opening_refused;
+    use nessa_sdk::infrastructure::mcp::McpError;
+    let (reason, message) = opening_refused(McpError::Closed);
+    assert_eq!(reason, StandInRefusal::UnknownSession);
+    assert!(message.contains("no open conversation"), "{message}");
+    for error in [
+        McpError::Timeout,
+        McpError::ServerGone,
+        McpError::Start("not found".into()),
+        McpError::Stopped,
+    ] {
+        let said = error.to_string();
+        let (reason, message) = opening_refused(error);
+        assert_eq!(reason, StandInRefusal::Unavailable, "{said}");
+        assert_eq!(message, said);
+    }
+}
+
+#[test]
 fn a_hello_never_prints_its_token() {
     let hello = Hello {
         server: "fixture".into(),
@@ -326,7 +346,10 @@ async fn a_revoked_grant_refuses_its_token_and_ends_the_sessions_it_opened() {
     drop(grant);
     // Its stand-in ends, its server is closed as the stand-in ending would
     // close it, and its token is refused from now on.
-    assert_eq!(relayed.await.unwrap(), Ok(()));
+    let relayed = tokio::time::timeout(std::time::Duration::from_secs(10), relayed)
+        .await
+        .expect("the stand-in ends");
+    assert_eq!(relayed.unwrap(), Ok(()));
     gone(pid).await;
     assert!(unknown_session(answered(&side, &server, &token).await));
     drop(harness_in);
@@ -618,7 +641,10 @@ async fn a_harness_through_the_relay_gets_a_session_of_its_own() {
     );
     // The harness goes; its stand-in and session end, and the server with them.
     drop(harness_in);
-    assert_eq!(relayed.await.unwrap(), Ok(()));
+    let relayed = tokio::time::timeout(std::time::Duration::from_secs(10), relayed)
+        .await
+        .expect("the stand-in ends");
+    assert_eq!(relayed.unwrap(), Ok(()));
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         // SAFETY: signal 0 only asks whether the process exists.
         while unsafe { libc::kill(pid, 0) } == 0 {

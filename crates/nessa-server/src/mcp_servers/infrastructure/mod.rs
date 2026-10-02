@@ -7,7 +7,7 @@ mod relay_command;
 mod tool_uis;
 
 #[cfg(all(test, unix))]
-pub(crate) use relay::said;
+pub(crate) use relay::{opening_refused, said};
 
 pub use grants::{ConversationGrants, OsTokens, TokenSource};
 #[cfg(unix)]
