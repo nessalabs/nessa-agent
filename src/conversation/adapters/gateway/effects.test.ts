@@ -676,6 +676,9 @@ it("gives every code the client decides before admission a word of its own", asy
   // way, so the two sets are checked against each other rather than assumed.
   // A code added to the client's pre-admission list without a word here fails.
   for (const code of Object.values(ConversationErrorCode)) {
+    // The `mcp_` codes answer only an MCP App's own calls (`mcp.*`), which
+    // this adapter never sends: no conversation command meets them.
+    if (code.startsWith("mcp_")) continue
     const rejection = new NessaConversationMutationError(
       "server",
       "action",
