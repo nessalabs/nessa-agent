@@ -12,8 +12,11 @@
  *   crates/nessa-server/src/protocol/generated_catalog.rs
  *   crates/nessa-server/src/protocol/generated_types.rs
  */
+import Ajv2020 from "ajv/dist/2020.js"
 import ts from "typescript"
+import { rustWireShapes } from "./product-protocol/rust-wire-shapes.mjs"
 import { compile } from "json-schema-to-typescript"
+import { spawnSync } from "node:child_process"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -24,6 +27,46 @@ const protocolDir = join(root, "protocol")
 const schemaDir = join(protocolDir, "schemas/v1")
 const exportSchema = JSON.parse(readFileSync(join(schemaDir, "export.json"), "utf8"))
 const manifest = JSON.parse(readFileSync(join(protocolDir, "manifest.json"), "utf8"))
+
+// Publish presence agreement from the actual schema, including present JSON null.
+// Index: ok * 4 + payload-present * 2 + error-present.
+const frameAjv = new Ajv2020({ strict: false, validateSchema: false })
+for (const file of ["common.json", "frames.json"]) {
+  frameAjv.addSchema(JSON.parse(readFileSync(join(schemaDir, file), "utf8")))
+}
+const validateResponse = frameAjv.getSchema(
+  "nessa://protocol/v1/frames.json#/$defs/ResFrame",
+)
+const frameDefinitions = JSON.parse(
+  readFileSync(join(schemaDir, "frames.json"), "utf8"),
+).$defs
+const commonDefinitions = JSON.parse(
+  readFileSync(join(schemaDir, "common.json"), "utf8"),
+).$defs
+const frameScalars = {
+  responseIdMinLength: frameDefinitions.ResFrame.properties.id.minLength,
+  eventNameMinLength: frameDefinitions.EventFrame.properties.event.minLength,
+  errorCodeMinLength: commonDefinitions.GatewayError.properties.code.minLength,
+}
+for (const name of Object.keys(commonDefinitions))
+  if (Object.hasOwn(frameDefinitions, name))
+    throw new Error(`Ambiguous common/frame schema definition ${name}`)
+const responsePresence = Array.from({ length: 8 }, (_, index) => {
+  const frame = { type: "res", id: "presence", ok: Boolean(index & 4) }
+  if (index & 2) frame.payload = null
+  if (index & 1) frame.error = { code: "error", message: "" }
+  return validateResponse(frame)
+})
+// Presence branches are consumed separately through the full schema-derived truth table.
+const responseBase = { ...frameDefinitions.ResFrame }
+delete responseBase.oneOf
+const frameShapes = rustWireShapes(
+  { ...commonDefinitions, ...frameDefinitions, ResFrame: responseBase },
+  ["ResFrame", "EventFrame"],
+  Object.fromEntries(
+    Object.keys(commonDefinitions).map((name) => [`common.json#/$defs/${name}`, name]),
+  ),
+)
 
 const outDir = join(root, "packages/nessa-client/src/generated")
 const outFile = process.env.NESSA_PROTOCOL_OUT ?? join(outDir, "protocol.ts")
@@ -225,6 +268,7 @@ function generateRustTypes(schemasByFile) {
     "#![allow(dead_code)]",
     "",
     "use serde::{Deserialize, Serialize};",
+    "use serde_json::Value;",
     "",
   ]
 
@@ -253,11 +297,6 @@ function generateRustTypes(schemasByFile) {
 
   return lines.join("\n")
 }
-
-mkdirSync(dirname(outFile), { recursive: true })
-mkdirSync(dirname(catalogTsOut), { recursive: true })
-mkdirSync(dirname(catalogRsOut), { recursive: true })
-mkdirSync(dirname(typesRsOut), { recursive: true })
 
 const tsBanner =
   "/* eslint-disable */\n" +
@@ -300,12 +339,20 @@ const enumConstants = SCHEMA_FILES.flatMap((file) =>
         `export const ${name} = ${JSON.stringify(Object.fromEntries(def.enum.map((value) => [enumVariantName(value), value])))} as const`,
     ),
 ).join("\n")
-const formatted = await format(deduped + "\n" + enumConstants, {
-  ...prettierConfig,
-  filepath: outFile,
-})
-writeFileSync(outFile, formatted)
-console.log(`wrote ${outFile}`)
+const formatted = await format(
+  deduped +
+    "\n" +
+    enumConstants +
+    `
+/** Schema-derived response presence agreement; index = ok*4 + payload*2 + error. */
+export const responsePresence = ${JSON.stringify(responsePresence)} as const
+export const frameScalars = ${JSON.stringify(frameScalars)} as const
+`,
+  {
+    ...prettierConfig,
+    filepath: outFile,
+  },
+)
 
 /** $ref compilation can move property descriptions onto referenced declarations.
  * Restore canonical declaration and field comments from their owning schemas.
@@ -391,11 +438,10 @@ ${eventEntries.map((name) => `  ${tsKey(name)}: "${name}",`).join("\n")}
 export type EventName = (typeof Event)[keyof typeof Event]
 `
 
-writeFileSync(
-  catalogTsOut,
-  catalogTs.replace("export const Event = {\n\n}", "export const Event = {}"),
+const catalogTsContents = catalogTs.replace(
+  "export const Event = {\n\n}",
+  "export const Event = {}",
 )
-console.log(`wrote ${catalogTsOut}`)
 
 const catalogRs = `//! Generated from \`protocol/manifest.json\` — do not edit by hand.
 //!
@@ -423,8 +469,7 @@ ${eventEntries
 }
 `
 
-writeFileSync(catalogRsOut, catalogRs.replace("pub mod event {\n\n}", "pub mod event {}"))
-console.log(`wrote ${catalogRsOut}`)
+const catalogRsContents = catalogRs.replace("pub mod event {\n\n}", "pub mod event {}")
 
 const schemasByFile = Object.fromEntries(
   SCHEMA_FILES.map((file) => [
@@ -432,6 +477,26 @@ const schemasByFile = Object.fromEntries(
     JSON.parse(readFileSync(join(schemaDir, file), "utf8")),
   ]),
 )
-const typesRs = generateRustTypes(schemasByFile)
-writeFileSync(typesRsOut, typesRs)
-console.log(`wrote ${typesRsOut}`)
+const typesRs =
+  generateRustTypes(schemasByFile) +
+  frameShapes +
+  `
+/// Schema-derived response presence agreement; index = ok*4 + payload*2 + error.
+pub const RESPONSE_PRESENCE: [bool; 8] = [${responsePresence.join(", ")}];
+`
+const rustFormatted = spawnSync("rustfmt", ["--edition", "2021"], {
+  input: typesRs,
+  encoding: "utf8",
+})
+if (rustFormatted.status !== 0) throw new Error(rustFormatted.stderr)
+// Validate every output before beginning publication; compute failure writes nothing.
+for (const [path, contents] of [
+  [outFile, formatted],
+  [catalogTsOut, catalogTsContents],
+  [catalogRsOut, catalogRsContents],
+  [typesRsOut, rustFormatted.stdout],
+]) {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, contents)
+  console.log(`wrote ${path}`)
+}

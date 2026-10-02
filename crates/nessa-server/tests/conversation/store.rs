@@ -1,8 +1,9 @@
 //! Ownership, tombstones and summaries in one database: create-once
 //! ownership, tombstones and summaries that cannot stand without their record,
 //! rows refused rather than repaired, and a list that reads only its owner's.
-use super::store::{LocalConversationStore, LIST, UNFINISHED};
+use super::store::{list_query, LocalConversationStore, UNFINISHED};
 use crate::agents::domain::AgentId;
+use crate::conversation::infrastructure::conversation_catalogue_schema;
 use crate::conversation::{
     application::{
         CatalogueKey, CataloguePageRequest, ConversationCatalogue, ConversationCreationDisposition,
@@ -11,13 +12,18 @@ use crate::conversation::{
         ConversationSummaries,
     },
     domain::{
-        Conversation, ConversationDeletion, ConversationId, ConversationSummary,
-        ProviderSessionErasure, ProviderSessionLink,
+        conversation_catalogue_stream, Conversation, ConversationApprovalMode,
+        ConversationDeletion, ConversationId, ConversationModelId, ConversationPreview,
+        ConversationSummary, ConversationTitle, ProviderSessionErasure, ProviderSessionLink,
     },
 };
-use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_auth::domain::{OrganizationId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, Connection, StatementStatus};
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
+use nessa_sync::replication::{
+    catalogue::{CataloguePass, EntryKey, ManifestRequest, MAX_CATALOGUE_ENTRIES},
+    domain::{Id, Scope},
+};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -252,14 +258,31 @@ fn catalogue_request(
     after: Option<CatalogueKey>,
     limit: usize,
 ) -> CataloguePageRequest {
+    let scope = Scope::new(
+        Id::new("metadata-test-receiver").unwrap(),
+        Id::new("metadata-test-origin").unwrap(),
+        conversation_catalogue_stream(&org(), &owner),
+        Id::new(incarnation).unwrap(),
+        conversation_catalogue_schema(),
+        Id::new("epoch-1").unwrap(),
+    );
+    let manifest = ManifestRequest {
+        pass: CataloguePass {
+            scope,
+            completed,
+            boundary,
+            cursor: after.map(|key| EntryKey {
+                creation: key.creation,
+                id: Id::new(key.id.to_string()).unwrap(),
+            }),
+            generation: 1,
+        },
+        max_entries: limit,
+    };
     CataloguePageRequest {
         organization: org(),
         owner,
-        incarnation: incarnation.into(),
-        completed,
-        boundary,
-        after,
-        limit,
+        manifest,
     }
 }
 async fn listed(
@@ -965,6 +988,100 @@ async fn a_row_whose_text_is_not_utf8_costs_its_list_that_row_alone() {
     );
 }
 
+#[tokio::test]
+async fn oversized_text_costs_its_list_one_row_and_remains_refused_by_exact_reads() {
+    for (table, column, ceiling) in [
+        ("conversations", "model", ConversationModelId::MAX_BYTES),
+        (
+            "conversations",
+            "creator_surface",
+            Conversation::MAX_CREATOR_CONTEXT_BYTES,
+        ),
+        (
+            "conversations",
+            "creation_action",
+            Conversation::MAX_CREATOR_CONTEXT_BYTES,
+        ),
+        (
+            "summaries",
+            "title",
+            ConversationTitle::MAX_CHARS * char::MAX.len_utf8(),
+        ),
+        ("summaries", "preview", ConversationPreview::MAX_BYTES),
+    ] {
+        let opened = opened();
+        let (kept, damaged) = (new_id(), new_id());
+        for (id, at) in [(&kept, 5), (&damaged, 6)] {
+            opened.store.create(owned(id)).await.unwrap();
+            ConversationSummaries::record(&opened.store, id, said("hello", at))
+                .await
+                .unwrap();
+        }
+        let key = if table == "conversations" {
+            "id"
+        } else {
+            "conversation_id"
+        };
+        raw(&opened.path)
+            .execute(
+                &format!("UPDATE {table} SET {column} = ?1 WHERE {key} = ?2"),
+                params!["x".repeat(ceiling * 3), damaged.to_string()],
+            )
+            .unwrap();
+        assert_eq!(
+            listed(&opened.store, &alice(), false, 10).await,
+            (vec![kept.clone()], 1),
+            "{column}"
+        );
+        assert_eq!(
+            listed(&opened.store, &PrincipalId::new("bob").unwrap(), false, 10).await,
+            (vec![], 0)
+        );
+        let exact = if table == "conversations" {
+            ConversationRepository::load(&opened.store, &damaged)
+                .await
+                .map(|_| ())
+        } else {
+            ConversationSummaries::load(&opened.store, &damaged)
+                .await
+                .map(|_| ())
+        };
+        assert!(
+            matches!(exact, Err(ConversationError::Metadata)),
+            "{column}"
+        );
+        let head = opened.store.head(&org(), &alice()).await.unwrap();
+        assert!(
+            matches!(
+                opened
+                    .store
+                    .resolve(&org(), &alice(), &head.incarnation, &damaged)
+                    .await,
+                Err(ConversationError::Metadata)
+            ),
+            "{column}"
+        );
+        let reopened = LocalConversationStore::open(&opened.path).unwrap();
+        assert_eq!(
+            listed(&reopened, &alice(), false, 10).await,
+            (vec![kept], 1),
+            "{column} after reopen"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_failed_list_query_is_not_reported_as_row_damage() {
+    let opened = opened();
+    raw(&opened.path)
+        .execute("DROP TABLE summaries", [])
+        .unwrap();
+    assert!(matches!(
+        ConversationListing::list(&opened.store, &org(), &alice(), false, 10).await,
+        Err(ConversationError::Metadata)
+    ));
+}
+
 #[test]
 fn a_file_that_is_not_a_database_is_refused_as_unreadable() {
     let directory = tempfile::tempdir().unwrap();
@@ -1017,7 +1134,7 @@ fn many(path: &Path, owner: &str, count: usize) {
 /// `owner`, run as the store runs it.
 fn list_cost(path: &Path, owner: &str, limit: i64) -> (usize, i32, i32) {
     let raw = raw(path);
-    let mut statement = raw.prepare(LIST).unwrap();
+    let mut statement = raw.prepare(&list_query()).unwrap();
     let rows = statement
         .query_map(params!["org", owner, false, limit], |_| Ok(()))
         .unwrap()
@@ -1643,4 +1760,352 @@ async fn a_regressed_owner_head_is_unavailable_before_a_new_revision() {
         )
         .unwrap();
     assert_eq!(revision, 2);
+}
+
+#[tokio::test]
+async fn catalogue_metadata_consumes_actual_request_owner_and_derives_one_incarnation() {
+    let opened = opened();
+    let conversation = new_id();
+    opened.store.create(owned(&conversation)).await.unwrap();
+    let head = opened.store.head(&org(), &alice()).await.unwrap();
+    let valid = catalogue_request(alice(), &head.incarnation, 0, head.revision, None, 1);
+    assert_eq!(
+        opened
+            .store
+            .page(valid.clone())
+            .await
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+    let mut cases = vec![];
+    let mut request = valid.clone();
+    request.manifest.pass.generation = 0;
+    cases.push(request);
+    let mut request = valid.clone();
+    request.manifest.pass.boundary = 0;
+    cases.push(request);
+    for creation in [0, head.revision + 1] {
+        let mut request = valid.clone();
+        request.manifest.pass.cursor = Some(EntryKey {
+            creation,
+            id: Id::new(conversation.to_string()).unwrap(),
+        });
+        cases.push(request);
+    }
+    for count in [0, MAX_CATALOGUE_ENTRIES + 1] {
+        let mut request = valid.clone();
+        request.manifest.max_entries = count;
+        cases.push(request);
+    }
+    for request in cases {
+        assert!(matches!(
+            opened.store.page(request).await,
+            Err(ConversationError::CatalogueInvalidRequest)
+        ));
+    }
+    let mut changed = valid.clone();
+    let scope = &changed.manifest.pass.scope;
+    changed.manifest.pass.scope = Scope::new(
+        scope.receiver().clone(),
+        scope.origin().clone(),
+        scope.stream().clone(),
+        Id::new("otherwise-valid-other-incarnation").unwrap(),
+        scope.schema().clone(),
+        scope.access_epoch().clone(),
+    );
+    assert!(matches!(
+        opened.store.page(changed).await,
+        Err(ConversationError::CatalogueIdentityChanged)
+    ));
+    assert_eq!(opened.store.page(valid).await.unwrap().entries.len(), 1);
+}
+
+#[tokio::test]
+async fn catalogue_acquisition_refuses_corruption_atomically_and_preserves_unknown_agent() {
+    let opened = opened();
+    let first = new_id();
+    let second = new_id();
+    opened.store.create(owned(&first)).await.unwrap();
+    opened.store.create(owned(&second)).await.unwrap();
+    let head = opened.store.head(&org(), &alice()).await.unwrap();
+    let request = catalogue_request(alice(), &head.incarnation, 0, head.revision, None, 2);
+    let connection = raw(&opened.path);
+    connection
+        .pragma_update(None, "ignore_check_constraints", true)
+        .unwrap();
+    let huge = "unknown".repeat(1_000_000);
+    connection
+        .execute(
+            "UPDATE conversations SET agent = ?1 WHERE id = ?2",
+            params![huge, second.to_string()],
+        )
+        .unwrap();
+    assert_eq!(
+        opened
+            .store
+            .page(request.clone())
+            .await
+            .unwrap()
+            .entries
+            .len(),
+        2
+    );
+    let value = opened
+        .store
+        .resolve(&org(), &alice(), &head.incarnation, &second)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(value.conversation.agent(), None);
+    for column in [
+        "model",
+        "creator_surface",
+        "creation_action",
+        "approval_mode",
+    ] {
+        let original: String = connection
+            .query_row(
+                &format!("SELECT {column} FROM conversations WHERE id = ?1"),
+                [second.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        connection
+            .execute(
+                &format!("UPDATE conversations SET {column} = ?1 WHERE id = ?2"),
+                params!["x".repeat(1_000_000), second.to_string()],
+            )
+            .unwrap();
+        // First row remains valid: a later corrupt row must refuse the whole page.
+        assert!(opened.store.page(request.clone()).await.is_err());
+        assert!(opened
+            .store
+            .resolve(&org(), &alice(), &head.incarnation, &second)
+            .await
+            .is_err());
+        let retained: i64 = connection
+            .query_row(
+                &format!("SELECT octet_length({column}) FROM conversations WHERE id = ?1"),
+                [second.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retained, 1_000_000);
+        connection
+            .execute(
+                &format!("UPDATE conversations SET {column} = ?1 WHERE id = ?2"),
+                params![original, second.to_string()],
+            )
+            .unwrap();
+    }
+    connection
+        .execute(
+            "INSERT INTO summaries VALUES (?1, ?2, ?3, 1, 0)",
+            params![
+                second.to_string(),
+                "😀".repeat(ConversationTitle::MAX_CHARS),
+                "é".repeat(ConversationPreview::MAX_BYTES / 2)
+            ],
+        )
+        .unwrap();
+    assert!(opened
+        .store
+        .resolve(&org(), &alice(), &head.incarnation, &second)
+        .await
+        .unwrap()
+        .unwrap()
+        .summary
+        .is_some());
+    connection
+        .execute(
+            "UPDATE summaries SET preview = ?1 WHERE conversation_id = ?2",
+            params!["x".repeat(1_000_000), second.to_string()],
+        )
+        .unwrap();
+    assert!(opened
+        .store
+        .resolve(&org(), &alice(), &head.incarnation, &second)
+        .await
+        .is_err());
+    connection
+        .execute(
+            "UPDATE catalogue_identity SET incarnation = ?1",
+            ["x".repeat(1_000_000)],
+        )
+        .unwrap();
+    assert!(opened.store.head(&org(), &alice()).await.is_err());
+    assert!(opened.store.page(request).await.is_err());
+    assert!(opened
+        .store
+        .resolve(&org(), &alice(), &head.incarnation, &first)
+        .await
+        .is_err());
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT octet_length(incarnation) FROM catalogue_identity",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1_000_000
+    );
+}
+
+#[tokio::test]
+async fn catalogue_acquisition_accepts_full_supported_multibyte_fields() {
+    let opened = opened();
+    let id = new_id();
+    let organization = OrganizationId::new("é".repeat(MAX_IDENTIFIER_BYTES / 2)).unwrap();
+    let owner = PrincipalId::new("é".repeat(MAX_IDENTIFIER_BYTES / 2)).unwrap();
+    let conversation = Conversation::new(
+        id.clone(),
+        organization.clone(),
+        owner.clone(),
+        "é".repeat(Conversation::MAX_CREATOR_CONTEXT_BYTES / 2),
+        "é".repeat(Conversation::MAX_CREATOR_CONTEXT_BYTES / 2),
+        1,
+        AgentId::Opencode,
+        ConversationModelId::new("é".repeat(ConversationModelId::MAX_BYTES / 2)).unwrap(),
+        ConversationApprovalMode::Full,
+    )
+    .unwrap();
+    opened.store.create(conversation).await.unwrap();
+    let head = opened.store.head(&organization, &owner).await.unwrap();
+    let mut request =
+        catalogue_request(owner.clone(), &head.incarnation, 0, head.revision, None, 1);
+    request.organization = organization.clone();
+    let old_scope = &request.manifest.pass.scope;
+    request.manifest.pass.scope = Scope::new(
+        old_scope.receiver().clone(),
+        old_scope.origin().clone(),
+        conversation_catalogue_stream(&organization, &owner),
+        old_scope.incarnation().clone(),
+        old_scope.schema().clone(),
+        old_scope.access_epoch().clone(),
+    );
+    assert_eq!(opened.store.page(request).await.unwrap().entries.len(), 1);
+    let value = opened
+        .store
+        .resolve(&organization, &owner, &head.incarnation, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(value.conversation.agent(), Some(AgentId::Opencode));
+    assert_eq!(
+        value.conversation.model().as_str().len(),
+        ConversationModelId::MAX_BYTES
+    );
+    assert!(matches!(
+        opened
+            .store
+            .resolve(&organization, &owner, &"x".repeat(1_000_000), &id)
+            .await,
+        Err(ConversationError::CatalogueInvalidRequest)
+    ));
+}
+
+#[tokio::test]
+async fn catalogue_resolve_acquires_bounded_deletion_and_preserves_supported_progress() {
+    let opened = opened();
+    let session = ExecutionSessionId::new("é".repeat(ExecutionSessionId::MAX_BYTES / 2)).unwrap();
+    let initial = deletion("delete");
+    let recorded = initial.after_reading(Some(session));
+    let mut supported = vec![
+        initial,
+        deletion("delete").after_reading(None),
+        deletion("delete").after_losing_history(),
+        recorded.clone(),
+    ];
+    for erasure in [
+        ProviderSessionErasure::Deleted,
+        ProviderSessionErasure::Archived,
+        ProviderSessionErasure::Acknowledged,
+        ProviderSessionErasure::NotListed,
+        ProviderSessionErasure::NotSupported,
+        ProviderSessionErasure::NoHandler,
+    ] {
+        supported.push(recorded.after_provider_erasure(erasure));
+    }
+    for decision in supported {
+        let id = new_id();
+        opened.store.create(owned(&id)).await.unwrap();
+        opened
+            .store
+            .record_deletion(&id, decision.clone())
+            .await
+            .unwrap();
+        let head = opened.store.head(&org(), &alice()).await.unwrap();
+        let value = opened
+            .store
+            .resolve(&org(), &alice(), &head.incarnation, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(value.conversation.deletion(), Some(&decision));
+    }
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    opened.store.record_deletion(&id, recorded).await.unwrap();
+    let head = opened.store.head(&org(), &alice()).await.unwrap();
+    let connection = raw(&opened.path);
+    connection
+        .pragma_update(None, "ignore_check_constraints", true)
+        .unwrap();
+    for column in [
+        "organization",
+        "initiator",
+        "surface",
+        "request",
+        "provider_session",
+        "provider_session_id",
+        "provider_erasure",
+    ] {
+        let prior: Option<String> = connection
+            .query_row(
+                &format!("SELECT {column} FROM deletions WHERE conversation_id = ?1"),
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        connection
+            .execute(
+                &format!("UPDATE deletions SET {column} = ?1 WHERE conversation_id = ?2"),
+                params!["x".repeat(1_000_000), id.to_string()],
+            )
+            .unwrap();
+        assert!(
+            opened
+                .store
+                .resolve(&org(), &alice(), &head.incarnation, &id)
+                .await
+                .is_err(),
+            "{column}"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    &format!(
+                        "SELECT octet_length({column}) FROM deletions WHERE conversation_id = ?1"
+                    ),
+                    [id.to_string()],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1_000_000
+        );
+        connection
+            .execute(
+                &format!("UPDATE deletions SET {column} = ?1 WHERE conversation_id = ?2"),
+                params![prior, id.to_string()],
+            )
+            .unwrap();
+        assert!(opened
+            .store
+            .resolve(&org(), &alice(), &head.incarnation, &id)
+            .await
+            .is_ok());
+    }
 }

@@ -40,6 +40,7 @@ it("shows a late bounded startup failure from the replacement view", () => {
       failure: { code: "provider", message: "The configured agent did not start." },
     },
     queueComplete: true,
+    transcriptState: "complete",
     truncated: false,
   }
   expect(conversationNotice(value)).toEqual({
@@ -77,6 +78,7 @@ it("shows late mandatory lifecycle evidence failure after attachment succeeds", 
       },
     },
     queueComplete: true,
+    transcriptState: "complete",
     truncated: false,
   }
   expect(conversationNotice(value)).toEqual({

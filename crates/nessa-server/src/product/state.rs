@@ -3,7 +3,8 @@ use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::attachments::{application::AttachmentService, entrypoint::http::UploadRoute};
 use crate::conversation::application::{
-    ConversationRepository, ConversationService, ReceiverAuthority,
+    CatalogueReadSource, ConversationRepository, ConversationService, ReceiverAuthority,
+    RecordReadSource,
 };
 use axum::extract::FromRef;
 use nessa_auth::{
@@ -30,6 +31,9 @@ pub struct ProductRouteState {
     pub(crate) browser_session_origin: Option<String>,
     pub(crate) requests: Arc<Semaphore>,
     pub(crate) controls: Arc<Semaphore>,
+    /// Four physical record reads or pending record replies globally, kept
+    /// separate from command and control admission.
+    pub(crate) record_reads: Arc<Semaphore>,
     /// Beginning an upload has capacity of its own. It opens no provider, so it
     /// does not belong behind reads and opens; and it sweeps tickets, reads
     /// holds, and writes audit records, so it must never be what keeps a
@@ -53,6 +57,8 @@ pub struct ProductRouteState {
     pub(crate) conversations: Option<Arc<ConversationService>>,
     /// Passive reads use these independent authorities without opening an Agent.
     pub(crate) passive_read: Option<(Arc<dyn ReceiverAuthority>, Arc<dyn ConversationRepository>)>,
+    pub(crate) catalogue_source: Option<Arc<dyn CatalogueReadSource>>,
+    pub(crate) record_source: Option<Arc<dyn RecordReadSource>>,
     pub(crate) agent_installations: Option<Arc<dyn AgentInstallations>>,
     pub(crate) installs: Arc<Semaphore>,
     pub(crate) agents_catalog: Option<Arc<AgentsListResult>>,
@@ -119,6 +125,7 @@ impl ProductRouteState {
             settings: SessionSettings::default(),
             requests: Arc::new(Semaphore::new(128)),
             controls: Arc::new(Semaphore::new(32)),
+            record_reads: Arc::new(Semaphore::new(4)),
             upload_begins: Arc::new(Semaphore::new(16)),
             deletions: Arc::new(Semaphore::new(8)),
             gateway: Resource::new(gateway_organization_id, gateway_id),
@@ -130,6 +137,8 @@ impl ProductRouteState {
             admin: None,
             conversations: None,
             passive_read: None,
+            record_source: None,
+            catalogue_source: None,
             agents_catalog: None,
             agent_installations: None,
             installs: Arc::new(Semaphore::new(1)),
@@ -171,6 +180,18 @@ impl ProductRouteState {
         conversations: Arc<dyn ConversationRepository>,
     ) -> Self {
         self.passive_read = Some((receivers, conversations));
+        self
+    }
+
+    /// Inject current catalogue metadata reads behind passive admission.
+    pub fn with_catalogue_source(mut self, source: Arc<dyn CatalogueReadSource>) -> Self {
+        self.catalogue_source = Some(source);
+        self
+    }
+
+    /// Inject the bounded SDK record adapter without opening a conversation Agent.
+    pub fn with_record_source(mut self, source: Arc<dyn RecordReadSource>) -> Self {
+        self.record_source = Some(source);
         self
     }
 

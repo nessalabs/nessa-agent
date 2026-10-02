@@ -9,6 +9,9 @@
 //! epochs and transition evidence in its own private SQLite dataset. It supplies
 //! passive admission; `exact_record_scope` combines its admitted receiver and
 //! epoch with the SDK source's physical identity before a bounded read.
+//! `record_read` checks that identity from metadata before worker creation,
+//! runs each SDK source on a tracked non-entered thread, and joins those threads
+//! before storage shutdown.
 //!
 //! Ports and local files:
 //!
@@ -33,12 +36,18 @@ mod receiver_authority;
 mod store;
 pub use receiver_authority::{LocalReceiverAuthority, ReceiverChangeError};
 mod record_scope;
-pub use record_scope::exact_record_scope;
+pub use record_scope::{exact_record_scope, record_scope_from_identity};
+mod catalogue_read;
+mod read_workers;
+mod record_read;
+pub use catalogue_read::NessaCatalogueReadSource;
+pub use record_read::NessaRecordReadSource;
 pub use store::LocalConversationStore;
 
+pub(crate) mod catalogue_payload;
 mod catalogue_source;
 pub use catalogue_source::{
-    conversation_catalogue_schema, conversation_catalogue_stream, NessaCatalogueSource,
+    conversation_catalogue_schema, CatalogueWorkerError, NessaCatalogueSource,
 };
 
 mod provider_sessions;

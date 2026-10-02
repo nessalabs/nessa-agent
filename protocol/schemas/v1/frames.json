@@ -64,7 +64,39 @@
           "description": "Structured rejection on failure."
         }
       },
-      "description": "RPC response envelope matched to a pending request. Failed responses become NessaRpcError."
+      "description": "RPC response envelope matched to a pending request. Failed responses become NessaRpcError.",
+      "oneOf": [
+        {
+          "properties": {
+            "ok": {
+              "const": true
+            }
+          },
+          "required": [
+            "payload"
+          ],
+          "not": {
+            "required": [
+              "error"
+            ]
+          }
+        },
+        {
+          "properties": {
+            "ok": {
+              "const": false
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "not": {
+            "required": [
+              "payload"
+            ]
+          }
+        }
+      ]
     },
     "EventFrame": {
       "type": "object",

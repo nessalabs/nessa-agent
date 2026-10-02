@@ -18,22 +18,32 @@ export interface ReqFrame {
 
 /** RPC response envelope matched to a pending request. Failed responses become NessaRpcError. */
 
-export interface ResFrame {
-  /** Response frame discriminator. */
-
+export type ResFrame = {
+  /**
+   * Response frame discriminator.
+   */
   type: "res"
-  /** Identifier of the request being answered. */
-
+  /**
+   * Identifier of the request being answered.
+   */
   id: string
-  /** Whether the operation succeeded. */
-
+  /**
+   * Whether the operation succeeded.
+   */
   ok: boolean
-  /** Method-specific result on success. */
-
+  /**
+   * Method-specific result on success.
+   */
   payload?: unknown
-  /** Structured rejection on failure. */
   error?: GatewayError
-}
+} & (
+  | {
+      ok?: true
+    }
+  | {
+      ok?: false
+    }
+)
 
 /** Structured server rejection carried by a response frame and exposed as NessaRpcError. */
 
@@ -224,4 +234,20 @@ export const ShortcutSurface = {
   Desktop: "desktop",
   Browser: "browser",
   Any: "*",
+} as const
+/** Schema-derived response presence agreement; index = ok*4 + payload*2 + error. */
+export const responsePresence = [
+  false,
+  true,
+  false,
+  false,
+  false,
+  false,
+  true,
+  false,
+] as const
+export const frameScalars = {
+  responseIdMinLength: 1,
+  eventNameMinLength: 1,
+  errorCodeMinLength: 1,
 } as const

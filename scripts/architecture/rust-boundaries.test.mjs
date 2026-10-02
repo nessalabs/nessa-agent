@@ -102,3 +102,36 @@ test("scanner discovers every Cargo workspace package and Tauri Rust root", () =
     assert.ok(roots.includes(normalizedPath(resolve(pkg.manifest_path, ".."))))
   assert.ok(roots.some((path) => path.endsWith("/src-tauri")))
 })
+
+test("domain may import pure address values but no net module or socket effects", () => {
+  for (const value of [
+    "IpAddr",
+    "Ipv4Addr",
+    "Ipv6Addr",
+    "SocketAddr",
+    "SocketAddrV4",
+    "SocketAddrV6",
+  ]) {
+    assert.deepEqual(
+      rustBoundaryViolations("src/domain/endpoint.rs", `use std::net::${value};`),
+      [],
+    )
+  }
+  assert.deepEqual(
+    rustBoundaryViolations(
+      "src/domain/endpoint.rs",
+      "use std::net::{IpAddr, SocketAddr};",
+    ),
+    [],
+  )
+  for (const source of [
+    "use std::net;",
+    "use std::net::*;",
+    "use std::net::TcpStream;",
+    "use std::net::TcpListener;",
+    "use std::net::{SocketAddr, TcpStream};",
+    "use std::{net, fs::File};",
+  ]) {
+    assert.ok(rustBoundaryViolations("src/domain/endpoint.rs", source).length, source)
+  }
+})

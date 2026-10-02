@@ -547,12 +547,15 @@ export interface ConversationView {
   capabilities: ConversationCapabilities
   /** Current provider attachment lifecycle. */
   lifecycle: ConversationLifecycle
-  /** Some non-actionable history or text was omitted to bound this response. */
+  /** Some history, text or whole interactions were omitted to bound this response; interactionViewError explains omitted actionable units. */
   truncated: boolean
-  /** Why pending review choices cannot safely be shown; do not offer inferred choices. */
-  permissionViewError?: string
+  /** Why complete pending reviews or questions cannot safely be shown; do not infer omitted choices or question fields. */
+  interactionViewError?: string
   /** All currently pending execution IDs are represented, so an exact reorder may be attempted. */
   queueComplete: boolean
+  /** Committed physical transcript completeness and freshness, independent of display truncation. */
+  transcriptState:
+    "not_loaded" | "partial" | "complete_empty" | "complete" | "stale" | "unknown"
   /** Configured provider, model and working directory for this conversation. */
   runtime?: ConversationRuntime
   /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
@@ -976,8 +979,219 @@ export const InstallableAgent = {
   Opencode: "opencode",
 } as const
 export type InstallableAgent = (typeof InstallableAgent)[keyof typeof InstallableAgent]
+/** Exact receiver authority and physical stream identity. */
+export interface RecordScope {
+  /** Validated sync-engine Id, at most 128 UTF-8 bytes. */
+  receiver: string
+  /** Validated sync-engine Id, at most 128 UTF-8 bytes. */
+  origin: string
+  /** Validated sync-engine Id, at most 128 UTF-8 bytes. */
+  stream: string
+  /** Validated sync-engine Id, at most 128 UTF-8 bytes. */
+  incarnation: string
+  /** Validated sync-engine Id, at most 128 UTF-8 bytes. */
+  schema: string
+  /** Validated sync-engine Id, at most 128 UTF-8 bytes. */
+  accessEpoch: string
+}
+/** Fixed target page after a downloaded checkpoint. */
+export interface RecordPageRequest {
+  /** Exact authorized receiver and physical stream identity. */
+  scope: RecordScope
+  /** Last downloaded position, as canonical unsigned decimal. */
+  after: string
+  /** Captured committed head for this pass, as canonical unsigned decimal. */
+  target: string
+  /** Maximum returned records, from one through the product bound. */
+  maxRecords: number
+  /** Maximum aggregate decoded physical payload bytes. */
+  maxPayloadBytes: number
+  /** Maximum decoded bytes in one physical record. */
+  maxRecordBytes: number
+}
+/** One physical record; payload is canonical padded RFC 4648 base64. */
+export interface RecordWireRecord {
+  /** Dense physical position, starting at one. */
+  position: string
+  /** Immutable physical record identity. */
+  id: string
+  /** Canonical padded RFC 4648 base64 physical payload. */
+  payload: string
+}
+/** Read a committed physical head under fresh receiver authority. */
+export interface ConversationRecordsHeadParams {
+  /** Conversation selected under authenticated ownership. */
+  conversationId: string
+  /** Positive current numeric receiver binding epoch. */
+  accessEpoch: string
+  /** Trusted receiver binding selector; the actual physical scope is returned by the authenticated head read. */
+  receiverId: string
+}
+/** Committed head for the exact requested scope. */
+export interface ConversationRecordsHeadResult {
+  /** Exact scope for this committed head. */
+  scope: RecordScope
+  /** Committed terminal physical position, as canonical unsigned decimal. */
+  head: string
+}
+/** Read a bounded page through a captured terminal target. */
+export interface ConversationRecordsPageParams {
+  /** Conversation selected under authenticated ownership. */
+  conversationId: string
+  /** Positive current numeric receiver binding epoch. */
+  accessEpoch: string
+  /** Bounded fixed-target page request. */
+  request: RecordPageRequest
+}
+/** Echoed request and bounded physical records. */
+export interface ConversationRecordsPageResult {
+  /** Exact request echoed by the source. */
+  request: RecordPageRequest
+  /** One through sixteen contiguous physical records, validated before encoding. */
+  records: RecordWireRecord[]
+}
+/** Typed refusal for bounded authorized record reads; transport loss is not a delivery acknowledgement. */
+export const RecordReadErrorCode = {
+  InvalidRequest: "invalid_request",
+  Unauthorized: "unauthorized",
+  Forbidden: "forbidden",
+  WrongOwner: "wrong_owner",
+  WrongReceiver: "wrong_receiver",
+  StaleEpoch: "stale_epoch",
+  Unverifiable: "unverifiable",
+  IdentityChanged: "identity_changed",
+  HistoryPruned: "history_pruned",
+  RecordTooLarge: "record_too_large",
+  ResponseTooLarge: "response_too_large",
+  TemporarilyUnavailable: "temporarily_unavailable",
+  ReadTimeout: "read_timeout",
+  SourcePreparing: "source_preparing",
+} as const
+export type RecordReadErrorCode =
+  (typeof RecordReadErrorCode)[keyof typeof RecordReadErrorCode]
+/** Stable creation-order key; absence conveys no deletion. */
+export interface CatalogueEntryKey {
+  /** Creation revision of this stable identity. */
+  creation: string
+  /** Stable owner catalogue identity; text is preserved unchanged. */
+  id: string
+}
+/** Current catalogue descriptor or explicit retained deletion marker. */
+export interface CatalogueDescriptor {
+  /** Stable creation-order identity of this descriptor. */
+  key: CatalogueEntryKey
+  /** Current committed revision, possibly newer than the captured pass boundary. */
+  revision: string
+  /** Explicit retained deletion marker for this identity. */
+  deleted: boolean
+}
+/** Saved finite pass; the receiver owns durable progress and validates echoed correlation. */
+export interface CataloguePass {
+  /** Exact authorized owner scope saved with this finite pass. */
+  scope: RecordScope
+  /** Last fully completed owner revision. */
+  completed: string
+  /** Fixed head captured when this finite pass began. */
+  boundary: string
+  /** Last committed stable key; omitted before the first page. */
+  cursor?: CatalogueEntryKey
+  /** Positive receiver generation; delayed responses must match the saved pass. */
+  generation: string
+}
+/** Bounded creation-order descriptor request. */
+export interface CatalogueManifestRequest {
+  /** Saved finite pass whose boundary and cursor select the next descriptors. */
+  pass: CataloguePass
+  /** Maximum manifest entries; sync-engine owns the accepted bound. */
+  maxEntries: number
+}
+/** Discover catalogue scope and head after fresh authenticated owner admission. */
+export interface ConversationCatalogueHeadParams {
+  /** Server-bound receiver identity requesting this owner catalogue. */
+  receiverId: string
+  /** Positive current numeric receiver binding epoch. */
+  accessEpoch: string
+}
+/** Server-selected owner stream, physical incarnation, and head. */
+export interface ConversationCatalogueHeadResult {
+  /** Server-selected authorized owner scope, including current incarnation. */
+  scope: RecordScope
+  /** Current owner catalogue head. */
+  head: string
+}
+/** Read a bounded manifest under exact freshly authorized scope. */
+export interface ConversationCatalogueManifestParams {
+  /** Saved finite pass and requested descriptor count. */
+  request: CatalogueManifestRequest
+  /** Positive current numeric receiver binding epoch. */
+  accessEpoch: string
+}
+/** Exact echoed request and current descriptors in stable creation order. */
+export interface ConversationCatalogueManifestResult {
+  /** Returned request evidence retained for receiver core correlation. */
+  request: CatalogueManifestRequest
+  /** Current descriptors returned in stable creation order. */
+  entries: CatalogueDescriptor[]
+  /** Whether eligible descriptors remain beyond this page. */
+  hasMore: boolean
+}
+/** Resolve current value at the descriptor key and at least its revision. */
+export interface ConversationCatalogueResolveParams {
+  /** Saved finite pass authorizing this descriptor resolution. */
+  pass: CataloguePass
+  /** Manifest descriptor naming the key and minimum revision to resolve. */
+  descriptor: CatalogueDescriptor
+  /** Maximum decoded payload bytes; sync-engine owns the accepted bound. */
+  maxPayloadBytes: number
+  /** Positive current numeric receiver binding epoch. */
+  accessEpoch: string
+}
+/** Exact request correlation and current equal-or-newer value; no truncation. */
+export interface ConversationCatalogueResolveResult {
+  /** Returned pass evidence retained for receiver correlation. */
+  pass: CataloguePass
+  /** Returned requested descriptor evidence retained for receiver correlation. */
+  descriptor: CatalogueDescriptor
+  /** Current descriptor corresponding to the returned value or deletion marker. */
+  entry: CatalogueDescriptor
+  /** Base64 current metadata payload; empty for a retained deletion marker. */
+  payload: string
+}
+/** Typed catalogue admission, source, capacity, and transport refusals. */
+export const CatalogueReadErrorCode = {
+  InvalidRequest: "invalid_request",
+  Unauthorized: "unauthorized",
+  Forbidden: "forbidden",
+  WrongOwner: "wrong_owner",
+  WrongReceiver: "wrong_receiver",
+  StaleEpoch: "stale_epoch",
+  Unverifiable: "unverifiable",
+  IdentityChanged: "identity_changed",
+  SourceUnavailable: "source_unavailable",
+  OversizedEntry: "oversized_entry",
+  ReadTimeout: "read_timeout",
+  ResponseTooLarge: "response_too_large",
+  ServerBusy: "server_busy",
+} as const
+export type CatalogueReadErrorCode =
+  (typeof CatalogueReadErrorCode)[keyof typeof CatalogueReadErrorCode]
+/** Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor. */
+export const passiveReadTiming = {
+  readTimeoutMs: 10000,
+  deliveryTimeoutMs: 30000,
+  clientAllowanceMs: 5000,
+  minRequestTimeoutMs: 45000,
+} as const
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
+  maxOrdinaryResponseBytes: 65536,
+  maxReadyMethods: 29,
+  maxAuthCredentialCharacters: 16384,
+  maxProductClientIdCharacters: 256,
+  maxPhysicalRecordPayloadBytes: 65546,
+  maxRecordPageRecords: 16,
+  maxRecordPagePayloadBytes: 65546,
+  maxRecordResponseBytes: 131072,
   minAgentInstallRequestIdCharacters: 1,
   maxAgentInstallRequestIdBytes: 256,
   maxConfiguredAgents: 3,
@@ -994,6 +1208,15 @@ export const bounds = {
   conversationIdPattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
   maxConversationTitleBytes: 256,
   maxConversationPreviewBytes: 512,
+  maxSyncIdBytes: 128,
+  decimalU64Pattern: "^(0|[1-9][0-9]{0,19})$",
+  maxDecimalU64Characters: 20,
+  positiveEpochPattern: "^[1-9][0-9]{0,19}$",
+  maxPositiveEpochCharacters: 20,
+  recordPayloadPattern:
+    "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+  minRecordPayloadEncodedCharacters: 4,
+  maxRecordPayloadEncodedCharacters: 87396,
   maxListedConversations: 500,
   maxToolStructuredContentBytes: 16384,
   maxMcpNameBytes: 128,
@@ -1008,6 +1231,8 @@ export const ProductMethod = {
   CredentialRevoke: "credential.revoke",
   ConversationCreate: "conversation.create",
   ConversationRead: "conversation.read",
+  ConversationRecordsHead: "conversation.recordsHead",
+  ConversationRecordsPage: "conversation.recordsPage",
   ConversationList: "conversation.list",
   ConversationSend: "conversation.send",
   ConversationSteer: "conversation.steer",
@@ -1025,5 +1250,259 @@ export const ProductMethod = {
   ConversationSetApprovalMode: "conversation.setApprovalMode",
   AgentsInstallOptions: "agents.installOptions",
   AgentsInstall: "agents.install",
+  ConversationCatalogueHead: "conversation.catalogueHead",
+  ConversationCatalogueManifest: "conversation.catalogueManifest",
+  ConversationCatalogueResolve: "conversation.catalogueResolve",
 } as const
 export const ProductEvent = { SessionChallenge: "session.challenge" } as const
+export const ProductHandshakeMethod = "session.authenticate" as const
+export const productReadyMethods = [
+  "auth.session",
+  "server.health",
+  "credential.issue",
+  "credential.list",
+  "credential.revoke",
+  "conversation.create",
+  "conversation.read",
+  "conversation.recordsHead",
+  "conversation.recordsPage",
+  "conversation.list",
+  "conversation.send",
+  "conversation.steer",
+  "conversation.remove",
+  "conversation.answer",
+  "conversation.answerQuestion",
+  "conversation.cancel",
+  "conversation.close",
+  "conversation.archive",
+  "conversation.unarchive",
+  "conversation.delete",
+  "conversation.reorder",
+  "attachment.begin",
+  "agents.list",
+  "conversation.setApprovalMode",
+  "agents.installOptions",
+  "agents.install",
+  "conversation.catalogueHead",
+  "conversation.catalogueManifest",
+  "conversation.catalogueResolve",
+] as const
+export const catalogueWireSchemas = {
+  RecordScope: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      receiver: {
+        type: "string",
+        "x-core-utf8-bound": "id_max_utf8_bytes",
+        "x-utf8MaxBytes": 128,
+      },
+      origin: {
+        type: "string",
+        "x-core-utf8-bound": "id_max_utf8_bytes",
+        "x-utf8MaxBytes": 128,
+      },
+      stream: {
+        type: "string",
+        "x-core-utf8-bound": "id_max_utf8_bytes",
+        "x-utf8MaxBytes": 128,
+      },
+      incarnation: {
+        type: "string",
+        "x-core-utf8-bound": "id_max_utf8_bytes",
+        "x-utf8MaxBytes": 128,
+      },
+      schema: {
+        type: "string",
+        "x-core-utf8-bound": "id_max_utf8_bytes",
+        "x-utf8MaxBytes": 128,
+      },
+      accessEpoch: {
+        type: "string",
+        "x-core-utf8-bound": "id_max_utf8_bytes",
+        "x-utf8MaxBytes": 128,
+      },
+    },
+    required: ["receiver", "origin", "stream", "incarnation", "schema", "accessEpoch"],
+  },
+  CatalogueEntryKey: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      creation: {
+        type: "string",
+        minLength: 1,
+        maxLength: 20,
+        pattern: "^(0|[1-9][0-9]{0,19})$",
+      },
+      id: {
+        type: "string",
+        minLength: 1,
+        "x-core-utf8-bound": "id_max_utf8_bytes",
+        "x-utf8MaxBytes": 128,
+      },
+    },
+    required: ["creation", "id"],
+  },
+  CatalogueDescriptor: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      key: { $ref: "#/$defs/CatalogueEntryKey" },
+      revision: {
+        type: "string",
+        minLength: 1,
+        maxLength: 20,
+        pattern: "^(0|[1-9][0-9]{0,19})$",
+      },
+      deleted: { type: "boolean" },
+    },
+    required: ["key", "revision", "deleted"],
+  },
+  CataloguePass: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      scope: { $ref: "#/$defs/RecordScope" },
+      completed: {
+        type: "string",
+        minLength: 1,
+        maxLength: 20,
+        pattern: "^(0|[1-9][0-9]{0,19})$",
+      },
+      boundary: {
+        type: "string",
+        minLength: 1,
+        maxLength: 20,
+        pattern: "^(0|[1-9][0-9]{0,19})$",
+      },
+      cursor: { $ref: "#/$defs/CatalogueEntryKey" },
+      generation: {
+        type: "string",
+        minLength: 1,
+        maxLength: 20,
+        pattern: "^(0|[1-9][0-9]{0,19})$",
+      },
+    },
+    required: ["scope", "completed", "boundary", "generation"],
+  },
+  CatalogueManifestRequest: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pass: { $ref: "#/$defs/CataloguePass" },
+      maxEntries: {
+        type: "integer",
+        minimum: 1,
+        "x-core-maximum-bound": "catalogue_max_entries",
+        maximum: 256,
+      },
+    },
+    required: ["pass", "maxEntries"],
+  },
+  ConversationCatalogueHeadParams: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      receiverId: {
+        type: "string",
+        minLength: 1,
+        "x-core-utf8-bound": "id_max_utf8_bytes",
+        "x-utf8MaxBytes": 128,
+      },
+      accessEpoch: { type: "string", pattern: "^[1-9][0-9]{0,19}$", maxLength: 20 },
+    },
+    required: ["receiverId", "accessEpoch"],
+  },
+  ConversationCatalogueHeadResult: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      scope: { $ref: "#/$defs/RecordScope" },
+      head: {
+        type: "string",
+        minLength: 1,
+        maxLength: 20,
+        pattern: "^(0|[1-9][0-9]{0,19})$",
+      },
+    },
+    required: ["scope", "head"],
+    "x-maxEncodedBytes": 131072,
+  },
+  ConversationCatalogueManifestParams: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      request: { $ref: "#/$defs/CatalogueManifestRequest" },
+      accessEpoch: { type: "string", pattern: "^[1-9][0-9]{0,19}$", maxLength: 20 },
+    },
+    required: ["request", "accessEpoch"],
+  },
+  ConversationCatalogueManifestResult: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      request: { $ref: "#/$defs/CatalogueManifestRequest" },
+      entries: {
+        type: "array",
+        items: { $ref: "#/$defs/CatalogueDescriptor" },
+        "x-core-max-items-bound": "catalogue_max_entries",
+        maxItems: 256,
+      },
+      hasMore: { type: "boolean" },
+    },
+    required: ["request", "entries", "hasMore"],
+    "x-maxEncodedBytes": 131072,
+  },
+  ConversationCatalogueResolveParams: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pass: { $ref: "#/$defs/CataloguePass" },
+      descriptor: { $ref: "#/$defs/CatalogueDescriptor" },
+      maxPayloadBytes: {
+        type: "integer",
+        minimum: 1,
+        "x-core-maximum-bound": "catalogue_max_payload_bytes",
+        maximum: 1048576,
+      },
+      accessEpoch: { type: "string", pattern: "^[1-9][0-9]{0,19}$", maxLength: 20 },
+    },
+    required: ["pass", "descriptor", "maxPayloadBytes", "accessEpoch"],
+  },
+  ConversationCatalogueResolveResult: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pass: { $ref: "#/$defs/CataloguePass" },
+      descriptor: { $ref: "#/$defs/CatalogueDescriptor" },
+      entry: { $ref: "#/$defs/CatalogueDescriptor" },
+      payload: {
+        type: "string",
+        "x-core-base64-bound": "catalogue_max_payload_bytes",
+        pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+        maxLength: 1398104,
+      },
+    },
+    required: ["pass", "descriptor", "entry", "payload"],
+    "x-maxEncodedBytes": 131072,
+  },
+  CatalogueReadErrorCode: {
+    type: "string",
+    enum: [
+      "invalid_request",
+      "unauthorized",
+      "forbidden",
+      "wrong_owner",
+      "wrong_receiver",
+      "stale_epoch",
+      "unverifiable",
+      "identity_changed",
+      "source_unavailable",
+      "oversized_entry",
+      "read_timeout",
+      "response_too_large",
+      "server_busy",
+    ],
+  },
+} as const

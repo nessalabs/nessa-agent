@@ -189,7 +189,7 @@ const view = await client.conversation.read(conversationId)
 
 Read serially while the surface is visible to display current streamed output. Each
 view replaces the previous one; `revision` is opaque, and `truncated` indicates
-omitted history or text. `permissionViewError` means a complete review cannot be
+omitted history, text or whole interactions. `interactionViewError` means a complete interaction cannot be
 shown safely. Permission controls must use its exact offered IDs and original input.
 
 The client generates separate execution and action IDs once per message. A
@@ -363,3 +363,17 @@ requirements and validation status.
 ### Reorder waiting messages
 
 `client.conversation.reorder(id, executionIds)` atomically replaces the full waiting order (at most 64 unique IDs). Include every current waiting input, including steering inputs; running work is excluded, and ordinary messages cannot move ahead of steering. The result contains `requestId` and `outcome`: `applied`, `unchanged`, `queue_changed`, or `priority_conflict`. The latter two leave the queue unchanged; refresh the view before choosing another order. An uncertain acknowledgement exposes `NessaConversationControlError` without replay.
+
+### Physical record reads
+
+`client.records.head(conversationId, receiverId, accessEpoch)` discovers the actual
+full scope and committed head after fresh authorization. Save that scope and use
+it unchanged in `client.records.page(conversationId, accessEpoch, request)`.
+`source_preparing` means bounded validation is incomplete; retry with fresh
+authorization. It does not report a zero head.
+
+The client checks transport shape, decimal representation, base64 and generated
+wire caps. It preserves opaque identity and page evidence for the receiving
+process's core `validate_page` before durable download or semantic effects. A
+changed scope needs the receiver's explicit reset decision. The example Rust
+receiver owns durable checkpoints; no native application shell is required.

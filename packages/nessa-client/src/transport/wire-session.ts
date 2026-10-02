@@ -10,8 +10,19 @@ import { buildRequestFrame } from "../protocol/encode.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { NessaConnectionClosedError } from "../application/connection-closed-error.js"
 import type { RequestDeadline } from "../application/session-port.js"
+import { bounds, ProductMethod } from "../generated/product.js"
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+
+function boundedUtf8Length(text: string, maximum: number): number {
+  let bytes = 0
+  for (const character of text) {
+    const point = character.charCodeAt(0)
+    bytes += character.length === 2 ? 4 : point <= 0x7f ? 1 : point <= 0x7ff ? 2 : 3
+    if (bytes > maximum) break
+  }
+  return bytes
+}
 
 /**
  * The configured deadline, raised or capped for one request.
@@ -29,6 +40,7 @@ function boundedTimeout(configuredMs: number, deadline?: RequestDeadline): numbe
 }
 
 type PendingRequest = {
+  method: string
   resolve: (payload: unknown) => void
   reject: (error: Error) => void
   timer: ReturnType<typeof setTimeout>
@@ -91,6 +103,7 @@ export class WireSession {
       }, timeoutMs)
 
       this.pending.set(id, {
+        method,
         resolve: (payload) => {
           clearTimeout(timer)
           resolve(payload)
@@ -161,8 +174,29 @@ export class WireSession {
   }
 
   private handleWireMessage(raw: string): void {
+    const wireBytes = boundedUtf8Length(raw, bounds.maxRecordResponseBytes)
+    if (wireBytes > bounds.maxRecordResponseBytes) {
+      this.handleClose(1009, "response exceeds product byte bound")
+      this.socket.close()
+      return
+    }
     const frame = parseWireMessage(raw)
     if (!frame) return
+    if (wireBytes > bounds.maxOrdinaryResponseBytes) {
+      const pending = isResponseFrame(frame) ? this.pending.get(frame.id) : undefined
+      if (
+        !pending ||
+        (pending.method !== ProductMethod.ConversationRecordsHead &&
+          pending.method !== ProductMethod.ConversationRecordsPage &&
+          pending.method !== ProductMethod.ConversationCatalogueHead &&
+          pending.method !== ProductMethod.ConversationCatalogueManifest &&
+          pending.method !== ProductMethod.ConversationCatalogueResolve)
+      ) {
+        this.handleClose(1009, "unrelated response exceeds product byte bound")
+        this.socket.close()
+        return
+      }
+    }
     this.dispatchFrame(frame)
   }
 

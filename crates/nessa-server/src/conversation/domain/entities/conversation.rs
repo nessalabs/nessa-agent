@@ -30,6 +30,9 @@ pub struct Conversation {
     deletion: Option<ConversationDeletion>,
 }
 impl Conversation {
+    /// Maximum UTF-8 bytes in each persisted creator surface/action field.
+    pub const MAX_CREATOR_CONTEXT_BYTES: usize = 256;
+
     pub fn with_approval_mode(mut self, mode: ConversationApprovalMode) -> Self {
         self.approval_mode = mode;
         self
@@ -152,7 +155,10 @@ impl Conversation {
         creation_action: &str,
     ) -> Result<(), &'static str> {
         for value in [creator_surface, creation_action] {
-            if value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+            if value.trim().is_empty()
+                || value.len() > Self::MAX_CREATOR_CONTEXT_BYTES
+                || value.chars().any(char::is_control)
+            {
                 return Err("invalid conversation creator context");
             }
         }

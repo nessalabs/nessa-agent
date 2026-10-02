@@ -10,6 +10,7 @@ use nessa_auth::{
     },
     domain::{Action, CredentialId, OrganizationId, PrincipalId, Resource},
 };
+use nessa_sync::replication::domain::{Id, Scope};
 use std::{future::Future, pin::Pin};
 
 /// A binding authority reads committed state. A missing or unavailable binding
@@ -30,6 +31,21 @@ pub enum ReadRefusal {
     WrongReceiver,
     StaleEpoch,
     Unverifiable,
+}
+
+impl From<AccessError> for ReadRefusal {
+    fn from(error: AccessError) -> Self {
+        match error {
+            AccessError::Unavailable | AccessError::StaleRevision | AccessError::Unsupported => {
+                Self::Unverifiable
+            }
+            AccessError::InvalidCredential
+            | AccessError::CredentialRevoked
+            | AccessError::CredentialExpired
+            | AccessError::InactiveMembership
+            | AccessError::IdentityMismatch => Self::Unauthorized,
+        }
+    }
 }
 
 /// Exact receiver and ownership portion of a source scope. The physical source
@@ -157,10 +173,7 @@ impl AdmitPassiveRead<'_> {
         {
             Ok(Decision::Allow) => {}
             Ok(Decision::Deny) => return Err(ReadRefusal::Forbidden),
-            Err(AccessError::Unavailable | AccessError::Unsupported) => {
-                return Err(ReadRefusal::Unverifiable)
-            }
-            Err(_) => return Err(ReadRefusal::Unauthorized),
+            Err(error) => return Err(error.into()),
         }
         let binding = self
             .receivers
@@ -186,4 +199,26 @@ impl AdmitPassiveRead<'_> {
         }
         Ok(binding)
     }
+}
+
+/// Encode the trusted passive receiver and numeric epoch into opaque sync IDs.
+pub(crate) fn passive_read_selector(receiver: &str, epoch: u64) -> Result<(Id, Id), ReadRefusal> {
+    let receiver = Id::new(receiver).map_err(|_| ReadRefusal::Unverifiable)?;
+    let epoch = Id::new(format!("epoch-{epoch}")).map_err(|_| ReadRefusal::Unverifiable)?;
+    Ok((receiver, epoch))
+}
+
+pub(crate) fn validate_passive_read_selector(
+    receiver: &str,
+    epoch: u64,
+    scope: &Scope,
+) -> Result<(), ReadRefusal> {
+    let (receiver, epoch) = passive_read_selector(receiver, epoch)?;
+    if scope.receiver() != &receiver {
+        return Err(ReadRefusal::WrongReceiver);
+    }
+    if scope.access_epoch() != &epoch {
+        return Err(ReadRefusal::StaleEpoch);
+    }
+    Ok(())
 }

@@ -5,6 +5,48 @@ import {
 } from "../../application/ports"
 import { scenarioEffects } from "./effects"
 
+it("publishes complete history after echo admission and preserves it on replay", async () => {
+  const effects = scenarioEffects("echo")
+  const conversationId = "00000000-0000-4000-8000-000000000001"
+  await effects.create(conversationId)
+  expect(await effects.read(conversationId)).toMatchObject({
+    transcriptState: "complete_empty",
+    messages: [],
+    revision: "0",
+  })
+  const input = {
+    conversationId,
+    executionId: "execution-1",
+    actionId: "action-1",
+    text: "hello",
+    attachments: [],
+    files: [],
+  }
+  await effects.send(input)
+  const first = await effects.read(conversationId)
+  expect(first).toMatchObject({
+    transcriptState: "complete",
+    messages: [{ executionId: input.executionId, userText: input.text }],
+    revision: "1",
+  })
+  await effects.send(input)
+  expect(await effects.read(conversationId)).toEqual(first)
+  await effects.steer({
+    ...input,
+    executionId: "execution-2",
+    actionId: "action-2",
+    text: "again",
+  })
+  expect(await effects.read(conversationId)).toMatchObject({
+    transcriptState: "complete",
+    messages: [
+      { executionId: "execution-1", userText: "hello" },
+      { executionId: "execution-2", userText: "again" },
+    ],
+    revision: "2",
+  })
+})
+
 /**
  * The substitute is held to the same port the gateway adapter implements.
  *

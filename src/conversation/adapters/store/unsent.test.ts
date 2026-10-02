@@ -163,6 +163,7 @@ it("known-unsent follow-up does not settle the earlier running invocation before
           title: null,
           revision: "running",
           queueComplete: true,
+          transcriptState: "complete",
           truncated: false,
           pending: [],
           permissions: [],

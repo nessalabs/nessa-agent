@@ -51,6 +51,7 @@ const view = (conversationId: string): ConversationView => ({
   lifecycle: { phase: "attached" },
   truncated: false,
   queueComplete: true,
+  transcriptState: "complete",
 })
 
 function reading(read: () => Promise<ConversationView>) {

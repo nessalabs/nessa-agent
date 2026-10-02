@@ -31,6 +31,7 @@ const functional = [
   "drag",
   "responsive",
   "safe-area",
+  "committed-transcript",
   "load-fallback",
   "widgets",
 ]

@@ -14,7 +14,9 @@ pub mod env;
 pub mod health;
 pub mod mcp_servers;
 pub mod product;
+mod product_contract;
 pub mod protocol;
+mod read_only_sync;
 pub mod server;
 
 pub use core::run;
@@ -34,3 +36,7 @@ pub(crate) mod attachments_test_support;
 #[cfg(test)]
 #[path = "../tests/conversation/support.rs"]
 pub(crate) mod conversation_test_support;
+
+#[cfg(test)]
+#[path = "../tests/conversation/catalogue_receiver/store.rs"]
+pub(crate) mod catalogue_receiver_store;

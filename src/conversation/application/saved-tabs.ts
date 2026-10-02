@@ -1,4 +1,4 @@
-import { conversation } from "../model"
+import { conversation, conversationHistoryEmpty } from "../model"
 import type { LocalTabs } from "./local-tabs"
 
 export type SavedConversationTab = { conversationId: string; title?: string }
@@ -50,12 +50,7 @@ export function parseConversationTabSnapshot(
  * may be a restored conversation that has simply not been read yet.
  */
 function knownEmpty(item: LocalTabs["conversations"][number]): boolean {
-  return (
-    item.remote !== undefined &&
-    !item.remote.truncated &&
-    item.turns.length === 0 &&
-    item.draft.length === 0
-  )
+  return conversationHistoryEmpty(item) && item.draft.length === 0
 }
 
 export function conversationTabSnapshot(tabs: LocalTabs): SavedConversationTabs {

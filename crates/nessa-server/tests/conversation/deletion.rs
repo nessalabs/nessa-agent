@@ -6,7 +6,8 @@ use crate::conversation::{
     application::{
         AttachmentReleaseCause, ConversationCreation, ConversationCreationAuditRecord,
         ConversationCreationCause, ConversationDeletionBudgets, ConversationDeletionCause,
-        ConversationFuture, ProviderSessionEraser, SubmittedFile, UnfinishedDeletions,
+        ConversationFuture, ConversationMessageStatus, ProviderSessionEraser, SubmittedFile,
+        UnfinishedDeletions,
     },
     infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,

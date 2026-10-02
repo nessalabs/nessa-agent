@@ -1,7 +1,9 @@
 /**
  * Transport layer — WebSocket I/O and request/response correlation.
  *
- * Owns the socket lifecycle hooks and pending RPC registry. Does not know
+ * Owns the socket lifecycle hooks, pending RPC registry, and raw response byte
+ * ceiling. A larger record response is accepted only for a pending record read.
+ * Does not know
  * connect handshake order or the public `NessaClient` API.
  *
  * ```

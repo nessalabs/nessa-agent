@@ -74,6 +74,7 @@ function gatewayView(): ConversationView {
     lifecycle: { phase: "attached" },
     truncated: false,
     queueComplete: true,
+    transcriptState: "complete",
   }
 }
 

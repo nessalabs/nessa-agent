@@ -24,6 +24,7 @@ export {
   type IssueCredentialResult,
   type ServerApi,
   type AgentsApi,
+  type RecordReadApi,
 } from "./presentation/index.js"
 export type {
   NessaClientConnectOptions,
@@ -111,6 +112,13 @@ export type {
 } from "./generated/product.js"
 
 export type { SessionTermination } from "./generated/product.js"
+export { RecordReadErrorCode } from "./generated/product.js"
+export type {
+  ConversationRecordsHeadResult,
+  RecordScope,
+  RecordPageRequest,
+} from "./generated/product.js"
+export type { DecodedRecord, DecodedRecordPage } from "./protocol/record-read-validate.js"
 
 export { NessaMutationError } from "./application/mutation-error.js"
 export type {
@@ -215,3 +223,19 @@ export {
 } from "./application/conversation-mutation-error.js"
 
 export { isRetryableConnectionError } from "./application/connect-retry.js"
+
+export type { CatalogueReadApi } from "./presentation/catalogue-read-api.js"
+export type { DecodedCatalogueResolve } from "./protocol/catalogue-read-validate.js"
+export type {
+  CataloguePass,
+  CatalogueDescriptor,
+  CatalogueEntryKey,
+  CatalogueManifestRequest,
+  ConversationCatalogueHeadParams,
+  ConversationCatalogueHeadResult,
+  ConversationCatalogueManifestParams,
+  ConversationCatalogueManifestResult,
+  ConversationCatalogueResolveParams,
+  ConversationCatalogueResolveResult,
+} from "./generated/product.js"
+export { CatalogueReadErrorCode } from "./generated/product.js"

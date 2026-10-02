@@ -141,8 +141,9 @@ export function conversationView(value: unknown, expected: string): Conversation
     "capabilities",
     "lifecycle",
     "truncated",
-    "permissionViewError",
+    "interactionViewError",
     "queueComplete",
+    "transcriptState",
     "runtime",
     "title",
     "approvalMode",
@@ -155,6 +156,14 @@ export function conversationView(value: unknown, expected: string): Conversation
   optionalText(item, "title", bounds.maxConversationTitleBytes)
   flag(item, "truncated")
   flag(item, "queueComplete")
+  oneOf(text(item, "transcriptState", 14, false), [
+    "not_loaded",
+    "partial",
+    "complete_empty",
+    "complete",
+    "stale",
+    "unknown",
+  ])
   const committedMode = text(item, "approvalMode", 4, false)
   const offeredModes = approvalModeChoices(item.approvalModes)
   if (!offeredModes.some((choice) => choice.id === committedMode))
@@ -168,8 +177,8 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Conversation requested mode is unavailable")
     oneOf(text(change, "status"), ["changing", "recovery_required"])
   }
-  if (item.permissionViewError !== undefined)
-    text(item, "permissionViewError", 2048, false)
+  if (item.interactionViewError !== undefined)
+    text(item, "interactionViewError", 2048, false)
   const messages = items(item, "messages", 128)
   const messageIds = new Set<string>()
   const messageStatuses = new Map<string, string>()
@@ -482,6 +491,28 @@ export function conversationView(value: unknown, expected: string): Conversation
   ]
   exact(capabilities, capabilityKeys)
   for (const key of capabilityKeys.slice(0, 5)) flag(capabilities, key)
+  const confirmed =
+    item.transcriptState === "complete" || item.transcriptState === "complete_empty"
+  if (
+    !confirmed &&
+    (item.queueComplete ||
+      capabilities.queue ||
+      capabilities.steer ||
+      capabilities.permissions ||
+      pendingIds.size ||
+      permissionIds.size ||
+      questionIds.size)
+  )
+    throw new Error("Unconfirmed conversation history offers controls")
+  if (
+    item.transcriptState === "complete_empty" &&
+    (messages.length ||
+      pendingIds.size ||
+      permissionIds.size ||
+      questionIds.size ||
+      toolIds.size)
+  )
+    throw new Error("Empty conversation history contains transcript evidence")
   const features = record(capabilities.agentFeatures)
   const featureValues = {
     permissionDenial: PermissionDenialSupport,
