@@ -78,6 +78,12 @@ export const css = {
   sampleCard: "[data-sample-card]", // the sample trail's own card
   sampleView: "[data-sample-view]", // a sample widget's view; its value is the widget's id
   sampleStep: "[data-sample-step]", // a step of the trail, which opens its detail
+
+  // MCP Apps (ADR 344, #349) and the fixture app the sample workspace registers (src/desktop/widgets/app/fixture/)
+  appFrame: "[data-app-frame]", // an app's sandbox proxy frame; its value is the place it is drawn in
+  appView: "[data-app-view]", // an app's view; its value is the view's lifecycle
+  appNotice: ".widget-app-notice", // class: a notice above a running app
+  fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
   sampleDetail: "[data-sample-detail]", // the trail's open detail
   sampleAccessory: "[data-sample-accessory]", // the sample plugin's accessory in its session's header
   sampleSize: "[data-sample-size]", // the place's size as the sample view was told it, "<width>x<height>"
@@ -308,6 +314,12 @@ export const names = {
   widgetSession: "Widget hosts, every state",
   /** The channel the sample session is in. */
   widgetChannel: "design-system",
+  /** The sample session (in-memory source) whose conversation carries the fixture MCP App's call. */
+  appSession: "An MCP App, in its sandbox",
+  /** What the fixture server refuses its hidden tool with (`fixture-plugin.ts`). */
+  hiddenToolRefused: "fixture_secret is not available to apps",
+  /** The notice above an app whose CSP blocked a load (`app-view.ts`, `appLines`). */
+  blockedNotice: "Blocked a connection this app didn't declare: https://example.com",
   openWidget: "Open",
   openInWindow: "Open in Window",
   closePane: "Close Pane",
@@ -336,4 +348,7 @@ export const harmlessConsole = [
   // A fresh browser asks for /favicon.ico, which the dev server does not serve.
   // Chrome's message does not name the URL, so both the text and the source are matched.
   { text: /status of 404/i, url: /\/favicon\.ico(\?|$)/ },
+  // The fixture MCP App asks for a page its CSP does not declare, on purpose
+  // (`mcp-apps.mjs --only csp`): the engine reports the refusal it is checked for.
+  { text: /Content Security Policy|Refused to connect/i, url: /^(about:srcdoc)?$/ },
 ]

@@ -207,6 +207,20 @@ gateway's, and remaining.
 Nothing is retried by the host and nothing pretends to be live (gate 7, gate
 16); a source that reads again answers `useWidget` again.
 
+An `app` plugin's answer is its tool call's (#349): `unread` while the call is
+not read, `missing` for none, else ready, titled by its tool and belonging to
+the call's session; it offers every place. A ready app's view is the sandboxed
+frame, and has rows of its own (`app/model/app-view.ts`):
+
+| The app's view | `inline` | `pane`, `window` |
+| --- | --- | --- |
+| loading (its resource read, the proxy loading, the handshake) | its plugin's name, quiet, over the frame not yet shown | the same |
+| live | the frame | the frame |
+| could not be loaded (not an app's resource, a deadline missed, its proxy reloaded under it) | "This app couldn't be loaded" | the same, with close |
+| its server gone when read | "This app's server has stopped" | the same, with close |
+| live, a call found its server gone | the frame, under "This app's server has stopped" | the same |
+| live, its CSP blocked a load | the frame, under "Blocked a connection this app didn't declare: *origins*" | the same |
+
 ### Boundaries
 
 The desktop's verticals depend in one direction: **widgets ← workspace ←

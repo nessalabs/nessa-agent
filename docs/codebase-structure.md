@@ -251,8 +251,17 @@ writing the full defaults on first launch is buying.
   host context read from the page (`adapters/`); the plugin contract and the
   hosts — the card in a message, a widget's body in a pane or the window
   (`ui/`); and the sample plugin composition registers while the sample
-  workspace is in use (`fixture/`). It knows no plugin and imports no other
-  vertical. The workspace draws the chrome around the hosts and carries out
+  workspace is in use (`fixture/`). The `app` kind's renderer is its own
+  responsibility under `app/` (#349): reading a frame's messages into typed
+  copies, the CSP built from `_meta.ui.csp`, display modes onto places, the
+  host context and one view's lifecycle (`app/model/`); the `ui/*` bridge
+  and its ports — the server, the tool calls, the conversation, links,
+  downloads, the timers (`app/application/`); the frame transport, the page's
+  style variables and where the sandbox proxy is (`app/adapters/dom/`); the
+  proxy itself and the dev server's listener for it (`app/sandbox/`, served
+  in the desktop app by `src-tauri/src/app_sandbox.rs`); the view the hosts
+  draw (`app/ui/`); and a fixture server's app (`app/fixture/`). It knows no
+  plugin and imports no other vertical. The workspace draws the chrome around the hosts and carries out
   their callbacks with its own commands. The desktop's verticals depend one
   way, widgets ← workspace ← subagents ← experiments, each importing only
   those before it; `scripts/architecture/desktop-verticals.mjs` refuses an

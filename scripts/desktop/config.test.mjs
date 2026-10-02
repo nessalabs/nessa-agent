@@ -41,7 +41,9 @@ test("packaged desktop content policy permits required local capabilities", () =
     ],
     "object-src": ["'none'"],
     "base-uri": ["'self'"],
-    "frame-src": ["'none'"],
+    // Only the MCP Apps sandbox proxy (src-tauri/src/app_sandbox.rs), as a
+    // scheme where the platform gives it one and an http host on Windows.
+    "frame-src": ["nessa-sandbox:", "http://nessa-sandbox.localhost"],
     "form-action": ["'none'"],
   })
   assert.equal(config.app.security.devCsp, null)

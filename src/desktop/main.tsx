@@ -6,7 +6,7 @@ import { createDesktopDependencies } from "./dependencies"
 import { makeDesktopStore } from "./store"
 import { DesktopIconFamilyProvider } from "./ui/icons"
 import { DesktopWindow } from "./ui/desktop-window"
-import { WidgetRegistryProvider } from "./widgets"
+import { sandboxFor, WidgetRegistryProvider } from "./widgets"
 import { ClockProvider, followWorkspace, loadWorkspace } from "./workspace"
 
 import "@fontsource-variable/geist"
@@ -16,7 +16,12 @@ import "./styles.css"
 // Composition: the window's outside things and its widget plugins, then the
 // store over them, then the tree. The store follows the workspace source for
 // the window's life.
-const dependencies = createDesktopDependencies()
+const dependencies = createDesktopDependencies({
+  apps: {
+    sandbox: sandboxFor(host.kind, document),
+    platform: host.kind === "browser" ? "web" : "desktop",
+  },
+})
 const store = makeDesktopStore(dependencies)
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())

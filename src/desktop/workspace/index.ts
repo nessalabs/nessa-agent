@@ -57,7 +57,7 @@ export { ClockProvider } from "./adapters/dom/clock"
 export { focusInFront } from "./adapters/dom/focus"
 export { measureWorkspace } from "./adapters/dom/measure"
 export { inMemorySource } from "./adapters/in-memory/in-memory-source"
-export { sampleWidgetSession } from "./adapters/in-memory/sample-labs"
+export { sampleAppSession, sampleWidgetSession } from "./adapters/in-memory/sample-labs"
 export { workspaceEffects } from "./adapters/store/effects"
 export { initialWorkspaceFrom, workspaceReducer } from "./adapters/store/slice"
 export { rememberedFilter } from "./adapters/storage/remembered-filter"
@@ -73,3 +73,4 @@ export type {
   WorkspaceUpdate,
 } from "./application/ports"
 export type { WorkspaceFailureReason } from "./model/failure"
+export { mcpAppPlugin } from "./model/transcript"

@@ -1,4 +1,5 @@
 /** Sample sessions in Nessa Labs and Personal. */
+import { fixtureCallId, fixtureServer } from "../../../widgets/app/fixture/fixture-plugin"
 import { sampleWidgets } from "../../../widgets/fixture/sample-widgets"
 import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import {
@@ -11,7 +12,7 @@ import {
   text,
   type SampleSession,
 } from "./sample-content"
-import type { Part } from "../../model/transcript"
+import { mcpAppPlugin, type Part } from "../../model/transcript"
 
 /**
  * The session the sample plugin's widgets belong to (`widgets/fixture/`):
@@ -19,6 +20,13 @@ import type { Part } from "../../model/transcript"
  * use, and its conversation carries one of each.
  */
 export const sampleWidgetSession = "widget-hosts"
+
+/**
+ * The session the fixture MCP App's call belongs to (`widgets/app/fixture/`):
+ * composition registers the app with it while the sample workspace is in
+ * use, and its conversation carries the call's widget.
+ */
+export const sampleAppSession = "mcp-app-host"
 
 const widget = (ref: WidgetRef): Part => ({ kind: "widget", widget: ref })
 
@@ -289,6 +297,25 @@ export const labsSamples: readonly SampleSession[] = [
           widget(sampleWidgets.off),
           widget(sampleWidgets.unshowable),
           widget(sampleWidgets.unregistered),
+        ],
+      ],
+    ],
+  },
+  {
+    id: sampleAppSession,
+    channelId: "design-system",
+    title: "An MCP App, in its sandbox",
+    model: models.opus,
+    updated: 9 * 24 * 60 + 30,
+    preview: "The fixture server's app, drawn behind the sandbox proxy.",
+    messages: [
+      ["user", 9 * 24 * 60 + 34, [text("Show me the fixture app.")]],
+      [
+        "agent",
+        9 * 24 * 60 + 30,
+        [
+          text("The fixture server's app, drawn in its sandbox:"),
+          widget({ plugin: mcpAppPlugin(fixtureServer), id: fixtureCallId }),
         ],
       ],
     ],

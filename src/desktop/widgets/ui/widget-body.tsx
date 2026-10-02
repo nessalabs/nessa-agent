@@ -12,6 +12,7 @@ import { useRef } from "react"
 import { Button } from "@nessa-ui/react/button"
 import { EmptyState } from "@nessa-ui/react/empty-state"
 import { useHostContext } from "../adapters/dom/host-context"
+import { AppView } from "../app/ui/app-view"
 import { hostDraws } from "../model/host-table"
 import type { OpenPlace, WidgetAnswer } from "../model/widget-state"
 import type { WidgetHost, WidgetPlugin } from "./plugin"
@@ -46,7 +47,9 @@ export function WidgetBody({
       {...{ [widgetBodyAttribute]: "" }}
       tabIndex={-1}
     >
-      {draws.kind === "view" && View ? (
+      {draws.kind === "view" && plugin?.kind === "app" ? (
+        <AppView plugin={plugin} id={id} place={place} host={host} context={context} />
+      ) : draws.kind === "view" && View ? (
         <View id={id} place={place} host={host} context={context} />
       ) : draws.kind === "waiting" ? (
         <p className="widget-waiting" role="status">

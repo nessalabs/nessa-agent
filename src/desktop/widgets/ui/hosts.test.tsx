@@ -7,6 +7,7 @@
 import { act, StrictMode, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { fixtureAppPlugin } from "../app/fixture/fixture-plugin"
 import { createWidgetRegistry } from "../application/registry"
 import { WidgetRegistryProvider } from "../adapters/react/registry-context"
 import type { WidgetRef } from "../model/widget-ref"
@@ -234,12 +235,22 @@ describe("plugins registered while the window runs", () => {
       <Body widget={ref("run", "mcp:rows")} place="pane" fake={fakeHost()} />,
     )
     expect(text()).toBe("Can't show this hereClose")
-    // An MCP App: its renderer is #349, so it is drawn as one the window cannot show, by its name.
+    // An MCP App, whose calls hold no widget "run": it says so, by the table.
     await act(
-      async () => void registry.register({ kind: "app", id: "mcp:rows", name: "Rows" }),
+      async () =>
+        void registry.register({
+          ...fixtureAppPlugin({
+            id: "mcp:rows",
+            sessionId: "a",
+            sandbox: undefined,
+            timers: { after: () => () => {} },
+            page: () => ({ styles: {}, timeZone: "UTC", platform: "web" }),
+          }),
+          name: "Rows",
+        }),
     )
     expect(host.querySelector('[data-slot="empty-state-title"]')?.textContent).toBe(
-      "Can't show this here",
+      "This is no longer available",
     )
     let named = ""
     await draw(

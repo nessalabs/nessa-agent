@@ -6,6 +6,7 @@ import { defineConfig, searchForWorkspaceRoot } from "vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
+import { appSandbox } from "./src/desktop/widgets/app/sandbox/serve"
 import { gatewayOrigin, parseStage } from "./src/env/gateway-ports"
 import { loadEnvironment } from "./src/env/environment"
 
@@ -71,6 +72,8 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    // The MCP Apps sandbox proxy's own origin, beside the dev server.
+    appSandbox(),
     {
       name: "nessa-bundle-stage",
       apply: "build",

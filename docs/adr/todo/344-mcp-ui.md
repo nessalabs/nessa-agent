@@ -85,6 +85,31 @@ the `openai/*` fields are optional.
 desktop is a pane beside the conversation, as ChatGPT's desktop draws it; the
 window place serves a sidebar entry; `pip` is not offered.
 
+**The sandbox** (#349). The window frames a proxy on an origin of its own —
+the `nessa-sandbox` scheme in the desktop app (`http://nessa-sandbox.localhost`
+on Windows), a listener beside the dev server in the browser build — with
+`allow-scripts allow-same-origin`, as the spec requires of the proxy; the
+proxy frames the app's document as `srcdoc` with `allow-scripts` alone, so the
+app's origin is opaque. With `allow-same-origin` there too, every app would
+share the proxy's origin: one app could script another's proxy through
+`top[i]` and drive that app's bridge, and all would share storage. Hosts that
+give each app an origin of its own avoid that; a custom scheme and a dev
+listener cannot give one per server on every platform, so an app here has no
+storage or cookies, and its requests carry `Origin: null`. An origin per
+server is the change that would allow more. The CSP is written into the app's
+document, first, from the parsed parts of `_meta.ui.csp` alone (with
+`form-action 'none'` beside the spec's directives); nothing declared means no
+network. Permissions (`camera`, …) and `_meta.ui.domain` are not granted.
+
+**Teardown.** The host sends `ui/resource-teardown` and waits for the answer
+(or a deadline) where it ends an app itself and the place stays: an app in a
+pane or the window asking to go. When a person closes the place — a pane's
+close, ⌘W, the window left — the frame goes with it at once: an iframe's
+document is discarded when it leaves the page and reloaded if it is moved, so
+nothing sent then could be delivered, and none is sent. That is the one place
+the host does not do what the spec says it SHOULD (wait for the answer);
+honouring it would mean holding frames outside the places that draw them.
+
 **Nessa's own views ship as extensions.** A research view such as experiments
 is an MCP server with an MCP App in nessa-extensions, held to nessa-agent's
 coding standards, published separately, and usable in any MCP Apps host. It
@@ -135,6 +160,24 @@ app widgets alike.
   directory; the `openai/*` extensions Nessa chooses to support.
 - Work: #346, #347, #348, #349 in nessa-agent; nessa-extensions #1–#7. Part of
   #345.
+
+## Evidence (#349)
+
+- **The bridge**, in jsdom, through the real frame transport and the spec's
+  own messages: `widgets/app/application/bridge.test.ts`, one test at least
+  per row and ordering of the design table on #349; the parsing, the CSP, the
+  places, the host context, the lifecycle and the tool call's notifications
+  each under `widgets/app/model/`; the hosts drawing an app,
+  `widgets/app/ui/app-view.test.tsx`.
+- **In a real browser**: `verification/desktop/scripts/mcp-apps.mjs`, with
+  the fixture app (`widgets/app/fixture/`) — it renders inline, in a pane and
+  in the window; `tools/call` is answered, and refused for a hidden tool; a
+  request its CSP does not declare is blocked; its origin is opaque; it is
+  torn down on close (`verification/desktop/CHECKLIST.md` › _MCP Apps_).
+- **The desktop app's scheme** serves the proxy and nothing else
+  (`src-tauri/src/app_sandbox.rs`), and the navigation policy lets the proxy
+  and the app's `srcdoc` load in a frame (`links.rs`). Not driven by a script:
+  the scripts run the browser build.
 
 ## What each harness passes through ACP
 

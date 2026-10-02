@@ -1,0 +1,104 @@
+<!doctype html>
+<!--
+  The sandbox proxy for MCP Apps (MCP Apps 2026-01-26, *Sandbox proxy*).
+
+  Served on an origin of its own, never the window's: by a listener of its
+  own in the browser build (`app/sandbox/vite-plugin.ts`) and by the
+  `nessa-sandbox` scheme in the desktop app (`src-tauri/src/app_sandbox.rs`).
+  The window frames it with `sandbox="allow-scripts allow-same-origin"`.
+
+  It holds no rule of its own. It says it is ready; it loads the one document
+  the host hands it into the app's frame, with `sandbox="allow-scripts"` (an
+  opaque origin: the app reaches neither this document, nor any other app's,
+  nor storage); and it relays messages between the two. The document arrives
+  with its Content Security Policy already in it (`app/model/csp.ts`,
+  `appDocument`). Methods under `ui/notifications/sandbox-` are the host's and
+  this proxy's: none is relayed from the host to the app, and of the app's
+  only the CSP reporter's is passed on.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>App sandbox</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+      }
+      iframe {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      ;(function () {
+        "use strict"
+        // Loaded as a page of its own rather than in a frame — a link to it
+        // followed in the window — it is nothing to look at: back to where
+        // the window was.
+        if (window.parent === window) {
+          history.back()
+          return
+        }
+        var host = window.parent
+        var reserved = "ui/notifications/sandbox-"
+        var reporter = "ui/notifications/sandbox-csp-violation"
+        // The host's origin, from its first message; the app's frame, once made.
+        var hostOrigin = null
+        var app = null
+
+        function methodOf(data) {
+          return data !== null &&
+            typeof data === "object" &&
+            typeof data.method === "string"
+            ? data.method
+            : null
+        }
+
+        window.addEventListener("message", function (event) {
+          if (event.source === host) {
+            var method = methodOf(event.data)
+            if (app === null) {
+              // The first thing the host says is the document; nothing is
+              // relayed before it.
+              if (method !== "ui/notifications/sandbox-resource-ready") return
+              var params = event.data.params
+              if (params === null || typeof params !== "object") return
+              var html = params.html
+              if (typeof html !== "string") return
+              hostOrigin = event.origin
+              app = document.createElement("iframe")
+              app.setAttribute("sandbox", "allow-scripts")
+              app.setAttribute("title", "App")
+              app.srcdoc = html
+              document.body.appendChild(app)
+              return
+            }
+            if (event.origin !== hostOrigin) return
+            if (method !== null && method.indexOf(reserved) === 0) return
+            // The app's origin is opaque: it can be addressed only as "*".
+            app.contentWindow.postMessage(event.data, "*")
+            return
+          }
+          if (app !== null && event.source === app.contentWindow) {
+            var from = methodOf(event.data)
+            if (from !== null && from.indexOf(reserved) === 0 && from !== reporter) return
+            host.postMessage(event.data, hostOrigin)
+          }
+        })
+
+        host.postMessage(
+          { jsonrpc: "2.0", method: "ui/notifications/sandbox-proxy-ready", params: {} },
+          "*",
+        )
+      })()
+    </script>
+  </body>
+</html>

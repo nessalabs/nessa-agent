@@ -350,6 +350,36 @@ scripts drive the sample plugin the sample workspace registers
   it, the body with room. _Check:_ `widgets.mjs --only narrow-short` (1000 ×
   560, three panes).
 
+## MCP Apps
+
+_ADR 344_ ([`docs/adr/todo/344-mcp-ui.md`](../../docs/adr/todo/344-mcp-ui.md)),
+#349: an MCP server's app is drawn behind a sandbox proxy on another origin,
+inline, in a pane (its fullscreen) and in the window, and spoken to over the
+`ui/*` bridge. The script drives the fixture app the sample workspace
+registers (`src/desktop/widgets/app/fixture/`), on its session "An MCP App,
+in its sandbox". Every row of the bridge's design table is a jsdom test
+(`app/application/bridge.test.ts`, `app/ui/app-view.test.tsx`).
+
+- [ ] **It renders in all three places, told its mode and its call** — the
+  card's app live, told `inline`, its call's input and result, its frame as
+  tall as the app says; its fullscreen request opens a pane beside the
+  conversation (answered `inline`: the card stays), whose app is told
+  `fullscreen` and fills its body; Open in Window shows it in the window,
+  filling it. _Check:_ `mcp-apps.mjs --only inline,pane,window`.
+- [ ] **`tools/call` is answered for an allowed tool and refused for a hidden
+  one**, with the gateway's reason. _Check:_ `mcp-apps.mjs --only tools-call`.
+- [ ] **A request to an origin the app did not declare is blocked by its CSP,
+  and the host says so** above the app. _Check:_ `mcp-apps.mjs --only csp`.
+- [ ] **The app is on an opaque origin**: no parent or top document, no
+  storage, no cookie; the proxy on another origin than the window.
+  _Check:_ `mcp-apps.mjs --only isolation`.
+- [ ] **It is torn down on close**: a pane's close takes its proxy and app
+  documents with it; an app asking to go is sent `ui/resource-teardown`, and
+  its pane closes only once it answers. _Check:_ `mcp-apps.mjs --only teardown`.
+- [ ] **In the desktop app** (by hand, `pnpm app`): the proxy loads from the
+  `nessa-sandbox` scheme and the fixture app renders in each place.
+  _ADR 344._ Not scriptable here: the scripts drive the browser build.
+
 ## Composer and approval card
 
 - [ ] **The approval card arranges itself by its own width** at 280, 340,
