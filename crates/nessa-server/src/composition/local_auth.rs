@@ -284,6 +284,11 @@ pub(super) async fn product_state(
             .with_attachments(attachments)
             .with_agents_catalog(agents_catalog);
     }
+    // The route redeems on the store the conversation service issues on.
+    #[cfg(unix)]
+    if let Some(mcp) = &mcp {
+        product = product.with_resource_tickets(mcp.resource_tickets.clone());
+    }
     Ok(LocalProduct {
         routes: product,
         record_reader,

@@ -16,7 +16,9 @@ use super::agent::{agent_search_path, AgentsConfig};
 use crate::core::RunError;
 use crate::mcp_servers::{
     domain::{configuration_digest, relay_arguments},
-    infrastructure::{bind, BoundRelay, ConversationGrants, OsTokens, Relay},
+    infrastructure::{
+        bind, BoundRelay, ConversationGrants, OsTokens, Relay, ResourceTicketStore, TicketEvent,
+    },
 };
 use nessa_sdk::infrastructure::{
     acp::sessions::{StandInSessions, StdioMcpServer},
@@ -29,7 +31,14 @@ use std::{
     ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+
+/// How often the resource ticket store looks for tickets past their
+/// deadline between the calls it answers: an unredeemed ticket's bytes are
+/// let go of, and its expiry reported, at most this long after it.
+pub(super) const RESOURCE_TICKET_SWEEP: Duration = Duration::from_secs(5);
 
 /// What composition hands the server lifecycle: the servers to start once it
 /// is listening and stop once conversations have, and the relay to serve.
@@ -37,6 +46,21 @@ pub(super) struct McpComposition {
     pub(super) servers: McpServers,
     pub(super) relay: Arc<Relay>,
     pub(super) listener: BoundRelay,
+    /// The MCP App resources held behind tickets: the conversation service
+    /// issues and releases on it, `GET /mcp-resources` redeems on it
+    /// (`ProductRouteState::with_resource_tickets`), and the server lifecycle
+    /// sweeps it (`ResourceTicketStore::sweep_periodically`). One instance,
+    /// shared by `Arc`.
+    pub(super) resource_tickets: Arc<ResourceTicketStore>,
+    /// Each ticket's end — redeemed, expired, or released unredeemed — as the
+    /// store reports it. Whoever audits an app's calls takes this receiver
+    /// and records each as `TicketEvent::phase`; until it does, nothing
+    /// drains it.
+    #[expect(
+        dead_code,
+        reason = "the conversation service's audit of an MCP App's calls takes it (#348)"
+    )]
+    pub(super) ticket_events: UnboundedReceiver<TicketEvent>,
 }
 
 /// Where the relay socket of the namespace at `namespace` is, for the user
@@ -154,10 +178,17 @@ pub(super) async fn compose(
     let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
     agents.mcp_servers = stand_ins;
     agents.stand_ins = StandInSessions::granted_by(Arc::new(grants.clone()));
+    let (ticket_ends, ticket_events) = unbounded_channel();
     Ok(Some(McpComposition {
         relay: Arc::new(Relay::new(servers.clone(), digests, grants)),
         servers,
         listener,
+        resource_tickets: Arc::new(ResourceTicketStore::new(
+            Arc::new(super::local_auth::SystemClock),
+            Arc::new(OsTokens),
+            Arc::new(ticket_ends),
+        )),
+        ticket_events,
     }))
 }
 

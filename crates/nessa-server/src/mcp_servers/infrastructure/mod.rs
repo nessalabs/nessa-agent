@@ -1,14 +1,18 @@
 //! The relay socket, the `mcp-relay` command on its other end, the grants
-//! that tie each stand-in to its conversation, and the view's tool UI lookup
-//! over the SDK's `McpServers`.
+//! that tie each stand-in to its conversation, the resource tickets an MCP
+//! App redeems, and the view's tool UI lookup over the SDK's `McpServers`.
 mod apps;
 mod grants;
 mod relay;
 mod relay_command;
+mod resource_tickets;
 mod tool_uis;
 
 #[cfg(all(test, unix))]
 pub(crate) use relay::{opening_refused, said};
+#[cfg(test)]
+#[path = "../../../tests/mcp_servers/ticket_support.rs"]
+pub(crate) mod ticket_test_support;
 
 pub use apps::SessionApps;
 pub use grants::{ConversationGrants, OsTokens, TokenSource};
@@ -21,4 +25,5 @@ pub use relay::{
 #[cfg(unix)]
 pub use relay_command::run;
 pub use relay_command::{relay, RelayFailure};
+pub use resource_tickets::{ResourceTicketStore, TicketEnd, TicketEvent, TicketEvents};
 pub use tool_uis::ListedToolUis;
