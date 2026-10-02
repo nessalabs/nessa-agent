@@ -87,8 +87,15 @@ export function createDesktopDependencies(
   const sample = options.workspace === undefined
   const workspace = options.workspace ?? inMemorySource({ now, after })
   const newId = options.newId ?? (() => crypto.randomUUID())
-  const widgets = widgetRegistry(options.widgets, sample, options.apps, after, newId)
   const { apps, gateway } = options
+  // The fixture app only beside the sample workspace, and never beside a
+  // gateway, whose servers' apps it could otherwise stand in for.
+  const widgets = widgetRegistry(
+    options.widgets,
+    sample,
+    gateway ? undefined : apps,
+    after,
+  )
   return {
     workspace,
     now,
@@ -103,7 +110,7 @@ export function createDesktopDependencies(
           gatewayApps: gatewayApps({
             registry: widgets,
             mcpApps: gateway.mcpApps,
-            ports: appPorts(apps, after, newId),
+            ports: appPorts(apps, after),
           }),
         }
       : {}),
@@ -116,11 +123,15 @@ interface AppsOptions {
   readonly platform: ReturnType<typeof platformFor>
 }
 
-/** What every app's view is given by the window, whichever server it is. */
-function appPorts(apps: AppsOptions, after: Timers["after"], newId: () => string) {
+/**
+ * What every app's view is given by the window, whichever server it is. Its
+ * mounts' ids are the protocol's lowercase UUIDs, whatever ids the workspace
+ * is given.
+ */
+function appPorts(apps: AppsOptions, after: Timers["after"]) {
   return {
     timers: { after },
-    newId,
+    newId: () => crypto.randomUUID(),
     ...(apps.sandbox ? { sandbox: apps.sandbox } : {}),
     hostInfo: { name: "Nessa", version: "desktop" },
     page: () => readPageContext(document, apps.platform),
@@ -132,7 +143,6 @@ function widgetRegistry(
   sample: boolean,
   apps: AppsOptions | undefined,
   after: Timers["after"],
-  newId: () => string,
 ): DesktopWidgetRegistry {
   // The sample plugin only beside the sample workspace, whose session its widgets belong to.
   const registry = createWidgetRegistry<WidgetPlugin>(
@@ -146,7 +156,7 @@ function widgetRegistry(
         sessionId: sampleAppSession,
         sandbox: apps.sandbox,
         timers: { after },
-        newId,
+        newId: () => crypto.randomUUID(),
         page: () => readPageContext(document, apps.platform),
       }),
     )

@@ -20,6 +20,7 @@ import type { HostContext, OpenPlace, WidgetPlace } from "../../model/widget-sta
 import {
   createAppBridge,
   deadlines,
+  busyReads,
   pendingLimit,
   teardownId,
   type AppBridge,
@@ -56,7 +57,7 @@ const mountId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12,
 
 /** The address the fixture's call is reached at from mount `instanceId`. */
 const addressOf = (instanceId: string): AppAddress => ({
-  conversationId: "session-a",
+  sessionId: "session-a",
   server: "weather",
   app: { executionId: "fixture-execution", toolId: "fixture-call", instanceId },
 })
@@ -218,7 +219,11 @@ describe("the handshake", () => {
     const app = harness({ server: { ...fixtureServerPort(), readResource: read } })
     expect(frameOn(app.bridge.view().lifecycle)).toBe(false)
     await flush()
-    expect(read).toHaveBeenCalledWith(addressOf(mountId(1)), fixtureResourceUri)
+    expect(read).toHaveBeenCalledWith(
+      addressOf(mountId(1)),
+      fixtureResourceUri,
+      expect.any(AbortSignal),
+    )
     expect(app.bridge.view()).toMatchObject({ lifecycle: { kind: "proxy" } })
     expect(app.take()).toEqual([])
     app.say({
@@ -775,8 +780,8 @@ describe("a live app's requests", () => {
     })
     await flush()
     expect(read.mock.calls).toEqual([
-      [addressOf(mountId(1)), fixtureResourceUri],
-      [addressOf(mountId(1)), "ui://elsewhere"],
+      [addressOf(mountId(1)), fixtureResourceUri, expect.any(AbortSignal)],
+      [addressOf(mountId(1)), "ui://elsewhere", expect.any(AbortSignal)],
     ])
   })
 })
@@ -806,6 +811,67 @@ describe("how long a tools/call is waited for", () => {
     answer.resolve({ kind: "ok", result: { content: [] } })
     await flush()
     expect(app.take()).toContainEqual({ jsonrpc: "2.0", id: 1, result: { content: [] } })
+  })
+})
+
+describe("a gateway too busy to read the app (L1b)", () => {
+  it("L1b: the first read answered busy is made again, retryRead apart, and the app loads", async () => {
+    const answers: ServerAnswer[] = [{ kind: "busy" }, { kind: "busy" }]
+    const read = vi.fn(
+      async (address: AppAddress, uri: string, signal: AbortSignal) =>
+        answers.shift() ?? fixtureServerPort().readResource(address, uri, signal),
+    )
+    const app = harness({ server: { ...fixtureServerPort(), readResource: read } })
+    await flush()
+    expect(app.bridge.view().lifecycle.kind).toBe("reading")
+    expect(app.timers.filter((t) => !t.cancelled).map((t) => t.ms)).toEqual([
+      deadlines.retryRead,
+    ])
+    app.deadline()
+    await flush()
+    expect(read).toHaveBeenCalledTimes(2)
+    app.deadline()
+    await flush()
+    expect(read).toHaveBeenCalledTimes(3)
+    expect(app.bridge.view().lifecycle.kind).toBe("proxy")
+  })
+
+  it("L1b: busy for every one of busyReads reads, the view fails", async () => {
+    const read = vi.fn(async (): Promise<ServerAnswer> => ({ kind: "busy" }))
+    const app = harness({ server: { ...fixtureServerPort(), readResource: read } })
+    await flush()
+    for (let n = 1; n < busyReads; n++) {
+      app.deadline()
+      await flush()
+    }
+    expect(read).toHaveBeenCalledTimes(busyReads)
+    expect(app.bridge.view().lifecycle).toEqual({ kind: "failed", reason: "load" })
+    expect(app.timers.filter((t) => !t.cancelled)).toEqual([])
+  })
+
+  it("L1b, L24: removed while waiting to read again, it reads no more", async () => {
+    const read = vi.fn(async (): Promise<ServerAnswer> => ({ kind: "busy" }))
+    const app = harness({ server: { ...fixtureServerPort(), readResource: read } })
+    await flush()
+    app.bridge.remove()
+    expect(app.timers.every((t) => t.cancelled)).toBe(true)
+    expect(read).toHaveBeenCalledTimes(1)
+  })
+
+  it("A8: an app's own request answered busy is refused, too many at once", async () => {
+    const app = harness({
+      server: { ...fixtureServerPort(), callTool: async () => ({ kind: "busy" }) },
+    })
+    await live(app)
+    app.say({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "t" } })
+    await flush()
+    expect(app.take()).toEqual([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: errorCodes.refused, message: "Too many requests at once" },
+      },
+    ])
   })
 })
 
@@ -857,17 +923,81 @@ describe("the mount and its release (#384)", () => {
     expect(released).toEqual([addressOf(mountId(1))])
   })
 
-  it("M4: a failed view, removed, releases the mount it read under", async () => {
+  it("M2, M3: a view whose read failed is released then, once, and not again when removed", async () => {
     const { released, server } = releasing({
       readResource: async () => ({ kind: "refused", reason: "No" }),
     })
     const app = harness({ server })
     await flush()
     expect(app.bridge.view().lifecycle).toEqual({ kind: "failed", reason: "load" })
-    expect(released).toEqual([])
+    expect(released).toEqual([addressOf(mountId(1))])
     app.bridge.remove()
     await flush()
     expect(released).toEqual([addressOf(mountId(1))])
+  })
+
+  it("M2: a live view whose app left its frame, with a call waiting, is released at once", async () => {
+    const { released, server } = releasing({ callTool: () => new Promise(() => {}) })
+    const app = harness({ server })
+    await live(app)
+    app.say({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "delete_all" },
+    })
+    app.say({ jsonrpc: "2.0", method: "ui/notifications/sandbox-app-left", params: {} })
+    await flush()
+    expect(app.bridge.view().lifecycle).toEqual({ kind: "failed", reason: "load" })
+    expect(released).toEqual([addressOf(mountId(1))])
+  })
+
+  it("M2: a live view failed by its deadline, or by the proxy loading again, is released", async () => {
+    for (const fail of [
+      (app: Harness) => app.deadline(),
+      (app: Harness) =>
+        app.say({
+          jsonrpc: "2.0",
+          method: "ui/notifications/sandbox-proxy-ready",
+          params: {},
+        }),
+    ]) {
+      const { released, server } = releasing()
+      const app = harness({ server })
+      await flush()
+      app.say({
+        jsonrpc: "2.0",
+        method: "ui/notifications/sandbox-proxy-ready",
+        params: {},
+      })
+      fail(app)
+      await flush()
+      expect(app.bridge.view().lifecycle.kind).toBe("failed")
+      expect(released).toHaveLength(1)
+    }
+  })
+
+  it("R6: the release aborts the signal every read of this mount was given", async () => {
+    const signals: AbortSignal[] = []
+    const { server } = releasing({
+      readResource: async (_address, uri, signal) => {
+        signals.push(signal)
+        return fixtureServerPort().readResource(addressOf(mountId(1)), uri, signal)
+      },
+    })
+    const app = harness({ server })
+    await live(app)
+    app.say({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "resources/read",
+      params: { uri: "ui://x" },
+    })
+    await flush()
+    expect(signals).toHaveLength(2)
+    expect(signals.every((signal) => !signal.aborted)).toBe(true)
+    app.bridge.remove()
+    expect(signals.every((signal) => signal.aborted)).toBe(true)
   })
 
   it("M5: a release that fails is logged, and the view stays gone", async () => {
@@ -1359,7 +1489,11 @@ describe("the end", () => {
     })
     app.bridge.remove()
     read.resolve(
-      await fixtureServerPort().readResource(addressOf(mountId(1)), fixtureResourceUri),
+      await fixtureServerPort().readResource(
+        addressOf(mountId(1)),
+        fixtureResourceUri,
+        new AbortController().signal,
+      ),
     )
     await flush()
     expect(app.bridge.view()).toMatchObject({ lifecycle: { kind: "gone" } })

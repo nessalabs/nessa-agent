@@ -12,7 +12,7 @@
  * address its server calls go to — the conversation, the server, the call and
  * this mount of it — is the view's own, never anything the app says. Each
  * bridge is one mount: it mints its `instanceId` when it is made, and releases
- * that mount once, when the view ends (#384, M1–M7).
+ * that mount once, the first time the view fails or ends (#384, M1–M7).
  */
 import { appDocument, approvedDomains, cspPolicy } from "../model/csp"
 import { sandboxMethods } from "../model/sandbox-methods"
@@ -65,12 +65,20 @@ export const deadlines = {
   initialize: 15_000,
   /** For the app to answer `ui/resource-teardown`. */
   teardown: 3_000,
+  /** Before the app's resource is read again, when the gateway was too busy to read it (L1b). */
+  retryRead: 1_000,
   /** For a port to answer one of the app's requests; `tools/call` waits the server's `callWithin`. */
   request: 60_000,
 } as const
 
 /** At most this many of an app's requests wait on the host at once. */
 export const pendingLimit = 16
+
+/**
+ * How many times the app's resource is read while the gateway answers that it
+ * is busy, `deadlines.retryRead` apart, before the view fails (L1b).
+ */
+export const busyReads = 15
 
 /** The id of the host's one request to a view: its teardown. */
 export const teardownId = "nessa-teardown"
@@ -120,7 +128,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   let logged = 0
 
   const address: AppAddress = {
-    conversationId: call.sessionId,
+    sessionId: call.sessionId,
     server: options.server,
     app: {
       executionId: call.executionId,
@@ -129,6 +137,9 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     },
   }
   const gone = () => lifecycle.kind === "gone"
+  // Aborted when the mount is released: a read in flight fetches nothing more.
+  const mount = new AbortController()
+  let cancelReadAgain: (() => void) | undefined
   const initialized = () => lifecycle.kind === "live" || lifecycle.kind === "ending"
 
   const show = (next: Partial<AppViewState>) => {
@@ -230,8 +241,16 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
     if (lifecycle.kind === "gone") {
       for (const cancel of pending.values()) cancel()
       pending.clear()
-      // The mount ends here, and only here: `gone` is never left, so this is
-      // the one release (M2, M3). What it still waits on is let go with it.
+      cancelReadAgain?.()
+    }
+    // The mount ends the first time the view fails or goes: neither state is
+    // ever left but for `gone`, and the signal is aborted once, so this is the
+    // one release (M2, M3). The reviews it has open are withdrawn with it.
+    if (
+      (lifecycle.kind === "failed" || lifecycle.kind === "gone") &&
+      !mount.signal.aborted
+    ) {
+      mount.abort()
       ports.server.release(address).catch((error: unknown) => {
         console.error("An MCP App's release failed", error)
       })
@@ -249,6 +268,8 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
       case "server-gone":
         if (!view.serverGone) show({ serverGone: true })
         return send(refuse(id, errorCodes.refused, "The app's server has stopped"))
+      case "busy":
+        return send(refuse(id, errorCodes.refused, "Too many requests at once"))
       case "failed":
         return answer.error
           ? send(relayError(id, answer.error))
@@ -312,15 +333,17 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
           ports.server.callWithin,
         )
       case "resources/read":
-        return settle(id, ports.server.readResource(address, message.uri), (answer) =>
-          answerServer(id, answer),
+        return settle(
+          id,
+          ports.server.readResource(address, message.uri, mount.signal),
+          (answer) => answerServer(id, answer),
         )
       case "ui/message": {
         const conversation = ports.conversation
         if (!conversation) return unsupported(id)
         return settle(
           id,
-          conversation.sendMessage(address.conversationId, message.content),
+          conversation.sendMessage(address.sessionId, message.content),
           (done) => (done === "done" ? ok(id) : declined(id)),
         )
       }
@@ -335,7 +358,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
         }
         return settle(
           id,
-          conversation.updateModelContext(address.conversationId, update),
+          conversation.updateModelContext(address.sessionId, update),
           (done) =>
             done === "done"
               ? ok(id)
@@ -438,19 +461,27 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
   }
 
   options.onView(view)
-  // Read the app's resource, once, over its session's connection. A window
-  // with no sandbox can show no app, and reads nothing for one.
-  if (ports.sandbox) readResource()
+  // Read the app's resource over its session's connection: once, or again
+  // while the gateway answers that it is busy (L1b). A window with no sandbox
+  // can show no app, and reads nothing for one.
+  if (ports.sandbox) readResource(busyReads)
   else step({ kind: "read", outcome: "unloadable" })
-  function readResource() {
+  function readResource(reads: number) {
     ports.server
-      .readResource(address, call.resourceUri)
+      .readResource(address, call.resourceUri, mount.signal)
       .catch((error: unknown) => {
         console.error("An MCP App port failed", error)
         return { kind: "failed" } as const
       })
       .then((answer) => {
         if (gone()) return
+        if (answer.kind === "busy" && reads > 1) {
+          cancelReadAgain = ports.timers.after(deadlines.retryRead, () => {
+            cancelReadAgain = undefined
+            readResource(reads - 1)
+          })
+          return
+        }
         if (answer.kind === "ok") resource = uiResource(answer.result, call.resourceUri)
         step({
           kind: "read",
@@ -470,7 +501,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
       // One view is one call, at one address: a call of another session,
       // identity or resource is not this view's, and is not told to it.
       if (
-        next.sessionId !== address.conversationId ||
+        next.sessionId !== address.sessionId ||
         next.executionId !== address.app.executionId ||
         next.toolId !== address.app.toolId ||
         next.resourceUri !== call.resourceUri

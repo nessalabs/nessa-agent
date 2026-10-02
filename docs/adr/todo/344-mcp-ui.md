@@ -239,9 +239,17 @@ app widgets alike.
   server's own JSON-RPC error passed on with its signed code, the 32 KiB bound
   refused before sending, the ticket redeemed once and never handed on — and
   #349's L14 and L24 through the real bridge over it.
-- **The mount**: each view mints its `instanceId` and releases it once when it
-  ends (`bridge.test.ts`, "the mount and its release").
-- **The calls from the transcript** (`app-calls.ts`): `app-calls.test.ts`, and
+- **The mount**: each view mints its `instanceId` and releases it once, the
+  first time it fails or ends, aborting what its reads have not fetched
+  (`bridge.test.ts`, "the mount and its release"; `app-view.test.tsx` under
+  StrictMode). A first read the gateway was too busy for is made again
+  (`bridge.test.ts`, L1b).
+- **Limits, each its own issue**: a release ends the reviews already open, but
+  a call admitted before it can still open one after (#397); the app lane's
+  4 slots per socket are shared by every app in the window (#398); an app is
+  told `{}` for arguments the view does not carry (#394).
+- **The calls from the transcript** (`app-calls.ts`), each named by its
+  conversation as well as its execution and tool ids: `app-calls.test.ts`, and
   `workspace/adapters/gateway/tool-widget.test.ts` for the widget the
   transcript draws reading the same call.
 - **Not yet in a real browser against a real gateway**: the window shows a

@@ -36,7 +36,7 @@ describe("a view's tool as an app call", () => {
     const app = gatewayAppCall(conversationId, tool())
     expect(app).toEqual({
       server: "mcptest",
-      widgetId: JSON.stringify(["execution-1", "call-1"]),
+      widgetId: JSON.stringify([conversationId, "execution-1", "call-1"]),
       call: {
         sessionId: conversationId,
         executionId: "execution-1",
@@ -118,7 +118,7 @@ describe("a view's tool as an app call", () => {
 })
 
 describe("the calls of each server", () => {
-  const id = JSON.stringify(["execution-1", "call-1"])
+  const id = JSON.stringify([conversationId, "execution-1", "call-1"])
 
   it("C1, C7: a call is read once observed; an unchanged view keeps its value and tells no one", () => {
     const calls = gatewayAppCalls()
@@ -152,8 +152,45 @@ describe("the calls of each server", () => {
     ])
     expect(calls.forServer("other").read(id)).toEqual({ kind: "missing" })
     expect(
-      calls.forServer("mcptest").read(JSON.stringify(["execution-1", "call-2"])),
+      calls
+        .forServer("mcptest")
+        .read(JSON.stringify([conversationId, "execution-1", "call-2"])),
     ).toEqual({ kind: "missing" })
+  })
+
+  it("C10: the same execution and tool ids in two conversations are two calls, each read as its own", () => {
+    const other = "9f8e7d6c-5b4a-4c3d-8e2f-1a0b9c8d7e6f"
+    const calls = gatewayAppCalls()
+    const port = calls.forServer("mcptest")
+    calls.observe(conversationId, [tool()])
+    calls.observe(other, [tool({ status: "completed" })])
+    calls.observe(conversationId, [tool()])
+    expect(port.read(id)).toMatchObject({
+      kind: "known",
+      call: { sessionId: conversationId, phase: { kind: "running" } },
+    })
+    expect(port.read(JSON.stringify([other, "execution-1", "call-1"]))).toMatchObject({
+      kind: "known",
+      call: { sessionId: other, phase: { kind: "done" } },
+    })
+  })
+
+  it("C11: a call gone from its conversation's view is forgotten, and its readers told", () => {
+    const calls = gatewayAppCalls()
+    const port = calls.forServer("mcptest")
+    const told = vi.fn()
+    port.subscribe(id, told)
+    calls.observe(conversationId, [tool()])
+    expect(calls.observe(conversationId, [])).toEqual([])
+    expect(port.read(id)).toEqual({ kind: "missing" })
+    expect(told).toHaveBeenCalledTimes(2)
+  })
+
+  it("C11: another conversation's view forgets nothing of this one's", () => {
+    const calls = gatewayAppCalls()
+    calls.observe(conversationId, [tool()])
+    calls.observe("9f8e7d6c-5b4a-4c3d-8e2f-1a0b9c8d7e6f", [])
+    expect(calls.forServer("mcptest").read(id).kind).toBe("known")
   })
 
   it("C7: a stopped subscription is not told", () => {
@@ -187,7 +224,7 @@ describe("the servers' app plugins", () => {
     expect(plugin).toMatchObject({ kind: "app", server: "mcptest", name: "mcptest" })
     if (plugin?.kind !== "app") return
     expect(
-      plugin.ports.calls.read(JSON.stringify(["execution-1", "call-1"])),
+      plugin.ports.calls.read(JSON.stringify([conversationId, "execution-1", "call-1"])),
     ).toMatchObject({
       kind: "known",
       call: { phase: { kind: "done" } },

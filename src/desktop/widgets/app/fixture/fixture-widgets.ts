@@ -18,9 +18,12 @@ export const fixtureCallIdentity = {
   toolId: "fixture-call",
 } as const
 
-/** The widget its one call is drawn as. */
-export const fixtureWidget = appWidget(
-  fixtureServer,
-  fixtureCallIdentity.executionId,
-  fixtureCallIdentity.toolId,
-)
+/** The widget its one call is drawn as, in session `sessionId`. */
+export function fixtureWidget(sessionId: string) {
+  return appWidget(
+    fixtureServer,
+    sessionId,
+    fixtureCallIdentity.executionId,
+    fixtureCallIdentity.toolId,
+  )
+}

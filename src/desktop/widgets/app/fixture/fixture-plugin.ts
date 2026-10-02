@@ -96,7 +96,7 @@ export function fixtureAppPlugin(options: {
   const ports: McpAppPorts = {
     server: fixtureServerPort(),
     calls: {
-      read: (id) => (id === fixtureWidget.id ? known : missing),
+      read: (id) => (id === fixtureWidget(options.sessionId).id ? known : missing),
       subscribe: () => () => {},
     },
     timers: options.timers,

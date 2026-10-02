@@ -72,13 +72,13 @@ describe("an agent message's parts", () => {
 })
 
 describe("a tool call's widget", () => {
-  const call = { executionId: "run", toolId: "call-1" }
+  const call = { sessionId: "k", executionId: "run", toolId: "call-1" }
   const ui = { server: "charts", tool: "show", resourceUri: "ui://charts/view.html" }
 
   it("is the MCP server's app drawing that call, when the tool declared a UI", () => {
     expect(toolWidget({ ...call, mcp: ui })).toEqual({
       kind: "widget",
-      widget: { plugin: "mcp:charts", id: JSON.stringify(["run", "call-1"]) },
+      widget: { plugin: "mcp:charts", id: JSON.stringify(["k", "run", "call-1"]) },
     })
   })
 
@@ -89,13 +89,18 @@ describe("a tool call's widget", () => {
   })
 
   it("names each call apart, however its identities are spelt", () => {
-    const one = toolWidget({ executionId: "a:b", toolId: "c", mcp: ui })!
-    const other = toolWidget({ executionId: "a", toolId: "b:c", mcp: ui })!
+    const one = toolWidget({ sessionId: "k", executionId: "a:b", toolId: "c", mcp: ui })!
+    const other = toolWidget({
+      sessionId: "k",
+      executionId: "a",
+      toolId: "b:c",
+      mcp: ui,
+    })!
     expect(sameWidget(one.widget, other.widget)).toBe(false)
     expect(
       sameWidget(
         one.widget,
-        toolWidget({ executionId: "a:b", toolId: "c", mcp: ui })!.widget,
+        toolWidget({ sessionId: "k", executionId: "a:b", toolId: "c", mcp: ui })!.widget,
       ),
     ).toBe(true)
   })

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest"
 import { createWidgetRegistry, gatewayApps, type WidgetPlugin } from "../../../widgets"
 import { gatewayToolWidget } from "./tool-widget"
 
+const conversation = "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d"
+
 const tool: ConversationTool = {
   executionId: "run",
   toolId: "call-1",
@@ -23,16 +25,22 @@ describe("a gateway tool call as a widget part", () => {
         resourceUri: "ui://nessa-test/chart.html",
       },
     }
-    expect(gatewayToolWidget(shown)).toEqual({
+    expect(gatewayToolWidget(conversation, shown)).toEqual({
       kind: "widget",
-      widget: { plugin: "mcp:mcptest", id: JSON.stringify(["run", "call-1"]) },
+      widget: {
+        plugin: "mcp:mcptest",
+        id: JSON.stringify([conversation, "run", "call-1"]),
+      },
     })
   })
 
   it("is none for a call without MCP identity, or an MCP tool without UI", () => {
-    expect(gatewayToolWidget(tool)).toBeNull()
+    expect(gatewayToolWidget(conversation, tool)).toBeNull()
     expect(
-      gatewayToolWidget({ ...tool, mcp: { server: "mcptest", tool: "report_rows" } }),
+      gatewayToolWidget(conversation, {
+        ...tool,
+        mcp: { server: "mcptest", tool: "report_rows" },
+      }),
     ).toBeNull()
   })
 
@@ -55,8 +63,8 @@ describe("a gateway tool call as a widget part", () => {
         hostInfo: { name: "Nessa", version: "test" },
         page: () => ({ styles: {}, timeZone: "UTC", platform: "web" }),
       },
-    }).observe("0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d", [shown])
-    const part = gatewayToolWidget(shown)
+    }).observe(conversation, [shown])
+    const part = gatewayToolWidget(conversation, shown)
     const plugin = part ? registry.plugin(part.widget.plugin) : undefined
     expect(plugin?.kind).toBe("app")
     if (plugin?.kind !== "app" || !part) return

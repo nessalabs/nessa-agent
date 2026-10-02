@@ -32,6 +32,11 @@ export type ServerAnswer =
   /** The server, or its session, is gone: nothing more will reach it. */
   | { readonly kind: "server-gone" }
   /**
+   * The gateway has no room for another app call just now, and nothing
+   * reached the server: the same request may be made again.
+   */
+  | { readonly kind: "busy" }
+  /**
    * It did not answer. `error` is the server's own JSON-RPC error, when it
    * sent one: passed to the app as it came, its code a signed integer.
    */
@@ -44,14 +49,14 @@ export interface ServerError {
 }
 
 /**
- * Who is asking, and over what: the conversation the app's tool call was made
- * in, the server it belongs to, and the app itself — its tool call, by the
- * execution and tool ids that name it, and this mount of it. The bridge makes
- * it from the view's own call and never from anything the app says
- * (`bridge.test.ts`, "forged identity").
+ * Who is asking, and over what: the session (the gateway's conversation) the
+ * app's tool call was made in, the server it belongs to, and the app itself —
+ * its tool call, by the execution and tool ids that name it, and this mount of
+ * it. The bridge makes it from the view's own call and never from anything the
+ * app says (`bridge.test.ts`, "forged identity").
  */
 export interface AppAddress {
-  readonly conversationId: string
+  readonly sessionId: string
   readonly server: string
   readonly app: {
     readonly executionId: string
@@ -63,13 +68,21 @@ export interface AppAddress {
 
 /** The MCP server an app belongs to, over the gateway's connection for its conversation (#346, #348). */
 export interface McpAppServer {
-  /** `resources/read` (`ReadResourceResult`). */
-  readResource(address: AppAddress, uri: string): Promise<ServerAnswer>
+  /**
+   * `resources/read` (`ReadResourceResult`). `signal` is aborted when the
+   * mount is released: what the read has not fetched yet, it does not fetch.
+   */
+  readResource(
+    address: AppAddress,
+    uri: string,
+    signal: AbortSignal,
+  ): Promise<ServerAnswer>
   /** `tools/call` (`CallToolResult`). */
   callTool(address: AppAddress, tool: string, args: JsonObject): Promise<ServerAnswer>
   /**
-   * This mount is torn down: whatever it still waits on — a review, a
-   * resource — is let go. Sent once, when the view ends (#384, M2).
+   * This mount is torn down: the reviews it has open are withdrawn and its
+   * resource tickets released. Sent once, when the view first fails or ends
+   * (#384, M2).
    */
   release(address: AppAddress): Promise<void>
   /**
@@ -140,7 +153,7 @@ export interface McpAppPorts {
   readonly links?: LinkOpener
   readonly downloads?: FileDownloader
   readonly timers: Timers
-  /** A fresh UUID, for each mount's `instanceId`. */
+  /** A fresh lowercase UUID, for each mount's `instanceId` (the protocol's form). */
   readonly newId: () => string
   /** Where the proxy is; absent when this window has none, and no app can be shown. */
   readonly sandbox?: SandboxOrigin

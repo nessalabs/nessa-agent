@@ -65,7 +65,7 @@ function fakeHost(): WidgetHost & { opened: OpenPlace[]; closed: number } {
   return fake
 }
 
-const widget = fixtureWidget
+const widget = fixtureWidget("session-a")
 
 async function draw(
   plugin: AppWidgetPlugin,
@@ -264,5 +264,24 @@ describe("an app in a pane", () => {
       ),
     )
     expect(posted.length).toBe(before)
+  })
+
+  it("releases each mount once, under StrictMode's second mount too (M2, M3, M6)", async () => {
+    const released: string[] = []
+    const read: string[] = []
+    const server: McpAppServer = {
+      ...fixtureServerPort(),
+      readResource: (address, uri, signal) => {
+        read.push(address.app.instanceId)
+        return fixtureServerPort().readResource(address, uri, signal)
+      },
+      release: async (address) => void released.push(address.app.instanceId),
+    }
+    await draw(app({ server }), "pane")
+    await act(async () => root.render(<></>))
+    // StrictMode mounts twice; every mount that read was released, each once.
+    expect(read.length).toBeGreaterThanOrEqual(2)
+    expect(new Set(read).size).toBe(read.length)
+    expect([...released].sort()).toEqual([...read].sort())
   })
 })

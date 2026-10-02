@@ -13,26 +13,31 @@
  * goes no further than that call: nothing here keeps, logs or returns it
  * (`mcp-app-server.test.ts`, "the ticket").
  *
- * Every answer settles: a refusal, a fault and a malformed answer are each an
- * outcome, never a rejection, so the bridge never mistakes one for a fault of
- * this adapter. Only `release` rejects, when the gateway did not take it.
+ * A request outside the gateway's bounds — arguments past 32 KiB, a tool name
+ * or URI too long — is the client's to refuse, before anything is sent (its
+ * documented `TypeError`); it is the app's request that is refused, in one
+ * place (A2). A read whose mount was released fetches nothing more (R6).
+ *
+ * `callTool` and `readResource` settle with an outcome whatever the client
+ * throws, so the bridge never mistakes one for a fault of this adapter
+ * (`mcp-app-server.test.ts`, "never rejects"). Only `release` rejects, when
+ * the gateway did not take it.
  */
 import {
   ConversationErrorCode,
-  MAX_MCP_ARGUMENTS_BYTES,
   MCP_APP_CALL_DEADLINE_MS,
   NessaMcpAppError,
   type McpAppsApi,
   type McpReadResourceResult,
 } from "@nessa/client"
 import type { AppAddress, McpAppServer, ServerAnswer } from "../../application/ports"
-import { isObject, type Json, type JsonObject } from "../../model/json-rpc"
+import type { JsonObject } from "../../model/json-rpc"
 
 /** What the gateway refused, in words the app is shown. */
-type Refusal = "declined" | "expired" | "withdrawn" | "not-for-app" | "too-large" | "busy"
+type Refusal = "declined" | "expired" | "withdrawn" | "not-for-app" | "too-large"
 
 /** What one of the gateway's codes comes to (gate 11: every code is placed). */
-type Outcome = { readonly refused: Refusal } | "server-gone" | "failed"
+type Outcome = { readonly refused: Refusal } | "busy" | "server-gone" | "failed"
 
 const outcomes: Record<ConversationErrorCode, Outcome> = {
   [ConversationErrorCode.McpApprovalDenied]: { refused: "declined" },
@@ -42,7 +47,8 @@ const outcomes: Record<ConversationErrorCode, Outcome> = {
   [ConversationErrorCode.McpServerMismatch]: { refused: "not-for-app" },
   [ConversationErrorCode.McpAppUnknown]: { refused: "not-for-app" },
   [ConversationErrorCode.McpRequestTooLarge]: { refused: "too-large" },
-  [ConversationErrorCode.TemporarilyUnavailable]: { refused: "busy" },
+  // No room on the app lane; nothing reached the server (L1b, A8).
+  [ConversationErrorCode.TemporarilyUnavailable]: "busy",
   // The server's session, or the conversation it belongs to, is gone.
   [ConversationErrorCode.McpSessionUnavailable]: "server-gone",
   [ConversationErrorCode.ConversationNotFound]: "server-gone",
@@ -100,27 +106,29 @@ const refusalWords: Record<Refusal, { tool: string; resource: string }> = {
     resource: "This app may not read that resource",
   },
   "too-large": {
-    tool: "The arguments are larger than 32 KiB",
-    resource: "The request is too large",
+    tool: "The request is outside the gateway's bounds",
+    resource: "The request is outside the gateway's bounds",
   },
-  busy: { tool: "Too many requests at once", resource: "Too many requests at once" },
 }
 
 const failed: ServerAnswer = { kind: "failed" }
-const utf8 = new TextEncoder()
 
 /** The port's answer for what a call threw: a refusal, a server gone, or a failure. */
 function answerFor(error: unknown, asked: "tool" | "resource"): ServerAnswer {
-  if (!(error instanceof NessaMcpAppError)) {
-    // Not the gateway's answer: a fault before or around the call. Logged
-    // as the error alone; the arguments and any ticket are not in it.
+  // The client's refusal of a request outside the schema's bounds, made
+  // before anything is sent: the app asked for too much (A2).
+  if (error instanceof TypeError)
+    return { kind: "refused", reason: refusalWords["too-large"][asked] }
+  // The client narrows the gateway's code to the ones this build knows, or
+  // none (`conversationErrorCode`): a code that is not one is no key here.
+  if (!(error instanceof NessaMcpAppError) || error.code === undefined) {
+    // No answer, one the client did not believe, or a fault around the call.
+    // Logged as the error alone: the arguments and any ticket are not in it.
     console.error("An MCP App call failed", error)
     return failed
   }
-  // The client narrows the gateway's code to the ones this build knows, or
-  // none (`conversationErrorCode`): a code that is not one is no key here.
-  if (error.code === undefined) return failed
   const outcome = outcomes[error.code]
+  if (outcome === "busy") return { kind: "busy" }
   if (outcome === "server-gone") return { kind: "server-gone" }
   if (outcome === "failed")
     return error.remoteError
@@ -130,16 +138,6 @@ function answerFor(error: unknown, asked: "tool" | "resource"): ServerAnswer {
         }
       : failed
   return { kind: "refused", reason: refusalWords[outcome.refused][asked] }
-}
-
-/** The server's `CallToolResult` (A1), or a failure for text that is not a JSON object. */
-function toolResult(resultJson: string): ServerAnswer {
-  try {
-    const result = JSON.parse(resultJson) as Json
-    return isObject(result) ? { kind: "ok", result } : failed
-  } catch {
-    return failed
-  }
 }
 
 /** The bytes as text, or `undefined` when they are not UTF-8. */
@@ -185,30 +183,26 @@ export function gatewayAppServer(mcpApps: McpAppsApi): McpAppServer {
     callWithin: MCP_APP_CALL_DEADLINE_MS,
 
     async callTool(address: AppAddress, tool: string, args: JsonObject) {
-      const argumentsJson = JSON.stringify(args)
-      // Refused here, before anything is sent, by the client's own bound (A2).
-      if (utf8.encode(argumentsJson).byteLength > MAX_MCP_ARGUMENTS_BYTES)
-        return { kind: "refused", reason: refusalWords["too-large"].tool }
-      let resultJson: string
       try {
-        ;({ resultJson } = await mcpApps.callTool(
-          address.conversationId,
+        const { resultJson } = await mcpApps.callTool(
+          address.sessionId,
           address.app,
           address.server,
           tool,
-          argumentsJson,
-        ))
+          JSON.stringify(args),
+        )
+        // The client believes only one JSON object here (`mcpCallToolResult`).
+        return { kind: "ok", result: JSON.parse(resultJson) as JsonObject }
       } catch (error) {
         return answerFor(error, "tool")
       }
-      return toolResult(resultJson)
     },
 
-    async readResource(address: AppAddress, uri: string) {
+    async readResource(address: AppAddress, uri: string, signal: AbortSignal) {
       let described: McpReadResourceResult
       try {
         described = await mcpApps.readResource(
-          address.conversationId,
+          address.sessionId,
           address.app,
           address.server,
           uri,
@@ -216,17 +210,21 @@ export function gatewayAppServer(mcpApps: McpAppsApi): McpAppServer {
       } catch (error) {
         return answerFor(error, "resource")
       }
+      // The mount was released while the read was out: nothing to fetch for (R6).
+      if (signal.aborted) return failed
       let bytes: Uint8Array
       try {
         // Redeemed at once, and only here: the ticket is spent whatever happens.
-        bytes = await mcpApps.fetchResource(described.ticket, {
-          size: described.size,
-          sha256: described.sha256,
-        })
+        bytes = await mcpApps.fetchResource(
+          described.ticket,
+          { size: described.size, sha256: described.sha256 },
+          { signal },
+        )
       } catch (error) {
         // Used, expired, released, not the bytes described, or unreachable:
-        // the app is not loaded (R4). The error never holds the ticket.
-        console.error("An MCP App's resource was not fetched", error)
+        // the app is not loaded (R4). The error never holds the ticket; an
+        // abort is the mount's own end, not a fault.
+        if (!signal.aborted) console.error("An MCP App's resource was not fetched", error)
         return failed
       }
       const text = decoded(bytes)
@@ -236,7 +234,7 @@ export function gatewayAppServer(mcpApps: McpAppsApi): McpAppServer {
     },
 
     async release(address: AppAddress) {
-      await mcpApps.releaseApp(address.conversationId, address.app)
+      await mcpApps.releaseApp(address.sessionId, address.app)
     },
   }
 }

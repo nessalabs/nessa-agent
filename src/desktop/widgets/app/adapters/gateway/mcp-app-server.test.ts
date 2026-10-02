@@ -8,7 +8,6 @@
  */
 import {
   ConversationErrorCode,
-  MAX_MCP_ARGUMENTS_BYTES,
   MCP_APP_CALL_DEADLINE_MS,
   NessaMcpAppError,
   NessaMcpResourceError,
@@ -18,6 +17,7 @@ import {
   type McpReadResourceResult,
   type McpResourceFailureCode,
 } from "@nessa/client"
+import { inspect } from "node:util"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createAppBridge } from "../../application/bridge"
 import type { AppAddress, McpAppPorts, ServerAnswer } from "../../application/ports"
@@ -33,7 +33,10 @@ const app: McpAppReference = {
   toolId: "call-1",
   instanceId: "6f1d2c3b-4a5e-4f60-8172-839405a6b7c8",
 }
-const address: AppAddress = { conversationId, server: "weather", app }
+const address: AppAddress = { sessionId: conversationId, server: "weather", app }
+
+/** A mount's signal while it is not released. */
+const live = () => new AbortController().signal
 const uri = "ui://weather/app.html"
 const ticket = "T".repeat(43)
 const page = "<!doctype html><p>Weather</p>"
@@ -114,34 +117,22 @@ describe("tools/call", () => {
     })
   })
 
-  it("A1: a result that is not a JSON object is a failure, never handed to the app", async () => {
+  it("A2: a request outside the schema's bounds is the client's to refuse before sending, and the app's refusal", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    // What the client throws, before anything is sent, for arguments past
+    // MAX_MCP_ARGUMENTS_BYTES, or a tool name or URI past its bound.
+    const outside = () =>
+      Promise.reject(new TypeError("Arguments must contain at most 32768 UTF-8 bytes"))
     const server = gatewayAppServer(
-      fakeApps({
-        callTool: vi
-          .fn<McpAppsApi["callTool"]>()
-          .mockResolvedValueOnce({ resultJson: "[1]" })
-          .mockResolvedValueOnce({ resultJson: "{" }),
-      }),
+      fakeApps({ callTool: vi.fn(outside), readResource: vi.fn(outside) }),
     )
-    expect(await server.callTool(address, "t", {})).toEqual({ kind: "failed" })
-    expect(await server.callTool(address, "t", {})).toEqual({ kind: "failed" })
-  })
-
-  it("A2: arguments past the client's bound, in UTF-8 bytes, are refused before anything is sent", async () => {
-    const apps = fakeApps()
-    const server = gatewayAppServer(apps)
-    // `{"a":"…"}` is 8 bytes around the text; "é" is two bytes in one character.
-    const fits = { a: "é".repeat((MAX_MCP_ARGUMENTS_BYTES - 8) / 2) }
-    expect(new TextEncoder().encode(JSON.stringify(fits)).byteLength).toBe(
-      MAX_MCP_ARGUMENTS_BYTES,
-    )
-    expect((await server.callTool(address, "t", fits)).kind).toBe("ok")
-    const over = { a: `${fits.a}x` }
-    expect(await server.callTool(address, "t", over)).toEqual({
+    const refused = {
       kind: "refused",
-      reason: "The arguments are larger than 32 KiB",
-    })
-    expect(apps.callTool).toHaveBeenCalledTimes(1)
+      reason: "The request is outside the gateway's bounds",
+    }
+    expect(await server.callTool(address, "t", { a: "x" })).toEqual(refused)
+    expect(await server.readResource(address, uri, live())).toEqual(refused)
+    expect(error).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -151,13 +142,25 @@ describe("tools/call", () => {
     [ConversationErrorCode.McpToolNotForApp, "This app may not use that tool"],
     [ConversationErrorCode.McpServerMismatch, "This app may not use that tool"],
     [ConversationErrorCode.McpAppUnknown, "This app may not use that tool"],
-    [ConversationErrorCode.McpRequestTooLarge, "The arguments are larger than 32 KiB"],
-    [ConversationErrorCode.TemporarilyUnavailable, "Too many requests at once"],
-  ])("A3–A8: %s is refused with the gateway's reason", async (code, reason) => {
+    [
+      ConversationErrorCode.McpRequestTooLarge,
+      "The request is outside the gateway's bounds",
+    ],
+  ])("A3–A7: %s is refused with the gateway's reason", async (code, reason) => {
     const server = gatewayAppServer(
       fakeApps({ callTool: vi.fn(() => Promise.reject(refusal(code))) }),
     )
     expect(await server.callTool(address, "t", {})).toEqual({ kind: "refused", reason })
+  })
+
+  it("A8, L1b: no room on the app lane is busy, for the same request to be made again", async () => {
+    const busy = () =>
+      Promise.reject(refusal(ConversationErrorCode.TemporarilyUnavailable))
+    const server = gatewayAppServer(
+      fakeApps({ callTool: vi.fn(busy), readResource: vi.fn(busy) }),
+    )
+    expect(await server.callTool(address, "t", {})).toEqual({ kind: "busy" })
+    expect(await server.readResource(address, uri, live())).toEqual({ kind: "busy" })
   })
 
   it.each([
@@ -207,9 +210,9 @@ describe("tools/call", () => {
       // A code this build does not know, and one that names a prototype's key.
       refusal("mcp_something_new"),
       refusal("constructor"),
-      // No answer at all, and a fault before anything was sent.
+      // No answer at all, and something that is no error of the client's.
       new NessaMcpAppError(conversationId, "r", app, new Error("socket closed")),
-      new TypeError("Tool must contain 1-128 UTF-8 bytes"),
+      "a string",
     ]
     for (const each of thrown) {
       const server = gatewayAppServer(
@@ -217,8 +220,9 @@ describe("tools/call", () => {
       )
       expect(await server.callTool(address, "t", {})).toEqual({ kind: "failed" })
     }
-    // Only the fault that is not the gateway's answer is logged.
-    expect(error).toHaveBeenCalledTimes(1)
+    // What is not the gateway's typed answer is logged: the two unknown codes,
+    // no answer, and the stray value.
+    expect(error).toHaveBeenCalledTimes(4)
   })
 
   it("A3–A11: every code the gateway can send has an outcome (gate 11)", async () => {
@@ -231,6 +235,8 @@ describe("tools/call", () => {
     }
     const refused = [...kinds].filter(([, kind]) => kind === "refused").map(([c]) => c)
     const gone = [...kinds].filter(([, kind]) => kind === "server-gone").map(([c]) => c)
+    const busy = [...kinds].filter(([, kind]) => kind === "busy").map(([c]) => c)
+    expect(busy).toEqual(["temporarily_unavailable"])
     expect(refused.sort()).toEqual(
       [
         "mcp_app_unknown",
@@ -240,7 +246,6 @@ describe("tools/call", () => {
         "mcp_request_too_large",
         "mcp_server_mismatch",
         "mcp_tool_not_for_app",
-        "temporarily_unavailable",
       ].sort(),
     )
     expect(gone.sort()).toEqual(
@@ -263,13 +268,14 @@ describe("resources/read and the ticket", () => {
   it("R1, R2: reads, redeems the ticket once with what was described, and hands back the app — never the ticket", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {})
     const apps = fakeApps()
-    const answer = await gatewayAppServer(apps).readResource(address, uri)
+    const answer = await gatewayAppServer(apps).readResource(address, uri, live())
     expect(apps.readResource).toHaveBeenCalledWith(conversationId, app, "weather", uri)
     expect(apps.fetchResource).toHaveBeenCalledTimes(1)
-    expect(apps.fetchResource).toHaveBeenCalledWith(ticket, {
-      size: described.size,
-      sha256: described.sha256,
-    })
+    expect(apps.fetchResource).toHaveBeenCalledWith(
+      ticket,
+      { size: described.size, sha256: described.sha256 },
+      { signal: expect.any(AbortSignal) },
+    )
     expect(answer.kind).toBe("ok")
     if (answer.kind !== "ok") return
     expect(JSON.stringify(answer.result)).not.toContain(ticket)
@@ -289,7 +295,7 @@ describe("resources/read and the ticket", () => {
         prefersBorder: false,
       })),
     })
-    const answer = await gatewayAppServer(apps).readResource(address, uri)
+    const answer = await gatewayAppServer(apps).readResource(address, uri, live())
     expect(answer).toMatchObject({
       kind: "ok",
       result: {
@@ -306,7 +312,7 @@ describe("resources/read and the ticket", () => {
         async () => new Uint8Array([0xff, 0xfe]) as Uint8Array<ArrayBuffer>,
       ),
     })
-    expect(await gatewayAppServer(apps).readResource(address, uri)).toEqual({
+    expect(await gatewayAppServer(apps).readResource(address, uri, live())).toEqual({
       kind: "failed",
     })
   })
@@ -324,15 +330,17 @@ describe("resources/read and the ticket", () => {
     async (code) => {
       const error = vi.spyOn(console, "error").mockImplementation(() => {})
       const apps = fakeApps({
-        fetchResource: vi.fn(() => Promise.reject(new NessaMcpResourceError(code))),
+        fetchResource: vi.fn(() =>
+          Promise.reject(new NessaMcpResourceError(code, 404, new Error("route"))),
+        ),
       })
-      expect(await gatewayAppServer(apps).readResource(address, uri)).toEqual({
+      expect(await gatewayAppServer(apps).readResource(address, uri, live())).toEqual({
         kind: "failed",
       })
       expect(apps.fetchResource).toHaveBeenCalledTimes(1)
-      expect(
-        JSON.stringify(error.mock.calls.map((call) => String(call[1]))),
-      ).not.toContain(ticket)
+      expect(error).toHaveBeenCalledTimes(1)
+      // Everything logged, every argument and its causes, holds no ticket.
+      expect(inspect(error.mock.calls, { depth: 10 })).not.toContain(ticket)
     },
   )
 
@@ -351,8 +359,71 @@ describe("resources/read and the ticket", () => {
     ]
     for (const [code, expected] of cases) {
       const apps = fakeApps({ readResource: vi.fn(() => Promise.reject(refusal(code))) })
-      expect(await gatewayAppServer(apps).readResource(address, uri)).toEqual(expected)
+      expect(await gatewayAppServer(apps).readResource(address, uri, live())).toEqual(
+        expected,
+      )
       expect(apps.fetchResource).not.toHaveBeenCalled()
+    }
+  })
+})
+
+describe("a read whose mount is released (R6)", () => {
+  it("R6: released while the read was out, the ticket is not redeemed, and nothing is logged", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    let answer!: (value: McpReadResourceResult) => void
+    const apps = fakeApps({
+      readResource: vi.fn(
+        () => new Promise<McpReadResourceResult>((ok) => (answer = ok)),
+      ),
+    })
+    const mount = new AbortController()
+    const read = gatewayAppServer(apps).readResource(address, uri, mount.signal)
+    mount.abort()
+    answer(described)
+    expect(await read).toEqual({ kind: "failed" })
+    expect(apps.fetchResource).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it("R6: released while the bytes are fetched, the fetch is abandoned through the same signal, and it is no fault", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const mount = new AbortController()
+    const apps = fakeApps({
+      fetchResource: vi.fn(
+        (_ticket, _expected, options?: { signal?: AbortSignal }) =>
+          new Promise<Uint8Array<ArrayBuffer>>((_, reject) =>
+            options?.signal?.addEventListener("abort", () =>
+              reject(new NessaMcpResourceError("aborted")),
+            ),
+          ),
+      ),
+    })
+    const read = gatewayAppServer(apps).readResource(address, uri, mount.signal)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    mount.abort()
+    expect(await read).toEqual({ kind: "failed" })
+    expect(error).not.toHaveBeenCalled()
+  })
+})
+
+describe("whatever the client throws", () => {
+  it("callTool and readResource never reject: each is an outcome", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    for (const thrown of [undefined, null, 0, "x", {}, new Error("x"), Symbol("x")]) {
+      const reject = () => Promise.reject(thrown)
+      const apps = fakeApps({
+        callTool: vi.fn(reject),
+        readResource: vi.fn(reject),
+      })
+      const server = gatewayAppServer(apps)
+      await expect(server.callTool(address, "t", {})).resolves.toEqual({ kind: "failed" })
+      await expect(server.readResource(address, uri, live())).resolves.toEqual({
+        kind: "failed",
+      })
+      const fetchFails = fakeApps({ fetchResource: vi.fn(reject) })
+      await expect(
+        gatewayAppServer(fetchFails).readResource(address, uri, live()),
+      ).resolves.toEqual({ kind: "failed" })
     }
   })
 })
@@ -506,5 +577,42 @@ describe("#349's L14 and L24, through the real bridge over this adapter", () => 
     answer(refusal(ConversationErrorCode.McpCancelled))
     await flush()
     expect(view.posted).toEqual([])
+  })
+
+  it("L24, R6: the place removed while the app is read releases the mount, and its ticket is never redeemed", async () => {
+    let answer!: (value: McpReadResourceResult) => void
+    const apps = fakeApps({
+      readResource: vi.fn(
+        () => new Promise<McpReadResourceResult>((ok) => (answer = ok)),
+      ),
+    })
+    const view = bridged(apps)
+    await flush()
+    view.bridge.remove()
+    answer(described)
+    await flush()
+    expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, ownApp)
+    expect(apps.fetchResource).not.toHaveBeenCalled()
+  })
+
+  it("M2: an app that leaves its frame while a review waits is released at once, not when its card goes", async () => {
+    const apps = fakeApps()
+    apps.callTool.mockImplementationOnce(() => new Promise(() => {}))
+    const view = bridged(apps)
+    await live(view)
+    view.say({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "delete_all" },
+    })
+    view.say({ jsonrpc: "2.0", method: "ui/notifications/sandbox-app-left", params: {} })
+    await flush()
+    expect(view.bridge.view().lifecycle).toEqual({ kind: "failed", reason: "load" })
+    expect(apps.releaseApp).toHaveBeenCalledTimes(1)
+    expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, ownApp)
+    view.bridge.remove()
+    await flush()
+    expect(apps.releaseApp).toHaveBeenCalledTimes(1)
   })
 })

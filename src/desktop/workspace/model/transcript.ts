@@ -168,6 +168,8 @@ export function messageText(message: Message): string {
  * the MCP server and tool it went to and the UI resource the tool declared.
  */
 export interface ToolCallIdentity {
+  /** The session (conversation) the call was made in. */
+  readonly sessionId: string
   readonly executionId: string
   readonly toolId: string
   readonly mcp?: {
@@ -181,8 +183,9 @@ export interface ToolCallIdentity {
  * The widget part a tool call's UI is drawn in, or `null` for a call whose
  * tool declared none, and for one whose harness did not say — the call's
  * steps and result read as they always have. The plugin is the MCP server's
- * app; the id is the call, by the execution and tool identities that name it
- * (`appWidget`, the widgets' one statement of how an app's widgets are named).
+ * app; the id is the call, by its session and the execution and tool
+ * identities that name it there (`appWidget`, the widgets' one statement of
+ * how an app's widgets are named).
  */
 export function toolWidget(
   call: ToolCallIdentity,
@@ -190,6 +193,6 @@ export function toolWidget(
   if (!call.mcp?.resourceUri) return null
   return {
     kind: "widget",
-    widget: appWidget(call.mcp.server, call.executionId, call.toolId),
+    widget: appWidget(call.mcp.server, call.sessionId, call.executionId, call.toolId),
   }
 }

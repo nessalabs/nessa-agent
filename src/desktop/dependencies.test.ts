@@ -90,4 +90,13 @@ describe("the window's widget plugins", () => {
       server: "mcptest",
     })
   })
+
+  it("leave the fixture app out beside a gateway, whose servers' apps it could stand in for", () => {
+    const { widgets, gatewayApps } = createDesktopDependencies({
+      gateway: { mcpApps: {} as McpAppsApi },
+      apps: { sandbox: undefined, platform: "web" },
+    })
+    expect(widgets.plugin(appPluginId(fixtureServer))).toBeUndefined()
+    expect(gatewayApps).toBeDefined()
+  })
 })

@@ -1,5 +1,6 @@
 /**
- * A gateway conversation's tool call, read as the transcript's widget part.
+ * A gateway conversation's tool call, read as the transcript's widget part,
+ * named in that conversation (`conversationId`).
  *
  * The gateway names a call's MCP server and tool, and — from its own
  * connection to that server, since no harness passes it (ADR 344, #346) — the
@@ -13,9 +14,11 @@ import type { ConversationTool } from "@nessa/client"
 import { toolWidget, type Part } from "../../model/transcript"
 
 export function gatewayToolWidget(
+  conversationId: string,
   tool: ConversationTool,
 ): Extract<Part, { kind: "widget" }> | null {
   return toolWidget({
+    sessionId: conversationId,
     executionId: tool.executionId,
     toolId: tool.toolId,
     ...(tool.mcp ? { mcp: tool.mcp } : {}),
