@@ -26,8 +26,8 @@ use crate::{
     },
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, DurableConversationModeAudit, LocalConversationStore,
-        LocalReceiverAuthority,
+        DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
+        LocalConversationStore, LocalReceiverAuthority,
     },
 };
 use crate::{
@@ -38,7 +38,9 @@ use crate::{
     app::ports::Clock as ServerClock,
     attachments::application::AttachmentService,
     browser_session::adapters::PersistentSessions,
-    conversation::application::{ConversationRepository, ConversationService, ReceiverAuthority},
+    conversation::application::{
+        ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
+    },
     conversation::infrastructure::{NessaCatalogueReadSource, NessaRecordReadSource},
     core::RunError,
     env::Environment,
@@ -357,6 +359,16 @@ struct BuiltConversations {
     warm_ups: Vec<StartupWarmUp>,
     /// The MCP servers this run holds, when any are configured.
     mcp: McpParts,
+    /// Where each step of an MCP App's call is recorded, under
+    /// `<root>/audit/mcp-apps`. Built beside the other conversation audits and
+    /// handed to the conversation service once it takes one. Once something
+    /// reads it the `expect` goes unfulfilled, which Clippy's `-D warnings`
+    /// refuses, so it cannot outlive that change.
+    #[expect(
+        dead_code,
+        reason = "the conversation service does not take an MCP App audit yet (#348)"
+    )]
+    mcp_app_audit: Arc<dyn McpAppAudit>,
 }
 
 #[cfg(not(unix))]
@@ -578,6 +590,12 @@ async fn conversations(
         DurableConversationModeAudit::new(root.join("audit").join("approval-mode"), clock.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
+    // Every step of an MCP App's call (#348), for the conversation service's
+    // app calls.
+    let mcp_app_audit: Arc<dyn McpAppAudit> = Arc::new(
+        DurableMcpAppAudit::new(root.join("audit").join("mcp-apps"), clock.clone())
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
     let file_link_audit = Arc::new(
         DurableConversationFileLinkAudit::new(root.join("audit").join("file-links"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -672,6 +690,7 @@ async fn conversations(
         agent_probe: resolver,
         warm_ups,
         mcp,
+        mcp_app_audit,
     })
 }
 
