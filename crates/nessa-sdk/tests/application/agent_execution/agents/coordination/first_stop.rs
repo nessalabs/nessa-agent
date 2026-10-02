@@ -1,6 +1,7 @@
 //! A shared cleanup attempt does not supply the cause of newly stopped work.
 use super::*;
 use crate::domain::agent_execution::sessions::SessionId;
+use crate::infrastructure::session_storage::RuntimeMessageCommitClock;
 
 #[tokio::test]
 async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
@@ -11,9 +12,7 @@ async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
         let manager = SessionManager::open(
             Some(id.clone()),
             storage.clone(),
-            std::sync::Arc::new(
-                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
-            ),
+            Arc::new(RuntimeMessageCommitClock::new()),
         )
         .await
         .unwrap();
@@ -68,9 +67,7 @@ async fn explicit_close_owns_waiters_first_stopped_during_automatic_cleanup() {
         let restored = SessionManager::open(
             Some(id),
             storage,
-            std::sync::Arc::new(
-                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
-            ),
+            Arc::new(RuntimeMessageCommitClock::new()),
         )
         .await
         .unwrap();
