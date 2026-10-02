@@ -139,8 +139,10 @@ mod tests {
         MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES, MAX_RECORD_PAGE_RECORDS,
         MAX_RECORD_RESPONSE_BYTES,
     };
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
     use nessa_sync::replication::domain::{Id, Record, MAX_ID_BYTES};
+    use serde_json::Value;
 
     #[test]
     fn aggregate_request_published_boundary_is_admitted_and_successor_refused() {
@@ -212,7 +214,7 @@ mod tests {
                 "{}",
                 encoded.len()
             );
-            let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+            let parsed: Value = serde_json::from_str(&encoded).unwrap();
             assert_eq!(
                 parsed["payload"]["records"].as_array().unwrap().len(),
                 lengths.len()

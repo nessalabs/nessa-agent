@@ -1,36 +1,29 @@
 mod acquisition;
 
 use crate::agents::domain::AgentId;
-use crate::conversation::{
-    application::{
-        CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
-        CatalogueValue, ConversationCatalogue, ConversationCreation,
-        ConversationCreationDisposition, ConversationError, ConversationFuture,
-        ConversationListing, ConversationModeApplication, ConversationModeRequest,
-        ConversationModeRequestState, ConversationRepository, ConversationSummaries,
-        ListedConversation, ListedConversations, UnfinishedDeletions,
-    },
-    domain::{
-        Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
-        ConversationModelId, ConversationPreview, ConversationSummary, ConversationTitle,
-        DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
-    },
+use crate::conversation::application::{
+    CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage, CataloguePageRequest,
+    CatalogueValue, ConversationCatalogue, ConversationCreation, ConversationCreationDisposition,
+    ConversationError, ConversationFuture, ConversationListing, ConversationModeApplication,
+    ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
+    ConversationSummaries, ListedConversation, ListedConversations, UnfinishedDeletions,
+};
+use crate::conversation::domain::{
+    Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
+    ConversationModelId, ConversationPreview, ConversationSummary, ConversationTitle,
+    DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId, MAX_IDENTIFIER_BYTES};
-use nessa_local_database::{
-    rusqlite::{self, params, Connection, OptionalExtension, Row, TransactionBehavior},
-    OpenError, Schema,
+use nessa_local_database::rusqlite::{
+    params, Connection, Error, OptionalExtension, Row, TransactionBehavior,
 };
+use nessa_local_database::{rusqlite, OpenError, Schema};
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
-use nessa_sync::replication::{
-    catalogue::{validate_manifest_request, MAX_CATALOGUE_ENTRIES},
-    domain::{Id, MAX_ID_BYTES},
-};
+use nessa_sync::replication::catalogue::{validate_manifest_request, MAX_CATALOGUE_ENTRIES};
+use nessa_sync::replication::domain::{Id, MAX_ID_BYTES};
 use serde::{Deserialize, Serialize};
-use std::{
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 /// The tables and their version, defined once.
 const DEFINITION: &str = include_str!("schema.sql");
@@ -113,14 +106,11 @@ impl LocalConversationStore {
 /// rather than the database failing to answer. The first is that row's damage,
 /// and costs a list or a startup finish that row alone
 /// (`a_row_whose_text_is_not_utf8_costs_its_list_that_row_alone`).
-fn damaged(error: &rusqlite::Error) -> bool {
+fn damaged(error: &Error) -> bool {
     // Bounded acquisition substitutes a BLOB for refused text. That typed
     // value error, like invalid UTF-8, belongs to the row, not the query
     // (`oversized_text_costs_its_list_one_row_and_remains_refused_by_exact_reads`).
-    matches!(
-        error,
-        rusqlite::Error::Utf8Error(..) | rusqlite::Error::InvalidColumnType(..)
-    )
+    matches!(error, Error::Utf8Error(..) | Error::InvalidColumnType(..))
 }
 
 /// A row's cells, `None` when they are [`damaged`].
@@ -134,7 +124,7 @@ fn cells<T>(stored: rusqlite::Result<T>) -> Result<Option<T>, ConversationError>
 
 /// SQLite could not be asked. Logged here, once, because every caller only
 /// learns `Metadata`.
-fn failed(error: rusqlite::Error) -> ConversationError {
+fn failed(error: Error) -> ConversationError {
     tracing::error!(%error, "conversation metadata could not be read or written");
     ConversationError::Metadata
 }

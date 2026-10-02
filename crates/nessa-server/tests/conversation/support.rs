@@ -15,51 +15,46 @@ use crate::conversation::domain::{
     Conversation, ConversationDeletion, ConversationId, ConversationSummary, ProviderSessionErasure,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_sdk::{
-    application::{
-        agent_execution::{
-            agents::AgentError,
-            executions::{
-                ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent,
-                ExecutionRequest, ExecutionUpdate, PermissionAuthoritySource,
-            },
-            permissions::{
-                PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
-                PermissionResolution, PermissionSelectionState, QuestionAnswer,
-            },
-            providers::{
-                AgentProvider, ApprovalMode, CleanupFuture, CleanupReport, CloseOutcome,
-                ExecutionEventStream, ExecutionReport, ObservationFailure, OpenedProviderSession,
-                ProviderExecutionFuture, ProviderExecutionReply, ProviderIdentity,
-                ProviderObservationFuture, ProviderOpenError, ProviderOpenFuture,
-                ProviderOpenRequest, ProviderOperationCapabilities, ProviderOperationFailure,
-                ProviderOperationFuture, ProviderSession, ProviderSessionBackend,
-                ProviderSessionState, SessionCloseRequest,
-            },
-            tools::ToolReviewInput,
-        },
-        dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto},
-    },
-    domain::{
-        agent_execution::{
-            executions::{ExecutionOutcome, MessageChunk},
-            permissions::{
-                PermissionAuthority, PermissionAuthorityError, PermissionDecision,
-                PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption,
-                PermissionOptionId, PermissionOptions, PermissionScope,
-            },
-            prompts::ImageReference,
-            sessions::ExecutionSessionId,
-            tools::{ToolCallId, ToolCallUpdate},
-        },
-        effective_capabilities::value_objects::{BindingRestrictions, EffectiveCapabilities},
-        model_metadata::{
-            entities::ModelMetadata,
-            value_objects::{Modalities, ModelFeatures},
-        },
-    },
-    infrastructure::session_storage::InMemoryStorage,
+use nessa_sdk::application::agent_execution::agents::AgentError;
+use nessa_sdk::application::agent_execution::executions::{
+    ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionRequest,
+    ExecutionUpdate, PermissionAuthoritySource,
 };
+use nessa_sdk::application::agent_execution::permissions::{
+    PermissionAnswer, PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
+    PermissionSelectionState, QuestionAnswer,
+};
+use nessa_sdk::application::agent_execution::providers::{
+    AgentProvider, ApprovalMode, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
+    ExecutionReport, ObservationFailure, OpenedProviderSession, ProviderExecutionFuture,
+    ProviderExecutionReply, ProviderIdentity, ProviderObservationFuture, ProviderOpenError,
+    ProviderOpenFuture, ProviderOpenRequest, ProviderOperationCapabilities,
+    ProviderOperationFailure, ProviderOperationFuture, ProviderSession, ProviderSessionBackend,
+    ProviderSessionState, SessionCloseRequest,
+};
+use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
+use nessa_sdk::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
+use nessa_sdk::domain::agent_execution::executions::{ExecutionOutcome, MessageChunk};
+use nessa_sdk::domain::agent_execution::permissions::{
+    PermissionAuthority, PermissionAuthorityError, PermissionDecision, PermissionEffect,
+    PermissionId, PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
+    PermissionScope,
+};
+use nessa_sdk::domain::agent_execution::prompts::ImageReference;
+use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
+use nessa_sdk::domain::agent_execution::tools::{ToolCallId, ToolCallUpdate};
+use nessa_sdk::domain::effective_capabilities::value_objects::{
+    BindingRestrictions, EffectiveCapabilities,
+};
+use nessa_sdk::domain::model_metadata::entities::ModelMetadata;
+use nessa_sdk::domain::model_metadata::value_objects::{Modalities, ModelFeatures};
+use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot::Receiver;
+use tokio::sync::{mpsc, oneshot, Notify};
+use uuid::Uuid;
 
 pub(crate) struct AcceptingAudit;
 impl ExecutionAudit for AcceptingAudit {
@@ -70,14 +65,6 @@ impl ExecutionAudit for AcceptingAudit {
         Box::pin(async { Ok(()) })
     }
 }
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
-};
-use tokio::sync::{mpsc, oneshot, Notify};
 
 #[derive(Default)]
 pub(crate) struct MemoryRepository {
@@ -470,7 +457,7 @@ pub(crate) struct MemorySummaries {
     pub(crate) erase_fails: AtomicBool,
     /// Holds the next `load` after it has read, saying so on the first
     /// sender, until the second channel is let go.
-    pub(crate) load_gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+    pub(crate) load_gate: Mutex<Option<(oneshot::Sender<()>, Receiver<()>)>>,
 }
 impl ConversationSummaries for MemorySummaries {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<ConversationSummary>> {
@@ -590,21 +577,21 @@ pub(crate) struct ProviderFactory {
     pub(crate) mode_updates: Mutex<Vec<ApprovalMode>>,
     pub(crate) mode_failure: Mutex<Option<AgentError>>,
     pub(crate) mode_started: Notify,
-    pub(crate) mode_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) mode_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) open_calls: AtomicUsize,
     pub(crate) open_failure: Mutex<Option<AgentError>>,
     pub(crate) opening: Notify,
-    pub(crate) open_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) open_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) executions: Mutex<Vec<String>>,
     pub(crate) execution_started: Notify,
-    pub(crate) execution_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) execution_gate: Mutex<Option<Receiver<()>>>,
     /// One explicit provider settlement used by failure-path projection tests.
     /// Absence keeps the normal completed response below.
     pub(crate) execution_reply: Mutex<Option<ProviderExecutionReply>>,
     /// Valid observations emitted before an explicit settlement fixture.
     pub(crate) execution_updates: Mutex<Vec<ExecutionUpdate>>,
     pub(crate) updates_sent: Notify,
-    pub(crate) after_updates_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) after_updates_gate: Mutex<Option<Receiver<()>>>,
     /// The terminal observation failure paired with `execution_reply`.
     ///
     /// Setting this also ends the observation stream, matching an ACP worker
@@ -613,11 +600,11 @@ pub(crate) struct ProviderFactory {
     /// open and does not model that adapter path.
     pub(crate) execution_observation_failure: Mutex<Option<ObservationFailure>>,
     pub(crate) request_permission: AtomicUsize,
-    pub(crate) permission_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) permission_gate: Mutex<Option<Receiver<()>>>,
     /// Gate after domain consumption rather than before it.
     pub(crate) consume_before_answer_gate: AtomicBool,
     pub(crate) answer_started: Notify,
-    pub(crate) answer_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) answer_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) answer_failure: Mutex<Option<(AgentError, PermissionSelectionState)>>,
     /// Substitute the custom backend seam without changing the domain owner.
     pub(crate) authority_override:
@@ -626,7 +613,7 @@ pub(crate) struct ProviderFactory {
     pub(crate) close_failure: Mutex<Option<AgentError>>,
     pub(crate) close_reports: Mutex<VecDeque<CleanupReport>>,
     pub(crate) close_finished: Notify,
-    pub(crate) close_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    pub(crate) close_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) close_requests: Mutex<Vec<SessionCloseRequest>>,
     /// Whether the agent agreed to take images, and its model can see them.
     pub(crate) image_input: AtomicBool,
@@ -964,9 +951,8 @@ impl AgentProvider for Provider {
                 return Err(ProviderOpenError::no_resources(error));
             }
             let (sender, receiver) = mpsc::unbounded_channel();
-            let session_id = restore.unwrap_or_else(|| {
-                ExecutionSessionId::new(uuid::Uuid::new_v4().to_string()).unwrap()
-            });
+            let session_id = restore
+                .unwrap_or_else(|| ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap());
             let controller = ExecutionController::new(session_id.clone());
             let authority = controller.permission_authority_source();
             Ok(OpenedProviderSession {

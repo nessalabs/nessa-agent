@@ -3,30 +3,24 @@
 //! This adapter accepts only a scope and caller already chosen by the host,
 //! and never opens a writer or provider.
 
-use crate::conversation::{
-    application::{
-        CatalogueDescriptor, CataloguePageRequest, CatalogueValue, ConversationCaller,
-        ConversationCatalogue, ConversationError,
-    },
-    domain::{conversation_catalogue_stream, ConversationId},
+use crate::conversation::application::{
+    CatalogueDescriptor, CataloguePageRequest, CatalogueValue, ConversationCaller,
+    ConversationCatalogue, ConversationError,
 };
+use crate::conversation::domain::{conversation_catalogue_stream, ConversationId};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_sync::replication::{
-    catalogue::{
-        validate_catalogue_pass, validate_manifest_request, CataloguePass, CatalogueSource,
-        CatalogueSourceError, EntryKey, ManifestEntry, ManifestPage, ManifestRequest,
-        ResolvedEntry, MAX_CATALOGUE_ENTRIES, MAX_CATALOGUE_PAYLOAD_BYTES,
-    },
-    domain::{Id, Scope},
+use nessa_sync::replication::catalogue::{
+    validate_catalogue_pass, validate_manifest_request, CataloguePass, CatalogueSource,
+    CatalogueSourceError, EntryKey, ManifestEntry, ManifestPage, ManifestRequest, ResolvedEntry,
+    MAX_CATALOGUE_ENTRIES, MAX_CATALOGUE_PAYLOAD_BYTES,
 };
-use std::{
-    io,
-    sync::{
-        mpsc::{self, Receiver, RecvError, Sender, SyncSender},
-        Arc, Mutex,
-    },
-    thread::{self, JoinHandle},
-};
+use nessa_sync::replication::domain::{Id, Scope};
+use std::io::Result as IoResult;
+use std::sync::mpsc::{Receiver, RecvError, Sender, SyncSender};
+use std::sync::{mpsc, Arc, Mutex};
+#[cfg(test)]
+use std::thread;
+use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use tokio::runtime::{Builder, Runtime};
 
 const SCHEMA: &str = "nessa.conversation-catalogue.v1";
@@ -158,8 +152,8 @@ impl NessaCatalogueSource {
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
         scope: Scope,
-        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> io::Result<JoinHandle<()>>,
-        make_runtime: impl FnOnce() -> io::Result<Runtime> + Send + 'static,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> IoResult<JoinHandle<()>>,
+        make_runtime: impl FnOnce() -> IoResult<Runtime> + Send + 'static,
     ) -> Result<Self, CatalogueWorkerError> {
         Self::start_with_identity(
             catalogue,
@@ -175,8 +169,8 @@ impl NessaCatalogueSource {
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
         scope: SourceScope,
-        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> io::Result<JoinHandle<()>>,
-        make_runtime: impl FnOnce() -> io::Result<Runtime> + Send + 'static,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> IoResult<JoinHandle<()>>,
+        make_runtime: impl FnOnce() -> IoResult<Runtime> + Send + 'static,
     ) -> Result<(Self, Option<u64>), CatalogueWorkerError> {
         Self::start_with_readiness(catalogue, caller, scope, spawn, make_runtime, |ready| {
             ready.recv()
@@ -187,8 +181,8 @@ impl NessaCatalogueSource {
         catalogue: Arc<dyn ConversationCatalogue>,
         caller: ConversationCaller,
         scope: SourceScope,
-        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> io::Result<JoinHandle<()>>,
-        make_runtime: impl FnOnce() -> io::Result<Runtime> + Send + 'static,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> IoResult<JoinHandle<()>>,
+        make_runtime: impl FnOnce() -> IoResult<Runtime> + Send + 'static,
         receive: impl FnOnce(
             Receiver<CatalogueReadiness>,
         )
@@ -326,12 +320,12 @@ impl NessaCatalogueSource {
             .map_err(|_| CatalogueSourceError::Unavailable)
     }
 }
-fn spawn_worker(run: Box<dyn FnOnce() + Send>) -> io::Result<JoinHandle<()>> {
-    thread::Builder::new()
+fn spawn_worker(run: Box<dyn FnOnce() + Send>) -> IoResult<JoinHandle<()>> {
+    ThreadBuilder::new()
         .name("nessa-catalogue-source".into())
         .spawn(run)
 }
-fn make_runtime() -> io::Result<Runtime> {
+fn make_runtime() -> IoResult<Runtime> {
     Builder::new_current_thread()
         .enable_all()
         .max_blocking_threads(1)

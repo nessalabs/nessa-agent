@@ -1,29 +1,25 @@
 //! Composition of one finite authenticated socket run and its private cache.
 use super::profile::{Profile, ProfileError};
+use crate::app::dependencies::RuntimeDependencies;
 use crate::composition::local_auth::SystemClock;
-use crate::{
-    app::dependencies::RuntimeDependencies,
-    conversation::domain::ConversationId,
-    product::generated::{MAX_AUTH_CREDENTIAL_CHARACTERS, PASSIVE_MIN_REQUEST_TIMEOUT_MS},
-    read_only_sync::{
-        application::{
-            driver::{run_catalogue, run_records},
-            CachePolicy, Cancellation, GatewayError, GatewayPolicy,
-        },
-        entrypoint::{online, Command, CommandError},
-        infrastructure::{
-            cache::ReadOnlyCache,
-            gateway::{GatewayConnection, LocalConnector, Session},
-        },
-    },
-};
+use crate::conversation::domain::ConversationId;
+use crate::product::generated::{MAX_AUTH_CREDENTIAL_CHARACTERS, PASSIVE_MIN_REQUEST_TIMEOUT_MS};
+use crate::read_only_sync::application::driver::{run_catalogue, run_records};
+use crate::read_only_sync::application::{CachePolicy, Cancellation, GatewayError, GatewayPolicy};
+use crate::read_only_sync::entrypoint::{online, Command, CommandError};
+use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
+use crate::read_only_sync::infrastructure::gateway::{GatewayConnection, LocalConnector, Session};
 use serde_json::json;
-use std::{io::Write, path::Path, sync::Arc};
+#[cfg(test)]
+use std::cell::RefCell;
+use std::io::Write;
+use std::path::Path;
+use std::sync::Arc;
 
 #[cfg(test)]
 thread_local! {
     // One-shot scheduling witness for actual composition saved-output races.
-    static BEFORE_SAVED_REFRESH: std::cell::RefCell<Option<Box<dyn FnOnce() + Send>>> = const { std::cell::RefCell::new(None) };
+    static BEFORE_SAVED_REFRESH: RefCell<Option<Box<dyn FnOnce() + Send>>> = const { RefCell::new(None) };
 }
 
 struct CommandCancellation;

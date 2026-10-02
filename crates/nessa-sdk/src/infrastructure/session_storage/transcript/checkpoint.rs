@@ -1,9 +1,7 @@
 //! Immutable chunks stream one semantic checkpoint codec without an aggregate buffer.
 use super::TranscriptError;
-use std::{
-    io::{self, Read, Write},
-    sync::Arc,
-};
+use std::io::{self, ErrorKind, Read, Write};
+use std::sync::Arc;
 
 /// Maximum retained byte allocation for one checkpoint chunk.
 pub const MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES: usize = 1024 * 1024;
@@ -90,7 +88,7 @@ impl Write for ChunkWriter {
         let total = self.written.checked_add(written);
         if total.is_none_or(|total| self.limit.is_some_and(|limit| total > limit)) {
             self.limit_exceeded = true;
-            return Err(io::ErrorKind::FileTooLarge.into());
+            return Err(ErrorKind::FileTooLarge.into());
         }
         self.written = total.expect("checkpoint byte addition was checked");
         while !bytes.is_empty() {

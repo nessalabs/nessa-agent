@@ -1,44 +1,38 @@
-use super::super::{
-    session::{LocalConnector, RpcKind, Session},
-    sources::GatewayConnection,
+use super::super::session::{LocalConnector, RpcKind, Session};
+use super::super::sources::GatewayConnection;
+use crate::app::ports::Clock;
+use crate::conversation::domain::{conversation_catalogue_stream, ConversationId};
+use crate::conversation::infrastructure::{conversation_catalogue_schema, NessaCatalogueSource};
+use crate::product::catalogue_read::wire::wire_descriptor;
+use crate::product::generated::{
+    product_event, product_method, ProductSessionReady, SessionChallenge,
+    MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_PRODUCT_CLIENT_ID_CHARACTERS, PRODUCT_VERSION,
 };
-use crate::conversation::{
-    domain::{conversation_catalogue_stream, ConversationId},
-    infrastructure::{conversation_catalogue_schema, NessaCatalogueSource},
+use crate::product::passive_read::wire::wire_scope;
+use crate::product_contract::generated::{
+    CatalogueReadErrorCode, RecordReadErrorCode, SessionCloseReason,
 };
-use crate::product_contract::generated::{RecordReadErrorCode, SessionCloseReason};
-use crate::{
-    app::ports::Clock,
-    product::{
-        generated::{
-            product_event, product_method, ProductSessionReady, SessionChallenge,
-            MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_PRODUCT_CLIENT_ID_CHARACTERS, PRODUCT_VERSION,
-        },
-        passive_read::wire::wire_scope,
-    },
-    protocol::{EventFrame, OutgoingMessage, RequestFrame, ResponseFrame},
-    read_only_sync::application::{
-        Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
-    },
+use crate::protocol::{EventFrame, OutgoingMessage, RequestFrame, ResponseFrame};
+use crate::read_only_sync::application::{
+    Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_gateway_endpoint::domain::{EndpointIdentity, GatewayEndpoint};
-use nessa_sync::replication::{
-    application::{Access, ScopeAuthorizer},
-    domain::{Id, Scope},
+use nessa_sync::replication::application::{Access, ScopeAuthorizer};
+use nessa_sync::replication::catalogue::{
+    CataloguePass, CatalogueSource, CatalogueSourceError, EntryKey, ManifestEntry, ManifestRequest,
 };
+use nessa_sync::replication::domain::{Id, Scope};
 use serde_json::json;
-use std::{
-    io::{self, Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
-    sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc,
-    },
-    thread::{self, JoinHandle, Result as ThreadResult},
-    time::{Duration, Instant},
-};
-use tungstenite::{error::ProtocolError, Error, Message, WebSocket};
+use std::io::{ErrorKind, Read, Result as IoResult, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle, Result as ThreadResult};
+use std::time::{Duration, Instant};
+use tungstenite::error::ProtocolError;
+use tungstenite::{Error, Message, WebSocket};
+
 struct Time(Instant);
 impl Clock for Time {
     fn elapsed_ms(&self) -> u64 {
@@ -88,9 +82,7 @@ fn bounded_accept(listener: &TcpListener) -> (TcpStream, SocketAddr) {
                     .unwrap();
                 return accepted;
             }
-            Err(error)
-                if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
-            {
+            Err(error) if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
                 thread::sleep(Duration::from_millis(1));
             }
             Err(error) => panic!("test peer accept failed: {error}"),
@@ -317,7 +309,6 @@ fn authorizer_calls_actual_head_each_time_and_returns_changed_actual_scope() {
 
 #[test]
 fn passive_authorizer_preserves_temporary_and_permanent_access_meaning() {
-    use crate::product_contract::generated::CatalogueReadErrorCode;
     for catalogue in [false, true] {
         for (record_code, catalogue_code, expected) in [
             (
@@ -641,9 +632,9 @@ fn authentication_temporary_permanent_and_unknown_refusals_consume_the_shared_cl
 fn borrowed_authentication_scalar_acquisition_is_bounded_before_connect() {
     struct RefuseConnect(AtomicUsize);
     impl GatewayConnector for RefuseConnect {
-        fn connect(&self, _: SocketAddr, _: Duration) -> io::Result<Box<dyn GatewayStream>> {
+        fn connect(&self, _: SocketAddr, _: Duration) -> IoResult<Box<dyn GatewayStream>> {
             self.0.fetch_add(1, Ordering::SeqCst);
-            Err(io::ErrorKind::ConnectionRefused.into())
+            Err(ErrorKind::ConnectionRefused.into())
         }
     }
     let endpoint = GatewayEndpoint::new(
@@ -747,12 +738,6 @@ fn cancellation_and_deadline_overflow_before_callback_close_without_entering_dri
 
 #[test]
 fn catalogue_resolve_preserves_oversized_entry_and_transport_cause() {
-    use crate::product::catalogue_read::wire::wire_descriptor;
-    use crate::product_contract::generated::CatalogueReadErrorCode;
-    use nessa_sync::replication::catalogue::{
-        CataloguePass, CatalogueSource, CatalogueSourceError, EntryKey, ManifestEntry,
-        ManifestRequest,
-    };
     for (code, expected) in [
         (
             CatalogueReadErrorCode::OversizedEntry,

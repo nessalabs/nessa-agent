@@ -1,12 +1,10 @@
 use crate::app::ports::Clock;
 use crate::read_only_sync::application::{Cancellation, GatewayError, GatewayStream};
-use std::{
-    cell::Cell,
-    io::{self, Read, Write},
-    rc::Rc,
-    sync::Arc,
-    time::Duration,
-};
+use std::cell::Cell;
+use std::io::{Error, ErrorKind, Read, Result as IoResult, Write};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
 
 pub(super) struct DeadlineStream {
     stream: Box<dyn GatewayStream>,
@@ -61,18 +59,18 @@ impl DeadlineStream {
             self.failure.set(Some(error));
         }
     }
-    fn physical<T>(&mut self, result: io::Result<T>) -> io::Result<T> {
+    fn physical<T>(&mut self, result: IoResult<T>) -> IoResult<T> {
         result.inspect_err(|error| {
             self.record_failure(io_cause(error));
         })
     }
-    fn refused(&mut self, error: GatewayError) -> io::Error {
+    fn refused(&mut self, error: GatewayError) -> Error {
         self.record_failure(error);
-        io::Error::other("gateway operation refused")
+        Error::other("gateway operation refused")
     }
 }
 impl Read for DeadlineStream {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+    fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
         if bytes.is_empty() {
             return Ok(0);
         }
@@ -94,7 +92,7 @@ impl Read for DeadlineStream {
     }
 }
 impl Write for DeadlineStream {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
         let timeout = self.remaining().map_err(|error| self.refused(error))?;
         let result = self.stream.write_timeout(timeout);
         self.physical(result)?;
@@ -103,7 +101,7 @@ impl Write for DeadlineStream {
         self.remaining().map_err(|error| self.refused(error))?;
         Ok(written)
     }
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> IoResult<()> {
         let timeout = self.remaining().map_err(|error| self.refused(error))?;
         let result = self.stream.write_timeout(timeout);
         self.physical(result)?;
@@ -119,9 +117,9 @@ impl Drop for DeadlineStream {
     }
 }
 
-pub(super) fn io_cause(error: &io::Error) -> GatewayError {
+pub(super) fn io_cause(error: &Error) -> GatewayError {
     match error.kind() {
-        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => GatewayError::TimedOut,
+        ErrorKind::TimedOut | ErrorKind::WouldBlock => GatewayError::TimedOut,
         _ => GatewayError::Transport,
     }
 }

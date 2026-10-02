@@ -1,5 +1,6 @@
 //! Passive read admission against the local ownership adapter.
 
+use crate::agents::domain::AgentId;
 use crate::conversation::application::{
     AdmitPassiveRead, CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation,
     CatalogueReadResponse, CatalogueReadScope, CatalogueReadSource, CatalogueReadValue,
@@ -7,45 +8,31 @@ use crate::conversation::application::{
     ReceiverBinding, ReceiverReadScope, RecordHead, RecordReadError, RecordReadFuture,
     RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadSource, RecordReadValue,
 };
-use crate::{
-    agents::domain::AgentId,
-    conversation::{
-        domain::{
-            conversation_catalogue_stream, Conversation, ConversationApprovalMode, ConversationId,
-            ConversationModelId,
-        },
-        infrastructure::LocalConversationStore,
-    },
+use crate::conversation::domain::{
+    conversation_catalogue_stream, Conversation, ConversationApprovalMode, ConversationId,
+    ConversationModelId,
 };
-use nessa_auth::{
-    adapters::cedar::CedarPolicyEvaluator,
-    application::{
-        authorization::AuthorizeAction,
-        ports::{
-            AccessError, AccessReader, AccessSnapshot, Clock, CredentialEvidence,
-            CredentialVerifier, PortFuture, VerifiedCredential,
-        },
-        session::AuthenticateSession,
-    },
-    domain::{
-        Action, AudienceId, Credential, CredentialId, Grant, Membership, MembershipId,
-        MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
-    },
+use crate::conversation::infrastructure::LocalConversationStore;
+use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
+use nessa_auth::application::authorization::AuthorizeAction;
+use nessa_auth::application::ports::{
+    AccessError, AccessReader, AccessSnapshot, Clock, CredentialEvidence, CredentialVerifier,
+    PortFuture, VerifiedCredential,
 };
-use nessa_sync::replication::{
-    catalogue::{
-        CataloguePass, EntryKey, ManifestEntry, ManifestPage, ManifestRequest, ResolvedEntry,
-    },
-    domain::{Id, Page, PageRequest, Scope},
+use nessa_auth::application::session::AuthenticateSession;
+use nessa_auth::domain::{
+    Action, AudienceId, Credential, CredentialId, Grant, Membership, MembershipId, MembershipRole,
+    MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
 };
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
-    },
+use nessa_sync::replication::catalogue::{
+    CataloguePass, EntryKey, ManifestEntry, ManifestPage, ManifestRequest, ResolvedEntry,
 };
+use nessa_sync::replication::domain::{Id, Page, PageRequest, Scope};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+use uuid::Uuid;
 
 #[derive(Default)]
 struct RecordSpy {
@@ -96,7 +83,7 @@ async fn record_use_case_admits_before_metadata_and_rechecks_each_request() {
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
     let conversations = LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap();
-    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     conversations
         .create(
             Conversation::new(
@@ -438,7 +425,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     nessa_local_storage::create_directory(&private).unwrap();
     let path = private.join("metadata.sqlite3");
     let conversations = LocalConversationStore::open(&path).unwrap();
-    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     conversations
         .create(
             Conversation::new(
@@ -549,7 +536,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
             Err(expected)
         );
     }
-    let other = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let other = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     conversations
         .create(
             Conversation::new(

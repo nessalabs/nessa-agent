@@ -1,12 +1,9 @@
 use crate::product_contract::generated::{
     CatalogueReadErrorCode, RecordReadErrorCode, SessionCloseReason,
 };
-
-use std::{
-    io::{self, Read, Write},
-    net::SocketAddr,
-    time::Duration,
-};
+use std::io::{Read, Result as IoResult, Write};
+use std::net::SocketAddr;
+use std::time::Duration;
 
 /// Cancellation supplied by the composition that owns the synchronous run.
 pub(crate) trait Cancellation: Send + Sync {
@@ -15,13 +12,12 @@ pub(crate) trait Cancellation: Send + Sync {
 
 /// The synchronous connection owner supplies socket I/O and timeout controls.
 pub(crate) trait GatewayStream: Read + Write {
-    fn read_timeout(&self, timeout: Duration) -> io::Result<()>;
-    fn write_timeout(&self, timeout: Duration) -> io::Result<()>;
-    fn shutdown(&self) -> io::Result<()>;
+    fn read_timeout(&self, timeout: Duration) -> IoResult<()>;
+    fn write_timeout(&self, timeout: Duration) -> IoResult<()>;
+    fn shutdown(&self) -> IoResult<()>;
 }
 pub(crate) trait GatewayConnector {
-    fn connect(&self, address: SocketAddr, timeout: Duration)
-        -> io::Result<Box<dyn GatewayStream>>;
+    fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<Box<dyn GatewayStream>>;
 }
 
 /// Finite physical policy; protocol/semantic ceilings remain their publications.

@@ -1,23 +1,22 @@
 //! Bounded physical catalogue reads; core owns semantic progress and revision rules.
 use super::rows;
-use crate::{
-    conversation::{
-        application::CatalogueMetadata, domain::ConversationId, infrastructure::catalogue_payload,
-    },
-    read_only_sync::application::CacheError,
+use crate::conversation::application::CatalogueMetadata;
+use crate::conversation::domain::ConversationId;
+use crate::conversation::infrastructure::catalogue_payload;
+use crate::read_only_sync::application::CacheError;
+use nessa_local_database::rusqlite::types::ValueRef;
+use nessa_local_database::rusqlite::{params, Connection, OptionalExtension};
+use nessa_sync::replication::catalogue::{
+    validate_catalogue_progress, validate_manifest_entry, validate_resolved, CataloguePass,
+    CatalogueProgress, EntryKey, ManifestEntry, ResolvedEntry, MAX_CATALOGUE_PAYLOAD_BYTES,
 };
-use nessa_local_database::rusqlite::{params, types::ValueRef, Connection, OptionalExtension};
-use nessa_sync::replication::{
-    catalogue::{
-        validate_catalogue_progress, validate_manifest_entry, validate_resolved, CataloguePass,
-        CatalogueProgress, EntryKey, ManifestEntry, ResolvedEntry, MAX_CATALOGUE_PAYLOAD_BYTES,
-    },
-    domain::{Id, Scope},
-};
+use nessa_sync::replication::domain::{Id, Scope};
+#[cfg(test)]
+use std::cell::Cell;
 
 #[cfg(test)]
 std::thread_local! {
-    pub(super) static PAYLOAD_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(super) static PAYLOAD_READS: Cell<usize> = const { Cell::new(0) };
 }
 
 pub(super) fn progress(

@@ -174,12 +174,11 @@ pub(crate) fn decode_resolved_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conversation::application::{CatalogueReadOperation, CatalogueReadValue};
+    use crate::product::generated::MAX_RECORD_RESPONSE_BYTES;
     use crate::product_contract::generated::CatalogueReadErrorCode;
-    use crate::{
-        conversation::application::{CatalogueReadOperation, CatalogueReadValue},
-        product::generated::MAX_RECORD_RESPONSE_BYTES,
-    };
     use nessa_sync::replication::catalogue::{MAX_CATALOGUE_ENTRIES, MAX_CATALOGUE_PAYLOAD_BYTES};
+    use serde_json::Value;
 
     fn pass() -> CataloguePass {
         let escaped = Id::new("\u{0001}".repeat(128)).unwrap();
@@ -245,10 +244,9 @@ mod tests {
             response.len(),
             MAX_RECORD_RESPONSE_BYTES
         );
-        let decoded: ConversationCatalogueResolveResult =
-            serde_json::from_str::<serde_json::Value>(&response)
-                .and_then(|value| serde_json::from_value(value["payload"].clone()))
-                .unwrap();
+        let decoded: ConversationCatalogueResolveResult = serde_json::from_str::<Value>(&response)
+            .and_then(|value| serde_json::from_value(value["payload"].clone()))
+            .unwrap();
         assert_eq!(STANDARD.decode(decoded.payload).unwrap().len(), 65_536);
     }
 

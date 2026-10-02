@@ -1,66 +1,54 @@
 //! Independent client/gateway processes use canonical credential, receiver and cache owners.
 use super::{private_write, uuid, Setup};
-use crate::{
-    agents::{
-        application::{AgentProbe, AgentProbeEvidence},
-        domain::AgentId,
-    },
-    app::dependencies::RuntimeDependencies,
-    composition::local_auth::SystemClock,
-    conversation::{
-        application::{
-            ConversationRepository, ReceiverReadScope, RecordReadFuture, RecordReadLease,
-            RecordReadOperation, RecordReadResponse, RecordReadSource,
-        },
-        domain::{Conversation, ConversationApprovalMode, ConversationId, ConversationModelId},
-        infrastructure::{
-            LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource,
-            NessaRecordReadSource,
-        },
-    },
-    product::{ProductDependencies, ProductRouteState},
+use crate::agents::application::{AgentProbe, AgentProbeEvidence};
+use crate::agents::domain::AgentId;
+use crate::app::dependencies::RuntimeDependencies;
+use crate::composition::local_auth::SystemClock;
+use crate::conversation::application::{
+    ConversationRepository, ReceiverReadScope, RecordReadFuture, RecordReadLease,
+    RecordReadOperation, RecordReadResponse, RecordReadSource,
 };
+use crate::conversation::domain::{
+    Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
+};
+use crate::conversation::infrastructure::{
+    LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
+};
+use crate::product::{ProductDependencies, ProductRouteState};
 use axum::Extension;
-use nessa_auth::{
-    adapters::{
-        cedar::CedarPolicyEvaluator,
-        local::{BootstrapRequest, LocalCredentialStore},
-    },
-    application::{
-        credential_admin::{IssueCredentialOutcome, IssueCredentialRequest},
-        dto::{
-            CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
-            OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
-        },
-        ports::{AccessReader, Clock, CredentialVerifier},
-    },
-    domain::{AudienceId, OrganizationId, PrincipalId, ResourceId},
+use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
+use nessa_auth::adapters::local::{BootstrapRequest, LocalCredentialStore};
+use nessa_auth::application::credential_admin::{IssueCredentialOutcome, IssueCredentialRequest};
+use nessa_auth::application::dto::{
+    CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
+    OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
 };
-use nessa_gateway_endpoint::{
-    application::PublishGatewayEndpoint,
-    domain::{EndpointIdentity, GatewayEndpoint, GatewayEndpointAdvertisement},
-    infrastructure::FileEndpointPublication,
+use nessa_auth::application::ports::{AccessReader, Clock, CredentialVerifier};
+use nessa_auth::domain::{AudienceId, OrganizationId, PrincipalId, ResourceId};
+use nessa_gateway_endpoint::application::PublishGatewayEndpoint;
+use nessa_gateway_endpoint::domain::{
+    EndpointIdentity, GatewayEndpoint, GatewayEndpointAdvertisement,
 };
-use nessa_sdk::{
-    application::agent_execution::{
-        providers::ProviderIdentity,
-        sessions::{SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage},
-    },
-    domain::agent_execution::sessions::{ExecutionSessionId, ProviderContext, SessionId},
-    infrastructure::session_storage::RecordStorage,
+use nessa_gateway_endpoint::infrastructure::FileEndpointPublication;
+use nessa_local_storage::OpenMode;
+use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
+use nessa_sdk::application::agent_execution::sessions::{
+    SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
 };
+use nessa_sdk::domain::agent_execution::sessions::{
+    ExecutionSessionId, ProviderContext, SessionId,
+};
+use nessa_sdk::infrastructure::session_storage::RecordStorage;
 use nessa_sync::replication::domain::Id;
 use serde_json::json;
+use std::io::{self, Write};
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
-use std::{
-    io::{self, Write},
-    path::Path,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-};
+use tokio::net::TcpListener;
 use tokio::runtime::Handle;
+
 struct NoAgents;
 impl AgentProbe for NoAgents {
     fn evidence(&self, _: AgentId) -> Option<AgentProbeEvidence> {
@@ -325,11 +313,8 @@ async fn gateway_child() {
             .verify(&evidence, &AudienceId::new(setup.gateway.clone()).unwrap())
             .await
             .unwrap();
-        let mut token = nessa_local_storage::open(
-            &root.join("reader.token"),
-            nessa_local_storage::OpenMode::ReadWrite,
-        )
-        .unwrap();
+        let mut token =
+            nessa_local_storage::open(&root.join("reader.token"), OpenMode::ReadWrite).unwrap();
         token.set_len(0).unwrap();
         token.write_all(evidence.expose_bytes()).unwrap();
         token.sync_all().unwrap();
@@ -344,11 +329,8 @@ async fn gateway_child() {
             .await
             .unwrap();
         let bytes = serde_json::to_vec(&json!({"receiver":setup.receiver,"accessEpoch":binding.access_epoch,"credentialFile":root.join("reader.token"),"endpointRoot":root,"endpointDirectory":"endpoint"})).unwrap();
-        let mut file = nessa_local_storage::open(
-            &root.join("profile.json"),
-            nessa_local_storage::OpenMode::ReadWrite,
-        )
-        .unwrap();
+        let mut file =
+            nessa_local_storage::open(&root.join("profile.json"), OpenMode::ReadWrite).unwrap();
         file.set_len(0).unwrap();
         file.write_all(&bytes).unwrap();
         file.sync_all().unwrap();
@@ -448,7 +430,7 @@ async fn gateway_child() {
         metadata,
         Id::new(&setup.gateway).unwrap(),
     )));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let endpoint = GatewayEndpoint::new(
         format!("ws://{address}"),

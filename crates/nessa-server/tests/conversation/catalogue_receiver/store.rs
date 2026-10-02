@@ -1,17 +1,17 @@
 //! Durable receiver cache shared by catalogue adapter and product-process tests.
 use crate::conversation::domain::ConversationId;
 use nessa_local_database::rusqlite::{params, Connection, OptionalExtension};
-use nessa_sync::replication::{
-    catalogue::{
-        catalogue_progress_after_begin, catalogue_progress_after_page,
-        catalogue_progress_after_reset, validate_catalogue_progress,
-        validate_catalogue_revision_transition, CataloguePagePlan, CataloguePass,
-        CatalogueProgress, CatalogueStore, CatalogueStoreError, CatalogueValidationError, EntryKey,
-        ManifestEntry,
-    },
-    domain::{Id, Scope},
+use nessa_sync::replication::catalogue::{
+    catalogue_progress_after_begin, catalogue_progress_after_page, catalogue_progress_after_reset,
+    validate_catalogue_progress, validate_catalogue_revision_transition, CataloguePagePlan,
+    CataloguePass, CatalogueProgress, CatalogueStore, CatalogueStoreError,
+    CatalogueValidationError, EntryKey, ManifestEntry,
 };
-use std::{fmt::Debug, path::Path};
+use nessa_sync::replication::domain::{Id, Scope};
+use serde_json::Value;
+use std::fmt::Debug;
+use std::path::Path;
+
 fn err(_: impl Debug) -> CatalogueStoreError {
     CatalogueStoreError::Failed
 }
@@ -43,7 +43,7 @@ impl SqliteReceiver {
             .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
             .unwrap()
     }
-    pub(crate) fn payload(&self, id: &ConversationId) -> serde_json::Value {
+    pub(crate) fn payload(&self, id: &ConversationId) -> Value {
         let bytes: Vec<u8> = self
             .conn
             .query_row(

@@ -1,16 +1,15 @@
 //! CLI reset admission and output consume the actual private cache receipt.
-use super::{catalogue_tests, fixtures::*, ReadOnlyCache};
-use crate::read_only_sync::{
-    application::CacheError,
-    entrypoint::{parse, run_local, Command, CommandError},
+use super::fixtures::*;
+use super::{catalogue_tests, ReadOnlyCache};
+use crate::read_only_sync::application::CacheError;
+use crate::read_only_sync::entrypoint::{parse, run_local, Command, CommandError};
+use nessa_sync::replication::application::ReplicaStore;
+use nessa_sync::replication::catalogue::{
+    CataloguePagePlan, CatalogueStore, ManifestPage, ManifestRequest,
 };
-use nessa_sync::replication::{
-    application::ReplicaStore,
-    catalogue::{CataloguePagePlan, CatalogueStore, ManifestPage, ManifestRequest},
-    domain::Scope,
-};
+use nessa_sync::replication::domain::Scope;
 use serde_json::Value;
-use std::io::{self, Write};
+use std::io::{ErrorKind, Result as IoResult, Write};
 use uuid::Uuid;
 
 fn command(name: &str, scope: &Scope, generation: u64) -> Command {
@@ -42,10 +41,10 @@ fn render(cache: &mut ReadOnlyCache, command: &Command) -> Value {
 
 struct UnavailableOutput;
 impl Write for UnavailableOutput {
-    fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-        Err(io::ErrorKind::BrokenPipe.into())
+    fn write(&mut self, _: &[u8]) -> IoResult<usize> {
+        Err(ErrorKind::BrokenPipe.into())
     }
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> IoResult<()> {
         Ok(())
     }
 }

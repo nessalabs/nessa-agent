@@ -1,63 +1,61 @@
 //! Projections are bounded display state, not permission or scheduling authority.
+use super::projection::{bound_view, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES};
 use super::view::ConversationTranscriptState;
 use super::{
-    projection::{bound_view, clipped, Projection, MAX_TEXT},
-    ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
+    retained_view, ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
     ConversationAttachmentEvidenceFailureCode, ConversationCaller, ConversationCapabilities,
     ConversationDependencies, ConversationLifecycle, ConversationLifecyclePhase,
-    ConversationLimits, ConversationMessageStatus, ConversationService, PermissionDenialSupport,
-    ProviderSessionErasers, RequestedConversation, SubmissionMode, SubmittedMessage,
-    MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationLimits, ConversationMessageStatus, ConversationService, ConversationView,
+    PermissionDenialSupport, ProviderSessionErasers, RequestedConversation, SubmissionMode,
+    SubmittedMessage, MAX_STRUCTURED_CONTENT_BYTES,
 };
-use crate::{
-    conversation::domain::ConversationId,
-    conversation_test_support::{
-        fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit,
-        MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit,
-        TestClock, Unlisted, DELETION_BUDGETS,
-    },
+use crate::conversation::domain::ConversationId;
+use crate::conversation_test_support::{
+    fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit,
+    MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit,
+    TestClock, Unlisted, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
-use nessa_sdk::{
-    application::agent_execution::{
-        agents::{AgentError, ProviderDiagnostic},
-        executions::{
-            ExecutionController, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
-            SubmissionMode as InvocationSubmissionMode,
-        },
-        permissions::{ActionContext, CancellationOrigin},
-        providers::{
-            ExecutionReport, ObservationFailure, ObservationFailureCause, OperationCapabilities,
-            ProviderExecutionReply, ProviderIdentity, ProviderSessionState,
-        },
-        sessions::{
-            CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus,
-            InvocationRecord, InvocationSchedulingEvent, MessageCommitClock, MessageCommitSleep,
-            QueueHistoryRecord, SessionSnapshot, SessionStorage, SubmissionAcknowledgement,
-        },
-        tools::ToolReviewInput,
-    },
-    domain::agent_execution::{
-        executions::{
-            ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, MessageChunk,
-            MessageId, QueueMutation, SchedulingCause,
-        },
-        permissions::{
-            PermissionCancellationReason, PermissionDecision, PermissionEffect, PermissionId,
-            PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
-            PermissionScope,
-        },
-        prompts::{PromptText, UserMessage},
-        questions::{
-            AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId, MAX_OPEN_ASK_COST,
-        },
-        sessions::{ExecutionSessionId, ProviderContext, SessionId},
-        tools::{McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
-    },
+use nessa_sdk::application::agent_execution::agents::{AgentError, ProviderDiagnostic};
+use nessa_sdk::application::agent_execution::executions::{
+    ExecutionController, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
+    SubmissionMode as InvocationSubmissionMode,
 };
-use std::{sync::Arc, time::Duration};
+use nessa_sdk::application::agent_execution::permissions::{ActionContext, CancellationOrigin};
+use nessa_sdk::application::agent_execution::providers::{
+    ExecutionReport, ObservationFailure, ObservationFailureCause, OperationCapabilities,
+    ProviderExecutionReply, ProviderIdentity, ProviderSessionState,
+};
+use nessa_sdk::application::agent_execution::sessions::{
+    CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus, InvocationRecord,
+    InvocationSchedulingEvent, MessageCommitClock, MessageCommitSleep, QueueHistoryRecord,
+    SessionSnapshot, SessionStorage, SubmissionAcknowledgement,
+};
+use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
+use nessa_sdk::domain::agent_execution::executions::{
+    ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, MessageChunk, MessageId,
+    QueueMutation, SchedulingCause,
+};
+use nessa_sdk::domain::agent_execution::permissions::{
+    PermissionCancellationReason, PermissionDecision, PermissionEffect, PermissionId,
+    PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
+    PermissionScope,
+};
+use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
+use nessa_sdk::domain::agent_execution::questions::{
+    AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId, MAX_OPEN_ASK_COST,
+};
+use nessa_sdk::domain::agent_execution::sessions::{
+    ExecutionSessionId, ProviderContext, SessionId,
+};
+use nessa_sdk::domain::agent_execution::tools::{
+    McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus,
+};
+use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::oneshot;
+use uuid::Uuid;
 
 #[tokio::test]
 async fn gateway_record_view_waits_for_message_commit() {
@@ -106,7 +104,7 @@ async fn gateway_record_view_waits_for_message_commit() {
         None,
     )
     .unwrap();
-    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     service
         .create(
             id.clone(),
@@ -459,7 +457,7 @@ fn successful_provider_result_with_later_failure_does_not_claim_provider_refusal
     assert!(!error.contains("provider refused"));
 }
 
-fn assert_partial_tool(view: &super::ConversationView, expected: bool) {
+fn assert_partial_tool(view: &ConversationView, expected: bool) {
     if !expected {
         assert!(view.tools.is_empty());
         return;
@@ -493,7 +491,7 @@ async fn assert_terminal_failure_round_trip(
     *provider.execution_updates.lock().unwrap() = updates;
     let (release_execution, execution_gate) = tokio::sync::oneshot::channel();
     *provider.execution_gate.lock().unwrap() = Some(execution_gate);
-    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     service
         .create(
             id.clone(),
@@ -650,7 +648,7 @@ async fn protocol_failure_after_partial_tool_preserves_observation_across_termin
     .await;
 }
 
-fn committed_tool_view(events: &[ExecutionEvent]) -> super::ConversationView {
+fn committed_tool_view(events: &[ExecutionEvent]) -> ConversationView {
     let snapshot = completed_snapshot("execution", events.to_vec());
     let capabilities = projection().read().capabilities;
     bound_view(Projection::new("conversation".into(), capabilities, Some(&snapshot)).read())
@@ -1307,8 +1305,6 @@ fn custom_backend_questions_over_display_budget_remain_semantic_and_atomic() {
 
 #[test]
 fn retained_projection_uses_shared_bounds_status_and_injected_revision() {
-    use super::{projection::MAX_VIEW_BYTES, retained_view};
-    use uuid::Uuid;
     let id = ConversationId::new("00000000-0000-0000-0000-000000000001").unwrap();
     let revision = Uuid::from_u128(1);
     let mut snapshot = completed_snapshot("first", vec![]);

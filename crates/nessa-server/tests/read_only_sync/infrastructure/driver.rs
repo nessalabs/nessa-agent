@@ -1,19 +1,20 @@
 //! Finite scheduling over a real private cache and SDK-produced facts.
-use super::{catalogue_tests, fixtures::*};
+use super::fixtures::*;
+use super::{catalogue_tests, ReadOnlyCache};
 use crate::read_only_sync::application::driver::{
     run_catalogue, run_records, RecordDriverCause, TranscriptCache,
 };
 use crate::read_only_sync::application::CacheError;
 use nessa_sdk::application::agent_execution::sessions::CommittedViewState;
-use nessa_sync::replication::{
-    application::{
-        Access, RecordSource, ReplicaStore, ScopeAuthorizer, SourceError, StoreError, SyncError,
-    },
-    catalogue::{
-        CatalogueSource, CatalogueSourceError, CatalogueStore, ManifestPage, ManifestRequest,
-        ResolvedEntry,
-    },
-    domain::{Checkpoint, CommitPlan, Id, Limits, Page, PageRequest, Record, Scope},
+use nessa_sync::replication::application::{
+    Access, RecordSource, ReplicaStore, ScopeAuthorizer, SourceError, StoreError, SyncError,
+};
+use nessa_sync::replication::catalogue::{
+    CataloguePass, CatalogueSource, CatalogueSourceError, CatalogueStore, ManifestPage,
+    ManifestRequest, ResolvedEntry,
+};
+use nessa_sync::replication::domain::{
+    Checkpoint, CommitPlan, Id, Limits, Page, PageRequest, Record, Scope,
 };
 
 struct Allowed;
@@ -255,7 +256,7 @@ impl CatalogueSource for CatalogueSourceFixture {
     }
     fn resolve(
         &mut self,
-        _: &nessa_sync::replication::catalogue::CataloguePass,
+        _: &CataloguePass,
         _: &Id,
         _: usize,
     ) -> Result<ResolvedEntry, CatalogueSourceError> {
@@ -351,7 +352,7 @@ async fn driver_keeps_captured_head_when_source_appends() {
     );
 }
 struct RefusedObservation {
-    cache: super::ReadOnlyCache,
+    cache: ReadOnlyCache,
     observations: usize,
 }
 impl ReplicaStore for RefusedObservation {

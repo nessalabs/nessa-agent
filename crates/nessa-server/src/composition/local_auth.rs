@@ -3,9 +3,7 @@ use super::agent::AgentsConfig;
 #[cfg(unix)]
 use super::current_agent::{CurrentAgentResolver, CurrentAgentResolverInput};
 #[cfg(unix)]
-use super::opencode_profile::EffectiveOpenCodeProfile;
-#[cfg(unix)]
-use super::opencode_profile::OpenCodeProfile;
+use super::opencode_profile::{EffectiveOpenCodeProfile, OpenCodeProfile};
 #[cfg(unix)]
 use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
 use crate::product::generated::AgentsListResult;
@@ -76,6 +74,8 @@ use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(unix)]
+use tokio::runtime::Handle;
 
 /// Wall time for authentication. Health's monotonic uptime remains a separate port.
 pub(super) struct SystemClock;
@@ -523,7 +523,7 @@ async fn conversations(
     let record_reader = Arc::new(NessaRecordReadSource::new(
         storage.clone(),
         record_origin.clone(),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
     ));
     let catalogue_reader = Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),

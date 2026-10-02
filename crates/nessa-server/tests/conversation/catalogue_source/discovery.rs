@@ -1,14 +1,14 @@
 use super::*;
-use crate::conversation::{
-    application::{
-        CatalogueHead, CataloguePage, CatalogueReadError, CatalogueReadOperation,
-        CatalogueReadScope, CatalogueReadSource, ConversationFuture, RecordReadLease,
-    },
-    infrastructure::NessaCatalogueReadSource,
+use crate::conversation::application::{
+    CatalogueHead, CataloguePage, CatalogueReadError, CatalogueReadOperation, CatalogueReadScope,
+    CatalogueReadSource, ConversationFuture, RecordReadLease,
 };
+use crate::conversation::infrastructure::NessaCatalogueReadSource;
+use mpsc::{Receiver, RecvError, Sender, TryRecvError};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::{future::Future, task::Poll};
+use std::task::Poll;
 use tokio::sync::Semaphore;
 
 struct Metadata {
@@ -16,7 +16,7 @@ struct Metadata {
     reset: AtomicBool,
     panic: AtomicBool,
     fail: AtomicBool,
-    gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    gate: Mutex<Option<(Sender<()>, Receiver<()>)>>,
 }
 impl Metadata {
     fn new() -> Self {
@@ -166,7 +166,7 @@ fn readiness_receiver_loss_joins_actual_worker_before_return() {
         make_runtime,
         |ready| {
             drop(ready);
-            Err(mpsc::RecvError)
+            Err(RecvError)
         },
     );
     assert!(matches!(
@@ -195,10 +195,7 @@ fn explicit_drain_waits_for_gated_read_and_retains_unexpected_exit() {
         let result = drain.finish();
         done.send(result).unwrap();
     });
-    assert!(matches!(
-        completed.try_recv(),
-        Err(mpsc::TryRecvError::Empty)
-    ));
+    assert!(matches!(completed.try_recv(), Err(TryRecvError::Empty)));
     release.send(()).unwrap();
     assert_eq!(read.join().unwrap(), Ok(5));
     assert_eq!(completed.recv().unwrap(), Ok(()));

@@ -7,13 +7,15 @@ use nessa_sdk::infrastructure::session_storage::{
     TranscriptCheckpoint, MAX_TRANSCRIPT_CHECKPOINT_CHUNK_BYTES,
 };
 use nessa_sync::replication::domain::{Id, Scope, MAX_ID_BYTES};
+#[cfg(test)]
+use std::cell::Cell;
 
 // Storage conversion envelope; semantic acceptance remains with Id::new.
 pub(super) const MAX_STORED_ID_BYTES: usize = 2 * MAX_ID_BYTES;
 
 #[cfg(test)]
 std::thread_local! {
-    pub(super) static IDENTIFIER_TEXT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(super) static IDENTIFIER_TEXT_READS: Cell<usize> = const { Cell::new(0) };
 }
 
 pub(super) fn database_error(error: Error) -> CacheError {

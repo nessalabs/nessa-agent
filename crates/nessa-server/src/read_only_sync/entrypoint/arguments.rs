@@ -1,16 +1,10 @@
 use crate::conversation::domain::ConversationId;
-use crate::read_only_sync::{
-    application::{CacheError, GatewayError},
-    domain::CacheReset,
-};
-use nessa_sync::replication::{
-    catalogue::EntryKey,
-    domain::{Id, Scope},
-};
-use std::{
-    fmt::{self, Display, Formatter},
-    path::PathBuf,
-};
+use crate::read_only_sync::application::{CacheError, GatewayError};
+use crate::read_only_sync::domain::CacheReset;
+use nessa_sync::replication::catalogue::EntryKey;
+use nessa_sync::replication::domain::{Id, Scope};
+use std::fmt::{Display, Formatter, Result as FmtResult};
+use std::path::PathBuf;
 
 pub(crate) const HELP: &str = "read_only_sync sync-records CACHE PROFILE CONVERSATION PAGES\nread_only_sync check-records CACHE PROFILE CONVERSATION\nread_only_sync sync-catalogue CACHE PROFILE PAGES\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
 
@@ -52,7 +46,7 @@ pub(crate) enum CommandError {
     OnlineRefused,
 }
 impl Display for CommandError {
-    fn fmt(&self, out: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, out: &mut Formatter<'_>) -> FmtResult {
         match self {
             Self::Arguments => out.write_str(HELP),
             Self::Identity => out.write_str("invalid saved target identity"),

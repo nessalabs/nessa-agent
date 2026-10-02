@@ -1,30 +1,28 @@
 //! The actual command composition and bounded wire privilege/budget probes.
+use super::super::super::super::profile::Profile;
 use super::CLIENT;
-use crate::{
-    composition::read_only_example,
-    product::{
-        generated::{
-            ProductClientMetadata, SessionAuthenticateParams, MAX_AUTH_CREDENTIAL_CHARACTERS,
-            PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
-        },
-        passive_read::wire::encode_request,
-    },
+use crate::composition::read_only_example;
+use crate::product::generated::{
+    ProductClientMetadata, SessionAuthenticateParams, MAX_AUTH_CREDENTIAL_CHARACTERS,
+    PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
 };
+use crate::product::passive_read::wire::encode_request;
 use serde::Serialize;
 use serde_json::Value;
-use std::{
-    io::{self, Write},
-    path::Path,
-    process::Command,
-};
-use std::{net::TcpStream, time::Duration};
-use tungstenite::{stream::MaybeTlsStream, Message, WebSocket};
+use std::io::{self, ErrorKind, Result as IoResult, Write};
+use std::net::TcpStream;
+use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
+use tungstenite::stream::MaybeTlsStream;
+use tungstenite::{Message, WebSocket};
+
 struct RefusedOutput;
 impl Write for RefusedOutput {
-    fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-        Err(io::ErrorKind::BrokenPipe.into())
+    fn write(&mut self, _: &[u8]) -> IoResult<usize> {
+        Err(ErrorKind::BrokenPipe.into())
     }
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> IoResult<()> {
         Ok(())
     }
 }
@@ -71,8 +69,7 @@ pub(crate) struct WireClient {
 }
 impl WireClient {
     pub(crate) fn connect(root: &Path) -> Self {
-        let profile =
-            super::super::super::super::profile::Profile::load(&root.join("profile.json")).unwrap();
+        let profile = Profile::load(&root.join("profile.json")).unwrap();
         let endpoint = profile.endpoint().unwrap();
         let credential = profile.credential(MAX_AUTH_CREDENTIAL_CHARACTERS).unwrap();
         let (socket, _) =

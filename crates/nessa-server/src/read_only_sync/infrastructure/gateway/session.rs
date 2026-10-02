@@ -1,71 +1,62 @@
 //! One socket and one attempt outcome. Facades never own their own connection.
 use super::deadline_stream::{io_cause, DeadlineStream};
+use crate::app::ports::Clock;
+use crate::product::generated::{
+    product_event, wire_shape_product_session_ready, wire_shape_session_authenticate_params,
+    wire_shape_session_challenge, ProductClientMetadata, ProductSessionReady,
+    SessionAuthenticateParams, SessionChallenge, MAX_AUTH_CREDENTIAL_CHARACTERS,
+    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD,
+    PRODUCT_SESSION_PATH, PRODUCT_VERSION,
+};
+use crate::product::passive_read::wire::{encode_request, ReadEncodeError};
+use crate::product::wire::{authentication_close_reason, supports_product_version};
 use crate::product_contract::generated::{
     CatalogueReadErrorCode, RecordReadErrorCode, SessionCloseReason,
 };
-use crate::{
-    app::ports::Clock,
-    product::{
-        generated::{
-            product_event, wire_shape_product_session_ready,
-            wire_shape_session_authenticate_params, wire_shape_session_challenge,
-            ProductClientMetadata, ProductSessionReady, SessionAuthenticateParams,
-            SessionChallenge, MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
-            MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_SESSION_PATH,
-            PRODUCT_VERSION,
-        },
-        passive_read::wire::{encode_request, ReadEncodeError},
-        wire::{authentication_close_reason, supports_product_version},
-    },
-    protocol::{OutgoingMessage, ResponseFrame},
-    read_only_sync::application::{
-        Cancellation, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy, GatewayStream,
-    },
+use crate::protocol::{OutgoingMessage, ResponseFrame};
+use crate::read_only_sync::application::{
+    Cancellation, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy, GatewayStream,
 };
 use nessa_gateway_endpoint::domain::GatewayEndpoint;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::Value;
-use std::{
-    io::{self, Read, Write},
-    net::{Shutdown, SocketAddr, TcpStream},
-    sync::Arc,
-    time::Duration,
-};
-use tungstenite::{client, protocol::WebSocketConfig, Error, Message, WebSocket};
+use std::io::{Read, Result as IoResult, Write};
+use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::sync::Arc;
+use std::time::Duration;
+use tungstenite::protocol::WebSocketConfig;
+use tungstenite::{client, Error, Message, WebSocket};
 
 pub(crate) struct LocalConnector;
 impl GatewayConnector for LocalConnector {
-    fn connect(
-        &self,
-        address: SocketAddr,
-        timeout: Duration,
-    ) -> io::Result<Box<dyn GatewayStream>> {
+    fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<Box<dyn GatewayStream>> {
         TcpStream::connect_timeout(&address, timeout)
             .map(|socket| Box::new(Socket(socket)) as Box<dyn GatewayStream>)
     }
 }
 struct Socket(TcpStream);
 impl Read for Socket {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+    fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
         self.0.read(bytes)
     }
 }
 impl Write for Socket {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
         self.0.write(bytes)
     }
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> IoResult<()> {
         self.0.flush()
     }
 }
 impl GatewayStream for Socket {
-    fn read_timeout(&self, timeout: Duration) -> io::Result<()> {
+    fn read_timeout(&self, timeout: Duration) -> IoResult<()> {
         self.0.set_read_timeout(Some(timeout))
     }
-    fn write_timeout(&self, timeout: Duration) -> io::Result<()> {
+    fn write_timeout(&self, timeout: Duration) -> IoResult<()> {
         self.0.set_write_timeout(Some(timeout))
     }
-    fn shutdown(&self) -> io::Result<()> {
+    fn shutdown(&self) -> IoResult<()> {
         self.0.shutdown(Shutdown::Both)
     }
 }

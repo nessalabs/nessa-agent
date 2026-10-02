@@ -4,8 +4,9 @@ use super::generated_types::{
     wire_shape_event_frame, wire_shape_res_frame, GatewayError, RESPONSE_PRESENCE,
 };
 use super::json::unique_value;
-use serde::{de::Error, Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Error as JsonError, Value};
 
 /// Client → server RPC (`type: "req"`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -20,11 +21,7 @@ pub struct RequestFrame {
 
 impl RequestFrame {
     /// Construct a typed request envelope; the method owns its parameter DTO.
-    pub fn new<T: Serialize>(
-        id: &str,
-        method: &str,
-        params: &T,
-    ) -> Result<Self, serde_json::Error> {
+    pub fn new<T: Serialize>(id: &str, method: &str, params: &T) -> Result<Self, JsonError> {
         Ok(Self {
             kind: "req".into(),
             id: id.into(),
@@ -40,7 +37,7 @@ impl RequestFrame {
     /// collapsed to one value before anything could object. Decoding rejects
     /// repeated names at every depth, which is why no client text reaches
     /// dispatch — or error correlation — through `serde_json::from_str`.
-    pub fn decode(text: &str) -> Result<Self, serde_json::Error> {
+    pub fn decode(text: &str) -> Result<Self, JsonError> {
         serde_json::from_value(unique_value(text)?)
     }
 }
@@ -89,7 +86,7 @@ pub enum OutgoingMessage {
 
 impl ResponseFrame {
     /// Successful RPC reply with a typed payload.
-    pub fn success<T: Serialize>(request_id: &str, payload: &T) -> Result<Self, serde_json::Error> {
+    pub fn success<T: Serialize>(request_id: &str, payload: &T) -> Result<Self, JsonError> {
         Ok(Self {
             kind: "res".into(),
             id: request_id.to_string(),
@@ -132,7 +129,7 @@ impl EventFrame {
         payload: &T,
         seq: u64,
         state_version: u64,
-    ) -> Result<Self, serde_json::Error> {
+    ) -> Result<Self, JsonError> {
         Ok(Self {
             kind: "event".into(),
             event: event.to_string(),
@@ -145,10 +142,10 @@ impl EventFrame {
 
 impl OutgoingMessage {
     /// Decode trusted server envelopes through the same unique-key budget owner.
-    pub fn decode(text: &str) -> Result<Self, serde_json::Error> {
+    pub fn decode(text: &str) -> Result<Self, JsonError> {
         let value = unique_value(text)?;
         if !wire_shape_res_frame(&value) && !wire_shape_event_frame(&value) {
-            return Err(serde_json::Error::custom("invalid server frame shape"));
+            return Err(JsonError::custom("invalid server frame shape"));
         }
         let frame: Self = serde_json::from_value(value)?;
         let valid = match &frame {
@@ -161,13 +158,13 @@ impl OutgoingMessage {
             Self::Event(_) => true,
         };
         if !valid {
-            return Err(serde_json::Error::custom("contradictory server frame"));
+            return Err(JsonError::custom("contradictory server frame"));
         }
         Ok(frame)
     }
 
     /// Serialize to the JSON text sent on the WebSocket.
-    pub fn to_wire_text(&self) -> Result<String, serde_json::Error> {
+    pub fn to_wire_text(&self) -> Result<String, JsonError> {
         serde_json::to_string(self)
     }
 

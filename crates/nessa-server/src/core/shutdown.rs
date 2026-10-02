@@ -1,6 +1,7 @@
 //! Typed cleanup evidence preserved by process composition.
 use crate::conversation::application::{CatalogueReadError, ConversationError, RecordReadError};
-use std::{error::Error, fmt};
+use std::error::Error;
+use std::fmt::{Display, Formatter, Result as FmtResult};
 
 /// Observed physical drain results. Unknown is distinct from successful drain.
 /// Composition records evidence here; each ReadWorkers owner owns actual drain.
@@ -83,8 +84,8 @@ pub enum ShutdownFailure {
         conversations: ConversationError,
     },
 }
-impl fmt::Display for ShutdownFailure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for ShutdownFailure {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             Self::ReadersUnreported { outcomes } => write!(f, "passive reader physical drain unreported: {outcomes:?}; conversation cleanup not started"),
             Self::ConversationsUnreported { readers } => write!(f, "passive reader cleanup: {readers:?}; conversation cleanup unreported"),

@@ -554,17 +554,12 @@ impl crate::desktop_runtime::application::BackgroundWork for StartupWarmUps {
 mod tests {
     use super::*;
     use crate::env::{MockEnv, Stage, STAGE};
-    use std::{
-        sync::atomic::{AtomicBool, Ordering},
-        task::Poll,
-    };
-    use tokio::{
-        net::TcpListener,
-        sync::{
-            oneshot::{self, Sender},
-            Notify,
-        },
-    };
+    use std::io::Result as IoResult;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::Poll;
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot::Sender;
+    use tokio::sync::{oneshot, Notify};
 
     #[tokio::test]
     async fn shutdown_stops_connection_admission_before_a_blocked_reader_drains() {
@@ -578,7 +573,7 @@ mod tests {
             async fn accept(&mut self) -> (Self::Io, Self::Addr) {
                 Listener::accept(self.inner.as_mut().unwrap()).await
             }
-            fn local_addr(&self) -> std::io::Result<Self::Addr> {
+            fn local_addr(&self) -> IoResult<Self::Addr> {
                 self.inner.as_ref().unwrap().local_addr()
             }
         }

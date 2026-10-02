@@ -1,10 +1,10 @@
+use std::panic;
+use std::panic::AssertUnwindSafe;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{
-    panic::{self, AssertUnwindSafe},
-    sync::{Arc, Mutex},
-    thread::{self, JoinHandle},
-};
+use std::sync::{Arc, Mutex};
+use std::thread::{Builder, JoinHandle};
+use tokio::sync::watch::Receiver;
 use tokio::sync::{oneshot, watch};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,7 +22,7 @@ pub(in crate::conversation::infrastructure) struct ReadWorkerState {
     pub(in crate::conversation::infrastructure) joins: Vec<JoinHandle<()>>,
     failure: Option<ReadWorkerError>,
     pub(in crate::conversation::infrastructure) drain:
-        Option<watch::Receiver<Option<Result<(), ReadWorkerError>>>>,
+        Option<Receiver<Option<Result<(), ReadWorkerError>>>>,
 }
 impl ReadWorkerState {
     fn admit(&self) -> Result<(), ReadWorkerError> {
@@ -80,7 +80,7 @@ impl ReadWorkers {
             state.admit()?;
             state.reap_finished()?;
             let owner = self.clone();
-            let join = thread::Builder::new()
+            let join = Builder::new()
                 .name(name.into())
                 .spawn(move || {
                     // A cancelled caller cannot observe sender loss, and dropping

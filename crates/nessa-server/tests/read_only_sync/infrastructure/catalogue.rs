@@ -1,18 +1,17 @@
 //! Catalogue progress, metadata and deletion effects use the same physical database.
-use super::{
-    fixtures::{cache, cache_path, id, plan, scope, source_records},
-    ReadOnlyCache,
-};
+use super::fixtures::{cache, cache_path, id, plan, scope, source_records};
+use super::ReadOnlyCache;
 use crate::read_only_sync::application::CacheError;
-use nessa_sync::replication::{
-    application::{ReplicaStore, StoreError},
-    catalogue::{
-        CataloguePagePlan, CataloguePass, CatalogueStore, CatalogueStoreError, EntryKey,
-        ManifestEntry, ManifestPage, ManifestRequest, ResolvedEntry,
-    },
-    domain::Scope,
+use crate::read_only_sync::domain::CacheReset;
+use nessa_local_database::rusqlite::{params, ErrorCode};
+use nessa_sync::replication::application::{ReplicaStore, StoreError};
+use nessa_sync::replication::catalogue::{
+    CataloguePagePlan, CataloguePass, CatalogueStore, CatalogueStoreError,
+    CatalogueValidationError, EntryKey, ManifestEntry, ManifestPage, ManifestRequest,
+    ResolvedEntry, MAX_CATALOGUE_PAYLOAD_BYTES,
 };
-use serde_json::json;
+use nessa_sync::replication::domain::Scope;
+use serde_json::{json, Value};
 
 pub(super) fn catalogue_scope() -> Scope {
     let scope = scope();
@@ -226,10 +225,7 @@ async fn catalogue_deletion_audit_failure_is_atomic() {
     assert_eq!(observed, 123000u64.to_be_bytes());
 }
 
-fn reset_request(
-    cache: &mut ReadOnlyCache,
-    operation: &str,
-) -> crate::read_only_sync::domain::CacheReset {
+fn reset_request(cache: &mut ReadOnlyCache, operation: &str) -> CacheReset {
     let old = catalogue_scope();
     let progress = CatalogueStore::progress(cache, &old).unwrap().unwrap();
     let next = Scope::new(
@@ -240,7 +236,7 @@ fn reset_request(
         old.schema().clone(),
         id("new-epoch"),
     );
-    crate::read_only_sync::domain::CacheReset::new(
+    CacheReset::new(
         id(operation),
         id("local-operator"),
         old,
@@ -292,7 +288,7 @@ fn catalogue_reset_returns_original_audited_receipt() {
             .unwrap(),
         Some(value(2, false))
     );
-    let conflict = crate::read_only_sync::domain::CacheReset::new(
+    let conflict = CacheReset::new(
         request.operation().clone(),
         id("different-operator"),
         request.expected().clone(),
@@ -304,7 +300,7 @@ fn catalogue_reset_returns_original_audited_receipt() {
         reopened.reset_catalogue(&conflict),
         Err(CacheError::ConflictingRecord)
     );
-    let stale = crate::read_only_sync::domain::CacheReset::new(
+    let stale = CacheReset::new(
         id("new-reset"),
         request.caller().clone(),
         request.expected().clone(),
@@ -562,8 +558,7 @@ fn cached_key_and_equal_revision_payload_conflicts_are_atomic() {
     );
     let mut content_conflict = original.clone();
     content_conflict.entries[0] = value(3, false);
-    let mut raw: serde_json::Value =
-        serde_json::from_slice(&content_conflict.entries[0].payload).unwrap();
+    let mut raw: Value = serde_json::from_slice(&content_conflict.entries[0].payload).unwrap();
     raw["model"] = json!("different");
     content_conflict.entries[0].payload = serde_json::to_vec(&raw).unwrap();
     assert_eq!(
@@ -600,7 +595,7 @@ fn catalogue_reset_refuses_delayed_same_scope_page() {
     let progress = CatalogueStore::progress(&mut second, &scope)
         .unwrap()
         .unwrap();
-    let request = crate::read_only_sync::domain::CacheReset::new(
+    let request = CacheReset::new(
         id("reset"),
         id("operator"),
         scope.clone(),
@@ -628,7 +623,6 @@ fn catalogue_reset_refuses_delayed_same_scope_page() {
 
 #[test]
 fn catalogue_restoration_bounds_payload_and_identity_acquisition() {
-    use nessa_sync::replication::catalogue::MAX_CATALOGUE_PAYLOAD_BYTES;
     let root = tempfile::tempdir().unwrap();
     let path = cache_path(root.path(), "cache.sqlite3");
     let mut cache = cache(&path);
@@ -716,7 +710,7 @@ fn catalogue_scope_owner_is_retained_with_entries() {
         .unwrap_err();
     assert_eq!(
         error.sqlite_error_code(),
-        Some(nessa_local_database::rusqlite::ErrorCode::ConstraintViolation)
+        Some(ErrorCode::ConstraintViolation)
     );
     drop(cache);
     let mut cache = super::fixtures::cache(&path);
@@ -734,8 +728,6 @@ fn catalogue_scope_owner_is_retained_with_entries() {
 
 #[test]
 fn catalogue_descriptor_admission_precedes_payload_acquisition() {
-    use nessa_local_database::rusqlite::params;
-    use nessa_sync::replication::catalogue::CatalogueValidationError;
     for (creation, revision) in [(0u64, 1u64), (2, 1), (u64::MAX, u64::MAX - 1)] {
         for deleted in [false, true] {
             let root = tempfile::tempdir().unwrap();

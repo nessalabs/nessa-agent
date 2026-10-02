@@ -1,9 +1,10 @@
 use crate::product::generated::{RecordScope, MAX_RECORD_RESPONSE_BYTES};
 use crate::protocol::{RequestFrame, MAX_PAYLOAD_BYTES};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use nessa_sync::replication::domain::{Id, Scope};
 use serde::Serialize;
-use std::io::{self, Write};
+use std::io::{Error, Result as IoResult, Write};
 
 /// The product response could not be encoded within its published byte budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,11 +105,11 @@ impl CappedWriter {
 }
 
 impl Write for CappedWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
         let available = self.limit.saturating_sub(self.bytes.len());
         if bytes.len() > available {
             self.exceeded = true;
-            return Err(io::Error::other(
+            return Err(Error::other(
                 "passive read response exceeds product byte bound",
             ));
         }
@@ -116,7 +117,7 @@ impl Write for CappedWriter {
         Ok(bytes.len())
     }
 
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> IoResult<()> {
         Ok(())
     }
 }

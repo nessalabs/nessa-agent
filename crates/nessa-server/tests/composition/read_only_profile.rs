@@ -1,21 +1,22 @@
 //! Private command inputs and current publication use the real file owners.
 use super::{Profile, ProfileError, MAX_PROFILE_BYTES};
-use nessa_gateway_endpoint::{
-    application::PublishGatewayEndpoint,
-    domain::{EndpointIdentity, GatewayEndpoint, GatewayEndpointAdvertisement},
-    infrastructure::FileEndpointPublication,
+use nessa_gateway_endpoint::application::PublishGatewayEndpoint;
+use nessa_gateway_endpoint::domain::{
+    EndpointIdentity, GatewayEndpoint, GatewayEndpointAdvertisement,
 };
+use nessa_gateway_endpoint::infrastructure::FileEndpointPublication;
 use nessa_local_storage::OpenMode;
 use serde_json::json;
 #[cfg(unix)]
-use std::{fs::Permissions, os::unix::fs::PermissionsExt};
-use std::{
-    io::{ErrorKind, Read, Write},
-    net::{TcpListener, TcpStream},
-    path::{Path, PathBuf},
-    thread,
-    time::{Duration, Instant},
-};
+use std::fs::Permissions;
+use std::io::{ErrorKind, Read, Write};
+use std::net::{TcpListener, TcpStream};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::RecvTimeoutError;
+use std::thread;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 fn write(path: &Path, bytes: &[u8]) {
@@ -71,10 +72,7 @@ fn health_socket_waits_for_controlled_request_on_nonblocking_stream() {
     client.write_all(b"GET /health HTTP/1.1\r\n\r\n").unwrap();
     reader.join().unwrap();
     assert!(
-        matches!(
-            before_request,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        ),
+        matches!(before_request, Err(RecvTimeoutError::Timeout)),
         "the fixture read must wait for the controlled request: {before_request:?}"
     );
     let request = result

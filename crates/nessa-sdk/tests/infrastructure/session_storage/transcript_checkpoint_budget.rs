@@ -3,7 +3,7 @@ use crate::infrastructure::session_storage::{
     physical_record_schema, TranscriptError, TranscriptFold,
 };
 use nessa_sync::replication::domain::{Id, Scope};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 
 fn fold() -> TranscriptFold {
     let id = |value| Id::new(value).unwrap();
@@ -48,7 +48,7 @@ fn chunk_writer_refuses_before_retaining_bytes_beyond_aggregate_allowance() {
     assert_eq!(writer.current.len(), 13);
     let before = writer.current.clone();
     let error = writer.write_all(b"y").unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::FileTooLarge);
+    assert_eq!(error.kind(), ErrorKind::FileTooLarge);
     assert!(writer.limit_exceeded());
     assert_eq!(writer.written, limit);
     assert_eq!(writer.current, before);

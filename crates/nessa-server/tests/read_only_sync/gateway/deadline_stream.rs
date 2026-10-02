@@ -1,16 +1,11 @@
 use super::super::deadline_stream::DeadlineStream;
-use crate::{
-    app::ports::Clock,
-    read_only_sync::application::{Cancellation, GatewayError, GatewayStream},
-};
-use std::{
-    io::{self, Read, Write},
-    sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use crate::app::ports::Clock;
+use crate::read_only_sync::application::{Cancellation, GatewayError, GatewayStream};
+use std::io::{ErrorKind, Read, Result as IoResult, Write};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
 struct Time(AtomicU64);
 impl Clock for Time {
     fn elapsed_ms(&self) -> u64 {
@@ -30,10 +25,10 @@ struct Physical {
     timeout: bool,
 }
 impl Read for Physical {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+    fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         if self.timeout {
-            return Err(io::ErrorKind::TimedOut.into());
+            return Err(ErrorKind::TimedOut.into());
         }
         bytes[0] = 1;
         self.clock.0.fetch_add(4, Ordering::SeqCst);
@@ -41,22 +36,22 @@ impl Read for Physical {
     }
 }
 impl Write for Physical {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
         Ok(bytes.len())
     }
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> IoResult<()> {
         Ok(())
     }
 }
 impl GatewayStream for Physical {
-    fn read_timeout(&self, timeout: Duration) -> io::Result<()> {
+    fn read_timeout(&self, timeout: Duration) -> IoResult<()> {
         assert!(timeout <= Duration::from_millis(10));
         Ok(())
     }
-    fn write_timeout(&self, _: Duration) -> io::Result<()> {
+    fn write_timeout(&self, _: Duration) -> IoResult<()> {
         Ok(())
     }
-    fn shutdown(&self) -> io::Result<()> {
+    fn shutdown(&self) -> IoResult<()> {
         self.shutdowns.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -134,7 +129,7 @@ fn admitted_io_cancellation_and_partial_writes_stop_before_later_effects() {
         cancel_after_read: bool,
     }
     impl Read for Admitted {
-        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
             self.effects.fetch_add(1, Ordering::SeqCst);
             bytes[0] = 1;
             self.cancel
@@ -144,23 +139,23 @@ fn admitted_io_cancellation_and_partial_writes_stop_before_later_effects() {
         }
     }
     impl Write for Admitted {
-        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+        fn write(&mut self, _: &[u8]) -> IoResult<usize> {
             self.effects.fetch_add(1, Ordering::SeqCst);
             self.clock.0.fetch_add(4, Ordering::SeqCst);
             Ok(1)
         }
-        fn flush(&mut self) -> io::Result<()> {
+        fn flush(&mut self) -> IoResult<()> {
             Ok(())
         }
     }
     impl GatewayStream for Admitted {
-        fn read_timeout(&self, _: Duration) -> io::Result<()> {
+        fn read_timeout(&self, _: Duration) -> IoResult<()> {
             Ok(())
         }
-        fn write_timeout(&self, _: Duration) -> io::Result<()> {
+        fn write_timeout(&self, _: Duration) -> IoResult<()> {
             Ok(())
         }
-        fn shutdown(&self) -> io::Result<()> {
+        fn shutdown(&self) -> IoResult<()> {
             self.shutdowns.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }

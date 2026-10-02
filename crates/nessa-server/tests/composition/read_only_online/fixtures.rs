@@ -4,13 +4,13 @@ mod client;
 #[path = "fixtures/gateway.rs"]
 mod gateway;
 pub(super) use client::{command, WireClient};
+use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Serialize};
-use std::{
-    io::{BufRead, BufReader, Write},
-    path::Path,
-    process::{Child, Command, Stdio},
-};
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
 use uuid::Uuid;
+
 const GATEWAY: &str =
     "composition::read_only_example::online::tests::fixtures::gateway::gateway_child";
 const CLIENT: &str =
@@ -32,7 +32,7 @@ pub(super) fn uuid() -> String {
     Uuid::new_v4().to_string()
 }
 pub(super) fn private_write(path: &Path, bytes: &[u8]) {
-    nessa_local_storage::open(path, nessa_local_storage::OpenMode::CreateNew)
+    nessa_local_storage::open(path, OpenMode::CreateNew)
         .unwrap()
         .write_all(bytes)
         .unwrap();

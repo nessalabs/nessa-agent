@@ -1,9 +1,12 @@
 use super::*;
 use crate::conversation::application::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadScope,
-    CatalogueReadSource,
+    CatalogueReadSource, RecordHead, RecordReadValue,
 };
+use nessa_sync::replication::domain::{Id, Scope};
+use serde_json::Value;
 use std::{
+    io::Error,
     pin::Pin,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -12,7 +15,10 @@ use std::{
     task::{Context, Poll},
     thread::JoinHandle,
 };
-use tokio::sync::Notify;
+use tokio::{
+    sync::{oneshot::Receiver, Notify},
+    task::JoinHandle as AsyncJoinHandle,
+};
 
 // Each successful physical flush replenishes one bounded higher-priority lane.
 // No producer can run out and accidentally let the old biased writer pass.
@@ -56,7 +62,7 @@ impl Stream for ReadySocket {
     }
 }
 impl Sink<Message> for ReadySocket {
-    type Error = std::io::Error;
+    type Error = Error;
     fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
@@ -152,7 +158,7 @@ async fn continuously_ready_lane_releases_all_record_leases(
     for _ in 0..16 {
         tokio::task::yield_now().await;
     }
-    let terminated = writers.iter().all(tokio::task::JoinHandle::is_finished);
+    let terminated = writers.iter().all(AsyncJoinHandle::is_finished);
     let released = global_reads.available_permits();
     let slots_released = record_slots
         .iter()
@@ -327,7 +333,7 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
             panic!("text response expected")
         };
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&text).unwrap()["id"],
+            serde_json::from_str::<Value>(&text).unwrap()["id"],
             expected
         );
     }
@@ -409,20 +415,18 @@ impl RecordReadSource for HeldSuccessfulRead {
             assert!(matches!(operation, RecordReadOperation::Head));
             self.entered.notify_one();
             self.release.notified().await;
-            let id = |value| nessa_sync::replication::domain::Id::new(value).unwrap();
-            let value = crate::conversation::application::RecordReadValue::Head(
-                crate::conversation::application::RecordHead {
-                    scope: nessa_sync::replication::domain::Scope::new(
-                        id(admitted.receiver_id),
-                        id("gateway".into()),
-                        id(admitted.conversation_id.to_string()),
-                        id("incarnation".into()),
-                        id("physical-schema".into()),
-                        id(format!("epoch-{}", admitted.access_epoch)),
-                    ),
-                    head: 1,
-                },
-            );
+            let id = |value| Id::new(value).unwrap();
+            let value = RecordReadValue::Head(RecordHead {
+                scope: Scope::new(
+                    id(admitted.receiver_id),
+                    id("gateway".into()),
+                    id(admitted.conversation_id.to_string()),
+                    id("incarnation".into()),
+                    id("physical-schema".into()),
+                    id(format!("epoch-{}", admitted.access_epoch)),
+                ),
+                head: 1,
+            });
             self.completed.fetch_add(1, Ordering::SeqCst);
             Ok(RecordReadResponse { value, lease })
         })
@@ -577,12 +581,12 @@ async fn successful_read_during_held_authority(input: HeldAuthorityInput, stalle
         }
         tokio::time::advance(RECORD_SEND_TIMEOUT + Duration::from_millis(1)).await;
         let _ = timeout(Duration::from_secs(1), async {
-            while !tasks.iter().all(tokio::task::JoinHandle::is_finished) {
+            while !tasks.iter().all(AsyncJoinHandle::is_finished) {
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
         })
         .await;
-        let ended = tasks.iter().all(tokio::task::JoinHandle::is_finished);
+        let ended = tasks.iter().all(AsyncJoinHandle::is_finished);
         let released = capacity.available_permits();
         let cancelled_checks = held.waiting.load(Ordering::SeqCst);
         let effects_before = effects.0.load(Ordering::SeqCst);
@@ -642,7 +646,7 @@ async fn successful_read_during_held_authority(input: HeldAuthorityInput, stalle
         else {
             panic!("record response expected")
         };
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["id"], "record");
         assert_eq!(value["ok"], true);
         assert_eq!(released, 4);
@@ -655,7 +659,7 @@ async fn successful_read_during_held_authority(input: HeldAuthorityInput, stalle
             let Message::Text(text) = deferred.unwrap().unwrap() else {
                 panic!("deferred reply expected")
             };
-            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["id"], "deferred");
             match input {
                 HeldAuthorityInput::Malformed => {
@@ -732,7 +736,7 @@ async fn held_input_authority_does_not_suspend_credential_expiry() {
     let Message::Close(Some(close)) = close else {
         panic!("credential expiry close expected")
     };
-    let reason: serde_json::Value = serde_json::from_str(&close.reason).unwrap();
+    let reason: Value = serde_json::from_str(&close.reason).unwrap();
     assert_eq!(reason["code"], "credential_expired");
     timeout(Duration::from_secs(1), task)
         .await
@@ -813,7 +817,7 @@ async fn periodic_authority_cannot_authorize_deferred_input() {
         let Message::Close(Some(close)) = close else {
             panic!("invalid current authority close expected")
         };
-        let reason: serde_json::Value = serde_json::from_str(&close.reason).unwrap();
+        let reason: Value = serde_json::from_str(&close.reason).unwrap();
         assert_eq!(reason["code"], "authorization_lost");
         timeout(Duration::from_secs(1), task)
             .await
@@ -836,8 +840,9 @@ struct HeldPhysicalRead {
     joins: Mutex<Vec<JoinHandle<()>>>,
 }
 impl HeldPhysicalRead {
-    fn start(&self, lease: RecordReadLease) -> tokio::sync::oneshot::Receiver<()> {
+    fn start(&self, lease: RecordReadLease) -> Receiver<()> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        let released = *self.gate.0.lock().unwrap();
         let gate = self.gate.clone();
         let (send, receive) = tokio::sync::oneshot::channel();
         let join = std::thread::spawn(move || {
@@ -851,6 +856,12 @@ impl HeldPhysicalRead {
             let _ = send.send(());
         });
         self.joins.lock().unwrap().push(join);
+        if released {
+            // Paused Tokio can outrun a runnable OS thread. After release, join
+            // this real worker before exposing its completion receiver. Held
+            // reads keep their asynchronous lease and cancellation behavior.
+            self.release_and_join();
+        }
         receive
     }
     fn release_and_join(&self) {
@@ -905,12 +916,7 @@ impl CatalogueReadSource for HeldPhysicalRead {
         })
     }
 }
-async fn physical_response(
-    peer: &mut TestPeer,
-    id: &str,
-    method: &str,
-    params: &serde_json::Value,
-) -> serde_json::Value {
+async fn physical_response(peer: &mut TestPeer, id: &str, method: &str, params: &Value) -> Value {
     peer.input
         .send(Ok(Message::Text(
             json!({"type":"req","id":id,"method":method,"params":params})

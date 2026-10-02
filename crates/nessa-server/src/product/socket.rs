@@ -4,15 +4,13 @@ use super::generated::{
     SessionTermination, MAX_RECORD_RESPONSE_BYTES, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
     PRODUCT_VERSION,
 };
-use super::{
-    passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT},
-    state::ProductRouteState,
-    wire::*,
+use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
+use super::state::ProductRouteState;
+use super::wire::*;
+use crate::browser_session::application::{
+    invalidation_reason, BrowserSessionVerifier, ReadBrowserSession,
 };
-use crate::browser_session::{
-    application::{invalidation_reason, BrowserSessionVerifier, ReadBrowserSession},
-    domain::value_objects::RemovalReason,
-};
+use crate::browser_session::domain::value_objects::RemovalReason;
 use crate::conversation::application::{ReadRefusal, RecordReadLease};
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
@@ -22,28 +20,31 @@ use crate::protocol::{
     ResponseFrame, MAX_PAYLOAD_BYTES,
 };
 use axum::extract::ws::{CloseFrame, Message};
-use futures_util::{stream::FuturesUnordered, Sink, SinkExt, Stream, StreamExt};
-use nessa_auth::{
-    application::{
-        authorization::AuthorizeAction,
-        credential_admin::{
-            CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest,
-            ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
-        },
-        dto::{CredentialGrantDto, MembershipRoleDto, MembershipStateDto, ResourceDto},
-        ports::{AccessError, AccessSnapshot, CredentialEvidence, Decision, SessionEvidence},
-        session::{AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession},
-    },
-    domain::{Action, CredentialId},
+use axum::Error;
+use futures_util::stream::{FuturesUnordered, SplitSink};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use nessa_auth::application::authorization::AuthorizeAction;
+use nessa_auth::application::credential_admin::{
+    CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
+    RevokeCredentialOutcome, RevokeCredentialRequest,
 };
+use nessa_auth::application::dto::{
+    CredentialGrantDto, MembershipRoleDto, MembershipStateDto, ResourceDto,
+};
+use nessa_auth::application::ports::{
+    AccessError, AccessSnapshot, CredentialEvidence, Decision, SessionEvidence,
+};
+use nessa_auth::application::session::{
+    AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession,
+};
+use nessa_auth::domain::{Action, CredentialId};
 use serde_json::json;
-use std::{
-    future::{poll_fn, Future},
-    pin::Pin,
-    sync::Arc,
-    task::Poll,
-    time::Duration,
-};
+use std::future::{poll_fn, Future};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::Poll;
+use std::time::Duration;
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{interval, timeout, timeout_at, Instant, MissedTickBehavior};
 use uuid::Uuid;
@@ -51,7 +52,7 @@ use uuid::Uuid;
 /// Run one mandatory-authentication product session.
 pub async fn handle_socket<S>(mut socket: S, state: ProductRouteState)
 where
-    S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin + Send + 'static,
+    S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
 {
     let deadline = Instant::now() + state.settings.handshake_timeout();
     let nonce = Uuid::new_v4().to_string();
@@ -141,7 +142,7 @@ async fn receive_authentication<S>(
     deadline: Instant,
 ) -> Result<(String, AuthenticatedSession), (String, &'static str)>
 where
-    S: Stream<Item = Result<Message, axum::Error>> + Unpin,
+    S: Stream<Item = Result<Message, Error>> + Unpin,
 {
     let Some(Ok(Message::Text(text))) = socket.next().await else {
         return Err((String::new(), "unauthorized"));
@@ -334,14 +335,14 @@ enum WriterResponse {
 }
 
 async fn write_authenticated<S>(
-    mut sink: futures_util::stream::SplitSink<S, Message>,
-    mut controls: mpsc::Receiver<ControlOutput>,
-    mut refusals: mpsc::Receiver<OutgoingMessage>,
-    mut ordinary: mpsc::Receiver<QueuedResponse>,
-    mut records: mpsc::Receiver<QueuedRecordResponse>,
+    mut sink: SplitSink<S, Message>,
+    mut controls: Receiver<ControlOutput>,
+    mut refusals: Receiver<OutgoingMessage>,
+    mut ordinary: Receiver<QueuedResponse>,
+    mut records: Receiver<QueuedRecordResponse>,
     write_timeout: Duration,
 ) where
-    S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin,
+    S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin,
 {
     // Moving the record out of its lane observes its original deadline, not a
     // physical-send priority change. Its slot still bounds queue + local state.
@@ -447,7 +448,7 @@ type AuthorityCheck<'a> = Pin<Box<dyn Future<Output = Option<AccessError>> + Sen
 
 async fn run_authenticated<S>(socket: S, state: ProductRouteState, session: AuthenticatedSession)
 where
-    S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin + Send + 'static,
+    S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
 {
     let (sink, mut incoming) = socket.split();
     let (control_send, control_receive) = mpsc::channel(4);
@@ -1272,18 +1273,60 @@ async fn close_session<S: Sink<Message> + Unpin>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::generated::{
+        ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
+        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    };
+    use super::super::passive_read::wire::encode_response;
     use super::super::state::SessionSettings;
     use super::*;
     use crate::agents::domain::AgentId;
+    use crate::agents_test_support::StubAgentProbe;
+    use crate::app::ports::Clock as UptimeClock;
+    use crate::browser_session::application::SessionStore;
+    use crate::browser_session::domain::value_objects::{
+        BrowserSessionOrigin, BrowserSessionState,
+    };
     use crate::conversation::application::{
-        ReadRefusal, ReceiverAuthority, ReceiverBinding, ReceiverReadScope, RecordReadError,
-        RecordReadFuture, RecordReadOperation, RecordReadResponse, RecordReadSource,
+        ConversationRepository, ReadRefusal, ReceiverAuthority, ReceiverBinding, ReceiverReadScope,
+        RecordReadError, RecordReadFuture, RecordReadOperation, RecordReadResponse,
+        RecordReadSource,
     };
     use crate::conversation::domain::{
         Conversation, ConversationApprovalMode, ConversationId, ConversationModelId,
     };
+    use crate::conversation::infrastructure::{LocalConversationStore, NessaRecordReadSource};
+    use crate::product::ProductDependencies;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    use conversation_support::MemoryRepository;
+    use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
+    use nessa_auth::application::credential_admin::CredentialAdmin;
+    use nessa_auth::application::dto::CredentialMetadataDto;
+    use nessa_auth::application::ports::{
+        AccessReader, AccessSnapshot, Clock, CredentialVerifier, PolicyEvaluator, PortFuture,
+        VerifiedCredential,
+    };
+    use nessa_auth::domain::{
+        AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipId,
+        MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
+    };
+    use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
+    use nessa_sdk::application::agent_execution::sessions::{
+        ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+    };
+    use nessa_sdk::domain::agent_execution::sessions::SessionId;
+    use nessa_sdk::infrastructure::session_storage::{
+        RecordStorage, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES as SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+    };
+    use nessa_sync::replication::domain::Id;
+    use serde_json::Value;
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+    use tokio::runtime::Handle;
+    use uuid::Uuid;
 
     struct RecordBinding;
     impl ReceiverAuthority for RecordBinding {
@@ -1329,7 +1372,7 @@ mod tests {
 
     #[test]
     fn every_manifest_method_has_one_runtime_dispatch_path() {
-        let manifest: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        let manifest: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../protocol/product/manifest.json"
         )))
@@ -1377,35 +1420,6 @@ mod tests {
             assert!(reason.web_socket_code() >= 4000);
         }
     }
-
-    use crate::{
-        agents_test_support::StubAgentProbe,
-        app::ports::Clock as UptimeClock,
-        browser_session::{
-            application::SessionStore,
-            domain::value_objects::{BrowserSessionOrigin, BrowserSessionState},
-        },
-        product::ProductDependencies,
-    };
-    use nessa_auth::{
-        adapters::cedar::CedarPolicyEvaluator,
-        application::{
-            credential_admin::CredentialAdmin,
-            dto::CredentialMetadataDto,
-            ports::{
-                AccessReader, AccessSnapshot, Clock, CredentialVerifier, PolicyEvaluator,
-                PortFuture, VerifiedCredential,
-            },
-        },
-        domain::{
-            AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipId,
-            MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
-        },
-    };
-    use std::sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
-    };
 
     #[test]
     fn record_queue_metadata_stays_within_its_captured_send_fields() {
@@ -1569,7 +1583,7 @@ mod tests {
         }
     }
 
-    fn issue_params() -> serde_json::Value {
+    fn issue_params() -> Value {
         json!({
             "requestId": "issue",
             "principal": {"id": "reader", "kind": "integration"},
@@ -1668,28 +1682,12 @@ mod tests {
 
     #[tokio::test]
     async fn admitted_record_route_uses_owner_scope_and_real_physical_source() {
-        use crate::conversation::{
-            application::ConversationRepository,
-            infrastructure::{LocalConversationStore, NessaRecordReadSource},
-        };
-        use nessa_sdk::{
-            application::agent_execution::{
-                providers::ProviderIdentity,
-                sessions::{
-                    ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot,
-                    SessionStorage,
-                },
-            },
-            domain::agent_execution::sessions::SessionId,
-            infrastructure::session_storage::{RecordStorage, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES},
-        };
-        use nessa_sync::replication::domain::Id;
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
         let conversations =
             Arc::new(LocalConversationStore::open(&private.join("metadata.sqlite3")).unwrap());
-        let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+        let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
         conversations
             .create(
                 Conversation::new(
@@ -1769,7 +1767,7 @@ mod tests {
         let source = Arc::new(NessaRecordReadSource::new(
             storage.clone(),
             origin,
-            tokio::runtime::Handle::current(),
+            Handle::current(),
         ));
         let state = state
             .with_passive_read(Arc::new(RecordBinding), conversations)
@@ -1790,7 +1788,7 @@ mod tests {
         let WireResponse::Record { text, .. } = head_wire else {
             panic!("record reply expected")
         };
-        let head_json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let head_json: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(head_json["payload"]["head"], "1");
         assert_eq!(head_json["payload"]["scope"]["accessEpoch"], "epoch-3");
         drop(lease);
@@ -1799,8 +1797,8 @@ mod tests {
             "conversationId": id.to_string(), "accessEpoch": "3",
             "request": {
                 "scope": scope_json, "after": "0", "target": "1", "maxRecords": 16,
-                "maxPayloadBytes": MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-                "maxRecordBytes": MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                "maxPayloadBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                "maxRecordBytes": SDK_MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
             },
         });
         let (page_wire, lease) = dispatch_passive_read(
@@ -1814,7 +1812,7 @@ mod tests {
         let WireResponse::Record { text, .. } = page_wire else {
             panic!("record reply expected")
         };
-        let page_json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let page_json: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(page_json["payload"]["records"][0]["position"], "1");
         assert_eq!(
             page_json["payload"]["request"]["scope"]["accessEpoch"],
@@ -1986,7 +1984,7 @@ mod tests {
                     let Message::Text(text) = received.unwrap().unwrap() else {
                         panic!("correlated read refusal expected")
                     };
-                    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    let value: Value = serde_json::from_str(&text).unwrap();
                     assert_eq!(value["id"], id);
                     assert_eq!(value["error"]["code"], code, "{error:?}, {method}");
                 }
@@ -2099,7 +2097,7 @@ mod tests {
             else {
                 panic!("correlated read refusal expected")
             };
-            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["id"], "deadline");
             assert_eq!(value["error"]["code"], "read_timeout");
             assert_eq!(Instant::now() - start, PASSIVE_READ_TIMEOUT);
@@ -2219,8 +2217,8 @@ mod tests {
                 reads: AtomicU64::new(0),
                 first_read_delay: Duration::from_secs(delay),
             });
-            let repository = Arc::new(conversation_support::MemoryRepository::default());
-            let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+            let repository = Arc::new(MemoryRepository::default());
+            let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
             repository.records.lock().unwrap().insert(
                 id.clone(),
                 Conversation::new(
@@ -2387,14 +2385,14 @@ mod tests {
     /// flush is released. Exercises the production session loop without relying
     /// on OS socket-buffer sizes or flooding a real network connection.
     struct TestSocket {
-        incoming: tokio::sync::mpsc::UnboundedReceiver<Result<Message, axum::Error>>,
+        incoming: tokio::sync::mpsc::UnboundedReceiver<Result<Message, Error>>,
         outgoing: tokio::sync::mpsc::UnboundedSender<Message>,
         writing: tokio::sync::mpsc::UnboundedSender<()>,
         gate: Option<tokio::sync::oneshot::Receiver<()>>,
         pending: Vec<Message>,
     }
     impl Stream for TestSocket {
-        type Item = Result<Message, axum::Error>;
+        type Item = Result<Message, Error>;
         fn poll_next(
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
@@ -2443,7 +2441,7 @@ mod tests {
         }
     }
     struct TestPeer {
-        input: tokio::sync::mpsc::UnboundedSender<Result<Message, axum::Error>>,
+        input: tokio::sync::mpsc::UnboundedSender<Result<Message, Error>>,
         output: tokio::sync::mpsc::UnboundedReceiver<Message>,
         writing: tokio::sync::mpsc::UnboundedReceiver<()>,
     }
@@ -2536,7 +2534,7 @@ mod tests {
             let Message::Text(text) = peer.message().await else {
                 panic!("response expected")
             };
-            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["id"], expected);
         }
         drop(controls_send);
@@ -2549,15 +2547,6 @@ mod tests {
 
     #[tokio::test]
     async fn maximum_record_frame_keeps_same_socket_control_live_without_raising_ordinary_cap() {
-        use super::super::{
-            generated::{
-                ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
-                MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-            },
-            passive_read::wire::encode_response,
-        };
-        use base64::{engine::general_purpose::STANDARD, Engine};
-
         let escaped = "\u{0001}".repeat(128);
         let scope = RecordScope {
             receiver: escaped.clone(),
@@ -2638,7 +2627,7 @@ mod tests {
         let Message::Text(second) = peer.message().await else {
             panic!("control response expected")
         };
-        let value: serde_json::Value = serde_json::from_str(&second).unwrap();
+        let value: Value = serde_json::from_str(&second).unwrap();
         assert_eq!(value["id"], "control");
         drop(control_send);
         drop(refusal_send);
@@ -2808,7 +2797,7 @@ mod tests {
         let Message::Text(challenge) = peer.message().await else {
             panic!("challenge expected")
         };
-        let challenge: serde_json::Value = serde_json::from_str(&challenge).unwrap();
+        let challenge: Value = serde_json::from_str(&challenge).unwrap();
         assert_eq!(challenge["payload"]["expiresAt"], 102);
         tokio::time::advance(Duration::from_millis(500)).await;
         // The old independent seconds check rejected this while its timer still ran.
@@ -2843,7 +2832,7 @@ mod tests {
         let Message::Text(challenge) = peer.message().await else {
             panic!("challenge expected")
         };
-        let challenge: serde_json::Value = serde_json::from_str(&challenge).unwrap();
+        let challenge: Value = serde_json::from_str(&challenge).unwrap();
         let nonce = challenge["payload"]["nonce"].as_str().unwrap();
         peer.input
             .send(Ok(Message::Text(
@@ -2891,7 +2880,7 @@ mod tests {
             let Message::Text(text) = peer.message().await else {
                 panic!("response expected")
             };
-            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["id"], "issue");
             assert_eq!(value["ok"], false);
             assert_eq!(value["error"]["code"], "invalid_request");
@@ -2918,7 +2907,7 @@ mod tests {
         let Message::Text(text) = peer.message().await else {
             panic!("response expected")
         };
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["id"], "after");
         task.abort();
     }
@@ -2940,7 +2929,7 @@ mod tests {
         let Message::Text(text) = peer.message().await else {
             panic!("response expected")
         };
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["error"]["code"], "credential_store_unavailable");
         task.abort();
     }
@@ -2959,7 +2948,7 @@ mod tests {
             panic!("close expected")
         };
         assert_eq!(close.code, 4006);
-        let reason: serde_json::Value = serde_json::from_str(&close.reason).unwrap();
+        let reason: Value = serde_json::from_str(&close.reason).unwrap();
         assert_eq!(reason["code"], "handshake_timeout");
         assert_eq!(reason["retryable"], true);
         task.await.unwrap();
@@ -2994,7 +2983,7 @@ mod tests {
         let Message::Text(text) = message else {
             panic!("expected successful response")
         };
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["id"], id);
         assert_eq!(value["ok"], true);
     }

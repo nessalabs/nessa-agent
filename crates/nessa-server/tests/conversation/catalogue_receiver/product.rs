@@ -1,57 +1,59 @@
 // Real product sockets connect a gateway process to separately owned receiver
 // processes. Receivers receive only port, credential, and their cache path.
 use super::*;
-use crate::{
-    catalogue_receiver_store::SqliteReceiver,
-    conversation::{
-        application::{
-            CatalogueHead, CataloguePage, CataloguePageRequest, CatalogueValue,
-            ConversationCatalogue, ConversationFuture, ConversationRepository,
-            ConversationSummaries, ReadRefusal, ReceiverAuthority, ReceiverBinding,
-        },
-        domain::{
-            Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
-            ConversationModelId, ConversationSummary,
-        },
-        infrastructure::{LocalConversationStore, NessaCatalogueReadSource},
-    },
-    product::{
-        catalogue_read::wire as catalogue_wire,
-        generated::{
-            ConversationCatalogueHeadResult, ConversationCatalogueManifestResult,
-            ConversationCatalogueResolveResult,
-        },
-        passive_read::wire as shared_wire,
-    },
+use crate::agents::domain::AgentId;
+use crate::catalogue_receiver_store::SqliteReceiver;
+use crate::conversation::application::{
+    CatalogueHead, CataloguePage, CataloguePageRequest, CatalogueValue, ConversationCatalogue,
+    ConversationDependencies, ConversationFuture, ConversationLimits, ConversationRepository,
+    ConversationService, ConversationSummaries, ReadRefusal, ReceiverAuthority, ReceiverBinding,
 };
-use base64::{engine::general_purpose::STANDARD, Engine};
-use nessa_sdk::{
-    application::agent_execution::{
-        executions::ExecutionUpdate,
-        providers::{ExecutionReport, ProviderExecutionReply, ProviderSessionState},
-    },
-    domain::agent_execution::executions::ExecutionOutcome,
+use crate::conversation::domain::{
+    Conversation, ConversationApprovalMode, ConversationDeletion, ConversationId,
+    ConversationModelId, ConversationSummary,
 };
-use nessa_sync::replication::{
-    catalogue::{
-        apply_next_page, begin_or_resume, validate_catalogue_pass, validate_manifest_request, validate_resolved, CatalogueError, CataloguePass, EntryKey,
-        CatalogueSource, CatalogueSourceError, CatalogueStore, CatalogueValidationError,
-        ManifestEntry, ManifestPage, ManifestRequest, ResolvedEntry, MAX_CATALOGUE_ENTRIES,
-    },
-    domain::{Id, Scope},
-    infrastructure::MemoryAuthorizer,
+use crate::conversation::infrastructure::{LocalConversationStore, NessaCatalogueReadSource};
+use crate::product::catalogue_read::wire as catalogue_wire;
+use crate::product::generated::{
+    CatalogueDescriptor, ConversationCatalogueHeadResult, ConversationCatalogueManifestResult,
+    ConversationCatalogueResolveResult,
 };
-use std::{
-    collections::HashMap,
-    future::Future,
-    io::{BufRead, BufReader, Write},
-    net::TcpStream,
-    path::Path,
-    pin::Pin,
-    process::{Child, Command, Stdio},
-    sync::atomic::AtomicUsize,
+use crate::product::passive_read::wire as shared_wire;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use conversation_support::{
+    AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, Provider, ProviderFactory,
+    RecordingFileLinkAudit, TestClock,
 };
-use tungstenite::{stream::MaybeTlsStream, WebSocket};
+use nessa_local_database::rusqlite::Connection;
+use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
+use nessa_sdk::application::agent_execution::providers::{
+    ExecutionReport, ProviderExecutionReply, ProviderSessionState,
+};
+use nessa_sdk::domain::agent_execution::executions::ExecutionOutcome;
+use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
+use nessa_sync::replication::catalogue::{
+    apply_next_page, begin_or_resume, validate_catalogue_pass, validate_manifest_request,
+    validate_resolved, CatalogueError, CataloguePass, CatalogueSource, CatalogueSourceError,
+    CatalogueStore, CatalogueValidationError, EntryKey, ManifestEntry, ManifestPage,
+    ManifestRequest, ResolvedEntry, MAX_CATALOGUE_ENTRIES,
+};
+use nessa_sync::replication::domain::{Id, Scope};
+use nessa_sync::replication::infrastructure::MemoryAuthorizer;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::future::Future;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::process::{Child, ChildStdout, Command, Stdio};
+use std::sync::atomic::AtomicUsize;
+use std::time::Instant;
+use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
+use tungstenite::stream::MaybeTlsStream;
+use tungstenite::{Message, WebSocket};
 
 const GATEWAY_CHILD: &str = "product::socket::tests::catalogue_receiver::gateway_child";
 const RECEIVER_CHILD: &str = "product::socket::tests::catalogue_receiver::receiver_child";
@@ -77,7 +79,7 @@ fn conversation(id: ConversationId, owner: &str) -> Conversation {
         "fixture".into(),
         "seed".into(),
         1,
-        crate::agents::domain::AgentId::Claude,
+        AgentId::Claude,
         ConversationModelId::new("test").unwrap(),
         ConversationApprovalMode::Ask,
     )
@@ -191,7 +193,7 @@ struct Counts {
     page_done: AtomicUsize,
     resolve: AtomicUsize,
     hold: AtomicBool,
-    release: tokio::sync::Semaphore,
+    release: Semaphore,
 }
 impl Default for Counts {
     fn default() -> Self {
@@ -201,7 +203,7 @@ impl Default for Counts {
             page_done: AtomicUsize::new(0),
             resolve: AtomicUsize::new(0),
             hold: AtomicBool::new(false),
-            release: tokio::sync::Semaphore::new(0),
+            release: Semaphore::new(0),
         }
     }
 }
@@ -285,31 +287,27 @@ async fn gateway_child() {
         catalogue,
         sid("gateway-resource"),
     ));
-    let provider = Arc::new(conversation_support::ProviderFactory::default());
+    let provider = Arc::new(ProviderFactory::default());
     let (execution_release, execution_gate) = tokio::sync::oneshot::channel();
     *provider.execution_gate.lock().unwrap() = Some(execution_gate);
-    let service = crate::conversation::application::ConversationService::new(
-        crate::conversation::application::ConversationDependencies {
-            agents: conversation_support::only(Arc::new(conversation_support::Provider::new(
-                provider.clone(),
-            ))),
-            storage: Arc::new(nessa_sdk::infrastructure::session_storage::InMemoryStorage::new()),
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: conversation_support::only(Arc::new(Provider::new(provider.clone()))),
+            storage: Arc::new(InMemoryStorage::new()),
             metadata: store.clone(),
             summaries: store.clone(),
             listing: store.clone(),
-            mode_audit: Arc::new(conversation_support::AcceptingModeAudit),
-            creation_audit: Arc::new(conversation_support::AcceptingCreationAudit),
-            file_link_audit: Arc::new(conversation_support::RecordingFileLinkAudit::default()),
+            mode_audit: Arc::new(AcceptingModeAudit),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
-            deletion_audit: Arc::new(conversation_support::AcceptingDeletionAudit),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: conversation_support::claude_erasers(),
             deletion_budgets: conversation_support::DELETION_BUDGETS,
-            message_commit_clock: Arc::new(
-                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
-            ),
-            clock: Arc::new(conversation_support::TestClock),
+            message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+            clock: Arc::new(TestClock),
         },
-        crate::conversation::application::ConversationLimits::default(),
+        ConversationLimits::default(),
         None,
     )
     .unwrap();
@@ -321,7 +319,7 @@ async fn gateway_child() {
         .with_catalogue_source(source)
         .with_conversations(Arc::new(service));
     let capacity = state.record_reads.clone();
-    let (commands, mut received) = tokio::sync::mpsc::channel::<serde_json::Value>(8);
+    let (commands, mut received) = tokio::sync::mpsc::channel::<Value>(8);
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines() {
             let Ok(line) = line else { break };
@@ -339,14 +337,17 @@ async fn gateway_child() {
     let closing_provider = provider.clone();
     tokio::spawn(async move {
         closing_provider.close_finished.notified().await;
-        closing_provider.execution_updates.lock().unwrap().push(
-            ExecutionUpdate::Finished(ExecutionOutcome::Cancelled),
-        );
-        *closing_provider.execution_reply.lock().unwrap() = Some(
-            ProviderExecutionReply::Finished(ExecutionReport::new(
-                Some(Ok(ExecutionOutcome::Cancelled)), None, ProviderSessionState::Usable,
-            )),
-        );
+        closing_provider
+            .execution_updates
+            .lock()
+            .unwrap()
+            .push(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled));
+        *closing_provider.execution_reply.lock().unwrap() =
+            Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+                Some(Ok(ExecutionOutcome::Cancelled)),
+                None,
+                ProviderSessionState::Usable,
+            )));
         released.store(1, Ordering::SeqCst);
         let _ = execution_release.send(());
     });
@@ -415,8 +416,7 @@ async fn gateway_child() {
                     json!({"deleted":id.to_string()})
                 }
                 "corrupt" => {
-                    let connection =
-                        nessa_local_database::rusqlite::Connection::open(&metadata_path).unwrap();
+                    let connection = Connection::open(&metadata_path).unwrap();
                     connection
                         .execute(
                             "UPDATE conversations SET model='' WHERE id=?1",
@@ -499,7 +499,7 @@ async fn gateway_child() {
             std::io::stdout().flush().unwrap();
         }
     });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     println!("NESSA_297_READY {}", listener.local_addr().unwrap().port());
     std::io::stdout().flush().unwrap();
     axum::serve(listener, crate::server::entrypoint::http::router(state))
@@ -521,25 +521,18 @@ struct ProductSource {
     descriptors: HashMap<Id, ManifestEntry>,
     events: bool,
     owner: String,
-    cache_path: std::path::PathBuf,
+    cache_path: PathBuf,
     delayed: bool,
     fault: Option<WireFault>,
 }
 impl ProductSource {
-    fn connect(
-        port: u16,
-        owner: &str,
-        epoch: &str,
-        cache_path: std::path::PathBuf,
-        events: bool,
-    ) -> Self {
+    fn connect(port: u16, owner: &str, epoch: &str, cache_path: PathBuf, events: bool) -> Self {
         let (mut socket, _) =
             tungstenite::connect(format!("ws://127.0.0.1:{port}/session")).unwrap();
-        let challenge: serde_json::Value =
+        let challenge: Value =
             serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
-        socket.send(tungstenite::Message::Text(json!({"type":"req","id":"auth","method":"session.authenticate","params":{"minVersion":1,"maxVersion":1,"nonce":challenge["payload"]["nonce"],"credential":format!("{owner}-phone"),"client":{"id":"catalogue-receiver"}}}).to_string().into())).unwrap();
-        let ready: serde_json::Value =
-            serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+        socket.send(Message::Text(json!({"type":"req","id":"auth","method":"session.authenticate","params":{"minVersion":1,"maxVersion":1,"nonce":challenge["payload"]["nonce"],"credential":format!("{owner}-phone"),"client":{"id":"catalogue-receiver"}}}).to_string().into())).unwrap();
+        let ready: Value = serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
         assert_eq!(ready["ok"], true, "{ready}");
         let placeholder = Scope::new(
             sid("receiver"),
@@ -573,28 +566,29 @@ impl ProductSource {
             source.scope.receiver().as_str(),
             format!("{owner}-receiver")
         );
-        assert_eq!(source.scope.access_epoch().as_str(), format!("epoch-{epoch}"));
+        assert_eq!(
+            source.scope.access_epoch().as_str(),
+            format!("epoch-{epoch}")
+        );
         source
     }
-    fn read_json(&mut self) -> serde_json::Value {
+    fn read_json(&mut self) -> Value {
         loop {
             match self.socket.read().unwrap() {
-                tungstenite::Message::Text(text) => {
+                Message::Text(text) => {
                     assert!(text.len() <= MAX_RECORD_RESPONSE_BYTES);
                     return serde_json::from_str(&text).unwrap();
                 }
-                tungstenite::Message::Ping(bytes) => {
-                    self.socket.send(tungstenite::Message::Pong(bytes)).unwrap()
-                }
+                Message::Ping(bytes) => self.socket.send(Message::Pong(bytes)).unwrap(),
                 value => panic!("unexpected frame {value:?}"),
             }
         }
     }
-    fn call(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+    fn call(&mut self, method: &str, params: Value) -> Value {
         self.next += 1;
         let id = self.next.to_string();
         self.socket
-            .send(tungstenite::Message::Text(
+            .send(Message::Text(
                 json!({"type":"req","id":id,"method":method,"params":params})
                     .to_string()
                     .into(),
@@ -649,7 +643,10 @@ impl ProductSource {
 }
 impl CatalogueSource for ProductSource {
     fn head(&mut self, scope: &Scope) -> Result<u64, CatalogueSourceError> {
-        let reply=self.call("conversation.catalogueHead",json!({"receiverId":scope.receiver().as_str(),"accessEpoch":self.access_epoch}));
+        let reply = self.call(
+            "conversation.catalogueHead",
+            json!({"receiverId":scope.receiver().as_str(),"accessEpoch":self.access_epoch}),
+        );
         if reply["ok"] != true {
             return Err(CatalogueSourceError::Unavailable);
         }
@@ -662,7 +659,8 @@ impl CatalogueSource for ProductSource {
         &mut self,
         request: &ManifestRequest,
     ) -> Result<ManifestPage, CatalogueSourceError> {
-        validate_manifest_request(request, MAX_CATALOGUE_ENTRIES).map_err(|_| CatalogueSourceError::InvalidRequest)?;
+        validate_manifest_request(request, MAX_CATALOGUE_ENTRIES)
+            .map_err(|_| CatalogueSourceError::InvalidRequest)?;
         let reply=self.call("conversation.catalogueManifest",json!({"request":{"pass":catalogue_wire::wire_pass(&request.pass),"maxEntries":request.max_entries},"accessEpoch":self.access_epoch}));
         if reply["ok"] != true {
             return Err(CatalogueSourceError::Unavailable);
@@ -716,7 +714,7 @@ fn receiver_child() {
         return;
     };
     let owner = std::env::var("NESSA_297_RECEIVER_OWNER").unwrap();
-    let cache_path = std::path::PathBuf::from(std::env::var("NESSA_297_RECEIVER_CACHE").unwrap());
+    let cache_path = PathBuf::from(std::env::var("NESSA_297_RECEIVER_CACHE").unwrap());
     let mode = std::env::var("NESSA_297_RECEIVER_MODE").unwrap();
     let epoch = if mode == "reset" { "8" } else { "7" };
     let mut source = ProductSource::connect(
@@ -781,7 +779,7 @@ fn receiver_child() {
     if mode == "lost" {
         // Send the real request, wait through the gateway's source completion,
         // then drop the socket without reading or decoding its response.
-        source.socket.send(tungstenite::Message::Text(json!({"type":"req","id":"lost","method":"conversation.catalogueManifest","params":{"request":{"pass":catalogue_wire::wire_pass(&pass),"maxEntries":37},"accessEpoch":epoch}}).to_string().into())).unwrap();
+        source.socket.send(Message::Text(json!({"type":"req","id":"lost","method":"conversation.catalogueManifest","params":{"request":{"pass":catalogue_wire::wire_pass(&pass),"maxEntries":37},"accessEpoch":epoch}}).to_string().into())).unwrap();
         source.event("wait-page", None);
         return;
     }
@@ -813,11 +811,11 @@ fn receiver_child() {
         }
     }
     if mode == "verify-delayed" {
-        let value: serde_json::Value = serde_json::from_slice(
+        let value: Value = serde_json::from_slice(
             &std::fs::read(cache_path.with_extension("delayed.json")).unwrap(),
         )
         .unwrap();
-        let descriptor: crate::product::generated::CatalogueDescriptor =
+        let descriptor: CatalogueDescriptor =
             serde_json::from_value(value["descriptor"].clone()).unwrap();
         let old = ResolvedEntry {
             manifest: catalogue_wire::decode_descriptor(&descriptor).unwrap(),
@@ -854,7 +852,7 @@ impl Drop for ChildGuard {
 }
 struct Gateway {
     child: ChildGuard,
-    output: BufReader<std::process::ChildStdout>,
+    output: BufReader<ChildStdout>,
     port: u16,
 }
 impl Gateway {
@@ -887,7 +885,7 @@ impl Gateway {
             }
         }
     }
-    fn command(&mut self, value: serde_json::Value) -> serde_json::Value {
+    fn command(&mut self, value: Value) -> Value {
         writeln!(self.child.0.stdin.as_mut().unwrap(), "{value}").unwrap();
         let mut line = String::new();
         loop {
@@ -923,7 +921,7 @@ impl Gateway {
                 break;
             }
             if let Some(value) = line.trim().strip_prefix("NESSA_297_EVENT ") {
-                let event: serde_json::Value = serde_json::from_str(value).unwrap();
+                let event: Value = serde_json::from_str(value).unwrap();
                 if event["action"] == "wait-page" {
                     let mut observed = false;
                     for _ in 0..1000 {
@@ -948,7 +946,7 @@ impl Gateway {
         }
         let status = child.0.wait().unwrap();
         let mut error = String::new();
-        std::io::Read::read_to_string(child.0.stderr.as_mut().unwrap(), &mut error).unwrap();
+        Read::read_to_string(child.0.stderr.as_mut().unwrap(), &mut error).unwrap();
         assert!(status.success(), "receiver {owner} {mode}: {error}");
     }
 }
@@ -1066,20 +1064,48 @@ fn product_admission_refusals_touch_no_catalogue_and_source_refusals_are_typed()
             "conversation.catalogueManifest",
             json!({"request":{"pass":wire,"maxEntries":37},"accessEpoch":"7"}),
         );
-        assert_eq!(reply["error"]["code"], if field == "stream" { "wrong_owner" } else { "identity_changed" }, "{reply}");
+        assert_eq!(
+            reply["error"]["code"],
+            if field == "stream" {
+                "wrong_owner"
+            } else {
+                "identity_changed"
+            },
+            "{reply}"
+        );
         assert!(reply["payload"].is_null());
     }
     let descriptor = ManifestEntry {
-        key: EntryKey { creation: 1, id: sid(&cid("alice", 0).to_string()) },
+        key: EntryKey {
+            creation: 1,
+            id: sid(&cid("alice", 0).to_string()),
+        },
         revision: head,
         deleted: false,
     };
-    for (field, value) in [("generation", json!("0")), ("boundary", json!("0")), ("cursor", json!({"creation":"0","id":descriptor.key.id.as_str()})), ("cursor", json!({"creation":(head+1).to_string(),"id":descriptor.key.id.as_str()}))] {
+    for (field, value) in [
+        ("generation", json!("0")),
+        ("boundary", json!("0")),
+        (
+            "cursor",
+            json!({"creation":"0","id":descriptor.key.id.as_str()}),
+        ),
+        (
+            "cursor",
+            json!({"creation":(head+1).to_string(),"id":descriptor.key.id.as_str()}),
+        ),
+    ] {
         let mut invalid = serde_json::to_value(catalogue_wire::wire_pass(&pass)).unwrap();
         invalid[field] = value;
         for (method, params) in [
-            ("conversation.catalogueManifest", json!({"request":{"pass":invalid,"maxEntries":37},"accessEpoch":"7"})),
-            ("conversation.catalogueResolve", json!({"pass":invalid,"descriptor":catalogue_wire::wire_descriptor(&descriptor),"maxPayloadBytes":1,"accessEpoch":"7"})),
+            (
+                "conversation.catalogueManifest",
+                json!({"request":{"pass":invalid,"maxEntries":37},"accessEpoch":"7"}),
+            ),
+            (
+                "conversation.catalogueResolve",
+                json!({"pass":invalid,"descriptor":catalogue_wire::wire_descriptor(&descriptor),"maxPayloadBytes":1,"accessEpoch":"7"}),
+            ),
         ] {
             let reply = source.call(method, params);
             assert_eq!(reply["error"]["code"], "invalid_request", "{reply}");
@@ -1166,10 +1192,13 @@ fn socket_close_stops_active_provider_while_catalogue_workers_are_full_and_a_cal
     gateway.command(json!({"action":"wait-execution"}));
     let before = gateway.command(json!({"action":"stats"}));
     assert_eq!(before["closes"], 0);
-    assert_eq!(before["executionReleased"], 0, "provider invocation is still live");
+    assert_eq!(
+        before["executionReleased"], 0,
+        "provider invocation is still live"
+    );
     gateway.command(json!({"action":"block"}));
     for (index, client) in clients.iter_mut().take(4).enumerate() {
-        client.socket.send(tungstenite::Message::Text(json!({"type":"req","id":format!("held-{index}"),"method":"conversation.catalogueHead","params":{"receiverId":"alice-receiver","accessEpoch":"7"}}).to_string().into())).unwrap();
+        client.socket.send(Message::Text(json!({"type":"req","id":format!("held-{index}"),"method":"conversation.catalogueHead","params":{"receiverId":"alice-receiver","accessEpoch":"7"}}).to_string().into())).unwrap();
     }
     let expected = before["head"].as_u64().unwrap() + 4;
     let mut full = false;
@@ -1199,7 +1228,7 @@ fn socket_close_stops_active_provider_while_catalogue_workers_are_full_and_a_cal
         refusal["error"]["code"], "temporarily_unavailable",
         "{refusal}"
     );
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let stopped = clients[0].call(
         "conversation.close",
         json!({"conversationId":cid("alice",1).to_string(),"requestId":Uuid::new_v4().to_string()}),
@@ -1215,7 +1244,10 @@ fn socket_close_stops_active_provider_while_catalogue_workers_are_full_and_a_cal
         stats["closes"], 1,
         "the real SDK called provider cleanup despite read pressure"
     );
-    assert_eq!(stats["executionReleased"], 1, "actual provider close unblocked execute");
+    assert_eq!(
+        stats["executionReleased"], 1,
+        "actual provider close unblocked execute"
+    );
     assert_eq!(stats["permits"], 0);
     gateway.command(json!({"action":"release"}));
     let mut drained = false;

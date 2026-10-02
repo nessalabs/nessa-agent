@@ -8,13 +8,14 @@ use crate::composition::local_auth::SystemClock;
 use crate::product::generated::{
     MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES, MAX_RECORD_PAGE_RECORDS,
 };
-use crate::read_only_sync::{
-    application::CachePolicy,
-    entrypoint::{parse, run_local, Command, CommandError},
-    infrastructure::cache::ReadOnlyCache,
-};
+use crate::read_only_sync::application::CachePolicy;
+use crate::read_only_sync::entrypoint::{parse, run_local, Command, CommandError};
+use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use nessa_sync::replication::domain::Limits;
-use std::{io::Write, process::ExitCode, sync::Arc};
+use std::io::Write;
+use std::process::ExitCode;
+use std::sync::Arc;
+use uuid::Uuid;
 
 /// Runs explicit online and retained-data commands from the standalone example's argument contract.
 pub fn run_read_only_example(arguments: Vec<String>) -> ExitCode {
@@ -43,5 +44,5 @@ pub(super) fn execute(arguments: &[String], output: &mut dyn Write) -> Result<()
     };
     let mut cache = ReadOnlyCache::open(&local.cache, policy, Arc::new(SystemClock))
         .map_err(CommandError::Cache)?;
-    run_local(&command, &mut cache, uuid::Uuid::new_v4(), output)
+    run_local(&command, &mut cache, Uuid::new_v4(), output)
 }

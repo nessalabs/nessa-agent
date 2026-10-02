@@ -1,10 +1,11 @@
 use crate::read_only_sync::domain::CacheReset;
 use nessa_sdk::application::agent_execution::sessions::StorageError;
-use nessa_sync::replication::{
-    catalogue::{CatalogueProgress, CatalogueProgressError, CatalogueValidationError},
-    domain::{Limits, Scope},
+use nessa_sync::replication::catalogue::{
+    CatalogueProgress, CatalogueProgressError, CatalogueValidationError,
 };
-use std::fmt;
+use nessa_sync::replication::domain::{Limits, Scope};
+use std::error::Error;
+use std::fmt::{Display, Formatter, Result as FmtResult};
 
 /// Immutable limits for one consuming private cache.
 #[derive(Clone, Copy, Debug)]
@@ -76,8 +77,8 @@ pub(crate) enum CacheError {
     },
 }
 
-impl fmt::Display for CacheError {
-    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for CacheError {
+    fn fmt(&self, output: &mut Formatter<'_>) -> FmtResult {
         output.write_str(match self {
             Self::InvalidPolicy => "invalid cache policy",
             Self::Unavailable => "private cache unavailable",
@@ -98,7 +99,7 @@ impl fmt::Display for CacheError {
     }
 }
 
-impl std::error::Error for CacheError {}
+impl Error for CacheError {}
 
 /// Original durable reset evidence; returning it does not repeat the reset.
 #[must_use]
