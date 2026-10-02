@@ -2,7 +2,8 @@
 
 This register started as the investigation queue from the user-flow map in
 [PR #385](https://github.com/nessalabs/nessa-agent/pull/385). Follow-up work in
-[issue #386](https://github.com/nessalabs/nessa-agent/issues/386) adds controlled
+[issue #386](https://github.com/nessalabs/nessa-agent/issues/386) and
+[PR #387](https://github.com/nessalabs/nessa-agent/pull/387) adds controlled
 reproductions, regression fixes and negative controls. Test evidence below
 distinguishes real application paths with substituted outside effects from
 production/native execution; remaining boundaries are investigation prompts.
