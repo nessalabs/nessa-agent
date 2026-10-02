@@ -2078,7 +2078,7 @@
     "McpReadResourceParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "An MCP App reads a resource of its own server (mcp.readResource). The gateway reads it once, holds those bytes, and answers what they are and a ticket that serves exactly them over HTTP (GET /mcp-resources/{ticket}): the bytes never travel on the socket. App calls share their own lane, as mcp.callTool's.",
+      "description": "An MCP App reads a resource of its own server (mcp.readResource). The gateway reads it once, holds those bytes, and answers what they are and a ticket that serves exactly them over HTTP (GET /mcp-resources, the ticket in the x-nessa-resource-ticket header): the bytes never travel on the socket. App calls share their own lane, as mcp.callTool's.",
       "properties": {
         "conversationId": {
           "type": "string",
@@ -2194,7 +2194,7 @@
     "McpReadResourceResult": {
       "type": "object",
       "additionalProperties": false,
-      "description": "What the gateway read, and the ticket for its bytes. The host fetches GET /mcp-resources/{ticket} with the same credential, checks the bytes' SHA-256 against sha256 before rendering, and treats a mismatch as a failure to load.",
+      "description": "What the gateway read, and the ticket for its bytes. The host fetches GET /mcp-resources with the ticket in the x-nessa-resource-ticket header — never in a URL — checks the bytes' SHA-256 against sha256 before rendering, and treats a mismatch as a failure to load.",
       "properties": {
         "uri": {
           "type": "string",
@@ -2226,7 +2226,7 @@
           "pattern": "^[A-Za-z0-9_-]{43}$",
           "minLength": 43,
           "maxLength": 43,
-          "description": "Single use, 256 random bits (base64url), valid for expiresInMs, bound to the conversation and the app, redeemed only with the caller's credential."
+          "description": "Single use, 256 random bits (base64url), valid for expiresInMs, bound to the conversation and the app. It is the whole authority to fetch the bytes, as an upload ticket is: keep it out of URLs and logs."
         },
         "expiresInMs": {
           "type": "integer",

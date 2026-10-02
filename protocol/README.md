@@ -98,10 +98,13 @@ join the manifest when their routes do (#348).
   `mcp_session_unavailable`, `mcp_timed_out`, `mcp_remote_error` (its JSON-RPC
   error in `McpRemoteErrorDetails`) or `mcp_result_too_large`.
 
-`GET /mcp-resources/{ticket}`, on the gateway's HTTP listener, serves a held
-resource:
-- **Redeeming.** It takes the same credential as the socket that asked. A
-  ticket is single use, valid for 60 s, and bound to its conversation and app.
+`GET /mcp-resources`, on the gateway's HTTP listener, serves a held resource,
+as `PUT /attachments` takes an upload:
+- **Redeeming.** The ticket goes in the `x-nessa-resource-ticket` header,
+  never in the URL, and is the whole authority: 256 random bits, single use,
+  valid for 60 s, bound to its conversation and app, and issued only after
+  the socket's policy and audit. The route authenticates nobody else, and has
+  the same origin checks and CORS as `/attachments`.
 - **Refusals.** An unknown, used, expired or wrong-credential ticket gets the
   same `404` with no body.
 - **The response.** `Content-Type: text/html;profile=mcp-app`,
@@ -109,7 +112,7 @@ resource:
   `Content-Disposition: attachment`.
 - **The host's job.** It fetches the bytes, checks their SHA-256 against
   `sha256` before rendering, and hands them to its sandbox; the frame never
-  sees the ticket's URL.
+  sees the ticket.
 
 Credential lifecycle RPC errors distinguish `credential_conflict`,
 `credential_capacity`, and `credential_not_found` from

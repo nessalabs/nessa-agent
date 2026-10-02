@@ -821,7 +821,7 @@ export interface McpCallToolResult {
   /** The MCP CallToolResult exactly as the server answered it — content, structuredContent, isError, _meta — encoded as one JSON object, at most 56 KiB (past it, the call is refused mcp_result_too_large instead). isError true is a result for the app, not a refusal. */
   resultJson: string
 }
-/** An MCP App reads a resource of its own server (mcp.readResource). The gateway reads it once, holds those bytes, and answers what they are and a ticket that serves exactly them over HTTP (GET /mcp-resources/{ticket}): the bytes never travel on the socket. App calls share their own lane, as mcp.callTool's. */
+/** An MCP App reads a resource of its own server (mcp.readResource). The gateway reads it once, holds those bytes, and answers what they are and a ticket that serves exactly them over HTTP (GET /mcp-resources, the ticket in the x-nessa-resource-ticket header): the bytes never travel on the socket. App calls share their own lane, as mcp.callTool's. */
 export interface McpReadResourceParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
@@ -856,7 +856,7 @@ export interface McpUiPermissions {
   /** Asked for clipboardWrite. */
   clipboardWrite: boolean
 }
-/** What the gateway read, and the ticket for its bytes. The host fetches GET /mcp-resources/{ticket} with the same credential, checks the bytes' SHA-256 against sha256 before rendering, and treats a mismatch as a failure to load. */
+/** What the gateway read, and the ticket for its bytes. The host fetches GET /mcp-resources with the ticket in the x-nessa-resource-ticket header — never in a URL — checks the bytes' SHA-256 against sha256 before rendering, and treats a mismatch as a failure to load. */
 export interface McpReadResourceResult {
   /** The resource read. */
   uri: string
@@ -866,7 +866,7 @@ export interface McpReadResourceResult {
   size: number
   /** Lowercase hex SHA-256 of exactly the bytes the ticket serves. */
   sha256: string
-  /** Single use, 256 random bits (base64url), valid for expiresInMs, bound to the conversation and the app, redeemed only with the caller's credential. */
+  /** Single use, 256 random bits (base64url), valid for expiresInMs, bound to the conversation and the app. It is the whole authority to fetch the bytes, as an upload ticket is: keep it out of URLs and logs. */
   ticket: string
   /** How long the ticket can be redeemed. */
   expiresInMs: 60000
