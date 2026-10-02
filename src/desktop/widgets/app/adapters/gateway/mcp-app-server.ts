@@ -117,9 +117,10 @@ function answerFor(error: unknown, asked: "tool" | "resource"): ServerAnswer {
     console.error("An MCP App call failed", error)
     return failed
   }
-  const { code } = error
-  if (code === undefined || !Object.hasOwn(outcomes, code)) return failed
-  const outcome = outcomes[code]
+  // The client narrows the gateway's code to the ones this build knows, or
+  // none (`conversationErrorCode`): a code that is not one is no key here.
+  if (error.code === undefined) return failed
+  const outcome = outcomes[error.code]
   if (outcome === "server-gone") return { kind: "server-gone" }
   if (outcome === "failed")
     return error.remoteError
