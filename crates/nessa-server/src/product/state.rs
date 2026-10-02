@@ -48,6 +48,10 @@ pub struct ProductRouteState {
     /// many agents are asked at once is bounded again, and lower, by the
     /// conversation service.
     pub(crate) deletions: Arc<Semaphore>,
+    /// MCP Apps' calls have capacity of their own across every socket, as
+    /// each socket has a lane of its own for them: a call held on its review
+    /// must never be what keeps another socket's read or answer out.
+    pub(crate) app_calls: Arc<Semaphore>,
     pub(crate) settings: SessionSettings,
     pub(crate) gateway: Resource,
     pub(crate) audience: AudienceId,
@@ -141,6 +145,7 @@ impl ProductRouteState {
             record_reads: Arc::new(Semaphore::new(4)),
             upload_begins: Arc::new(Semaphore::new(16)),
             deletions: Arc::new(Semaphore::new(8)),
+            app_calls: Arc::new(Semaphore::new(32)),
             gateway: Resource::new(gateway_organization_id, gateway_id),
             audience,
             verifier: dependencies.verifier,

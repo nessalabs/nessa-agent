@@ -64,15 +64,7 @@ pub(super) async fn dispatch(
             }
         };
     }
-    let context = session.context();
-    // Credential identity is a verified surface association. The caller's optional
-    // client metadata is deliberately not used to attribute SDK commands.
-    let caller = |request_id: String| ConversationCaller {
-        organization_id: context.organization_id().clone(),
-        principal_id: context.principal_id().clone(),
-        surface_id: context.credential_id().as_str().to_owned(),
-        action_id: request_id,
-    };
+    let caller = |request_id: String| caller(session, request_id);
     let result: Result<OutgoingMessage, ConversationError> = async {
         match frame.method.as_str() {
             "conversation.create" => {
@@ -337,6 +329,19 @@ pub(super) async fn dispatch(
     }
 }
 
+/// Who sends a conversation command: the credential's verified identity.
+/// The caller's optional client metadata is deliberately not used to
+/// attribute SDK commands.
+pub(super) fn caller(session: &AuthenticatedSession, request_id: String) -> ConversationCaller {
+    let context = session.context();
+    ConversationCaller {
+        organization_id: context.organization_id().clone(),
+        principal_id: context.principal_id().clone(),
+        surface_id: context.credential_id().as_str().to_owned(),
+        action_id: request_id,
+    }
+}
+
 fn permission_answer_failure(
     request_id: &str,
     error: AgentError,
@@ -354,7 +359,7 @@ fn permission_answer_failure(
         serde_json::to_value(details).expect("generated error details serialize"),
     )
 }
-fn error_code(error: &ConversationError) -> ConversationErrorCode {
+pub(super) fn error_code(error: &ConversationError) -> ConversationErrorCode {
     match error {
         ConversationError::InvalidInput | ConversationError::CatalogueInvalidRequest => {
             ConversationErrorCode::InvalidRequest
@@ -470,7 +475,7 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
 
 /// The protocol code of an MCP App's refusal. `McpAppError::code` names the
 /// same code in audit; `tests/conversation/agreement.rs` holds them together.
-pub(super) fn mcp_app_code(error: &McpAppError) -> ConversationErrorCode {
+fn mcp_app_code(error: &McpAppError) -> ConversationErrorCode {
     match error {
         McpAppError::AppUnknown => ConversationErrorCode::McpAppUnknown,
         McpAppError::ServerMismatch => ConversationErrorCode::McpServerMismatch,
@@ -530,7 +535,7 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
     }
 }
 
-fn conversation_id(value: &str) -> Result<ConversationId, ConversationError> {
+pub(super) fn conversation_id(value: &str) -> Result<ConversationId, ConversationError> {
     ConversationId::new(value).map_err(|_| ConversationError::InvalidInput)
 }
 

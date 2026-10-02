@@ -150,7 +150,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 29,
+          "maxItems": 32,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -2066,10 +2066,7 @@
           "x-utf8MaxBytes": 256,
           "description": "Stable action identifier retained for retries of one logical command."
         },
-        "app": {
-          "$ref": "#/$defs/McpAppReference",
-          "description": "The app asking."
-        },
+        "app": { "$ref": "#/$defs/McpAppReference", "description": "The app asking." },
         "server": {
           "type": "string",
           "minLength": 1,
@@ -2127,10 +2124,7 @@
           "x-utf8MaxBytes": 256,
           "description": "Stable action identifier retained for retries of one logical command."
         },
-        "app": {
-          "$ref": "#/$defs/McpAppReference",
-          "description": "The app asking."
-        },
+        "app": { "$ref": "#/$defs/McpAppReference", "description": "The app asking." },
         "server": {
           "type": "string",
           "minLength": 1,
@@ -2205,18 +2199,9 @@
       "additionalProperties": false,
       "description": "What the app asked of the host (_meta.ui.permissions). Each is true only when asked for as {} or true; nothing else is ever granted.",
       "properties": {
-        "camera": {
-          "type": "boolean",
-          "description": "Asked for camera."
-        },
-        "microphone": {
-          "type": "boolean",
-          "description": "Asked for microphone."
-        },
-        "geolocation": {
-          "type": "boolean",
-          "description": "Asked for geolocation."
-        },
+        "camera": { "type": "boolean", "description": "Asked for camera." },
+        "microphone": { "type": "boolean", "description": "Asked for microphone." },
+        "geolocation": { "type": "boolean", "description": "Asked for geolocation." },
         "clipboardWrite": {
           "type": "boolean",
           "description": "Asked for clipboardWrite."

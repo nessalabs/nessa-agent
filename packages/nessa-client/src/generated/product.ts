@@ -1317,7 +1317,7 @@ export const passiveReadTiming = {
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
-  maxReadyMethods: 29,
+  maxReadyMethods: 32,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxPhysicalRecordPayloadBytes: 65546,
@@ -1385,6 +1385,9 @@ export const ProductMethod = {
   ConversationCatalogueHead: "conversation.catalogueHead",
   ConversationCatalogueManifest: "conversation.catalogueManifest",
   ConversationCatalogueResolve: "conversation.catalogueResolve",
+  McpCallTool: "mcp.callTool",
+  McpReadResource: "mcp.readResource",
+  McpReleaseApp: "mcp.releaseApp",
 } as const
 export const ProductEvent = { SessionChallenge: "session.challenge" } as const
 export const ProductHandshakeMethod = "session.authenticate" as const
@@ -1418,6 +1421,9 @@ export const productReadyMethods = [
   "conversation.catalogueHead",
   "conversation.catalogueManifest",
   "conversation.catalogueResolve",
+  "mcp.callTool",
+  "mcp.readResource",
+  "mcp.releaseApp",
 ] as const
 export const catalogueWireSchemas = {
   RecordScope: {

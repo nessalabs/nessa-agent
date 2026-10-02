@@ -68,8 +68,7 @@ host releases it through a third. Each names
 its conversation, the app — the tool call whose UI it is (`McpAppReference`:
 `executionId`, `toolId`) — and the server. Their shapes are
 `McpCallToolParams` / `McpCallToolResult` and `McpReadResourceParams` /
-`McpReadResourceResult` in [product/v1.json](product/v1.json). The methods
-join the manifest when their routes do (#348).
+`McpReadResourceResult` in [product/v1.json](product/v1.json).
 
 - **`mcp.callTool`** calls a tool the conversation's own session last listed
   with `visibility` including `app`. `argumentsJson` is at most 32 KiB, the most a review shows, and

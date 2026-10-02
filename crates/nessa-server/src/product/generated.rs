@@ -1263,6 +1263,9 @@ pub mod product_method {
     pub const CONVERSATION_CATALOGUE_HEAD: &str = "conversation.catalogueHead";
     pub const CONVERSATION_CATALOGUE_MANIFEST: &str = "conversation.catalogueManifest";
     pub const CONVERSATION_CATALOGUE_RESOLVE: &str = "conversation.catalogueResolve";
+    pub const MCP_CALL_TOOL: &str = "mcp.callTool";
+    pub const MCP_READ_RESOURCE: &str = "mcp.readResource";
+    pub const MCP_RELEASE_APP: &str = "mcp.releaseApp";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -1415,7 +1418,7 @@ pub(crate) fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 29
+                items.len() <= 32
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -1469,6 +1472,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.catalogueHead",
     "conversation.catalogueManifest",
     "conversation.catalogueResolve",
+    "mcp.callTool",
+    "mcp.readResource",
+    "mcp.releaseApp",
 ];
 pub const PRODUCT_VERSION: u64 = 1;
 pub const PRODUCT_SESSION_PATH: &str = "/session";

@@ -26,5 +26,6 @@ pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, 
 pub use wire::{SessionAuthenticateParams, SessionChallenge, SessionReady};
 
 mod conversation;
+mod mcp_apps;
 
 mod agent_install;
