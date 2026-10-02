@@ -142,7 +142,7 @@ export function tsconfigPathViolations(actual, paths = nessaUiPaths) {
   for (const key of Object.keys(given)) {
     if (!Object.hasOwn(expected, key))
       violations.push(
-        `tsconfig.json paths has "${key}", which scripts/nessa-ui-paths.mjs does not write; add it there, or run `pnpm ui:paths` to drop it`,
+        `tsconfig.json paths has "${key}", which scripts/nessa-ui-paths.mjs does not write; add it there, or run \`pnpm ui:paths\` to drop it`,
       )
   }
   return violations
