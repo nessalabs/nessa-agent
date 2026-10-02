@@ -12,6 +12,7 @@ use crate::conversation::application::app_reviews::{
 use crate::conversation::application::mcp_apps::TicketEnd;
 use crate::conversation::application::projection::MAX_VIEW_BYTES;
 use crate::conversation::application::view::{ConversationMessage, ConversationPermissionOrigin};
+use crate::conversation::application::DeletionFailures;
 use crate::mcp_servers::domain::MAX_APP_ARGUMENTS_BYTES;
 use nessa_auth::domain::PrincipalId;
 use nessa_sdk::application::agent_execution::agents::AgentError;
@@ -1300,9 +1301,18 @@ async fn a_call_still_running_holds_no_reopening_or_deletion_back() {
         .service
         .delete(fixture.id.clone(), caller("delete"))
         .await;
-    if let Err(ConversationError::DeletionIncomplete(failures)) = &deleted {
-        assert!(!failures.history_leased_elsewhere, "{deleted:?}");
-    }
+    // All this fixture leaves unfinished is the provider's own record of the
+    // session, which it has no way to erase: the agent stopped, and the
+    // history was not leased elsewhere.
+    let Err(ConversationError::DeletionIncomplete(failures)) = &deleted else {
+        panic!("{deleted:?}")
+    };
+    let only_the_provider = DeletionFailures {
+        provider: failures.provider.clone(),
+        ..DeletionFailures::default()
+    };
+    assert!(failures.provider.is_some(), "{deleted:?}");
+    assert_eq!(format!("{failures:?}"), format!("{only_the_provider:?}"));
     fixture.apps.gate.0.add_permits(1);
     running.await.unwrap().unwrap();
 }
@@ -1349,4 +1359,85 @@ async fn a_mount_released_after_its_read_was_admitted_is_not_read() {
         .unwrap();
     assert_eq!(refused(reading.await.unwrap()), McpAppError::Cancelled);
     assert_eq!(fixture.apps.reads.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_mount_released_once_its_call_is_sent_finds_it_sent() {
+    // Past its last check the call is sent: a release then ends nothing of
+    // it, as it ends nothing of any call already sent, and the call's own
+    // end is on record as its own.
+    let fixture = Fixture::new().await;
+    fixture.apps.hold.store(true, Ordering::SeqCst);
+    let running = {
+        let service = fixture.service.clone();
+        let id = fixture.id.clone();
+        let call = fixture.call("read_rows", None);
+        tokio::spawn(async move { service.call_app_tool(id, caller("sent"), call).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.apps.calls() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    fixture
+        .service
+        .release_app(fixture.id.clone(), caller("release"), fixture.app(INSTANCE))
+        .await
+        .unwrap();
+    fixture.apps.gate.0.add_permits(1);
+    running.await.unwrap().unwrap();
+    assert!(matches!(
+        fixture.audit.phases().last(),
+        Some(McpAppAuditPhase::Completed(McpAppOutcome::Answered { .. }))
+    ));
+}
+
+#[tokio::test]
+async fn an_app_review_never_pushes_the_agents_own_reviews_out_of_view() {
+    // The agent's reviews fill the view: an app's review is the one that
+    // waits unseen, and the view says so — an app's server cannot hide what
+    // the agent is asking.
+    let fixture = Fixture::new().await;
+    let (_task, review) = fixture
+        .held(fixture.call(
+            "delete_rows",
+            Some(&format!("{{\"a\":\"{}\"}}", "x".repeat(12_000))),
+        ))
+        .await;
+    let mut view = fixture
+        .service
+        .read(fixture.id.clone(), caller("read"))
+        .await
+        .unwrap();
+    let agents: Vec<_> = (0..4)
+        .map(|index| ConversationPermission {
+            permission_id: format!("agent-{index}"),
+            arguments_json: format!("{{\"a\":\"{}\"}}", "y".repeat(13_000)),
+            origin: ConversationPermissionOrigin::Harness,
+            ..review.clone()
+        })
+        .collect();
+    view.permissions = agents.clone();
+    view.interaction_view_error = None;
+    // As the read had it before its app reviews were added.
+    view.revision = view.revision.split(":app:").next().unwrap().to_owned();
+    let unshown = view.revision.clone();
+    let shown = with_app_reviews(view, vec![review.clone()]);
+    assert!(serde_json::to_vec(&shown).unwrap().len() <= MAX_VIEW_BYTES);
+    assert_eq!(
+        shown
+            .permissions
+            .iter()
+            .map(|shown| shown.permission_id.clone())
+            .collect::<Vec<_>>(),
+        agents
+            .iter()
+            .map(|agent| agent.permission_id.clone())
+            .collect::<Vec<_>>()
+    );
+    assert!(shown.interaction_view_error.is_some());
+    // Not shown, so not in the revision either.
+    assert_eq!(shown.revision, unshown);
 }

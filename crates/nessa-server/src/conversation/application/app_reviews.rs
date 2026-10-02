@@ -161,7 +161,8 @@ impl AppReviews {
         state.bytes = 0;
         // Every opening is ended before the next begins. Should one ever not
         // be, its reviews are not carried into this one: let go of, each
-        // wait reads its review as withdrawn by the system.
+        // wait reads its review as withdrawn by the system. Its tickets are
+        // not let go of here; they run out their lifetime.
         state.pending.clear();
         state.epoch
     }
@@ -443,7 +444,9 @@ impl Waiting {
             }
         };
         self.ended = None;
-        // The sender goes only with its conversation's registry.
+        // The sender goes with its conversation's registry, or with an
+        // opening that began over this one: either way, withdrawn as the
+        // conversation ended, by the system.
         end.unwrap_or(ReviewEnd::Withdrawn {
             cause: McpAppWithdrawal::ConversationEnded,
             by: Some(McpAppInitiator::System),

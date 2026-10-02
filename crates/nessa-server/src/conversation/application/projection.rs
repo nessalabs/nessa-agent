@@ -976,17 +976,23 @@ impl Projection {
 }
 
 /// What a view bounded to its size says of the interactions it left out.
-const UNSHOWN_INTERACTIONS: &str =
+pub(super) const UNSHOWN_INTERACTIONS: &str =
     "Some pending interactions exceed this display limit. Use Stop to cancel them.";
 
 /// Bound the complete service result after its metadata and authority additions.
 pub(super) fn bound_view(view: ConversationView) -> ConversationView {
-    bound_view_within(view, MAX_VIEW_BYTES)
+    bound_view_within(view, MAX_VIEW_BYTES, true)
 }
 
 /// As [`bound_view`], within `limit` bytes: the view that leaves room for
-/// what is added beside it after.
-pub(super) fn bound_view_within(mut view: ConversationView, limit: usize) -> ConversationView {
+/// what is added beside it after. Its interactions — the agent's reviews
+/// and questions — are given up for that room only when `interactions`
+/// says so; otherwise it stops short of them, over `limit` if need be.
+pub(super) fn bound_view_within(
+    mut view: ConversationView,
+    limit: usize,
+    interactions: bool,
+) -> ConversationView {
     // The binding bounds actual admitted ACP asks. Custom backends can
     // retain other valid histories, so the encoded display owner gives up
     // whole interactions with an explicit notice rather than cutting choices.
@@ -1033,6 +1039,8 @@ pub(super) fn bound_view_within(mut view: ConversationView, limit: usize) -> Con
         } else if !view.pending.is_empty() {
             view.pending.remove(0);
             view.queue_complete = false;
+        } else if !interactions {
+            break;
         } else if !view.permissions.is_empty() {
             view.permissions.pop();
             view.interaction_view_error = Some(UNSHOWN_INTERACTIONS.into());

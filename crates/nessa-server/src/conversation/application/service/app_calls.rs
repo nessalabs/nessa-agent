@@ -19,7 +19,9 @@ use super::super::mcp_apps::{
     McpAppFailure, McpAppInitiator, McpAppOutcome, McpAppPorts, McpAppRef, McpAppWithdrawal,
     TicketRefusal,
 };
-use super::super::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
+use super::super::projection::{
+    bound_view, bound_view_within, MAX_VIEW_BYTES, UNSHOWN_INTERACTIONS,
+};
 use super::super::session_key::conversation_session;
 use super::super::view::{ConversationPermission, ConversationTranscriptState, ConversationView};
 use super::{ConversationCaller, ConversationError, ConversationService, LiveConversation};
@@ -169,18 +171,28 @@ impl ConversationService {
             .clone()
     }
 
-    /// The conversation `id` was deleted, and its agent stopped: its apps
-    /// take no more work, ever, and keep nothing. Kept as that, not
-    /// removed, so that a release or an opening racing the delete cannot
-    /// build them afresh.
+    /// The conversation `id` was deleted, and its agent's stop tried: its
+    /// apps, if it has any in this run, take no more work, ever, and keep
+    /// nothing. Kept as that, not removed, so that a release or an opening
+    /// racing the delete cannot build them afresh. One with none is given
+    /// none: its tombstone refuses everything that would.
     pub(super) fn close_apps_for_good(&self, id: &ConversationId) {
-        self.apps_of(id).delete(|| {
-            if let Some(ports) = &self.inner.mcp_apps {
-                ports
-                    .tickets
-                    .release_conversation(id, &McpAppInitiator::System);
-            }
-        });
+        let apps = self
+            .inner
+            .apps
+            .lock()
+            .expect("conversations' apps")
+            .get(id)
+            .cloned();
+        if let Some(apps) = apps {
+            apps.delete(|| {
+                if let Some(ports) = &self.inner.mcp_apps {
+                    ports
+                        .tickets
+                        .release_conversation(id, &McpAppInitiator::System);
+                }
+            });
+        }
     }
 
     /// `by` ended `live`'s conversation: withdraw its apps' reviews, let go
@@ -274,9 +286,11 @@ impl ConversationService {
                 }
             }
         }
-        // Checked once more as it is sent, with nothing awaited between: the
+        // Checked once more just before it is handed to the session: the
         // mount released or the opening ended since it was admitted, and it
-        // is not sent — not to this opening's session, nor a later one's.
+        // is not sent. One that lands after this finds it sent — it may wait
+        // for room in the session's queue first — but never to a later
+        // opening's session, which is chosen before that wait.
         if opening.admit(&call.app).is_err() {
             return Err(step.refuse_by_system(McpAppError::Cancelled).await);
         }
@@ -768,17 +782,19 @@ impl From<AppRefusal> for McpAppError {
 }
 
 /// The view, bounded, with the app reviews open beside it. Room is kept for
-/// them — at most [`MAX_APP_REVIEW_BYTES`] — by bounding the rest of the
-/// view to leave it: its transcript, tool calls and queue give way first,
-/// then, in a view of the agent's reviews alone past its size, the agent's
-/// newest. Their identities are folded into its revision — 16 hex digits of
-/// the fold keep the revision within its bound — so a window holding this
-/// revision holds these reviews.
-///
-/// [`MAX_APP_REVIEW_BYTES`]: super::super::app_reviews::MAX_APP_REVIEW_BYTES
+/// them — at most [`MAX_APP_REVIEW_BYTES`] — out of its transcript, tool
+/// calls and queue, which give way first; never out of the agent's own
+/// reviews and questions, which an app's server must not be able to hide.
+/// Should that not make room, the newest app reviews that do not fit wait
+/// unseen, and the view says some interactions are not shown. The
+/// identities of those shown are folded into its revision — 16 hex digits
+/// of the fold keep the revision within its bound — so a window holding
+/// this revision holds these reviews.
 ///
 /// Shown only in a view whose transcript is confirmed complete: the client
 /// refuses one of unconfirmed history that offers any control.
+///
+/// [`MAX_APP_REVIEW_BYTES`]: super::super::app_reviews::MAX_APP_REVIEW_BYTES
 pub(super) fn with_app_reviews(
     view: ConversationView,
     reviews: Vec<ConversationPermission>,
@@ -791,16 +807,35 @@ pub(super) fn with_app_reviews(
         .iter()
         .map(|review| serde_json::to_vec(review).map_or(usize::MAX, |bytes| bytes.len() + 1))
         .fold(":app:".len() + 16, usize::saturating_add);
-    let mut view = bound_view_within(view, MAX_VIEW_BYTES.saturating_sub(room));
+    let view = bound_view_within(view, MAX_VIEW_BYTES.saturating_sub(room), false);
+    let mut view = bound_view(view);
+    let revision = view.revision.clone();
     let mut digest = Sha256::new();
-    for review in &reviews {
-        digest.update((review.permission_id.len() as u64).to_be_bytes());
-        digest.update(review.permission_id.as_bytes());
+    let mut shown = 0;
+    for review in reviews {
+        let mut fold = digest.clone();
+        fold.update((review.permission_id.len() as u64).to_be_bytes());
+        fold.update(review.permission_id.as_bytes());
+        view.revision = format!("{revision}:app:{}", &hex_of(fold.clone())[..16]);
+        view.permissions.push(review);
+        if serde_json::to_vec(&view).map_or(usize::MAX, |bytes| bytes.len()) > MAX_VIEW_BYTES {
+            view.permissions.pop();
+            view.interaction_view_error = Some(UNSHOWN_INTERACTIONS.into());
+            break;
+        }
+        digest = fold;
+        shown += 1;
     }
-    let fold = Sha256Digest::from_bytes(digest.finalize().into()).to_hex();
-    view.revision = format!("{}:app:{}", view.revision, &fold[..16]);
-    view.permissions.extend(reviews);
+    view.revision = if shown == 0 {
+        revision
+    } else {
+        format!("{revision}:app:{}", &hex_of(digest)[..16])
+    };
     view
+}
+
+fn hex_of(digest: Sha256) -> String {
+    Sha256Digest::from_bytes(digest.finalize().into()).to_hex()
 }
 
 /// Lowercase hex SHA-256 of `bytes`.

@@ -47,7 +47,7 @@ Each step is recorded with who took it:
 | the caller of `mcp.releaseApp` | that caller, with their request |
 | the person who closed or deleted the conversation | that person, with their request |
 | a deadline, an automatic stop, the recovery of an approval-mode change that could not be applied, the gateway stopping | the system |
-| a refusal because the mount was released, or the opening ended, before the call was admitted, sent or held | the system: the release or the end was another command, recorded as its caller's when it ended anything |
+| a refusal or failure because the mount was released, or the opening ended, before the call was admitted, sent or held | the system: the release or the end was another command, recorded as its caller's when it ended anything |
 
 ## A conversation's apps
 
@@ -72,16 +72,24 @@ end ends that epoch.
 An app call keeps only its conversation's apps and the epoch of the opening
 it was admitted in — never the live agent, so a call that runs a minute
 holds neither the conversation's history nor its reopening or deletion. It
-is checked once more as it is sent, with nothing awaited between: a call
-whose mount was released, or whose opening ended, after it was admitted is
-not sent — not to that opening's session, nor a later one's. Its
-`Admitted` is on record before that last check, so the evidence of a
-release can come between them.
+is checked once more just before it is handed to the session: a release or
+end that lands before that last check stops it — it is not sent, to that
+opening's session or a later one's. One that lands after it finds the call
+sent, as it finds any call already sent: the check and the send are not one
+step, and between them the call may wait for room in the session's queue,
+which the agent's own calls share, so that window is as long as that wait.
+The session was chosen before it, so the call never reaches a later
+opening's session. Its `Admitted` is
+on record before the last check, so the evidence of a release can come
+between them.
 
-So nothing is admitted, opened, sent or issued for a mount or an opening
-once it has ended, whatever the interleaving. A deleted conversation's apps
-are kept as that — ended, and holding nothing — once its agent is stopped,
-so a release or an opening racing the delete cannot build them afresh. A
+So nothing is admitted, opened or issued for a mount or an opening once it
+has ended, whatever the interleaving, and nothing is sent once its last
+check finds it ended. A deleted conversation's apps, if it has any in this
+run, are kept as that — ended, and holding nothing — once its agent's stop
+has been tried, so a release or an opening racing the delete cannot build
+them afresh. One with none in this run is given none: its tombstone refuses
+everything that would. A
 conversation remembers its last 1024 released mounts. A mount released
 longer ago than that is forgotten: a host gives each mount a fresh
 `instanceId` and never asks in a released one's name, so only a host that
@@ -118,6 +126,7 @@ is opened again.
 | Waiting | the conversation's agent is stopped otherwise — by the desktop, or to recover an approval-mode change that could not be applied — or the gateway stops | — | `Withdrawn(ConversationEnded)`, by the system; `mcp_cancelled` |
 | Waiting | an answer and the deadline at once | — | whichever ended the review first; an answer is never lost to the expiry |
 | Checking | the tool is still listed, for apps, and as destructive as it was | Sending | — |
+| Checking, or admitted not destructive | its mount released or its opening ended since it was admitted, before its last check | — | `Refused(mcp_cancelled)`, by the system; nothing sent |
 | Checking | it is not | — | `Refused(mcp_tool_not_for_app)`; nothing sent |
 | Sending | the session cannot take another request now; nothing is sent | — | `Refused(temporarily_unavailable)` |
 | Sending | the server answers within 56 KiB, measured as the JSON string the wire carries | — | `Completed(Answered{isError, bytes})`; the answer, re-encoded |
@@ -143,11 +152,13 @@ not in an app.
 
 An app review is shown only in a view whose transcript is confirmed
 complete: the client refuses a view of unconfirmed history that offers any
-control. Room is kept for app reviews — at most 16 000 bytes together — by
-bounding the rest of the view to leave it: its transcript, tool calls and
-queue give way first, then — in a view of the agent's reviews alone past
-its size — the agent's newest. The view's revision folds in the app reviews
-it shows.
+control. Room is kept for app reviews — at most 16 000 bytes together — out
+of the view's transcript, tool calls and queue, which give way first; never
+out of the agent's own reviews and questions, which an app's server must
+not be able to hide. Should that not make room, the newest app reviews that
+do not fit wait unseen — the view says some interactions are not shown —
+and expire if nobody answers them. The view's revision folds in only the app
+reviews it shows.
 
 ### A resource read
 
@@ -156,6 +167,7 @@ it shows.
 | refused as a tool call is (app, server, mount released, opening ended) | the same codes |
 | a URI that is no `ui://` resource, or past 2048 bytes | `Refused(invalid_request)` |
 | admitted | `Admitted`; the resource read |
+| admitted, its mount released or its opening ended before its last check | `Refused(mcp_cancelled)`, by the system; nothing read |
 | no open session, or it ends | `Completed(Failed(mcp_session_unavailable))` |
 | read, and not an app's HTML | `Completed(Failed(mcp_app_unknown))` |
 | the session cannot take another request now; nothing is sent | `Refused(temporarily_unavailable)` |

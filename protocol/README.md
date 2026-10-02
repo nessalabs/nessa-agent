@@ -130,8 +130,9 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   error in `McpRemoteErrorDetails`, or no details for an answer that is no
   MCP answer, or a code past what a JSON number keeps) or
   `mcp_result_too_large`. `temporarily_unavailable` may come either side:
-  a lane or slot that was full, or a busy session, asked nothing; a
-  resource read that found no room to hold its bytes was read.
+  a lane, slot or review that was full, or a busy session, asked nothing; a
+  resource read that found no room, or no ticket, to hold its bytes was read;
+  and a call whose task failed may have been sent.
   `audit_unavailable` says a step could not be
   recorded and was not taken — except the last: a call already made whose
   answer could not be recorded is answered `audit_unavailable` too, its
