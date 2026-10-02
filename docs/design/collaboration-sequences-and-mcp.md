@@ -17,7 +17,8 @@ The second call goes through the same public API and access checks as other call
 flowchart LR
     UI[Surface] --> C[NessaClient]
     C <--> G[Gateway]
-    G --> R[nessa-sdk coordinator]
+    G --> I[SDK principal command owner]
+    I -->|ADR 0008 binding resolved| R[nessa-sdk coordinator]
     R <-->|Run and report results with IDs| B[ACP binding]
     B <--> A[External agent]
     R -->|Append| S[Event stream and local store]
@@ -46,20 +47,27 @@ updates from the same agent run.
 sequenceDiagram
     participant A as Client A
     participant G as Gateway
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant R as SDK coordinator
     participant P as ACP binding
     participant S as Shared stream runtime
     participant B as Client B
     A->>G: Authenticated conversation.open(requestId, binding, workspace)
     G->>G: Authorize creation and verify caller context
-    G->>R: Create with verified caller details
-    R->>R: Resolve receipt, then check configuration for new creation
-    R->>S: Save creation acceptance and IDs
-    S-->>R: Saved
-    R->>P: Initialize configured provider
-    P-->>R: Actual supported features
-    R->>S: Save creation outcome
-    R-->>G: Same creation ID and readiness
+    G->>I: Create with verified caller details
+    I->>K: Resolve creation through ADR 0008
+    Note over I,K: New creation saves binding, acceptance and IDs together
+    K-->>I: Committed new or original creation acceptance
+    alt New confirmed creation
+        I->>R: Apply accepted creation
+        R->>P: Initialize configured provider
+        P-->>R: Actual supported features
+        R->>K: Save creation outcome
+        R-->>G: Creation ID and readiness
+    else Existing creation
+        I-->>G: Original creation ID and saved readiness
+    end
     G-->>A: conversationId C
     B->>G: Authenticated conversation.get(C)
     G->>G: Authorize resource read
@@ -73,8 +81,15 @@ sequenceDiagram
     Note over B,S: B applies records once. The summary does not replace history
     A->>G: Subscribe to the same stream
     A->>G: turn.prompt(requestId, C, input)
-    G->>R: Command with verified caller details
-    R->>R: Check current access, existing receipt, and idle state
+    G->>G: Authorize prompt and verify caller context
+    G->>I: Prompt with verified caller details
+    I->>K: Resolve or commit request binding through ADR 0008
+    K-->>I: Matching committed binding
+    Note over G,I: Conflict or unresolved binding ends before target admission
+    I->>R: Exact bound prompt
+    R->>S: Resolve committed acceptance for this binding
+    S-->>R: Complete lookup establishes no acceptance
+    R->>R: Check capabilities and idle state using verified context
     R->>S: Save one turn acceptance record
     S-->>R: Saved turnId T and receipt
     R-->>G: Accepted T
@@ -112,6 +127,8 @@ sequenceDiagram
     participant M as Optional MCP adapter
     participant C as Sender's NessaClient
     participant G as Gateway
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant R as Target SDK coordinator
     participant S as Target conversation stream
     participant O as Authorized turn starter
@@ -120,8 +137,14 @@ sequenceDiagram
     M->>C: conversation.message(X, target, next_turn, body)
     C->>G: Authenticated product request
     G->>G: Authorize message and verify source
-    G->>R: Command with verified source details
-    R->>R: Resolve duplicates and check inbox limits
+    G->>I: Message with verified source details
+    I->>K: Resolve or commit X binding through ADR 0008
+    K-->>I: Matching committed binding
+    Note over G,I: Conflict or unresolved binding ends before target admission
+    I->>R: Exact bound message
+    R->>S: Resolve committed acceptance for X
+    S-->>R: Complete lookup establishes no acceptance
+    R->>R: Check inbox limits using verified context
     R->>S: Save message M and its fixed acceptance receipt
     S-->>R: Saved cursor
     R-->>G: Accepted M, pending
@@ -131,7 +154,12 @@ sequenceDiagram
     Note over E,R: Tool returns now. No turn starts or is awaited
     O->>G: Explicit turn.prompt(Y, target, input)
     G->>G: Authorize starter and candidate source access
-    G->>R: Turn command with verified context and authorized candidate IDs
+    G->>I: Prompt Y with verified context and authorized candidate IDs
+    I->>K: Resolve or commit Y binding through ADR 0008
+    K-->>I: Matching committed binding
+    I->>R: Exact bound prompt Y
+    R->>S: Resolve committed acceptance for Y
+    S-->>R: Complete lookup establishes no acceptance
     R->>R: Check capabilities and select still-pending candidates by domain rules
     R->>S: Save accepted turn T with message M assigned to it
     S-->>R: Saved
@@ -167,17 +195,28 @@ receipt. Reusing the same request ID finds what Nessa already accepted.
 sequenceDiagram
     participant C as NessaClient
     participant G as Gateway
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant R as SDK coordinator
     participant S as Stream runtime
     actor Owner
     C->>G: State-changing command with requestId X
-    G->>R: Command with access checked
+    G->>I: Command with access checked
+    I->>K: Resolve or commit X binding through ADR 0008
+    K-->>I: Matching committed binding
+    I->>R: Exact bound command X
+    R->>S: Resolve committed acceptance for X
+    S-->>R: Complete lookup establishes no acceptance
     R->>S: Save acceptance and receipt
     S-->>R: Saved
     Note over C,G: Connection fails before receipt reaches C
     C->>G: Reauthenticate and explicitly retry X with identical input
-    G->>R: Current access check and same requestId
-    R->>R: Find existing receipt before accepting new work
+    G->>I: Current access check and same requestId
+    I->>K: Resolve X through ADR 0008
+    K-->>I: Original matching committed binding
+    I->>R: Resolve acceptance for exact bound X
+    R->>S: Read committed acceptance
+    S-->>R: Original acceptance and receipt
     R-->>G: Original identity and acceptance receipt
     G-->>C: Original receipt, inspect current state separately
     Owner->>G: Revoke credential

@@ -57,9 +57,10 @@ work deadlines.
    allowed by the server, and requested settings/features. It cannot supply
    executable paths, arbitrary provider methods, or credentials.
 4. The host authorizes each request before SDK access, including retries. The
-   SDK returns the existing creation for an identical retry. For a new request,
-   check configuration and capability requirements, then save acceptance and allocated
-   IDs before initializing the provider.
+   SDK resolves creation through ADR 0008's
+   [principal request owner](../adr/todo/0008-agent-client-api.md#one-durable-record-source).
+   An accepted creation is restored before initializing its provider; an identical
+   retry observes that original creation.
 5. Supervise startup and give it a deadline. Keep pending/ready/failed creation
    state available under the same ID. Clean up partial setup on failure. Waiting
    for readiness must not block other commands or subscriptions. Initialization
@@ -236,9 +237,12 @@ scope. The binding privately maps these Nessa choices to actual provider options
 It cannot grant permission itself or invent a required interaction the protocol
 cannot represent. Report that failure explicitly.
 
-`approval.respond` checks current access, whether the approval is still pending,
-the exact turn/choice, and `requestId`. Save the winning decision before forwarding
-it. Identical retries return its receipt. Conflicting, stale, or expired responses
+`approval.respond` follows ADR 0008's
+[request owner](../adr/todo/0008-agent-client-api.md#one-durable-record-source)
+before target admission. The host checks current access before routing. The target
+coordinator consumes that verified context, checks the exact pending turn/choice,
+and saves the winning decision before forwarding it.
+Identical accepted retries return their receipt; stale or expired new responses
 fail. Denial and cancellation remain different outcomes.
 
 A waiting provider callback must not block the coordinator needed to answer it.

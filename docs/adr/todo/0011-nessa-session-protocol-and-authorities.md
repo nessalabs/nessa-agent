@@ -145,10 +145,11 @@ changes while waiting for a socket.
 
 ## Phase B: messages without a second execution queue
 
-After phase A, add `conversation.message` and `message.status`. The target SDK
-coordinator checks source/target permissions and saves one acceptance record
-containing the message, verified author information, and its receipt. Use ADR
-0008's `requestId` rules. The **inbox** is the pending-input view built from this
+After phase A, add `conversation.message` and `message.status`. The host checks
+source/target permissions, then routes the mutation through ADR 0008's
+[principal request owner](0008-agent-client-api.md#one-durable-record-source)
+before target coordinator admission. Its accepted record contains the message,
+verified author information and receipt. The **inbox** is the pending-input view built from this
 conversation's records. It has no separate broker, database, or execution owner.
 
 A send-only caller may inspect its own receipt/status without reading the target's

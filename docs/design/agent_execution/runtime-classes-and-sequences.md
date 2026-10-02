@@ -83,7 +83,7 @@ classDiagram
 
 | Role and layer | What its functions do |
 | --- | --- |
-| `ConversationRuntime` — application | `describeBinding` returns the current capability snapshot and setup status. `createConversation` resolves retries, saves creation, and supervises initialization. `loadConversation` rebuilds existing state without starting a provider. `routeCommand` locates the owning coordinator. `shutdown` stops new work and closes owned resources in order |
+| `ConversationRuntime` — application | `describeBinding` returns the current capability snapshot and setup status. `createConversation` consumes ADR 0008's principal control-stream creation contract and supervises initialization. `loadConversation` rebuilds existing state without starting a provider. `routeCommand` resolves the principal request binding through that owner before locating the target coordinator. `shutdown` stops new work and closes owned resources in order |
 | `ConversationCoordinator` — application | `acceptPrompt` saves one accepted turn before execution. `acceptSteer` saves guidance for the same active turn when supported. `requestStop` starts the shared cleanup flow. `answerInteraction` resolves the exact pending interaction. `applyProviderUpdate` checks ownership and saves normalized results. `applyHealthDecision` records and applies an allowed policy action. `reconcile` restores known state without repeating uncertain work |
 | `EffectiveCapabilities` — SDK immutable value | Carries boolean features and applicable constraints from the configured execution path. Pure `validate` checks command requirements locally. It knows no authorization policy or turn lifecycle |
 | `ModelMetadata` — descriptive data | JSON entries parsed at startup and keyed by provider/model ID. Required feature fields are booleans; missing models are configuration errors. No provider request logic or mutable turn state |
@@ -93,8 +93,10 @@ classDiagram
 | `ActionContext` — application value | Carries verified actor, surface, optional instance, and cause. It is immutable for the accepted action. The record adds its IDs, time, input, and receipt. Domain code receives translated domain values where needed |
 
 The host authorizes each operation before SDK access, including receipt retries,
-reads, and subscription delivery. The SDK then resolves the receipt **before** new
-capability/state checks. An identical accepted steer retried after completion
+reads, and subscription delivery. Commands first pass through ADR 0008's
+[principal request owner](../../adr/todo/0008-agent-client-api.md#one-durable-record-source),
+then the target coordinator resolves acceptance before new capability/state checks.
+An identical accepted steer retried after completion
 returns its old receipt without steering again. The coordinator serializes new
 capability/readiness checks, the aggregate decision, and its commit. Reading saved
 history does not require provider capabilities.
@@ -169,13 +171,15 @@ The generic stream library stores/orders records; it knows no Conversation rules
 
 ```mermaid
 sequenceDiagram
-    participant H as Authorized host application
+    participant H as SDK principal command owner
     participant C as Coordinator
     participant D as Conversation aggregate
     participant S as Semantic record store
     participant B as Agent binding
-    H->>C: StartTurn with verified context and requestId
-    C->>C: Resolve existing receipt first
+    Note over H,C: ADR 0008 principal binding is already committed and matched
+    H->>C: Exact bound StartTurn with verified context
+    C->>S: Resolve committed acceptance for this binding
+    S-->>C: Complete lookup establishes no acceptance
     Note over C,B: Below is the new-request path
     C->>C: Validate input against current capability snapshot
     Note over C,D: Unsupported requirements end here
@@ -289,17 +293,24 @@ Binding and acceptance can be separate commits as its state table describes.
 sequenceDiagram
     participant C as Client
     participant G as Gateway or host application
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant R as Coordinator
     participant S as Records
     participant B as Binding
     C->>G: Prompt with requestId and target resource
     G->>G: Authorize action and verify context
     Note over C,G: Denial ends before SDK access
-    G->>R: Prompt with verified action context
-    R->>R: Resolve request binding and acceptance through ADR 0008 owner
+    G->>I: Prompt with verified action context
+    I->>K: Resolve or commit request binding through ADR 0008
+    K-->>I: Matching committed binding
+    Note over G,I: Conflict or unresolved binding ends before target admission
+    I->>R: Exact bound prompt
+    R->>S: Resolve committed acceptance for this binding
+    S-->>R: Original acceptance, complete absence, or unresolved
     alt Identical accepted request
         R-->>C: Original turnId and receipt
-    else New request allowed by policy
+    else Complete lookup establishes no acceptance
         R->>R: Validate input against current capability snapshot
         R->>R: Check aggregate lifecycle rules and binding readiness
         alt Available
@@ -313,8 +324,8 @@ sequenceDiagram
         else Busy, unsupported, or invalid configuration
             R-->>C: Error, no new turn or provider call
         end
-    else Denied or conflicting retry
-        R-->>C: Error
+    else Acceptance unresolved or unavailable
+        R-->>C: Unknown or unavailable, no new admission or provider call
     end
 ```
 
@@ -335,17 +346,24 @@ same stream infrastructure as normal input and a distinct semantic action.
 sequenceDiagram
     participant C as Caller
     participant G as Gateway or host application
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant R as Coordinator
     participant S as Records
     participant B as Binding
     C->>G: Steer turn T with requestId and guidance
     G->>G: Authorize resource action and verify context
     Note over C,G: Denial ends before SDK access
-    G->>R: Steer with verified context
-    R->>R: Resolve receipt before new-action checks
+    G->>I: Steer with verified context
+    I->>K: Resolve or commit request binding through ADR 0008
+    K-->>I: Matching committed binding
+    Note over G,I: Conflict or unresolved binding ends before target admission
+    I->>R: Exact bound steer
+    R->>S: Resolve committed acceptance for this binding
+    S-->>R: Original acceptance, complete absence, or unresolved
     alt Identical accepted retry
         R-->>C: Original receipt, no forwarding
-    else New request
+    else Complete lookup establishes no acceptance
         R->>R: Validate steering and guidance against current snapshot
         R->>R: Ask Conversation to validate T is running
         alt Allowed
@@ -358,6 +376,8 @@ sequenceDiagram
         else Denied, unsupported, or T already ended
             R-->>C: Error, no new turn or restart
         end
+    else Acceptance unresolved or unavailable
+        R-->>C: Unknown or unavailable, no new admission or forwarding
     end
 ```
 
@@ -378,16 +398,36 @@ a surface does around that server-owned flow:
 ```mermaid
 sequenceDiagram
     participant Q as UI queue
+    participant G as Authorized host application
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant R as Coordinator
+    participant S as Conversation records
     participant H as Binding and host cleanup
-    Q->>R: Stop T, keep prompt B locally
+    Q->>G: Stop T with requestId X, keep prompt B locally
+    G->>G: Authorize Stop and verify context
+    G->>I: Stop with verified context
+    I->>K: Resolve X through ADR 0008 request owner
+    K-->>I: Matching committed binding
+    I->>R: Exact bound Stop T
+    R->>S: Resolve acceptance and commit new Stop if allowed
+    S-->>R: Committed acceptance
     R-->>Q: Stop accepted
     R->>H: Stop and clean up T
     H-->>R: Outcome and cleanup evidence
     R-->>Q: Saved final state for T and current readiness
     alt Final state and binding ready
-        Q->>R: Send B with its requestId
+        Q->>G: Send B with its requestId Y
+        G->>G: Authorize prompt and verify context
+        G->>I: Prompt B with verified context
+        I->>K: Resolve Y through ADR 0008 request owner
+        K-->>I: Matching committed binding
+        I->>R: Exact bound prompt B
+        R->>S: Resolve committed acceptance for Y
+        S-->>R: Complete lookup establishes no acceptance
         alt No other client won the active slot
+            R->>S: Commit permitted prompt B as turn U
+            S-->>R: Committed acceptance
             R-->>Q: Accepted as turn U
         else Another client started first
             R-->>Q: turn_busy
@@ -401,6 +441,8 @@ sequenceDiagram
 A command receipt alone never releases B. Neither does a local timeout or a quiet
 stream. If Q disconnects, R still owns T. If sending B loses its reply, Q reconciles
 that same request ID before deciding whether B is still pending.
+This diagram shows permitted new commands. Binding or acceptance uncertainty ends
+at the corresponding ADR 0008 owner without a new Stop or replacement prompt.
 
 ## Observe health without another turn state machine
 
@@ -410,6 +452,8 @@ sequenceDiagram
     participant R as Coordinator
     participant P as RunHealthPolicy
     participant G as Host application gate
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant S as Records
     participant C as Clients
     H-->>R: Timestamped progress, liveness, and available health signals
@@ -422,8 +466,14 @@ sequenceDiagram
         R->>G: Request server action with health evidence
         G->>G: Authorize action and construct verified context
         Note over G,R: Denial reports assessment without an optional Stop
-        G->>R: Allowed Stop with actor and cause
+        G->>I: Allowed Stop with stable requestId, actor and cause
+        I->>K: Resolve through ADR 0008 request owner
+        K-->>I: Matching committed binding
+        I->>R: Exact bound Stop
+        R->>S: Resolve committed acceptance
+        S-->>R: Complete lookup establishes no acceptance
         R->>S: Save server action, cause, and policy revision
+        S-->>R: Committed acceptance
         R->>R: Enter the same stopping flow
         R-->>C: Saved state and health decision
     else Observations unavailable
@@ -450,10 +500,16 @@ every CPU sample into conversation history or building a telemetry service.
 ```mermaid
 sequenceDiagram
     participant H as Host composition
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant S as Records
     participant R as Coordinator
     participant E as Owned execution facilities
     H->>S: Open exclusively owned durable store
+    H->>I: Restore principal request source
+    I->>K: Rebuild committed bindings and creation acceptance
+    K-->>I: Restored bindings, or unavailable
+    Note over H,I: New admission waits for restoration required by ADR 0008
     H->>R: Restore creation and conversation records
     R->>S: Rebuild state, receipts, and accepted actions
     R->>E: Reconcile original scopes and process identities
@@ -487,8 +543,9 @@ to this checklist, including related facts that cross a module or layer boundary
   one domain TurnState definition;
   one coordinator owns each conversation. Health is an assessment, not a new turn.
 - SDK discovery and validation share capability logic. The aggregate owns state
-  rules; host authorization precedes all SDK access. SDK receipt lookup precedes
-  new capability/state checks, and replay never performs effects.
+  rules; host authorization precedes all SDK access. Every depicted mutation
+  consumes ADR 0008's principal request owner before target admission; acceptance
+  lookup precedes new capability/state checks, and replay never performs effects.
 - Accepted actions, including server actions, record verified actor, surface, and
   cause. Resource permission is checked independently of surface metadata.
 - Confirmed acceptance, provider delivery, final turn outcome, and cleanup readiness

@@ -125,6 +125,14 @@ ADR 0008 owns the
 The producer still needs concrete source interfaces and state/order evidence
 before changing source behavior; the other feature designs link to that owner.
 
+Three successive planning findings exposed one structural gap: namespace prose
+was changed while consumer sequences still entered the target coordinator
+directly. The corrected diagrams show the principal control-stream owner before
+target acceptance, including message, prompt, steering, Stop, creation and restart.
+ADR 0008's state table requires real competing-target and competing-operation
+tests through affected consumers. These are producer acceptance gates still to
+implement; a consistent diagram or documentation-only CI does not prove them.
+
 Command admission is not the complete writer inventory. Queued runs, provider
 callbacks, audit writes and deletion work can survive a command's return.
 Permanent storage shutdown is not a reversible export lease. An online export

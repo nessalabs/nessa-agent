@@ -119,9 +119,10 @@ finish. A socket write must not block auth changes or SDK command handling.
 
 `conversation.message` takes `requestId`, the target conversation, a text body
 with a size limit, optional `replyToMessageId`, and `record_only` or `next_turn`.
-It does not start a turn. The target SDK coordinator checks permission and saves
-one acceptance record containing the message, verified author/source information,
-and its receipt.
+It does not start a turn. The host authorizes the message, then the SDK routes it
+through ADR 0008's [principal request owner](../adr/todo/0008-agent-client-api.md#one-durable-record-source)
+before the target coordinator resolves acceptance and inbox admission. An accepted
+message record contains the message, verified author/source information and receipt.
 
 Record `messageId`, target, acceptance time/cursor, caller/surface, optional verified
 source conversation/turn, display attribution, and reply correlation. Also save

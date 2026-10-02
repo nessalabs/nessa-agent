@@ -191,7 +191,8 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    H["Host authorizes action"] --> C["SDK resolves existing receipt"]
+    H["Host authorizes action"] --> I["Principal control-stream owner resolves binding"]
+    I --> C["Target coordinator resolves acceptance"]
     C --> V["New command: validate capabilities"]
     V --> D["Conversation checks lifecycle rules"]
     D --> S["Commit, then execute"]
@@ -399,17 +400,30 @@ only loses that client's view. The following assumes the server stays running:
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant R as SDK runtime
+    participant G as Authorized host application
+    participant I as Principal command owner
+    participant K as Principal control stream
+    participant R as SDK coordinator
+    participant S as Conversation records
     participant A as Agent
-    C->>R: Send prompt with requestId
-    R->>R: Save acceptance and turnId T
+    C->>G: Send prompt with requestId
+    G->>G: Authorize and verify context
+    G->>I: Prompt with verified context
+    I->>K: Resolve through request binding owner
+    K-->>I: Matching committed binding
+    I->>R: Exact bound prompt
+    R->>S: Resolve acceptance, then save a permitted new turn T
+    S-->>R: Committed acceptance
     R-->>C: Accepted T
     R->>A: Run T
     Note over C,R: Client disconnects
     A-->>R: More updates for T
-    R->>R: Save updates
-    C->>R: Reconnect and read T after last applied cursor
-    R-->>C: Missed records, then live updates
+    R->>S: Save updates
+    C->>G: Reconnect and read T after last applied cursor
+    G->>G: Authorize bounded observation
+    G->>S: Read committed records
+    S-->>G: Missed records, then live updates
+    G-->>C: Authorized record batches
 ```
 
 An explicit Stop can end work. So can an execution failure, shutdown, or an
@@ -430,8 +444,10 @@ flowchart LR
     Q["UI queue: B, then C"] --> G["T ends and binding is ready"]
     T --> G
     G --> B["Send B with its requestId"]
-    B --> N["Accepted as new turn U"]
-    H["Steer: focus on SQLite"] --> T
+    B --> I["Host authorization and principal request owner"]
+    I --> N["Target admission: accepted as new turn U or refused"]
+    H["Steer: focus on SQLite"] --> J["Host authorization and principal request owner"]
+    J --> T
 ```
 
 The queue belongs to that surface, not the server. Do not promise it survives UI
@@ -554,7 +570,8 @@ flowchart LR
     V --> P["Probe supported host or provider signals"]
     P --> H
     H --> D["Configured policy requests Stop"]
-    D --> C["Same coordinator and stopping flow"]
+    D --> I["Host authorization and principal request owner"]
+    I --> C["Target coordinator and stopping flow"]
 ```
 
 Health does not add `stuck`, `inactive`, or `recovering` turn states. A supervisor
@@ -582,7 +599,8 @@ allow turn work to detach and become ownerless. An idle harness may remain alive
 for its conversation. Supporting a long-lived user service needs a separate,
 explicit owner and lifetime first.
 
-Stopping follows these steps, with deadlines and safe repeated requests:
+After [request binding and acceptance resolution](#one-durable-record-source),
+stopping follows these steps, with deadlines and safe repeated requests:
 
 1. Save acceptance of Stop for the exact turn. Close that turn to new tool work
    and approvals, then signal cancellation. If resource creation races with Stop,
@@ -612,14 +630,22 @@ sequenceDiagram
     participant C as Caller
     participant R as SDK coordinator
     participant G as Gateway or host application
+    participant I as Principal command owner
+    participant K as Principal control stream
     participant S as Record store
     participant B as Binding
     participant H as Host process facilities
     C->>G: Stop exact turn T with requestId
     G->>G: Authorize resource action and verify context
     Note over C,G: Denial ends here, before SDK access
-    G->>R: Authorized Stop with verified context
-    R->>R: Resolve receipt first, then exact-turn domain rules for a new Stop
+    G->>I: Authorized Stop with verified context
+    I->>K: Resolve or commit request binding
+    K-->>I: Matching committed binding
+    Note over G,I: Conflict or unresolved binding ends command admission here
+    I->>R: Exact bound Stop
+    R->>S: Resolve committed acceptance
+    S-->>R: Original acceptance, complete absence, or unresolved
+    R->>R: Exact-turn domain rules only for complete absence
     Note over R,H: A stale Stop never targets a newer turn
     alt New allowed Stop on active T
         R->>S: Save Stop acceptance, actor, cause, and stopping state
@@ -646,6 +672,8 @@ sequenceDiagram
         R-->>C: Final outcome and binding readiness, or persistence fault
     else Denied, duplicate, or already final
         R-->>C: Error, original receipt, or existing outcome
+    else Acceptance unresolved or unavailable
+        R-->>C: Unknown or unavailable, no new command acceptance
     end
 ```
 
@@ -852,7 +880,10 @@ host-settings storage remain unchanged.
 The principal's control-stream owner serializes request binding. The conversation
 coordinator serializes acceptance in the target conversation. A binding and an
 acceptance are distinct committed facts; there is no cross-stream transaction.
-The coordinator processes these steps:
+Each command attempt, including an explicit retry, first passes the host's
+[current authorization snapshot](../done/0010-local-authentication.md#requests-after-connection-setup).
+The SDK receives that verified context and has no authorization read port.
+The SDK routes a command through these owners in order:
 
 1. Validate the caller, operation, target, canonical input and origin. Resolve
    `(principal, requestId)` in the principal's committed control stream. An
@@ -865,7 +896,8 @@ The coordinator processes these steps:
    returns it. A bound command with incomplete or unavailable acceptance evidence
    remains unresolved. Read-only lookup never admits or dispatches work.
 3. For an explicit exact retry or first attempt whose complete lookup establishes
-   no acceptance, check current authority and turn state, then allocate `turnId`
+   no acceptance, consume the host-verified context and check capability/readiness
+   and turn state, then allocate `turnId`
    for a new accepted prompt. Append one
    record containing the canonical command, validated origin, allocated IDs, and
    acceptance response. The adapter must save the whole record or none of it.
@@ -882,13 +914,49 @@ for the same request identity across different conversations.
 
 | Request binding / acceptance ordering | Required result | Owning implementation evidence to establish |
 | --- | --- | --- |
-| Two conversations compete for one principal/request identity | One immutable binding; conflicting target refused before target admission | Principal control-stream producer, real durable concurrent/reopen test |
+| Two conversations compete for one principal/request identity | One immutable binding; conflicting target refused before target admission | Principal control-stream producer plus affected target consumers, real concurrent/reopen test |
+| Different operations concurrently compete for one principal/request identity | One immutable binding; conflicting operation refused before either losing target effect | Principal control-stream producer plus affected target consumers, real concurrent/reopen test |
 | Existing binding; changed operation, input or verified origin | Conflict; original binding and acceptance unchanged | Binding constructor/comparison and actual admission refusal test |
 | Binding saved; crash before target acceptance | Bound unresolved command survives; no provider execution inferred | Separate durable sources and process-restart test |
-| Exact explicit retry; complete target lookup establishes no acceptance | Reconcile original binding, then current authority/state and one acceptance | Target coordinator and admission/dispatch ordering test |
+| Exact explicit retry; complete target lookup establishes no acceptance | Host authorizes this attempt before routing; reconcile original binding, then target capability/state checks and one acceptance | Host entry point, target coordinator and admission/dispatch ordering test |
+| Host allows a snapshot; revocation commits while binding or acceptance lookup waits | Preserve ADR 0010's already-allowed-operation meaning; no second SDK access read | Real host snapshot/revocation barriers plus delayed binding/acceptance consumers and direct embedding host without a gateway auth port |
+| Next explicit retry arrives after revocation | Host refuses before SDK binding or target admission | Same host/consumer fixture, denied retry with no new binding, acceptance or provider effect |
 | Acceptance saved; response lost | Original turn/receipt returned; no repeated provider work | Committed acceptance lookup and real lost-reply test |
 | Acceptance lookup incomplete or source unavailable | Unresolved/unavailable; read-only lookup performs no admission or dispatch | Bounded committed reader and provider-free lookup test |
 | Creation before target stream exists | Binding and acceptance saved together in control stream | Creation producer and restart/uncertain-write test |
+
+The producer tests must enter through both affected command consumers with one
+principal/request ID and different targets or operations. Gate both contenders
+before binding, observe one committed winner, and verify that the losing target
+has no acceptance or provider effect. Reopen both sources and preserve that same
+binding and receipt outcome. These tests are required implementation evidence,
+not results established by this proposal.
+
+```mermaid
+sequenceDiagram
+    participant A as Authorized command A
+    participant B as Authorized command B
+    participant I as Principal command owner
+    participant K as Principal control stream
+    participant T as Target coordinator
+    participant S as Target conversation records
+    par Same principal and requestId
+        A->>I: Operation and target A, verified context
+    and Conflicting bound facts
+        B->>I: Operation or target B, verified context
+    end
+    I->>K: Resolve and commit one immutable binding
+    K-->>I: Binding A committed
+    I-->>B: Conflict before target B admission
+    I->>T: Exact bound command A
+    T->>S: Resolve committed acceptance for A
+    S-->>T: Complete lookup establishes no acceptance
+    T->>T: Consume verified context, check capability and domain state
+    T->>S: Commit permitted acceptance and receipt
+    S-->>T: Committed
+    T-->>A: Acceptance receipt
+    Note over I,T: Binding-only crash is unresolved, not execution
+```
 
 For example, a connection may drop after a prompt was saved but before its reply
 arrived. Retrying the same `requestId` returns the original `turnId` and receipt.
