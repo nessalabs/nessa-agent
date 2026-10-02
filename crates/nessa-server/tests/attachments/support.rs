@@ -8,10 +8,10 @@ use crate::{
             BeginUpload, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer,
             Kept, NormalizeError, NormalizeFuture, NormalizedImage, Ownership,
             OwnershipUnavailable, PortFuture, ReceivedBytes, ReleaseEvidence, ReleaseReport,
-            ReleasedHold, RevertCause, SecretsUnavailable, StagedUpload, StoreUnavailable,
-            TicketSecrets, UploadBody, UploadInterrupted,
+            RemovedBlob, RetiredHold, RetirementEvidence, RevertCause, SecretsUnavailable,
+            StagedUpload, StoreUnavailable, TicketSecrets, UploadBody, UploadInterrupted,
         },
-        domain::{Attachment, Hold, HoldState, MediaType, RetiredFrom},
+        domain::{Attachment, Hold, MediaType, RetiredFrom},
     },
     conversation::domain::ConversationId,
 };
@@ -531,7 +531,7 @@ impl AttachmentStore for MemoryStore {
         &'a self,
         organization_id: &'a OrganizationId,
         conversation_id: &'a ConversationId,
-        _evidence: &'a ReleaseEvidence,
+        evidence: &'a ReleaseEvidence,
     ) -> PortFuture<'a, ReleaseReport, StoreUnavailable> {
         Box::pin(async move {
             self.check()?;
@@ -554,25 +554,39 @@ impl AttachmentStore for MemoryStore {
                         record.hold.conversation_id().clone(),
                         record.generation.clone(),
                     ));
-                    report.released.push(ReleasedHold {
-                        hold: record.hold,
-                        was: if record.kept {
-                            HoldState::Held
-                        } else {
-                            HoldState::Pending
-                        },
-                    });
+                    report.retired.push(
+                        RetiredHold::new(
+                            record.hold,
+                            if record.kept {
+                                RetiredFrom::Held
+                            } else {
+                                RetiredFrom::Pending
+                            },
+                            RetirementEvidence::Release(evidence.clone()),
+                        )
+                        .expect("valid original retirement"),
+                    );
                 }
             }
             let mut considered = Vec::new();
-            for released in &report.released {
-                let digest = released.hold.stored().digest();
+            for released in &report.retired {
+                let digest = released.hold().stored().digest();
                 if considered.contains(&digest) {
                     continue;
                 }
                 considered.push(digest);
                 if state.remove_unheld(digest) {
-                    report.removed.push(released.hold.clone());
+                    report.removed.push(
+                        RemovedBlob::new(
+                            report
+                                .retired
+                                .iter()
+                                .filter(|retired| retired.hold().stored().digest() == digest)
+                                .cloned()
+                                .collect(),
+                        )
+                        .expect("nonempty same-digest retirements"),
+                    );
                 }
             }
             Ok(report)

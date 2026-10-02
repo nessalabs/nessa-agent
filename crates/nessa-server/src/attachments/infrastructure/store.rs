@@ -39,8 +39,8 @@ use crate::{
     attachments::{
         application::{
             AttachmentStore, Confirmation, Discard, HoldClaim, Kept, PortFuture, ReceivedBytes,
-            ReleaseEvidence, ReleaseReport, ReleasedHold, RetirementEvidence, RevertCause,
-            StagedUpload, StoreUnavailable,
+            ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold, RetirementEvidence,
+            RevertCause, StagedUpload, StoreUnavailable,
         },
         domain::{ArtifactId, Attachment, Hold, RetiredFrom},
     },
@@ -54,7 +54,7 @@ use nessa_local_storage::{
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -597,35 +597,39 @@ impl Files {
         let mut report = ReleaseReport::default();
         let mut purge = Vec::new();
         for (path, record) in self.conversation_records(organization_id, conversation_id)? {
-            let released = record.and_then(|record| {
-                match &record.state {
-                    RecordState::Retired { .. } => {
+            let retired = record.and_then(|record| {
+                let (was, original) = match &record.state {
+                    RecordState::Retired { was, evidence } => {
                         sync_directory_beneath(
                             &self.root,
                             path.parent()
                                 .ok_or_else(|| corrupt("hold has no directory"))?,
                         )?;
+                        (*was, evidence.clone())
                     }
                     state => {
                         let was = prior_state(state);
+                        let original = RetirementEvidence::Release(evidence.clone());
                         self.write_record(
                             &record.hold,
                             RecordState::Retired {
                                 was,
-                                evidence: RetirementEvidence::Release(evidence.clone()),
+                                evidence: original.clone(),
                             },
                             &record.generation,
                         )?;
-                        report.released.push(ReleasedHold {
-                            hold: record.hold.clone(),
-                            was: was.into(),
-                        });
+                        (was, original)
                     }
-                }
-                Ok(record.hold)
+                };
+                RetiredHold::new(record.hold, was, original).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "contradictory retirement")
+                })
             });
-            match released {
-                Ok(hold) => purge.push(hold),
+            match retired {
+                Ok(retired) => {
+                    report.retired.push(retired.clone());
+                    purge.push(retired);
+                }
                 Err(error) => {
                     tracing::error!(path = %path.display(), %error, "hold was not released");
                     report.failures += 1;
@@ -634,16 +638,22 @@ impl Files {
         }
         // Bytes go only after every hold of this conversation is gone, and
         // what is still held anywhere is read once for all of them.
-        let mut considered = HashSet::new();
+        let mut by_digest: HashMap<_, Vec<_>> = HashMap::new();
+        for retired in purge {
+            by_digest
+                .entry(retired.hold().stored().digest())
+                .or_default()
+                .push(retired);
+        }
         match self.referenced() {
             Ok(referenced) => {
-                for released in &purge {
-                    let digest = released.stored().digest();
-                    if !considered.insert(digest) {
+                for (digest, retirements) in by_digest {
+                    let Some(removed) = RemovedBlob::new(retirements) else {
+                        report.failures += 1;
                         continue;
-                    }
+                    };
                     match self.remove_unheld(digest, &referenced) {
-                        Ok(true) => report.removed.push(released.clone()),
+                        Ok(true) => report.removed.push(removed),
                         Ok(false) => {}
                         Err(error) => {
                             tracing::error!(%digest, %error, "unheld attachment bytes were not removed");

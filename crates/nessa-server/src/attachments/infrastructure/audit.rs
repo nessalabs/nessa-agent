@@ -10,7 +10,7 @@
 use crate::attachments::{
     application::{
         AttachmentAudit, AttachmentAuditRecord, AuditUnavailable, PortFuture, ReleaseCause,
-        ReleaseEvidence, RevertCause, UploadRejection,
+        ReleaseEvidence, RetiredHold, RetirementEvidence, RevertCause, UploadRejection,
     },
     domain::{Attachment, Caller, Hold, HoldState, UploadTicket},
 };
@@ -170,6 +170,35 @@ fn released(
 }
 
 /// Everything except the record's identity and observation time.
+fn retirement_value(retired: &RetiredHold) -> Value {
+    match retired.evidence() {
+        RetirementEvidence::Release(release) => released(
+            "attachment_hold_released",
+            hold_state(retired.was().into()),
+            release_cause(release.cause),
+            retired.hold(),
+            release,
+        ),
+        RetirementEvidence::RevertedUpload {
+            cause,
+            caller: original,
+        } => reverted(retired.hold(), retired.was().into(), *cause, original),
+    }
+}
+
+fn reverted(hold: &Hold, was: HoldState, cause: RevertCause, original: &Caller) -> Value {
+    json!({
+        "kind": "attachment_hold_reverted",
+        "target": hold_target(hold),
+        "transition": {"before": hold_state(was), "after": hold_state(HoldState::Absent)},
+        "cause": revert_cause(cause),
+        "initiator": {"kind": "automatic"},
+        "uploadedBy": caller(original),
+        "correlationId": original.action_id(),
+        "requestedAtMs": hold.ticket_issued_at_ms(),
+    })
+}
+
 pub(super) fn record_value(record: &AttachmentAuditRecord) -> Value {
     match record {
         AttachmentAuditRecord::TicketIssued { ticket } => by_ticket_caller(
@@ -253,19 +282,9 @@ pub(super) fn record_value(record: &AttachmentAuditRecord) -> Value {
             "heldSinceMs": hold.uploaded_at_ms(),
         }),
         // Nobody asked for this: the upload's own bookkeeping took it back.
-        AttachmentAuditRecord::HoldReverted { hold, cause, was } => json!({
-            "kind": "attachment_hold_reverted",
-            "target": hold_target(hold),
-            "transition": {
-                "before": hold_state((*was).into()),
-                "after": hold_state(HoldState::Absent),
-            },
-            "cause": revert_cause(*cause),
-            "initiator": {"kind": "automatic"},
-            "uploadedBy": caller(hold.uploaded_by()),
-            "correlationId": hold.uploaded_by().action_id(),
-            "requestedAtMs": hold.ticket_issued_at_ms(),
-        }),
+        AttachmentAuditRecord::HoldReverted { hold, cause, was } => {
+            reverted(hold, (*was).into(), *cause, hold.uploaded_by())
+        }
         AttachmentAuditRecord::HoldReleased { hold, was, release } => released(
             "attachment_hold_released",
             hold_state(*was),
@@ -273,19 +292,14 @@ pub(super) fn record_value(record: &AttachmentAuditRecord) -> Value {
             hold,
             release,
         ),
-        // The caller's release is why the last hold went; that the bytes then
-        // had no holder is why they were removed.
-        AttachmentAuditRecord::BlobRemoved { hold, release } => {
-            let mut value = released(
-                "attachment_bytes_removed",
-                "stored",
-                json!("last_hold_released"),
-                hold,
-                release,
-            );
-            value["releaseCause"] = json!(release_cause(release.cause));
-            value
-        }
+        AttachmentAuditRecord::BlobRemoved { removed } => json!({
+            "kind": "attachment_bytes_removed",
+            "target": {"storedDigest": removed.digest().to_string()},
+            "transition": {"before": "stored", "after": "absent"},
+            "cause": "unheld_cleanup",
+            "initiator": {"kind": "automatic"},
+            "retirements": removed.retirements().iter().map(retirement_value).collect::<Vec<_>>(),
+        }),
     }
 }
 

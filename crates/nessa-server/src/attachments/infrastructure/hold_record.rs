@@ -9,7 +9,9 @@
 //! Prior state excludes Absent by construction through RetiredFrom.
 use crate::{
     attachments::{
-        application::{ReleaseCause, ReleaseEvidence, RetirementEvidence, RevertCause},
+        application::{
+            ReleaseCause, ReleaseEvidence, RetiredHold, RetirementEvidence, RevertCause,
+        },
         domain::{Attachment, Caller, Hold, MediaType, RetiredFrom},
     },
     conversation::domain::ConversationId,
@@ -206,14 +208,8 @@ pub(super) fn decode(bytes: &[u8]) -> Option<HoldRecord> {
         record.ticket_issued_at_ms,
         record.uploaded_at_ms,
     )?;
-    if let RecordState::Retired {
-        evidence: RetirementEvidence::RevertedUpload { caller, .. },
-        ..
-    } = &state
-    {
-        if caller != hold.uploaded_by() {
-            return None;
-        }
+    if let RecordState::Retired { was, evidence } = &state {
+        RetiredHold::new(hold.clone(), *was, evidence.clone())?;
     }
     Some(HoldRecord {
         hold,

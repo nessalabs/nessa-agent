@@ -84,21 +84,90 @@ pub enum Discard {
     NotMine,
 }
 
-/// One active hold a release retired, and whether it had become usable.
+/// One confirmed retirement, preserving its original predecessor and cause.
+///
+/// ```compile_fail
+/// use nessa_server::attachments::{application::RetiredHold, domain::RetiredFrom};
+/// fn rewrite(mut retired: RetiredHold) { retired.was = RetiredFrom::Held; }
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReleasedHold {
-    pub hold: Hold,
-    /// [`HoldState::Held`], or [`HoldState::Pending`] for a hold whose upload
-    /// had not finished recording it.
-    pub was: HoldState,
+pub struct RetiredHold {
+    hold: Hold,
+    was: RetiredFrom,
+    evidence: RetirementEvidence,
 }
 
-/// Everything a release did. A failure never stops the rest from being tried.
+impl RetiredHold {
+    /// Refuse reversal evidence belonging to a different upload caller.
+    pub fn new(hold: Hold, was: RetiredFrom, evidence: RetirementEvidence) -> Option<Self> {
+        if let RetirementEvidence::RevertedUpload { caller, .. } = &evidence {
+            if caller != hold.uploaded_by() {
+                return None;
+            }
+        }
+        Some(Self {
+            hold,
+            was,
+            evidence,
+        })
+    }
+    pub fn hold(&self) -> &Hold {
+        &self.hold
+    }
+    pub fn was(&self) -> RetiredFrom {
+        self.was
+    }
+    pub fn evidence(&self) -> &RetirementEvidence {
+        &self.evidence
+    }
+    pub fn into_parts(self) -> (Hold, RetiredFrom, RetirementEvidence) {
+        (self.hold, self.was, self.evidence)
+    }
+}
+
+/// One physically removed digest and every related confirmed primary retirement.
+/// Contributor order conveys no chronology; no unique last hold is inferred.
+///
+/// ```compile_fail
+/// use nessa_server::attachments::application::RemovedBlob;
+/// fn erase(mut removed: RemovedBlob) { removed.retirements.clear(); }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovedBlob {
+    digest: Sha256Digest,
+    retirements: Box<[RetiredHold]>,
+}
+
+impl RemovedBlob {
+    /// Refuse missing contributors or retirement targets for another digest.
+    pub fn new(retirements: Vec<RetiredHold>) -> Option<Self> {
+        let digest = retirements.first()?.hold().stored().digest();
+        if retirements
+            .iter()
+            .any(|retired| retired.hold().stored().digest() != digest)
+        {
+            return None;
+        }
+        Some(Self {
+            digest,
+            retirements: retirements.into_boxed_slice(),
+        })
+    }
+    pub fn digest(&self) -> Sha256Digest {
+        self.digest
+    }
+    pub fn retirements(&self) -> &[RetiredHold] {
+        &self.retirements
+    }
+}
+
+/// Confirmed retirements (including retry confirmation) and actual byte cleanup.
+/// A failure never stops the rest from being tried.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReleaseReport {
-    pub released: Vec<ReleasedHold>,
-    /// For each stored digest whose bytes were removed, the last hold on it.
-    pub removed: Vec<Hold>,
+    pub retired: Vec<RetiredHold>,
+    /// One entry per actually removed digest, with complete related evidence.
+    pub removed: Vec<RemovedBlob>,
     /// Holds whose retirement was not confirmed, and bytes that could not be
     /// removed or proved unheld. Each is left in place rather than guessed at.
     pub failures: usize,
@@ -372,12 +441,9 @@ pub enum AttachmentAuditRecord {
         was: HoldState,
         release: ReleaseEvidence,
     },
-    /// The last hold on some bytes was released, so the bytes were removed.
-    /// `hold` is that last hold.
-    BlobRemoved {
-        hold: Hold,
-        release: ReleaseEvidence,
-    },
+    /// Unheld bytes were removed after the original retirement.
+    /// Carries its actual predecessor and release-or-reversal evidence.
+    BlobRemoved { removed: RemovedBlob },
 }
 
 /// Durable evidence of attachment transitions, committed before success is reported.

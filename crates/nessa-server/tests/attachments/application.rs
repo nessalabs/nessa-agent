@@ -1113,8 +1113,13 @@ async fn a_caller_the_conversation_context_accepts_is_one_this_context_can_recor
                 assert_eq!(hold.uploaded_by().principal_id(), &principal("owner"));
                 release
             }
-            AttachmentAuditRecord::BlobRemoved { hold, release } => {
-                assert_eq!(hold.stored().digest(), digest_of(BYTES));
+            AttachmentAuditRecord::BlobRemoved { removed } => {
+                assert_eq!(removed.retirements().len(), 1);
+                let retired = &removed.retirements()[0];
+                assert_eq!(retired.hold().stored().digest(), digest_of(BYTES));
+                let RetirementEvidence::Release(release) = &retired.evidence() else {
+                    panic!("expected explicit release")
+                };
                 release
             }
             other => panic!("unexpected {other:?}"),
@@ -1126,7 +1131,9 @@ async fn a_caller_the_conversation_context_accepts_is_one_this_context_can_recor
         assert_eq!(release.requested_at_ms, NOW_MS + 9);
     }
 
-    // Releasing nothing is not a failure and records nothing.
+    // This MemoryStore removes completed records and returns an empty report.
+    // The real store retains retirement metadata; its retry evidence is covered
+    // by the actual durable-audit fixtures in artifacts.rs.
     fixture
         .service
         .release(release_request(CONVERSATION))

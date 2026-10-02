@@ -3,7 +3,8 @@
 Owner: [#273](https://github.com/nessalabs/nessa-agent/issues/273).
 Status: local persistence, manifest facts and tracked bounded range reads are
 implemented. The original published consumer passed local and platform checks;
-verification of the refreshed private-worker dependency remains pending.
+the refreshed private-worker dependency passed its required gates at `4a2384f7`.
+The retirement retry correction is in review.
 Protected transport is not active. The shared worker producer is `f36ac5d0`,
 on merged `c2f3b0ec`. The linked-device
 integration plan owns cross-feature activation; this document owns the artifact
@@ -116,7 +117,7 @@ The application passes its already validated `ReleaseEvidence` into explicit
 release, and passes actual `RevertCause` into take-back. Owned discard of Pending
 and Kept both publishes Retired; Pending had no prior Live content. A late discard
 of Retired returns NotMine. Private failed-pending-write cleanup can remove only
-a still-Pending exact generation, never Kept or Retired. `ReleaseReport` keeps actual hold/blob outcomes; existing audit sink
+a still-Pending exact generation, never Kept or Retired. `ReleaseReport` carries `RetiredHold` (original hold, RetiredFrom and exhaustive RetirementEvidence) for confirmed retirements. Each actually removed digest is one `RemovedBlob` containing the complete confirmed primary retirement set for that digest from this release. Already-Retired records are re-synced and return their saved evidence before cleanup; new retirement returns the same values it saved. Grouping is ephemeral report assembly from those same metadata records, not another ledger. Directory iteration cannot choose a uniquely last causal hold; contributor order conveys no chronology. Per-hold retirement audits stay separate. Blob audit records automatic stored→absent unheld cleanup and the complete related original retirement evidence, each with its own predecessor/cause/caller. The later request owns only newly withdrawn tickets and newly retired active holds. Repeat confirmation can repeat original evidence, not exactly-once audit delivery; existing audit sink
 failure does not resurrect the hold. Durable Retired metadata retains the
 transition's cause and initiator when the independent audit write fails. This is
 state evidence, not another audit dispatch queue: no automatic audit replay or
@@ -257,6 +258,11 @@ facts and audit mapping. Local physical chunk and source drain evidence is being
 | A23 | Duplicate keys, explicit null retirement fields, or state/evidence disagreement in saved input | One typed codec rejects ambiguous/contradictory records; no collapsed-field acceptance or alternate decoder | Top-level/nested duplicate and presence-state fixtures |
 | A24 | One physical manifest or chunk worker remains held after caller cancellation | Both source methods return Busy without queue; shutdown fences through the sole worker owner and retains actual joins | Held source/cancelled observer/combined admission tests; poll the actual manifest caller once before dropping it, then observe Busy and pending shutdown through the public ports |
 | A25 | Record read completes, then its directory locator disappears before publication acknowledgement | Actual directory-sync refusal prevents manifest/range facts publication; no Live inferred from a previously read record | Real directory relocation at the source publication boundary |
+| A26 | Pending/Held release writes Retired then directory sync fails; later release has another caller/cause/time in same process or reopen | Confirm original saved predecessor and RetirementEvidence before purge; both confirmed retirement and actual blob removal report those original values, never retry request | Real local store→service→audit changed-request retry matrix |
+| A27 | RevertedUpload retirement succeeds but blob removal fails; later conversation release cleans bytes | Report original reversal/caller and Pending/Held predecessor; application maps it to automatic HoldReverted and BlobRemoved reversal evidence, not explicit HoldReleased | Real-store reversal→cleanup retry with actual audit records |
+| A28 | Retry confirms original retirement and cleans bytes, independent audit refuses | Preserve original metadata and actual storage cleanup; audit failure remains independent and cannot resurrect hold or change causal attribution | Recorded/unavailable audit neighbors with reopen verification |
+| A29 | Same digest under different media: one primary already retired by reversal, another active primary newly released; or both are prior retirements on retry | One actual digest removal carries all confirmed original predecessors/evidence, independent of enumeration; no unique last-cause assertion | Actual mixed-media service/durable-audit fixture, reversed construction order and all-prior retry neighbor |
+| A30 | Substitutable store attempts contradictory reversal caller or empty/mixed-digest removal contributors | Immutable application report constructors enforce original upload caller correlation and nonempty same-digest contributors; saved metadata decode consumes the same retirement validator before reporting | Public-constructor refusal and valid adapter/audit agreement neighbors |
 
 ## Later activation and limits
 
@@ -267,11 +273,11 @@ methods and generated codecs are later contracts, not implemented guarantees.
 Artifact work uses one reusable transfer quantum at a time and yields to foreground
 transcript scheduling after the currently admitted physical quantum completes.
 
-The canonical native pairing design already approves a measured revised finite
-composition ceiling. Remaining acceptance work is actual allocation/lifetime and
-platform proof; it is not a decision to preserve the former128KiB whole-owner
-target. Wire sizing still consumes published bounds and measures worst-valid
-encoding/retained allocations before paired activation.
+The canonical native pairing design keeps complete finite sizing open pending
+actual owner and calling-owner overlap proof. The former 128 KiB whole-owner
+target is not accepted. Wire sizing consumes published bounds; protected
+activation requires maximum-valid encoding, retained allocation and platform
+evidence at that native owner.
 
 A held-upload source slice does not close #273. Completion includes actual trusted
 produced-artifact discovery, protected paired verified fetch/resume, revocation and

@@ -238,7 +238,7 @@ async fn cancelled_open_read_keeps_shared_capacity_and_actual_drain_while_releas
         )
         .await
         .unwrap();
-    assert_eq!(retired.released.len(), 1);
+    assert_eq!(retired.retired.len(), 1);
     assert_eq!(retired.failures, 0);
     assert!(
         tokio::time::timeout(Duration::from_millis(30), store.shutdown())
@@ -338,7 +338,7 @@ async fn an_admitted_open_range_finishes_after_retirement_but_later_reads_are_de
         )
         .await
         .unwrap();
-    assert_eq!(retired.released.len(), 1);
+    assert_eq!(retired.retired.len(), 1);
     assert_eq!(retired.failures, 0);
     release.send(()).unwrap();
     assert_eq!(waiter.await.unwrap().unwrap().as_bytes(), b"yte");

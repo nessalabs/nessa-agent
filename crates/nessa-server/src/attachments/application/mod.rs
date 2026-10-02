@@ -32,8 +32,8 @@ pub use ports::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditUnavailable, Confirmation,
     ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept, NormalizeError,
     NormalizeFuture, NormalizedImage, Ownership, OwnershipUnavailable, PortFuture, ReceivedBytes,
-    ReleaseCause, ReleaseEvidence, ReleaseReport, ReleasedHold, RetirementEvidence, RevertCause,
-    SecretsUnavailable, StagedUpload, StoreUnavailable, TicketSecrets, UploadBody,
+    ReleaseCause, ReleaseEvidence, ReleaseReport, RemovedBlob, RetiredHold, RetirementEvidence,
+    RevertCause, SecretsUnavailable, StagedUpload, StoreUnavailable, TicketSecrets, UploadBody,
     UploadInterrupted, UploadRejection,
 };
 pub use service::{

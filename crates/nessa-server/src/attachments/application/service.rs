@@ -2,8 +2,8 @@ use super::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditDelivery, AuditUnavailable,
     BeginError, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept,
     NormalizeError, Ownership, OwnershipUnavailable, ReceivedBytes, ReleaseCause, ReleaseError,
-    ReleaseEvidence, RevertCause, StagedUpload, StoreUnavailable, TicketSecret, TicketSecrets,
-    UploadBody, UploadError, UploadRejection,
+    ReleaseEvidence, RetirementEvidence, RevertCause, StagedUpload, StoreUnavailable, TicketSecret,
+    TicketSecrets, UploadBody, UploadError, UploadRejection,
 };
 use crate::{
     attachments::domain::{
@@ -818,19 +818,25 @@ impl AttachmentService {
             })
             .collect();
         if let Some(report) = report {
-            records.extend(report.released.into_iter().map(|released| {
-                AttachmentAuditRecord::HoldReleased {
-                    hold: released.hold,
-                    was: released.was,
-                    release: release.clone(),
+            records.extend(report.retired.into_iter().map(|retired| {
+                let (hold, was, evidence) = retired.into_parts();
+                match evidence {
+                    RetirementEvidence::Release(release) => AttachmentAuditRecord::HoldReleased {
+                        hold,
+                        was: was.into(),
+                        release,
+                    },
+                    RetirementEvidence::RevertedUpload { cause, .. } => {
+                        AttachmentAuditRecord::HoldReverted { hold, was, cause }
+                    }
                 }
             }));
-            records.extend(report.removed.into_iter().map(|hold| {
-                AttachmentAuditRecord::BlobRemoved {
-                    hold,
-                    release: release.clone(),
-                }
-            }));
+            records.extend(
+                report
+                    .removed
+                    .into_iter()
+                    .map(|removed| AttachmentAuditRecord::BlobRemoved { removed }),
+            );
         }
         // One budget for the whole release: a conversation's holds are not
         // bounded, and a sink that answers slowly must not keep a close open
