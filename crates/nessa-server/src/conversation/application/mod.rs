@@ -73,6 +73,9 @@
 //! serialized per conversation (`ConversationLocks`), and a delete that waits
 //! behind another attempt answers from its tombstone without one of its own.
 mod app_reviews;
+// For the agreement test, which holds it to the published `x-mcpAppCallTiming`.
+#[cfg(test)]
+pub(crate) use app_reviews::APP_REVIEW_DEADLINE;
 mod catalogue;
 mod catalogue_read;
 mod error;
