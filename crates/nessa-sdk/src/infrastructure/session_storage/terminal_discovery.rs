@@ -153,12 +153,15 @@ impl TerminalCache {
         if through > tail {
             return Err(SourceError::IdentityChanged);
         }
-        if state.validator.offset() < through {
+        // A different caller may need proof below this retained pass's ceiling.
+        // Stop its read at that target without discarding the larger pass.
+        let until = target.map_or(through, |target| target.min(through));
+        if state.validator.offset() < until {
             let page = runtime
                 .read_after(
                     &Cursor::new(key.clone(), state.validator.offset()),
                     STEP,
-                    Some(&Cursor::new(key.clone(), through)),
+                    Some(&Cursor::new(key.clone(), until)),
                 )
                 .await
                 .map_err(source_error)?;
@@ -220,9 +223,8 @@ impl TerminalCache {
         }
         if state.validator.offset() == through {
             state.through = None;
-            if target.is_some_and(|target| target > state.validator.offset()) {
-                return Ok(RecordReadStatus::Preparing);
-            }
+        }
+        if state.validator.offset() == target.unwrap_or(through) {
             Ok(RecordReadStatus::Ready(state.terminal))
         } else {
             Ok(RecordReadStatus::Preparing)
