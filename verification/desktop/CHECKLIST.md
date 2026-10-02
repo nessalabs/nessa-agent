@@ -154,6 +154,9 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   header held to the top left, and cut to it —
   its title never drawn stretched, any frame — and a drag leaves no pane at a size of its own. _Check:_
   `drag.mjs` (`preview-panes-take-shape`; every drag check's residue).
+- _Harmless, and not a failure:_ a single read of a title's transforms in
+  WebKit that mixes two moments. How the two stretch checks read a title is
+  `recordShapes`' (`drag.mjs`), and why, with the runs and probes, is #365.
 - [ ] **A zone the fit rule refuses offers nothing; a session already on
   screen offers "Go to Pane".** _Check:_ manual (drag a session from the list
   onto four panes; drag an on-screen session).
