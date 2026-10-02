@@ -24,3 +24,8 @@ export function tsconfigPathViolations(
   actual: Record<string, unknown> | undefined,
   paths?: readonly NessaUiPath[],
 ): string[]
+
+export function tsconfigTextViolations(
+  text: string,
+  paths?: readonly NessaUiPath[],
+): string[]

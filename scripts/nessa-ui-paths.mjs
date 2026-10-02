@@ -23,8 +23,11 @@
  * Order is not part of the table: the derivers put a whole specifier and a
  * longer prefix ahead of a shorter one, so `lib/` is never claimed by the
  * components' rule. Pure on purpose — the architecture check imports this with
- * bare Node and no `node_modules`. Its types are `nessa-ui-paths.d.mts`'s.
+ * bare Node and no `node_modules`, so it imports Node's own modules alone. Its
+ * types are `nessa-ui-paths.d.mts`'s.
  */
+
+import { posix } from "node:path"
 
 /** @typedef {import("./nessa-ui-paths.d.mts").NessaUiPath} NessaUiPath */
 
@@ -91,15 +94,22 @@ export function tsconfigPaths(paths = nessaUiPaths) {
   )
 }
 
+const sourceRoot = posix.normalize(linkedSourceRoot)
+
 /**
- * Whether a `paths` entry leads into the design system's source, which makes
- * it the table's to hold, whatever its key.
+ * Whether a `paths` entry leads into the design system's source through its
+ * `node_modules` link, however the path is spelled (`./` or not, `a/./b`,
+ * the root itself): that makes it the table's to hold, whatever its key. A
+ * path into the vendored checkout's real location (`.vendor/…`) is not
+ * recognised; nothing in `tsconfig.json` reaches the source that way.
  */
 const intoTheSource = (targets) =>
   Array.isArray(targets) &&
-  targets.some(
-    (target) => typeof target === "string" && target.startsWith(`${linkedSourceRoot}/`),
-  )
+  targets.some((target) => {
+    if (typeof target !== "string") return false
+    const path = posix.normalize(target)
+    return path === sourceRoot || path.startsWith(`${sourceRoot}/`)
+  })
 
 /**
  * How `tsconfig.json`'s `compilerOptions.paths` disagrees with the table: an
@@ -131,8 +141,29 @@ export function tsconfigPathViolations(actual, paths = nessaUiPaths) {
   for (const [key, targets] of Object.entries(given)) {
     if (intoTheSource(targets) && !Object.hasOwn(expected, key))
       violations.push(
-        `tsconfig.json paths has "${key}", which scripts/nessa-ui-paths.mjs does not map`,
+        `tsconfig.json paths has "${key}", which leads into the design system's source but is not in scripts/nessa-ui-paths.mjs; remove it, or add its mapping to the table first`,
       )
   }
   return violations
+}
+
+/**
+ * `tsconfigPathViolations` for `tsconfig.json`'s text. The check reads it with
+ * `JSON.parse`, having no parser for comments or trailing commas, so a file
+ * that is not plain JSON is reported as such rather than thrown.
+ *
+ * @param {string} text
+ * @param {readonly NessaUiPath[]} [paths]
+ * @returns {string[]}
+ */
+export function tsconfigTextViolations(text, paths = nessaUiPaths) {
+  let tsconfig
+  try {
+    tsconfig = JSON.parse(text)
+  } catch (error) {
+    return [
+      `tsconfig.json is not plain JSON (${error.message}); the check that holds its paths to scripts/nessa-ui-paths.mjs reads it with JSON.parse, so keep it free of comments and trailing commas`,
+    ]
+  }
+  return tsconfigPathViolations(tsconfig?.compilerOptions?.paths, paths)
 }

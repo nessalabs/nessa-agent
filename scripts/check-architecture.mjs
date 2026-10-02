@@ -25,7 +25,7 @@ import {
   workspaceRustSourceRoots,
 } from "./architecture/rust-boundaries.mjs"
 import { withoutComments } from "./architecture/without-comments.mjs"
-import { tsconfigPathViolations } from "./nessa-ui-paths.mjs"
+import { tsconfigTextViolations } from "./nessa-ui-paths.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const src = join(root, "src")
@@ -466,8 +466,8 @@ for (const boundary of portableRuntimeBoundaries) {
 // Vitest do, so its copy in `tsconfig.json` is held to the table here.
 {
   const file = join(root, "tsconfig.json")
-  const paths = JSON.parse(readFileSync(file, "utf8")).compilerOptions?.paths
-  for (const violation of tsconfigPathViolations(paths)) fail(file, violation)
+  for (const violation of tsconfigTextViolations(readFileSync(file, "utf8")))
+    fail(file, violation)
 }
 
 // A script rather than product source, so it is read by path rather than by
