@@ -117,7 +117,7 @@ The application passes its already validated `ReleaseEvidence` into explicit
 release, and passes actual `RevertCause` into take-back. Owned discard of Pending
 and Kept both publishes Retired; Pending had no prior Live content. A late discard
 of Retired returns NotMine. Private failed-pending-write cleanup can remove only
-a still-Pending exact generation, never Kept or Retired. `ReleaseReport` carries `RetiredHold` (original hold, RetiredFrom and exhaustive RetirementEvidence) for confirmed retirements. Each actually removed digest is one `RemovedBlob` containing the complete confirmed primary retirement set for that digest from this release. Already-Retired records are re-synced and return their saved evidence before cleanup; new retirement returns the same values it saved. Grouping is ephemeral report assembly from those same metadata records, not another ledger. Directory iteration cannot choose a uniquely last causal hold; contributor order conveys no chronology. Per-hold retirement audits stay separate. Blob audit records automatic stored→absent unheld cleanup and the complete related original retirement evidence, each with its own predecessor/cause/caller. The later request owns only newly withdrawn tickets and newly retired active holds. Repeat confirmation can repeat original evidence, not exactly-once audit delivery; existing audit sink
+a still-Pending exact generation, never Kept or Retired. `ReleaseReport` carries `RetiredHold` (original hold, RetiredFrom and exhaustive RetirementEvidence) for confirmed retirements. Each actually removed digest is one `RemovedBlob` containing the complete selected-target primary retirement set for that digest acknowledged during retirement attempts or subsequently confirmed by the authoritative retention scan. Already-Retired records are re-synced and return their saved evidence before cleanup; new retirement returns the same values it saved. Grouping is ephemeral report assembly from those same metadata records, not another ledger. Directory iteration cannot choose a uniquely last causal hold; contributor order conveys no chronology. Per-hold retirement audits stay separate. Blob audit records automatic stored→absent unheld cleanup and the complete related original retirement evidence, each with its own predecessor/cause/caller. The later request owns only newly withdrawn tickets and newly retired active holds. Repeat confirmation can repeat original evidence, not exactly-once audit delivery; existing audit sink
 failure does not resurrect the hold. Durable Retired metadata retains the
 transition's cause and initiator when the independent audit write fails. This is
 state evidence, not another audit dispatch queue: no automatic audit replay or
@@ -222,14 +222,16 @@ shutdown before that composition wiring is active. Initial physical range admiss
 and no waiter queue. That capacity remains held through actual OS read and result
 completion even if the caller cancels or its deadline expires. It is distinct from
 socket delivery and global record permits, and is not a whole-gateway heap bound.
-The extraction is consumed; local range checks remain in progress. Network capacity, socket
+The extraction is consumed. Local range and source-drain checks are implemented and locally verified by `tests/attachments/artifact_ranges.rs`, including held work, caller loss, panic and opened-before-retirement lifetime. Network capacity, socket
 permit and delivery policy are likewise integration-owned; no artifact-specific
 second socket ledger or guessed gateway capacity is added here.
 
 ## Required feature state/order evidence
 
-This table is the target contract. Current tests cover local persistence, manifest
-facts and audit mapping. Local physical chunk and source drain evidence is being implemented against the shared worker owner. Protected transport and composed drain rows remain queued until their actual owners are integrated.
+This table records the feature contract. Current local tests cover persistence, manifest
+facts, audit mapping, physical chunk work and source drain through the shared worker owner.
+Protected transport, composed host drain and supported-platform acceptance remain queued
+until their actual owners are integrated and verified.
 
 | Row | Event ordering | Source result and durable owner | Regression to implement |
 | --- | --- | --- | --- |
@@ -283,3 +285,37 @@ A held-upload source slice does not close #273. Completion includes actual trust
 produced-artifact discovery, protected paired verified fetch/resume, revocation and
 deletion refusal, honest sleeping-source metadata and transfer priority/data-cost
 evidence against active transcript work.
+
+### Retention scan and release-report agreement correction
+
+| Ordering / substitutable boundary | Required result | One enforcing owner |
+| --- | --- | --- |
+| Same digest, first primary replacement succeeds but directory acknowledgement transiently fails; scan later confirms it | Keep first failure explicit. The existing retention scan re-reads and synchronizes saved Retired metadata, returns all confirmed primary retirements for the requested organization/conversation, and supplies both the per-hold report and removal group. Cleanup includes the first saved cause even though its earlier write returned failure | Files retention scan under existing changes lock |
+| Corrupt primary or confirmed retirement belonging to another conversation | Corrupt primary conservatively retains its filename digest. Other conversations' active references protect bytes; other conversations' retirements are not contributors to this release's report | Same retention scan |
+| Custom report has foreign organization/conversation, duplicate retirement identity or duplicate removed digest | Reject hold/blob report mapping before durable audit; ticket withdrawal already performed keeps its own admitted target and evidence. Return incomplete, with no invented rollback of adapter effects | ReleaseReport agreement against admitted target |
+| Contributor is absent, differs in original hold/predecessor/evidence, is duplicated, or omits a reported retirement for its removed digest | Refuse the report as contradictory. Legitimate distinct media on one digest remain accepted, in either order; original release/reversal evidence need not equal the retry request | Same ReleaseReport agreement owner |
+| Retry/reopen after actual removal or independent audit refusal | Storage confirmation and audit delivery remain separate. An absent blob cannot generate another physical removal; saved original retirements remain unchanged and can be confirmed again | Existing store removal and application audit owners |
+| Confirmed retirement followed by a conservatively unreadable primary during scan | Keep the already acknowledged retirement fact and add newly scan-confirmed facts without duplicates. The unreadable filename still retains its digest, forbids physical cleanup and reports independent candidate uncertainty. Later restoration/retry preserves the original cause and can complete cleanup; read availability is not authority to erase an observed transition | Same Files release/retention report assembly; owning real-file reread regression |
+
+### Structural content and retention outcomes
+
+Repeated report/retention findings came from incomplete relationship facts:
+digest/media identity omitted stored byte length, and the scan collapsed validated
+active retention with unreadability. The current structural correction keeps one
+application report validator and one ephemeral filesystem retention result. It
+preserves prior review history; at most two full rounds follow this rework before
+the bounded draft handoff rule applies. Issue383's bulk cost policy stays open.
+
+| Input / ordering | Required result | One owner |
+| --- | --- | --- |
+| Same stored digest, different stored lengths, distinct media; either order, including retired-only | Refuse combined report before hold/blob audit. One borrowed content relationship is consumed by both aggregate validation and removed-group construction | Existing application report owner; distinct from physical blob verification |
+| Same stored digest/length, distinct media, original causes or normalized uploaded lengths | Accept each original fact; do not equate uploaded and stored representations | Same relationship owner |
+| Pending/Held retirement acknowledged, primary becomes unreadable before scan | Retain original retirement/audit and independently report candidate cleanup uncertainty. Preserve bytes; exact metadata restoration permits original-cause cleanup retry | Existing Files retention result and remove_unheld |
+| Valid active foreign holder with candidate digest | Protect bytes with an affirmative active fact; successful no-removal, no foreign retirement contributor | Same retention result |
+| Unrelated unreadable primary has another digest | Protect that digest without failing candidate cleanup | Same retention result |
+| Candidate has both active and unreadable primaries | Candidate uncertainty takes precedence; no successful cleanup conclusion or unlink | Same remove_unheld decision |
+| Owned discard meets candidate uncertainty | Original retirement remains; existing CleanupIncomplete preserves predecessor. Failed-upload rollback uses the same decision and remains best effort under its original failure | Same remove_unheld consumed by all cleanup paths |
+
+The report describes confirmed stored facts, not proof that an arbitrary adapter
+performed its claimed physical effects. Validation does not establish exactly-once
+audit delivery, and issue383 retains the separate bulk-audit policy limit.

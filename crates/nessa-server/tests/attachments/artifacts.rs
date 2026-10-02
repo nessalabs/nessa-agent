@@ -1,8 +1,14 @@
 //! Exact held-lifetime manifests and durable retirement/reupload boundaries.
 use super::*;
-use crate::attachments::application::{ArtifactReadError, ArtifactState, AttachmentArtifacts};
+use crate::attachments::application::{
+    ArtifactReadError, ArtifactState, AttachmentArtifacts, AttachmentDependencies,
+    AttachmentLimits, AttachmentService, ReleaseError, ReleaseRequest,
+};
+use crate::attachments::infrastructure::DurableAttachmentAudit;
+use crate::attachments_test_support::Fixture;
 use nessa_auth::domain::MAX_IDENTIFIER_BYTES;
 use serde_json::Value;
+use std::sync::Mutex;
 
 #[tokio::test]
 async fn manifests_keep_the_exact_stored_lifetime_across_restart_and_reupload() {
@@ -331,9 +337,13 @@ async fn an_uncertain_retirement_does_not_publish_a_manifest_until_directory_syn
         .await
         .unwrap();
     assert_eq!(report.failures, 1);
-    assert!(report.retired.is_empty());
-    assert!(report.removed.is_empty());
-    assert!(store.read(digest_of(b"bytes"), 16).await.unwrap().is_some());
+    assert_eq!(
+        report.retired.len(),
+        1,
+        "scan confirmed the saved retirement"
+    );
+    assert_eq!(report.removed.len(), 1);
+    assert!(store.read(digest_of(b"bytes"), 16).await.unwrap().is_none());
     let id = ArtifactId::from_generation(claim.as_str());
     *store.files.publication_fault.lock().unwrap() = Some(PublicationFault::BeforeManifestSync);
     assert_eq!(
@@ -372,8 +382,10 @@ async fn an_uncertain_retirement_does_not_publish_a_manifest_until_directory_syn
         retried.retired[0].evidence(),
         &RetirementEvidence::Release(release_evidence())
     );
-    assert_eq!(retried.removed.len(), 1);
-    assert_eq!(retried.removed[0].retirements(), retried.retired);
+    assert!(
+        retried.removed.is_empty(),
+        "first scan already removed the blob"
+    );
 }
 
 #[tokio::test]
@@ -693,11 +705,6 @@ async fn an_unrelated_corrupt_primary_prevents_live_manifest_without_releasing_i
 
 // Actual local store and durable sink; only unrelated application ports are doubles.
 async fn retry_retirement_case(kept: bool, reopen: bool, audit_refuses: bool, reversal: bool) {
-    use crate::attachments::application::{
-        AttachmentDependencies, AttachmentLimits, AttachmentService, ReleaseError, ReleaseRequest,
-    };
-    use crate::attachments::infrastructure::DurableAttachmentAudit;
-    use crate::attachments_test_support::Fixture;
     let root = tempfile::tempdir().unwrap();
     let mut store = Arc::new(open(root.path()));
     let hold = hold_for("org", CONVERSATION, b"bytes", b"bytes");
@@ -757,15 +764,21 @@ async fn retry_retirement_case(kept: bool, reopen: bool, audit_refuses: bool, re
         fs::remove_dir(&blob).unwrap();
         fs::write(&blob, b"bytes").unwrap();
     } else {
+        // Keep actual cleanup pending after the scan confirms the transiently
+        // failed publication, so the changed-request retry removes bytes later.
+        fs::remove_file(&blob).unwrap();
+        fs::create_dir(&blob).unwrap();
         *store.files.publication_fault.lock().unwrap() =
             Some(PublicationFault::AfterPrimaryReplace);
         assert_eq!(
             first.release(request(false)).await,
             Err(ReleaseError::Incomplete {
-                storage_failures: 1,
+                storage_failures: 2,
                 audit_failures: 0
             })
         );
+        fs::remove_dir(&blob).unwrap();
+        fs::write(&blob, b"bytes").unwrap();
     }
     let saved_path = root.path().join("attachments").join(path_of(&hold));
     let original = fs::read(&saved_path).unwrap();
@@ -776,7 +789,7 @@ async fn retry_retirement_case(kept: bool, reopen: bool, audit_refuses: bool, re
     }
     support.clock.set(9_000);
     if audit_refuses {
-        fs::remove_dir(&audit_path).unwrap();
+        fs::remove_dir_all(&audit_path).unwrap();
     }
     let service = service_for(store.clone());
     let result = service.release(request(true)).await;
@@ -805,7 +818,7 @@ async fn retry_retirement_case(kept: bool, reopen: bool, audit_refuses: bool, re
             .unwrap()
             .map(|entry| serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap())
             .collect();
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), if reversal { 2 } else { 3 });
         for record in records {
             let fact = if record["kind"] == "attachment_bytes_removed" {
                 assert_eq!(record["cause"], "unheld_cleanup");
@@ -893,11 +906,6 @@ async fn reversal_cleanup_retry_stays_automatic_in_actual_durable_audit() {
 
 #[tokio::test]
 async fn mixed_media_digest_cleanup_keeps_all_original_retirements_in_actual_durable_audit() {
-    use crate::attachments::application::{
-        AttachmentDependencies, AttachmentLimits, AttachmentService, ReleaseRequest,
-    };
-    use crate::attachments::infrastructure::DurableAttachmentAudit;
-    use crate::attachments_test_support::Fixture;
     for reverse_creation in [false, true] {
         for all_prior in [false, true] {
             let root = tempfile::tempdir().unwrap();
@@ -1062,6 +1070,394 @@ async fn mixed_media_digest_cleanup_keeps_all_original_retirements_in_actual_dur
             assert_eq!(repeated.retired.len(), 2);
             assert!(repeated.removed.is_empty());
             assert_eq!(repeated.failures, 0);
+        }
+    }
+}
+
+#[tokio::test]
+async fn transiently_confirmed_shared_digest_retirements_all_reach_actual_cleanup_audit() {
+    for reversal in [false, true] {
+        for reverse in [false, true] {
+            for reopen in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let mut store = Arc::new(open(root.path()));
+                let first = hold_for("org", CONVERSATION, b"bytes", b"bytes");
+                let ticket = UploadTicket::new(
+                    organization("org"),
+                    conversation(CONVERSATION),
+                    attachment(b"bytes", "image/png"),
+                    Caller::new(principal("owner"), "panel", "begin-2").unwrap(),
+                    TicketLifetime::starting(1_000).unwrap(),
+                );
+                let second =
+                    Hold::from_upload(&ticket, attachment(b"bytes", "image/png"), 2_000).unwrap();
+                let (first_claim, second_claim) = if reverse {
+                    let second_claim = claim(&store, &second, b"bytes").await;
+                    (claim(&store, &first, b"bytes").await, second_claim)
+                } else {
+                    (
+                        claim(&store, &first, b"bytes").await,
+                        claim(&store, &second, b"bytes").await,
+                    )
+                };
+                store.confirm(&second, &second_claim).await.unwrap();
+                if reversal {
+                    assert_eq!(
+                        store
+                            .discard(&first, &first_claim, RevertCause::ConfirmationFailed)
+                            .await,
+                        Ok(Discard::Discarded {
+                            was: RetiredFrom::Pending
+                        })
+                    );
+                }
+                let support = Fixture::new(AttachmentLimits::default());
+                support.clock.set(3_000);
+                let audit_path = root.path().join("audit");
+                let audit = Arc::new(
+                    DurableAttachmentAudit::new(audit_path.clone(), support.clock.clone()).unwrap(),
+                );
+                let service_for = |store: Arc<LocalAttachmentStore>| {
+                    AttachmentService::new(
+                        AttachmentDependencies {
+                            store,
+                            audit: audit.clone(),
+                            ownership: support.ownership.clone(),
+                            secrets: support.secrets.clone(),
+                            normalizer: support.normalizer.clone(),
+                            clock: support.clock.clone(),
+                        },
+                        AttachmentLimits::default(),
+                    )
+                };
+                let request = |retry| ReleaseRequest {
+                    organization_id: first.organization_id().clone(),
+                    conversation_id: first.conversation_id().clone(),
+                    cause: if retry {
+                        ReleaseCause::ConversationDeleted
+                    } else {
+                        ReleaseCause::ConversationClosed
+                    },
+                    principal_id: principal(if retry { "another-owner" } else { "owner" }),
+                    surface_id: if retry { "phone" } else { "panel" }.into(),
+                    correlation_id: if retry { "retry-2" } else { "release-1" }.into(),
+                };
+                *store.files.publication_fault.lock().unwrap() =
+                    Some(PublicationFault::AfterPrimaryReplace);
+                let service = service_for(store.clone());
+                assert_eq!(
+                    service.release(request(false)).await,
+                    Err(ReleaseError::Incomplete {
+                        storage_failures: 1,
+                        audit_failures: 0
+                    })
+                );
+                let blob = root
+                    .path()
+                    .join("attachments")
+                    .join(blob_path(first.stored().digest()));
+                assert!(!blob.exists());
+                let records: Vec<Value> = fs::read_dir(&audit_path)
+                    .unwrap()
+                    .map(|entry| {
+                        serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap()
+                    })
+                    .collect();
+                assert_eq!(
+                    records.len(),
+                    3,
+                    "two original retirements and one physical removal"
+                );
+                let removal = records
+                    .iter()
+                    .find(|record| record["kind"] == "attachment_bytes_removed")
+                    .unwrap();
+                let contributors = removal["retirements"].as_array().unwrap();
+                assert_eq!(
+                    contributors.len(),
+                    2,
+                    "scan-confirmed failed write is load-bearing"
+                );
+                for (media, before, cause, correlation) in [
+                    (
+                        PDF,
+                        "pending",
+                        if reversal {
+                            "confirmation_failed"
+                        } else {
+                            "conversation_closed"
+                        },
+                        if reversal { "begin-1" } else { "release-1" },
+                    ),
+                    ("image/png", "held", "conversation_closed", "release-1"),
+                ] {
+                    let fact = contributors
+                        .iter()
+                        .find(|fact| fact["target"]["stored"]["mediaType"] == media)
+                        .unwrap();
+                    assert_eq!(fact["transition"]["before"], before);
+                    assert_eq!(fact["cause"], cause);
+                    assert_eq!(fact["correlationId"], correlation);
+                }
+                let paths = [
+                    root.path().join("attachments").join(path_of(&first)),
+                    root.path().join("attachments").join(path_of(&second)),
+                ];
+                let saved = paths
+                    .iter()
+                    .map(|path| fs::read(path).unwrap())
+                    .collect::<Vec<_>>();
+                drop(service);
+                if reopen {
+                    drop(store);
+                    store = Arc::new(open(root.path()));
+                }
+                support.clock.set(9_000);
+                service_for(store.clone())
+                    .release(request(true))
+                    .await
+                    .unwrap();
+                for (path, original) in paths.iter().zip(saved) {
+                    assert_eq!(fs::read(path).unwrap(), original);
+                }
+                let records: Vec<Value> = fs::read_dir(&audit_path)
+                    .unwrap()
+                    .map(|entry| {
+                        serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap()
+                    })
+                    .collect();
+                assert_eq!(
+                    records
+                        .iter()
+                        .filter(|record| record["kind"] == "attachment_bytes_removed")
+                        .count(),
+                    1,
+                    "retry cannot fabricate another physical removal"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn confirmed_retirement_survives_conservative_real_primary_reread_failure() {
+    for kept in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(open(root.path()));
+        let hold = hold_for("org", CONVERSATION, b"bytes", b"bytes");
+        let claim = claim(&store, &hold, b"bytes").await;
+        if kept {
+            store.confirm(&hold, &claim).await.unwrap();
+        }
+        let path = root.path().join("attachments").join(path_of(&hold));
+        let saved = Arc::new(Mutex::new(None));
+        let retained = saved.clone();
+        let reread_path = path.clone();
+        *store.files.before_retention_scan.lock().unwrap() = Some(Box::new(move || {
+            *retained.lock().unwrap() = Some(fs::read(&reread_path).unwrap());
+            // A real private primary becomes undecodable only after acknowledgement.
+            // The scan must retain its filename digest without losing the known fact.
+            fs::write(&reread_path, b"unreadable record").unwrap();
+        }));
+        let support = Fixture::new(AttachmentLimits::default());
+        support.clock.set(3_000);
+        let audit_path = root.path().join("audit");
+        let service = AttachmentService::new(
+            AttachmentDependencies {
+                store: store.clone(),
+                audit: Arc::new(
+                    DurableAttachmentAudit::new(audit_path.clone(), support.clock.clone()).unwrap(),
+                ),
+                ownership: support.ownership.clone(),
+                secrets: support.secrets.clone(),
+                normalizer: support.normalizer.clone(),
+                clock: support.clock.clone(),
+            },
+            AttachmentLimits::default(),
+        );
+        let request = |retry| ReleaseRequest {
+            organization_id: hold.organization_id().clone(),
+            conversation_id: hold.conversation_id().clone(),
+            cause: if retry {
+                ReleaseCause::ConversationDeleted
+            } else {
+                ReleaseCause::ConversationClosed
+            },
+            principal_id: principal(if retry { "another-owner" } else { "owner" }),
+            surface_id: "panel".into(),
+            correlation_id: if retry { "retry-2" } else { "release-1" }.into(),
+        };
+        assert!(matches!(
+            service.release(request(false)).await,
+            Err(crate::attachments::application::ReleaseError::Incomplete {
+                storage_failures: 1,
+                audit_failures: 0
+            })
+        ));
+        let records: Vec<Value> = fs::read_dir(&audit_path)
+            .unwrap()
+            .map(|entry| serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap())
+            .collect();
+        assert_eq!(
+            records.len(),
+            1,
+            "known confirmed retirement must survive reread failure"
+        );
+        assert_eq!(records[0]["kind"], "attachment_hold_released");
+        assert_eq!(
+            records[0]["transition"]["before"],
+            if kept { "held" } else { "pending" }
+        );
+        assert_eq!(records[0]["cause"], "conversation_closed");
+        assert_eq!(records[0]["correlationId"], "release-1");
+        let blob = root
+            .path()
+            .join("attachments")
+            .join(blob_path(hold.stored().digest()));
+        assert!(
+            blob.exists(),
+            "unreadable primary conservatively retains bytes"
+        );
+        fs::write(&path, saved.lock().unwrap().take().unwrap()).unwrap();
+        support.clock.set(9_000);
+        service.release(request(true)).await.unwrap();
+        assert!(!blob.exists());
+        let records: Vec<Value> = fs::read_dir(&audit_path)
+            .unwrap()
+            .map(|entry| serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap())
+            .collect();
+        let removal = records
+            .iter()
+            .find(|record| record["kind"] == "attachment_bytes_removed")
+            .unwrap();
+        assert_eq!(removal["retirements"][0]["cause"], "conversation_closed");
+        assert_eq!(removal["retirements"][0]["correlationId"], "release-1");
+    }
+}
+
+#[tokio::test]
+async fn cleanup_distinguishes_active_unrelated_and_candidate_uncertain_retention() {
+    for kept in [false, true] {
+        for discard in [false, true] {
+            // 0=unheld, 1=valid foreign holder, 2=unrelated corruption,
+            // 3=unknown candidate, 4=valid holder plus unknown candidate.
+            for case in 0..5 {
+                let root = tempfile::tempdir().unwrap();
+                let store = open(root.path());
+                let hold = hold_for("org", CONVERSATION, b"bytes", b"bytes");
+                let owned = claim(&store, &hold, b"bytes").await;
+                if kept {
+                    store.confirm(&hold, &owned).await.unwrap();
+                }
+                let active = if case == 1 || case == 4 {
+                    let active = hold_for("org", OTHER_CONVERSATION, b"bytes", b"bytes");
+                    let active_claim = claim(&store, &active, b"bytes").await;
+                    store.confirm(&active, &active_claim).await.unwrap();
+                    Some(active)
+                } else {
+                    None
+                };
+                let uncertain = if case >= 2 {
+                    let bytes: &[u8] = if case == 2 { b"unrelated" } else { b"bytes" };
+                    let unknown = hold_for("foreign", OTHER_CONVERSATION, bytes, bytes);
+                    let _original_claim = claim(&store, &unknown, bytes).await;
+                    let path = root.path().join("attachments").join(path_of(&unknown));
+                    let original = fs::read(&path).unwrap();
+                    let physical_path = path.clone();
+                    *store.files.before_retention_scan.lock().unwrap() =
+                        Some(Box::new(move || {
+                            fs::write(physical_path, b"unreadable primary").unwrap();
+                        }));
+                    Some((unknown, path, original))
+                } else {
+                    None
+                };
+                let candidate_unknown = case == 3 || case == 4;
+                if discard {
+                    assert_eq!(
+                        store
+                            .discard(&hold, &owned, RevertCause::ConfirmationFailed)
+                            .await,
+                        Ok(if candidate_unknown {
+                            Discard::CleanupIncomplete {
+                                was: if kept {
+                                    RetiredFrom::Held
+                                } else {
+                                    RetiredFrom::Pending
+                                },
+                            }
+                        } else {
+                            Discard::Discarded {
+                                was: if kept {
+                                    RetiredFrom::Held
+                                } else {
+                                    RetiredFrom::Pending
+                                },
+                            }
+                        }),
+                        "case {case}"
+                    );
+                } else {
+                    let report = store
+                        .release(
+                            hold.organization_id(),
+                            hold.conversation_id(),
+                            &release_evidence(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        report.failures,
+                        usize::from(candidate_unknown),
+                        "case {case}"
+                    );
+                    assert_eq!(report.retired.len(), 1);
+                    assert_eq!(report.retired[0].hold(), &hold);
+                    assert_eq!(report.removed.len(), usize::from(case == 0 || case == 2));
+                }
+                let blob = root
+                    .path()
+                    .join("attachments")
+                    .join(blob_path(hold.stored().digest()));
+                assert_eq!(blob.exists(), case == 1 || candidate_unknown, "case {case}");
+                if let Some(active) = &active {
+                    assert!(holds(&store, active).await);
+                }
+                if let Some((unknown, path, original)) = uncertain {
+                    // Actual restore establishes retention again; it does not
+                    // invent retirement or remove another conversation's hold.
+                    fs::write(path, original).unwrap();
+                    let retry = store
+                        .release(
+                            hold.organization_id(),
+                            hold.conversation_id(),
+                            &release_evidence(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(retry.failures, 0);
+                    assert_eq!(retry.retired.len(), 1);
+                    assert_eq!(retry.retired[0].hold(), &hold);
+                    if discard {
+                        assert!(
+                            matches!(retry.retired[0].evidence(), RetirementEvidence::RevertedUpload {
+                            cause: RevertCause::ConfirmationFailed, caller
+                        } if caller == hold.uploaded_by())
+                        );
+                    } else {
+                        assert_eq!(
+                            retry.retired[0].evidence(),
+                            &RetirementEvidence::Release(release_evidence())
+                        );
+                    }
+                    assert_eq!(retry.removed.len(), 0, "no repeat or foreign removal");
+                    assert!(root
+                        .path()
+                        .join("attachments")
+                        .join(blob_path(unknown.stored().digest()))
+                        .exists());
+                }
+            }
         }
     }
 }

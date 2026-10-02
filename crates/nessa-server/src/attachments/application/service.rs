@@ -808,7 +808,10 @@ impl AttachmentService {
             .store
             .release(&request.organization_id, &request.conversation_id, &release)
             .await
-            .ok();
+            .ok()
+            .filter(|report| {
+                report.agrees_with(&request.organization_id, &request.conversation_id)
+            });
         let storage_failures = report.as_ref().map_or(1, |report| report.failures);
         let mut records: Vec<_> = withdrawn
             .into_iter()

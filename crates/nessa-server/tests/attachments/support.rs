@@ -311,6 +311,8 @@ pub(crate) struct MemoryStore {
     /// report, because nothing is left to report it.
     pub(crate) confirm_panics: AtomicBool,
     pub(crate) discard_fails: AtomicBool,
+    /// An actual substitutable port can return independently valid but unrelated reports.
+    pub(crate) release_report: Mutex<Option<ReleaseReport>>,
     pub(crate) discard_cleanup_incomplete: AtomicBool,
     /// Transfers staged and not yet kept or dropped.
     pub(crate) staged: Arc<AtomicUsize>,
@@ -535,6 +537,9 @@ impl AttachmentStore for MemoryStore {
     ) -> PortFuture<'a, ReleaseReport, StoreUnavailable> {
         Box::pin(async move {
             self.check()?;
+            if let Some(report) = self.release_report.lock().unwrap().take() {
+                return Ok(report);
+            }
             let mut state = self.state.lock().unwrap();
             let mut report = ReleaseReport::default();
             let (mine, others): (Vec<_>, Vec<_>) = std::mem::take(&mut state.records)

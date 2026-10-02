@@ -78,6 +78,15 @@ struct Files {
     publication_fault: Mutex<Option<PublicationFault>>,
     #[cfg(test)]
     before_source_sync: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    before_retention_scan: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+}
+
+/// Facts from one scan; unreadability is not affirmative active ownership.
+struct Retention {
+    active: HashSet<String>,
+    unresolved: HashSet<String>,
+    retirements: Vec<RetiredHold>,
 }
 
 #[cfg(test)]
@@ -124,6 +133,8 @@ impl LocalAttachmentStore {
                 publication_fault: Mutex::new(None),
                 #[cfg(test)]
                 before_source_sync: Mutex::new(None),
+                #[cfg(test)]
+                before_retention_scan: Mutex::new(None),
             }),
         })
     }
@@ -320,8 +331,19 @@ impl Files {
 
     /// Pending/Kept records retain their named digest. An unreadable primary
     /// retains it conservatively; validated durable retirement relinquishes it.
-    fn referenced(&self) -> io::Result<HashSet<String>> {
-        let mut digests = HashSet::new();
+    fn referenced(
+        &self,
+        release_target: Option<(&OrganizationId, &ConversationId)>,
+    ) -> io::Result<Retention> {
+        #[cfg(test)]
+        if let Some(before_scan) = self.before_retention_scan.lock().unwrap().take() {
+            before_scan();
+        }
+        let mut retention = Retention {
+            active: HashSet::new(),
+            unresolved: HashSet::new(),
+            retirements: Vec::new(),
+        };
         for organization in directories(&self.root.join(HOLDS))? {
             for conversation in directories(&organization)? {
                 for entry in fs::read_dir(&conversation)? {
@@ -335,7 +357,8 @@ impl Files {
                         // a validated Retired record relinquishes retention.
                         match self.read_record(&relative) {
                             Ok(Some(HoldRecord {
-                                state: RecordState::Retired { .. },
+                                hold,
+                                state: RecordState::Retired { was, evidence },
                                 ..
                             })) => {
                                 // Exclusion also confirms any prior uncertain
@@ -346,27 +369,39 @@ impl Files {
                                         .parent()
                                         .ok_or_else(|| corrupt("hold has no directory"))?,
                                 )?;
+                                if release_target.is_some_and(|(organization, conversation)| {
+                                    hold.organization_id() == organization
+                                        && hold.conversation_id() == conversation
+                                }) {
+                                    retention.retirements.push(
+                                        RetiredHold::new(hold, was, evidence)
+                                            .ok_or_else(|| corrupt("contradictory retirement"))?,
+                                    );
+                                }
                             }
-                            _ => {
-                                digests.insert(digest.to_owned());
+                            Ok(Some(_)) => {
+                                retention.active.insert(digest.to_owned());
+                            }
+                            Ok(None) | Err(_) => {
+                                retention.unresolved.insert(digest.to_owned());
                             }
                         }
                     }
                 }
             }
         }
-        Ok(digests)
+        Ok(retention)
     }
 
-    /// Remove bytes that no record in `referenced` names. `Ok(true)` when
-    /// bytes were removed, `Ok(false)` when they are still held or were
-    /// already gone.
-    fn remove_unheld(
-        &self,
-        digest: Sha256Digest,
-        referenced: &HashSet<String>,
-    ) -> io::Result<bool> {
-        if referenced.contains(&digest.to_hex()) {
+    /// Remove bytes proved unheld by the scan. Unresolved candidate retention
+    /// refuses cleanup independently of any active reference. `Ok(true)` means
+    /// removed; `Ok(false)` means validated retention or bytes already absent.
+    fn remove_unheld(&self, digest: Sha256Digest, retention: &Retention) -> io::Result<bool> {
+        let named = digest.to_hex();
+        if retention.unresolved.contains(&named) {
+            return Err(corrupt("candidate blob retention is unresolved"));
+        }
+        if retention.active.contains(&named) {
             return Ok(false);
         }
         Ok(not_found(self.remove(&blob_path(digest)))?.is_some())
@@ -514,8 +549,8 @@ impl Files {
         if mine {
             let _ = self.remove(&path_of(hold));
         }
-        if let Ok(referenced) = self.referenced() {
-            let _ = self.remove_unheld(hold.stored().digest(), &referenced);
+        if let Ok(retention) = self.referenced(None) {
+            let _ = self.remove_unheld(hold.stored().digest(), &retention);
         }
     }
 
@@ -573,8 +608,8 @@ impl Files {
                     &record.generation,
                 )?;
                 match self
-                    .referenced()
-                    .and_then(|referenced| self.remove_unheld(hold.stored().digest(), &referenced))
+                    .referenced(None)
+                    .and_then(|retention| self.remove_unheld(hold.stored().digest(), &retention))
                 {
                     Ok(_) => Ok(Discard::Discarded { was }),
                     Err(error) => {
@@ -595,7 +630,6 @@ impl Files {
     ) -> io::Result<ReleaseReport> {
         let _changes = self.lock()?;
         let mut report = ReleaseReport::default();
-        let mut purge = Vec::new();
         for (path, record) in self.conversation_records(organization_id, conversation_id)? {
             let retired = record.and_then(|record| {
                 let (was, original) = match &record.state {
@@ -626,33 +660,39 @@ impl Files {
                 })
             });
             match retired {
-                Ok(retired) => {
-                    report.retired.push(retired.clone());
-                    purge.push(retired);
-                }
+                Ok(retired) => report.retired.push(retired),
                 Err(error) => {
                     tracing::error!(path = %path.display(), %error, "hold was not released");
                     report.failures += 1;
                 }
             }
         }
-        // Bytes go only after every hold of this conversation is gone, and
-        // what is still held anywhere is read once for all of them.
-        let mut by_digest: HashMap<_, Vec<_>> = HashMap::new();
-        for retired in purge {
-            by_digest
-                .entry(retired.hold().stored().digest())
-                .or_default()
-                .push(retired);
-        }
-        match self.referenced() {
-            Ok(referenced) => {
+        // The scan confirms saved retirements after all attempts, including a
+        // replacement whose earlier acknowledgement failed. It owns retention
+        // and the selected target's original report contributors together.
+        match self.referenced(Some((organization_id, conversation_id))) {
+            Ok(mut retention) => {
+                // A later conservative read failure cannot erase a retirement
+                // already confirmed by this operation. The scan adds facts it
+                // confirmed, while its reference set independently gates cleanup.
+                for retired in retention.retirements.drain(..) {
+                    if !report.retired.contains(&retired) {
+                        report.retired.push(retired);
+                    }
+                }
+                let mut by_digest: HashMap<_, Vec<_>> = HashMap::new();
+                for retired in &report.retired {
+                    by_digest
+                        .entry(retired.hold().stored().digest())
+                        .or_default()
+                        .push(retired.clone());
+                }
                 for (digest, retirements) in by_digest {
                     let Some(removed) = RemovedBlob::new(retirements) else {
                         report.failures += 1;
                         continue;
                     };
-                    match self.remove_unheld(digest, &referenced) {
+                    match self.remove_unheld(digest, &retention) {
                         Ok(true) => report.removed.push(removed),
                         Ok(false) => {}
                         Err(error) => {

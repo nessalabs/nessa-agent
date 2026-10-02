@@ -125,6 +125,17 @@ impl RetiredHold {
     }
 }
 
+// Report agreement concerns returned facts, not physical blob verification.
+fn stored_content_agrees(retirements: &[RetiredHold]) -> bool {
+    retirements.iter().enumerate().all(|(index, retired)| {
+        let stored = retired.hold().stored();
+        retirements[..index].iter().all(|prior| {
+            prior.hold().stored().digest() != stored.digest()
+                || prior.hold().stored().size() == stored.size()
+        })
+    })
+}
+
 /// One physically removed digest and every related confirmed primary retirement.
 /// Contributor order conveys no chronology; no unique last hold is inferred.
 ///
@@ -139,12 +150,13 @@ pub struct RemovedBlob {
 }
 
 impl RemovedBlob {
-    /// Refuse missing contributors or retirement targets for another digest.
+    /// Refuse missing contributors or contradictory stored content facts.
     pub fn new(retirements: Vec<RetiredHold>) -> Option<Self> {
         let digest = retirements.first()?.hold().stored().digest();
-        if retirements
-            .iter()
-            .any(|retired| retired.hold().stored().digest() != digest)
+        if !stored_content_agrees(&retirements)
+            || retirements
+                .iter()
+                .any(|retired| retired.hold().stored().digest() != digest)
         {
             return None;
         }
@@ -171,6 +183,57 @@ pub struct ReleaseReport {
     /// Holds whose retirement was not confirmed, and bytes that could not be
     /// removed or proved unheld. Each is left in place rather than guessed at.
     pub failures: usize,
+}
+
+impl ReleaseReport {
+    /// Correlate the whole returned report with the admitted release target.
+    /// Original causal evidence may predate this request, but no foreign target
+    /// or contradictory/partial removal group may become an audit fact.
+    pub fn agrees_with(
+        &self,
+        organization_id: &OrganizationId,
+        conversation_id: &ConversationId,
+    ) -> bool {
+        if !stored_content_agrees(&self.retired) {
+            return false;
+        }
+        for (index, retired) in self.retired.iter().enumerate() {
+            let hold = retired.hold();
+            if hold.organization_id() != organization_id
+                || hold.conversation_id() != conversation_id
+                || self.retired[..index].iter().any(|prior| {
+                    prior.hold().stored().digest() == hold.stored().digest()
+                        && prior.hold().stored().media_type() == hold.stored().media_type()
+                })
+            {
+                return false;
+            }
+        }
+        for (index, removed) in self.removed.iter().enumerate() {
+            if self.removed[..index]
+                .iter()
+                .any(|prior| prior.digest() == removed.digest())
+            {
+                return false;
+            }
+            let related_count = self
+                .retired
+                .iter()
+                .filter(|retired| retired.hold().stored().digest() == removed.digest())
+                .count();
+            if related_count != removed.retirements().len() {
+                return false;
+            }
+            for (index, contributor) in removed.retirements().iter().enumerate() {
+                if !self.retired.contains(contributor)
+                    || removed.retirements()[..index].contains(contributor)
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
 }
 
 /// A transfer being written to private temporary storage. Dropping it removes
