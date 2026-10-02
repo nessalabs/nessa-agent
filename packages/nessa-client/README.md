@@ -347,7 +347,10 @@ SHA-256 are the ones `readResource` described. A destructive tool waits for the
 person's answer to a review with `origin: {kind: "app", server, tool}`, for up
 to 5 minutes, and `callTool` waits that long for it. `argumentsJson` is at most
 32 KiB (`MAX_MCP_ARGUMENTS_BYTES`), the most a review shows; arguments past any
-bound throw `TypeError` before anything is sent.
+bound throw `TypeError` before anything is sent. What an app sends — a tool's
+name, a resource's URI, the arguments — is held to its bounds, and to being
+Unicode, by `mcpAppRequestProblem`, which `callTool` and `readResource` ask and
+a host may ask first, to refuse the app's request itself.
 
 `callTool` and `readResource` fail with `NessaMcpAppError`. Its `uncertain` is
 `false` when nothing reached the app's server — `mcp_app_unknown`,

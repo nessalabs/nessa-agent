@@ -20,30 +20,80 @@ export const MAX_MCP_RESOURCE_BYTES = bounds.maxMcpResourceBytes
 
 const utf8 = new TextEncoder()
 
+/** A UTF-16 surrogate with no partner: text that is no Unicode at all. */
+const loneSurrogate =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+
+/**
+ * Whether `text` is Unicode: no lone surrogate, which the gateway's JSON
+ * decoder cannot read — it drops a frame holding one, unanswered.
+ */
+function wellFormed(text: string): boolean {
+  return !loneSurrogate.test(text)
+}
+
+/** Whether every string in the JSON `text` encodes — keys included — is Unicode. */
+function wellFormedJson(text: string): boolean {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    // Not JSON: whether the arguments are an object is the gateway's to say.
+    return true
+  }
+  // Walked without recursion: 32 KiB of brackets is deeper than a stack.
+  const pending: unknown[] = [value]
+  while (pending.length > 0) {
+    const next = pending.pop()
+    if (typeof next === "string") {
+      if (!wellFormed(next)) return false
+    } else if (Array.isArray(next)) {
+      pending.push(...next)
+    } else if (next !== null && typeof next === "object") {
+      for (const [key, item] of Object.entries(next)) {
+        if (!wellFormed(key)) return false
+        pending.push(item)
+      }
+    }
+  }
+  return true
+}
+
 /**
  * What an MCP App may send its server, held to the schema's bounds: the one
  * statement of them. `McpAppsApi` refuses a request past them before sending
  * anything, and a host may ask first, so it can refuse the app's request
- * itself rather than read a `TypeError` whose cause it cannot tell.
+ * itself rather than read a `TypeError` whose cause it cannot tell. Every
+ * string must also be Unicode: one with a lone surrogate never reaches the
+ * gateway as a request it can answer.
  *
  * Each answers the problem in words, or `undefined` within bounds.
  */
 export const mcpAppRequestProblem = {
-  /** A tool's name: 1 to `maxMcpNameBytes` UTF-8 bytes. */
+  /** A tool's name: 1 to `maxMcpNameBytes` UTF-8 bytes of Unicode. */
   tool: (tool: string): string | undefined =>
-    boundedName(tool, bounds.maxMcpNameBytes)
-      ? undefined
-      : `Tool must contain 1-${bounds.maxMcpNameBytes} UTF-8 bytes`,
-  /** A resource's URI: 1 to `maxMcpResourceUriBytes` UTF-8 bytes. */
+    !boundedName(tool, bounds.maxMcpNameBytes)
+      ? `Tool must contain 1-${bounds.maxMcpNameBytes} UTF-8 bytes`
+      : !wellFormed(tool)
+        ? "Tool must be Unicode text"
+        : undefined,
+  /** A resource's URI: 1 to `maxMcpResourceUriBytes` UTF-8 bytes of Unicode. */
   uri: (uri: string): string | undefined =>
-    boundedName(uri, bounds.maxMcpResourceUriBytes)
-      ? undefined
-      : `Resource URI must contain 1-${bounds.maxMcpResourceUriBytes} UTF-8 bytes`,
-  /** A tool's arguments, encoded: at most `MAX_MCP_ARGUMENTS_BYTES` UTF-8 bytes. */
+    !boundedName(uri, bounds.maxMcpResourceUriBytes)
+      ? `Resource URI must contain 1-${bounds.maxMcpResourceUriBytes} UTF-8 bytes`
+      : !wellFormed(uri)
+        ? "Resource URI must be Unicode text"
+        : undefined,
+  /**
+   * A tool's arguments, encoded: at most `MAX_MCP_ARGUMENTS_BYTES` UTF-8
+   * bytes, every string in them Unicode.
+   */
   argumentsJson: (argumentsJson: string): string | undefined =>
-    utf8.encode(argumentsJson).byteLength <= MAX_MCP_ARGUMENTS_BYTES
-      ? undefined
-      : `Arguments must contain at most ${MAX_MCP_ARGUMENTS_BYTES} UTF-8 bytes`,
+    utf8.encode(argumentsJson).byteLength > MAX_MCP_ARGUMENTS_BYTES
+      ? `Arguments must contain at most ${MAX_MCP_ARGUMENTS_BYTES} UTF-8 bytes`
+      : !wellFormed(argumentsJson) || !wellFormedJson(argumentsJson)
+        ? "Arguments must be Unicode text"
+        : undefined,
 } as const
 
 const instanceIdPattern = new RegExp(bounds.mcpAppInstanceIdPattern)

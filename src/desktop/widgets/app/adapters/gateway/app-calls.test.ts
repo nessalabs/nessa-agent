@@ -126,14 +126,19 @@ describe("the calls of each server", () => {
     const told = vi.fn()
     port.subscribe(id, told)
     expect(port.read(id)).toEqual({ kind: "missing" })
-    expect(calls.observe(conversationId, [tool()])).toEqual(["mcptest"])
+    expect(calls.observe({ conversationId: conversationId, tools: [tool()] })).toEqual([
+      "mcptest",
+    ])
     const first = port.read(id)
     expect(first).toMatchObject({ kind: "known", call: { tool: "show_chart" } })
     expect(told).toHaveBeenCalledTimes(1)
-    calls.observe(conversationId, [tool()])
+    calls.observe({ conversationId: conversationId, tools: [tool()] })
     expect(port.read(id)).toBe(first)
     expect(told).toHaveBeenCalledTimes(1)
-    calls.observe(conversationId, [tool({ status: "completed" })])
+    calls.observe({
+      conversationId: conversationId,
+      tools: [tool({ status: "completed" })],
+    })
     expect(port.read(id)).toMatchObject({
       kind: "known",
       call: { phase: { kind: "done" } },
@@ -143,13 +148,16 @@ describe("the calls of each server", () => {
 
   it("C9: a widget id read through another server's plugin is missing", () => {
     const calls = gatewayAppCalls()
-    calls.observe(conversationId, [
-      tool(),
-      tool({
-        toolId: "call-2",
-        mcp: { server: "other", tool: "x", resourceUri: "ui://o" },
-      }),
-    ])
+    calls.observe({
+      conversationId: conversationId,
+      tools: [
+        tool(),
+        tool({
+          toolId: "call-2",
+          mcp: { server: "other", tool: "x", resourceUri: "ui://o" },
+        }),
+      ],
+    })
     expect(calls.forServer("other").read(id)).toEqual({ kind: "missing" })
     expect(
       calls
@@ -162,9 +170,9 @@ describe("the calls of each server", () => {
     const other = "9f8e7d6c-5b4a-4c3d-8e2f-1a0b9c8d7e6f"
     const calls = gatewayAppCalls()
     const port = calls.forServer("mcptest")
-    calls.observe(conversationId, [tool()])
-    calls.observe(other, [tool({ status: "completed" })])
-    calls.observe(conversationId, [tool()])
+    calls.observe({ conversationId: conversationId, tools: [tool()] })
+    calls.observe({ conversationId: other, tools: [tool({ status: "completed" })] })
+    calls.observe({ conversationId: conversationId, tools: [tool()] })
     expect(port.read(id)).toMatchObject({
       kind: "known",
       call: { sessionId: conversationId, phase: { kind: "running" } },
@@ -180,14 +188,14 @@ describe("the calls of each server", () => {
     const port = calls.forServer("mcptest")
     const told = vi.fn()
     port.subscribe(id, told)
-    calls.observe(conversationId, [tool()])
+    calls.observe({ conversationId: conversationId, tools: [tool()] })
     const first = port.read(id)
     // The gateway keeps its latest tools: sixteen more push the app's out.
     const later = Array.from({ length: 16 }, (_, n) => {
       const { mcp: _mcp, ...plain } = tool({ toolId: `later-${n}` })
       return plain
     })
-    expect(calls.observe(conversationId, later)).toEqual([])
+    expect(calls.observe({ conversationId: conversationId, tools: later })).toEqual([])
     expect(port.read(id)).toBe(first)
     expect(told).toHaveBeenCalledTimes(1)
   })
@@ -198,8 +206,8 @@ describe("the calls of each server", () => {
     const port = calls.forServer("mcptest")
     const told = vi.fn()
     port.subscribe(id, told)
-    calls.observe(conversationId, [tool()])
-    calls.observe(other, [tool()])
+    calls.observe({ conversationId: conversationId, tools: [tool()] })
+    calls.observe({ conversationId: other, tools: [tool()] })
     calls.forget(other)
     expect(port.read(id).kind).toBe("known")
     expect(told).toHaveBeenCalledTimes(1)
@@ -208,26 +216,20 @@ describe("the calls of each server", () => {
     expect(port.read(id)).toEqual({ kind: "missing" })
     expect(told).toHaveBeenCalledTimes(2)
     // A view of it arriving after it went does not bring it back.
-    expect(calls.observe(conversationId, [tool()])).toEqual([])
+    expect(calls.observe({ conversationId: conversationId, tools: [tool()] })).toEqual([])
     expect(port.read(id)).toEqual({ kind: "missing" })
     expect(told).toHaveBeenCalledTimes(2)
   })
 
-  it("C11: an ended call stays ended: a view behind the one that ended it changes nothing", () => {
+  it("C11: each view's state is read as it comes: the order of views is the source's (#248)", () => {
     const calls = gatewayAppCalls()
     const port = calls.forServer("mcptest")
-    calls.observe(conversationId, [tool({ status: "completed", details: "Done" })])
-    const ended = port.read(id)
-    const told = vi.fn()
-    port.subscribe(id, told)
-    calls.observe(conversationId, [tool({ status: "running" })])
-    expect(port.read(id)).toBe(ended)
-    expect(told).not.toHaveBeenCalled()
-    // A later report of the ended call, changed, is still read.
-    calls.observe(conversationId, [tool({ status: "failed", details: "No" })])
-    expect(port.read(id)).toMatchObject({
-      call: { phase: { result: { isError: true } } },
+    calls.observe({
+      conversationId,
+      tools: [tool({ status: "completed", details: "Done" })],
     })
+    calls.observe({ conversationId, tools: [tool({ status: "running" })] })
+    expect(port.read(id)).toMatchObject({ call: { phase: { kind: "running" } } })
   })
 
   it("C7: a stopped subscription is not told", () => {
@@ -235,7 +237,7 @@ describe("the calls of each server", () => {
     const told = vi.fn()
     const stop = calls.forServer("mcptest").subscribe(id, told)
     stop()
-    calls.observe(conversationId, [tool()])
+    calls.observe({ conversationId: conversationId, tools: [tool()] })
     expect(told).not.toHaveBeenCalled()
   })
 })
@@ -254,8 +256,11 @@ describe("the servers' app plugins", () => {
     const changes = vi.fn()
     registry.subscribe(changes)
     const apps = gatewayApps({ registry, mcpApps, ports })
-    apps.observe(conversationId, [tool()])
-    apps.observe(conversationId, [tool({ status: "completed" })])
+    apps.observe({ conversationId: conversationId, tools: [tool()] })
+    apps.observe({
+      conversationId: conversationId,
+      tools: [tool({ status: "completed" })],
+    })
     expect(changes).toHaveBeenCalledTimes(1)
     const plugin = registry.plugin(appPluginId("mcptest"))
     expect(plugin).toMatchObject({ kind: "app", server: "mcptest", name: "mcptest" })
@@ -271,9 +276,10 @@ describe("the servers' app plugins", () => {
 
   it("C2, C8: a view with no app calls registers nothing", () => {
     const registry = createWidgetRegistry<WidgetPlugin>([])
-    gatewayApps({ registry, mcpApps, ports }).observe(conversationId, [
-      tool({ mcp: { server: "mcptest", tool: "rows" } }),
-    ])
+    gatewayApps({ registry, mcpApps, ports }).observe({
+      conversationId: conversationId,
+      tools: [tool({ mcp: { server: "mcptest", tool: "rows" } })],
+    })
     expect(registry.plugin(appPluginId("mcptest"))).toBeUndefined()
   })
 })

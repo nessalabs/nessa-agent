@@ -8,7 +8,7 @@
  *
  * With a gateway's `client.mcpApps`, real servers' apps are drawn: an app
  * plugin is registered for each server a conversation's view names with a UI,
- * and the source hands each view's tools to `gatewayApps.observe` (#384,
+ * and the source hands each view to `gatewayApps.observe` (#384,
  * `widgets/app/adapters/gateway/`). The fixture app stays with the sample
  * workspace.
  *
@@ -50,9 +50,9 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   /** The widget plugins, native ones registered here (ADR 326); provided to the tree by `main.tsx`. */
   readonly widgets: DesktopWidgetRegistry
   /**
-   * Where a gateway source reports each conversation view's tools, so the
-   * apps of their servers are registered and their calls read, and each
-   * conversation that goes; absent unless both a gateway and `apps` are given.
+   * Where a gateway source reports each conversation view, so the apps of
+   * its servers are registered and their calls read, and each conversation
+   * deleted; absent unless both a gateway and `apps` are given.
    */
   readonly gatewayApps?: GatewayApps
 }

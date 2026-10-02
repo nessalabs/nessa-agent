@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { expect, it, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { NessaConversationControlError } from "../application/conversation-mutation-error.js"
 import type { RequestTimer } from "../application/gateway-http.js"
@@ -15,6 +15,7 @@ import {
 } from "../application/mcp-resource-fetch.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { conversationView } from "../protocol/conversation-validate.js"
+import { mcpAppRequestProblem } from "../protocol/mcp-app-validate.js"
 import { createMcpAppsApi } from "./mcp-apps-api.js"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
@@ -146,6 +147,18 @@ it.each([
   ["arguments past 32 KiB", { argumentsJson: `{"a":"${over(32761)}"}` }],
   // Counted in UTF-8 bytes: 16,392 characters and 32,776 bytes.
   ["arguments past 32 KiB of UTF-8", { argumentsJson: `{"a":"${"é".repeat(16384)}"}` }],
+  // A lone surrogate is no Unicode: the gateway cannot decode the frame.
+  ["a tool with a lone surrogate", { tool: "get\ud800" }],
+  [
+    "arguments with a lone surrogate, escaped",
+    { argumentsJson: JSON.stringify({ a: "\ud800" }) },
+  ],
+  [
+    "arguments with a lone surrogate in a key",
+    { argumentsJson: JSON.stringify({ ["\udc00"]: 1 }) },
+  ],
+  ["a tool that is no string", { tool: 7 as unknown as string }],
+  ["arguments that are no string", { argumentsJson: {} as unknown as string }],
 ] as const)(
   "refuses to call a tool with %s before asking the gateway",
   async (_name, change) => {
@@ -787,5 +800,48 @@ it("reports a refused release as certain and a lost one as uncertain", async () 
   await expect(
     api(request).releaseApp(conversationId, { ...app, instanceId: "" }),
   ).rejects.toBeInstanceOf(TypeError)
+  expect(request).not.toHaveBeenCalled()
+})
+
+describe("what an app may send its server (mcpAppRequestProblem)", () => {
+  it("answers nothing for a request within bounds, and in Unicode", () => {
+    expect(mcpAppRequestProblem.tool("é".repeat(64))).toBeUndefined()
+    expect(mcpAppRequestProblem.tool("chart\ud83d\udcc8")).toBeUndefined()
+    expect(mcpAppRequestProblem.uri("ui://w/app.html")).toBeUndefined()
+    expect(
+      mcpAppRequestProblem.argumentsJson('{"a":["\\ud83d\\udcc8",{"b":1}]}'),
+    ).toBeUndefined()
+    // Not JSON: whether the arguments are an object is the gateway's to say.
+    expect(mcpAppRequestProblem.argumentsJson("[")).toBeUndefined()
+  })
+
+  it.each([
+    ["tool", ""],
+    ["tool", "é".repeat(65)],
+    ["tool", "\ud800"],
+    ["tool", "a\udc00b"],
+    ["uri", ""],
+    ["uri", `ui://${"x".repeat(2044)}`],
+    ["uri", "ui://w/\udfff"],
+    ["argumentsJson", `{"a":"${"x".repeat(32761)}"}`],
+    ["argumentsJson", '{"a":"\\ud800"}'],
+    ["argumentsJson", '{"a":[[{"b":"\\udc00"}]]}'],
+    ["argumentsJson", '{"\\ud800":1}'],
+  ] as const)("says what is wrong with a %s of %j", (kind, value) => {
+    expect(mcpAppRequestProblem[kind](value)).toEqual(expect.any(String))
+  })
+
+  it("walks deeply nested arguments without exhausting the stack", () => {
+    const deep = `${"[".repeat(16000)}"\\ud800"${"]".repeat(16000)}`
+    expect(mcpAppRequestProblem.argumentsJson(deep)).toEqual(expect.any(String))
+  })
+})
+
+it("refuses to read a URI that is no string, or not Unicode, before asking the gateway", async () => {
+  const request = vi.fn()
+  for (const uri of [7 as unknown as string, "ui://w/\ud800"])
+    await expect(
+      api(request).readResource(conversationId, app, "charts", uri),
+    ).rejects.toBeInstanceOf(TypeError)
   expect(request).not.toHaveBeenCalled()
 })

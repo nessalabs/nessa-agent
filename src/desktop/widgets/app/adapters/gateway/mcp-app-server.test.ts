@@ -147,6 +147,13 @@ describe("tools/call", () => {
       reason: mcpAppRequestProblem.tool(`${"é".repeat(64)}x`),
     })
     expect(await server.callTool(address, "", {})).toMatchObject({ kind: "refused" })
+    // A lone surrogate is no Unicode: the gateway could not decode the frame.
+    for (const answer of [
+      await server.callTool(address, "get\ud800", {}),
+      await server.callTool(address, "get", { a: "\udc00" }),
+      await server.readResource(address, "ui://w/\ud800", live()),
+    ])
+      expect(answer).toMatchObject({ kind: "refused" })
     const long = `ui://w/${"a".repeat(2048)}`
     expect(await server.readResource(address, long, live())).toEqual({
       kind: "refused",
@@ -488,7 +495,6 @@ describe("the release", () => {
   it.each([
     ConversationErrorCode.ConversationNotFound,
     ConversationErrorCode.ConversationDeleted,
-    ConversationErrorCode.ConversationClosed,
   ])(
     "M5: a release refused %s — the conversation is gone — has nothing left to let go, and is no fault",
     async (code) => {
@@ -507,6 +513,24 @@ describe("the release", () => {
       await expect(gatewayAppServer(apps).release(address)).resolves.toBeUndefined()
     },
   )
+
+  it("M5: a release refused conversation_closed rejects: a closed conversation reopens, and is not gone", async () => {
+    const apps = fakeApps({
+      releaseApp: vi.fn(() =>
+        Promise.reject(
+          new NessaConversationControlError(
+            conversationId,
+            "r",
+            app.executionId,
+            new NessaRpcError(ConversationErrorCode.ConversationClosed, "closed"),
+          ),
+        ),
+      ),
+    })
+    await expect(gatewayAppServer(apps).release(address)).rejects.toBeInstanceOf(
+      NessaConversationControlError,
+    )
+  })
 
   it("M5: a release the gateway did not take rejects, for the bridge to log", async () => {
     const apps = fakeApps({

@@ -63,7 +63,7 @@ describe("a gateway tool call as a widget part", () => {
         hostInfo: { name: "Nessa", version: "test" },
         page: () => ({ styles: {}, timeZone: "UTC", platform: "web" }),
       },
-    }).observe(conversation, [shown])
+    }).observe({ conversationId: conversation, tools: [shown] })
     const part = gatewayToolWidget(conversation, shown)
     const plugin = part ? registry.plugin(part.widget.plugin) : undefined
     expect(plugin?.kind).toBe("app")

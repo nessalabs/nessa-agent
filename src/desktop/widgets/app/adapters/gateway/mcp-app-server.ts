@@ -123,7 +123,6 @@ const failed: ServerAnswer = { kind: "failed" }
 const conversationGone: ReadonlySet<ConversationErrorCode | undefined> = new Set([
   ConversationErrorCode.ConversationNotFound,
   ConversationErrorCode.ConversationDeleted,
-  ConversationErrorCode.ConversationClosed,
 ])
 
 /** The port's answer for what a call threw: a refusal, a server gone, or a failure. */

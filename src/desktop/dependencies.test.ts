@@ -73,18 +73,25 @@ describe("the window's widget plugins", () => {
       gateway,
       apps,
     })
-    gatewayApps?.observe("0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d", [
-      {
-        executionId: "run",
-        toolId: "call-1",
-        title: "show_chart",
-        kind: "other",
-        status: "running",
-        details: "",
-        input: "",
-        mcp: { server: "mcptest", tool: "show_chart", resourceUri: "ui://t/chart.html" },
-      },
-    ])
+    gatewayApps?.observe({
+      conversationId: "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
+      tools: [
+        {
+          executionId: "run",
+          toolId: "call-1",
+          title: "show_chart",
+          kind: "other",
+          status: "running",
+          details: "",
+          input: "",
+          mcp: {
+            server: "mcptest",
+            tool: "show_chart",
+            resourceUri: "ui://t/chart.html",
+          },
+        },
+      ],
+    })
     expect(widgets.plugin(appPluginId("mcptest"))).toMatchObject({
       kind: "app",
       server: "mcptest",
@@ -98,18 +105,25 @@ describe("the window's widget plugins", () => {
       gateway: { mcpApps: {} as McpAppsApi },
       apps: { sandbox: undefined, platform: "web" },
     })
-    gatewayApps?.observe("0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d", [
-      {
-        executionId: "run",
-        toolId: "call-1",
-        title: "show_chart",
-        kind: "other",
-        status: "running",
-        details: "",
-        input: "",
-        mcp: { server: "mcptest", tool: "show_chart", resourceUri: "ui://t/chart.html" },
-      },
-    ])
+    gatewayApps?.observe({
+      conversationId: "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
+      tools: [
+        {
+          executionId: "run",
+          toolId: "call-1",
+          title: "show_chart",
+          kind: "other",
+          status: "running",
+          details: "",
+          input: "",
+          mcp: {
+            server: "mcptest",
+            tool: "show_chart",
+            resourceUri: "ui://t/chart.html",
+          },
+        },
+      ],
+    })
     const plugin = widgets.plugin(appPluginId("mcptest"))
     expect(plugin?.kind).toBe("app")
     if (plugin?.kind !== "app") return
