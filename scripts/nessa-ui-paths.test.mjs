@@ -20,6 +20,7 @@ import {
   tsconfigPaths,
   tsconfigTextViolations,
   withTsconfigPaths,
+  writeTsconfigPaths,
   viteAliases,
 } from "./nessa-ui-paths.mjs"
 
@@ -194,7 +195,7 @@ test("the repository's tsconfig.json is exactly what the writer makes of it", ()
   assert.equal(withTsconfigPaths(text), text)
 })
 
-test("a key inherited from Object.prototype is not read as an entry", () => {
+test("a key inherited from a prototype is not read as an entry", () => {
   const paths = Object.assign(Object.create({ "@/lib/*": ["./inherited/*"] }), {})
   assert.match(tsconfigPathViolations(paths).join("\n"), /has no "@\/lib\/\*"/)
 })
@@ -295,21 +296,19 @@ test("the writer, run anywhere, repairs a drifted tsconfig.json and touches a cu
   }
 })
 
-test("the writer refuses a tsconfig.json it cannot use with a sentence, and leaves it as it was", () => {
+test("pnpm ui:paths, refused, says why in one line naming the file, exits 1, and leaves it as it was", () => {
   const { root, tsconfig, run } = scratchCheckout()
   try {
-    for (const text of [
-      "{ // a comment\n}\n",
-      '{ "compilerOptions": "ab" }\n',
-      "[]\n",
-      "null\n",
-    ]) {
-      writeFileSync(tsconfig, text)
-      const refused = run()
-      assert.equal(refused.status, 1, text)
-      assert.match(refused.stderr, /^tsconfig\.json('s compilerOptions)? is not /, text)
-      assert.equal(readFileSync(tsconfig, "utf8"), text)
-    }
+    const text = "{ // a comment\n}\n"
+    writeFileSync(tsconfig, text)
+    const refused = run()
+    assert.equal(refused.status, 1)
+    assert.equal(refused.stderr.trim().split("\n").length, 1, refused.stderr)
+    assert.ok(
+      refused.stderr.startsWith(`${tsconfig}: tsconfig.json is not plain JSON`),
+      refused.stderr,
+    )
+    assert.equal(readFileSync(tsconfig, "utf8"), text)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -332,4 +331,75 @@ test("a byte-order mark is accepted, and kept", () => {
   const text = "\uFEFF" + withTsconfigPaths("{}")
   assert.deepEqual(tsconfigTextViolations(text), [])
   assert.equal(withTsconfigPaths(text), text)
+})
+
+/** An in-memory file for `writeTsconfigPaths`, recording what is written. */
+function memoryFile(bytes, { readError, writeError } = {}) {
+  const writes = []
+  return {
+    writes,
+    io: {
+      read: () => {
+        if (readError) throw readError
+        return bytes
+      },
+      write: (_file, text) => {
+        if (writeError) throw writeError
+        writes.push(text)
+      },
+    },
+  }
+}
+
+const utf8 = (text) => new TextEncoder().encode(text)
+const fsError = (code) => Object.assign(new Error(`${code}: boom`), { code })
+
+test("writeTsconfigPaths writes a drifted file once, and a current one not at all", () => {
+  const current = withTsconfigPaths("{}")
+  const drifted = memoryFile(utf8("{}\n"))
+  assert.deepEqual(writeTsconfigPaths("t.json", drifted.io), { written: true })
+  assert.deepEqual(drifted.writes, [current])
+  const same = memoryFile(utf8(current))
+  assert.deepEqual(writeTsconfigPaths("t.json", same.io), { written: false })
+  assert.deepEqual(same.writes, [])
+})
+
+test("writeTsconfigPaths refuses, naming the file and writing nothing, whatever stops it", () => {
+  for (const [why, file, pattern] of [
+    [
+      "missing",
+      memoryFile(null, { readError: fsError("ENOENT") }),
+      /^t\.json cannot be read \(ENOENT\)$/,
+    ],
+    [
+      "a directory",
+      memoryFile(null, { readError: fsError("EISDIR") }),
+      /^t\.json cannot be read \(EISDIR\)$/,
+    ],
+    [
+      "not UTF-8",
+      memoryFile(Uint8Array.of(0x7b, 0x22, 0xff, 0x22, 0x7d)),
+      /^t\.json is not UTF-8 text/,
+    ],
+    [
+      "not JSON",
+      memoryFile(utf8("{ // c\n}")),
+      /^t\.json: tsconfig\.json is not plain JSON/,
+    ],
+    [
+      "not an object",
+      memoryFile(utf8("[]")),
+      /^t\.json: tsconfig\.json is not a JSON object/,
+    ],
+    [
+      "unwritable",
+      memoryFile(utf8("{}"), { writeError: fsError("EACCES") }),
+      /^t\.json cannot be written \(EACCES\)$/,
+    ],
+  ]) {
+    const result = writeTsconfigPaths("t.json", file.io)
+    assert.ok("refused" in result, why)
+    assert.match(result.refused, pattern, why)
+    assert.deepEqual(file.writes, [], why)
+  }
 })

@@ -15,9 +15,8 @@
  * `extends` would move them, or the file is not a plain JSON object
  * (`tsconfigTextViolations`); the test "the repository's tsconfig.json is
  * exactly what the writer makes of it" holds the file byte for byte. An alias
- * of the app's own
- * would be a new decision: it is added here, or this module stops owning
- * `paths` whole.
+ * of the app's own would be a new decision: it is added here, or this module
+ * stops owning `paths` whole.
  *
  * Each rule maps an import prefix to a directory of the package's `src/`:
  *
@@ -61,7 +60,9 @@ export const nessaUiPaths = [
  * (`react/jsx-runtime`, which every TSX file imports), at this app's
  * `@types/<name>`: without that TypeScript reads React's types twice — once
  * for the app, once for the design system's source — and the two do not
- * assign to each other (155 errors when the bare names are removed).
+ * assign to each other (155 errors when the bare names are removed). The
+ * subpath redirect also covers `react/package.json`, which would then type
+ * against `@types/react`'s; nothing imports it.
  */
 export const sharedPackages = ["react", "react-dom"]
 
@@ -238,4 +239,44 @@ export function withTsconfigPaths(text, paths = nessaUiPaths) {
   tsconfig.compilerOptions = { ...tsconfig.compilerOptions, paths: tsconfigPaths(paths) }
   const eol = text.includes("\r\n") ? "\r\n" : "\n"
   return bom + `${JSON.stringify(tsconfig, null, 2)}\n`.replaceAll("\n", eol)
+}
+
+/**
+ * What `pnpm ui:paths` does to `file`, given how to read and write it, so
+ * every way it can go is decided here and tested without a filesystem: the
+ * bytes must be UTF-8 and a plain JSON object; the file is written only when
+ * that changes it. Each refusal is one sentence naming the file, and nothing
+ * is written.
+ *
+ * @param {string} file
+ * @param {{ read: (file: string) => Uint8Array, write: (file: string, text: string) => void }} io
+ * @param {readonly NessaUiPath[]} [paths]
+ * @returns {{ written: boolean } | { refused: string }}
+ */
+export function writeTsconfigPaths(file, { read, write }, paths = nessaUiPaths) {
+  let bytes
+  try {
+    bytes = read(file)
+  } catch (error) {
+    return { refused: `${file} cannot be read (${error.code ?? error.message})` }
+  }
+  let before
+  try {
+    before = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+  } catch {
+    return { refused: `${file} is not UTF-8 text; it is left as it was` }
+  }
+  let after
+  try {
+    after = withTsconfigPaths(before, paths)
+  } catch (error) {
+    return { refused: `${file}: ${error.message}` }
+  }
+  if (after === before) return { written: false }
+  try {
+    write(file, after)
+  } catch (error) {
+    return { refused: `${file} cannot be written (${error.code ?? error.message})` }
+  }
+  return { written: true }
 }

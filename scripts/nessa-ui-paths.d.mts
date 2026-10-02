@@ -32,3 +32,12 @@ export function tsconfigTextViolations(
 ): string[]
 
 export function withTsconfigPaths(text: string, paths?: readonly NessaUiPath[]): string
+
+export function writeTsconfigPaths(
+  file: string,
+  io: {
+    read: (file: string) => Uint8Array
+    write: (file: string, text: string) => void
+  },
+  paths?: readonly NessaUiPath[],
+): { written: boolean } | { refused: string }
