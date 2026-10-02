@@ -4,13 +4,20 @@ Start with what a person does, then follow the sequence into the code that owns
 the result. This map is a reading layer over the existing implementation and
 canonical guides, not a replacement specification.
 
-The inspection covers these local revisions:
+The initial inspection covers these local revisions:
 
 | Repository | Inspected revision | Role |
 | --- | --- | --- |
 | `nessalabs/nessa-agent` | `52bc6cbca5c30ab119002101feeb8a31fe57d8eb` | Native host, floating panel, desktop workspace, client, gateway, SDK and local tools |
 | `nessalabs/nessa-extensions` | `8dccc7fe5450936d0fd14e802a3abcbdb15d14d0` | Shared MCP App/server libraries and experiments domain |
 | `nessalabs/nessa_ui` | `8aaeb437037c1c53de6276314b26d5fa0420da86` | Design system, stream parsing, package/registry distribution and Storybook |
+
+Before the documentation PR, the branch was updated onto agent revision
+`e3fe8cf8a731a4cc2169ef866303cee7b3f23814`. The extensions/UI and runtime maps
+were refreshed for the new MCP App backend APIs in PR #377; the renderer remains
+a separate placeholder. PR #376 also centralizes the agent's design-system import
+paths. Other journeys retain their original inspection baseline and explicit
+verification limits.
 
 The agent consumes the separately pinned UI revision in
 [`nessa-ui-revision`](../../../nessa-ui-revision), rather than necessarily using

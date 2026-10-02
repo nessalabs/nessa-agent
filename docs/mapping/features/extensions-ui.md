@@ -7,7 +7,7 @@ reading tools are in [chat](chat.md); execution and approval ownership are in
 [runtime](runtime.md); file surfaces are in [attachments](attachments.md); starting
 the workshop and services is in [startup](startup.md).
 
-Evidence baseline: `nessa-agent` `52bc6cbc`, `nessa-extensions` `8dccc7fe`,
+Evidence baseline: `nessa-agent` `e3fe8cf8` (updated from `52bc6cbc` after PR #377), `nessa-extensions` `8dccc7fe`,
 `nessa_ui` `8aaeb437` (2026-10-02). This map was checked against source, existing
 tests, and local Git history. Linked tests describe regression evidence; they were
 not executed for this documentation pass. “Implemented” means present in these
@@ -19,8 +19,10 @@ issue links denote planned work and are never counted as contributing PRs.
 
 **Implemented:** the gateway owns upstream MCP sessions, lists tool UI metadata,
 and projects a matching `ui://` resource URI onto the conversation tool. The
-conversation also carries MCP identity and structured output. **Not implemented:**
-fetching that HTML from a desktop app request and mounting an MCP App renderer.
+conversation also carries MCP identity and structured output. **Implemented backend
+additions:** app resource/tool methods and ticket redemption
+(PR #377). **Not implemented:** wiring a desktop app mount to those methods and
+mounting an MCP App renderer.
 A resource URI in a projection is not an openable card by itself.
 
 ```mermaid
@@ -79,7 +81,9 @@ in [runtime](runtime.md) before diagnosing this as a rendering failure.
 
 ## User flow: open a tool's MCP App and interact with its host
 
-**Proposed Nessa flow, not shipped end to end.** [ADR 344](../../adr/todo/344-mcp-ui.md)
+**Proposed desktop integration, not shipped end to end.** The backend app APIs,
+policy, reviews, audit, and resource tickets are implemented by PR #377; the
+desktop renderer and `ui/*` host bridge remain absent. [ADR 344](../../adr/todo/344-mcp-ui.md)
 defines the separate-origin sandbox, gateway app-call policy, and display mapping.
 The standard bridge is implemented in `nessa-extensions` for development hosts;
 that implementation does not supply the missing Nessa desktop host.
@@ -88,14 +92,17 @@ that implementation does not supply the missing Nessa desktop host.
 sequenceDiagram
   actor Person
   participant Widget as Desktop widget host (planned app renderer)
-  participant Gateway as Gateway app API (planned)
+  participant Gateway as Gateway app API (implemented)
   participant Server as Same upstream MCP session
   participant App as Sandboxed MCP App
   Person->>Widget: Open tool's view
   Widget->>Gateway: Read declared ui:// resource
   Gateway->>Server: resources/read on originating session
   Server-->>Gateway: HTML plus CSP and permissions metadata
-  Gateway-->>Widget: Resource
+  Gateway-->>Widget: Resource descriptor and single-use ticket
+  Widget->>Gateway: GET /mcp-resources with ticket header
+  Gateway-->>Widget: Bytes after audited redemption
+  Widget->>Widget: Check size and SHA-256 before render
   Widget->>App: Mount isolated frame under declared policy
   App->>Widget: ui/initialize (version and offered modes)
   Widget-->>App: Host capabilities and partial context
@@ -132,24 +139,142 @@ sequenceDiagram
   conversation; window placement serves sidebar entries; `pip` is not offered.
   See [desktop placement flows](desktop.md) for the implemented native hosts,
   Escape routing, focused pane, window view, and fallback behavior.
-- Planned policy: own server only, app-visible tools only, destructive-tool approval
-  through existing permissions, and audit per call. [Issue #348](https://github.com/nessalabs/nessa-agent/issues/348)
-  covers app methods; its merged session-token slices do not establish those
-  methods exist. Camera/microphone/clipboard declarations still depend on host
+- Implemented backend policy: own server only, app-visible tools only, destructive-tool
+  approval through gateway-owned app reviews, and audit per step. Agent approval mode
+  does not bypass app review. [PR #377](https://github.com/nessalabs/nessa-agent/pull/377)
+  supplies app methods after issue #348's session-token slices.
+  Camera/microphone/clipboard declarations still depend on host
   grants and browser feature detection. CSP declarations are separate from tool
   permission and from a request to open an external link.
 - Contributing PRs: [agent #350](https://github.com/nessalabs/nessa-agent/pull/350)
   records the design, [#364](https://github.com/nessalabs/nessa-agent/pull/364)
   supplies native widget hosts and the app placeholder, and [#374](https://github.com/nessalabs/nessa-agent/pull/374)
-  moves host sizing onto the shared UI size observer. The sequence above is an
+  moves host sizing onto the shared UI size observer.
+  [#377](https://github.com/nessalabs/nessa-agent/pull/377) supplies the backend
+  app-call API, without supplying the desktop renderer. The sequence above is an
   implementation target, not evidence these PRs shipped an MCP App host.
 
 Bug perspective: **confirmed implementation gap** — registering an app widget
 currently yields the cannot-show surface; reachable trigger and regression
-evidence are in `hosts.test.tsx`. **Hypothesis for future host verification** —
-wrong-session calls, lost approval/audit evidence, or origin/CSP leakage become
-risks when the planned renderer and app API land. No current exploit or failure
-of those absent components is claimed.
+evidence are in `hosts.test.tsx`. **Hypothesis for future host integration verification** — incorrect mount identity
+or origin/CSP leakage needs testing when the desktop renderer lands. Backend
+wrong-server/visibility/approval/ticket cases now have implementation and regression
+evidence below; this is not a claim those checks were dynamically exercised here.
+
+## User flow: call an app tool, approve it, or fetch its resource through the gateway
+
+**Implemented backend and client, without a desktop renderer.** The authenticated
+caller identifies a conversation, the originating tool (`executionId`, `toolId`),
+and one mount (`instanceId`). The mount identity separates simultaneous inline
+and pane instances, their outstanding reviews, and their resource tickets.
+
+```mermaid
+sequenceDiagram
+  participant Client as client.mcpApps / future desktop host
+  participant Socket as Product socket app lane
+  participant Service as Conversation app-call service
+  participant Audit as Durable app audit
+  participant Person as Person via conversation.answer
+  participant Server as Conversation-owned MCP session
+  participant Tickets as Resource tickets and HTTP route
+  Client->>Socket: mcp.callTool with conversation and app mount identity
+  Socket->>Service: Admit to own task, retain gateway slot
+  Service->>Service: Check originating app, own server, visibility and bounds
+  alt Destructive tool
+    Service->>Audit: Record approval requested
+    Service->>Person: App-origin permission review
+    Person->>Service: Allow or deny through conversation.answer
+    Service->>Audit: Record selection before advancing
+  else Non-destructive tool
+    Service->>Audit: Record admission
+  end
+  alt Authorized call
+    Service->>Server: tools/call on conversation session
+    Server-->>Service: Tool answer or typed failure
+    Service->>Audit: Record completion
+    alt Completion audit succeeds
+      Service-->>Client: Result or refusal
+    else Completion audit fails after upstream effect
+      Service-->>Client: audit_unavailable, result withheld
+      Note over Client,Server: Failure does not prove no effect, do not infer safe retry
+    end
+  else Review denied, expired or withdrawn
+    Service-->>Client: Explicit app-call refusal
+  end
+  Client->>Service: mcp.readResource
+  Service->>Audit: Record resource-read admission
+  Service->>Server: resources/read on own server
+  Server-->>Service: App HTML and metadata
+  Service->>Tickets: Hold exact bytes under unpublished single-use ticket
+  Service->>Audit: Record read completion and ticket issue
+  Note over Service,Tickets: Audit failure discards the unpublished ticket
+  Service-->>Client: Size, digest, metadata and ticket
+  Client->>Tickets: GET /mcp-resources, ticket in header
+  alt HTTP Origin refused
+    Tickets-->>Client: 403 before ticket lookup, ticket not spent
+  else Origin accepted and ticket redeemable
+    Tickets->>Audit: Record redemption before serving
+    Tickets-->>Client: Bytes, or 503 if audit cannot be written
+    Note over Client,Tickets: Redemption spends ticket, including audit failure
+  end
+  Client->>Client: Check size and SHA-256
+  Client->>Service: mcp.releaseApp for one mount
+  Service->>Service: Withdraw waiting reviews and release tickets
+  Note over Service,Server: Already-sent tools finish on their own task even if caller leaves
+```
+
+- [App-call design and state tables](../../design/mcp-app-calls.md) describe
+  current behavior, including refusal, caller loss, audit failure and ticket
+  lifecycle. [Policy](../../../crates/nessa-server/src/mcp_servers/domain/app_call.rs)
+  permits only an originating MCP tool with UI, its own server and an app-visible
+  listed tool. Arguments are one JSON object within 32 KiB; tool results are at
+  most 56 KiB. A tool is destructive unless `readOnlyHint` is true or
+  `destructiveHint` is false.
+- [Service](../../../crates/nessa-server/src/conversation/application/service/app_calls.rs)
+  owns each call's task and one of 32 gateway-wide slots. Socket app calls have
+  four slots; `mcp.releaseApp` uses the separate control lane so waiting calls
+  cannot block release. [App reviews](../../../crates/nessa-server/src/conversation/application/app_reviews.rs)
+  appear in conversation permissions with app origin and settle once as allowed,
+  denied, expired after five minutes, or withdrawn. They are not tied to a running
+  agent execution and agent approval mode does not exempt them.
+- [Audit adapter](../../../crates/nessa-server/src/conversation/infrastructure/mcp_app_audit.rs)
+  keeps idempotent durable steps under a gateway-minted call ID, without retaining
+  raw arguments, results or resource bytes. [Ticket storage](../../../crates/nessa-server/src/mcp_servers/infrastructure/resource_tickets.rs)
+  and [HTTP redemption](../../../crates/nessa-server/src/mcp_servers/entrypoint/http.rs)
+  serve held bytes once within 60 seconds. Tickets are header secrets, not URL
+  parameters; replay/expiry/release returns the same empty 404. Redemption audit
+  failure returns 503 without serving bytes and still spends the ticket.
+  A disallowed HTTP Origin returns 403 before ticket lookup or redemption and
+  does not spend the ticket.
+- [Client API](../../../packages/nessa-client/src/presentation/mcp-apps-api.ts)
+  offers `callTool`, `readResource`, `fetchResource` and `releaseApp`.
+  Resource bytes travel over HTTP instead of the socket; `fetchResource` checks
+  declared size and SHA-256 before handing bytes to a renderer.
+- Existing regression evidence: [policy](../../../crates/nessa-server/tests/mcp_servers/app_call.rs),
+  [call lifecycle](../../../crates/nessa-server/tests/conversation/app_calls.rs),
+  [reviews](../../../crates/nessa-server/tests/conversation/app_reviews.rs),
+  [audit](../../../crates/nessa-server/tests/conversation/mcp_app_audit.rs),
+  [tickets](../../../crates/nessa-server/tests/mcp_servers/resource_tickets.rs),
+  [HTTP route](../../../crates/nessa-server/tests/mcp_servers/http.rs),
+  [gateway lanes](../../../crates/nessa-server/tests/mcp_servers/gateway.rs),
+  [client API](../../../packages/nessa-client/src/presentation/mcp-apps-api.test.ts),
+  and [HTTP client transport](../../../packages/nessa-client/src/transport/mcp-resource-fetch.test.ts).
+  These newly pulled tests were read, not executed by this documentation update.
+  Contributing PR: [agent #377](https://github.com/nessalabs/nessa-agent/pull/377),
+  verified by squash commit `e3fe8cf8`.
+
+Bug perspective: **designed limitation** — a disconnected caller or released mount
+withdraws a waiting review but cannot undo an already-sent server call. Its own
+retained task finishes and records the outcome. **Designed limitation** — resource
+redemption spends the ticket even when its audit fails; reacquire rather than
+retrying the same ticket. The Origin guard's earlier 403 does not redeem or spend
+it. **Designed limitation** — tool completion audit can fail after the upstream
+effect, returning `audit_unavailable` and withholding the result. That response
+does not prove the tool did nothing and does not establish that automatic retry
+is safe. **Integration boundary** — the methods and client checks
+exist, but the missing desktop host must supply correct mount identities, map
+`ui/*` messages, and enforce the sandbox's origin/CSP/browser grants. See
+[runtime](runtime.md) for authoritative review and cleanup ordering.
 
 ## User flow: develop an MCP App in the fake host and reference host
 
@@ -529,8 +654,9 @@ an arbitrary consumer's browser geometry or backend behavior.
 
 ## Coverage and verification boundaries
 
-Covered: MCP identity/UI metadata to transcript; the explicit missing app host;
-proposed sandbox, tool permission and display/context/link flow; standard bridge,
+Covered: MCP identity/UI metadata to transcript; the implemented app-call backend
+and explicit missing desktop app host; proposed sandbox and desktop
+display/context/link integration; standard bridge,
 theme, teardown and development hosts; server definition, negotiation and transport;
 experiments domain/samples and planned UI; package/registry consumer differences;
 workshop stream rendering and transport limitations; all reusable UI families
@@ -538,8 +664,8 @@ exported through the current public barrel.
 
 Excluded from behavioral claims: extension npm release availability, ChatGPT or
 other live third-party hosts, future remote authenticated extension serving,
-unbuilt experiments server/app, absent desktop MCP App API/renderer, and exhaustive
-per-primitive browser verification. This documentation pass does not report new
+unbuilt experiments server/app, absent desktop MCP App renderer/host bridge, and
+exhaustive per-primitive browser verification. This documentation pass does not report new
 passing tests or claim the proposals were exercised. Installation/startup evidence
 belongs in [startup](startup.md); product-native geometry and widget lifecycle
 belong in [desktop](desktop.md).

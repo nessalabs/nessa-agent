@@ -3,7 +3,7 @@
 This map starts after an authorized conversation command reaches the gateway's
 conversation service. It follows the Rust SDK, provider processes, installed
 runtimes, MCP sessions, durable records, and passive history reads at checkout
-`52bc6cbc` (2026-10-02). Diagrams describe implemented paths, including failure
+`e3fe8cf8` (2026-10-02). Diagrams describe implemented paths, including failure
 ordering; they are not evidence that a live vendor agent was exercised here.
 
 Navigate to [chat commands and projections](chat.md), [startup and readiness](startup.md),
@@ -440,8 +440,9 @@ under that grant. Two conversations do not share their MCP session.
 The [MCP connections design/state tables](../../design/mcp-connections.md)
 describe this implemented lifecycle. [UI lookup adapter](../../../crates/nessa-server/src/mcp_servers/infrastructure/tool_uis.rs)
 and [tool MCP value](../../../crates/nessa-sdk/src/domain/agent_execution/tools/value_objects/mcp.rs)
-are the bridge to [MCP Apps rendering](extensions-ui.md); rendering, sandbox,
-window/pane placement, and host interactions are outside this backend map.
+feed the gateway-owned app calls below. The [extensions UI map](extensions-ui.md)
+tracks the host boundary: these backend APIs are implemented, while the app
+renderer, sandbox, and mount lifecycle integration remain absent.
 
 Tests: [gateway grants/relay](../../../crates/nessa-server/tests/mcp_servers/mod.rs),
 [SDK session isolation/revocation](../../../crates/nessa-sdk/tests/infrastructure/mcp/sessions.rs),
@@ -459,6 +460,150 @@ or absent `_meta.ui`. Check the conversation-owned session before blaming the
 renderer. Resource subscriptions are deliberately refused by the stand-in. A
 request timeout sends cancellation upstream and can leave the connection usable;
 an oversized/non-JSON frame terminates the session instead.
+
+## User flow: an app calls a tool through gateway policy and review
+
+PR [#377](https://github.com/nessalabs/nessa-agent/pull/377) implements the backend
+half of app interactions. An app reference binds an execution, tool, and mount
+instance; it is not permission to choose another server. The gateway checks
+conversation ownership/write access, finds the originating tool in the current
+projection, requires its UI metadata, and checks the target's app visibility on
+the same conversation-owned upstream session. Destructive hints always require
+a gateway-owned review, independently of the conversation approval mode.
+
+| Entry point | Implemented authority and outcome |
+| --- | --- |
+| `mcp.callTool` | Same-server visible target, object arguments at most 32 KiB; gateway policy/refusal, optional review, and completion audit. Returns MCP result JSON at most 56 KiB; `isError: true` is a tool answer. |
+| `conversation.answer` / `conversation.cancel` | Routes gateway app reviews before SDK reviews. App-origin reviews offer allow-once/deny-once and expire after five minutes. Exact execution/review identities are required. |
+| `mcp.readResource` | Same originating app/server and validated `ui://` URI; one upstream read, resource metadata, and a single-use bearer ticket for held HTML bytes. |
+| `GET /mcp-resources` | `x-nessa-resource-ticket` authorizes redemption without a second HTTP authentication step; trusted-origin check, one consumption, and redemption audit precede bytes. |
+| `mcp.releaseApp` | Idempotently withdraws current waiting reviews and releases current unredeemed tickets for the exact mount; no permanent mount revocation or provider close. |
+
+```mermaid
+sequenceDiagram
+    participant App as Host caller / app reference
+    participant Gateway as ConversationService app task
+    participant Audit as McpAppAudit
+    participant Reviews as Gateway AppReviews
+    participant Person as Conversation review UI
+    participant MCP as Same conversation MCP session
+    App->>Gateway: mcp.callTool(app, server, target, arguments, requestId)
+    Gateway->>Gateway: Verify caller, originating UI, own server, listed target and bounds
+    alt Policy refuses
+        Gateway->>Audit: Refused with gateway callId and app/action attribution
+        Gateway-->>App: Typed refusal, no upstream call
+    else Destructive target
+        Gateway->>Audit: ApprovalRequested before opening review
+        Gateway->>Reviews: Open exact review (maximum 16 per conversation)
+        Reviews-->>Person: Conversation view permission with app origin
+        Person->>Gateway: conversation.answer or cancel with person action
+        Gateway->>Reviews: Consume exact gateway review
+        alt Allowed
+            Reviews-->>Gateway: Allowed with answering person attribution
+            Gateway->>Audit: Approved before dispatch
+            Gateway->>MCP: tools/call
+        else Denied, expired, withdrawn or conversation ended
+            Reviews-->>Gateway: Terminal refusal/cause
+            Gateway->>Audit: Denied, Expired or Withdrawn
+            Gateway-->>App: Typed refusal, no upstream call
+        end
+    else Target needs no review
+        Gateway->>Audit: Admitted before dispatch
+        Gateway->>MCP: tools/call
+    end
+    opt An upstream call was dispatched
+        MCP-->>Gateway: Result or remote failure
+        Gateway->>Audit: Completed before returning outcome
+        Gateway-->>App: Result JSON or typed failure
+    end
+```
+
+A gateway-generated call ID correlates phases separately from the caller's
+request/action ID. Failure to record a pre-dispatch phase prevents that step;
+a completion-audit failure can occur after the upstream effect. The socket lane has four slots; each owned service task retains one of 32
+gateway-wide slots until it ends.
+Caller disappearance withdraws a waiting review, preserving an answer that won
+the race; an already dispatched call retains its completion/audit task. The
+client does not automatically replay app calls and reports ambiguous outcomes
+as uncertain errors.
+
+Owners: [wire dispatch](../../../crates/nessa-server/src/product/mcp_apps.rs),
+[app calls and audit ordering](../../../crates/nessa-server/src/conversation/application/service/app_calls.rs),
+[policy](../../../crates/nessa-server/src/mcp_servers/domain/app_call.rs),
+[review consumption and expiry](../../../crates/nessa-server/src/conversation/application/app_reviews.rs),
+[same-session adapter](../../../crates/nessa-server/src/mcp_servers/infrastructure/apps.rs),
+and [client API/error contract](../../../packages/nessa-client/src/presentation/mcp-apps-api.ts).
+Tests: [app policy, review, cancellation, bounds and audit failure](../../../crates/nessa-server/tests/conversation/app_calls.rs),
+[review identity](../../../crates/nessa-server/tests/conversation/app_reviews.rs),
+[app audit](../../../crates/nessa-server/tests/conversation/mcp_app_audit.rs),
+and [client calls](../../../packages/nessa-client/src/presentation/mcp-apps-api.test.ts).
+
+## User flow: read an app resource once and release its ticket
+
+```mermaid
+sequenceDiagram
+    participant App as Host caller
+    participant Gateway as App resource task
+    participant MCP as Same conversation MCP session
+    participant Tickets as ResourceTicketStore
+    participant Audit as McpAppAudit
+    participant HTTP as GET /mcp-resources
+    App->>Gateway: mcp.readResource(app, own server, ui URI)
+    Gateway->>Gateway: Verify caller, originating UI and same-server authority
+    Gateway->>Audit: Admitted
+    Gateway->>MCP: resources/read once
+    MCP-->>Gateway: HTML bytes and UI metadata
+    Gateway->>Tickets: Hold bytes under single-use random bearer ticket
+    Gateway->>Audit: Completed and TicketIssued (digest, size, SHA-256)
+    alt Issue audit fails
+        Gateway->>Tickets: Discard unissued ticket
+        Gateway-->>App: Failure, no usable ticket returned
+    else Recorded
+        Gateway-->>App: Ticket, size, SHA-256, CSP and permissions metadata
+        App->>HTTP: GET with x-nessa-resource-ticket
+        alt Untrusted origin
+            HTTP-->>App: Empty 403, ticket untouched
+        else Trusted origin or no Origin header
+            HTTP->>Tickets: Consume one live unspent ticket
+            alt Missing, malformed, expired, spent or released
+                HTTP-->>App: Empty 404
+            else Consumed
+                HTTP->>Audit: TicketRedeemed before response bytes
+                alt Audit fails
+                    HTTP-->>App: Empty 503, ticket remains spent
+                else Recorded
+                    HTTP-->>App: HTML bytes, attachment, nosniff and no-store
+                    App->>App: Client verifies exact size and SHA-256
+                end
+            end
+        end
+    end
+    opt App teardown, successful conversation release, expiry or store drop
+        Gateway->>Tickets: Release outstanding held bytes/tickets
+        Tickets->>Audit: Asynchronous ticket end event (failure logged)
+    end
+```
+
+Tickets expire after 60 seconds. Per conversation, the store holds at most 64
+tickets and 16 MiB; individual UI HTML is bounded to 4 MiB by the SDK resource
+parser. Only ticket digests enter audit/storage. `HEAD` never redeems a ticket.
+A successful response uses `text/html;profile=mcp-app`; the client fetch checks
+length/digest and does not automatically retry redemption. Redemption awaits
+audit without its own deadline. Expiry/release already frees bytes even if its
+asynchronous audit event fails, so an end audit is not a guaranteed durable
+cleanup receipt. These tickets are distinct from attachment/download tickets.
+
+Owners: [ticket port and limits](../../../crates/nessa-server/src/conversation/application/mcp_apps.rs),
+[ticket store and release sweeper](../../../crates/nessa-server/src/mcp_servers/infrastructure/resource_tickets.rs),
+[HTTP redemption](../../../crates/nessa-server/src/mcp_servers/entrypoint/http.rs),
+and [SDK UI resource parser](../../../crates/nessa-sdk/src/domain/mcp_apps/value_objects/ui_resource.rs).
+Tests: [ticket consumption and release](../../../crates/nessa-server/tests/mcp_servers/resource_tickets.rs),
+[HTTP origin, redemption and audit](../../../crates/nessa-server/tests/mcp_servers/http.rs),
+and [resource issue/audit failure](../../../crates/nessa-server/tests/conversation/app_calls.rs).
+Bug tracing: distinguish a policy refusal, waiting app-origin review, upstream
+failure, issue-audit failure, spent ticket, fetch digest failure, and the currently
+absent renderer. A lost response after dispatch/redemption requires reading the
+correlated audit; replay can repeat a tool effect or spend a different ticket.
 
 ## User flow: install or replace a pinned agent runtime
 
@@ -608,6 +753,7 @@ sequenceDiagram
     end
     opt Agent close acknowledged
         Service->>Service: Join attachment owner and release live slot
+        Service->>Service: End gateway app reviews and release conversation resource tickets
     end
     Service-->>Caller: Close result (including independent upload-release failure)
 ```
@@ -825,9 +971,10 @@ numbers. Commit links preserve the evidence when a PR groups several features.
 | Authorized product reads and durable receiver | [#300](https://github.com/nessalabs/nessa-agent/pull/300), [#354](https://github.com/nessalabs/nessa-agent/pull/354) | Explicit PR links in authorized-reads design; squash `c2f3b0ec`; reads **issue 296**, admission **issue 295** |
 | Gateway MCP client and structured tool identity/results | [#363](https://github.com/nessalabs/nessa-agent/pull/363), [#355](https://github.com/nessalabs/nessa-agent/pull/355) | Merge `cd092666`, squash `1bf01c87`; MCP client **issue 346**, ADR **344** |
 | Conversation-keyed MCP grant lifecycle | [#367](https://github.com/nessalabs/nessa-agent/pull/367), [#372](https://github.com/nessalabs/nessa-agent/pull/372) | Squashes `25ed89d8`, `e927378f`; grant work **issue 348**, part a only |
+| Gateway app policy, reviews, audit and resource tickets | [#377](https://github.com/nessalabs/nessa-agent/pull/377) | Squash `e3fe8cf8`; **issue 348**, part b; renderer still absent |
 | Shell output closure | [#307](https://github.com/nessalabs/nessa-agent/pull/307) | Squash `7da63127` |
 
-Inspect [mapped checkout commit](https://github.com/nessalabs/nessa-agent/commit/52bc6cbc),
+Inspect [mapped checkout commit](https://github.com/nessalabs/nessa-agent/commit/e3fe8cf8),
 [MCP grant introduction](https://github.com/nessalabs/nessa-agent/commit/25ed89d8),
 [record transport introduction](https://github.com/nessalabs/nessa-agent/commit/c2f3b0ec),
 and [streaming commit introduction](https://github.com/nessalabs/nessa-agent/commit/4bc780f0).
