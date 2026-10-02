@@ -4,7 +4,10 @@ use crate::conversation::domain::{
     ConversationSummary, ProviderSessionErasure,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_sdk::domain::agent_execution::{prompts::ImageReference, sessions::ExecutionSessionId};
+use nessa_sdk::domain::agent_execution::{
+    prompts::ImageReference, sessions::ExecutionSessionId, tools::McpTool,
+};
+use nessa_sdk::domain::mcp_apps::UiResourceUri;
 use std::{future::Future, pin::Pin};
 
 pub type ConversationFuture<'a, T> =
@@ -516,4 +519,23 @@ pub trait ConversationAttachments: Send + Sync {
     /// the release with its cause and initiator; an `Err` reports that some of
     /// it, or its evidence, could not be completed after every part was tried.
     fn release(&self, release: AttachmentRelease) -> ConversationFuture<'_, ()>;
+}
+
+/// The UI an MCP tool declared, as its server last listed it (ADR 344).
+///
+/// No harness passes a tool's `_meta.ui` through ACP, so the view asks the one
+/// connection the gateway holds to each server. Answered from what was last
+/// listed, never by asking a server while a view is read.
+pub trait McpToolUis: Send + Sync {
+    /// The `ui://` resource of the listed tool an observed `call` names
+    /// (`ListedTool::ui_for`), or `None`.
+    fn resource_uri(&self, call: &McpTool) -> Option<UiResourceUri>;
+}
+
+/// No MCP servers, so no tool has a UI.
+pub struct NoMcpToolUis;
+impl McpToolUis for NoMcpToolUis {
+    fn resource_uri(&self, _: &McpTool) -> Option<UiResourceUri> {
+        None
+    }
 }

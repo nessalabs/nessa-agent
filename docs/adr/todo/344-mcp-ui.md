@@ -61,11 +61,14 @@ What binds:
 **Nessa is an MCP Apps host.** An app's `tools/call` and `resources/read` must
 reach the same MCP session that produced its tool's result — a stateful server
 may have handed back a handle only that session knows — so there is **one
-connection per server, and the gateway owns it**. For a configured server, the
-gateway starts it and connects to it, and gives the harness a stdio stand-in (in
-`nessa-mcp`'s place in `session/new`) that forwards the harness's calls over
-that same connection. The agent's calls and the app's calls then travel one
-upstream session. Through it the gateway lists tools with their `_meta.ui` and
+connection per server for each harness session, owned by the gateway**. Per
+harness session rather than per server, because one connection shared by
+every conversation would let one conversation's state, slow calls and crashes
+reach the others (#346). For a configured server, the harness is given a stdio
+stand-in (in the server's place in `session/new`); when it starts, the gateway
+starts the server and connects to it, and the stand-in forwards the harness's
+calls over that connection until the harness session ends. The agent's calls
+and its app's calls then travel one upstream session. Through it the gateway lists tools with their `_meta.ui` and
 reads `ui://` resources (#346). A tool call's identity, `_meta` and result
 travel from the ACP parser to the window's transcript (#347). The gateway offers
 the window `mcp.readResource` and `mcp.callTool` for an app, under a policy —
@@ -108,10 +111,18 @@ app widgets alike.
 
 ## Consequences
 
-- The gateway gains the one connection to each server — the harness's MCP
-  traffic now passes through it — and two app methods, with policy and audit;
-  the SDK and protocol carry tool identity and `_meta`, which also helps any
-  tool view in the transcript.
+- The gateway gains the connection to each server for each harness session —
+  the harness's MCP traffic now passes through it — and two app methods, with
+  policy and audit; what that connection means is designed in
+  [mcp-connections](../../design/mcp-connections.md) (#346): a harness's
+  context fingerprint covers its stand-in, whose arguments carry a digest of
+  the configured server, so it still changes exactly when the server does; a
+  gateway restart ends every session, so a restored conversation's handles
+  are gone and the server says so; a server that exits ends its stand-in, as
+  when the harness owned it; and which conversation a stand-in belongs to is
+  carried to the gateway by #348, before any app method exists. The SDK and
+  protocol carry tool identity and `_meta`, which also helps any tool view in
+  the transcript.
 - A view like experiments becomes a package with its own release, testable in a
   fake host, and portable.
 - An extension cannot reach into the core: whatever it needs from the

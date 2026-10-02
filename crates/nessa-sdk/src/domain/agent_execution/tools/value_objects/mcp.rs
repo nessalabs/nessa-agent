@@ -53,6 +53,31 @@ impl McpTool {
     pub fn payload_bytes(&self) -> usize {
         self.server.len().saturating_add(self.tool.len())
     }
+    /// Whether this observed call names `listed`, a tool as its server listed
+    /// it: the same server, and the same tool either exactly or in the
+    /// spelling Claude's harness gives a name, where every UTF-16 code unit
+    /// outside `[A-Za-z0-9_-]` became `_` (its JavaScript replaces per code
+    /// unit, so a character outside the Basic Multilingual Plane becomes two).
+    ///
+    /// Two listed tools can both be named — `rows.get` and `rows_get` by
+    /// `rows_get` — and a caller that needs one must refuse to choose
+    /// ([`ListedTool::ui_for`](crate::domain::mcp_apps::ListedTool::ui_for)).
+    pub fn names(&self, listed: &McpTool) -> bool {
+        if self.server != listed.server {
+            return false;
+        }
+        if self.tool == listed.tool {
+            return true;
+        }
+        let mut spelled = listed.tool.chars().flat_map(|c| {
+            let kept = c.is_ascii_alphanumeric() || c == '_' || c == '-';
+            std::iter::repeat_n(
+                if kept { c } else { '_' },
+                if kept { 1 } else { c.len_utf16() },
+            )
+        });
+        self.tool.chars().all(|c| spelled.next() == Some(c)) && spelled.next().is_none()
+    }
 }
 
 fn name(value: String, field: &'static str) -> Result<Box<str>, ExecutionError> {

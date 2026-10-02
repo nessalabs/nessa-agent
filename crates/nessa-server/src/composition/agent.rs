@@ -301,7 +301,10 @@ impl AgentsConfig {
 /// A developer loop has no host and no such variable, and there the process
 /// `PATH` *is* the developer's own shell path, which is the right answer.
 #[cfg(unix)]
-fn agent_search_path(resolved: Option<OsString>, inherited: Option<OsString>) -> Option<OsString> {
+pub(super) fn agent_search_path(
+    resolved: Option<OsString>,
+    inherited: Option<OsString>,
+) -> Option<OsString> {
     resolved
         .filter(|path| !path.is_empty())
         .or(inherited)

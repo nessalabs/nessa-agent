@@ -5,7 +5,7 @@ use super::{
     ConversationAttachmentEvidenceFailureCode, ConversationCaller, ConversationCapabilities,
     ConversationDependencies, ConversationLifecycle, ConversationLifecyclePhase,
     ConversationLimits, ConversationMessageStatus, ConversationPendingMode, ConversationService,
-    PermissionDenialSupport, ProviderSessionErasers, SubmissionMode, SubmittedMessage,
+    McpToolUis, PermissionDenialSupport, ProviderSessionErasers, SubmissionMode, SubmittedMessage,
     MAX_STRUCTURED_CONTENT_BYTES,
 };
 use crate::{
@@ -16,6 +16,7 @@ use crate::{
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_sdk::domain::mcp_apps::UiResourceUri;
 use nessa_sdk::{
     application::agent_execution::{
         agents::{AgentError, ProviderDiagnostic},
@@ -47,7 +48,7 @@ use nessa_sdk::{
         tools::{McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
     },
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 fn said(text: &str) -> UserMessage {
     UserMessage::text_only(PromptText::new(text).unwrap())
 }
@@ -1711,4 +1712,80 @@ fn a_message_linking_long_paths_gives_way_before_an_ask_does() {
     assert!(bytes <= 60_000, "{bytes} bytes");
     assert_eq!(view.questions.len(), 8, "no admitted ask is given up");
     assert!(view.truncated);
+}
+
+/// The tools a server listed, as the view's lookup sees them: `charts`'
+/// `show` has whatever UI the test sets, nothing else has any.
+struct ListedUis(Mutex<Option<&'static str>>);
+impl McpToolUis for ListedUis {
+    fn resource_uri(&self, call: &McpTool) -> Option<UiResourceUri> {
+        if (call.server(), call.tool()) != ("charts", "show") {
+            return None;
+        }
+        self.0
+            .lock()
+            .unwrap()
+            .map(|uri| UiResourceUri::new(uri).unwrap())
+    }
+}
+
+fn mcp_call(projection: &mut Projection, id: &str, server: &str, tool: &str) {
+    projection.event(&event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(ToolCallId::new(id).unwrap(), None, None, None, None, None)
+            .with_mcp_tool(McpTool::new(server, tool).unwrap()),
+    )));
+}
+
+#[test]
+fn an_mcp_tools_ui_comes_from_the_listed_tools_and_moves_the_revision() {
+    let listed = Arc::new(ListedUis(Mutex::new(None)));
+    let mut projection = projection().with_tool_uis(listed.clone());
+    mcp_call(&mut projection, "chart", "charts", "show");
+    mcp_call(&mut projection, "report", "charts", "report");
+    projection.event(&event(ExecutionUpdate::Tool(ToolCallUpdate::new(
+        ToolCallId::new("shell").unwrap(),
+        Some("Shell".into()),
+        None,
+        None,
+        None,
+        None,
+    ))));
+    // Not listed yet: no UI, and the wire says nothing about one.
+    let unknown = projection.read();
+    assert_eq!(unknown.tools[0].mcp.as_ref().unwrap().resource_uri, None);
+    let wire = serde_json::to_value(&unknown.tools[0]).unwrap();
+    assert_eq!(
+        wire["mcp"],
+        serde_json::json!({ "server": "charts", "tool": "show" })
+    );
+
+    // Listed later: the same projection's next read has it, under a new revision.
+    *listed.0.lock().unwrap() = Some("ui://charts/show.html");
+    let known = projection.read();
+    let mcp = known.tools[0].mcp.as_ref().unwrap();
+    assert_eq!(mcp.resource_uri.as_deref(), Some("ui://charts/show.html"));
+    assert_eq!(
+        serde_json::to_value(&known.tools[0]).unwrap()["mcp"]["resourceUri"],
+        "ui://charts/show.html"
+    );
+    assert_ne!(known.revision, unknown.revision);
+    assert_eq!(projection.read().revision, known.revision);
+    // A tool without UI, and a tool that is not MCP's, are as they were.
+    assert_eq!(known.tools[1].mcp.as_ref().unwrap().resource_uri, None);
+    assert_eq!(known.tools[2].mcp, None);
+
+    // A different UI is a different revision.
+    *listed.0.lock().unwrap() = Some("ui://charts/other.html");
+    assert_ne!(projection.read().revision, known.revision);
+    // Without a lookup, no UI.
+    let mut bare = super::projection::Projection::new(
+        "conversation".into(),
+        unknown.capabilities.clone(),
+        None,
+    );
+    mcp_call(&mut bare, "chart", "charts", "show");
+    assert_eq!(
+        bare.read().tools[0].mcp.as_ref().unwrap().resource_uri,
+        None
+    );
 }
