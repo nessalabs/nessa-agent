@@ -1,5 +1,7 @@
 //! Authenticated commands resolve one shared Agent owner per conversation.
 //! Service -> metadata repository; shared Agent -> SDK session storage/provider.
+//! Service::create_command -> SDK CreationCoordinator -> principal control lease;
+//! service/creation keeps current target deletion and the existing admission guard.
 //! Service -> ConversationSummaries: what a list shows about each conversation,
 //! written when a message is accepted and when a turn completes.
 //! Service -> ConversationListing: one caller's conversations with their

@@ -1408,3 +1408,15 @@ client/encoder support in its `read_only_online/fixtures/` children. Pure parser
 and JSON presentation evidence lives under `tests/read_only_sync/entrypoint/`.
 
 The client incoming wire admission uses `packages/nessa-client/src/protocol/unique-json.ts` for decoded object-key uniqueness before `parseWireMessage` delegates grammar/value conversion to JSON.parse.
+
+### Durable creation command owners
+
+SDK `application/agent_execution/commands/creation.rs` owns immutable creation
+bindings, progress and effect order. `infrastructure/session_storage/creation.rs`
+implements its principal lease with the existing SQLite runtime; it does not
+modify the conversation semantic record writer. The host consumer lives under
+`conversation/application/service/creation.rs`, sharing the existing creation
+helper, metadata/deletion authority and admission guard. Tests mirror those
+owners under `nessa-sdk/tests/infrastructure/session_storage/creation.rs` and
+`nessa-server/tests/conversation/creation_commands.rs`. The state table is in
+[command creation](design/command-creation.md).

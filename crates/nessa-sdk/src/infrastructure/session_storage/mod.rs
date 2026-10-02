@@ -18,6 +18,7 @@
 //!                                      |-> semantic facts -> SQLite runtime
 //! RecordStorage -> identity metadata -> expected bounded read source -> sync engine
 //! RecordStorage -> transcript fold -> committed gateway view
+//! RecordStorage -> creation control stream -> principal command lease/receipts
 //! MessageCommitClock <--------------------- Tokio monotonic clock adapter
 //! ```
 //! Arrows show calls and representation mapping. A complete framed fact is
@@ -25,6 +26,7 @@
 //! they finish. Erasing a session resets its stream under that lease. `paths`
 //! identifies stale JSONL history so the record adapter refuses it unchanged.
 
+mod creation;
 mod memory;
 mod message_commit_clock;
 mod paths;
