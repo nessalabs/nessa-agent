@@ -9,8 +9,10 @@ use crate::infrastructure::mcp::{McpError, McpOwner};
 use serde_json::json;
 use std::time::Duration;
 
-/// The budget these tests give a call (the gateway gives the protocol's).
+/// The budgets these tests give a call and a read (the gateway gives the
+/// protocol's).
 const CALL: Duration = Duration::from_secs(60);
+const READ: Duration = Duration::from_secs(10);
 
 fn conversation(name: &str) -> SessionId {
     SessionId::new(name).unwrap()
@@ -72,7 +74,7 @@ async fn without_a_session_of_its_own_an_app_reaches_nothing() {
     );
     assert_eq!(
         servers
-            .read_app_resource(&none, "fixture", &UiResourceUri::new(CHART).unwrap())
+            .read_app_resource(&none, "fixture", &UiResourceUri::new(CHART).unwrap(), READ)
             .await,
         Err(McpError::NoSession)
     );
@@ -185,6 +187,7 @@ async fn an_apps_resource_is_read_over_its_conversations_own_session() {
             &conversation("a"),
             "fixture",
             &UiResourceUri::new(CHART).unwrap(),
+            READ,
         )
         .await
         .unwrap();

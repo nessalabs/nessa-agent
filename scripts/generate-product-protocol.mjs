@@ -59,12 +59,13 @@ if (passiveReadTiming.minRequestTimeoutMs > 2_147_483_647)
   throw new Error("Passive request deadline exceeds the runtime timer range")
 
 // An MCP App's call timing is product policy too, with one owner: the
-// gateway's review deadline, the server's answer budget and the client's
-// allowance. The client waits their sum for `mcp.callTool`; every layer reads
-// these generated values and spells none of them.
+// gateway's review deadline, the server's budgets for a call and a read, and
+// the client's allowance. The client waits a call's sum for `mcp.callTool` and
+// a read's for `mcp.readResource`; every layer reads these generated values
+// and spells none of them.
 const appTiming = schema["x-mcpAppTiming"]
 const mcpAppTiming = {}
-for (const name of ["reviewMs", "callMs", "clientAllowanceMs"]) {
+for (const name of ["reviewMs", "callMs", "readMs", "clientAllowanceMs"]) {
   if (
     !appTiming ||
     !Object.hasOwn(appTiming, name) ||
@@ -78,6 +79,9 @@ mcpAppTiming.callDeadlineMs =
   mcpAppTiming.reviewMs + mcpAppTiming.callMs + mcpAppTiming.clientAllowanceMs
 if (mcpAppTiming.callDeadlineMs > 2_147_483_647)
   throw new Error("MCP App call deadline exceeds the runtime timer range")
+mcpAppTiming.readDeadlineMs = mcpAppTiming.readMs + mcpAppTiming.clientAllowanceMs
+if (mcpAppTiming.readDeadlineMs > 2_147_483_647)
+  throw new Error("MCP App read deadline exceeds the runtime timer range")
 
 const sdkFrames = readFileSync(
   resolve(root, "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"),
@@ -372,10 +376,10 @@ for (const name of [
 for (const [name, value] of Object.entries(passiveReadTiming)) {
   rs += `/// Published passive read timing from the product schema, in milliseconds.\npub const PASSIVE_${snake(name).toUpperCase()}: u64 = ${value};\n`
 }
-// Pure values the gateway's own layers read (the review, the call, the
-// ticket), so they sit with the product contract, not the wire. The client's
-// allowance and deadline are the client's alone.
-for (const name of ["reviewMs", "callMs"]) {
+// Pure values the gateway's own layers read (the review, the call, the read,
+// the ticket), so they sit with the product contract, not the wire. The
+// client's allowance and deadlines are the client's alone.
+for (const name of ["reviewMs", "callMs", "readMs"]) {
   contractRs += `/// Published MCP App call timing from the product schema, in milliseconds.\npub const MCP_APP_${snake(name).toUpperCase()}: u64 = ${mcpAppTiming[name]};\n`
 }
 contractRs += `/// Published lifetime of an MCP App's resource ticket from the product schema, in milliseconds.\npub const MCP_RESOURCE_TICKET_MS: u64 = ${bounds.mcpResourceTicketMs};\n`
@@ -383,7 +387,7 @@ ts += `${doc(
   "Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor.",
 )}export const passiveReadTiming = ${JSON.stringify(passiveReadTiming)} as const\n`
 ts += `${doc(
-  "An MCP App's call timing: how long a review waits for the person, how long the server has to answer, and the client's allowance. The client waits their sum (`callDeadlineMs`) for `mcp.callTool`.",
+  "An MCP App's call timing: how long a review waits for the person, how long the server has to answer a call and a read, and the client's allowance. The client waits a call's sum (`callDeadlineMs`) for `mcp.callTool` and a read's (`readDeadlineMs`) for `mcp.readResource`.",
 )}export const mcpAppTiming = ${JSON.stringify(mcpAppTiming)} as const\n`
 ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",

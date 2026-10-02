@@ -10,6 +10,7 @@
   "x-mcpAppTiming": {
     "reviewMs": 300000,
     "callMs": 60000,
+    "readMs": 10000,
     "clientAllowanceMs": 10000
   },
   "$defs": {

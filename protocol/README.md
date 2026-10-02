@@ -86,10 +86,13 @@ its conversation, the app — the tool call whose UI it is (`McpAppReference`:
   torn down, or the conversation ends.
 - **The timing is published once**, in the schema's `x-mcpAppTiming`:
   `reviewMs` (how long a review waits, 5 minutes), `callMs` (how long the
-  server has to answer, 60 s) and `clientAllowanceMs`. A client waits their
-  sum for `mcp.callTool`. The gateway, the SDK's caller and the client read the
-  generated values (`MCP_APP_REVIEW_MS` and `MCP_APP_CALL_MS` in Rust,
-  `mcpAppTiming` in TypeScript); no layer writes its own.
+  server has to answer a call, 60 s), `readMs` (how long it has to answer a
+  resource read, 10 s) and `clientAllowanceMs`. A client waits
+  `reviewMs + callMs + clientAllowanceMs` for `mcp.callTool` and
+  `readMs + clientAllowanceMs` for `mcp.readResource`. The gateway, the SDK's
+  caller and the client read the generated values (`MCP_APP_REVIEW_MS`,
+  `MCP_APP_CALL_MS` and `MCP_APP_READ_MS` in Rust, `mcpAppTiming` in
+  TypeScript); no layer writes its own.
 - **`mcp.readResource`** reads a resource of the app's server once and holds
   exactly those bytes. Its answer says what they are (`mimeType`, `size`,
   `sha256`, the app's `csp`, `permissions`, `domain`, `prefersBorder`) and

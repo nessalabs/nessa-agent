@@ -84,6 +84,7 @@ none is taken for an agent's.
 | refused as a tool call is (app, server, session) | the same codes |
 | a URI that is no `ui://` resource | `Refused(invalid_request)` |
 | read, and not an app's HTML | `Completed(Failed(mcp_app_unknown))` |
+| no answer in 10 s (`x-mcpAppTiming.readMs`) | `Completed(Failed(mcp_timed_out))` |
 | read | `Completed(Answered)`, then `TicketIssued{digest, size, sha256}`; the ticket answered |
 | no room to hold it: 16 MiB or 64 tickets per conversation | `Completed(Failed(temporarily_unavailable))` |
 | the issue cannot be recorded | the ticket is discarded, unreported; `audit_unavailable` |

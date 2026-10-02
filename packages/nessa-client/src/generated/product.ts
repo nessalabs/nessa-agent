@@ -1314,12 +1314,14 @@ export const passiveReadTiming = {
   clientAllowanceMs: 5000,
   minRequestTimeoutMs: 45000,
 } as const
-/** An MCP App's call timing: how long a review waits for the person, how long the server has to answer, and the client's allowance. The client waits their sum (`callDeadlineMs`) for `mcp.callTool`. */
+/** An MCP App's call timing: how long a review waits for the person, how long the server has to answer a call and a read, and the client's allowance. The client waits a call's sum (`callDeadlineMs`) for `mcp.callTool` and a read's (`readDeadlineMs`) for `mcp.readResource`. */
 export const mcpAppTiming = {
   reviewMs: 300000,
   callMs: 60000,
+  readMs: 10000,
   clientAllowanceMs: 10000,
   callDeadlineMs: 370000,
+  readDeadlineMs: 20000,
 } as const
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {

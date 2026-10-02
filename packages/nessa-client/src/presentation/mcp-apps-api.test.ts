@@ -16,7 +16,7 @@ import {
 import { NessaRpcError } from "../application/rpc-error.js"
 import { conversationView } from "../protocol/conversation-validate.js"
 import { mcpAppTiming } from "../generated/product.js"
-import { createMcpAppsApi } from "./mcp-apps-api.js"
+import { createMcpAppsApi, mcpAppDeadlines } from "./mcp-apps-api.js"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
 const app = {
@@ -426,13 +426,15 @@ it("reads a resource and returns what the gateway holds, ticket and all", async 
   const answer = await api(request).readResource(conversationId, app, "charts", uri, {
     requestId: "read",
   })
-  expect(request).toHaveBeenCalledExactlyOnceWith("mcp.readResource", {
-    conversationId,
-    requestId: "read",
-    app,
-    server: "charts",
-    uri,
-  })
+  expect(request).toHaveBeenCalledExactlyOnceWith(
+    "mcp.readResource",
+    { conversationId, requestId: "read", app, server: "charts", uri },
+    { atLeastMs: mcpAppDeadlines.readResourceMs },
+  )
+  // The server's read and the client's allowance, as the protocol publishes them.
+  expect(mcpAppDeadlines.readResourceMs).toBe(
+    mcpAppTiming.readMs + mcpAppTiming.clientAllowanceMs,
+  )
   expect(answer).toEqual({ ...resource, domain: "app.example", prefersBorder: false })
   // Absent is absent: neither is invented when the app did not say.
   const plain = await api(async () => resource).readResource(

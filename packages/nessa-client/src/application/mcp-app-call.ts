@@ -20,6 +20,14 @@ import { mcpRemoteErrorDetails } from "../protocol/mcp-app-validate.js"
 export const MCP_APP_CALL_DEADLINE_MS = mcpAppTiming.callDeadlineMs
 
 /**
+ * The longest `mcp.readResource` can take the gateway: the server's budget for
+ * the read, and the client's allowance (`x-mcpAppTiming`). Nothing waits on the
+ * person, so a client configured for less would give up on a read the gateway
+ * is still bound to answer.
+ */
+export const MCP_APP_READ_DEADLINE_MS = mcpAppTiming.readDeadlineMs
+
+/**
  * An MCP App's call (`mcp.callTool`, `mcp.readResource`) that did not answer.
  *
  * `uncertain` is false only when the gateway refused the call before anything

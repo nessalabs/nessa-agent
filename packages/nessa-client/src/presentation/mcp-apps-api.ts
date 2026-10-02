@@ -2,6 +2,7 @@ import { NessaConversationControlError } from "../application/conversation-mutat
 import { requestWithin, type RequestTimer } from "../application/gateway-http.js"
 import {
   MCP_APP_CALL_DEADLINE_MS,
+  MCP_APP_READ_DEADLINE_MS,
   NessaMcpAppError,
 } from "../application/mcp-app-call.js"
 import {
@@ -33,6 +34,20 @@ import {
   validResourceTicket,
 } from "../protocol/mcp-app-validate.js"
 import type { ConversationActionOptions } from "./conversation-api.js"
+
+/**
+ * How long {@link McpAppsApi}'s calls can take, in milliseconds: `callTool`
+ * and `readResource` wait at least this long — longer when the client is
+ * configured for longer — and `fetchResource` exactly this long. A host that
+ * bounds an app's request waits as long, so that it never drops an answer the
+ * gateway is still bound to send. Derived from the protocol's
+ * `x-mcpAppTiming` and the ticket's lifetime; nothing else spells them.
+ */
+export const mcpAppDeadlines = Object.freeze({
+  callToolMs: MCP_APP_CALL_DEADLINE_MS,
+  readResourceMs: MCP_APP_READ_DEADLINE_MS,
+  fetchResourceMs: RESOURCE_DEADLINE_MS,
+})
 
 /** What `mcp.readResource` said the bytes are: the size and SHA-256 `fetchResource` holds them to. */
 export type McpResourceDescription = Pick<McpReadResourceResult, "size" | "sha256">
@@ -95,7 +110,9 @@ export type McpAppsApi = {
   ) => Promise<McpCallToolResult>
   /**
    * Read a resource of the app's own server: once, held by the gateway as
-   * exactly those bytes, and described with a ticket to fetch them.
+   * exactly those bytes, and described with a ticket to fetch them. The server
+   * has 10 s to answer the read; this client waits that and its allowance
+   * (`mcpAppDeadlines.readResourceMs`).
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
    * @param app - The app asking: its tool call and this mount of it.
    * @param server - The app's own server, by its configured name: 1-128 UTF-8 bytes.
@@ -161,7 +178,8 @@ export type McpAppsApi = {
 }
 
 const utf8 = new TextEncoder()
-const callDeadline: RequestDeadline = { atLeastMs: MCP_APP_CALL_DEADLINE_MS }
+const callDeadline: RequestDeadline = { atLeastMs: mcpAppDeadlines.callToolMs }
+const readDeadline: RequestDeadline = { atLeastMs: mcpAppDeadlines.readResourceMs }
 
 function hex(digest: ArrayBuffer): string {
   return Array.from(new Uint8Array(digest), (byte) =>
@@ -253,8 +271,11 @@ export function createMcpAppsApi(
         throw new TypeError(
           `Resource URI must contain 1-${bounds.maxMcpResourceUriBytes} UTF-8 bytes`,
         )
-      return call(ProductMethod.McpReadResource, { ...command, server, uri }, (value) =>
-        mcpReadResourceResult(value, uri),
+      return call(
+        ProductMethod.McpReadResource,
+        { ...command, server, uri },
+        (value) => mcpReadResourceResult(value, uri),
+        readDeadline,
       )
     },
     async fetchResource(ticket, expected, options = {}) {
@@ -268,7 +289,7 @@ export function createMcpAppsApi(
         (signal) => transport.get({ ticket, maxBytes: expected.size, signal }),
         options.signal,
         timer,
-        RESOURCE_DEADLINE_MS,
+        mcpAppDeadlines.fetchResourceMs,
         {
           aborted: () => new NessaMcpResourceError("aborted"),
           timeout: () => new NessaMcpResourceError("timeout"),

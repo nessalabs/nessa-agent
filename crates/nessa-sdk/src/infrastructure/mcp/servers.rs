@@ -446,23 +446,26 @@ impl McpServers {
     }
 
     /// Read the MCP App resource `uri` over `session`'s own newest open
-    /// session of `server`, as [`McpSession::read_ui_resource`] does.
+    /// session of `server`, as [`McpSession::read_ui_resource`] does, waiting
+    /// at most `timeout` for its answer: the caller's own budget, as for
+    /// [`Self::call_tool`].
     ///
     /// # Errors
     ///
-    /// [`McpError::NoSession`], and what [`McpSession::read_ui_resource`]
-    /// fails with.
+    /// [`McpError::NoSession`], [`McpError::Timeout`] past `timeout`, and what
+    /// [`McpSession::read_ui_resource`] fails with.
     pub async fn read_app_resource(
         &self,
         session: &SessionId,
         server: &str,
         uri: &UiResourceUri,
+        timeout: Duration,
     ) -> Result<UiResource, McpError> {
         let own = self.newest(session, server).ok_or(McpError::NoSession)?;
         let params = json!({ "uri": uri.as_str() });
         let result = own
             .connection
-            .request("resources/read", Some(params), REQUEST_TIMEOUT)
+            .request("resources/read", Some(params), timeout)
             .await?;
         wire::ui_resource(uri, &result)
     }

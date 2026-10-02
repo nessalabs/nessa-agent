@@ -158,10 +158,15 @@ test("passive timing publishes changed phase values and their derived client flo
       assert.match(rust, new RegExp(`PASSIVE_${name}: u64 = ${value};`))
   }))
 
-test("MCP App timing publishes its parts, the client's deadline, and the gateway's values", () =>
+test("MCP App timing publishes its parts, the client's deadlines, and the gateway's values", () =>
   fixture((path) => {
     edit(path, "protocol/product/v1.json", (schema) => {
-      schema["x-mcpAppTiming"] = { reviewMs: 307, callMs: 61, clientAllowanceMs: 11 }
+      schema["x-mcpAppTiming"] = {
+        reviewMs: 307,
+        callMs: 61,
+        readMs: 13,
+        clientAllowanceMs: 11,
+      }
     })
     const result = generate(path, "generate-product-protocol")
     assert.equal(result.status, 0, result.stderr)
@@ -174,9 +179,12 @@ test("MCP App timing publishes its parts, the client's deadline, and the gateway
     assert.match(published, /reviewMs: 307/)
     assert.match(published, /callMs: 61/)
     assert.match(published, /clientAllowanceMs: 11/)
+    assert.match(published, /readMs: 13/)
     assert.match(published, /callDeadlineMs: 379/)
+    assert.match(published, /readDeadlineMs: 24/)
     assert.match(contract, /MCP_APP_REVIEW_MS: u64 = 307;/)
     assert.match(contract, /MCP_APP_CALL_MS: u64 = 61;/)
+    assert.match(contract, /MCP_APP_READ_MS: u64 = 13;/)
     assert.match(contract, /MCP_RESOURCE_TICKET_MS: u64 = \d+;/)
   }))
 
@@ -185,6 +193,9 @@ for (const [name, value] of [
   ["reviewMs", 0],
   ["callMs", "60000"],
   ["callMs", 1.5],
+  ["readMs", null],
+  ["readMs", 0],
+  ["readMs", 2_147_483_647],
   ["clientAllowanceMs", -1],
   ["clientAllowanceMs", 2_147_483_647],
 ])
