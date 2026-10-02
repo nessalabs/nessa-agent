@@ -8,11 +8,22 @@ use nessa_sdk::infrastructure::acp::sessions::{StandInGrant, StandInGrants};
 use nessa_sdk::infrastructure::mcp::{McpOwner, McpServers};
 use std::{
     collections::HashMap,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
 };
+
+/// Where tokens' random bytes come from.
+pub trait TokenSource: Send + Sync {
+    /// Fill `bytes` with fresh random bytes, or say why not.
+    fn fill(&self, bytes: &mut [u8; 32]) -> Result<(), String>;
+}
+
+/// The operating system's random source.
+pub struct OsTokens;
+impl TokenSource for OsTokens {
+    fn fill(&self, bytes: &mut [u8; 32]) -> Result<(), String> {
+        getrandom::fill(bytes).map_err(|error| error.to_string())
+    }
+}
 
 /// The grants live now, by the digest of each one's token.
 #[derive(Clone)]
@@ -22,18 +33,19 @@ pub struct ConversationGrants {
 
 struct Grants {
     servers: McpServers,
+    tokens: Arc<dyn TokenSource>,
     live: Mutex<HashMap<TokenDigest, McpOwner>>,
-    next: AtomicU64,
 }
 
 impl ConversationGrants {
-    /// Grants whose revocation ends their sessions on `servers`.
-    pub fn new(servers: McpServers) -> Self {
+    /// Grants whose tokens come from `tokens`, and whose revocation closes
+    /// their sessions on `servers`.
+    pub fn new(servers: McpServers, tokens: Arc<dyn TokenSource>) -> Self {
         Self {
             inner: Arc::new(Grants {
                 servers,
+                tokens,
                 live: Mutex::default(),
-                next: AtomicU64::new(0),
             }),
         }
     }
@@ -55,7 +67,7 @@ impl ConversationGrants {
 impl StandInGrants for ConversationGrants {
     fn grant(&self, session: &SessionId) -> StandInGrant {
         let mut bytes = [0; 32];
-        if let Err(error) = getrandom::fill(&mut bytes) {
+        if let Err(error) = self.inner.tokens.fill(&mut bytes) {
             // Without a token, this open's stand-ins are refused: its MCP
             // servers fail to start, and nothing else does.
             tracing::error!(%error, "no MCP session token could be made; this session's MCP servers are off");
@@ -63,29 +75,29 @@ impl StandInGrants for ConversationGrants {
         }
         let token = session_token(bytes);
         let digest = TokenDigest::of(&token);
-        let grant = self.inner.next.fetch_add(1, Ordering::Relaxed);
+        let owner = McpOwner::new(session.clone());
         self.inner
             .live
             .lock()
             .expect("grants")
-            .insert(digest, McpOwner::new(session.clone(), grant));
+            .insert(digest, owner.clone());
         StandInGrant::new(
             vec![(SESSION_VARIABLE.to_owned(), token)],
             Box::new(Revoke {
                 grants: self.inner.clone(),
                 digest,
-                grant,
+                owner,
             }),
         )
     }
 }
 
-/// Revokes one grant when dropped: its token is no longer let through, and
-/// the sessions opened with it end at once.
+/// Revokes one grant when dropped: its token is no longer let through, no
+/// session opens under it, and the sessions opened with it are closed.
 struct Revoke {
     grants: Arc<Grants>,
     digest: TokenDigest,
-    grant: u64,
+    owner: McpOwner,
 }
 impl Drop for Revoke {
     fn drop(&mut self) {
@@ -94,6 +106,6 @@ impl Drop for Revoke {
             .lock()
             .expect("grants")
             .remove(&self.digest);
-        self.grants.servers.close_granted(self.grant);
+        self.grants.servers.revoke(&self.owner);
     }
 }

@@ -383,7 +383,7 @@ async fn an_open_holds_its_sessions_grant_until_the_provider_session_ends() {
     let (_root, mut config, capabilities) = profile_setup();
     let grants = Arc::new(CountedGrants::default());
     config.stand_ins = super::super::sessions::StandInSessions::granted_by(grants.clone());
-    let open = |session: Option<SessionId>| {
+    let open = |session: Option<SessionId>, reject_startup: bool| {
         let process_config = config.clone();
         let process = Arc::new(move || {
             let mut command = tokio::process::Command::new(process_config.executable.executable());
@@ -400,7 +400,7 @@ async fn an_open_holds_its_sessions_grant_until_the_provider_session_ends() {
             config.clone(),
             capabilities.clone(),
             TestAcpProfile {
-                reject_startup: false,
+                reject_startup,
                 reject_session: false,
             },
             Arc::new(RecordingAudit::default()),
@@ -410,7 +410,7 @@ async fn an_open_holds_its_sessions_grant_until_the_provider_session_ends() {
             },
         )
     };
-    let opened = open(Some(SessionId::new("conversation").unwrap()))
+    let opened = open(Some(SessionId::new("conversation").unwrap()), false)
         .await
         .unwrap();
     // One grant, for the session opened, held while it lives.
@@ -427,15 +427,23 @@ async fn an_open_holds_its_sessions_grant_until_the_provider_session_ends() {
         .await
         .into_result()
         .unwrap();
+    // Shut down, but still held by its handles: not revoked early.
+    assert_eq!(grants.held.load(Ordering::SeqCst), 1);
     drop(opened);
     assert_eq!(
         grants.held.load(Ordering::SeqCst),
         0,
         "revoked once it ends"
     );
+    // An open that fails is revoked with it.
+    assert!(open(Some(SessionId::new("failed").unwrap()), true)
+        .await
+        .is_err());
+    assert_eq!(grants.asked.lock().unwrap().len(), 2);
+    assert_eq!(grants.held.load(Ordering::SeqCst), 0);
     // An open naming no SDK session is granted nothing.
-    let unnamed = open(None).await.unwrap();
-    assert_eq!(grants.asked.lock().unwrap().len(), 1);
+    let unnamed = open(None, false).await.unwrap();
+    assert_eq!(grants.asked.lock().unwrap().len(), 2);
     assert_eq!(grants.held.load(Ordering::SeqCst), 0);
     drop(unnamed);
 }

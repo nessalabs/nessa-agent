@@ -93,7 +93,8 @@ pub struct AcpConfig {
     pub mcp_servers: Vec<StdioMcpServer>,
     /// Where each provider open's MCP server processes get their per-open environment: a
     /// host's grant for the SDK session being opened, held for that provider session's life.
-    /// Excluded from restoration identity, like credentials. Never persisted by the SDK.
+    /// Excluded from restoration identity, like credentials. Held in memory only: no session
+    /// snapshot records it, since a snapshot records the provider context, not the launch.
     pub stand_ins: StandInSessions,
     /// Allowed permission decisions offered for provider requests. Provider choices are
     /// restricted to this policy; the selected profile must support every configured scope. An

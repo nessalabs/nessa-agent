@@ -16,7 +16,7 @@ use super::agent::{agent_search_path, AgentsConfig};
 use crate::core::RunError;
 use crate::mcp_servers::{
     domain::{configuration_digest, relay_arguments},
-    infrastructure::{bind, BoundRelay, ConversationGrants, Relay},
+    infrastructure::{bind, BoundRelay, ConversationGrants, OsTokens, Relay},
 };
 use nessa_sdk::infrastructure::{
     acp::sessions::{StandInSessions, StdioMcpServer},
@@ -151,7 +151,7 @@ pub(super) async fn compose(
             )
         })
         .collect();
-    let grants = ConversationGrants::new(servers.clone());
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
     agents.mcp_servers = stand_ins;
     agents.stand_ins = StandInSessions::granted_by(Arc::new(grants.clone()));
     Ok(Some(McpComposition {

@@ -9,7 +9,7 @@
 //!     │                                    ├── list_tools / read_ui_resource
 //!     │                                    └── serve(harness pipes) ──▶ stand_in
 //!     ├── tool_ui (an SDK session's own newest session of the server)
-//!     └── close_granted (a revoked grant's sessions, at once)
+//!     └── revoke (a grant's sessions closed, none opened under it after)
 //!
 //! Connection: framing (bounded newline JSON-RPC) ─ wire (MCP JSON → domain)
 //! ```

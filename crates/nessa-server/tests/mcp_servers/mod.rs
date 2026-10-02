@@ -15,8 +15,8 @@ use super::domain::{
     SESSION_VARIABLE,
 };
 use super::infrastructure::{
-    read_line, relay, write_line, Answer, ConversationGrants, Hello, ListedToolUis, Refusal, Relay,
-    RelayFailure, HELLO_TIMEOUT, MAX_HELLO_BYTES,
+    read_line, relay, write_line, Answer, ConversationGrants, Hello, ListedToolUis, OsTokens,
+    Refusal, Relay, RelayFailure, TokenSource, HELLO_TIMEOUT, MAX_HELLO_BYTES,
 };
 use crate::conversation::application::McpToolUis;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
@@ -61,7 +61,7 @@ fn relay_for(servers: Vec<StdioMcpServer>) -> (Arc<Relay>, McpServers, Conversat
         .iter()
         .map(|server| (server.name.clone(), digest(server)))
         .collect();
-    let grants = ConversationGrants::new(mcp.clone());
+    let grants = ConversationGrants::new(mcp.clone(), Arc::new(OsTokens));
     (
         Arc::new(Relay::new(mcp.clone(), digests, grants.clone())),
         mcp,
@@ -261,6 +261,45 @@ async fn a_token_maps_to_the_conversation_it_was_issued_for_while_its_grant_live
     assert_eq!(grants.live(), 1);
 }
 
+/// A random source that has none to give.
+struct NoRandom;
+impl TokenSource for NoRandom {
+    fn fill(&self, _: &mut [u8; 32]) -> Result<(), String> {
+        Err("no entropy".into())
+    }
+}
+
+#[tokio::test]
+async fn without_a_token_an_opens_stand_ins_are_refused_and_nothing_else_is_affected() {
+    let server = fixture();
+    let (_, mcp, _) = relay_for(vec![server.clone()]);
+    let grants = ConversationGrants::new(mcp.clone(), Arc::new(NoRandom));
+    let grant = grants.grant(&SessionId::new("conversation").unwrap());
+    // No token to carry, and none registered: its stand-ins say none, and
+    // none is let through.
+    assert!(grant.environment().is_empty());
+    assert_eq!(grants.live(), 0);
+    let relay = Arc::new(Relay::new(
+        mcp,
+        BTreeMap::from([(server.name.clone(), digest(&server))]),
+        grants,
+    ));
+    assert!(unknown_session(answered(&relay, &server, "").await));
+    drop(grant);
+}
+
+#[test]
+fn a_hello_never_prints_its_token() {
+    let hello = Hello {
+        server: "fixture".into(),
+        configuration: "sha256:c".into(),
+        session: "secret-token".into(),
+    };
+    let printed = format!("{hello:?}");
+    assert!(!printed.contains("secret-token"), "{printed}");
+    assert!(printed.contains("fixture"));
+}
+
 #[tokio::test]
 async fn a_revoked_grant_refuses_its_token_and_ends_the_sessions_it_opened() {
     let server = fixture();
@@ -280,8 +319,8 @@ async fn a_revoked_grant_refuses_its_token_and_ends_the_sessions_it_opened() {
     let pid = place(&mut harness_in, &mut answers).await;
     // The conversation's provider session ends: its grant goes.
     drop(grant);
-    // Its stand-in ends, its server is killed at once, and its token is
-    // refused from now on.
+    // Its stand-in ends, its server is closed as the stand-in ending would
+    // close it, and its token is refused from now on.
     assert_eq!(relayed.await.unwrap(), Ok(()));
     gone(pid).await;
     assert!(unknown_session(answered(&side, &server, &token).await));

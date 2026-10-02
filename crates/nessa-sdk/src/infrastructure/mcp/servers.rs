@@ -75,21 +75,52 @@ struct Inner {
 }
 
 /// Whose a session is: the SDK session (a conversation's) its harness was
-/// opened for, and the host's grant for that open. Sessions of one grant
-/// end together when the host revokes it ([`McpServers::close_granted`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// opened for, under one grant of the host's for that open. Each
+/// [`McpOwner::new`] is a grant of its own, shared by its clones; sessions of
+/// one grant are closed together when the host revokes it
+/// ([`McpServers::revoke`]), and none opens under it after.
+#[derive(Clone)]
 pub struct McpOwner {
     session: SessionId,
-    grant: u64,
+    grant: Arc<Grant>,
+}
+/// One grant: set revoked once, under the open sessions' lock.
+#[derive(Default)]
+struct Grant {
+    revoked: std::sync::atomic::AtomicBool,
 }
 impl McpOwner {
-    /// The sessions opened for `session` under the host's grant `grant`.
-    pub fn new(session: SessionId, grant: u64) -> Self {
-        Self { session, grant }
+    /// A new grant for sessions opened for `session`.
+    pub fn new(session: SessionId) -> Self {
+        Self {
+            session,
+            grant: Arc::default(),
+        }
     }
     /// The SDK session these sessions belong to.
     pub fn session(&self) -> &SessionId {
         &self.session
+    }
+    /// Whether `other` is this same grant.
+    fn same_grant(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.grant, &other.grant)
+    }
+    fn revoked(&self) -> bool {
+        self.grant.revoked.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+impl PartialEq for McpOwner {
+    fn eq(&self, other: &Self) -> bool {
+        self.session == other.session && self.same_grant(other)
+    }
+}
+impl Eq for McpOwner {}
+impl std::fmt::Debug for McpOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpOwner")
+            .field("session", &self.session)
+            .field("revoked", &self.revoked())
+            .finish_non_exhaustive()
     }
 }
 
@@ -135,10 +166,14 @@ impl Session {
         self.process.lock().expect("process").take()
     }
     /// Close the connection and kill the process group at once, without the
-    /// grace: dropping the process kills its group.
+    /// grace: dropping the process kills its group. Said stopped only when it
+    /// took the process; a close already stopping it says so itself, once
+    /// it has.
     fn kill_now(&self, cause: McpError) {
-        drop(self.close_now(cause));
-        self.stopped.send_replace(true);
+        if let Some(process) = self.close_now(cause) {
+            drop(process);
+            self.stopped.send_replace(true);
+        }
     }
 }
 
@@ -270,6 +305,12 @@ impl McpServers {
                 connection.close(McpError::Stopped);
                 return Err(McpError::Stopped);
             }
+            // Revoked while opening: `revoke` sets this under this lock, so
+            // either it finds this session registered or this sees it.
+            if owner.revoked() {
+                connection.close(McpError::Closed);
+                return Err(McpError::Closed);
+            }
             live.next += 1;
             let session = Arc::new(Session {
                 id: live.next,
@@ -319,20 +360,33 @@ impl McpServers {
             })
     }
 
-    /// End every session opened under the host's grant `grant`, at once: its
-    /// connection closed and its process group killed, without the grace —
-    /// the grant is revoked, so nothing of it is waited for.
-    pub fn close_granted(&self, grant: u64) {
+    /// Revoke `owner`'s grant: no session opens under it from now on — one
+    /// opening now is refused [`McpError::Closed`] — and each open one is
+    /// closed as its stand-in ending would close it: calls waiting end
+    /// [`McpError::Closed`] at once, the server's stdin is closed, and a
+    /// server still running two seconds later is killed with its process
+    /// group. Returns at once; the closing runs on the current runtime
+    /// (without one, the process groups are killed at once).
+    pub fn revoke(&self, owner: &McpOwner) {
         let granted: Vec<Arc<Session>> = {
             let live = self.inner.live.lock().expect("live sessions");
+            owner
+                .grant
+                .revoked
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             live.sessions
                 .values()
                 .filter_map(Weak::upgrade)
-                .filter(|each| each.owned_by.grant == grant)
+                .filter(|each| each.owned_by.same_grant(owner))
                 .collect()
         };
         for session in granted {
-            session.kill_now(McpError::Closed);
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => {
+                    runtime.spawn(close(session, McpError::Closed));
+                }
+                Err(_) => session.kill_now(McpError::Closed),
+            }
         }
     }
 

@@ -39,9 +39,9 @@ fn conversation() -> SessionId {
     SessionId::new("conversation").unwrap()
 }
 
-/// Whose test sessions are: [`conversation`], under grant 0.
+/// Whose test sessions are: [`conversation`], each under a grant of its own.
 fn owner() -> McpOwner {
-    McpOwner::new(conversation(), 0)
+    McpOwner::new(conversation())
 }
 
 /// A session on `fixture` with `behaviour`, with the servers and launcher.

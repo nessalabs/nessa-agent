@@ -13,7 +13,7 @@ use nessa_sdk::infrastructure::{
 };
 use nessa_server::mcp_servers::{
     domain::{configuration_digest, SESSION_VARIABLE},
-    infrastructure::{bind, ConversationGrants, Relay},
+    infrastructure::{bind, ConversationGrants, OsTokens, Relay},
 };
 use serde_json::{json, Value};
 use std::{
@@ -57,7 +57,7 @@ async fn serve(directory: &Path, server: &StdioMcpServer) -> (PathBuf, StandInGr
         configuration_digest(&server.command, &server.args),
     )]);
     let listener = bind(&socket).await.unwrap();
-    let grants = ConversationGrants::new(servers.clone());
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
     let grant = grants.grant(&SessionId::new("conversation").unwrap());
     let token = grant.environment()[0].1.clone();
     tokio::spawn(Arc::new(Relay::new(servers, configured, grants)).listen(listener));

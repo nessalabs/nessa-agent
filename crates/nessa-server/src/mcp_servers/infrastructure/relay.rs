@@ -27,7 +27,7 @@ pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 pub const ANSWER_TIMEOUT: Duration = INITIALIZE_TIMEOUT.saturating_add(HELLO_TIMEOUT);
 
 /// What a stand-in says first.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Hello {
     pub server: String,
@@ -35,6 +35,17 @@ pub struct Hello {
     /// The session token from the stand-in's environment; empty when it has
     /// none.
     pub session: String,
+}
+
+impl std::fmt::Debug for Hello {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The session token is a bearer secret: never printed.
+        f.debug_struct("Hello")
+            .field("server", &self.server)
+            .field("configuration", &self.configuration)
+            .field("session", &"..")
+            .finish()
+    }
 }
 
 /// What the gateway answers.

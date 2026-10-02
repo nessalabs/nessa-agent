@@ -9,14 +9,18 @@ use std::{fmt, sync::Arc};
 /// open of an SDK session, the binding asks for a grant and holds it for
 /// that provider session's life — through every restart of its process —
 /// then drops it. What the grant's environment says is the host's own; the
-/// SDK passes it to every MCP server process of that open and nowhere else.
+/// SDK puts it in every `mcpServers` entry of that open, which the harness
+/// gives the MCP server process it starts.
 pub trait StandInGrants: Send + Sync {
-    /// A grant for one open of `session`.
+    /// A grant for one open of `session`. Called on the open's task, so it
+    /// must not block; it may be called from several opens at once.
     fn grant(&self, session: &SessionId) -> StandInGrant;
 }
 
 /// One open's grant: the environment its MCP server processes get, and what
-/// the host revokes when the grant is dropped.
+/// the host revokes when the grant is dropped — which happens on whichever
+/// task drops the provider session's last handle, so `held`'s `Drop` must not
+/// block either.
 pub struct StandInGrant {
     environment: Arc<[(String, String)]>,
     _held: Box<dyn Send + Sync>,

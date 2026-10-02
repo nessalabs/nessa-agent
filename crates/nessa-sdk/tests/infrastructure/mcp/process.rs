@@ -289,6 +289,42 @@ async fn every_close_returns_only_once_the_server_is_stopped() {
 }
 
 #[tokio::test]
+async fn a_grant_revoked_while_its_session_closes_leaves_every_close_waiting_for_the_stop() {
+    let (servers, _) = process(&["--ignore-eof"]);
+    let owner = super::owner();
+    let session = servers.open("fixture", owner.clone()).await.unwrap();
+    session.list_tools().await.unwrap();
+    let pid = i64::from(session.process_id().unwrap());
+    // One close holds the server through its grace; revoking the grant then
+    // must not say it is stopped before it is.
+    let first = tokio::spawn({
+        let session = session.clone();
+        async move { session.close().await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    servers.revoke(&owner);
+    session.close().await;
+    assert!(!exists(pid), "process {pid} is left after close returned");
+    first.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_session_dropped_while_a_close_holds_its_server_leaves_stop_waiting_for_it() {
+    let (servers, _) = process(&["--ignore-eof"]);
+    let owner = super::owner();
+    let session = servers.open("fixture", owner.clone()).await.unwrap();
+    session.list_tools().await.unwrap();
+    let pid = i64::from(session.process_id().unwrap());
+    // Revoking starts a close that holds the server through its grace; the
+    // last handle then goes, which must not say it is stopped before it is.
+    servers.revoke(&owner);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(session);
+    servers.stop().await;
+    assert!(!exists(pid), "process {pid} is left after stop returned");
+}
+
+#[tokio::test]
 async fn a_session_dropped_without_closing_kills_its_process_group() {
     let (servers, _) = process(&["--ignore-eof", "--child"]);
     let session = servers.open("fixture", super::owner()).await.unwrap();

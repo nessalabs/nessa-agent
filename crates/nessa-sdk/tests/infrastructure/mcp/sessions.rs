@@ -260,12 +260,12 @@ async fn each_conversation_sees_its_own_newest_sessions_ui() {
     let a = SessionId::new("a").unwrap();
     let b = SessionId::new("b").unwrap();
     let first = servers
-        .open("fixture", McpOwner::new(a.clone(), 1))
+        .open("fixture", McpOwner::new(a.clone()))
         .await
         .unwrap();
     // Another conversation's session of the same server declares another UI.
     let other = servers
-        .open("fixture", McpOwner::new(b.clone(), 2))
+        .open("fixture", McpOwner::new(b.clone()))
         .await
         .unwrap();
     first.list_tools().await.unwrap();
@@ -285,7 +285,7 @@ async fn each_conversation_sees_its_own_newest_sessions_ui() {
     assert_eq!(uri(&SessionId::new("c").unwrap()), None);
     // Resumed: its newest session is the one its harness talks to now.
     let resumed = servers
-        .open("fixture", McpOwner::new(a.clone(), 3))
+        .open("fixture", McpOwner::new(a.clone()))
         .await
         .unwrap();
     launcher
@@ -300,25 +300,57 @@ async fn each_conversation_sees_its_own_newest_sessions_ui() {
 }
 
 #[tokio::test]
-async fn a_revoked_grant_ends_its_sessions_at_once_and_no_others() {
+async fn a_revoked_grant_closes_its_sessions_and_no_others() {
     use crate::domain::agent_execution::sessions::SessionId;
     use crate::infrastructure::mcp::McpOwner;
     let (servers, launcher, _) = servers(Behaviour::default());
     let a = SessionId::new("a").unwrap();
+    let revoked_owner = McpOwner::new(a.clone());
     let revoked = servers
-        .open("fixture", McpOwner::new(a.clone(), 1))
+        .open("fixture", revoked_owner.clone())
         .await
         .unwrap();
     let kept = servers
-        .open("fixture", McpOwner::new(a.clone(), 2))
+        .open("fixture", McpOwner::new(a.clone()))
         .await
         .unwrap();
-    servers.close_granted(1);
-    launcher.server(0).stopped().await;
+    servers.revoke(&revoked_owner);
+    // Calls on it end at once; its server is closed as a stand-in ending
+    // would close it.
     assert_eq!(revoked.list_tools().await, Err(McpError::Closed));
-    // Closing it again waits for nothing: it is stopped already.
+    launcher.server(0).stopped().await;
+    // Closing it again returns once it is stopped.
     revoked.close().await;
     assert!(kept.list_tools().await.is_ok());
+    // No session opens under it after.
+    assert!(matches!(
+        servers.open("fixture", revoked_owner).await,
+        Err(McpError::Closed)
+    ));
+}
+
+#[tokio::test]
+async fn a_grant_revoked_while_its_session_opens_refuses_that_opening() {
+    use crate::domain::agent_execution::sessions::SessionId;
+    use crate::infrastructure::mcp::McpOwner;
+    let (servers, launcher, _) = servers(silent("initialize"));
+    let a = SessionId::new("a").unwrap();
+    let owner = McpOwner::new(a.clone());
+    let open = tokio::spawn({
+        let (servers, owner) = (servers.clone(), owner.clone());
+        async move { servers.open("fixture", owner).await.map(|_| ()) }
+    });
+    eventually("launched", || launcher.launches() == 1).await;
+    let server = launcher.server(0);
+    server.arrived("initialize", 1).await;
+    servers.revoke(&owner);
+    let asked = server.with_method("initialize")[0]["id"].clone();
+    server.send(json!({ "jsonrpc": "2.0", "id": asked,
+        "result": { "protocolVersion": "2025-06-18", "capabilities": {},
+                    "serverInfo": { "name": "fixture", "version": "1" } } }));
+    assert_eq!(open.await.unwrap(), Err(McpError::Closed));
+    server.stopped().await;
+    assert_eq!(servers.tool_ui(&a, &chart_call()), None);
 }
 
 #[tokio::test]

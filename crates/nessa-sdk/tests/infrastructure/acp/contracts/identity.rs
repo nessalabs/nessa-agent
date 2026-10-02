@@ -143,14 +143,17 @@ fn credential_and_context_keys_must_be_disjoint() {
     ));
 }
 
-/// Grants that give nothing.
-struct NoGrants;
-impl crate::infrastructure::acp::sessions::StandInGrants for NoGrants {
+/// Grants that give every open the token named.
+struct TokenGrants(&'static str);
+impl crate::infrastructure::acp::sessions::StandInGrants for TokenGrants {
     fn grant(
         &self,
         _: &crate::domain::agent_execution::sessions::SessionId,
     ) -> crate::infrastructure::acp::sessions::StandInGrant {
-        crate::infrastructure::acp::sessions::StandInGrant::new(Vec::new(), Box::new(()))
+        crate::infrastructure::acp::sessions::StandInGrant::new(
+            vec![("NESSA_MCP_SESSION".into(), self.0.into())],
+            Box::new(()),
+        )
     }
 }
 
@@ -192,12 +195,20 @@ fn fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments()
         .identity(),
         original
     );
-    // A host's grants for its MCP stand-ins are not context: a fresh one
+    // A host's grants for its MCP stand-ins are not context: a fresh token
     // each open never changes what a session resumes as.
-    let mut granted = config.clone();
-    granted.stand_ins =
-        crate::infrastructure::acp::sessions::StandInSessions::granted_by(Arc::new(NoGrants));
-    assert_eq!(provider(granted, &model).identity(), original);
+    for token in ["first", "second"] {
+        let (opened, _grant) = crate::infrastructure::acp::sessions::StandInSessions::granted_by(
+            Arc::new(TokenGrants(token)),
+        )
+        .opened(Some(
+            &crate::domain::agent_execution::sessions::SessionId::new("conversation").unwrap(),
+        ));
+        assert_eq!(opened.environment().len(), 1);
+        let mut granted = config.clone();
+        granted.stand_ins = opened;
+        assert_eq!(provider(granted, &model).identity(), original);
+    }
     let mut left = config.clone();
     let mut right = config;
     left.arguments = vec!["ab".into(), "c".into()];

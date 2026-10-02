@@ -26,8 +26,11 @@ hello and closed when the stand-in ends. Two harness sessions never share a
 server process, so neither blocks, sees, or outlives the other's, and Nessa's
 own `nessa` shell server runs per session as it did. Each session belongs to
 the conversation its harness was opened for, by a token the gateway issued
-for that open (below), so two conversations never share one, whatever a
-harness does. The SDK
+for that open (below), so two conversations never share one, as long as the
+harness passes each `mcpServers` entry's `env` to the stand-in it starts:
+Claude's and Codex's do (observed live; a stand-in without the token is
+refused, so one that did not would show no MCP servers at all); OpenCode's
+has not been run. The SDK
 (`crates/nessa-sdk/src/infrastructure/mcp/`) owns the protocol: the
 handshake, `tools/list` with each tool's `_meta.ui`, `resources/read` of an
 MCP App resource, forwarding a stand-in's traffic, and each session's
@@ -48,8 +51,12 @@ so it stays out of the context fingerprint, like credentials. The relay
 reads it from its environment and says it in its hello. The session it
 opens is owned by that open (`McpOwner`: the SDK session and the grant).
 When the provider session ends — closed, deleted, stopped, retired, shut
-down, warm-up done — the grant is dropped: its token is refused from then
-on, and its sessions end at once.
+down, warm-up done — the grant is dropped and revoked: its token is refused
+from then on, no session opens under it (one opening then is refused), and
+its sessions are closed as their stand-ins ending would close them — calls
+waiting end at once, the server's stdin is closed, and a server still
+running two seconds later is killed — so a server that commits evidence at
+end of input (Nessa's own shell server) still does.
 
 - **Handshake.** The gateway sends `initialize` with protocol `2025-06-18`
   and `capabilities.extensions: { "io.modelcontextprotocol/ui": { mimeTypes:
@@ -200,7 +207,7 @@ its own, and so a new stand-in.
 | Serving | harness reuses a cancelled request's id while the old call's answer is in flight | Serving | the old answer is dropped; the new request gets its own |
 | Serving | harness closes, or its socket breaks | Closed | the session is closed (above) |
 | Serving | session ends | Closed | the socket is closed, and the `mcp-relay` process exits at once, its stdin unread: the harness sees its server end, as when it owned the process |
-| Serving | the grant is revoked (its provider session ended) | Closed | the session ends at once: the process group is killed without the grace |
+| Serving | the grant is revoked (its provider session ended) | Closed | calls waiting end `Closed` at once; stdin closed, 2 s, then the process group killed, as a stand-in ending; a close already in its grace is not cut short, and every close returns only once the server is stopped |
 
 ### A grant
 
@@ -211,7 +218,8 @@ One per provider open of an SDK session (a conversation's, or a warm-up's).
 | — | the SDK opens a provider session for `S`: new, resumed, or warm-up | Live | a token minted; its digest registered as `S`; each stand-in of the open carries it |
 | Live | the harness process restarts inside that provider session | Live | the same token: the same open |
 | Live | a hello names its token | Live | a session opens, owned by (`S`, this grant) |
-| Live | the provider session ends: closed, deleted, stopped, retired, shut down, warm-up done | Revoked | the token is refused; the grant's sessions end at once |
+| Live | the provider session ends: closed, deleted, stopped, retired, shut down, warm-up done, or its open fails | Revoked | the token is refused; the grant's open sessions are closed (stdin, 2 s, the process group); a session still opening under it is refused when its `initialize` is answered — the revocation and its registration share one lock |
+| Revoked | a hello names its token | Revoked | refused `unknown-session` |
 | Live | `S` is opened again (resumed) | Live, beside the new one | the new open's stand-ins carry the new token; the view reads `S`'s newest session; this one is revoked when its provider session ends |
 | — | the gateway restarts | none | every old token is refused; each conversation gets a new one when it opens |
 
@@ -244,6 +252,15 @@ path that is not UTF-8 also leaves MCP servers off.
   and `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`
   and the agents' search path from the gateway's own environment; its standard
   error goes to the gateway's. It used to be whatever its harness gave it.
+- **What the token keeps apart, and what it does not.** It keeps one
+  conversation's stand-ins from being taken for another's, and a stand-in of
+  an ended open from reaching a new one. It is not a secret from processes of
+  the gateway's own user: a stand-in's environment can be read by them (as
+  `ps -E` shows on macOS), and so can the socket be opened. An agent's own
+  shell, running as that user, could therefore present another live
+  conversation's token. Part (b) of #348 has to hold that in its policy: an
+  app method acts on the conversation the authenticated caller names, never
+  on whatever a stand-in claims.
 - **Who can connect.** The relay socket is in a `0700` directory owned by the
   gateway's user (`/tmp/nessa-mcp-<uid>`, short because a socket's path has a
   platform limit — 104 bytes on macOS — that a namespace under a long data
@@ -265,7 +282,9 @@ Each row above has at least one test, named after it:
   cancellation both ways, id reuse, hidden tools, subscriptions, server
   requests answered, list-changed notices, sessions apart from each other,
   the view's lookup of a conversation's own newest session and not yet
-  listed, a revoked grant ending its sessions and no others, stop racing an
+  listed, a revoked grant closing its sessions and no others, a grant revoked
+  while its session opens refusing that opening, a grant revoked while its
+  session closes leaving every close waiting for the stop, stop racing an
   opening; a provider open holding its session's grant until it ends, every
   `mcpServers` entry carrying the open's environment, and grants left out of
   the fingerprint.
@@ -278,8 +297,10 @@ Each row above has at least one test, named after it:
 - Gateway: hello refusals (no, forged, and revoked tokens among them), a
   token mapping to its conversation while its grant lives, a revoked grant
   ending the sessions it opened, two conversations on one server and a
-  resumed one each on sessions of their own, the relay command's exit and its
-  token read from its environment, the stand-ins and digest in `session/new`, a relay process killed outright ending its server's
+  resumed one each on sessions of their own, no token when the random source
+  fails (its stand-ins refused, nothing else affected), a hello's `Debug`
+  never printing its token, the relay command's exit and its token read from
+  its environment, the stand-ins and digest in `session/new`, a relay process killed outright ending its server's
   process group, a relay exiting when its server ends with its stdin still
   open, the view's `resourceUri` and revision, the schema bound.
 - Desktop: a gateway tool with a `resourceUri` maps to a `widget` part.

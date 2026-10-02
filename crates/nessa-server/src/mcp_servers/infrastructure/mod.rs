@@ -9,7 +9,7 @@ mod tool_uis;
 #[cfg(all(test, unix))]
 pub(crate) use relay::said;
 
-pub use grants::ConversationGrants;
+pub use grants::{ConversationGrants, OsTokens, TokenSource};
 #[cfg(unix)]
 pub use relay::{bind, BoundRelay};
 pub use relay::{
