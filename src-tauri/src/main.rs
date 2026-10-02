@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_credentials;
+mod app_sandbox;
 mod attachments;
 mod composition;
 mod desktop_window;
@@ -64,6 +65,11 @@ fn main() {
         // a Nessa window goes to the person's browser, and never turns the
         // floating bar into a web page.
         .plugin(links::init())
+        // The origin MCP Apps are drawn behind (ADR 344): the sandbox proxy,
+        // and nothing else, on a scheme that is never the window's.
+        .register_uri_scheme_protocol(app_sandbox::SCHEME, |_context, request| {
+            app_sandbox::respond(request.method(), request.uri().path())
+        })
         .invoke_handler(tauri::generate_handler![
             platform::set_frosted,
             platform::panel_size,

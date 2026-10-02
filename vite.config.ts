@@ -7,6 +7,7 @@ import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
 import { sharedPackages, viteAliases } from "./scripts/nessa-ui-paths.mjs"
+import { appSandbox } from "./src/desktop/widgets/app/sandbox/serve"
 import { gatewayOrigin, parseStage } from "./src/env/gateway-ports"
 import { loadEnvironment } from "./src/env/environment"
 
@@ -72,6 +73,15 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    // The MCP Apps sandbox proxy's own origin, beside the dev server.
+    appSandbox(
+      readFileSync(
+        resolve(
+          dirname(fileURLToPath(import.meta.url)),
+          "src/desktop/widgets/app/sandbox/proxy.html",
+        ),
+      ),
+    ),
     {
       name: "nessa-bundle-stage",
       apply: "build",
