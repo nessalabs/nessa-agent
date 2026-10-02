@@ -21,6 +21,7 @@ import {
   tsconfigTextViolations,
   withTsconfigPaths,
   writeTsconfigPaths,
+  replaceWhole,
   viteAliases,
 } from "./nessa-ui-paths.mjs"
 
@@ -401,5 +402,60 @@ test("writeTsconfigPaths refuses, naming the file and writing nothing, whatever 
     assert.ok("refused" in result, why)
     assert.match(result.refused, pattern, why)
     assert.deepEqual(file.writes, [], why)
+  }
+})
+
+/** A filesystem of named texts for `replaceWhole`, failing where told to. */
+function memoryDisk(files, { failWrite, failRename } = {}) {
+  return {
+    files,
+    writeFileSync: (path, text) => {
+      // A write that fails partway leaves what it got through.
+      if (failWrite) {
+        files.set(path, text.slice(0, 3))
+        throw Object.assign(new Error("EFBIG: too big"), { code: "EFBIG" })
+      }
+      files.set(path, text)
+    },
+    renameSync: (from, to) => {
+      if (failRename) throw Object.assign(new Error("EXDEV"), { code: "EXDEV" })
+      files.set(to, files.get(from))
+      files.delete(from)
+    },
+    rmSync: (path) => void files.delete(path),
+  }
+}
+
+test("replaceWhole replaces the file in one step, or leaves it whole when writing fails partway", () => {
+  const done = memoryDisk(new Map([["t.json", "old"]]))
+  replaceWhole("t.json", "new text", done)
+  assert.deepEqual([...done.files], [["t.json", "new text"]])
+
+  for (const failure of [{ failWrite: true }, { failRename: true }]) {
+    const disk = memoryDisk(new Map([["t.json", "old"]]), failure)
+    assert.throws(() => replaceWhole("t.json", "new text", disk), /EFBIG|EXDEV/)
+    assert.deepEqual([...disk.files], [["t.json", "old"]], JSON.stringify(failure))
+  }
+})
+
+test("writeTsconfigPaths keeps a byte-order mark when it rewrites the file", () => {
+  const drifted = memoryFile(utf8("\uFEFF{}\n"))
+  assert.deepEqual(writeTsconfigPaths("t.json", drifted.io), { written: true })
+  assert.ok(drifted.writes[0].startsWith("\uFEFF"))
+})
+
+test("a refusal is one line, even when the parser quotes the source", () => {
+  const quoted = '{\n  "strict": tru,\n  "noUnusedLocals": false\n}\n'
+  const { refused } = writeTsconfigPaths("t.json", memoryFile(utf8(quoted)).io)
+  assert.match(refused, /^t\.json: tsconfig\.json is not plain JSON/)
+  assert.equal(refused.split("\n").length, 1, refused)
+  for (const thrown of [null, undefined, "x"]) {
+    const result = writeTsconfigPaths("t.json", {
+      read: () => {
+        throw thrown
+      },
+      write: () => {},
+    })
+    assert.match(result.refused, /^t\.json cannot be read \(\S+\)$/, String(thrown))
   }
 })

@@ -41,3 +41,14 @@ export function writeTsconfigPaths(
   },
   paths?: readonly NessaUiPath[],
 ): { written: boolean } | { refused: string }
+
+export function replaceWhole(
+  file: string,
+  text: string,
+  fs: {
+    writeFileSync: (path: string, text: string) => void
+    renameSync: (from: string, to: string) => void
+    rmSync: (path: string, options: { force: true }) => void
+  },
+  temporary?: string,
+): void

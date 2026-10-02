@@ -184,7 +184,9 @@ function readTsconfig(text) {
   try {
     tsconfig = JSON.parse(text.slice(bom.length))
   } catch (error) {
-    return { problem: `tsconfig.json is not plain JSON (${error.message}); ${plainJson}` }
+    // The parser can quote the source, newlines and all; the refusal stays one line.
+    const why = error.message.replace(/\s+/g, " ")
+    return { problem: `tsconfig.json is not plain JSON (${why}); ${plainJson}` }
   }
   if (!isObject(tsconfig))
     return { problem: `tsconfig.json is not a JSON object; ${plainJson}` }
@@ -241,12 +243,39 @@ export function withTsconfigPaths(text, paths = nessaUiPaths) {
   return bom + `${JSON.stringify(tsconfig, null, 2)}\n`.replaceAll("\n", eol)
 }
 
+/** What stopped a read or write, as one short phrase, whatever was thrown. */
+const failure = (error) =>
+  String(error?.code ?? error?.message ?? error).replace(/\s+/g, " ")
+
+/**
+ * Replaces `file` with `text` whole or not at all: the text goes to a sibling
+ * temporary file, which is then renamed over `file` (a rename within one
+ * directory replaces it in one step). If writing fails partway, `file` is
+ * untouched and the temporary file is removed. The filesystem calls are
+ * passed in, so the failure is tested without one.
+ *
+ * @param {string} file
+ * @param {string} text
+ * @param {{ writeFileSync: (path: string, text: string) => void, renameSync: (from: string, to: string) => void, rmSync: (path: string, options: { force: true }) => void }} fs
+ * @param {string} [temporary]
+ */
+export function replaceWhole(file, text, fs, temporary = `${file}.ui-paths.tmp`) {
+  try {
+    fs.writeFileSync(temporary, text)
+    fs.renameSync(temporary, file)
+  } catch (error) {
+    fs.rmSync(temporary, { force: true })
+    throw error
+  }
+}
+
 /**
  * What `pnpm ui:paths` does to `file`, given how to read and write it, so
  * every way it can go is decided here and tested without a filesystem: the
  * bytes must be UTF-8 and a plain JSON object; the file is written only when
- * that changes it. Each refusal is one sentence naming the file, and nothing
- * is written.
+ * that changes it. Each refusal is one line naming the file, and the file is
+ * left as it was — `write` must replace it whole or not at all
+ * (`replaceWhole`), so a write that fails partway leaves it intact.
  *
  * @param {string} file
  * @param {{ read: (file: string) => Uint8Array, write: (file: string, text: string) => void }} io
@@ -258,11 +287,12 @@ export function writeTsconfigPaths(file, { read, write }, paths = nessaUiPaths) 
   try {
     bytes = read(file)
   } catch (error) {
-    return { refused: `${file} cannot be read (${error.code ?? error.message})` }
+    return { refused: `${file} cannot be read (${failure(error)})` }
   }
   let before
   try {
-    before = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    // ignoreBOM keeps a byte-order mark in the text, so the writer can keep it.
+    before = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
   } catch {
     return { refused: `${file} is not UTF-8 text; it is left as it was` }
   }
@@ -276,7 +306,7 @@ export function writeTsconfigPaths(file, { read, write }, paths = nessaUiPaths) 
   try {
     write(file, after)
   } catch (error) {
-    return { refused: `${file} cannot be written (${error.code ?? error.message})` }
+    return { refused: `${file} cannot be written (${failure(error)})` }
   }
   return { written: true }
 }
