@@ -13,13 +13,13 @@ use nessa_sdk::application::agent_execution::{
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
     sessions::{CommittedSession, CommittedStatus, InvocationRecord, SessionSnapshot},
 };
+use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{ReviewDecline, ReviewDeclineReason, ReviewDeclineStage},
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
 };
-use nessa_sdk::domain::agent_execution::{sessions::SessionId, tools::McpTool};
 use sha2::{Digest, Sha256};
 use std::{collections::HashSet, sync::Arc};
 use uuid::Uuid;
@@ -926,8 +926,10 @@ impl Projection {
         // these URIs: a list read after the call still reaches the window.
         let mut drawn = Sha256::new();
         let mut any = false;
-        // The conversation's SDK session is named by its id.
-        let session = SessionId::new(view.conversation_id.clone()).ok();
+        // The conversation's own SDK session (`conversation_session`).
+        let session = ConversationId::new(&view.conversation_id)
+            .ok()
+            .map(|id| super::conversation_session(&id));
         for tool in &mut view.tools {
             let Some(mcp) = &mut tool.mcp else { continue };
             mcp.resource_uri = McpTool::new(mcp.server.as_str(), mcp.tool.as_str())

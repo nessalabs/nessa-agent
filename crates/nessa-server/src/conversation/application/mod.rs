@@ -84,6 +84,8 @@ mod provider_sessions;
 mod record_read;
 mod retries;
 mod service;
+mod session_key;
+pub(crate) use session_key::conversation_session;
 mod view;
 pub use crate::conversation::domain::ReceiverBinding;
 pub use catalogue::{

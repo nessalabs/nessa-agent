@@ -387,6 +387,58 @@ fn reading_the_view_while_sessions_end_never_deadlocks() {
         .expect("the lookup and sessions ending deadlocked");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_session_outlives_a_revocation_racing_its_opening() {
+    use crate::domain::agent_execution::sessions::SessionId;
+    use crate::infrastructure::mcp::McpOwner;
+    // Openings and revocations of the same grant, raced on several threads,
+    // many times: each opening is refused, or its session is closed by the
+    // revocation — never open after both are done.
+    let (servers, _, _) = servers(Behaviour::default());
+    for round in 0..300 {
+        let owner = McpOwner::new(SessionId::new(format!("c{round}")).unwrap());
+        let opening = tokio::spawn({
+            let (servers, owner) = (servers.clone(), owner.clone());
+            async move { servers.open("fixture", owner).await }
+        });
+        let revoking = tokio::spawn({
+            let (servers, owner) = (servers.clone(), owner.clone());
+            async move {
+                for _ in 0..round % 7 {
+                    tokio::task::yield_now().await;
+                }
+                servers.revoke(&owner);
+            }
+        });
+        revoking.await.unwrap();
+        match opening.await.unwrap() {
+            Err(error) => assert_eq!(error, McpError::Closed, "round {round}"),
+            Ok(session) => assert_eq!(
+                session.list_tools().await,
+                Err(McpError::Closed),
+                "round {round}: a session outlived its revocation"
+            ),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_grant_holds_only_its_open_sessions_and_those_ended_since_the_last() {
+    use crate::domain::agent_execution::sessions::SessionId;
+    use crate::infrastructure::mcp::McpOwner;
+    let (servers, _, _) = servers(Behaviour::default());
+    let owner = McpOwner::new(SessionId::new("a").unwrap());
+    for _ in 0..5 {
+        let session = servers.open("fixture", owner.clone()).await.unwrap();
+        session.close().await;
+        drop(session);
+    }
+    // The five ended ones are dropped as the next registers.
+    let open = servers.open("fixture", owner.clone()).await.unwrap();
+    assert_eq!(owner.held(), 1);
+    drop(open);
+}
+
 #[tokio::test]
 async fn a_grant_revoked_before_its_session_opens_launches_nothing() {
     use crate::domain::agent_execution::sessions::SessionId;

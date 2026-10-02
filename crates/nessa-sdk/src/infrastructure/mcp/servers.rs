@@ -86,13 +86,22 @@ pub struct McpOwner {
     session: SessionId,
     grant: Arc<Grant>,
 }
-/// One grant: set revoked once, under the open sessions' lock.
+/// One grant. Whether it is revoked and which sessions were opened under it
+/// share one lock, so registering a session (check, then add) and revoking
+/// (set, then take) are each one step: a session either is registered
+/// before the revocation, and is taken by it, or sees it and is refused —
+/// whichever [`McpServers`] it is opened and revoked through.
 #[derive(Default)]
 struct Grant {
-    revoked: std::sync::atomic::AtomicBool,
+    state: Mutex<GrantState>,
+}
+#[derive(Default)]
+struct GrantState {
+    revoked: bool,
     /// The sessions opened under it, so revoking it visits only its own.
-    /// Changed only under the open sessions' lock, as `revoked` is set.
-    sessions: Mutex<Vec<Weak<Session>>>,
+    /// Each registration first drops those already ended, so between
+    /// registrations it holds the open ones and those ended since the last.
+    sessions: Vec<Weak<Session>>,
 }
 impl McpOwner {
     /// A new grant for sessions opened for `session`.
@@ -111,7 +120,13 @@ impl McpOwner {
         Arc::ptr_eq(&self.grant, &other.grant)
     }
     fn revoked(&self) -> bool {
-        self.grant.revoked.load(std::sync::atomic::Ordering::SeqCst)
+        self.grant.state.lock().expect("grant").revoked
+    }
+    /// How many sessions the grant holds now, ended ones not yet dropped
+    /// among them.
+    #[cfg(all(test, unix))]
+    pub(super) fn held(&self) -> usize {
+        self.grant.state.lock().expect("grant").sessions.len()
     }
 }
 impl PartialEq for McpOwner {
@@ -317,9 +332,12 @@ impl McpServers {
                 connection.close(McpError::Stopped);
                 return Err(McpError::Stopped);
             }
-            // Revoked while opening: `revoke` sets this under this lock, so
-            // either it finds this session registered or this sees it.
-            if owner.revoked() {
+            // Revoked while opening: checked, and the session added to the
+            // grant, under the grant's own lock, which `revoke` sets and takes
+            // under — so either it takes this session or this sees it.
+            let grant = owner.grant.clone();
+            let mut granted = grant.state.lock().expect("grant");
+            if granted.revoked {
                 connection.close(McpError::Closed);
                 return Err(McpError::Closed);
             }
@@ -338,11 +356,8 @@ impl McpServers {
                 owner: Arc::downgrade(inner),
             });
             live.sessions.insert(session.id, Arc::downgrade(&session));
-            let mut granted = session.owned_by.grant.sessions.lock().expect("grant");
-            // Those already ended go as each new one comes, so the list holds
-            // what is open, and one more.
-            granted.retain(|each| each.strong_count() > 0);
-            granted.push(Arc::downgrade(&session));
+            granted.sessions.retain(|each| each.strong_count() > 0);
+            granted.sessions.push(Arc::downgrade(&session));
             drop(granted);
             session
         };
@@ -397,16 +412,13 @@ impl McpServers {
     /// whatever else closes it — its stand-in's end, with the grace, or its
     /// last handle going, at once.
     pub fn revoke(&self, owner: &McpOwner) {
-        // Its own sessions only, taken with the flag under the lock that
-        // registers them, and upgraded — and dropped — after it is released:
-        // see `open_sessions`.
+        // Its own sessions only, taken with the flag set in one step under
+        // the grant's lock (see `Grant`), and upgraded — and dropped — after
+        // it is released: see `open_sessions`.
         let granted = {
-            let _live = self.inner.live.lock().expect("live sessions");
-            owner
-                .grant
-                .revoked
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            std::mem::take(&mut *owner.grant.sessions.lock().expect("grant"))
+            let mut state = owner.grant.state.lock().expect("grant");
+            state.revoked = true;
+            std::mem::take(&mut state.sessions)
         };
         for session in granted.iter().filter_map(Weak::upgrade) {
             session.connection.close(McpError::Closed);

@@ -413,11 +413,20 @@ async fn place(
         harness_in.write_all(&bytes).await.unwrap();
         // Each answered before the next is asked: a call before its list is
         // answered is refused.
-        answer = serde_json::from_str(&answers.next_line().await.unwrap().unwrap()).unwrap();
+        answer = serde_json::from_str(&next_line(answers).await).unwrap();
     }
     answer["result"]["structuredContent"]["pid"]
         .as_i64()
         .unwrap() as libc::pid_t
+}
+
+/// The next line the stand-in answers, within ten seconds.
+async fn next_line(answers: &mut tokio::io::Lines<BufReader<DuplexStream>>) -> String {
+    tokio::time::timeout(std::time::Duration::from_secs(10), answers.next_line())
+        .await
+        .expect("an answer within ten seconds")
+        .unwrap()
+        .expect("a line, not the end")
 }
 
 /// Until `pid` has exited, within five seconds.
@@ -562,7 +571,10 @@ async fn the_relay_command_copies_both_ways_until_the_gateway_closes() {
     // The harness closes its input; the gateway, seeing that, closes; the
     // stand-in ends.
     drop(harness_in);
-    assert_eq!(running.await.unwrap(), Ok(()));
+    let running = tokio::time::timeout(std::time::Duration::from_secs(10), running)
+        .await
+        .expect("the stand-in ends");
+    assert_eq!(running.unwrap(), Ok(()));
 }
 
 /// A harness reaches the real server through `mcp-relay` and the relay
@@ -594,8 +606,7 @@ async fn a_harness_through_the_relay_gets_a_session_of_its_own() {
         ))
         .await
         .unwrap();
-    let initialized: Value =
-        serde_json::from_str(&answers.next_line().await.unwrap().unwrap()).unwrap();
+    let initialized: Value = serde_json::from_str(&next_line(&mut answers).await).unwrap();
     assert_eq!(
         initialized["result"]["serverInfo"]["name"],
         "fixture-process"
@@ -607,12 +618,12 @@ async fn a_harness_through_the_relay_gets_a_session_of_its_own() {
         ))
         .await
         .unwrap();
-    answers.next_line().await.unwrap().unwrap();
+    next_line(&mut answers).await;
     harness_in
         .write_all(&ask(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "where" } })))
         .await
         .unwrap();
-    let place: Value = serde_json::from_str(&answers.next_line().await.unwrap().unwrap()).unwrap();
+    let place: Value = serde_json::from_str(&next_line(&mut answers).await).unwrap();
     let pid = place["result"]["structuredContent"]["pid"]
         .as_i64()
         .unwrap() as libc::pid_t;
