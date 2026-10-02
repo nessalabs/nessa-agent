@@ -825,6 +825,12 @@ answers. Advanced callers can supply one. The RPC envelope's `id` identifies eac
 network attempt. Keep `requestId` as the single mutation-ID name in SDK and wire
 contracts, and do not embed one ID inside another.
 
+The mutation namespace is `(principal, requestId)`. Its first durable binding
+fixes the operation, target, canonical input and verified origin. Reusing that
+identity with different bound facts conflicts; changing the operation or target
+does not select a different receipt. Lookup is authorized for that principal and
+does not disclose another principal's binding or acceptance.
+
 ### One durable record source
 
 Use the external stream library and its verified local adapter for saved
@@ -839,21 +845,46 @@ source. Do not independently write a conversation database, a receipt database,
 and an event stream, or add another journal/cursor allocator. Existing auth and
 host-settings storage remain unchanged.
 
-The coordinator processes these acceptance steps one at a time per conversation:
+The principal's control-stream owner serializes request binding. The conversation
+coordinator serializes acceptance in the target conversation. A binding and an
+acceptance are distinct committed facts; there is no cross-stream transaction.
+The coordinator processes these steps:
 
-1. Validate the caller, operation, and origin information. Look up `requestId`
-   within that principal, operation, and target before allocating IDs or checking
-   whether a new turn can start. A **receipt** is the saved acceptance response.
-   An identical retry returns it. Different canonical input (input in the agreed
-   standard form) or different attribution fails. A caller cannot retrieve
-   another caller's receipt.
-2. Check turn state and allocate `turnId` for a new accepted prompt. Append one
+1. Validate the caller, operation, target, canonical input and origin. Resolve
+   `(principal, requestId)` in the principal's committed control stream. An
+   existing binding must match all those facts. For a new identity, commit that
+   immutable binding before target admission; retries keep its event ID and
+   bytes. Binding alone is not acceptance and cannot start a provider.
+2. Resolve acceptance for that exact bound command from the target's committed
+   records before allocating a turn or checking whether a new turn can start.
+   A **receipt** is the saved acceptance response. An identical accepted retry
+   returns it. A bound command with incomplete or unavailable acceptance evidence
+   remains unresolved. Read-only lookup never admits or dispatches work.
+3. For an explicit exact retry or first attempt whose complete lookup establishes
+   no acceptance, check current authority and turn state, then allocate `turnId`
+   for a new accepted prompt. Append one
    record containing the canonical command, validated origin, allocated IDs, and
    acceptance response. The adapter must save the whole record or none of it.
    Keep its event ID unchanged on append retries.
-3. Apply the saved record to runtime state, reply with acceptance, and start the
+4. Apply the saved record to runtime state, reply with acceptance, and start the
    provider. The commit authorizes execution. Work proceeds even if the reply
    never reaches the caller.
+
+A crash after binding but before acceptance preserves the original target and
+input as a bound unresolved command. An explicit exact retry reconciles that
+same command; lookup does not turn uncertainty into a new invocation. Restoring
+the principal binding source precedes new admission, including commands competing
+for the same request identity across different conversations.
+
+| Request binding / acceptance ordering | Required result | Owning implementation evidence to establish |
+| --- | --- | --- |
+| Two conversations compete for one principal/request identity | One immutable binding; conflicting target refused before target admission | Principal control-stream producer, real durable concurrent/reopen test |
+| Existing binding; changed operation, input or verified origin | Conflict; original binding and acceptance unchanged | Binding constructor/comparison and actual admission refusal test |
+| Binding saved; crash before target acceptance | Bound unresolved command survives; no provider execution inferred | Separate durable sources and process-restart test |
+| Exact explicit retry; complete target lookup establishes no acceptance | Reconcile original binding, then current authority/state and one acceptance | Target coordinator and admission/dispatch ordering test |
+| Acceptance saved; response lost | Original turn/receipt returned; no repeated provider work | Committed acceptance lookup and real lost-reply test |
+| Acceptance lookup incomplete or source unavailable | Unresolved/unavailable; read-only lookup performs no admission or dispatch | Bounded committed reader and provider-free lookup test |
+| Creation before target stream exists | Binding and acceptance saved together in control stream | Creation producer and restart/uncertain-write test |
 
 For example, a connection may drop after a prompt was saved but before its reply
 arrived. Retrying the same `requestId` returns the original `turnId` and receipt.
@@ -867,7 +898,8 @@ store cannot establish whether acceptance was saved, keep affected commands
 blocked. Do not invent a final record or repeat an external action to guess the
 answer.
 
-The acceptance record is also the recoverable receipt, so there is only one write.
+The acceptance record is also the recoverable receipt: acceptance and its receipt
+are one write, separate from the preceding immutable request binding.
 Later lifecycle and normalized provider records use the same stream. Save
 interaction decisions and normal Stop requests before forwarding them to the
 binding. If storage fails, protective stop/cleanup must still run within a deadline;
@@ -876,8 +908,9 @@ outcome when the commit failed or is uncertain. The SDK's ordered command handli
 resolves acceptance and interaction races; duplicate-record detection alone cannot.
 
 Creation needs a record before the conversation's own stream exists. Process
-creation requests one at a time per principal. Save acceptance, allocated IDs,
-and unchanging origin in that principal's **control stream** before initializing
+creation requests through the same principal request namespace. Save its binding,
+acceptance, allocated IDs and unchanging origin together in that principal's
+**control stream** before initializing
 the provider. Rebuild the conversation index from these records. Later turn and
 provider records go in the conversation's **primary stream**.
 

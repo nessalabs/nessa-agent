@@ -124,8 +124,9 @@ The selected namespace is principal plus mutation request identity. Reusing that
 identity with a different operation, target, canonical input or verified origin
 conflicts before target admission. Its durable binding and the accepted turn are
 different facts: a crash between them leaves a bound unresolved command, not
-proof of execution. ADR 0008 must publish the concrete binding and recovery
-contract before this producer changes source behavior.
+proof of execution. ADR 0008 owns this binding and recovery contract. Its producer
+still needs concrete source interfaces and state/order evidence before changing
+source behavior.
 
 Command admission is not the complete writer inventory. Queued runs, provider
 callbacks, audit writes and deletion work can survive a command's return.
