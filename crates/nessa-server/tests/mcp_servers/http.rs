@@ -2,17 +2,22 @@
 //! that every refusal is one answer.
 use super::*;
 use crate::attachments::entrypoint::http as attachments;
+use crate::conversation::application::McpAppAuditPhase;
 use crate::conversation::application::{ResourceTickets, RESOURCE_TICKET_LIFETIME_MS};
+use crate::mcp_servers::domain::ResourceTicketDigest;
+use crate::mcp_servers::infrastructure::ticket_test_support::app_initiator;
 use crate::mcp_servers::infrastructure::ticket_test_support::{
     app, conversation, held, Fixture, CONVERSATION,
 };
-use crate::mcp_servers::infrastructure::TicketEnd;
 use axum::body::to_bytes;
 
 const PAGE: &[u8] = b"<!doctype html><title>chart</title><p>exactly these bytes";
 
 fn route(fixture: &Fixture) -> State<ResourceRoute> {
-    State(ResourceRoute::new(Some(fixture.store.clone())))
+    State(ResourceRoute::new(Some((
+        fixture.store.clone(),
+        fixture.audit.clone(),
+    ))))
 }
 fn headers(origin: Option<&str>, tickets: &[&[u8]]) -> HeaderMap {
     let mut headers = HeaderMap::new();
@@ -70,7 +75,45 @@ async fn issue_then_redeem_serves_exactly_the_held_bytes_with_the_contracts_head
     );
     assert_eq!(answered[header::VARY], "origin");
     assert_eq!(body(response).await, PAGE);
-    assert_eq!(fixture.ends.take()[0].end, TicketEnd::Redeemed);
+    // Recorded before it was served, against the call that read it, as the app.
+    let records = fixture.audit.take();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].phase,
+        McpAppAuditPhase::TicketRedeemed {
+            ticket_digest: ResourceTicketDigest::of(&ticket).to_hex()
+        }
+    );
+    assert_eq!(records[0].call_id, "call-call-1");
+    assert_eq!(records[0].initiator, app_initiator());
+    assert!(fixture.ends.take().is_empty());
+}
+
+#[tokio::test]
+async fn a_redemption_that_cannot_be_recorded_serves_nothing_and_spends_the_ticket() {
+    let fixture = Fixture::new();
+    let ticket = issue(&fixture);
+    fixture.audit.fail(true);
+    let response = handle_resource(
+        route(&fixture),
+        headers(Some("tauri://localhost"), &[ticket.as_bytes()]),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!response.headers().contains_key(header::CONTENT_TYPE));
+    assert_eq!(response.headers()[header::VARY], "origin");
+    assert!(body(response).await.is_empty());
+    // Spent: with the audit back, the ticket buys nothing, and its bytes are
+    // let go of.
+    fixture.audit.fail(false);
+    let again = handle_resource(route(&fixture), headers(None, &[ticket.as_bytes()])).await;
+    assert_eq!(again.status(), StatusCode::NOT_FOUND);
+    assert!(fixture.audit.take().is_empty());
+    assert_eq!(fixture.store.held_bytes(&conversation(CONVERSATION)), 0);
+    // Nor is it reported as an unredeemed end afterwards.
+    fixture.clock.advance(RESOURCE_TICKET_LIFETIME_MS);
+    fixture.store.sweep();
+    assert!(fixture.ends.take().is_empty());
 }
 
 #[tokio::test]

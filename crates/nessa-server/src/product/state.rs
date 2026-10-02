@@ -3,8 +3,8 @@ use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::attachments::{application::AttachmentService, entrypoint::http::UploadRoute};
 use crate::conversation::application::{
-    CatalogueReadSource, ConversationRepository, ConversationService, ReceiverAuthority,
-    RecordReadSource,
+    CatalogueReadSource, ConversationRepository, ConversationService, McpAppAudit,
+    ReceiverAuthority, RecordReadSource,
 };
 use crate::mcp_servers::{entrypoint::http::ResourceRoute, infrastructure::ResourceTicketStore};
 use axum::extract::FromRef;
@@ -65,9 +65,10 @@ pub struct ProductRouteState {
     pub(crate) agents_catalog: Option<Arc<AgentsListResult>>,
     pub(crate) attachments: Option<AttachmentService>,
     /// The MCP App resources held behind tickets: issued by the conversation
-    /// service, redeemed at `GET /mcp-resources`. `None` when no MCP server is
+    /// service, redeemed at `GET /mcp-resources`, which records each
+    /// redemption in the audit beside it before serving. `None` when no MCP server is
     /// composed, and then that route answers every ticket `404`.
-    pub(crate) resource_tickets: Option<Arc<ResourceTicketStore>>,
+    pub(crate) resource_tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
     pub(crate) uptime_clock: Arc<dyn crate::app::ports::Clock>,
     pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
@@ -229,10 +230,15 @@ impl ProductRouteState {
     }
 
     /// Share one resource ticket store between the conversation service that
-    /// issues tickets and the route that redeems them. Composed only with MCP
-    /// servers.
-    pub fn with_resource_tickets(mut self, tickets: Arc<ResourceTicketStore>) -> Self {
-        self.resource_tickets = Some(tickets);
+    /// issues tickets and the route that redeems them, and the audit the
+    /// service records an app's calls in, which the route records each
+    /// redemption in. Composed only with MCP servers.
+    pub fn with_resource_tickets(
+        mut self,
+        tickets: Arc<ResourceTicketStore>,
+        audit: Arc<dyn McpAppAudit>,
+    ) -> Self {
+        self.resource_tickets = Some((tickets, audit));
         self
     }
 

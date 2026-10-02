@@ -52,15 +52,10 @@ pub(super) struct McpComposition {
     /// sweeps it (`ResourceTicketStore::sweep_periodically`). One instance,
     /// shared by `Arc`.
     pub(super) resource_tickets: Arc<ResourceTicketStore>,
-    /// Each ticket's end — redeemed, expired, or released unredeemed — as the
-    /// store reports it. Whoever audits an app's calls takes this receiver
-    /// and records each as `TicketEvent::phase`; until it does, nothing
-    /// drains it.
-    #[expect(
-        dead_code,
-        reason = "the conversation service's audit of an MCP App's calls takes it (#348)"
-    )]
-    pub(super) ticket_events: UnboundedReceiver<TicketEvent>,
+    /// Each ticket's unredeemed end — expired, released, or dropped — as the
+    /// store reports it. Composition takes it once, for `audit_ticket_ends`,
+    /// beside the conversation service that audits an app's calls.
+    pub(super) ticket_events: Option<UnboundedReceiver<TicketEvent>>,
 }
 
 /// Where the relay socket of the namespace at `namespace` is, for the user
@@ -188,7 +183,7 @@ pub(super) async fn compose(
             Arc::new(OsTokens),
             Arc::new(ticket_ends),
         )),
-        ticket_events,
+        ticket_events: Some(ticket_events),
     }))
 }
 

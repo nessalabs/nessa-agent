@@ -18,7 +18,7 @@ use super::{ConversationCaller, ConversationError, ConversationService, LiveConv
 use crate::conversation::domain::ConversationId;
 use crate::mcp_servers::domain::{
     admit_resource_read, admit_tool_call, AppCallAdmission, AppFacts, AppRefusal,
-    MAX_APP_RESULT_BYTES,
+    ResourceTicketDigest, MAX_APP_RESULT_BYTES,
 };
 use nessa_sdk::domain::agent_execution::{sessions::SessionId, tools::McpTool};
 use nessa_sdk::domain::mcp_apps::{UiCsp, UiPermissions, UiResourceUri};
@@ -345,9 +345,9 @@ impl ConversationService {
         let bytes: Arc<[u8]> = Arc::from(resource.html().as_bytes());
         let size = bytes.len();
         let sha256 = hex(&Sha256::digest(&bytes));
+        // The ticket's ends are recorded against this call.
         let issued = ports.tickets.issue(HeldResource {
-            conversation_id: id.clone(),
-            app: read.app.clone(),
+            record: step.record.clone(),
             bytes,
         });
         let ticket = match issued {
@@ -371,7 +371,7 @@ impl ConversationService {
         .await?;
         step.record(
             McpAppAuditPhase::TicketIssued {
-                ticket_digest: hex(&Sha256::digest(ticket.as_bytes())),
+                ticket_digest: ResourceTicketDigest::of(ticket.as_bytes()).to_hex(),
                 size,
                 sha256: sha256.clone(),
             },
