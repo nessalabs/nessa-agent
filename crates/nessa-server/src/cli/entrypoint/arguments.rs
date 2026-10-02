@@ -40,6 +40,17 @@ pub enum Command {
         /// answer before anything is downloaded.
         agent: AgentName,
     },
+    /// Stand in for a configured MCP server in a harness's session (ADR 344):
+    /// relay this process's stdin and stdout to the gateway's one connection
+    /// to that server. Not for people: the gateway gives it to the harness.
+    McpRelay {
+        /// The gateway's relay socket, absolute.
+        socket: PathBuf,
+        /// The configured server's name.
+        server: String,
+        /// The digest of the server's configuration when the stand-in was made.
+        configuration: String,
+    },
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -54,6 +65,19 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     }
     if args == ["server", "--provision-local"] {
         return Ok(Command::Server(LocalProvisioning::Automatic));
+    }
+    if let [relay, socket, server, configuration] = args {
+        if relay == crate::mcp_servers::domain::RELAY_SUBCOMMAND {
+            let socket = PathBuf::from(socket);
+            if !socket.is_absolute() {
+                return Err("mcp-relay takes an absolute socket path".into());
+            }
+            return Ok(Command::McpRelay {
+                socket,
+                server: server.clone(),
+                configuration: configuration.clone(),
+            });
+        }
     }
     if let [install, rest @ ..] = args {
         if install == "install-agent" {

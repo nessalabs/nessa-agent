@@ -1,0 +1,365 @@
+//! One JSON-RPC connection to one MCP server, shared by everything that talks
+//! to it: the client's own requests and every stand-in's forwarded ones.
+//!
+//! ```text
+//! call ──frame──▶ writer task ──▶ server stdin
+//!   ▲                                  │
+//!   └── pending[id] ◀── reader task ◀──┘ server stdout
+//!                         ├── server request ──▶ answered here (ping, else -32601)
+//!                         └── */list_changed ──▶ notices (broadcast)
+//! ```
+//!
+//! Arrows are frames. Ids are this connection's own, so callers with ids of
+//! their own (stand-ins) cannot collide. The connection ends once, with one
+//! cause, and every pending call gets that cause; a call admitted after the
+//! end gets it too, because admission and the end share one lock.
+use super::framing::{self, FrameEnd, Frames, MAX_FRAME_BYTES};
+use super::McpError;
+use crate::infrastructure::clock::{within, Clock};
+use serde_json::{json, Value};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::{broadcast, mpsc, oneshot, watch},
+    task::JoinHandle,
+};
+
+/// The most calls waiting on one server at a time.
+pub(crate) const MAX_IN_FLIGHT: usize = 256;
+/// Frames queued for the server's stdin before callers wait.
+const OUTGOING_FRAMES: usize = 64;
+/// Change notices held for a stand-in that has not read them yet. They are
+/// idempotent, so one that lags misses only repeats.
+const NOTICES: usize = 16;
+/// The most bytes of a server's error message kept.
+const MAX_ERROR_MESSAGE_BYTES: usize = 1024;
+
+/// What the server answered: a result, or a JSON-RPC error object, verbatim.
+pub(crate) type Reply = Result<Value, Value>;
+
+struct State {
+    pending: HashMap<u64, oneshot::Sender<Result<Reply, McpError>>>,
+    ended: Option<McpError>,
+}
+
+struct Shared {
+    state: Mutex<State>,
+    ended: watch::Sender<Option<McpError>>,
+    notices: broadcast::Sender<Arc<Value>>,
+    next_id: AtomicU64,
+}
+impl Shared {
+    /// End the connection with `cause`, once. Later causes are not recorded:
+    /// the first is what happened.
+    fn end(&self, cause: McpError) {
+        let pending = {
+            let mut state = self.state.lock().expect("connection state");
+            if state.ended.is_some() {
+                return;
+            }
+            state.ended = Some(cause.clone());
+            std::mem::take(&mut state.pending)
+        };
+        for (_, waiter) in pending {
+            let _ = waiter.send(Err(cause.clone()));
+        }
+        self.ended.send_replace(Some(cause));
+    }
+}
+
+/// A connection to one MCP server. Dropping it stops its tasks, which closes
+/// the server's stdin.
+pub(crate) struct Connection {
+    shared: Arc<Shared>,
+    outgoing: mpsc::Sender<Vec<u8>>,
+    clock: Arc<dyn Clock>,
+    writer: JoinHandle<()>,
+    reader: JoinHandle<()>,
+}
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.writer.abort();
+        self.reader.abort();
+    }
+}
+impl Connection {
+    /// Start reading `input` and writing `output`, the server's stdout and stdin.
+    pub(crate) fn open(
+        input: impl AsyncRead + Unpin + Send + 'static,
+        mut output: impl AsyncWrite + Unpin + Send + 'static,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        let shared = Arc::new(Shared {
+            state: Mutex::new(State {
+                pending: HashMap::new(),
+                ended: None,
+            }),
+            ended: watch::channel(None).0,
+            notices: broadcast::channel(NOTICES).0,
+            next_id: AtomicU64::new(1),
+        });
+        let (outgoing, mut frames) = mpsc::channel::<Vec<u8>>(OUTGOING_FRAMES);
+        let writer = tokio::spawn({
+            let shared = shared.clone();
+            async move {
+                while let Some(frame) = frames.recv().await {
+                    if framing::write(&mut output, &frame).await.is_err() {
+                        shared.end(McpError::ServerGone);
+                        return;
+                    }
+                }
+            }
+        });
+        let reader = tokio::spawn(read(
+            Frames::new(input, MAX_FRAME_BYTES),
+            shared.clone(),
+            outgoing.clone(),
+        ));
+        Self {
+            shared,
+            outgoing,
+            clock,
+            writer,
+            reader,
+        }
+    }
+
+    /// Send `method` and wait for the answer, with no deadline of its own.
+    /// Dropping the returned future before the answer cancels the request
+    /// upstream (`notifications/cancelled`), when it had been sent.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::Busy`] with [`MAX_IN_FLIGHT`] calls already waiting,
+    /// [`McpError::TooLarge`] for a request past the frame bound, and the
+    /// connection's end cause once it has ended.
+    pub(crate) async fn call(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Reply, McpError> {
+        let id = self.shared.next_id.fetch_add(1, Ordering::Relaxed);
+        let mut request = json!({ "jsonrpc": "2.0", "id": id, "method": method });
+        if let Some(params) = params {
+            request["params"] = params;
+        }
+        let frame = framing::encode(&request)?;
+        let (answer, answered) = oneshot::channel();
+        {
+            let mut state = self.shared.state.lock().expect("connection state");
+            if let Some(cause) = &state.ended {
+                return Err(cause.clone());
+            }
+            if state.pending.len() >= MAX_IN_FLIGHT {
+                return Err(McpError::Busy);
+            }
+            state.pending.insert(id, answer);
+        }
+        let mut guard = Pending {
+            connection: self,
+            id,
+            sent: false,
+        };
+        if self.outgoing.send(frame).await.is_err() {
+            return Err(self.end_cause().unwrap_or(McpError::ServerGone));
+        }
+        guard.sent = true;
+        let reply = answered.await.unwrap_or(Err(McpError::ServerGone));
+        guard.id = 0;
+        reply
+    }
+
+    /// [`Self::call`] within `timeout` on the connection's clock, with a
+    /// JSON-RPC error answer as [`McpError::Remote`].
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::Timeout`] when no answer came in time (the request is
+    /// cancelled upstream), [`McpError::Remote`] for an error answer, and
+    /// what [`Self::call`] fails with.
+    pub(crate) async fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        timeout: Duration,
+    ) -> Result<Value, McpError> {
+        let deadline = self.clock.now() + timeout;
+        match within(&*self.clock, deadline, self.call(method, params)).await {
+            None => Err(McpError::Timeout),
+            Some(Ok(Ok(result))) => Ok(result),
+            Some(Ok(Err(error))) => Err(remote(&error)),
+            Some(Err(error)) => Err(error),
+        }
+    }
+
+    /// Send a notification. Nothing answers it.
+    pub(crate) async fn notify(&self, method: &str, params: Option<Value>) -> Result<(), McpError> {
+        let mut notification = json!({ "jsonrpc": "2.0", "method": method });
+        if let Some(params) = params {
+            notification["params"] = params;
+        }
+        let frame = framing::encode(&notification)?;
+        self.outgoing
+            .send(frame)
+            .await
+            .map_err(|_| self.end_cause().unwrap_or(McpError::ServerGone))
+    }
+
+    /// Why the connection ended, or `None` while it is open.
+    pub(crate) fn end_cause(&self) -> Option<McpError> {
+        self.shared
+            .state
+            .lock()
+            .expect("connection state")
+            .ended
+            .clone()
+    }
+
+    /// Resolves with the end cause once the connection has ended.
+    pub(crate) fn ended(&self) -> impl std::future::Future<Output = McpError> + Send + 'static {
+        let mut ended = self.shared.ended.subscribe();
+        async move {
+            match ended.wait_for(Option::is_some).await {
+                Ok(cause) => cause.clone().unwrap_or(McpError::ServerGone),
+                Err(_) => McpError::ServerGone,
+            }
+        }
+    }
+
+    /// The server's `*/list_changed` notifications from now on, verbatim.
+    pub(crate) fn notices(&self) -> broadcast::Receiver<Arc<Value>> {
+        self.shared.notices.subscribe()
+    }
+
+    /// End the connection with `cause` and close the server's stdin. Calls
+    /// waiting on it get `cause`.
+    pub(crate) fn close(&self, cause: McpError) {
+        self.shared.end(cause);
+        self.writer.abort();
+    }
+}
+
+/// A call that has been admitted. Dropped before its answer, it gives up its
+/// place, and cancels the request upstream when the request was sent.
+struct Pending<'a> {
+    connection: &'a Connection,
+    /// Zero once answered.
+    id: u64,
+    sent: bool,
+}
+impl Drop for Pending<'_> {
+    fn drop(&mut self) {
+        if self.id == 0 {
+            return;
+        }
+        let waiting = self
+            .connection
+            .shared
+            .state
+            .lock()
+            .expect("connection state")
+            .pending
+            .remove(&self.id)
+            .is_some();
+        if waiting && self.sent {
+            // Best effort: a drop cannot wait for room in the queue, and a
+            // server that misses it answers a request nobody reads.
+            let cancelled = json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": { "requestId": self.id, "reason": "the caller stopped waiting" },
+            });
+            if let Ok(frame) = framing::encode(&cancelled) {
+                let _ = self.connection.outgoing.try_send(frame);
+            }
+        }
+    }
+}
+
+/// A JSON-RPC error object as [`McpError::Remote`]; an object without an
+/// integer code is [`McpError::Malformed`].
+pub(crate) fn remote(error: &Value) -> McpError {
+    let Some(code) = error.get("code").and_then(Value::as_i64) else {
+        return McpError::Malformed("an error answer without an integer code".into());
+    };
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mut end = message.len().min(MAX_ERROR_MESSAGE_BYTES);
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    McpError::Remote {
+        code,
+        message: message[..end].to_owned(),
+    }
+}
+
+async fn read<R: AsyncRead + Unpin>(
+    mut frames: Frames<R>,
+    shared: Arc<Shared>,
+    outgoing: mpsc::Sender<Vec<u8>>,
+) {
+    let cause = loop {
+        let bytes = match frames.next().await {
+            Ok(bytes) => bytes,
+            Err(FrameEnd::Closed) => break McpError::ServerGone,
+            Err(FrameEnd::TooLarge) => break McpError::TooLarge("a frame from the MCP server"),
+        };
+        let Ok(message) = serde_json::from_slice::<Value>(&bytes) else {
+            break McpError::Malformed("a frame from the MCP server is not JSON".into());
+        };
+        let method = message.get("method").and_then(Value::as_str);
+        let id = message.get("id").filter(|id| !id.is_null());
+        match (method, id) {
+            // A request of the server's own. This client declared no
+            // sampling, roots or elicitation, so only `ping` has an answer.
+            (Some(method), Some(id)) => {
+                let answer = if method == "ping" {
+                    json!({ "jsonrpc": "2.0", "id": id, "result": {} })
+                } else {
+                    json!({ "jsonrpc": "2.0", "id": id, "error": {
+                        "code": -32601, "message": "not supported by this MCP client" } })
+                };
+                // Never awaited: waiting here for room in a queue the server
+                // is not draining would stop reading what it writes.
+                if let Ok(frame) = framing::encode(&answer) {
+                    let _ = outgoing.try_send(frame);
+                }
+            }
+            (Some(method), None) => {
+                if method.ends_with("/list_changed") {
+                    let _ = shared.notices.send(Arc::new(message));
+                }
+            }
+            (None, Some(id)) => {
+                let Some(id) = id.as_u64() else { continue };
+                let waiter = shared
+                    .state
+                    .lock()
+                    .expect("connection state")
+                    .pending
+                    .remove(&id);
+                let Some(waiter) = waiter else { continue };
+                let reply = match (message.get("result"), message.get("error")) {
+                    (Some(result), None) => Ok(Ok(result.clone())),
+                    (None, Some(error)) if error.is_object() => Ok(Err(error.clone())),
+                    _ => Err(McpError::Malformed(
+                        "an answer without one result or error object".into(),
+                    )),
+                };
+                let _ = waiter.send(reply);
+            }
+            (None, None) => {}
+        }
+    };
+    shared.end(cause);
+}

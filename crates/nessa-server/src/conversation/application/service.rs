@@ -19,7 +19,7 @@ use super::{
     ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
     ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
-    RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
+    McpToolUis, NoMcpToolUis, RuntimeReadiness, StopFailure, SubmittedMessage, UnfinishedDeletions,
 };
 use crate::agents::domain::AgentId;
 use crate::conversation::domain::{
@@ -477,6 +477,8 @@ struct Inner {
     retries: Arc<DeletionRetries>,
     /// Permits for asking agents about their own record of a session.
     agents_asked: Arc<Semaphore>,
+    /// Where a view finds the UI an MCP call's tool declared.
+    tool_uis: Arc<dyn McpToolUis>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -628,11 +630,22 @@ pub struct QuestionChoiceInput {
 }
 
 impl ConversationService {
-    /// Own every configured agent, and the one a caller gets by default.
+    /// Own every configured agent, and the one a caller gets by default. No
+    /// MCP call shows a UI: see [`Self::with_tool_uis`].
     pub fn new(
         dependencies: ConversationDependencies,
         limits: ConversationLimits,
         workspace: Option<String>,
+    ) -> Result<Self, ConversationError> {
+        Self::with_tool_uis(dependencies, limits, workspace, Arc::new(NoMcpToolUis))
+    }
+    /// As [`Self::new`], with each MCP call's UI looked up in `tool_uis` when
+    /// a view is read.
+    pub fn with_tool_uis(
+        dependencies: ConversationDependencies,
+        limits: ConversationLimits,
+        workspace: Option<String>,
+        tool_uis: Arc<dyn McpToolUis>,
     ) -> Result<Self, ConversationError> {
         let ConversationDependencies {
             agents,
@@ -686,6 +699,7 @@ impl ConversationService {
                 retired: watch::channel(false).0,
                 agents_asked: Arc::new(Semaphore::new(MAX_AGENTS_ASKED_AT_ONCE)),
                 retries: Arc::new(DeletionRetries::default()),
+                tool_uis,
             }),
         })
     }
@@ -1073,7 +1087,8 @@ impl ConversationService {
                                 agent_features: operation_capabilities.into(),
                             };
                             let mut projection =
-                                Projection::new(id.to_string(), capabilities, snapshot.as_ref());
+                                Projection::new(id.to_string(), capabilities, snapshot.as_ref())
+                                    .with_tool_uis(service.inner.tool_uis.clone());
                             projection.view.selection = Some(ConversationSelectionView {
                                 agent: record.agent().expect("agent was resolved"),
                                 model: record.model().as_str().into(),
@@ -1563,6 +1578,7 @@ impl ConversationService {
                 },
                 snapshot.as_ref(),
             )
+            .with_tool_uis(self.inner.tool_uis.clone())
             .read_with_mode_change(Some(change))
         };
         view.selection = Some(ConversationSelectionView {

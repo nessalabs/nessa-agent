@@ -153,6 +153,8 @@ const bounds = {
     schema.$defs.ConversationMcpTool.properties.server["x-utf8MaxBytes"],
     schema.$defs.ConversationMcpTool.properties.tool["x-utf8MaxBytes"],
   ]),
+  maxUiResourceUriBytes:
+    schema.$defs.ConversationMcpTool.properties.resourceUri["x-utf8MaxBytes"],
 }
 for (const name of [
   "minAgentInstallRequestIdCharacters",

@@ -1248,7 +1248,7 @@
     "ConversationMcpTool": {
       "type": "object",
       "additionalProperties": false,
-      "description": "An MCP tool's identity: the server by the name it was configured under, and the tool on it.",
+      "description": "An MCP tool's identity: the server by the name it was configured under, and the tool on it; and the UI the tool declared, when known.",
       "properties": {
         "server": {
           "type": "string",
@@ -1263,6 +1263,13 @@
           "maxLength": 128,
           "x-utf8MaxBytes": 128,
           "description": "The tool's name on that server, under the same rule."
+        },
+        "resourceUri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "The ui:// resource of the tool's MCP App, as the gateway's own connection to the server last listed the tool (no harness passes it through ACP); absent when the tool declared none or it is not known. Which URIs are valid is the SDK domain's rule (UiResourceUri); only its byte bound is repeated here."
         }
       },
       "required": ["server", "tool"]

@@ -23,7 +23,9 @@ use crate::{
     },
     agents::{domain::AgentId, infrastructure::AgentLaunchFiles},
     attachments::infrastructure::ModelImageNormalizer,
-    conversation::application::{ConversationAgents, ConversationDependencies, ConversationLimits},
+    conversation::application::{
+        ConversationAgents, ConversationDependencies, ConversationLimits, McpToolUis, NoMcpToolUis,
+    },
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
         DurableConversationFileLinkAudit, DurableConversationModeAudit, LocalConversationStore,
@@ -95,7 +97,16 @@ pub(super) struct LocalProduct {
     /// Startup preparations for fixed providers plus the current OpenCode
     /// resolver when configured. Empty when no agent is configured.
     pub(super) warm_ups: Vec<StartupWarmUp>,
+    /// The gateway's connection to each configured MCP server, and its relay:
+    /// started once the gateway is listening, stopped after conversations.
+    pub(super) mcp: McpParts,
 }
+
+#[cfg(unix)]
+pub(super) type McpParts = Option<super::mcp_servers::McpComposition>;
+/// No MCP servers where no agent can run.
+#[cfg(not(unix))]
+pub(super) type McpParts = Option<std::convert::Infallible>;
 
 pub(super) enum StartupWarmUp {
     #[cfg(unix)]
@@ -180,9 +191,9 @@ pub(super) async fn product_state(
     // and its use depends on the order.
     let packaged_agents = bundle.is_some();
     let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
-    let (conversations, agent_probe, warm_ups) = match &settings.agents {
+    let (conversations, agent_probe, warm_ups, mcp) = match &settings.agents {
         Some(agents) => {
-            let built = conversations(
+            let mut built = conversations(
                 agents,
                 directory,
                 agent_credentials.clone(),
@@ -200,6 +211,7 @@ pub(super) async fn product_state(
                 )),
                 built.agent_probe,
                 built.warm_ups,
+                built.mcp.take(),
             )
         }
         None => (
@@ -209,6 +221,7 @@ pub(super) async fn product_state(
                 agent_credentials.clone(),
             )) as Arc<dyn AgentProbe>,
             Vec::new(),
+            None,
         ),
     };
     let admin = Arc::new(LocalAdmin {
@@ -255,6 +268,7 @@ pub(super) async fn product_state(
     Ok(LocalProduct {
         routes: product,
         warm_ups,
+        mcp,
     })
 }
 
@@ -320,6 +334,8 @@ struct BuiltConversations {
     /// Fixed-provider preparations plus the current OpenCode resolver. Started
     /// by the server lifecycle once the gateway is listening, not here.
     warm_ups: Vec<StartupWarmUp>,
+    /// The MCP servers this run holds, when any are configured.
+    mcp: McpParts,
 }
 
 #[cfg(not(unix))]
@@ -351,6 +367,31 @@ async fn conversations(
     policy_revision: &str,
 ) -> Result<BuiltConversations, RunError> {
     let mut warm_ups = Vec::new();
+    // The gateway holds the one connection to each MCP server (ADR 344), so
+    // every agent below is built with stand-ins in their place.
+    let namespace = directory
+        .parent()
+        .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?;
+    let mut agents = agents.clone();
+    let mcp = match std::env::current_exe() {
+        Ok(gateway) => {
+            super::mcp_servers::compose(
+                &mut agents,
+                // The effective user, whom `bind` requires to own the directory.
+                // SAFETY: geteuid has no preconditions and cannot fail.
+                &super::mcp_servers::relay_socket(namespace, unsafe { libc::geteuid() }),
+                &gateway,
+                super::mcp_servers::server_environment(|key| std::env::var_os(key)),
+            )
+            .await?
+        }
+        Err(error) => {
+            tracing::error!(%error, "MCP servers are off this run: this executable's path is unknown");
+            agents.mcp_servers.clear();
+            None
+        }
+    };
+    let agents = &agents;
     let root = conversation_root(
         directory
             .parent()
@@ -553,7 +594,14 @@ async fn conversations(
     // conversation's provider is.
     let mut erasers = built.erasers;
     resolver.register_session_eraser(&mut erasers);
-    let service = ConversationService::new(
+    // The view finds each MCP call's UI in its server's open sessions' lists.
+    let tool_uis: Arc<dyn McpToolUis> = match &mcp {
+        Some(mcp) => Arc::new(crate::mcp_servers::infrastructure::ListedToolUis(
+            mcp.servers.clone(),
+        )),
+        None => Arc::new(NoMcpToolUis),
+    };
+    let service = ConversationService::with_tool_uis(
         ConversationDependencies {
             agents: ConversationAgents::from_source(configured, selected, resolver.clone())
                 .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -575,6 +623,7 @@ async fn conversations(
         },
         ConversationLimits::default(),
         Some(agents.workspace.to_string_lossy().into_owned()),
+        tool_uis,
     )
     .map_err(|error| RunError::Agent(error.to_string()))?;
     if warm_current_opencode {
@@ -588,6 +637,7 @@ async fn conversations(
         agents_catalog,
         agent_probe: resolver,
         warm_ups,
+        mcp,
     })
 }
 

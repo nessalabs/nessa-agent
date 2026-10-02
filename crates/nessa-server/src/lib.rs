@@ -12,6 +12,7 @@ pub mod core;
 mod desktop_runtime;
 pub mod env;
 pub mod health;
+pub mod mcp_servers;
 pub mod product;
 pub mod protocol;
 pub mod server;

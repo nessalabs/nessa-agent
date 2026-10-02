@@ -116,3 +116,24 @@ export function permissionDecisions(view, answered, server) {
 export function viewTools(view, server) {
   return (view?.tools ?? []).filter((tool) => tool.mcp?.server === server)
 }
+
+/**
+ * The MCP servers the gateway gave the harness when it opened or reopened a
+ * session (`session/new`, `session/load`, `session/resume`), as it sent them.
+ * Under ADR 344 each is a stand-in — the gateway's own executable running
+ * `mcp-relay` — never the configured server itself.
+ */
+export function givenServers(records) {
+  return records.flatMap(({ direction, frame }) => {
+    if (
+      direction !== "to-agent" ||
+      !["session/new", "session/load", "session/resume"].includes(frame?.method)
+    )
+      return []
+    return (frame.params?.mcpServers ?? []).map(({ name, command, args }) => ({
+      name,
+      command,
+      args,
+    }))
+  })
+}
