@@ -2,6 +2,9 @@
 
 Owner: #261. This transport section composes with the separately owned cache design.
 
+The [linked-device integration plan](linked-device-sync-integration.md) names the
+remaining producer and consumer dependencies after this read path merged.
+
 ## Ordering / required tests
 
 | Row | Input/order | Owner / required outcome |
