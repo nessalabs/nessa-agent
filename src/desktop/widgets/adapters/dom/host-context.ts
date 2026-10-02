@@ -6,11 +6,12 @@
  * host draws in — the pane's header and the window's sit above its body —
  * so its safe area is none.
  *
- * The size is nessa_ui's `useMeasuredSize`: the place's content box in whole
- * CSS pixels, re-measured when its box resizes, its content changes, or a web
- * font loads — the last two being resizes WebKit does not always report.
- * `widgets.mjs --only host-size` holds what it reports to the place's box in
- * Chromium and WebKit, a card grown by its content or a font included.
+ * The size is nessa_ui's `useMeasuredSize` (registry item `size-observer`),
+ * which owns when an element is measured again: a box resize, a content
+ * change, or a web font loading — the last two being resizes WebKit does not
+ * always report. Its own `size-observer.test.ts` holds that each is reported.
+ * `widgets.mjs --only host-size` holds what this reports to the place's box,
+ * in whole pixels, in Chromium and WebKit.
  */
 import { useMemo, type RefObject } from "react"
 import { useMeasuredSize } from "@nessa-ui/react/lib/size-observer"
