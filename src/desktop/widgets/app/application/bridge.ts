@@ -171,6 +171,9 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
             notify(sandboxMethods.resourceReady, {
               html: appDocument(resource.html, resource.csp),
               policy: cspPolicy(resource.csp),
+              // The proxy waits as long for the app's frame to load and its
+              // reporter to answer (design L32).
+              checkWithin: deadlines.initialize,
             }),
           )
         return

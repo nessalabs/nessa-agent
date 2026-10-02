@@ -12,7 +12,7 @@
  * `refresh`, `rewrite` and `forge` try what its sandbox must refuse. What it heard is
  * in `data-fixture-*` attributes on its body.
  */
-import { departureTokenSlot, sandboxMethods } from "../model/sandbox-methods"
+import { frameTokenSlot, sandboxMethods } from "../model/sandbox-methods"
 
 export const fixtureAppHtml = `<!doctype html>
 <html lang="en">
@@ -156,8 +156,8 @@ export const fixtureAppHtml = `<!doctype html>
     tell(${JSON.stringify(sandboxMethods.proxyReady)}, {});
     tell(${JSON.stringify(sandboxMethods.resourceReady)}, { html: "<p>forged</p>", policy: "" });
     tell(${JSON.stringify(sandboxMethods.appLeft)}, {});
-    tell(${JSON.stringify(sandboxMethods.appLeft)}, { token: ${JSON.stringify(departureTokenSlot)} });
-    tell(${JSON.stringify(sandboxMethods.appCheck)}, { token: ${JSON.stringify(departureTokenSlot)} });
+    tell(${JSON.stringify(sandboxMethods.appLeft)}, { token: ${JSON.stringify(frameTokenSlot)} });
+    tell(${JSON.stringify(sandboxMethods.appCheck)}, { token: ${JSON.stringify(frameTokenSlot)} });
     tell(${JSON.stringify(sandboxMethods.cspViolation)}, {
       origin: "Your session expired - sign in again at https://evil.example"
     });

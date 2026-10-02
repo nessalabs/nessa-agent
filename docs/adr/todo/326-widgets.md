@@ -220,7 +220,7 @@ frame, and has rows of its own (`app/model/app-view.ts`):
 | could not be loaded (not an app's resource, a deadline missed, its proxy reloaded under it, the app's document gone from its frame) | "This app couldn't be loaded" | the same, with close |
 | its server gone when read | "This app's server has stopped" | the same, with close |
 | live, a call found its server gone | the frame, under "This app's server has stopped" | the same |
-| loading or live, its CSP blocked a load | what it draws, under "Blocked a connection this app didn't declare: *origins*" | the same |
+| from loading on, its CSP blocked a load | what it draws, under "Blocked a connection this app didn't declare: *origins*" | the same |
 
 ### Boundaries
 

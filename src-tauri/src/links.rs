@@ -70,11 +70,12 @@
 //! someone else's HTML. The app's policy has `frame-src 'none'` and applies
 //! to the proxy's document too (`src/desktop/widgets/app/model/csp.ts`), so
 //! the app can frame nothing and cannot navigate its own frame: each is
-//! refused before it reaches anything — in the browser build, where
-//! `mcp-apps.mjs --only escape-navigate,escape-refresh,escape-rewrite`
-//! (under `verification/desktop/scripts/`) checks it in Chromium and in
-//! Playwright's WebKit. Whether WKWebView under Tauri refuses it before this
-//! policy runs is not yet seen; if it does not, this policy would hand an
+//! refused before it reaches anything — in the browser build's Chromium,
+//! where it is checked (`mcp-apps.mjs --only
+//! escape-navigate,escape-refresh,escape-rewrite` under
+//! `verification/desktop/scripts/`; its WebKit run is still to come).
+//! Whether WKWebView under Tauri refuses it before this policy runs is not
+//! yet seen; if it does not, this policy would hand an
 //! `http`, `https` or `mailto` URL the app chose to the OS, with no gesture
 //! of the person's (#349, open question 3).
 //!

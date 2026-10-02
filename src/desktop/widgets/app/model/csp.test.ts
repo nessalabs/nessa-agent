@@ -1,6 +1,6 @@
 /** The policy an app is loaded under, built only from its `_meta.ui.csp` (#349, Sandbox). */
 import { describe, expect, it } from "vitest"
-import { sandboxMethods } from "./sandbox-methods"
+import { frameTokenSlot, sandboxMethods } from "./sandbox-methods"
 import {
   appDocument,
   appliedCsp,
@@ -181,17 +181,33 @@ describe("frames", () => {
 })
 
 describe("the reporter", () => {
-  it("says what is blocked and that the document is going, both registered before the app's markup", () => {
-    const document = appDocument("<script>app()</script>", appliedCsp(undefined))
-    const reporterAt = document.indexOf("<script>")
+  // The app spells the slot too, after the reporter: the proxy fills the
+  // first only (`sandbox/proxy.html`), which must be the reporter's.
+  const app = `<script>app("${frameTokenSlot}")</script>`
+  const document = appDocument(app, appliedCsp(undefined))
+  const reporterAt = document.indexOf("<script>")
+  const appAt = document.indexOf(app)
+
+  it("registers every listener before the app's markup", () => {
     for (const said of [
       'addEventListener("securitypolicyviolation"',
       sandboxMethods.cspViolation,
+      'addEventListener("message"',
+      sandboxMethods.appCheck,
+      "stopImmediatePropagation",
+      'addEventListener("click"',
       'addEventListener("pagehide"',
       sandboxMethods.appLeft,
-    ])
+    ]) {
       expect(document.indexOf(said), said).toBeGreaterThan(reporterAt)
-    for (const said of ['addEventListener("pagehide"', sandboxMethods.appLeft])
-      expect(document.indexOf(said), said).toBeLessThan(document.indexOf("app()"))
+      expect(document.indexOf(said), said).toBeLessThan(appAt)
+    }
+  })
+
+  it("holds the first spelling of the token's slot, once", () => {
+    const slotAt = document.indexOf(frameTokenSlot)
+    expect(slotAt).toBeGreaterThan(reporterAt)
+    expect(slotAt).toBeLessThan(appAt)
+    expect(document.slice(0, appAt).split(frameTokenSlot)).toHaveLength(2)
   })
 })

@@ -382,14 +382,18 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   words in the host's chrome. _#349 design, L32 and Sandbox._
   _Check:_ `mcp-apps.mjs --only escape-navigate,escape-refresh,escape-rewrite,forge`.
 - [ ] **Every way the app's document is replaced is its departure, and
-  nothing else is**: the real proxy, handed documents from the host's own
-  builder — a rewrite alone, a rewrite then a reload, a navigation or
-  `about:blank`, a navigation or a reload before the first load, a document
-  with no reporter — reports the app gone once and relays nothing of it
-  after; an app left alone past the check's deadline, an app forging
-  departures, and a third party forging them and the check's answer, are
-  not. _#349 design, L32._ _Check:_ `mcp-apps.mjs --only departures` (dev
-  server: it imports the host's builder).
+  nothing else is**: the real proxy, in the host's own frame, handed what the
+  host's own builder writes with the host's deadline — a rewrite alone, a
+  rewrite then a reload, a navigation or `about:blank`; a navigation or a
+  reload before the first load; a first load held back past the deadline;
+  going back across a fragment navigation (and the page lives on); a
+  document with no reporter, one answering without the token, or one whose
+  own frame answers with it — reports the app gone once and relays nothing
+  of it after; an app left alone (which never hears the check), its links
+  to fragments, an app forging departures, and a third party forging them
+  and the check's answer at every proxy and app frame, are not. _#349
+  design, L32._ _Check:_ `mcp-apps.mjs --only departures` (dev server: it
+  imports the host's builder; it waits past the initialize deadline).
 - [ ] **It is torn down on close**: a pane's close takes its proxy and app
   documents with it; an app asking to go is sent `ui/resource-teardown`, and
   its pane closes only once it answers. _Check:_ `mcp-apps.mjs --only teardown`.

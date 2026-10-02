@@ -22,12 +22,13 @@
   and the frame is removed. The departure is the proxy's own reading of the
   frame, where the app cannot reach (design L32): any `load` of the frame
   after its first — a navigation, refused or not, a reload, a rewritten
-  document — or, at the first, no answer to the check only the reporter the
-  host wrote into the document answers. The reporter's word on `pagehide`,
-  carrying the token this proxy minted for the frame and wrote into that
-  document alone (the browser no longer names the sender of a document that
-  has gone), says it sooner while the app leaves the reporter in place. What
-  its own policy blocks, it reports the same way.
+  document once it is closed — or no first load answered, by the time the
+  host gives, with the token this proxy minted for the frame and wrote into
+  the reporter alone (an error page or a blank one has none). The
+  reporter's word on `pagehide`, carrying the same token (the browser no
+  longer names the sender of a document that has gone), says it sooner
+  while the app leaves the reporter in place. What its own policy blocks,
+  it reports the same way.
   `verification/desktop/scripts/mcp-apps.mjs --only
   escape-navigate,escape-refresh,escape-rewrite,departures,forge` holds each.
 -->
@@ -71,11 +72,12 @@
         var cspViolation = "ui/notifications/sandbox-csp-violation"
         var appLeft = "ui/notifications/sandbox-app-left"
         var appCheck = "ui/notifications/sandbox-app-check"
-        var tokenSlot = "__nessa_departure_token__"
+        var tokenSlot = "__nessa_frame_token__"
         // Minted for this frame, and written into its document's reporter
-        // alone: the one way the check's answer is known to come from the
-        // document handed over, and a departure notice from this frame once
-        // its document is gone and the browser names no sender.
+        // alone: the one way the check's answer is known to come from a
+        // document of the app's (not an error page, not a blank one), and a
+        // departure notice from this frame once its document is gone and the
+        // browser names no sender. No other frame can read it.
         // (`getRandomValues`, not `randomUUID`: a custom scheme's page need
         // not be a secure context.)
         var token = Array.prototype.map
@@ -83,9 +85,6 @@
             return (byte + 256).toString(16).slice(1)
           })
           .join("")
-        // How long the frame's document has, from its first load, to answer
-        // the check.
-        var checkWithin = 5000
         // The host's origin, from its first message; the app's frame, once made.
         var hostOrigin = null
         var app = null
@@ -95,14 +94,17 @@
 
         // The app's document is gone, or going — by the frame's loads, the
         // check, or its reporter's word — and what comes after it in this
-        // frame is not the app: nothing more is relayed either way, the frame
-        // is removed, the host told, once.
+        // frame is not the app: nothing more is relayed either way, the host
+        // is told, once, and the frame removed on a later turn (removing a
+        // frame inside its own load handler takes the renderer down with it).
         function leave() {
           if (left) return
           left = true
           clearTimeout(checking)
-          app.remove()
           host.postMessage({ jsonrpc: "2.0", method: appLeft, params: {} }, hostOrigin)
+          setTimeout(function () {
+            app.remove()
+          }, 0)
         }
 
         function methodOf(data) {
@@ -124,7 +126,14 @@
               if (params === null || typeof params !== "object") return
               var html = params.html
               var policy = params.policy
-              if (typeof html !== "string" || typeof policy !== "string") return
+              var checkWithin = params.checkWithin
+              if (
+                typeof html !== "string" ||
+                typeof policy !== "string" ||
+                typeof checkWithin !== "number" ||
+                !(checkWithin > 0)
+              )
+                return
               // The policy first, on this document: what it loads from now
               // on, the app's frame and the frame's every navigation, is held
               // to it.
@@ -156,11 +165,12 @@
               // of the app's markup: only it is filled.
               app.srcdoc = html.replace(tokenSlot, token)
               // The frame's loads, heard here, where nothing the app runs can
-              // remove the listener. The first is checked: the document in it
-              // must be the one handed over, whose reporter alone holds the
-              // token to answer with; silence is a departure. Any later one
-              // is a new document — a navigation, refused or not, a reload, a
-              // rewrite — and the app's departure.
+              // remove the listener. By `checkWithin` from now, the frame
+              // must have loaded and its reporter, which alone holds the token,
+              // answered the check sent at that first load; else the app is
+              // gone. Any later load is a new document — a navigation, refused
+              // or not, a reload, a closed rewrite — and the app's departure.
+              checking = setTimeout(leave, checkWithin)
               app.addEventListener("load", function () {
                 if (left) return
                 loads += 1
@@ -168,7 +178,6 @@
                   leave()
                   return
                 }
-                checking = setTimeout(leave, checkWithin)
                 app.contentWindow.postMessage(
                   { jsonrpc: "2.0", method: appCheck, params: {} },
                   "*",

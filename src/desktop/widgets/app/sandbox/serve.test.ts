@@ -4,11 +4,7 @@
  */
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import {
-  departureTokenSlot,
-  sandboxMethods,
-  sandboxPrefix,
-} from "../model/sandbox-methods"
+import { frameTokenSlot, sandboxMethods, sandboxPrefix } from "../model/sandbox-methods"
 import { sandboxMetaName } from "../adapters/dom/sandbox-origin"
 import { sandboxResponse, withMeta } from "./serve"
 
@@ -58,7 +54,7 @@ describe("the proxy", () => {
     const names: [string, string][] = [
       ...Object.entries(sandboxMethods),
       ["reserved", sandboxPrefix],
-      ["tokenSlot", departureTokenSlot],
+      ["tokenSlot", frameTokenSlot],
     ]
     for (const [name, value] of names) {
       expect(text, name).toContain(`var ${name} = "${value}"\n`)

@@ -8,20 +8,24 @@
 export const sandboxMethods = {
   /** The proxy → the host: ready for the document. */
   proxyReady: "ui/notifications/sandbox-proxy-ready",
-  /** The host → the proxy: the app's document, and the policy for the proxy's own. */
+  /**
+   * The host → the proxy: the app's document, the policy for the proxy's
+   * own, and how long the app's frame has to load and answer `appCheck`.
+   */
   resourceReady: "ui/notifications/sandbox-resource-ready",
   /** The reporter or the proxy → the host: a load the policy refused, by its origin. */
   cspViolation: "ui/notifications/sandbox-csp-violation",
   /**
    * The proxy → the host: the app's document is gone — the frame loaded
-   * again, or did not answer `appCheck` — or its reporter → the proxy: it
-   * is going, on `pagehide`.
+   * again, or did not load and answer `appCheck` in time — or its reporter →
+   * the proxy: it is going, on `pagehide`.
    */
   appLeft: "ui/notifications/sandbox-app-left",
   /**
    * The proxy → the reporter, at the frame's first `load`, and back with the
-   * frame's token: the document loaded is the one handed over. No answer is a
-   * departure. Never relayed either way.
+   * frame's token: the document loaded is one the app's frame holds, not an
+   * error page or a blank one. No answer in time is a departure. Never
+   * relayed either way.
    */
   appCheck: "ui/notifications/sandbox-app-check",
 } as const
@@ -29,11 +33,12 @@ export const sandboxMethods = {
 /**
  * Where, in the reporter, the proxy writes the token it mints for the app's
  * frame (`sandbox/proxy.html`): the check's answer and the departure notice
- * carry it, so the proxy takes them from the document it handed over — the
- * notice even after that document is gone, when the browser no longer names
- * the sender — and from no other.
+ * carry it, so the proxy takes them from the app's frame alone — the notice
+ * even after its document is gone, when the browser no longer names the
+ * sender. Another frame cannot read it; the app can, so it says the app's
+ * frame, not which of the app's documents.
  */
-export const departureTokenSlot = "__nessa_departure_token__"
+export const frameTokenSlot = "__nessa_frame_token__"
 
 /**
  * The prefix of every method above: the proxy relays none from the host to

@@ -63,23 +63,66 @@ Checks, per engine and layout (--only <names> to pick):
 /** Says hello to the host, as an app would, each time a document of its runs. */
 const hello = `parent.postMessage({ jsonrpc: "2.0", method: "hello-from-app" }, "*");`
 
+/** Clicks the element \`id\` a moment after the document loads. */
+const clickAfterLoad = (...ids) =>
+  `addEventListener("load", function () { setTimeout(function () {
+    ${ids.map((id) => `document.getElementById(${JSON.stringify(id)}).click();`).join(" ")}
+    ${hello}
+  }, 200); });`
+
 /**
  * Documents for the \`departures\` check, by name: the HTML handed to the
  * proxy (behind the host's own policy and reporter, unless \`bare\`), and
- * whether the proxy must report the app gone.
+ * whether the proxy must report the app gone. \`@appLeft@\`, \`@appCheck@\`
+ * and \`@slot@\` are written, in the page, from the names
+ * \`sandbox-methods.ts\` states, never spelled here.
  */
 const departureScenarios = {
-  "left-alone": { html: `<p>quiet</p><script>${hello}</script>`, leaves: false },
+  // Also: the app never hears the proxy's check.
+  "left-alone": {
+    html: `<p>quiet</p><script>${hello}addEventListener("message", function (event) {
+      if (event.source === parent && event.data && event.data.method === "@appCheck@")
+        parent.postMessage({ jsonrpc: "2.0", method: "heard-the-check" }, "*");
+    })</script>`,
+    leaves: false,
+  },
   "forged-departures": {
     html: `<script>${hello}setTimeout(function () {
-      parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/sandbox-app-left", params: {} }, "*");
-      parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/sandbox-app-left", params: { token: "__nessa_departure_token__" } }, "*");
-      parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/sandbox-app-left", params: { token: "0123456789abcdef0123456789abcdef" } }, "*");
+      parent.postMessage({ jsonrpc: "2.0", method: "@appLeft@", params: {} }, "*");
+      parent.postMessage({ jsonrpc: "2.0", method: "@appLeft@", params: { token: "@slot@" } }, "*");
+      parent.postMessage({ jsonrpc: "2.0", method: "@appLeft@", params: { token: "0123456789abcdef0123456789abcdef" } }, "*");
     }, 300)</script>`,
     leaves: false,
   },
+  // Links to a fragment stay in the document (its base URL is the proxy's).
+  "fragment-links": {
+    html: `<a id="to" href="#x">to x</a><a id="top" href="#">top</a><p id="x">x</p><script>${hello}${clickAfterLoad("to", "top")}</script>`,
+    leaves: false,
+  },
+  // In Chromium, going back across a fragment navigation loads the frame
+  // again: a departure, said, and the page lives on. (History is the page's
+  // joint session history: this goes back after every other frame's
+  // fragment navigation, so it is this frame's that is undone.)
+  "hash-then-back": {
+    html: `<script>${hello}addEventListener("load", function () { setTimeout(function () {
+      location.hash = "#/a";
+      setTimeout(function () { history.back(); }, 200);
+    }, 1500); });</script>`,
+    leaves: true,
+  },
   "rewrite-alone": {
     html: `<script>${hello}setTimeout(function () { document.open(); document.write("<p>rewritten</p>"); document.close(); }, 300)</script>`,
+    leaves: true,
+  },
+  // The rewritten document talks as it loads — its load is the frame's,
+  // which the proxy hears in the same turn — so after the departure and
+  // before the frame is removed: never relayed.
+  "rewrite-talks-on": {
+    html: `<script>${hello}setTimeout(function () {
+      document.open();
+      document.write("<script>addEventListener('load', function () { parent.postMessage({ jsonrpc: '2.0', method: 'hello-from-app' }, '*'); })</scr" + "ipt>");
+      document.close();
+    }, 300)</script>`,
     leaves: true,
   },
   "rewrite-then-reload": {
@@ -102,9 +145,17 @@ const departureScenarios = {
     html: `<script>${hello}if (!window.name) { window.name = "reloaded"; location.reload(); }</script>`,
     leaves: true,
   },
-  // What the app posts as its document goes reaches the proxy with no
-  // sender (the frame's window is gone): after its reporter's word, never
-  // relayed.
+  // A frame of the app's whose document is opened and never closed — while
+  // it is still being parsed, so before it loads — holds the app's first
+  // load back: past the deadline, a departure.
+  "holds-first-load": {
+    html: `<script>${hello}addEventListener("load", function () { parent.postMessage({ jsonrpc: "2.0", method: "loaded" }, "*"); })</script><iframe srcdoc="<script>setTimeout(function () { document.open(); document.write('held'); }, 0)</script>${("<p>" + "x".repeat(200) + "</p>").repeat(10000)}"></iframe>`,
+    leaves: true,
+    // Its premise: the app's first load did not come.
+    never: "loaded",
+  },
+  // What the app posts as its document goes, after its reporter's word:
+  // never relayed.
   "posts-as-it-goes": {
     html: `<script>${hello}addEventListener("pagehide", function () { ${hello} });
       setTimeout(function () { location = "about:blank"; }, 300)</script>`,
@@ -115,17 +166,25 @@ const departureScenarios = {
     bare: true,
     leaves: true,
   },
-  // A document the host did not write that knows the protocol: it answers
-  // the check, but has no token to answer with. (It cannot spell the slot:
-  // the proxy fills the first, which the host puts in its reporter, and
-  // \`forged-departures\` holds an app that spells it behind the reporter.)
+  // A document with no reporter that knows the protocol: it answers the
+  // check, without the token.
   impostor: {
     html: `<script>addEventListener("message", function (event) {
-      if (event.data && event.data.method === "ui/notifications/sandbox-app-check") {
-        parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/sandbox-app-check", params: {} }, "*");
-        parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/sandbox-app-check", params: { token: "0123456789abcdef0123456789abcdef" } }, "*");
+      if (event.data && event.data.method === "@appCheck@") {
+        parent.postMessage({ jsonrpc: "2.0", method: "@appCheck@", params: {} }, "*");
+        parent.postMessage({ jsonrpc: "2.0", method: "@appCheck@", params: { token: "0123456789abcdef0123456789abcdef" } }, "*");
       }
     })</script>`,
+    bare: true,
+    leaves: true,
+  },
+  // A document with no reporter whose own frame holds the token — the slot
+  // is filled wherever it first is — and answers from there: not the app's
+  // frame, so not heard.
+  "nested-answers": {
+    html: `<script>var frame = document.createElement("iframe");
+      frame.srcdoc = "<scr" + "ipt>setInterval(function () { parent.parent.postMessage({ jsonrpc: '2.0', method: '@appCheck@', params: { token: '@slot@' } }, '*'); }, 200)</scr" + "ipt>";
+      document.documentElement.appendChild(frame);</script>`,
     bare: true,
     leaves: true,
   },
@@ -452,29 +511,43 @@ const checks = {
     page.on("request", (request) => {
       if (new URL(request.url()).hostname === "example.com") leaked.push(request.url())
     })
+    let crashed = false
+    page.on("crash", () => (crashed = true))
+    // The dev server's modules are what this check begins from; past this,
+    // anything that throws is the check failing.
+    const dev = await page.evaluate(
+      async () => (await fetch("/src/desktop/widgets/app/model/csp.ts")).ok,
+    )
+    if (!dev) throw new CannotRun("departures needs the dev server's modules")
+    const count = Object.keys(departureScenarios).length
     const seen = await page
       .evaluate(
-        async ({ scenarios, wait }) => {
-          let csp, methods, origin
-          try {
-            csp = await import("/src/desktop/widgets/app/model/csp.ts")
-            methods = (await import("/src/desktop/widgets/app/model/sandbox-methods.ts"))
-              .sandboxMethods
-            origin =
-              await import("/src/desktop/widgets/app/adapters/dom/sandbox-origin.ts")
-          } catch {
-            return null
-          }
+        async ({ scenarios }) => {
+          const csp = await import("/src/desktop/widgets/app/model/csp.ts")
+          const { sandboxMethods: methods, frameTokenSlot } =
+            await import("/src/desktop/widgets/app/model/sandbox-methods.ts")
+          const origin =
+            await import("/src/desktop/widgets/app/adapters/dom/sandbox-origin.ts")
+          const { deadlines } =
+            await import("/src/desktop/widgets/app/application/bridge.ts")
           const sandbox = origin.pageSandbox(document)
-          if (!sandbox) return null
+          if (!sandbox) throw new Error("the page names no sandbox it may use")
+          const named = (html) =>
+            html
+              .replaceAll("@appLeft@", methods.appLeft)
+              .replaceAll("@appCheck@", methods.appCheck)
+              .replaceAll("@slot@", frameTokenSlot)
           const applied = csp.appliedCsp({})
           const policy = csp.cspPolicy(applied)
           const seen = {}
+          const proxies = []
           let handed = 0
           let lastHanded = 0
           for (const [name, { html, bare }] of Object.entries(scenarios)) {
+            // The host's side: its frame, as the app view makes it, and the
+            // document, policy and deadline the bridge hands over.
             const proxy = document.createElement("iframe")
-            proxy.setAttribute("sandbox", "allow-scripts allow-same-origin")
+            proxy.setAttribute("sandbox", origin.proxyFrameSandbox)
             proxy.style.cssText = "position:fixed;left:-9999px;width:200px;height:100px"
             proxy.src = sandbox.url
             seen[name] = []
@@ -487,8 +560,9 @@ const checks = {
                     jsonrpc: "2.0",
                     method: methods.resourceReady,
                     params: {
-                      html: bare ? html : csp.appDocument(html, applied),
+                      html: bare ? named(html) : csp.appDocument(named(html), applied),
                       policy,
+                      checkWithin: deadlines.initialize,
                     },
                   },
                   sandbox.origin,
@@ -499,58 +573,71 @@ const checks = {
               }
               seen[name].push(method ?? "?")
             })
+            proxies.push(proxy)
             document.body.append(proxy)
           }
-          // A third party: a frame of the page's own, on no origin, that
-          // forges departures and check answers at every proxy and app.
+          const started = performance.now()
+          while (handed < proxies.length && performance.now() - started < 20_000)
+            await new Promise((resolve) => setTimeout(resolve, 100))
+          // A third party, once every app's frame is made: a frame of the
+          // page's own, on no origin, that forges departures and check
+          // answers at every proxy and every app frame it can reach.
           const third = document.createElement("iframe")
           third.setAttribute("sandbox", "allow-scripts")
           third.style.cssText = "position:fixed;left:-9999px"
-          third.srcdoc = `<script>setTimeout(function () {
+          third.srcdoc = `<script>
+            var proxies = 0, apps = 0;
+            var forged = [
+              { jsonrpc: "2.0", method: ${JSON.stringify(methods.appLeft)}, params: { token: "00000000000000000000000000000000" } },
+              { jsonrpc: "2.0", method: ${JSON.stringify(methods.appLeft)}, params: {} },
+              { jsonrpc: "2.0", method: ${JSON.stringify(methods.appCheck)}, params: { token: "00000000000000000000000000000000" } }
+            ];
             for (var i = 0; i < top.frames.length; i++) {
               var w = top.frames[i];
               if (w === window) continue;
-              var forged = [
-                { jsonrpc: "2.0", method: ${JSON.stringify(methods.appLeft)}, params: { token: "00000000000000000000000000000000" } },
-                { jsonrpc: "2.0", method: ${JSON.stringify(methods.appLeft)}, params: {} },
-                { jsonrpc: "2.0", method: ${JSON.stringify(methods.appCheck)}, params: { token: "00000000000000000000000000000000" } }
-              ];
+              proxies++;
               var app = null;
               try { app = w.frames[0] || null; } catch (error) { app = null; }
+              if (app) apps++;
               forged.forEach(function (m) { w.postMessage(m, "*"); if (app) app.postMessage(m, "*"); });
             }
-            parent.postMessage({ forgedAt: top.frames.length - 1 }, "*");
-          }, 1500)</script>`
-          let forgedAt = 0
+            parent.postMessage({ proxies: proxies, apps: apps }, "*");
+          </script>`
+          let forgedAt = { proxies: 0, apps: 0 }
           addEventListener("message", (event) => {
-            if (event.source === third.contentWindow) forgedAt = event.data?.forgedAt ?? 0
+            if (event.source === third.contentWindow) forgedAt = event.data
           })
           document.body.append(third)
-          // Every document handed over, then past the proxy's check deadline.
-          const count = Object.keys(scenarios).length
-          const started = performance.now()
-          while (handed < count && performance.now() - started < 20_000)
-            await new Promise((resolve) => setTimeout(resolve, 100))
+          // Then past the proxy's deadline for the last frame handed over.
+          const wait = deadlines.initialize + 2000
           await new Promise((resolve) =>
             setTimeout(resolve, Math.max(0, lastHanded + wait - performance.now())),
           )
           return { seen, appLeft: methods.appLeft, forgedAt, handed }
         },
-        { scenarios: departureScenarios, wait: 7000 },
+        { scenarios: departureScenarios },
       )
       .catch((error) => {
-        throw new CannotRun(`the departures harness failed: ${error.message}`)
+        if (crashed) return null
+        throw error
       })
-    if (seen === null)
-      throw new CannotRun("departures needs the dev server's modules and its sandbox")
-    if (seen.handed < Object.keys(departureScenarios).length)
-      throw new CannotRun(`only ${seen.handed} proxies were ready`)
-    // The third party forged at every frame of the page but itself: the
-    // proxies, and the window's own.
-    if (seen.forgedAt < Object.keys(departureScenarios).length)
-      failures.push(`the third party forged at ${seen.forgedAt} frames`)
-    for (const [name, { leaves }] of Object.entries(departureScenarios)) {
+    if (crashed || seen === null) {
+      failures.push("the page crashed")
+      return { failures }
+    }
+    if (seen.handed < count)
+      failures.push(`only ${seen.handed} of ${count} proxies were ready`)
+    // The third party reached every proxy, and the app frame in each that
+    // still had one: those that stay, at least.
+    const staying = Object.values(departureScenarios).filter((s) => !s.leaves).length
+    if (seen.forgedAt.proxies < count || seen.forgedAt.apps < staying)
+      failures.push(
+        `the third party forged at ${seen.forgedAt.proxies} proxies and ${seen.forgedAt.apps} apps`,
+      )
+    for (const [name, { leaves, never }] of Object.entries(departureScenarios)) {
       const said = seen.seen[name]
+      if (never && said.includes(never))
+        failures.push(`${name}: its premise did not hold (${said.join(" ")})`)
       const at = said.indexOf(seen.appLeft)
       if (!leaves && at !== -1) failures.push(`${name}: departed (${said.join(" ")})`)
       if (leaves && at === -1) failures.push(`${name}: no departure (${said.join(" ")})`)
@@ -560,6 +647,8 @@ const checks = {
         failures.push(
           `${name}: the app was relayed after its departure (${said.join(" ")})`,
         )
+      if (said.includes("heard-the-check"))
+        failures.push(`${name}: the app heard the check`)
     }
     if (leaked.length > 0)
       failures.push(`requests reached example.com: ${leaked.join(", ")}`)

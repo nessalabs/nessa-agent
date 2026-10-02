@@ -23,7 +23,7 @@
  * given (`sandbox/proxy.html`).
  */
 import { field, isObject, type Json, type JsonObject } from "./json-rpc"
-import { departureTokenSlot, sandboxMethods } from "./sandbox-methods"
+import { frameTokenSlot, sandboxMethods } from "./sandbox-methods"
 
 /** A source the policy may name: a scheme, a host (perhaps `*.`-prefixed), a port. */
 export interface CspSource {
@@ -151,20 +151,26 @@ export function approvedDomains(csp: AppliedCsp): JsonObject {
  * - reports each load the policy blocked, by the blocked origin alone;
  * - answers the proxy's check at the frame's first `load` (`appCheck`), and
  *   keeps the check from the app;
- * - says the document is going, on `pagehide`.
+ * - says the document is going, on `pagehide`;
+ * - keeps a link to a fragment (`href="#x"`) in this document: an
+ *   `about:srcdoc` document resolves it against the proxy's URL, a
+ *   navigation the policy refuses and the proxy reads as the app's
+ *   departure, so on a click nothing the app ran prevented, it moves to the
+ *   fragment as the link meant (`location.hash`) instead.
  *
- * Both carry the token the proxy wrote into its slot (`departureTokenSlot`),
- * in this document alone: what says the answer is from the document handed
- * over and not another the frame came to hold, and the departure from this
- * frame, which the browser no longer names once its document has gone.
+ * The answer and the notice carry the token the proxy wrote into its slot
+ * (`frameTokenSlot`), in this document alone: what says they come from the
+ * app's frame and not an error page, a blank page or another frame. The app
+ * can read it too; it speaks for itself.
  *
  * None of it is what the proxy relies on to know the app is gone: a further
- * `load` of the frame is that, or no answer to the check (design L32). The
+ * `load` of the frame is that, or no first load answered in time (design
+ * L32). The
  * app can send any of these itself; a report says only an origin, and a
  * departure only ends its own view. Enforcement never depends on them.
  */
 const reporter = `(function () {
-  var token = ${JSON.stringify(departureTokenSlot)};
+  var token = ${JSON.stringify(frameTokenSlot)};
   var parentWindow = window.parent;
   var post = parentWindow.postMessage.bind(parentWindow);
   window.addEventListener("securitypolicyviolation", function (event) {
@@ -178,6 +184,16 @@ const reporter = `(function () {
     event.stopImmediatePropagation();
     post({ jsonrpc: "2.0", method: ${JSON.stringify(sandboxMethods.appCheck)}, params: { token: token } }, "*");
   }, true);
+  window.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var link = event.target;
+    while (link && link.nodeName !== "A") link = link.parentNode;
+    if (!link || link.hasAttribute("target") || link.hasAttribute("download")) return;
+    var href = link.getAttribute("href");
+    if (typeof href !== "string" || href.charAt(0) !== "#") return;
+    event.preventDefault();
+    location.hash = href;
+  }, false);
   window.addEventListener("pagehide", function () {
     post({ jsonrpc: "2.0", method: ${JSON.stringify(sandboxMethods.appLeft)}, params: { token: token } }, "*");
   }, true);

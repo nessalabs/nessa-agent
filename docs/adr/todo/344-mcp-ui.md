@@ -105,20 +105,24 @@ document alone does not (review round 1 on #349 found exactly that escape) —
 and the app's document carries it first as well. `frameDomains` is not
 applied: `frame-src` is always `'none'`, so the app's frame loads nothing but
 its own document — a nested frame loads nothing but inline content, and no
-navigation of its own frame goes anywhere — and the app is told so in the domains it is told were approved. A nested
-frame needs an origin per app, and Tauri's navigation policy to tell a
+navigation of its own frame goes anywhere — and the app is told so in the
+domains it is told were approved. A nested frame needs an origin per app, and Tauri's navigation policy to tell a
 frame's load from the window's (it would hand a declared frame to the
 person's browser); round 2 on #349 showed what a declared frame lets an app's
 frame become. When the app's document goes anyway — a navigation refused, a
-reload, a document rewritten — the proxy knows it from the frame's own
-`load` events, which it hears in its own document where nothing the app runs
-reaches: any load after the first, or a first whose document does not answer
-the proxy's check with the token the proxy wrote into the document it handed
-over, and the proxy removes the frame and the host fails the view. The
-reporter in the app's document says so sooner on `pagehide` while the app
-leaves it in place; the guarantee is not its (round 3 on #349 erased it with
-`document.open()`). Permissions (`camera`, …) and `_meta.ui.domain` are not
-granted.
+reload, a document rewritten and closed — the proxy knows it from the
+frame's own `load` events, which it hears in its own document where nothing
+the app runs reaches: any load after the first, or no first load answered,
+by the time the host gives (its initialize deadline), with the token the
+proxy wrote into the reporter alone; the proxy then stops relaying, tells
+the host, which fails the view, and removes the frame on a later turn
+(removed inside its own `load` handler, it took the renderer down: round 4
+on #349). The reporter says so sooner on `pagehide` while the app leaves it
+in place; the guarantee is not its (round 3 erased it with
+`document.open()`). An `about:srcdoc` document resolves a link to a
+fragment against the proxy's URL, which the policy refuses, so the reporter
+keeps such a link in its document. Permissions (`camera`, …) and
+`_meta.ui.domain` are not granted.
 
 What the sandbox does not hold, and is not claimed to: CSP does not govern
 WebRTC, so an app can reach a STUN or TURN host it did not declare; a server
@@ -127,7 +131,11 @@ an app in development, and its app then reaches that local service, with
 `Origin: null`; and in the desktop app, whether WebKit refuses an app's
 navigation of its own frame (by the proxy's `frame-src`) before Tauri's
 navigation policy would hand the URL to the person's browser is not yet seen
-(`src-tauri/src/links.rs`).
+(`src-tauri/src/links.rs`). The app speaks for itself: it can read its own
+token, so a document it writes before its first load passes the proxy's
+check, and a document it opens and never closes is still its own; and in
+Chromium, going back across a fragment navigation loads the frame again,
+which ends the app's view.
 
 **Teardown.** The host sends `ui/resource-teardown` and waits for the answer
 (or a deadline) where it ends an app itself and the place stays: an app in a

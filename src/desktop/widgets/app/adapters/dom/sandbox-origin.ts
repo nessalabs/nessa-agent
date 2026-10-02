@@ -14,6 +14,13 @@ import type { HostKind } from "../../../../../host/features"
 import type { SandboxOrigin } from "../../application/ports"
 import type { PageContext } from "../../model/host-context"
 
+/**
+ * The proxy's frame's sandbox: the spec's MUST for the proxy (*Sandbox
+ * proxy*), on the sandbox origin, which is never the window's. The app's own
+ * frame inside it is `allow-scripts` alone (`sandbox/proxy.html`).
+ */
+export const proxyFrameSandbox = "allow-scripts allow-same-origin"
+
 /** The meta element the browser build's dev server writes the proxy's URL into. */
 export const sandboxMetaName = "nessa-app-sandbox"
 

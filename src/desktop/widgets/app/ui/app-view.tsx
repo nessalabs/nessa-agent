@@ -13,6 +13,7 @@ import type { HostContext, WidgetPlace } from "../../model/widget-state"
 import type { AppWidgetPlugin, WidgetHost } from "../../ui/plugin"
 import { WidgetLine, WidgetWaiting } from "../../ui/widget-line"
 import { frameTransport, type FrameTransport } from "../adapters/dom/frame-transport"
+import { proxyFrameSandbox } from "../adapters/dom/sandbox-origin"
 import { createAppBridge, type AppBridge } from "../application/bridge"
 import { appDraws, firstView } from "../model/app-view"
 import type { AppCall } from "../model/tool-call"
@@ -125,7 +126,7 @@ function AppFrame({
           ref={attach}
           className="widget-app-frame"
           src={sandbox.url}
-          sandbox="allow-scripts allow-same-origin"
+          sandbox={proxyFrameSandbox}
           referrerPolicy="no-referrer"
           title={`${call.tool}, from ${plugin.name}`}
           data-hidden={draws.frame === "hidden" ? "" : undefined}
