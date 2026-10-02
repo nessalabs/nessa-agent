@@ -148,31 +148,45 @@ export function approvedDomains(csp: AppliedCsp): JsonObject {
  * place — `document.open()` erases them, and a frame the app makes has none —
  * it:
  *
+ * - says which document it is (`appCheck`): at once, before any of the
+ *   app's scripts, and again in answer to each check the proxy sends at a
+ *   `load` of the frame, naming the check it answers, which it keeps from
+ *   the app. The id is minted here
+ *   and held in this closure alone, never in the document, so a document
+ *   that is not this one cannot give it;
  * - reports each load the policy blocked, by the blocked origin alone;
- * - answers the proxy's check at the frame's first `load` (`appCheck`), and
- *   keeps the check from the app;
  * - says the document is going, on `pagehide`;
- * - keeps a link to a fragment (`href="#x"`) in this document: an
- *   `about:srcdoc` document resolves it against the proxy's URL, a
- *   navigation the policy refuses and the proxy reads as the app's
- *   departure, so on a click nothing the app ran prevented, it moves to the
- *   fragment as the link meant (`location.hash`) instead.
+ * - keeps a link to a fragment of this document in it: an `about:srcdoc`
+ *   document resolves `href="#x"` against the proxy's URL, a navigation the
+ *   policy refuses and the proxy reads as the app's departure, so on a
+ *   primary click nothing the app ran prevented, on an `<a>`, `<area>` or
+ *   SVG `<a>` (found along the event's composed path) with no other target
+ *   and no `download`, whose URL is the document's base but for its
+ *   fragment, it moves to that fragment (`location.hash`) instead.
+ *   Navigating to `"#x"` by script (`location.href`, `location.assign`)
+ *   goes past it: an app sets `location.hash`.
  *
- * The answer and the notice carry the token the proxy wrote into its slot
+ * Its messages carry the token the proxy wrote into its slot
  * (`frameTokenSlot`), in this document alone: what says they come from the
  * app's frame and not an error page, a blank page or another frame. The app
- * can read it too; it speaks for itself.
+ * can read the token too; it speaks for itself.
  *
- * None of it is what the proxy relies on to know the app is gone: a further
- * `load` of the frame is that, or no first load answered in time (design
- * L32). The
- * app can send any of these itself; a report says only an origin, and a
- * departure only ends its own view. Enforcement never depends on them.
+ * The proxy relies on none of it to know the app is gone, only on its
+ * answers (design L32): a document naming itself as another than the first,
+ * or a `load` of the frame its document does not answer. The app can send
+ * any of these itself; a report says only an origin, and a departure only
+ * ends its own view. Enforcement never depends on them.
  */
 const reporter = `(function () {
   var token = ${JSON.stringify(frameTokenSlot)};
   var parentWindow = window.parent;
   var post = parentWindow.postMessage.bind(parentWindow);
+  var bytes = crypto.getRandomValues(new Uint8Array(16));
+  var documentId = "";
+  for (var i = 0; i < bytes.length; i++) documentId += (bytes[i] + 256).toString(16).slice(1);
+  function here(check) {
+    post({ jsonrpc: "2.0", method: ${JSON.stringify(sandboxMethods.appCheck)}, params: { token: token, document: documentId, check: check } }, "*");
+  }
   window.addEventListener("securitypolicyviolation", function (event) {
     var origin;
     try { origin = new URL(event.blockedURI).origin; } catch (error) { origin = undefined; }
@@ -182,21 +196,35 @@ const reporter = `(function () {
     var data = event.data;
     if (event.source !== parentWindow || data === null || typeof data !== "object" || data.method !== ${JSON.stringify(sandboxMethods.appCheck)}) return;
     event.stopImmediatePropagation();
-    post({ jsonrpc: "2.0", method: ${JSON.stringify(sandboxMethods.appCheck)}, params: { token: token } }, "*");
+    here(data.params !== null && typeof data.params === "object" ? data.params.check : undefined);
   }, true);
   window.addEventListener("click", function (event) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    var link = event.target;
-    while (link && link.nodeName !== "A") link = link.parentNode;
-    if (!link || link.hasAttribute("target") || link.hasAttribute("download")) return;
+    var path = event.composedPath();
+    var link = null;
+    for (var at = 0; at < path.length && link === null; at++) {
+      var node = path[at];
+      if (node && (node.localName === "a" || node.localName === "area") && typeof node.getAttribute === "function") link = node;
+    }
+    if (link === null) return;
+    var target = link.getAttribute("target");
+    if ((target !== null && target !== "" && target.toLowerCase() !== "_self") || link.hasAttribute("download")) return;
     var href = link.getAttribute("href");
-    if (typeof href !== "string" || href.charAt(0) !== "#") return;
+    if (href === null) href = link.getAttributeNS("http://www.w3.org/1999/xlink", "href");
+    if (href === null || href.indexOf("#") === -1) return;
+    var to, base;
+    try { to = new URL(href, document.baseURI); base = new URL(document.baseURI); } catch (error) { return; }
+    var fragment = to.hash;
+    to.hash = "";
+    base.hash = "";
+    if (to.href !== base.href) return;
     event.preventDefault();
-    location.hash = href;
+    location.hash = fragment;
   }, false);
   window.addEventListener("pagehide", function () {
     post({ jsonrpc: "2.0", method: ${JSON.stringify(sandboxMethods.appLeft)}, params: { token: token } }, "*");
   }, true);
+  here();
 })();`
 
 /**

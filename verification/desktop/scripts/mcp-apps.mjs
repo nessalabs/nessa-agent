@@ -6,8 +6,12 @@
  * display mode and given its tool call; `tools/call` is answered for an
  * allowed tool and refused for a hidden one; a request to an origin its CSP
  * does not declare is blocked, and the host says so; the app runs on an
- * opaque origin that reaches neither the window nor storage; and it is torn
- * down on close — by its pane's close, and by its own request.
+ * opaque origin that reaches neither the window nor storage; it cannot leave
+ * its frame for a page without its policy, nor speak as the proxy; the
+ * sandbox proxy, handed documents the host's own builder writes, reads every
+ * way the app's document is replaced as its departure and nothing else as
+ * one; and it is torn down on close — by its pane's close, and by its own
+ * request.
  *
  * The app's documents are cross-origin to the page, so the script reads them
  * through Playwright's frames, never through the page.
@@ -22,7 +26,8 @@ import { contentIs, paneCount, paneCountIs, settled, until } from "./lib/workspa
 
 const meta = {
   name: "mcp-apps",
-  summary: "MCP Apps: places, tools/call, CSP, isolation, teardown",
+  summary:
+    "MCP Apps: places, tools/call, CSP, isolation, escapes, forgery, departures, teardown",
   defaults: { engine: "chromium,webkit" },
   options: { only: { type: "string" } },
   help: `
@@ -45,15 +50,22 @@ Checks, per engine and layout (--only <names> to pick):
                after rewriting its document (which erases its reporter):
                refused (nothing reaches the other site), the frame taken off
                the page, and the host says it cannot show the app
-  departures   the real proxy, handed documents the host's own builder writes
-               (dev server only): every way a frame's document is replaced —
-               a rewrite then a reload, a navigation or about:blank; a
-               rewrite alone; a navigation or reload before the first load; a
-               document with no reporter, or one answering the check without
-               the frame's token — is the app's departure, said once
-               and nothing relayed after it; an app left alone, forging
-               departures with no token or a wrong one, or a third party
-               forging them, is not
+  departures   the real proxy, in the host's frame, handed documents the host's
+               own builder writes with the host's deadline (dev server only):
+               another document in the frame — a reload, before or after the
+               first load, a rewrite (closed or then sent away), a navigation
+               or about:blank, a document with no reporter or one answering
+               the check without the token or from a frame of its own — is
+               the app's departure, said once, nothing relayed after it; an
+               app left alone (which never hears the check), its links to a
+               fragment of any kind and its moves to one by script, a first
+               load held back, an app forging departures, and a third party
+               forging them and the check's answers at every frame, are not
+  departures-back
+               on a page of its own: going back across a move to a fragment
+               stays in the document, though the frame loads again, and the
+               page lives on; an answer to an earlier check, coming after a
+               later load, ends no wait
   forge        forged proxy messages change nothing; a forged report puts no
                words of the app's in the host's chrome
   teardown     closing the pane takes its frames off the page; the app asking to
@@ -63,18 +75,43 @@ Checks, per engine and layout (--only <names> to pick):
 /** Says hello to the host, as an app would, each time a document of its runs. */
 const hello = `parent.postMessage({ jsonrpc: "2.0", method: "hello-from-app" }, "*");`
 
-/** Clicks the element \`id\` a moment after the document loads. */
-const clickAfterLoad = (...ids) =>
+/**
+ * After the document loads, follows each link \`[id, fragment]\` names — a
+ * click as a person makes one — and says \`moved-<id>\` when the document
+ * moved to that fragment and is still this one.
+ */
+const followAfterLoad = (...links) =>
   `addEventListener("load", function () { setTimeout(function () {
-    ${ids.map((id) => `document.getElementById(${JSON.stringify(id)}).click();`).join(" ")}
+    ${links
+      .map(
+        ([id, fragment]) => `
+    var link = document.getElementById(${JSON.stringify(id)}) || document.getElementById("host").shadowRoot.getElementById(${JSON.stringify(id)});
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, composed: true, button: 0 }));
+    if (location.href === "about:srcdoc${fragment}")
+      parent.postMessage({ jsonrpc: "2.0", method: "moved-${id}" }, "*");`,
+      )
+      .join("")}
     ${hello}
   }, 200); });`
 
+/** The links \`fragment-links\` follows: \`[id, the URL's fragment after it]\`. */
+const fragmentLinks = [
+  ["plain", "#x"],
+  ["empty", "#"],
+  ["self", "#v"],
+  ["spaced", "#u"],
+  ["svg", "#y"],
+  ["area", "#z"],
+  ["shadowed", "#w"],
+]
+
 /**
  * Documents for the \`departures\` check, by name: the HTML handed to the
- * proxy (behind the host's own policy and reporter, unless \`bare\`), and
- * whether the proxy must report the app gone. \`@appLeft@\`, \`@appCheck@\`
- * and \`@slot@\` are written, in the page, from the names
+ * proxy (behind the host's own policy and reporter, unless \`bare\`); whether
+ * the proxy must report the app gone; what the app must have said
+ * (\`must\`), its premise, and what must never reach the host (\`never\`);
+ * and the deadline handed over, when not the host's. \`@appLeft@\`,
+ * \`@appCheck@\` and \`@slot@\` are written, in the page, from the names
  * \`sandbox-methods.ts\` states, never spelled here.
  */
 const departureScenarios = {
@@ -94,21 +131,29 @@ const departureScenarios = {
     }, 300)</script>`,
     leaves: false,
   },
-  // Links to a fragment stay in the document (its base URL is the proxy's).
+  // Links to a fragment of the document stay in it (its base URL is the
+  // proxy's), whatever kind of link, wherever it is.
   "fragment-links": {
-    html: `<a id="to" href="#x">to x</a><a id="top" href="#">top</a><p id="x">x</p><script>${hello}${clickAfterLoad("to", "top")}</script>`,
+    html: `<a id="plain" href="#x">x</a><a id="empty" href="#">top</a>
+      <a id="self" href="#v" target="_self">v</a><a id="spaced" href=" #u">u</a>
+      <svg width="20" height="20"><a id="svg" href="#y"><rect width="20" height="20"/></a></svg>
+      <map name="m"><area id="area" href="#z" shape="rect" coords="0,0,10,10"></map>
+      <img usemap="#m" width="10" height="10" alt="">
+      <div id="host"></div><p id="x">x</p>
+      <script>${hello}document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = '<a id="shadowed" href="#w">w</a>';
+      ${followAfterLoad(...fragmentLinks)}</script>`,
     leaves: false,
+    must: fragmentLinks.map(([id]) => `moved-${id}`),
   },
-  // In Chromium, going back across a fragment navigation loads the frame
-  // again: a departure, said, and the page lives on. (History is the page's
-  // joint session history: this goes back after every other frame's
-  // fragment navigation, so it is this frame's that is undone.)
-  "hash-then-back": {
+  // A move to a fragment by script stays in the document. (WebKit fires a
+  // load on the frame for it: a load alone is not a departure.)
+  "fragment-by-script": {
     html: `<script>${hello}addEventListener("load", function () { setTimeout(function () {
-      location.hash = "#/a";
-      setTimeout(function () { history.back(); }, 200);
-    }, 1500); });</script>`,
-    leaves: true,
+      location.hash = "#y";
+      if (location.href === "about:srcdoc#y") parent.postMessage({ jsonrpc: "2.0", method: "moved" }, "*");
+    }, 200); });</script>`,
+    leaves: false,
+    must: ["moved"],
   },
   "rewrite-alone": {
     html: `<script>${hello}setTimeout(function () { document.open(); document.write("<p>rewritten</p>"); document.close(); }, 300)</script>`,
@@ -125,9 +170,13 @@ const departureScenarios = {
     }, 300)</script>`,
     leaves: true,
   },
+  // The reloaded document names itself, before any of its own scripts: it
+  // is another document, and none of it is relayed.
   "rewrite-then-reload": {
-    html: `<script>${hello}setTimeout(function () { document.open(); document.write("<p>w</p>"); document.close(); setTimeout(function () { location.reload(); }, 200); }, 300)</script>`,
+    html: `<script>if (window.name) parent.postMessage({ jsonrpc: "2.0", method: "hello-again" }, "*");
+      else { ${hello}window.name = "rewritten"; setTimeout(function () { document.open(); document.write("<p>w</p>"); document.close(); setTimeout(function () { location.reload(); }, 200); }, 300); }</script>`,
     leaves: true,
+    never: ["hello-again"],
   },
   "rewrite-then-navigate": {
     html: `<script>${hello}setTimeout(function () { document.open(); document.write("<p>w</p>"); document.close(); setTimeout(function () { location = "https://example.com/?leak=rewrite"; }, 200); }, 300)</script>`,
@@ -147,12 +196,11 @@ const departureScenarios = {
   },
   // A frame of the app's whose document is opened and never closed — while
   // it is still being parsed, so before it loads — holds the app's first
-  // load back: past the deadline, a departure.
+  // load back (in Chromium): the document is still the app's, not a
+  // departure.
   "holds-first-load": {
     html: `<script>${hello}addEventListener("load", function () { parent.postMessage({ jsonrpc: "2.0", method: "loaded" }, "*"); })</script><iframe srcdoc="<script>setTimeout(function () { document.open(); document.write('held'); }, 0)</script>${("<p>" + "x".repeat(200) + "</p>").repeat(10000)}"></iframe>`,
-    leaves: true,
-    // Its premise: the app's first load did not come.
-    never: "loaded",
+    leaves: false,
   },
   // What the app posts as its document goes, after its reporter's word:
   // never relayed.
@@ -160,6 +208,13 @@ const departureScenarios = {
     html: `<script>${hello}addEventListener("pagehide", function () { ${hello} });
       setTimeout(function () { location = "about:blank"; }, 300)</script>`,
     leaves: true,
+  },
+  // A deadline no timer can wait: the proxy loads nothing.
+  "unusable-deadline": {
+    html: `<script>${hello}</script>`,
+    checkWithin: Infinity,
+    leaves: false,
+    never: ["hello-from-app"],
   },
   "no-reporter": {
     html: `<p>a document the host did not write</p>`,
@@ -172,7 +227,7 @@ const departureScenarios = {
     html: `<script>addEventListener("message", function (event) {
       if (event.data && event.data.method === "@appCheck@") {
         parent.postMessage({ jsonrpc: "2.0", method: "@appCheck@", params: {} }, "*");
-        parent.postMessage({ jsonrpc: "2.0", method: "@appCheck@", params: { token: "0123456789abcdef0123456789abcdef" } }, "*");
+        parent.postMessage({ jsonrpc: "2.0", method: "@appCheck@", params: { token: "0123456789abcdef0123456789abcdef", document: "impostor" } }, "*");
       }
     })</script>`,
     bare: true,
@@ -183,11 +238,237 @@ const departureScenarios = {
   // frame, so not heard.
   "nested-answers": {
     html: `<script>var frame = document.createElement("iframe");
-      frame.srcdoc = "<scr" + "ipt>setInterval(function () { parent.parent.postMessage({ jsonrpc: '2.0', method: '@appCheck@', params: { token: '@slot@' } }, '*'); }, 200)</scr" + "ipt>";
+      frame.srcdoc = "<scr" + "ipt>setInterval(function () { parent.parent.postMessage({ jsonrpc: '2.0', method: '@appCheck@', params: { token: '@slot@', document: 'nested' } }, '*'); }, 200)</scr" + "ipt>";
       document.documentElement.appendChild(frame);</script>`,
     bare: true,
     leaves: true,
   },
+}
+
+/**
+ * \`departures-back\`, on a page of its own: history is the page's joint
+ * session history, so no other frame's move may come between. (The two go
+ * back seconds apart.)
+ */
+const backScenarios = {
+  // Going back across a move to a fragment stays in the document, though
+  // the engines fire a load on the frame for it; and the page lives on.
+  "hash-then-back": {
+    html: `<script>${hello}addEventListener("hashchange", function () {
+      if (location.href === "about:srcdoc") parent.postMessage({ jsonrpc: "2.0", method: "went-back" }, "*");
+    });
+    addEventListener("load", function () { setTimeout(function () {
+      location.hash = "#/a";
+      setTimeout(function () { history.back(); }, 200);
+    }, 200); }, { once: true });</script>`,
+    leaves: false,
+    must: ["went-back"],
+  },
+  // A document that answers the first check only after the frame has loaded
+  // again: that answer ends no later wait, and the later checks, unanswered,
+  // are the app's departure. (Its token is its own: the proxy fills the
+  // first slot, which is its.)
+  "stale-answer": {
+    html: `<script>
+      var token = "@slot@";
+      var say = function (params) { parent.postMessage({ jsonrpc: "2.0", method: "@appCheck@", params: params }, "*"); };
+      say({ token: token, document: "stale" });
+      addEventListener("message", function (event) {
+        if (event.source !== parent || !event.data || event.data.method !== "@appCheck@") return;
+        if (event.data.params.check !== 1) return;
+        setTimeout(function () {
+          location.hash = "#a";
+          setTimeout(function () { history.back(); }, 200);
+        }, 3000);
+        setTimeout(function () {
+          say({ token: token, document: "stale", check: 1 });
+          parent.postMessage({ jsonrpc: "2.0", method: "answered-late" }, "*");
+        }, 4500);
+      });
+    </script>`,
+    bare: true,
+    leaves: true,
+    must: ["answered-late"],
+  },
+}
+
+/**
+ * Drives the real proxy, in the host's own frame, with \`scenarios\`' documents
+ * from the host's own builder and deadline, and a third party forging at
+ * every frame; judges what each proxy said against its scenario.
+ */
+async function departuresOn(page, scenarios) {
+  const failures = []
+  const leaked = []
+  page.on("request", (request) => {
+    if (new URL(request.url()).hostname === "example.com") leaked.push(request.url())
+  })
+  let crashed = false
+  page.on("crash", () => (crashed = true))
+  // The dev server's modules, and its sandbox, are what this check begins
+  // from (a preview answers any path with its page); past this, anything
+  // that throws is the check failing.
+  const dev = await page.evaluate(async () => {
+    const answer = await fetch("/src/desktop/widgets/app/model/csp.ts")
+    const type = answer.headers.get("content-type") ?? ""
+    return answer.ok && type.includes("javascript")
+  })
+  if (!dev) throw new CannotRun("departures needs the dev server's modules")
+  const sandboxed = await page.evaluate(async () => {
+    const origin = await import("/src/desktop/widgets/app/adapters/dom/sandbox-origin.ts")
+    return origin.pageSandbox(document) !== undefined
+  })
+  if (!sandboxed) throw new CannotRun("the page names no sandbox it may use")
+  const count = Object.keys(scenarios).length
+  const seen = await page
+    .evaluate(
+      async ({ scenarios }) => {
+        const csp = await import("/src/desktop/widgets/app/model/csp.ts")
+        const { sandboxMethods: methods, frameTokenSlot } =
+          await import("/src/desktop/widgets/app/model/sandbox-methods.ts")
+        const origin =
+          await import("/src/desktop/widgets/app/adapters/dom/sandbox-origin.ts")
+        const { deadlines } =
+          await import("/src/desktop/widgets/app/application/bridge.ts")
+        const sandbox = origin.pageSandbox(document)
+        const named = (html) =>
+          html
+            .replaceAll("@appLeft@", methods.appLeft)
+            .replaceAll("@appCheck@", methods.appCheck)
+            .replaceAll("@slot@", frameTokenSlot)
+        const applied = csp.appliedCsp({})
+        const policy = csp.cspPolicy(applied)
+        const seen = {}
+        const proxies = []
+        let handed = 0
+        for (const [name, { html, bare, checkWithin }] of Object.entries(scenarios)) {
+          // The host's side: its frame, as the app view makes it, and the
+          // document, policy and deadline the bridge hands over.
+          const proxy = document.createElement("iframe")
+          proxy.setAttribute("sandbox", origin.proxyFrameSandbox)
+          // On screen, as the host's are: an engine may throttle the timers
+          // of a frame it cannot see.
+          proxy.style.cssText = `position:fixed;z-index:9999;left:${(proxies.length % 10) * 42}px;top:${Math.floor(proxies.length / 10) * 32}px;width:40px;height:30px`
+          proxy.src = sandbox.url
+          seen[name] = []
+          addEventListener("message", (event) => {
+            if (event.source !== proxy.contentWindow) return
+            const method = event.data?.method
+            if (method === methods.proxyReady) {
+              proxy.contentWindow.postMessage(
+                {
+                  jsonrpc: "2.0",
+                  method: methods.resourceReady,
+                  params: {
+                    html: bare ? named(html) : csp.appDocument(named(html), applied),
+                    policy,
+                    checkWithin: checkWithin ?? deadlines.initialize,
+                  },
+                },
+                sandbox.origin,
+              )
+              handed += 1
+              return
+            }
+            seen[name].push(method ?? "?")
+          })
+          proxies.push(proxy)
+          document.body.append(proxy)
+        }
+        // Every document handed over, and every app that stays has spoken:
+        // its frame is made.
+        const speaking = Object.entries(scenarios)
+          .filter(([, s]) => !s.bare && s.checkWithin === undefined)
+          .map(([name]) => name)
+        const started = performance.now()
+        while (
+          (handed < proxies.length || speaking.some((name) => seen[name].length === 0)) &&
+          performance.now() - started < 20_000
+        )
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        const spoke = performance.now()
+        // A third party, once every app's frame is made: a frame of the
+        // page's own, on no origin, that forges departures and check
+        // answers at every proxy and every app frame it can reach.
+        const third = document.createElement("iframe")
+        third.setAttribute("sandbox", "allow-scripts")
+        third.style.cssText = "position:fixed;left:-9999px"
+        third.srcdoc = `<script>
+          var proxies = 0, apps = 0;
+          var forged = [
+            { jsonrpc: "2.0", method: ${JSON.stringify(methods.appLeft)}, params: { token: "00000000000000000000000000000000" } },
+            { jsonrpc: "2.0", method: ${JSON.stringify(methods.appLeft)}, params: {} },
+            { jsonrpc: "2.0", method: ${JSON.stringify(methods.appCheck)}, params: { token: "00000000000000000000000000000000" } }
+          ];
+          for (var i = 0; i < top.frames.length; i++) {
+            var w = top.frames[i];
+            if (w === window) continue;
+            proxies++;
+            var app = null;
+            try { app = w.frames[0] || null; } catch (error) { app = null; }
+            if (app) apps++;
+            forged.forEach(function (m) { w.postMessage(m, "*"); if (app) app.postMessage(m, "*"); });
+          }
+          parent.postMessage({ proxies: proxies, apps: apps }, "*");
+        </script>`
+        let forgedAt = { proxies: 0, apps: 0 }
+        addEventListener("message", (event) => {
+          if (event.source === third.contentWindow) forgedAt = event.data
+        })
+        document.body.append(third)
+        // Then past the proxy's deadline for the latest load it waits on:
+        // the rewrites come a moment after their apps first speak.
+        const wait = deadlines.initialize + 6000
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.max(0, spoke + wait - performance.now())),
+        )
+        return { seen, appLeft: methods.appLeft, forgedAt, handed }
+      },
+      { scenarios: scenarios },
+    )
+    .catch((error) => {
+      if (crashed) return null
+      throw error
+    })
+  if (crashed || seen === null) {
+    failures.push("the page crashed")
+    return { failures }
+  }
+  if (seen.handed < count)
+    failures.push(`only ${seen.handed} of ${count} proxies were ready`)
+  // The third party reached every proxy, and the app frame in each that
+  // still had one: those that stay, at least.
+  // (A scenario whose deadline the proxy refuses has no app frame.)
+  const staying = Object.values(scenarios).filter(
+    (s) => !s.leaves && s.checkWithin === undefined,
+  ).length
+  if (seen.forgedAt.proxies < count || seen.forgedAt.apps < staying)
+    failures.push(
+      `the third party forged at ${seen.forgedAt.proxies} proxies and ${seen.forgedAt.apps} apps`,
+    )
+  for (const [name, { leaves, must = [], never = [] }] of Object.entries(scenarios)) {
+    const said = seen.seen[name]
+    for (const wrong of never)
+      if (said.includes(wrong))
+        failures.push(`${name}: said ${wrong} (${said.join(" ")})`)
+    for (const premise of must)
+      if (!said.includes(premise))
+        failures.push(`${name}: never said ${premise} (${said.join(" ")})`)
+    const at = said.indexOf(seen.appLeft)
+    if (!leaves && at !== -1) failures.push(`${name}: departed (${said.join(" ")})`)
+    if (leaves && at === -1) failures.push(`${name}: no departure (${said.join(" ")})`)
+    if (at !== -1 && said.lastIndexOf(seen.appLeft) !== at)
+      failures.push(`${name}: departed more than once`)
+    if (at !== -1 && said.slice(at + 1).includes("hello-from-app"))
+      failures.push(
+        `${name}: the app was relayed after its departure (${said.join(" ")})`,
+      )
+    if (said.includes("heard-the-check"))
+      failures.push(`${name}: the app heard the check`)
+  }
+  if (leaked.length > 0)
+    failures.push(`requests reached example.com: ${leaked.join(", ")}`)
+  return { seen: seen.seen, forgedAt: seen.forgedAt, leaked, failures }
 }
 
 /** A fresh page on the sample session whose conversation carries the fixture app. */
@@ -457,7 +738,12 @@ const checks = {
         parentDocument: tries(() => window.parent.document.body),
         topDocument: tries(() => window.top.document.body),
         localStorage: tries(() => window.localStorage.getItem("x")),
-        cookie: tries(() => document.cookie),
+        // An opaque origin has no cookie jar: reading one throws (Chromium)
+        // or a cookie written does not stick (WebKit).
+        cookie: tries(() => {
+          document.cookie = "mcp-apps-probe=1"
+          if (!document.cookie.includes("mcp-apps-probe")) throw new Error("none")
+        }),
       }
     })
     const pageOrigin = await page.evaluate(() => window.origin)
@@ -475,185 +761,64 @@ const checks = {
   },
 
   ...Object.fromEntries(
-    ["navigate", "refresh", "rewrite"].map((control) => [
-      `escape-${control}`,
-      async (page) => {
-        const failures = []
-        const leaked = []
-        page.on("request", (request) => {
-          if (new URL(request.url()).hostname === "example.com")
-            leaked.push(request.url())
-        })
-        const { app } = await appFrame(page, "inline")
-        await appState(app, "live")
-        // The app's frame sent away: refused by the proxy's policy, and the
-        // frame, which is no longer the app's, taken off the page — said.
-        await app.click(css.fixtureControl(control))
-        const line = page.locator(css.appView, { hasText: names.appLoadLine })
-        await line
-          .first()
-          .waitFor({ timeout: 5000 })
-          .catch(() => {})
-        if (!(await line.count()))
-          failures.push(`after ${control}, the host does not say "${names.appLoadLine}"`)
-        if (await page.$(css.appFrameIn("inline")))
-          failures.push(`after ${control}, the app's frame is still on the page`)
-        if (leaked.length > 0)
-          failures.push(`requests reached example.com: ${leaked.join(", ")}`)
-        return { leaked, failures }
-      },
-    ]),
+    // The navigation is refused, and either the frame never left the app's
+    // document (WebKit: the app stays, live) or it did, and the host says so
+    // — how soon: the reporter's word on \`pagehide\`, well before the
+    // check's deadline; a rewrite erases the reporter, so the departure is
+    // its load's check going unanswered, past the host's initialize
+    // deadline.
+    Object.entries({ navigate: 5000, refresh: 5000, rewrite: 20_000 }).map(
+      ([control, within]) => [
+        `escape-${control}`,
+        async (page) => {
+          const failures = []
+          const leaked = []
+          page.on("request", (request) => {
+            if (new URL(request.url()).hostname === "example.com")
+              leaked.push(request.url())
+          })
+          const { app } = await appFrame(page, "inline")
+          await appState(app, "live")
+          // This document, marked: a document after it cannot carry the mark.
+          const mark = await app.evaluate(
+            () => (window.mcpAppsMark = String(Math.random())),
+          )
+          await app.click(css.fixtureControl(control))
+          const line = page.locator(css.appView, { hasText: names.appLoadLine })
+          await line
+            .first()
+            .waitFor({ timeout: within })
+            .catch(() => {})
+          const departed = (await line.count()) > 0
+          const stayed =
+            !departed &&
+            !app.isDetached() &&
+            (await app
+              .evaluate(
+                (marked) =>
+                  window.mcpAppsMark === marked && location.href === "about:srcdoc",
+                mark,
+              )
+              .catch(() => false)) &&
+            (await page.locator(css.appView).first().getAttribute("data-app-view")) ===
+              "live"
+          if (!departed && !stayed)
+            failures.push(
+              `within ${within} ms of ${control}, the host does not say "${names.appLoadLine}", and the app's document is not the one it was`,
+            )
+          if (departed && (await page.$(css.appFrameIn("inline"))))
+            failures.push(`after ${control}, the app's frame is still on the page`)
+          if (leaked.length > 0)
+            failures.push(`requests reached example.com: ${leaked.join(", ")}`)
+          return { outcome: departed ? "departed" : "stayed", leaked, failures }
+        },
+      ],
+    ),
   ),
 
-  departures: async (page) => {
-    const failures = []
-    const leaked = []
-    page.on("request", (request) => {
-      if (new URL(request.url()).hostname === "example.com") leaked.push(request.url())
-    })
-    let crashed = false
-    page.on("crash", () => (crashed = true))
-    // The dev server's modules are what this check begins from; past this,
-    // anything that throws is the check failing.
-    const dev = await page.evaluate(
-      async () => (await fetch("/src/desktop/widgets/app/model/csp.ts")).ok,
-    )
-    if (!dev) throw new CannotRun("departures needs the dev server's modules")
-    const count = Object.keys(departureScenarios).length
-    const seen = await page
-      .evaluate(
-        async ({ scenarios }) => {
-          const csp = await import("/src/desktop/widgets/app/model/csp.ts")
-          const { sandboxMethods: methods, frameTokenSlot } =
-            await import("/src/desktop/widgets/app/model/sandbox-methods.ts")
-          const origin =
-            await import("/src/desktop/widgets/app/adapters/dom/sandbox-origin.ts")
-          const { deadlines } =
-            await import("/src/desktop/widgets/app/application/bridge.ts")
-          const sandbox = origin.pageSandbox(document)
-          if (!sandbox) throw new Error("the page names no sandbox it may use")
-          const named = (html) =>
-            html
-              .replaceAll("@appLeft@", methods.appLeft)
-              .replaceAll("@appCheck@", methods.appCheck)
-              .replaceAll("@slot@", frameTokenSlot)
-          const applied = csp.appliedCsp({})
-          const policy = csp.cspPolicy(applied)
-          const seen = {}
-          const proxies = []
-          let handed = 0
-          let lastHanded = 0
-          for (const [name, { html, bare }] of Object.entries(scenarios)) {
-            // The host's side: its frame, as the app view makes it, and the
-            // document, policy and deadline the bridge hands over.
-            const proxy = document.createElement("iframe")
-            proxy.setAttribute("sandbox", origin.proxyFrameSandbox)
-            proxy.style.cssText = "position:fixed;left:-9999px;width:200px;height:100px"
-            proxy.src = sandbox.url
-            seen[name] = []
-            addEventListener("message", (event) => {
-              if (event.source !== proxy.contentWindow) return
-              const method = event.data?.method
-              if (method === methods.proxyReady) {
-                proxy.contentWindow.postMessage(
-                  {
-                    jsonrpc: "2.0",
-                    method: methods.resourceReady,
-                    params: {
-                      html: bare ? named(html) : csp.appDocument(named(html), applied),
-                      policy,
-                      checkWithin: deadlines.initialize,
-                    },
-                  },
-                  sandbox.origin,
-                )
-                handed += 1
-                lastHanded = performance.now()
-                return
-              }
-              seen[name].push(method ?? "?")
-            })
-            proxies.push(proxy)
-            document.body.append(proxy)
-          }
-          const started = performance.now()
-          while (handed < proxies.length && performance.now() - started < 20_000)
-            await new Promise((resolve) => setTimeout(resolve, 100))
-          // A third party, once every app's frame is made: a frame of the
-          // page's own, on no origin, that forges departures and check
-          // answers at every proxy and every app frame it can reach.
-          const third = document.createElement("iframe")
-          third.setAttribute("sandbox", "allow-scripts")
-          third.style.cssText = "position:fixed;left:-9999px"
-          third.srcdoc = `<script>
-            var proxies = 0, apps = 0;
-            var forged = [
-              { jsonrpc: "2.0", method: ${JSON.stringify(methods.appLeft)}, params: { token: "00000000000000000000000000000000" } },
-              { jsonrpc: "2.0", method: ${JSON.stringify(methods.appLeft)}, params: {} },
-              { jsonrpc: "2.0", method: ${JSON.stringify(methods.appCheck)}, params: { token: "00000000000000000000000000000000" } }
-            ];
-            for (var i = 0; i < top.frames.length; i++) {
-              var w = top.frames[i];
-              if (w === window) continue;
-              proxies++;
-              var app = null;
-              try { app = w.frames[0] || null; } catch (error) { app = null; }
-              if (app) apps++;
-              forged.forEach(function (m) { w.postMessage(m, "*"); if (app) app.postMessage(m, "*"); });
-            }
-            parent.postMessage({ proxies: proxies, apps: apps }, "*");
-          </script>`
-          let forgedAt = { proxies: 0, apps: 0 }
-          addEventListener("message", (event) => {
-            if (event.source === third.contentWindow) forgedAt = event.data
-          })
-          document.body.append(third)
-          // Then past the proxy's deadline for the last frame handed over.
-          const wait = deadlines.initialize + 2000
-          await new Promise((resolve) =>
-            setTimeout(resolve, Math.max(0, lastHanded + wait - performance.now())),
-          )
-          return { seen, appLeft: methods.appLeft, forgedAt, handed }
-        },
-        { scenarios: departureScenarios },
-      )
-      .catch((error) => {
-        if (crashed) return null
-        throw error
-      })
-    if (crashed || seen === null) {
-      failures.push("the page crashed")
-      return { failures }
-    }
-    if (seen.handed < count)
-      failures.push(`only ${seen.handed} of ${count} proxies were ready`)
-    // The third party reached every proxy, and the app frame in each that
-    // still had one: those that stay, at least.
-    const staying = Object.values(departureScenarios).filter((s) => !s.leaves).length
-    if (seen.forgedAt.proxies < count || seen.forgedAt.apps < staying)
-      failures.push(
-        `the third party forged at ${seen.forgedAt.proxies} proxies and ${seen.forgedAt.apps} apps`,
-      )
-    for (const [name, { leaves, never }] of Object.entries(departureScenarios)) {
-      const said = seen.seen[name]
-      if (never && said.includes(never))
-        failures.push(`${name}: its premise did not hold (${said.join(" ")})`)
-      const at = said.indexOf(seen.appLeft)
-      if (!leaves && at !== -1) failures.push(`${name}: departed (${said.join(" ")})`)
-      if (leaves && at === -1) failures.push(`${name}: no departure (${said.join(" ")})`)
-      if (at !== -1 && said.lastIndexOf(seen.appLeft) !== at)
-        failures.push(`${name}: departed more than once`)
-      if (at !== -1 && said.slice(at + 1).includes("hello-from-app"))
-        failures.push(
-          `${name}: the app was relayed after its departure (${said.join(" ")})`,
-        )
-      if (said.includes("heard-the-check"))
-        failures.push(`${name}: the app heard the check`)
-    }
-    if (leaked.length > 0)
-      failures.push(`requests reached example.com: ${leaked.join(", ")}`)
-    return { seen: seen.seen, forgedAt: seen.forgedAt, leaked, failures }
-  },
+  departures: (page) => departuresOn(page, departureScenarios),
+
+  "departures-back": (page) => departuresOn(page, backScenarios),
 
   forge: async (page) => {
     const failures = []

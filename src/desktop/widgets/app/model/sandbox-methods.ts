@@ -10,22 +10,26 @@ export const sandboxMethods = {
   proxyReady: "ui/notifications/sandbox-proxy-ready",
   /**
    * The host → the proxy: the app's document, the policy for the proxy's
-   * own, and how long the app's frame has to load and answer `appCheck`.
+   * own, and how long the app's frame has, after each of its loads, to
+   * answer `appCheck` (`checkWithin`, a whole number of milliseconds a timer
+   * can wait: at most 2^31 − 1).
    */
   resourceReady: "ui/notifications/sandbox-resource-ready",
   /** The reporter or the proxy → the host: a load the policy refused, by its origin. */
   cspViolation: "ui/notifications/sandbox-csp-violation",
   /**
-   * The proxy → the host: the app's document is gone — the frame loaded
-   * again, or did not load and answer `appCheck` in time — or its reporter →
+   * The proxy → the host: the app's document is gone — another document
+   * named itself, or a load went unanswered (`appCheck`) — or its reporter →
    * the proxy: it is going, on `pagehide`.
    */
   appLeft: "ui/notifications/sandbox-app-left",
   /**
-   * The proxy → the reporter, at the frame's first `load`, and back with the
-   * frame's token: the document loaded is one the app's frame holds, not an
-   * error page or a blank one. No answer in time is a departure. Never
-   * relayed either way.
+   * The reporter → the proxy, at its start and in answer: the frame's token,
+   * which document it is (an id the document cannot read), and the check it
+   * answers. The proxy → the reporter, at every `load` of the frame, with
+   * the check's number: which document is there now? The first named is
+   * pinned; another named, or the latest check unanswered in time, is a
+   * departure. Never relayed either way.
    */
   appCheck: "ui/notifications/sandbox-app-check",
 } as const

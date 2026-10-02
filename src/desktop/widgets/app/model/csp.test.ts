@@ -188,7 +188,7 @@ describe("the reporter", () => {
   const reporterAt = document.indexOf("<script>")
   const appAt = document.indexOf(app)
 
-  it("registers every listener before the app's markup", () => {
+  it("registers every listener, and names its document, before the app's markup", () => {
     for (const said of [
       'addEventListener("securitypolicyviolation"',
       sandboxMethods.cspViolation,
@@ -196,8 +196,12 @@ describe("the reporter", () => {
       sandboxMethods.appCheck,
       "stopImmediatePropagation",
       'addEventListener("click"',
+      "composedPath()",
       'addEventListener("pagehide"',
       sandboxMethods.appLeft,
+      // and says which document it is, at once
+      "document: documentId",
+      "here();\n})();",
     ]) {
       expect(document.indexOf(said), said).toBeGreaterThan(reporterAt)
       expect(document.indexOf(said), said).toBeLessThan(appAt)

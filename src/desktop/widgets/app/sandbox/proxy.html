@@ -20,15 +20,19 @@
   relayed from the host to the app, and of the app's only the CSP reporter's
   is passed on; and the app's departure, after which nothing more is relayed
   and the frame is removed. The departure is the proxy's own reading of the
-  frame, where the app cannot reach (design L32): any `load` of the frame
-  after its first — a navigation, refused or not, a reload, a rewritten
-  document once it is closed — or no first load answered, by the time the
-  host gives, with the token this proxy minted for the frame and wrote into
-  the reporter alone (an error page or a blank one has none). The
-  reporter's word on `pagehide`, carrying the same token (the browser no
-  longer names the sender of a document that has gone), says it sooner
-  while the app leaves the reporter in place. What its own policy blocks,
-  it reports the same way.
+  frame (design L32). Each document of the frame says which it is — its
+  reporter, first in it, mints an id the document cannot read and says it
+  at once and at every check — and the first is pinned: a document naming
+  itself as another (a reload) is a departure. At every `load` of the frame,
+  heard here where nothing the app runs can reach, the proxy sends a check;
+  a document that does not answer it as the pinned one by the time the host
+  gives (an error page, a blank one, a rewritten one) is a departure. A
+  `load` alone is not one: WebKit fires one for a move to a fragment. Every
+  answer carries the token this proxy minted for the frame and wrote into
+  the reporter alone, as does the reporter's word on `pagehide` (the browser
+  no longer names the sender of a document that has gone), which says it
+  sooner while the app leaves the reporter in place. What its own policy
+  blocks, it reports the same way.
   `verification/desktop/scripts/mcp-apps.mjs --only
   escape-navigate,escape-refresh,escape-rewrite,departures,forge` holds each.
 -->
@@ -89,22 +93,25 @@
         var hostOrigin = null
         var app = null
         var left = false
-        var loads = 0
+        // The document the frame first named, and the wait for an answer
+        // to the check sent at its latest load.
+        var pinned = null
         var checking = null
+        // Which check is the latest: an answer to an earlier one, delivered
+        // after a later load (WebKit), ends no wait.
+        var checks = 0
 
-        // The app's document is gone, or going — by the frame's loads, the
-        // check, or its reporter's word — and what comes after it in this
-        // frame is not the app: nothing more is relayed either way, the host
-        // is told, once, and the frame removed on a later turn (removing a
-        // frame inside its own load handler takes the renderer down with it).
+        // The app's document is gone, or going — another document named, a
+        // check unanswered, or its reporter's word — and what comes after it
+        // in this frame is not the app: nothing more is relayed either way,
+        // the frame is removed, the host told, once. Never from the frame's
+        // own load handler, where removing it takes the renderer down.
         function leave() {
           if (left) return
           left = true
           clearTimeout(checking)
+          app.remove()
           host.postMessage({ jsonrpc: "2.0", method: appLeft, params: {} }, hostOrigin)
-          setTimeout(function () {
-            app.remove()
-          }, 0)
         }
 
         function methodOf(data) {
@@ -131,7 +138,7 @@
                 typeof html !== "string" ||
                 typeof policy !== "string" ||
                 typeof checkWithin !== "number" ||
-                !(checkWithin > 0)
+                !(checkWithin > 0 && checkWithin <= 2147483647)
               )
                 return
               // The policy first, on this document: what it loads from now
@@ -165,21 +172,16 @@
               // of the app's markup: only it is filled.
               app.srcdoc = html.replace(tokenSlot, token)
               // The frame's loads, heard here, where nothing the app runs can
-              // remove the listener. By `checkWithin` from now, the frame
-              // must have loaded and its reporter, which alone holds the token,
-              // answered the check sent at that first load; else the app is
-              // gone. Any later load is a new document — a navigation, refused
-              // or not, a reload, a closed rewrite — and the app's departure.
-              checking = setTimeout(leave, checkWithin)
+              // remove the listener: at each, the document in the frame must
+              // answer the check as the pinned one within `checkWithin`, or
+              // the app is gone.
               app.addEventListener("load", function () {
                 if (left) return
-                loads += 1
-                if (loads > 1) {
-                  leave()
-                  return
-                }
+                clearTimeout(checking)
+                checking = setTimeout(leave, checkWithin)
+                checks += 1
                 app.contentWindow.postMessage(
-                  { jsonrpc: "2.0", method: appCheck, params: {} },
+                  { jsonrpc: "2.0", method: appCheck, params: { check: checks } },
                   "*",
                 )
               })
@@ -206,12 +208,25 @@
           if (app !== null && !left && event.source === app.contentWindow) {
             var from = methodOf(event.data)
             if (from === appCheck) {
+              var said = event.data.params
               if (
-                event.data.params !== null &&
-                typeof event.data.params === "object" &&
-                event.data.params.token === token
+                said === null ||
+                typeof said !== "object" ||
+                said.token !== token ||
+                typeof said.document !== "string"
               )
-                clearTimeout(checking)
+                return
+              if (pinned === null) pinned = said.document
+              if (said.document !== pinned) {
+                leave()
+                return
+              }
+              // Only an answer to the latest check ends the wait its load
+              // began: the announcement, or an answer to an earlier check,
+              // does nothing.
+              if (said.check !== checks) return
+              clearTimeout(checking)
+              checking = null
               return
             }
             if (from !== null && from.indexOf(reserved) === 0 && from !== cspViolation)
