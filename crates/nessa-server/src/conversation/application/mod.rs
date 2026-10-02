@@ -73,6 +73,10 @@
 //! serialized per conversation (`ConversationLocks`), and a delete that waits
 //! behind another attempt answers from its tombstone without one of its own.
 mod catalogue;
+pub(crate) mod catalogue_watch;
+pub use catalogue_watch::{
+    CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue,
+};
 mod catalogue_read;
 mod error;
 mod locks;

@@ -4,9 +4,9 @@
 
 ## What this changes
 
-The SDK passes a complete observed `SessionSnapshot` and its ordered `SessionChange` decisions through `SessionStorageLease`. The record writer saves Nessa facts at the SDK decision that produces each fact. `event-stream` provides ordered, durable physical records and cursors; the SDK owns their meaning, command receipt lookup, and whether provider work may start. A receiver reads committed facts through the [bounded record source](#bounded-read-source-for-276). The provider never runs during replay.
+The SDK passes a complete observed `SessionSnapshot`, its actual `SessionSaveGeneration` binding and caller-owned immutable `SessionSaveUnit` boundaries through `SessionStorageLease::save_changes`. The record writer persists unpublished units in decision order and publishes the whole save at its durable completion. `event-stream` provides ordered, durable physical records and cursors; the SDK owns their meaning, command receipt lookup, and whether provider work may start. A receiver reads committed facts through the [bounded record source](#bounded-read-source-for-276). The provider never runs during replay.
 
-Server composition opens one SQLite runtime before listening and injects the adapter through an SDK-owned port. The SDK retains its exclusive conversation lease for the life of the manager. A successful append returns the committed cursor. A timeout or dropped reply leaves the command unresolved until the same event ID and exact bytes are found or retried. The writer serializes each typed fact once and keeps those bytes across that reconciliation. Shutdown drains session owners before the shared runtime.
+Server composition opens one SQLite runtime before listening and injects the adapter through an SDK-owned port. The SDK retains its exclusive conversation lease for the life of the manager. A successful save returns a receipt bound to the original save identity, full unit count and next binding. A timeout or dropped reply leaves the save unresolved until its exact bytes and original completion are found or retried. Full no-I/O preflight serializes each unit once and discards its body; persistence re-encodes one immutable unit at a time and retains original pending framed bytes across reconciliation. Shutdown drains session owners before the shared runtime.
 
 ```mermaid
 flowchart LR
@@ -22,7 +22,7 @@ flowchart LR
 
 ## Commit boundaries
 
-The SDK's current decision sites define the facts. A pending set is retained inside `Evidence` when observed state advances but a save has not been acknowledged. It contains exact typed changes in decision order; `flush_observed` commits those changes as one atomic logical fact when more than one change is pending. The writer does not infer lifecycle facts by comparing two arbitrary final snapshots. It checks that folding the pending changes from the generation's original committed state equals the observed candidate before attempting an append. A mismatch is typed corruption before any write or provider effect. The generation is scoped to the lease and is not encoded in physical records; replay starts a fresh generation sequence.
+The SDK decision sites define explicit units retained in `Evidence` when observed state advances without an acknowledged save. `flush_observed` submits the complete ordered unit prefix as one outer save. The writer does not infer boundaries by comparing final snapshots or partitioning bytes. Canonical continuation validates each complete unit and the final observed candidate before pending reconciliation or append. The Record adapter restores the original incarnation, published base and generation from the same stream; reopening does not start a guessed generation sequence. `SessionLoad::into_published` denies unfinished saves before provider preparation or queue restoration. The detailed new ordering contract and its pending evidence are [below](#semantic-save-units-for-292).
 
 | SDK boundary | Fact | Before the next effect |
 | --- | --- | --- |
@@ -38,7 +38,7 @@ The SDK's current decision sites define the facts. A pending set is retained ins
 | `record_provider_report` | `provider-report` plus first dispatched local stop when applicable | Keep report and local stop in one fact. |
 | `finish`, `retain_result` or queued failure | `local-settlement` with previous and next result and preserved earlier outcome | Do not replace provider evidence. |
 
-A call that changes scheduling and queue membership together, or settles a failed queued input while removing it, commits one `atomic-transition` containing the ordered child facts. A later flush may include earlier message fragments or a receipt left observed after a failed write. Group validation applies all children to a candidate state and publishes it only after every child succeeds. Nested groups are invalid.
+A call that changes scheduling and queue membership together, or settles a failed queued input while removing it, constructs one indivisible unit containing the ordered changes. A later save can include earlier message units or a receipt left observed after a failed write. Canonical validation checks each unit checkpoint; the outer save publishes only after its final completion. A unit is a nonempty ordered change sequence, with no nested unit encoding.
 
 ## State and ordering
 
@@ -46,10 +46,10 @@ A call that changes scheduling and queue membership together, or settles a faile
 | --- | --- | --- |
 | No stream | New conversation selected for records | Create stream, append `session-open`, then expose the conversation. A failure leaves it unopened. |
 | Committed, no pending changes | SDK decision produces a change | Retain the typed change and observed candidate under the evidence mutex. |
-| Pending changes | Save boundary | Encode the single fact or atomic group once; append stable physical records. Do not start dependent work yet. |
+| Pending changes | Save boundary | Validate the complete explicit unit plan and encoded sizes before I/O, then append missing units and the original completion. Do not start dependent work until the exact full receipt. |
 | Pending streaming messages | The [commit cadence](streaming-message-commit.md) is due, or, as a safety limit, eight MiB of retained message bytes or 1,024 message observations accumulate | Save the complete observed prefix before accepting more output. Each message is at most four MiB, so even sixfold JSON escaping plus event metadata stays below the 160 MiB fact limit. A failed flush retains the same generation and pending decisions; no later provider effect is authorized by that failure. |
 | Oversized encoded atomic group | Preflight before installing a pending fact or advancing a save generation | Return a typed size refusal without an append or writer fence. The caller may retry a smaller valid group; an atomic decision group is never split without an explicit semantic boundary. |
-| Appending | Confirmed complete fact | Fold and validate it, advance committed state and cursor, clear pending changes, then release the dependent effect. |
+| Appending | Confirmed complete save | Publish the whole candidate at its completion, verify receipt binding and full unit count, clear pending units, then release the dependent effect. |
 | Appending | Definite rejection | Keep pending facts and return typed refusal. Do not claim acceptance or dispatch. |
 | Appending | Outcome unknown | Hold the affected command; read the same event ID and exact bytes. An identical committed record advances; changed bytes conflict; absence permits retry with identical bytes. |
 | Multi-decision save | Earlier decision A commits, later decision B fails | Retain the caller's original observed candidate and exact ordered decision bytes. Track A as a physically committed prefix while the call remains unresolved. A retry with the same full sequence verifies and skips A, then resumes B; load cannot expose a partial call as settled. |
@@ -65,12 +65,12 @@ A call that changes scheduling and queue membership together, or settles a faile
 | Fold queue membership and dispatch | An atomic group orders queue admission before input, or Running before selection, but ends with a valid final queue history | Reuse the queue replay owner incrementally: each `QueueDecision` must find its input and exact scheduling checkpoint at the time it occurs and apply to the live pending queue; a Running edge requires a preceding selection for that execution. A later input or selection cannot repair a past decision. Rebuild queue authority once from the validated prior snapshot, then advance it once per queue fact; final queue replay still checks complete membership and checkpoint relationships. A valid grouped admission, selection, dispatch, result, and removal remains admissible in causal order. |
 | Fold cross-invocation steering correlation | A steering input or injection names a queued target or an output offset produced only by later facts in the same group | At input admission, require the named target to be a prior invocation with established dispatch and require the captured target offset to equal its current observation count, as live admission records it. A targetless input has no offset. At an Injected edge, confirm the target's dispatch and captured offset still have prior evidence; never use a future output or dispatch to authorize an earlier steering fact. Keep final snapshot validation for whole-history consistency. Historical dispatch eligibility does not itself assert that a target remains active when a delayed acknowledgement is saved. |
 | Fold context-bound provider observations | An atomic group changes context A to B, records a permission cancellation from A, then restores A | Validate each observation's session and invocation correlation against the context current at that fact, using the same helper as restored checkpoint validation. A later context revision cannot make an earlier cancellation valid. Keep full permission-request history validation after the group, but reject the mismatched cancellation before append so same-lease and reopened reads agree. |
-| Writer opens or Reset installs a new stream incarnation | First save in that writer | Require the initial generation even when the physical history already contains earlier facts. Reset begins a new generation sequence for its replacement writer on the same exclusive lease. Reject a skipped first generation without changing the writer, so a valid initial save can still succeed. |
+| Writer opens or Reset installs a new stream incarnation | Load and first save | Restore the binding from the actual same-stream completion or unfinished lineage. Only a fresh/Reset incarnation starts at generation0/base0; old bindings refuse before append. `load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress` verifies zero physical rows after a skipped initial generation, independently of later envelope rejection. See O4–O7 and O10 for retry and erasure order. |
 | Appending | Definite physical conflict or invalid frame | Fence this live writer's load and future saves as corruption. The prior snapshot cannot be exposed as proof that the conflicting suffix is absent. |
 | Chunked fact, no matching seal | Same writer retries | Expose no part of that fact. The retained pending bytes resume the exact missing pieces and seal; no later fact may overtake it. |
-| Chunked fact, no matching seal | Process restarts under the exclusive lease | Validate the fixed physical prefix and append a deterministic abort bound to the attempt start, declared digest and observed tail. If all body pieces are present, verify their digest before deciding the missing seal is abortable; a mismatch is corruption. Only after the abort commits may replay expose the last complete semantic state. No provider effect is replayed. |
+| Chunked unit or completion, no matching seal | Process restarts under the exclusive lease | Validate the fixed physical prefix and append a deterministic abort bound to the attempt start, declared digest and observed tail. A body with all pieces must match its digest. Retain the original unfinished save binding and prior publication; Abort does not authorize preparation or acknowledge the outer save. See O4 and O6. |
 | Abort append | Reply lost or process restarts | Retry the same abort ID and bytes against the fixed prefix. An exact committed abort advances the physical cursor without folding a semantic change; malformed, foreign or reordered evidence is corruption. |
-| Aborted attempt | Caller retries the command | Derive a new physical attempt ID from the post-abort start offset while retaining the logical fact key. A changed command is checked against the last complete semantic state and admitted only by the normal SDK rules. |
+| Aborted attempt | Caller retries the save | Compare the original binding, exact unit boundaries, prior sealed prefix and aborted-attempt key/digest before retrying missing work. A changed or truncated prefix refuses; physical attempt IDs use the post-abort start. |
 | Reopen while abort is pending | Caller cancels open | Keep the exclusive reservation in the supervised recovery owner until the abort settles; a second opener cannot overlap it. |
 | Committed acceptance, response lost | Same caller, request ID, execution ID and input retries | Return the original receipt; do not dispatch twice. A changed command under the same identity conflicts. |
 | Provider accepted native steering but its acknowledgement was not saved | Restart | Preserve uncertain delivery. Check provider correlation if available; never inject again merely because the saved edge is absent. |
@@ -105,25 +105,136 @@ sequenceDiagram
     participant S as SDK coordinator
     participant R as Record runtime
     participant D as Device reader
-    S->>R: Append large fact start and digest
-    loop Bounded pieces
-        S->>R: Append next piece with stable ID
+    S->>S: Validate complete unit plan and encoded sizes
+    loop Explicit immutable units
+        S->>R: Append unit start, bounded pieces and seal
+        Note over D,R: Unit is durable but outer save remains unpublished
     end
-    Note over D,R: Partial prefix is not a visible fact
-    S->>R: Append matching seal
-    R-->>S: Confirm seal cursor
-    D->>R: Read committed records
-    R-->>D: Start, pieces and seal
-    D->>D: Validate and apply one fact
+    S->>R: Append original save completion
+    R-->>S: Exact full save receipt
+    D->>R: Read captured completion prefix
+    R-->>D: Units and completion
+    D->>D: Stage units privately, publish at completion
 ```
 
 ## Physical contract
 
-The logical key is `(kind u8, execution ID length u16, execution ID UTF-8, ordinal u64)` in big-endian order. The physical event ID is `nessa-fact-` plus SHA-256 of that key and the attempt start offset, with a `-start`, `-part-N`, `-seal`, or `-abort-N` suffix. The start payload also carries that offset. The logical body is typed UTF-8 JSON using the existing snapshot field mappings for request, actor, observation, scheduling, queue, report, outcome and error values. The frame never authorizes a body merely because its digest matches; the application fold validates the typed fields and relationships.
+The existing physical key remains `(kind u8, execution ID length u16,
+execution ID UTF-8, ordinal u64)` and physical framing version remains1. The
+current semantic codec uses kind12 `SaveUnit` and kind13 `SaveComplete`, with no execution ID
+and an ordinal in the original save. This intentionally refuses predecessor
+semantic kinds1–11, even though their physical framing version is also1.
+Unchanged physical framing does not preserve readability of those semantic records.
+Opening such a SQLite stream returns corruption without appending an abort,
+rewriting its bytes or translating it into a current unfinished save. There is
+one current semantic contract, with no legacy reader or format-version bump.
+`predecessor_semantic_sqlite_record_refuses_without_mutation` owns the actual
+predecessor opening-frame refusal and unchanged physical bytes/cursor regression. Physical event IDs hash the key and actual
+attempt start offset; strict retry compares original bytes, not ID equality alone.
 
-The ordinal is the prior committed count for queue, scheduling and observation facts. Session open, input acceptance, stop and provider report use zero with their unique scope. Receipt, local settlement, provider-context revisions and atomic transitions use the previous committed physical cursor offset; a failed append cannot advance it. A retry therefore derives the same identity from the same committed state. The writer still compares exact encoded bytes before treating that identity as a duplicate.
+`save_group.rs` owns the bounded136-byte envelope: stream digest, actual
+incarnation, original published base/generation, ordinal, prior chain and payload
+digest. A Unit carries a nonempty typed JSON batch using existing snapshot field
+mappings. Complete carries no semantic payload and seals the exact count/chain.
+The canonical continuation owns typed decisions and complete-unit validation;
+the envelope alone grants no provider authority.
 
-An inline fact has one start record if the complete payload fits 64 KiB. Otherwise it has a start record, 64 KiB pieces and a seal. The encoded body limit is 160 MiB. The writer preflights that limit before installing a pending fact; an oversized indivisible group returns `TooLarge` without an append or a writer fence. Streaming messages flush on the [commit cadence](streaming-message-commit.md) and at the latest at eight MiB retained bytes or 1,024 observations, well before JSON escaping can cross that limit. Direct-port partition of larger atomic groups is tracked in [#292](https://github.com/nessalabs/nessa-agent/issues/292). The adapter fixes the event-store record limit at 1 MiB, above its largest physical frame (a 64 KiB piece plus a nine-byte header). Physical IDs include the attempt start offset within the stream incarnation. Identical retries of the live writer use the same IDs and bytes; changed-byte reuse conflicts. A seal is the only visibility boundary for a chunked fact. On exclusive reopen, a strictly validated incomplete prefix can instead terminate with one durable abort record. The abort exposes no part of that fact. Framing lives in `crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs` and is used by the record writer.
+A physical body fits one start record or a start,64KiB pieces and seal. The
+existing160MiB body limit includes its save envelope. An indivisible oversized
+unit refuses before I/O; a larger outer save uses caller-owned semantic units.
+The event-store record bound remains1MiB. A physical unit seal validates that
+body but is not public progress. Only the original save completion is a source
+terminal and semantic applied cursor. An Abort retires one physical attempt
+without acknowledging its save. Framing/Abort remain owned by `stream_fact.rs`;
+save lineage and publication remain owned by `save_group.rs`.
+
+## Semantic save units for #292
+
+This is the current implementation contract for the in-progress #292 source
+migration. Oversized-save, killed-child restart, allocation and receiver fixtures
+are authored; their compiler/runtime gates and fresh independent review remain
+pending. The existing #275/#290 evidence is historical, not approval of these
+changed semantics.
+
+The caller owns explicit semantic units. A scheduling transition with its queue
+selection/removal, or settlement with terminal scheduling and queue removal, is
+one indivisible unit. The writer validates each complete unit and the final
+observed candidate against the existing canonical continuation before reconciling
+pending work or appending a record. A unit that individually exceeds the existing
+body bound still refuses with `TooLarge` before append. The writer cannot infer
+boundaries by slicing a flat list until it fits.
+
+Before any I/O, the writer serializes each immutable unit once to validate its
+encoded size and construct bounded identity/chain metadata, then drops that
+encoded body. Persistence and exact-prefix comparison re-encode one unit at a
+time. An uncertain physical append retains its original framed bytes across
+cancellation and retry. There is no aggregate encoded copy of the outer plan.
+The caller's plan, observed snapshot, validation continuation and bounded
+per-unit metadata remain retained; this is not a 160 MiB whole-save heap bound.
+The regression evidence must count preflight and persistence serializations
+separately and attribute retained buffers, including the original pending frame
+and a physical read used for exact-prefix comparison.
+
+An outer save can contain multiple bounded units. Each persisted unit is
+structurally unpublished. One bounded completion envelope in the same canonical
+record stream binds the original save identity, generation, base, exact unit
+boundaries and ordered content; its durable confirmation publishes the group.
+There is no separate start record, second snapshot/control store or compatibility
+reader. Physical starts/pieces/seals and their exact-byte recovery keep their
+existing owner. The new unit/completion metadata has one codec, also consumed by
+bounded source terminal discovery; that scanner must not accumulate semantic
+bodies to decide whether a terminal is published.
+
+The existing bare lease-local generation is insufficient after restart or Reset.
+The current lease load/save contract will provide an immutable backend-scoped save
+binding and actual published or unfinished evidence. Record bindings name the
+original incarnation, published base and generation; equal payload bytes or a
+restarted zero counter cannot establish identity. Snapshot adapters expose their
+actual snapshot capability without fabricated physical receipts. The manager
+obtains the binding from the lease and keeps explicit decision units through a
+failed or cancelled acknowledgment. Unfinished recovery is not a usable session
+for provider initialization, queue restoration or new command dispatch.
+
+| Row | State and ordering | Required result and fixture boundary |
+| --- | --- | --- |
+| O1 | Any late unit, unit checkpoint or final candidate is invalid; an indivisible unit exceeds 160 MiB | Refuse before pending reconciliation or any append. The encoded unit passes the existing physical body-size owner before decode-budget preflight, so an oversized valid unit reports typed TooLarge rather than malformed content. A size refusal leaves a fresh writer usable. Test actual storage row count, prior load and valid retry. `valid_unit_plan_with_wrong_candidate_never_appends` isolates valid decisions with a contradictory observed snapshot from canonical unit rejection. `late_invalid_unit_never_appends_valid_prefix` separately checks a valid first Unit followed by invalid second Unit. Both refuse with unchanged rows/publication before a valid same-binding retry, so a removed full preflight is tested against the late-prefix row assertion rather than being masked by an earlier candidate case. `explicit_units_publish_one_direct_save_beyond_one_body_bound` first refuses the same candidate as one oversized unit without rows, then saves its caller-owned input units and verifies final receipt/reopen/exact retry (authored; runtime gate pending). |
+| O2 | An explicit unit seals while the outer save is unfinished | Retain its exact staged bytes and original ownership. `abort_after_private_unit_keeps_prior_public_projection` checks an actual earlier sealed Unit plus a later partial/aborted attempt, so Abort cannot expose already-staged private decisions. Normal load exposes typed unfinished evidence; source head and receiver applied projection remain at the prior completed save. Test actual head and an invented intermediate page target. `save_envelope_refuses_independent_digest_ordinal_chain_and_identity_contradictions` checks newly isolated header/key ordinal, previous-chain, next-prefix and later generation/stream/incarnation clauses against valid linked Unit/Complete controls; the existing `changed_payload_boundary_scope_base_generation_and_count_refuse` owns digest and fresh base/generation/ordinal refusal; its direct envelope cases do not claim source persistence. One generic prefix-count/chain check owns both fresh (count0/empty chain) and later linked units; there are no repeated fresh ordinal/previous predicates. The header0/key1 case isolates physical key agreement while the generic prefix ordinal remains valid. |
+| O2a | Actual admitted product recordsHead/recordsPage uses the tiny current SDK save (one inline Unit plus one inline SaveComplete) | The published head is physical terminal position2, not the old snapshot-only single fact. The actual authenticated owner scope stays epoch-3; invented target1 is only a Unit seal and returns typed invalid_request, while captured target2 returns both dense physical positions1/2. `admitted_record_route_uses_owner_scope_and_real_physical_source` exercises the real store/source/dispatcher and keeps its wrong-receiver refusal. This is a current fixture migration after the full-suite stale-head1 failure, not a production source-bound change. |
+| O3 | Unit acknowledgment is lost or its caller disappears | Original lease/task retains physical work. Exact retry compares original identity, boundaries and bytes, skips confirmed units and resumes missing work. No next generation or provider effect is authorized. |
+| O3a | Same live writer retains Unit B after a real SQLite append refusal; caller retries the same binding and valid A prefix with a semantically valid changed B suffix | Refuse before reconciling original pending B: rows and prior public load stay unchanged. Then the original exact A/B retry completes once. `retry_of_extended_decisions_skips_exact_committed_prefix` uses the actual trigger-refused pending Unit; its changed-candidate checkpoint is valid, so the original pending-byte comparison must prevent physical reconciliation rather than rely on a later completion refusal. |
+| O3b | Same live writer has a durable Unit and a trigger-refused, absent SaveComplete; caller retries the same binding with a semantically valid changed Opening unit and its matching candidate | Refuse before any replacement completion append. The physical row count stays one, the original load remains unfinished and unpublished, and the committed watch stays clean. The original exact unit/completion retry then publishes once. `record_watch_stays_clean_after_unit_seal_until_original_completion_retry` separates confirmed-unit byte agreement from the later comparison against an already durable completion. |
+| O3c | Existing completed-turn fixture is seeded through the current explicit decision save API | InputAccepted carries no later events, result or local outcome; real Finished observation followed by LocalSettlement records the domain-produced Completed outcome. The final seeded snapshot retains that outcome instead of reusing snapshot-only inferred-success omission. `streamed_chunks_do_not_rescan_prior_turns_and_terminal_invalidates_cached_history` then measures live manager behavior against a valid actual adapter setup, with production validation unchanged. |
+| O3d | Snapshot adapter retries the exact opening, repartitions its confirmed prefix, or extends it with an actual context transition | Use Absent to Recorded with the matching extended candidate, so prefix repartition rejection is independently load-bearing and the exact original prefix plus valid suffix succeeds. Absent to Absent is not an accepted transition. `snapshot_fixture_keeps_exact_receipt_prefix_and_reset_capability` preserves the separate stale receipt and reset-incarnation refusals, then accepts the original opening under the reset binding. |
+| O4 | Child process dies inside a unit or after earlier unit seals | The existing strict physical abort terminates only that physical attempt. Earlier units remain an unfinished save; abort does not publish a partial group. Even before the first unit seals, recovery retains the original start key/full-body digest and refuses ordinary initialization; exact retry checks that bounded evidence before append. Reopen and retry the original binding without duplicate units. Owning regression `killed_child_retains_original_unpublished_unit_retry` kills and reaps the original child after two actual committed physical frames, then checks Unfinished admission, changed-byte refusal, original retry and duplicate-free lost-reply retry (authored; runtime gate pending). |
+| O5 | All units are durable but completion is absent; completion acknowledgment is lost | Without completion, remain unfinished and append only the missing terminal on exact retry. With a durable completion, restore the original receipt and next-generation binding and acknowledge exact retry without append. |
+| O6 | Same-generation P has a retained unit, and retry extends it to Q | Reconcile P's exact pending unit bytes unchanged, append Q's linked suffix and complete Q. A unit is not marked final. If restart aborts P's incomplete completion attempt, verify that original completion key/count/digest against the unchanged P prefix of Q; the abort does not publish P or require Q's later terminal to have P's digest. If P already has a durable completion, verify its exact prefix envelope and retain P's published meaning; its receipt never acknowledges Q. Test both evidence orders, aborted completion recovery and crash before the first extension unit. |
+| O7 | Changed/truncated/repartitioned retry; wrong base/incarnation; contradictory unit or terminal | Refuse before replacement or new append. Conflicting physical history fences the writer instead of using the prior snapshot to claim that suffix is absent. Published Record load requires absent snapshot/base0/generation0 together, or present snapshot/base>0/generation>0; a completion with empty metadata payload is not an empty semantic save. Reset returns the absent-snapshot form, and Unfinished refuses first. Contradictory evidence refuses before provider initialization. The published-load fixture includes absent snapshot with base1/generation1 to isolate snapshot/base agreement from generation/base agreement. Snapshot adapters are not subject to physical-cursor rules. Their exact retry owner retains the original immutable typed unit prefix; encoded-size/digest preflight drops each temporary unit body before encoding the next, without retaining a second encoded plan. A custom adapter receipt for another binding, a different unit count or impossible next capability refuses before clearing retained decisions or authorizing subsequent effects. `immutable_unit_and_snapshot_receipt_constructor_refuse_each_invalid_capability` owns empty-unit construction and each Snapshot revision pairing against a valid counterpart, without claiming physical persistence. Cached discovery retains a known malformed-tail failure; a repeated head cannot skip it merely because physical framing advanced. A requested older immutable publication may be revalidated independently. |
+| O7a | Actual in-memory adapter receives wrong binding/session, a changed or repartitioned retry, an exact retry/new generation, or erase followed by old/new work | The same public lease compares actual binding before effects, retains exact immutable prefix and original base for retries, returns the original receipt without a new revision for exact retry, and erases receipt/original/units while replacing incarnation. Owning memory tests use actual public saves/loads and only inspect retained cache after real erase; custom snapshot fixtures do not stand in for this adapter. |
+| O7b | Record or snapshot adapter admits an empty plan; raw unit constructor/codec receives empty changes | `SessionSaveUnit::validate_plan` owns nonempty plans and is called before any persistence. Adapters remove their copied predicates. The same borrowed `SessionSaveUnit::check_changes` owns nonempty individual units for construction and raw encode/decode; codec decoding converts through existing mappings before asking that owner. No compatibility encoding or relaxation is introduced. Constructor and raw-codec neighbors prove this shared rule in both representations. |
+| O7g | Live writer observes a typed physical frame/stream conflict, unavailable formerly confirmed prefix, or foreign pending terminal history | One private live-writer error owner consumes existing FactCommitError/is_invalid_fact and keeps the conflict fence on commit and live prefix-read paths. Ordinary caller-plan/domain refusal or store I/O failure does not fabricate a physical conflict. Restoring rows cannot revive the fenced original writer; a fresh actual replay may recover valid restored history. A changed pending terminal may be discarded only when physically absent, or accepted first when the exact original Complete is durable. Partial or Aborted at that terminal cursor is foreign physical history: the only private local terminal factory encodes exactly Header bytes and the physical codec stores that small body as one atomic inline event, while valid Partial/Abort require a noninline body above its frame ceiling. The earlier proposed matching-Partial local-terminal positive was therefore unreachable. Restored O6 abort-prefix input remains a separate raw-input owner and is retained. |
+| O7f | Corrupted persisted Start announces a long unfinished completion body but carries the digest of a zero/excess-prefix completion, then actual physical Abort ends it | Physical framing retains the original announced digest; it does not invent a completed semantic body. Semantic retry separately refuses zero completion prefix and prefix beyond actual confirmed Units before new append, even if key/digest otherwise match the requested plan. The owning SQLite tamper fixture uses current frame generation plus a changed persisted digest, actual abort/replay/save and unchanged physical tail. This is corrupted-source admission evidence, not an original writer producing partial small completions. The private prefix encoder does not repeat the upper bound: its normal caller passes the exact plan length, and retry callers first require prefix≤confirmed, where each confirmed Unit already matched an actual supplied header. Its independent zero-prefix refusal remains. |
+| O7e | Exact already-completed Record retry reaches cached return | Before this branch, the same owner compares every supplied Unit byte and every physical Complete against the original immutable prefix. A matching full supplied prefix with no unfinished work therefore has the original receipt installed by actual Complete acceptance; its binding/count/digest are derived there and are not revalidated in a parallel cache rule. Pending Unit/Complete reconciliation still finishes before this branch; incomplete work cannot return a prior receipt. The cached return remains necessary to avoid another terminal append. |
+| O7d | A physically valid first save envelope carries another stream/incarnation identity, or typed Unit encoding is preflighted | RecordWriter derives identity from its actual original stream binding before staging/replay; it separately refuses a decoded Opening for another session and a caller plan targeting another session before effects. A foreign first envelope refuses even when initial group generation/base and semantic Opening are otherwise valid. Both local payload-size calls receive successful serialization of nonempty typed WireBatch changes, so the copied zero-byte predicate is removed; GroupProgress independently owns nonempty received Unit bodies. The encoded body ceiling remains enforced before effects. |
+| O7c | Physical envelope ends with a short header, empty Unit, payload-bearing Complete, Complete without an original Unit, group switch while unfinished, or repeated Complete | The same Header decoder refuses incomplete bytes before slicing, and the same GroupProgress owner permits publication only from the original nonempty Unit extent with an empty exact completion. An unfinished extent cannot switch identity. Owning fixtures isolate each otherwise-correct envelope against its exact accepted neighbor; these are codec/publication facts, not proof of durable storage. The private extent count is positive because Unit installs checked count+1 and restore refuses count0; this provenance owns that invariant rather than a second completion-count predicate. A completion requires the existing unfinished extent; the preceding identity-switch check already refuses every unfinished different identity, so completion does not repeat `same`. |
+| O8 | Receiver pages end inside units or between their seals; journal/checkpoint reopens | Downloaded progress may advance, while public applied progress/projection stay prior. Retain the bounded last-completion identity/count/chain in the existing checkpoint. Its generation0 iff original base0, and first-generation completed unit count equals cumulative unit facts; later completion counts cannot exceed cumulative facts. Validate these actual producer invariants before restoration, restage from its published A through the same downloaded journal and publish only after exact group completion; no provider effects run. `checkpoint_rejects_each_independent_completion_binding_contradiction` isolates later-generation zero/count-over-total, generation/base pairing, non-prior base, foreign stream/incarnation and missing terminal metadata against a valid two-save checkpoint; the first-generation total mismatch remains separately covered. |
+| O8a | Untrusted checkpoint group identity/count/chain fields enter representation preflight before owned typed decoding | The existing Shape/Seed/TokenReader owner routes group and identity objects, admits only their declared keys, bounds the 32-byte and 16-byte arrays before reading an excess element, and gives numeric/fixed-byte slots zero decoded string allowance and no nested maps or nonempty arrays. Owning `checkpoint_group_preflight_refuses_each_independent_unbounded_shape` exercises representation admission directly against an accepted bounded group, then otherwise unchanged JSON with one wrong shape, unknown field or excess element. It establishes early preflight behavior, not cryptographic lineage or total receiver heap; later typed/domain validation remains separate. |
+| O8b | Preflight and typed checkpoint decoding inspect the same metadata fields | `save_group` declares each SaveIdentity/GroupCheckpoint field and Rust type once through its private metadata declaration. Serde derives wire keys/unknown-field refusal from that declaration; the same expansion publishes field resource kinds to Shape. Fixed byte widths derive from the declared array type, and numeric slots retain independent zero-string/no-container preallocation admission. Shape asks this owner for allowed fields and their kinds instead of repeating wire key lists or widths. Existing serialized keys/order/types remain unchanged; declaration agreement and resource admission have separate owning regression assertions. |
+| O9 | Historical page target is an intermediate unit seal, including after discovery-cache eviction | The same group-terminal owner rejects it. Holding current head behind the group is insufficient if direct historical target validation still accepts a physical seal. |
+| O10 | Reset or erasure overlaps unfinished save; old retry returns afterward | Preserve existing exclusive reset, deletion tombstone and physical cleanup ownership. Replacement incarnation invalidates every old binding; do not translate an old retry into the new initial generation. |
+| O11 | A complete group becomes durable under watch registration or caller loss | Consume the actual PR381 registry owner, retained by the original lease/task. Publish only when a newly verified outer SaveComplete installs its committed candidate/receipt, including lost-ack reconciliation; Unit seals and Abort never notify. An already completed exact retry appends nothing and does not add another notice. Durable Reset publishes before lost reply/replay/cleanup can fail, through that same registry. Admission closure precedes actual held-source join and survives shutdown waiter loss. `record_watch_stays_clean_after_unit_seal_until_original_completion_retry` forces a durable Unit and refused Complete through the real adapter, then checks exact terminal retry and no duplicate notice (authored; gates pending). Advisory hints do not make a unit fresh or authorize an effect. |
+
+The caller's complete candidate is not a retained projection for every unit. Reuse
+the canonical incremental lifecycle/queue validation and account privately staged
+history separately from the 160 MiB per-fact bound. Receiver journal recovery,
+small-unit operation counts, held physical ownership and increasing-history
+allocation measurements are implementation gates, not results of this table.
+
+The SDK session storage/manager and record writer/fold own this change. The
+principal command receipt stream in #268 remains separate. The unmerged watch
+producer in #381 must consume this final publication boundary when assembled;
+#298 hints carry no payload or independent semantic authority. Update the current
+lease contract, its real manager callers, snapshot adapters and direct fixtures
+together; no parallel legacy save entry point is introduced.
 
 ## Verification for #275
 
@@ -147,10 +258,10 @@ applied fact cursor separately from the downloaded physical checkpoint.
 
 | Current source state | Event or ordering | Result |
 | --- | --- | --- |
-| Existing stream, validated terminal at zero | Head read during a complete append | Scan in physical order to the last validated inline start, seal, or abort; return that terminal position. |
-| Validated terminal before an incomplete start or pieces | Head read before seal | Return the prior terminal; a page cannot expose the incomplete suffix. |
-| Incomplete suffix | Matching seal commits after the head read | A later head read validates the full attempt and advances to its seal. The earlier fixed target stays unchanged. |
-| Incomplete suffix | Writer or recovery commits a matching abort | A later head read advances through the abort without producing a semantic fact. |
+| Existing stream, validated publication at zero | Head read during a save | Scan bounded physical records, validate frame and save lineage, and return only the last exact save completion. |
+| Prior completion before an incomplete save | Head read inside a unit or between unit seals | Return the prior completion; a page cannot target the unpublished suffix. |
+| Incomplete save | Original completion commits after the head read | A later head validates the complete lineage and advances to that completion. A unit seal alone cannot advance it. The earlier fixed target stays unchanged. |
+| Incomplete physical attempt | Writer or recovery commits a matching abort | Physical validation advances through Abort while the public head stays at the prior save completion. |
 | Captured terminal head | Page read while the writer appends | Return a contiguous bounded prefix no later than the captured target; later writes do not change that page's target. |
 | Reader is catching up while the writer keeps appending | A head request observes a physical tail, then newer facts commit before each read | Validate only through the tail captured for that request and return the last terminal at or before it. The next head request may advance. Other readers must not wait for a moving tail to become idle. |
 | Reader has a historical fixed target | Newer facts commit before or during its page request | Validate the requested terminal through that target only; do not first catch the shared worker up to the current tail. Return the bounded page or a typed invalid-target result. |
@@ -160,7 +271,7 @@ applied fact cursor separately from the downloaded physical checkpoint.
 | Read queued on the source worker | Caller drops its wait or SDK shuts down | The owned worker finishes or reports unavailable; it does not mutate storage or take over writer recovery. |
 | Shared source worker is busy | Authorized clients submit more reads than its 64-command queue can retain | Admit at most 64 waiting commands; return `SourceError::Unavailable` immediately for the excess request, with no source read or allocated backlog. A client may retry after backoff. When the last source drops, the worker drains admitted commands and exits even if the queue was full. |
 | Repeated authorized reads on the same source | More head and page requests arrive | Clones share one worker and its last validated terminal. A repeated head checks for new records from that point. An old fixed target outside the bounded remembered-head set is revalidated from the stream prefix before paging. |
-| Receiver has a downloaded physical prefix ending inside a chunked fact | Receiver process restarts | Reload the durable physical checkpoint and staged frames; leave the semantic applied cursor at the prior terminal. Continue from the physical checkpoint, then validate the seal and atomically advance the applied cursor with its projection. |
+| Receiver has downloaded prefix D beyond public applied cursor A | Receiver process restarts | Restore the bounded last-completion metadata and public projection, restage the same durable journal from A through D, and keep units private until the original completion. O8 owns the restoration relationships. |
 | Receiver commits a page and projection but its reply is lost | Receiver process restarts | Reload both cursors and the projected state from the same local transaction. Rechecking the source starts after the downloaded checkpoint; do not apply the prior fact again. |
 | Receiver receives a foreign scope, position gap, changed frame schema, or invalid seal | Before local transaction | Refuse the page or semantic projection with typed failure. Keep both durable cursors and the prior projection unchanged. |
 

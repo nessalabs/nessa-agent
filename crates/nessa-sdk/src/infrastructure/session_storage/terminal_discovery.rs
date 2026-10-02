@@ -7,6 +7,7 @@
 
 use super::{
     record_source::source_error,
+    save_group::GroupProgress,
     stream_fact::{FrameStep, FrameValidator},
 };
 use event_stream::{
@@ -51,7 +52,9 @@ struct Entry {
 struct Progress {
     validator: FrameValidator,
     terminal: u64,
+    groups: GroupProgress,
     through: Option<u64>,
+    failed: bool,
 }
 struct Owner {
     cache: Arc<TerminalCache>,
@@ -69,7 +72,9 @@ impl Drop for Owner {
         entry.state = Some(Progress {
             validator: self.state.validator.clone(),
             terminal: self.state.terminal,
+            groups: self.state.groups.clone(),
             through: self.state.through,
+            failed: self.state.failed,
         });
         entries.push_back(entry);
     }
@@ -91,7 +96,9 @@ impl TerminalCache {
             Progress {
                 validator: FrameValidator::after(0),
                 terminal: 0,
+                groups: GroupProgress::after(0),
                 through: None,
+                failed: false,
             }
         };
         Some(Owner {
@@ -112,11 +119,35 @@ impl TerminalCache {
             return Ok(RecordReadStatus::Preparing);
         };
         let state = &mut owner.state;
-        if tail < state.validator.offset() {
+        if state.failed {
+            if target.is_some_and(|target| target <= state.terminal) {
+                *state = Progress {
+                    validator: FrameValidator::after(0),
+                    terminal: 0,
+                    groups: GroupProgress::after(0),
+                    through: None,
+                    failed: false,
+                };
+            } else {
+                return Err(SourceError::Unavailable);
+            }
+        }
+        if tail < state.terminal {
             return Err(SourceError::IdentityChanged);
         }
-        if target.is_some_and(|target| target <= state.validator.offset()) {
+        if target == Some(state.terminal) {
             return Ok(RecordReadStatus::Ready(state.terminal));
+        }
+        if target.is_some_and(|target| target <= state.validator.offset()) {
+            // Old targets outside the one remembered publication must prove the
+            // same group terminal from the immutable prefix, not a physical seal.
+            *state = Progress {
+                validator: FrameValidator::after(0),
+                terminal: 0,
+                groups: GroupProgress::after(0),
+                through: None,
+                failed: false,
+            };
         }
         let through = *state.through.get_or_insert(target.unwrap_or(tail));
         if through > tail {
@@ -152,9 +183,38 @@ impl TerminalCache {
                 let step = state
                     .validator
                     .push(&record.event, record.cursor.offset)
-                    .map_err(|_| SourceError::Unavailable)?;
-                if matches!(step, FrameStep::Complete { .. } | FrameStep::Aborted) {
-                    state.terminal = record.cursor.offset
+                    .map_err(|_| {
+                        state.failed = true;
+                        SourceError::Unavailable
+                    })?;
+                match step {
+                    FrameStep::Pending(Some(bytes)) => state.groups.piece(bytes).map_err(|_| {
+                        state.failed = true;
+                        SourceError::Unavailable
+                    })?,
+                    FrameStep::Pending(None) => {}
+                    FrameStep::Aborted => state.groups.reset_frame(),
+                    FrameStep::Complete { key, body } => {
+                        if let Some(bytes) = body {
+                            state.groups.piece(bytes).map_err(|_| {
+                                state.failed = true;
+                                SourceError::Unavailable
+                            })?;
+                        }
+                        let header =
+                            state
+                                .groups
+                                .complete(&key, record.cursor.offset)
+                                .map_err(|_| {
+                                    state.failed = true;
+                                    SourceError::Unavailable
+                                })?;
+                        if !header.identity.matches_stream(&record.cursor.stream) {
+                            state.failed = true;
+                            return Err(SourceError::Unavailable);
+                        }
+                        state.terminal = state.groups.published();
+                    }
                 }
             }
         }

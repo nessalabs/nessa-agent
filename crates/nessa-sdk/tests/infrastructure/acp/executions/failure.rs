@@ -8,8 +8,8 @@ use crate::application::agent_execution::{
     executions::{ExecutionRequest, SubmissionMode},
     permissions::ActionContext,
     sessions::storage::{
-        InvocationCancellationEvent, InvocationRecord, ProviderContext, SessionSnapshot,
-        SessionStorage, SubmissionAcknowledgement,
+        InvocationCancellationEvent, InvocationRecord, ProviderContext, SessionChange,
+        SessionSaveUnit, SessionSnapshot, SessionStorage, SubmissionAcknowledgement,
     },
 };
 use crate::domain::agent_execution::{
@@ -344,9 +344,49 @@ async fn finalized_provider_and_local_recipes_survive_storage_reload_exactly() {
             }],
         };
         let storage = InMemoryStorage::new();
-        let lease = storage.open(session_id).await.unwrap();
-        lease.save(snapshot).await.unwrap();
-        let restored = lease.load().await.unwrap().unwrap();
+        let lease = storage.open(session_id.clone()).await.unwrap();
+        let record = &snapshot.invocations[0];
+        let mut admitted = record.clone();
+        admitted.acknowledgement = SubmissionAcknowledgement::Pending;
+        admitted.provider_report = None;
+        admitted.local_cancellation = None;
+        admitted.result = None;
+        let changes = vec![
+            SessionChange::Opened {
+                id: snapshot.id.clone(),
+                provider: snapshot.provider.clone(),
+                context: snapshot.provider_context.clone(),
+            },
+            SessionChange::InputAccepted(Box::new(admitted)),
+            SessionChange::ReceiptUpdated {
+                execution_id: record.request.execution_id.clone(),
+                before: SubmissionAcknowledgement::Pending,
+                after: SubmissionAcknowledgement::Acknowledged,
+            },
+            SessionChange::ProviderReport {
+                execution_id: record.request.execution_id.clone(),
+                report: record.provider_report.clone().unwrap(),
+                local_stop: record.local_cancellation.clone(),
+            },
+            SessionChange::LocalSettlement {
+                execution_id: record.request.execution_id.clone(),
+                before: None,
+                after: record.result.clone().unwrap(),
+                local_outcome: record.local_outcome,
+            },
+        ];
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                snapshot,
+                vec![SessionSaveUnit::new(changes).unwrap()],
+            )
+            .await
+            .unwrap();
+        let restored = SessionSnapshot::load_saved(lease.as_ref(), &session_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(restored.invocations[0].provider_report, Some(report));
     }
 }

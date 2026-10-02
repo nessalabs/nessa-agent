@@ -19,6 +19,9 @@ use crate::conversation_test_support::{
     MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingDeletionAudit,
     RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
+use nessa_sdk::application::agent_execution::sessions::{
+    SessionLoad, SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::{
     application::agent_execution::sessions::StorageFuture,
@@ -298,7 +301,9 @@ async fn history(storage: &InMemoryStorage, id: &ConversationId) -> Option<Sessi
     })
     .await
     .expect("the history's lease is let go");
-    lease.load().await.unwrap()
+    SessionSnapshot::load_saved(lease.as_ref(), &session(id))
+        .await
+        .unwrap()
 }
 fn summary(fixture: &Deleting, id: &ConversationId) -> Option<ConversationSummary> {
     fixture.summaries.summaries.lock().unwrap().get(id).cloned()
@@ -1412,14 +1417,19 @@ impl SessionStorage for BusyUnderLease {
     }
 }
 impl SessionStorageLease for BusyLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         if self.load {
             return Box::pin(async { Err(StorageError::Busy) });
         }
         self.lease.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
-        self.lease.save(snapshot)
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
+        self.lease.save_changes(binding, snapshot, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         if self.erase {
@@ -1496,12 +1506,17 @@ impl SessionStorage for CleanupReplyFailsOnce {
 }
 
 impl SessionStorageLease for CleanupReplyLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.lease.load()
     }
 
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
-        self.lease.save(snapshot)
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
+        self.lease.save_changes(binding, snapshot, units)
     }
 
     fn erase(&self) -> StorageFuture<'_, ()> {
@@ -1680,7 +1695,7 @@ async fn a_history_still_leased_elsewhere_is_left_and_a_repeat_finishes() {
     assert!(failures.audit.is_none() && failures.summary.is_none());
     // Unread, so unrecorded, so nothing of what the record is for was erased.
     assert!(fixture.audit.records.lock().unwrap().is_empty());
-    assert!(held.load().await.unwrap().is_some());
+    assert!(held.load().await.unwrap().snapshot().is_some());
     assert!(summary(&fixture, &id).is_some());
     // The close's release, then the delete's: uploads go regardless.
     assert_eq!(
@@ -1735,7 +1750,7 @@ async fn a_lease_held_once_the_answer_is_settled_keeps_only_the_history() {
     // history waits for its lease.
     assert_eq!(fixture.audit.records.lock().unwrap().len(), 1);
     assert_eq!(summary(&fixture, &id), None);
-    assert!(held.load().await.unwrap().is_some());
+    assert!(held.load().await.unwrap().snapshot().is_some());
     assert_eq!(
         fixture.service.inner.retries.waiting_for(&id),
         Some((Waiting::ForRelease, 0))
@@ -2159,7 +2174,7 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(lease.load().await.unwrap(), None);
+    assert!(lease.load().await.unwrap().snapshot().is_none());
     // Ownership stays, and so does the tombstone that refuses it.
     let kept = ConversationRepository::load(metadata.as_ref(), &id)
         .await
@@ -2692,10 +2707,22 @@ impl SessionStorage for Misfiled {
     }
 }
 impl SessionStorageLease for MisfiledLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
-        Box::pin(async { Ok(Some(self.snapshot.clone())) })
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
+        Box::pin(async {
+            let evidence = self._exclusive.load().await?;
+            Ok(SessionLoad::new(
+                Some(self.snapshot.clone()),
+                evidence.binding().clone(),
+                SessionLoadState::Published,
+            ))
+        })
     }
-    fn save(&self, _: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        _: SessionSaveGeneration,
+        _: SessionSnapshot,
+        _: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async { Err(StorageError::Io("not written here".into())) })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

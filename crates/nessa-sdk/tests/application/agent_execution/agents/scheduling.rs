@@ -7,7 +7,8 @@ use crate::application::agent_execution::{
         AgentProvider, ProviderIdentity, ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest,
     },
     sessions::{
-        SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease, StorageFuture,
+        SessionLoad, SessionManager, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+        SessionSnapshot, SessionStorage, SessionStorageLease, StorageFuture,
     },
 };
 use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
@@ -146,11 +147,16 @@ impl SessionStorage for PanickingQueueStorage {
 }
 
 impl SessionStorageLease for PanickingQueueLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.inner.load()
     }
 
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         let should_panic = self
             .mutation
             .lock()
@@ -166,7 +172,7 @@ impl SessionStorageLease for PanickingQueueLease {
             self.mutation.lock().unwrap().take();
             return Box::pin(async { panic!("queue membership persistence panic") });
         }
-        self.inner.save(snapshot)
+        self.inner.save_changes(binding, snapshot, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.inner.erase()

@@ -4,7 +4,8 @@ use crate::{
         agents::SteeringDelivery,
         hooks::{BeforeInvocation, InvocationContext},
         sessions::{
-            SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+            SessionLoad, SessionManager, SessionSaveGeneration, SessionSaveReceipt,
+            SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
             StorageFuture, SubmissionAcknowledgement,
         },
     },
@@ -407,10 +408,15 @@ impl SessionStorage for FailReviewStorage {
     }
 }
 impl SessionStorageLease for FailReviewLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.inner.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
             let has_review = snapshot.invocations.iter().any(|record| {
                 record.events.iter().any(|event| {
@@ -420,7 +426,7 @@ impl SessionStorageLease for FailReviewLease {
             if has_review && !self.failed.swap(true, Ordering::SeqCst) {
                 return Err(StorageError::Io("review persistence rejected".into()));
             }
-            self.inner.save(snapshot).await
+            self.inner.save_changes(binding, snapshot, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
@@ -497,10 +503,15 @@ impl SessionStorage for FailSelectedDeclineStorage {
     }
 }
 impl SessionStorageLease for FailSelectedDeclineLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.inner.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
             let selected = snapshot.invocations.iter().any(|record| {
                 record.events.iter().any(|event| {
@@ -523,7 +534,7 @@ impl SessionStorageLease for FailSelectedDeclineLease {
                     "selected decline persistence rejected".into(),
                 ));
             }
-            self.inner.save(snapshot).await
+            self.inner.save_changes(binding, snapshot, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

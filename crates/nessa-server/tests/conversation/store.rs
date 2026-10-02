@@ -3,13 +3,16 @@
 //! rows refused rather than repaired, and a list that reads only its owner's.
 use super::store::{list_query, LocalConversationStore, UNFINISHED};
 use crate::agents::domain::AgentId;
-use crate::conversation::infrastructure::conversation_catalogue_schema;
+use crate::conversation::infrastructure::{
+    conversation_catalogue_schema, MAX_CATALOGUE_CHANGE_WATCHES,
+};
 use crate::conversation::{
     application::{
-        CatalogueKey, CataloguePageRequest, ConversationCatalogue, ConversationCreationDisposition,
+        CatalogueChangeWatch, CatalogueKey, CataloguePageRequest, CatalogueWatchError,
+        CatalogueWatchState, ConversationCatalogue, ConversationCreationDisposition,
         ConversationError, ConversationListing, ConversationModeApplication,
         ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
-        ConversationSummaries,
+        ConversationSummaries, WatchCatalogue,
     },
     domain::{
         conversation_catalogue_stream, Conversation, ConversationApprovalMode,
@@ -25,6 +28,12 @@ use nessa_sync::replication::{
     domain::{Id, Scope},
 };
 use std::path::{Path, PathBuf};
+use std::{
+    future::Future,
+    sync::Arc,
+    task::{Context, Poll, Wake, Waker},
+    time::Duration,
+};
 use uuid::Uuid;
 
 struct Opened {
@@ -2108,4 +2117,251 @@ async fn catalogue_resolve_acquires_bounded_deletion_and_preserves_supported_pro
             .await
             .is_ok());
     }
+}
+
+fn catalogue_watch_ready(watch: &mut CatalogueChangeWatch) -> CatalogueWatchState {
+    let mut wait = Box::pin(watch.changed());
+    match wait.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(state) => state,
+        Poll::Pending => panic!("expected a committed source notice"),
+    }
+}
+
+fn catalogue_watch_pending(watch: &mut CatalogueChangeWatch) {
+    let mut wait = Box::pin(watch.changed());
+    assert!(matches!(
+        wait.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    ));
+}
+
+#[tokio::test]
+async fn catalogue_watch_tracks_only_committed_owner_revisions_and_tombstone_fence() {
+    let opened = opened();
+    let id = new_id();
+    let mut watch = opened.store.watch(&org(), &alice()).unwrap();
+    let mut other = opened
+        .store
+        .watch(&org(), &PrincipalId::new("bob").unwrap())
+        .unwrap();
+    opened.store.create(owned(&id)).await.unwrap();
+    assert_eq!(
+        catalogue_watch_ready(&mut watch),
+        CatalogueWatchState::Dirty
+    );
+    catalogue_watch_pending(&mut other);
+    // Already-created identity does not advance head or notify.
+    opened.store.create(owned(&id)).await.unwrap();
+    catalogue_watch_pending(&mut watch);
+    let mut late = opened.store.watch(&org(), &alice()).unwrap();
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        1
+    );
+    catalogue_watch_pending(&mut late);
+    opened.store.record(&id, said("visible", 2)).await.unwrap();
+    assert_eq!(
+        catalogue_watch_ready(&mut watch),
+        CatalogueWatchState::Dirty
+    );
+    assert_eq!(catalogue_watch_ready(&mut late), CatalogueWatchState::Dirty);
+    opened.store.erase(&id).await.unwrap();
+    assert_eq!(
+        catalogue_watch_ready(&mut watch),
+        CatalogueWatchState::Dirty
+    );
+    assert_eq!(catalogue_watch_ready(&mut late), CatalogueWatchState::Dirty);
+    // First tombstone notifies before any provider/upload/history cleanup.
+    opened
+        .store
+        .record_deletion(&id, deletion("delete-watch"))
+        .await
+        .unwrap();
+    assert_eq!(
+        catalogue_watch_ready(&mut watch),
+        CatalogueWatchState::Dirty
+    );
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        4
+    );
+    assert!(matches!(
+        opened
+            .store
+            .record(&id, said("refused after fence", 3))
+            .await,
+        Err(ConversationError::Deleted)
+    ));
+    opened
+        .store
+        .record_deletion(&id, deletion("delete-watch"))
+        .await
+        .unwrap();
+    opened.store.erase(&id).await.unwrap();
+    catalogue_watch_pending(&mut watch);
+    catalogue_watch_pending(&mut other);
+    drop(opened);
+    assert_eq!(
+        catalogue_watch_ready(&mut watch),
+        CatalogueWatchState::Closed
+    );
+}
+
+#[tokio::test]
+async fn catalogue_watch_refuses_to_publish_a_rolled_back_revision() {
+    let opened = opened();
+    let id = new_id();
+    let mut watch = opened.store.watch(&org(), &alice()).unwrap();
+    {
+        let connection = opened.store.hold_mutation();
+        // All writes succeed inside the transaction; the deferred foreign key
+        // refuses COMMIT. This detects notification moved just before commit.
+        connection.execute_batch("CREATE TRIGGER refuse_creation AFTER INSERT ON conversations BEGIN INSERT INTO summaries (conversation_id, updated_at_ms, archived) VALUES ('missing-watch-target', 1, 0); END; PRAGMA defer_foreign_keys = ON;").unwrap();
+    }
+    assert!(matches!(
+        opened.store.create(owned(&id)).await,
+        Err(ConversationError::Metadata)
+    ));
+    catalogue_watch_pending(&mut watch);
+    assert_eq!(
+        opened.store.head(&org(), &alice()).await.unwrap().revision,
+        0
+    );
+    raw(&opened.path)
+        .execute_batch("DROP TRIGGER refuse_creation;")
+        .unwrap();
+    opened.store.create(owned(&id)).await.unwrap();
+    assert_eq!(
+        catalogue_watch_ready(&mut watch),
+        CatalogueWatchState::Dirty
+    );
+}
+
+#[tokio::test]
+async fn cancelled_catalogue_receipt_keeps_commit_publication_alive() {
+    let opened = opened();
+    let id = new_id();
+    let mut watch = opened.store.watch(&org(), &alice()).unwrap();
+    // Hold the actual connection so the blocking mutation cannot complete
+    // during its first poll; drop the receipt, then release physical work.
+    {
+        let gate = opened.store.hold_mutation();
+        let mut creation = opened.store.create(owned(&id));
+        assert!(matches!(
+            creation
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Pending
+        ));
+        drop(creation);
+        drop(gate);
+    }
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), watch.changed())
+            .await
+            .unwrap(),
+        CatalogueWatchState::Dirty
+    );
+    assert!(ConversationRepository::load(&opened.store, &id)
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn catalogue_watch_mode_bookkeeping_stays_clean_until_visible_mode_commit() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    let mut watch = opened.store.watch(&org(), &alice()).unwrap();
+    let request = ConversationModeRequest {
+        conversation_id: id.clone(),
+        organization_id: org(),
+        request_id: "watch-mode".into(),
+        initiator_principal_id: alice(),
+        initiator_surface_id: "panel".into(),
+        prior: ConversationApprovalMode::Ask,
+        requested: ConversationApprovalMode::Auto,
+        state: ConversationModeRequestState::Pending,
+        application: None,
+        requested_at_ms: 2,
+    };
+    opened.store.begin_mode_change(request).await.unwrap();
+    opened
+        .store
+        .observe_mode_application(&id, "watch-mode", ConversationModeApplication::Applied)
+        .await
+        .unwrap();
+    catalogue_watch_pending(&mut watch);
+    opened
+        .store
+        .finish_mode_change(&id, "watch-mode", ConversationModeRequestState::Applied)
+        .await
+        .unwrap();
+    assert_eq!(
+        catalogue_watch_ready(&mut watch),
+        CatalogueWatchState::Dirty
+    );
+    opened
+        .store
+        .finish_mode_change(&id, "watch-mode", ConversationModeRequestState::Applied)
+        .await
+        .unwrap();
+    catalogue_watch_pending(&mut watch);
+}
+
+struct PanickingCatalogueWaker;
+impl Wake for PanickingCatalogueWaker {
+    fn wake(self: Arc<Self>) {
+        panic!("test catalogue notification callback unwind");
+    }
+}
+
+#[tokio::test]
+async fn catalogue_watch_callback_panic_cannot_replace_a_durable_create_result() {
+    let opened = opened();
+    let id = new_id();
+    let mut faulty = opened.store.watch(&org(), &alice()).unwrap();
+    let mut healthy = opened.store.watch(&org(), &alice()).unwrap();
+    let waker = Waker::from(Arc::new(PanickingCatalogueWaker));
+    let mut wait = Box::pin(faulty.changed());
+    assert!(matches!(
+        wait.as_mut().poll(&mut Context::from_waker(&waker)),
+        Poll::Pending
+    ));
+    let result = opened.store.create(owned(&id)).await;
+    assert!(
+        ConversationRepository::load(&opened.store, &id)
+            .await
+            .unwrap()
+            .is_some(),
+        "metadata really committed"
+    );
+    assert!(
+        result.is_ok(),
+        "watch callback changed the durable source result: {result:?}"
+    );
+    assert_eq!(
+        catalogue_watch_ready(&mut healthy),
+        CatalogueWatchState::Dirty
+    );
+    drop(wait);
+    assert_eq!(
+        catalogue_watch_ready(&mut faulty),
+        CatalogueWatchState::NotificationFailed
+    );
+    drop(healthy);
+    let registrations = (1..MAX_CATALOGUE_CHANGE_WATCHES)
+        .map(|_| opened.store.watch(&org(), &alice()).unwrap())
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        opened.store.watch(&org(), &alice()),
+        Err(CatalogueWatchError::Capacity)
+    ));
+    drop(registrations);
+    drop(opened.store);
+    assert_eq!(
+        catalogue_watch_ready(&mut faulty),
+        CatalogueWatchState::NotificationFailed
+    );
 }

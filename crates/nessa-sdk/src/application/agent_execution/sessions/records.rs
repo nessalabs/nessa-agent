@@ -1,6 +1,6 @@
 //! Logical Nessa fact identity, separate from an event-stream cursor or retry ID.
 //! One accepted fact can use one inline record or several sealed physical records.
-pub(super) mod continuation;
+pub(crate) mod continuation;
 
 use super::{
     queue_validation::QueueReplayUndo,
@@ -14,7 +14,7 @@ use crate::{
             ExecutionId, ExecutionOutcome, InvocationHistory, InvocationObservation,
             InvocationStage, QueueMutation,
         },
-        sessions::{ProviderContext, SessionId},
+        sessions::ProviderContext,
     },
 };
 use std::{collections::HashMap, fmt::Display};
@@ -22,64 +22,23 @@ use std::{collections::HashMap, fmt::Display};
 /// Version 1 semantic fact kinds owned by the SDK conversation coordinator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FactKind {
-    SessionOpen,
-    InputAccepted,
-    QueueDecision,
-    SchedulingTransition,
-    ProviderObservation,
-    ReceiptUpdated,
-    StopDecision,
-    ProviderReport,
-    LocalSettlement,
-    ProviderContext,
-    AtomicTransition,
+    SaveUnit,
+    SaveComplete,
 }
 
 impl FactKind {
     pub(crate) fn code(self) -> u8 {
         match self {
-            Self::SessionOpen => 1,
-            Self::InputAccepted => 2,
-            Self::QueueDecision => 3,
-            Self::SchedulingTransition => 4,
-            Self::ProviderObservation => 5,
-            Self::ReceiptUpdated => 6,
-            Self::StopDecision => 7,
-            Self::ProviderReport => 8,
-            Self::LocalSettlement => 9,
-            Self::ProviderContext => 10,
-            Self::AtomicTransition => 11,
+            Self::SaveUnit => 12,
+            Self::SaveComplete => 13,
         }
     }
-
     pub(crate) fn from_code(code: u8) -> Option<Self> {
-        Some(match code {
-            1 => Self::SessionOpen,
-            2 => Self::InputAccepted,
-            3 => Self::QueueDecision,
-            4 => Self::SchedulingTransition,
-            5 => Self::ProviderObservation,
-            6 => Self::ReceiptUpdated,
-            7 => Self::StopDecision,
-            8 => Self::ProviderReport,
-            9 => Self::LocalSettlement,
-            10 => Self::ProviderContext,
-            11 => Self::AtomicTransition,
-            _ => return None,
-        })
-    }
-
-    fn needs_execution(self) -> bool {
-        matches!(
-            self,
-            Self::InputAccepted
-                | Self::SchedulingTransition
-                | Self::ProviderObservation
-                | Self::ReceiptUpdated
-                | Self::StopDecision
-                | Self::ProviderReport
-                | Self::LocalSettlement
-        )
+        match code {
+            12 => Some(Self::SaveUnit),
+            13 => Some(Self::SaveComplete),
+            _ => None,
+        }
     }
 }
 
@@ -99,15 +58,7 @@ impl FactKey {
         execution_id: Option<ExecutionId>,
         ordinal: u64,
     ) -> Option<Self> {
-        if kind.needs_execution() != execution_id.is_some()
-            || (matches!(
-                kind,
-                FactKind::SessionOpen
-                    | FactKind::InputAccepted
-                    | FactKind::StopDecision
-                    | FactKind::ProviderReport
-            ) && ordinal != 0)
-        {
+        if execution_id.is_some() {
             return None;
         }
         Some(Self {
@@ -128,76 +79,6 @@ impl FactKey {
     pub(crate) fn ordinal(&self) -> u64 {
         self.ordinal
     }
-}
-
-/// Derive a retry-stable key from the last committed state. For revisions whose
-/// count is not retained in a snapshot, the previous physical cursor is their
-/// ordinal. A failed append cannot advance that cursor.
-pub(crate) fn key_for_changes(
-    prior: Option<&SessionSnapshot>,
-    changes: &[SessionChange],
-    previous_offset: u64,
-) -> Result<FactKey, StorageError> {
-    key_for_changes_using(prior, changes, previous_offset, |id| invocation(prior, id))
-}
-
-fn key_for_changes_using<'a>(
-    prior: Option<&'a SessionSnapshot>,
-    changes: &[SessionChange],
-    previous_offset: u64,
-    lookup: impl Fn(&ExecutionId) -> Result<&'a super::InvocationRecord, StorageError>,
-) -> Result<FactKey, StorageError> {
-    let [change] = changes else {
-        if changes.len() < 2 {
-            return Err(corrupt("empty semantic batch"));
-        }
-        return FactKey::new(FactKind::AtomicTransition, None, previous_offset)
-            .ok_or_else(|| corrupt("invalid atomic transition key"));
-    };
-    let (kind, execution_id, ordinal) = match change {
-        SessionChange::Opened { .. } => (FactKind::SessionOpen, None, 0),
-        SessionChange::InputAccepted(record) => (
-            FactKind::InputAccepted,
-            Some(record.request.execution_id.clone()),
-            0,
-        ),
-        SessionChange::QueueDecision(_) => (
-            FactKind::QueueDecision,
-            None,
-            prior
-                .ok_or_else(|| corrupt("queue decision precedes session open"))?
-                .queue_history
-                .len() as u64,
-        ),
-        SessionChange::SchedulingTransition { execution_id, .. } => (
-            FactKind::SchedulingTransition,
-            Some(execution_id.clone()),
-            lookup(execution_id)?.scheduling.len() as u64,
-        ),
-        SessionChange::ProviderObservation(event) => (
-            FactKind::ProviderObservation,
-            Some(event.execution_id().clone()),
-            lookup(event.execution_id())?.events.len() as u64,
-        ),
-        SessionChange::ReceiptUpdated { execution_id, .. } => (
-            FactKind::ReceiptUpdated,
-            Some(execution_id.clone()),
-            previous_offset,
-        ),
-        SessionChange::StopDecision { execution_id, .. } => {
-            (FactKind::StopDecision, Some(execution_id.clone()), 0)
-        }
-        SessionChange::ProviderReport { execution_id, .. } => {
-            (FactKind::ProviderReport, Some(execution_id.clone()), 0)
-        }
-        SessionChange::LocalSettlement { execution_id, .. } => (
-            FactKind::LocalSettlement,
-            Some(execution_id.clone()),
-            previous_offset,
-        ),
-        SessionChange::ProviderContext { .. } => (FactKind::ProviderContext, None, previous_offset),
-    };
-    FactKey::new(kind, execution_id, ordinal).ok_or_else(|| corrupt("invalid semantic fact key"))
 }
 
 fn corrupt(message: impl Display) -> StorageError {
@@ -327,21 +208,10 @@ impl ProviderEvidence {
     }
 }
 
-fn invocation<'a>(
-    snapshot: Option<&'a SessionSnapshot>,
-    id: &ExecutionId,
-) -> Result<&'a super::InvocationRecord, StorageError> {
-    snapshot
-        .ok_or_else(|| corrupt("fact precedes session open"))?
-        .invocations
-        .iter()
-        .find(|record| &record.request.execution_id == id)
-        .ok_or_else(|| corrupt("semantic fact has no accepted input"))
-}
-
 /// Apply an ordered, atomic SDK decision batch to an already committed state.
 /// The returned candidate is validated before a caller can publish its cursor.
 /// Replay has no provider, audit or tool effects.
+#[cfg(test)]
 pub(crate) fn fold_changes(
     prior: Option<&SessionSnapshot>,
     changes: &[SessionChange],
@@ -927,58 +797,27 @@ impl continuation::Continuation {
     }
 }
 
-/// A writer checks the candidate against the SDK's observed state before append.
-pub(crate) fn confirm_candidate(
-    session: &SessionId,
-    prior: Option<&SessionSnapshot>,
-    changes: &[SessionChange],
-    observed: &SessionSnapshot,
-) -> Result<(), StorageError> {
-    if &observed.id != session {
-        return Err(StorageError::IdentityMismatch);
-    }
-    if fold_changes(prior, changes)? != *observed {
-        return Err(corrupt("semantic decisions disagree with observed session"));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        application::agent_execution::providers::ProviderIdentity,
-        domain::agent_execution::sessions::{ExecutionSessionId, ProviderContext},
-    };
 
     #[test]
-    fn fact_identity_is_stable_across_an_uncertain_append() {
-        let opened = SessionChange::Opened {
-            id: SessionId::new("conversation").unwrap(),
-            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
-            context: ProviderContext::Absent,
-        };
-        let first = key_for_changes(None, std::slice::from_ref(&opened), 0).unwrap();
-        assert_eq!(first.kind(), FactKind::SessionOpen);
-        assert_eq!(first.ordinal(), 0);
-        assert_eq!(key_for_changes(None, &[opened], 0).unwrap(), first);
-
-        let context = SessionChange::ProviderContext {
-            before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
-        };
-        let pending = key_for_changes(None, std::slice::from_ref(&context), 1).unwrap();
-        assert_eq!(pending.ordinal(), 1);
-        assert_eq!(
-            key_for_changes(None, std::slice::from_ref(&context), 1).unwrap(),
-            pending
-        );
+    fn current_unit_key_retains_ordinal_and_refuses_foreign_execution_scope() {
+        let first = FactKey::new(FactKind::SaveUnit, None, 0).unwrap();
+        assert_eq!(first, FactKey::new(FactKind::SaveUnit, None, 0).unwrap());
+        assert_ne!(first, FactKey::new(FactKind::SaveUnit, None, 1).unwrap());
         assert_ne!(
-            key_for_changes(None, std::slice::from_ref(&context), 2).unwrap(),
-            pending
+            first,
+            FactKey::new(FactKind::SaveComplete, None, 0).unwrap()
         );
-        let grouped = key_for_changes(None, &[context.clone(), context], 1).unwrap();
-        assert_eq!(grouped.kind(), FactKind::AtomicTransition);
-        assert_eq!(grouped.ordinal(), 1);
+        assert!(FactKey::new(
+            FactKind::SaveUnit,
+            Some(ExecutionId::new("execution").unwrap()),
+            0
+        )
+        .is_none());
+        for old_code in 1..=11 {
+            assert!(FactKind::from_code(old_code).is_none());
+        }
     }
 }
