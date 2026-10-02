@@ -500,6 +500,7 @@ pub struct ConversationPermission {
     pub title: String,
     pub options: Vec<ConversationPermissionOption>,
     pub tool_name: String,
+    pub origin: ConversationPermissionOrigin,
     pub arguments_json: String,
 }
 #[derive(Deserialize, Serialize)]
@@ -736,6 +737,98 @@ pub struct ConversationPart {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ConversationPermissionOriginKind {
+    Harness,
+    App,
+}
+impl ConversationPermissionOriginKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Harness => "harness",
+            Self::App => "app",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPermissionOrigin {
+    pub kind: ConversationPermissionOriginKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpAppReference {
+    pub execution_id: String,
+    pub tool_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpCallToolParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub app: McpAppReference,
+    pub server: String,
+    pub tool: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments_json: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpCallToolResult {
+    pub result_json: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpReadResourceParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub app: McpAppReference,
+    pub server: String,
+    pub uri: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpUiCsp {
+    pub connect_domains: Vec<String>,
+    pub resource_domains: Vec<String>,
+    pub frame_domains: Vec<String>,
+    pub base_uri_domains: Vec<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpUiPermissions {
+    pub camera: bool,
+    pub microphone: bool,
+    pub geolocation: bool,
+    pub clipboard_write: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpReadResourceResult {
+    pub uri: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub sha256: String,
+    pub ticket: String,
+    pub expires_in_ms: u64,
+    pub csp: McpUiCsp,
+    pub permissions: McpUiPermissions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefers_border: Option<bool>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpRemoteErrorDetails {
+    pub code: u64,
+    pub message: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ConversationErrorCode {
     AgentNotConfigured,
     AgentUnsupported,
@@ -769,6 +862,17 @@ pub enum ConversationErrorCode {
     AttachmentCleanupUnavailable,
     ConversationDeleted,
     ConversationErasureIncomplete,
+    McpAppUnknown,
+    McpServerMismatch,
+    McpToolNotForApp,
+    McpSessionUnavailable,
+    McpApprovalDenied,
+    McpApprovalExpired,
+    McpCancelled,
+    McpRequestTooLarge,
+    McpResultTooLarge,
+    McpTimedOut,
+    McpRemoteError,
 }
 impl ConversationErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -805,6 +909,17 @@ impl ConversationErrorCode {
             Self::AttachmentCleanupUnavailable => "attachment_cleanup_unavailable",
             Self::ConversationDeleted => "conversation_deleted",
             Self::ConversationErasureIncomplete => "conversation_erasure_incomplete",
+            Self::McpAppUnknown => "mcp_app_unknown",
+            Self::McpServerMismatch => "mcp_server_mismatch",
+            Self::McpToolNotForApp => "mcp_tool_not_for_app",
+            Self::McpSessionUnavailable => "mcp_session_unavailable",
+            Self::McpApprovalDenied => "mcp_approval_denied",
+            Self::McpApprovalExpired => "mcp_approval_expired",
+            Self::McpCancelled => "mcp_cancelled",
+            Self::McpRequestTooLarge => "mcp_request_too_large",
+            Self::McpResultTooLarge => "mcp_result_too_large",
+            Self::McpTimedOut => "mcp_timed_out",
+            Self::McpRemoteError => "mcp_remote_error",
         }
     }
 }

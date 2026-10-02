@@ -368,8 +368,20 @@ export function conversationView(value: unknown, expected: string): Conversation
       "options",
       "toolName",
       "argumentsJson",
+      "origin",
     ])
     for (const key of ["executionId", "permissionId", "toolId"]) identity(permission, key)
+    // Who asked: the agent, or an MCP App naming the tool it asked to call.
+    const origin = record(permission.origin)
+    exact(origin, ["kind", "server", "tool"])
+    const kind = text(origin, "kind", 16)
+    oneOf(kind, ["harness", "app"])
+    if (kind === "app") {
+      text(origin, "server", bounds.maxMcpNameBytes, false)
+      text(origin, "tool", bounds.maxMcpNameBytes, false)
+    } else if (origin.server !== undefined || origin.tool !== undefined) {
+      throw new Error("A review the agent asked for names no app tool")
+    }
     const permissionKey = JSON.stringify([
       permission.executionId,
       permission.permissionId,

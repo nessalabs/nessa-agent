@@ -258,6 +258,19 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   approval_mode_uncertain: "unavailable",
   approval_request_conflict: "unavailable",
   turn_running: "unavailable",
+  // An MCP App's calls answer these, never a read; written out so the table
+  // stays total.
+  mcp_app_unknown: "unavailable",
+  mcp_server_mismatch: "unavailable",
+  mcp_tool_not_for_app: "unavailable",
+  mcp_session_unavailable: "unavailable",
+  mcp_approval_denied: "unavailable",
+  mcp_approval_expired: "unavailable",
+  mcp_cancelled: "unavailable",
+  mcp_request_too_large: "unavailable",
+  mcp_result_too_large: "unavailable",
+  mcp_timed_out: "unavailable",
+  mcp_remote_error: "unavailable",
 }
 
 /**

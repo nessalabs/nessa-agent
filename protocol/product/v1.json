@@ -1093,6 +1093,10 @@
           "x-utf8MaxBytes": 256,
           "description": "Exact reviewed tool name."
         },
+        "origin": {
+          "$ref": "#/$defs/ConversationPermissionOrigin",
+          "description": "Who asked for this review: the agent or an MCP App."
+        },
         "argumentsJson": {
           "type": "string",
           "maxLength": 32768,
@@ -1107,7 +1111,8 @@
         "title",
         "options",
         "toolName",
-        "argumentsJson"
+        "argumentsJson",
+        "origin"
       ]
     },
     "ConversationTool": {
@@ -1956,6 +1961,329 @@
       "required": ["offset", "kind", "text", "toolId", "noticeId"],
       "description": "One ordered observation fragment in a bounded execution projection; offsets may have gaps."
     },
+    "ConversationPermissionOriginKind": {
+      "type": "string",
+      "enum": ["harness", "app"],
+      "description": "Who asked for a review: the conversation's agent (harness), or an MCP App calling a tool of its own server (app). The agent's approval mode never applies to an app's review."
+    },
+    "ConversationPermissionOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Who asked for this review. For harness, the review's executionId and toolId are the agent's tool call being reviewed. For app, they are the app's identity — the tool call whose UI it is — and server and tool name the tool the app asked to call (required for app, absent for harness). Answer either kind with conversation.answer or conversation.cancel.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ConversationPermissionOriginKind",
+          "description": "Who asked."
+        },
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "For app: the app's server, on which the tool would be called."
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "For app: the tool the app asked to call."
+        }
+      },
+      "required": ["kind"]
+    },
+    "McpAppReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An MCP App, by the tool call whose UI it is, in its conversation. The gateway checks it is an MCP call of the server the request names, and that its result carried a resourceUri. It is not authenticated beyond the caller's credential: the call is recorded as the app's, on the person's behalf.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The execution the app's tool call belongs to."
+        },
+        "toolId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The app's tool call."
+        }
+      },
+      "required": ["executionId", "toolId"]
+    },
+    "McpCallToolParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An MCP App calls a tool of its own server (mcp.callTool). Allowed only for a tool its conversation's own session last listed with visibility including app. A tool that is destructive — readOnlyHint is not true and destructiveHint is not false, so a tool with no annotations is — first waits for the person's approval in the conversation's permissions, whatever the approval mode; the call is answered when they answer, when the review expires (5 minutes), or when it is withdrawn. App calls travel on a lane of their own, 4 at once per socket; past that they are refused temporarily_unavailable.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "app": {
+          "$ref": "#/$defs/McpAppReference",
+          "description": "The app asking."
+        },
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The MCP server's configured name: the app's own server. A call naming any other is refused mcp_server_mismatch."
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The tool to call on that server."
+        },
+        "argumentsJson": {
+          "type": "string",
+          "maxLength": 49152,
+          "x-utf8MaxBytes": 49152,
+          "description": "The tool's arguments: one JSON object, encoded, at most 48 KiB (mcp_request_too_large past it, invalid_request if it is not an object). Absent is none."
+        }
+      },
+      "required": ["conversationId", "requestId", "app", "server", "tool"]
+    },
+    "McpCallToolResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The tool's answer.",
+      "properties": {
+        "resultJson": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 57344,
+          "x-utf8MaxBytes": 57344,
+          "description": "The MCP CallToolResult exactly as the server answered it — content, structuredContent, isError, _meta — encoded as one JSON object, at most 56 KiB (past it, the call is refused mcp_result_too_large instead). isError true is a result for the app, not a refusal."
+        }
+      },
+      "required": ["resultJson"]
+    },
+    "McpReadResourceParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An MCP App reads a resource of its own server (mcp.readResource). The gateway reads it once, holds those bytes, and answers what they are and a ticket that serves exactly them over HTTP (GET /mcp-resources/{ticket}): the bytes never travel on the socket. App calls share their own lane, as mcp.callTool's.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "app": {
+          "$ref": "#/$defs/McpAppReference",
+          "description": "The app asking."
+        },
+        "server": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The MCP server's configured name: the app's own server. A call naming any other is refused mcp_server_mismatch."
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "The resource's URI on that server."
+        }
+      },
+      "required": ["conversationId", "requestId", "app", "server", "uri"]
+    },
+    "McpUiCsp": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The CSP the app asked for (_meta.ui.csp): origins only, each list at most 64 of at most 512 bytes. No network when empty.",
+      "properties": {
+        "connectDomains": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "x-utf8MaxBytes": 512
+          },
+          "maxItems": 64,
+          "description": "connect-src origins."
+        },
+        "resourceDomains": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "x-utf8MaxBytes": 512
+          },
+          "maxItems": 64,
+          "description": "Origins for scripts, styles, images, fonts and media."
+        },
+        "frameDomains": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "x-utf8MaxBytes": 512
+          },
+          "maxItems": 64,
+          "description": "frame-src origins."
+        },
+        "baseUriDomains": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "x-utf8MaxBytes": 512
+          },
+          "maxItems": 64,
+          "description": "base-uri origins."
+        }
+      },
+      "required": ["connectDomains", "resourceDomains", "frameDomains", "baseUriDomains"]
+    },
+    "McpUiPermissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What the app asked of the host (_meta.ui.permissions). Each is true only when asked for as {} or true; nothing else is ever granted.",
+      "properties": {
+        "camera": {
+          "type": "boolean",
+          "description": "Asked for camera."
+        },
+        "microphone": {
+          "type": "boolean",
+          "description": "Asked for microphone."
+        },
+        "geolocation": {
+          "type": "boolean",
+          "description": "Asked for geolocation."
+        },
+        "clipboardWrite": {
+          "type": "boolean",
+          "description": "Asked for clipboardWrite."
+        }
+      },
+      "required": ["camera", "microphone", "geolocation", "clipboardWrite"]
+    },
+    "McpReadResourceResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What the gateway read, and the ticket for its bytes. The host fetches GET /mcp-resources/{ticket} with the same credential, checks the bytes' SHA-256 against sha256 before rendering, and treats a mismatch as a failure to load.",
+      "properties": {
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "The resource read."
+        },
+        "mimeType": {
+          "type": "string",
+          "const": "text/html;profile=mcp-app",
+          "description": "An MCP App's HTML; any other resource is refused mcp_app_unknown."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4194304,
+          "description": "The bytes' length: at most 4 MiB."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "minLength": 64,
+          "maxLength": 64,
+          "description": "Lowercase hex SHA-256 of exactly the bytes the ticket serves."
+        },
+        "ticket": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "minLength": 43,
+          "maxLength": 43,
+          "description": "Single use, 256 random bits (base64url), valid for expiresInMs, bound to the conversation and the app, redeemed only with the caller's credential."
+        },
+        "expiresInMs": {
+          "type": "integer",
+          "const": 60000,
+          "description": "How long the ticket can be redeemed."
+        },
+        "csp": {
+          "$ref": "#/$defs/McpUiCsp",
+          "description": "The CSP the app asked for."
+        },
+        "permissions": {
+          "$ref": "#/$defs/McpUiPermissions",
+          "description": "What the app asked of the host."
+        },
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "x-utf8MaxBytes": 512,
+          "description": "The dedicated origin the app asked for, when it did."
+        },
+        "prefersBorder": {
+          "type": "boolean",
+          "description": "Whether the app asked for a border, when it said."
+        }
+      },
+      "required": [
+        "uri",
+        "mimeType",
+        "size",
+        "sha256",
+        "ticket",
+        "expiresInMs",
+        "csp",
+        "permissions"
+      ]
+    },
+    "McpRemoteErrorDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The server's own JSON-RPC error, attached to a refusal coded mcp_remote_error.",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991,
+          "description": "The JSON-RPC error code."
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 512,
+          "x-utf8MaxBytes": 2048,
+          "description": "The server's message, at most 512 characters, control characters as spaces."
+        }
+      },
+      "required": ["code", "message"]
+    },
     "ConversationErrorCode": {
       "type": "string",
       "enum": [
@@ -1990,9 +2318,20 @@
         "attachment_storage_unavailable",
         "attachment_cleanup_unavailable",
         "conversation_deleted",
-        "conversation_erasure_incomplete"
+        "conversation_erasure_incomplete",
+        "mcp_app_unknown",
+        "mcp_server_mismatch",
+        "mcp_tool_not_for_app",
+        "mcp_session_unavailable",
+        "mcp_approval_denied",
+        "mcp_approval_expired",
+        "mcp_cancelled",
+        "mcp_request_too_large",
+        "mcp_result_too_large",
+        "mcp_timed_out",
+        "mcp_remote_error"
       ],
-      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator."
+      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's call (mcp.callTool, mcp.readResource): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within 5 minutes; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended; mcp_request_too_large and mcp_result_too_large, past the 48 KiB and 56 KiB bounds; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails)."
     },
     "ConversationAnswerOption": {
       "type": "object",

@@ -61,6 +61,56 @@ still starting when its budget expired, so nothing reached the provider and the
 same command is safe to repeat. `agent_not_configured` and `invalid_request`
 reject the command until their cause is addressed.
 
+## An MCP App's calls
+
+An MCP App (ADR 344) reaches its own server through two methods. Each names
+its conversation, the app — the tool call whose UI it is (`McpAppReference`:
+`executionId`, `toolId`) — and the server. Their shapes are
+`McpCallToolParams` / `McpCallToolResult` and `McpReadResourceParams` /
+`McpReadResourceResult` in [product/v1.json](product/v1.json). The methods
+join the manifest when their routes do (#348).
+
+- **`mcp.callTool`** calls a tool the conversation's own session last listed
+  with `visibility` including `app`. `argumentsJson` is at most 48 KiB, and
+  `resultJson`, the server's `CallToolResult` verbatim, at most 56 KiB.
+  `isError: true` is a result, not a refusal.
+- **Destructive tools** wait for approval first. A tool is destructive when
+  `readOnlyHint` is not true and `destructiveHint` is not false, so a tool with
+  no annotations waits. The approval is a review in the conversation's
+  `permissions`, with `origin: {kind: "app", server, tool}`, whatever the
+  approval mode. It is answered with `conversation.answer` or
+  `conversation.cancel`.
+- **A waiting call stays pending** until the person answers, or the review
+  expires after 5 minutes (`mcp_approval_expired`), or it is withdrawn
+  (`mcp_cancelled`). It is withdrawn when the request is cancelled, the app is
+  torn down, or the conversation ends.
+- **`mcp.readResource`** reads a resource of the app's server once and holds
+  exactly those bytes. Its answer says what they are (`mimeType`, `size`,
+  `sha256`, the app's `csp`, `permissions`, `domain`, `prefersBorder`) and
+  gives a `ticket`. The bytes never travel on the socket.
+- **App calls have a lane of their own**, 4 at once per socket. Past that
+  they are refused `temporarily_unavailable`, so held calls never stop
+  `conversation.read` or `conversation.answer`.
+- **What a refusal tells the host.** Nothing reached the server for
+  `mcp_app_unknown`, `mcp_server_mismatch`, `mcp_tool_not_for_app`,
+  `mcp_request_too_large`, `mcp_approval_denied`, `mcp_approval_expired` or
+  `mcp_cancelled`. The server may have been asked for
+  `mcp_session_unavailable`, `mcp_timed_out`, `mcp_remote_error` (its JSON-RPC
+  error in `McpRemoteErrorDetails`) or `mcp_result_too_large`.
+
+`GET /mcp-resources/{ticket}`, on the gateway's HTTP listener, serves a held
+resource:
+- **Redeeming.** It takes the same credential as the socket that asked. A
+  ticket is single use, valid for 60 s, and bound to its conversation and app.
+- **Refusals.** An unknown, used, expired or wrong-credential ticket gets the
+  same `404` with no body.
+- **The response.** `Content-Type: text/html;profile=mcp-app`,
+  `X-Content-Type-Options: nosniff`, `Cache-Control: no-store` and
+  `Content-Disposition: attachment`.
+- **The host's job.** It fetches the bytes, checks their SHA-256 against
+  `sha256` before rendering, and hands them to its sandbox; the frame never
+  sees the ticket's URL.
+
 Credential lifecycle RPC errors distinguish `credential_conflict`,
 `credential_capacity`, and `credential_not_found` from
 `credential_store_unavailable`. The first three reject the command; they do not

@@ -132,11 +132,12 @@ pub use view::{
     ConversationLifecyclePhase, ConversationLinkedFile, ConversationList, ConversationListEntry,
     ConversationMcpTool, ConversationMessage, ConversationMessageStatus, ConversationPending,
     ConversationPendingMode, ConversationPermission, ConversationPermissionOption,
-    ConversationReorderOutcome, ConversationStartupFailure, ConversationStartupFailureCode,
-    ConversationTool, ConversationView, ElicitationForwardingSupport, IncomingElicitationSupport,
-    ModelSwitchReportingSupport, NativeHookSuppressionSupport, PermissionDeferralSupport,
-    PermissionDenialSupport, PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport,
-    SubmissionReceipt, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationPermissionOrigin, ConversationReorderOutcome, ConversationStartupFailure,
+    ConversationStartupFailureCode, ConversationTool, ConversationView,
+    ElicitationForwardingSupport, IncomingElicitationSupport, ModelSwitchReportingSupport,
+    NativeHookSuppressionSupport, PermissionDeferralSupport, PermissionDenialSupport,
+    PolicyCloseSessionSupport, PolicyEndTurnSupport, PreToolPolicySupport, SubmissionReceipt,
+    MAX_STRUCTURED_CONTENT_BYTES,
 };
 
 #[cfg(test)]

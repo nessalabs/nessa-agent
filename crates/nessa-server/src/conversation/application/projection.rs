@@ -3,8 +3,8 @@ use super::view::{
     ConversationCapabilities, ConversationLifecycle, ConversationLifecyclePhase,
     ConversationMcpTool, ConversationMessage, ConversationMessageStatus, ConversationPart,
     ConversationPending, ConversationPendingMode, ConversationPermission,
-    ConversationPermissionOption, ConversationQuestion, ConversationTool,
-    ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationPermissionOption, ConversationPermissionOrigin, ConversationQuestion,
+    ConversationTool, ConversationTranscriptState, ConversationView, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use super::{McpToolUis, NoMcpToolUis};
 use crate::conversation::domain::ConversationId;
@@ -580,6 +580,7 @@ impl Projection {
             ),
             tool_name: input.name.clone(),
             arguments_json: input.arguments_json.clone(),
+            origin: ConversationPermissionOrigin::Harness,
             options: options
                 .choices()
                 .iter()
