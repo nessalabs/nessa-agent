@@ -4,7 +4,7 @@ use crate::attachments::application::{
     ArtifactRange, ArtifactReadError, ArtifactState, AttachmentArtifacts,
 };
 use nessa_sync::replication::artifacts::MAX_CHUNK_BYTES;
-use std::{sync::mpsc, time::Duration};
+use std::{future::poll_fn, sync::mpsc, task::Poll, time::Duration};
 
 fn range(hold: &Hold, claim: &HoldClaim, offset: u64, limit: usize) -> ArtifactRange {
     ArtifactRange::new(
@@ -256,7 +256,6 @@ async fn cancelled_open_read_keeps_shared_capacity_and_actual_drain_while_releas
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(store.source.workers.state.lock().unwrap().joins.len(), 0);
     store.shutdown().await.unwrap();
     let reopened = open(root.path());
     assert_eq!(
@@ -373,30 +372,23 @@ async fn a_physically_blocked_manifest_owns_the_same_nonwaiting_source_slot() {
         std::thread::spawn(move || {
             let _changes = files.lock().unwrap();
             let _ = started.send(());
-            resume.recv().unwrap();
+            // A failed assertion also releases the physical lock when its sender drops.
+            let _ = resume.recv();
         })
     };
     tokio::time::timeout(Duration::from_secs(5), entered)
         .await
         .unwrap()
         .unwrap();
-    let waiter = {
-        let (store, hold, id) = (store.clone(), hold.clone(), request.id().clone());
-        tokio::spawn(async move {
-            store
-                .manifest(hold.organization_id(), hold.conversation_id(), &id)
-                .await
-        })
-    };
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while store.source.workers.state.lock().unwrap().joins.is_empty() {
-            tokio::task::yield_now().await;
-        }
+    let mut waiter = store.manifest(hold.organization_id(), hold.conversation_id(), request.id());
+    // The first poll admits the real physical read before awaiting its answer.
+    // Dropping that pending caller must leave the source slot charged to the worker.
+    poll_fn(|cx| {
+        assert!(waiter.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
     })
-    .await
-    .unwrap();
-    waiter.abort();
-    assert!(waiter.await.unwrap_err().is_cancelled());
+    .await;
+    drop(waiter);
     assert_eq!(
         store
             .manifest(hold.organization_id(), hold.conversation_id(), request.id())

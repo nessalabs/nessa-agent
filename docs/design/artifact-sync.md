@@ -2,9 +2,10 @@
 
 Owner: [#273](https://github.com/nessalabs/nessa-agent/issues/273).
 Status: local persistence, manifest facts and tracked bounded range reads are
-implemented; assembled author preflight and independent review remain pending.
-Protected transport is not active. The shared worker producer is `51bfcc01`,
-assembled locally as `bd7abd02`, on merged `c2f3b0ec`. The linked-device
+implemented. The original published consumer passed local and platform checks;
+verification of the refreshed private-worker dependency remains pending.
+Protected transport is not active. The shared worker producer is `f36ac5d0`,
+on merged `c2f3b0ec`. The linked-device
 integration plan owns cross-feature activation; this document owns the artifact
 source state and persistence proposal. [Architecture](../ARCHITECTURE.md),
 [dependency injection](dependency-injection.md) and the
@@ -212,7 +213,7 @@ manifest must match revision/content before opening. Missing bytes are unavailab
 not a fabricated tombstone. Whole64MiB reads followed by truncation are excluded.
 
 Physical range work must use the existing tracked read-worker implementation,
-now owned by `core::read_workers`, consumed from reviewed producer `51bfcc01`. `LocalAttachmentStore` owns one source admission semaphore shared by manifest and chunk. `ReadWorkers` alone owns closure tracking, sticky worker fault and retained drain; no source closed/failure ledger is added. A nonwaiting slot permit travels with the closure and its result wrapper until actual work and result handoff/drop complete. The owning
+now owned by `core::read_workers`, consumed from reviewed producer `f36ac5d0`. `LocalAttachmentStore` owns one source admission semaphore shared by manifest and chunk. `ReadWorkers` alone owns closure tracking, sticky worker fault and retained drain; no source closed/failure ledger is added. A nonwaiting slot permit travels with the closure and its result wrapper until actual work and result handoff/drop complete. The owning
 worker retains the OS handle and source result through actual join, including
 caller loss and result-drop panic. Composition's admission fence/drain-before-store
 cleanup remains queued integration. The source adapter cannot claim complete
@@ -254,7 +255,7 @@ facts and audit mapping. Local physical chunk and source drain evidence is being
 | A21 | Correct generation supplied with another hold description | Store refuses retirement; audit cannot describe a different caller/content than stored owner | Exact generation/wrong-hold local port regression |
 | A22 | Archive rename failed its sync, then reupload retries in same process with primary absent | Confirm conversation-directory durability before any fresh Pending publication; failure creates no Pending | Actual rename-failure plus pending-directory-sync retry fixture |
 | A23 | Duplicate keys, explicit null retirement fields, or state/evidence disagreement in saved input | One typed codec rejects ambiguous/contradictory records; no collapsed-field acceptance or alternate decoder | Top-level/nested duplicate and presence-state fixtures |
-| A24 | One physical manifest or chunk worker remains held after caller cancellation | Both source methods return Busy without queue; shutdown fences through the sole worker owner and retains actual joins | Held source/cancelled observer/combined admission tests |
+| A24 | One physical manifest or chunk worker remains held after caller cancellation | Both source methods return Busy without queue; shutdown fences through the sole worker owner and retains actual joins | Held source/cancelled observer/combined admission tests; poll the actual manifest caller once before dropping it, then observe Busy and pending shutdown through the public ports |
 | A25 | Record read completes, then its directory locator disappears before publication acknowledgement | Actual directory-sync refusal prevents manifest/range facts publication; no Live inferred from a previously read record | Real directory relocation at the source publication boundary |
 
 ## Later activation and limits
