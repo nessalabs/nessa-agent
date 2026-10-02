@@ -235,10 +235,9 @@ async function recordShapes(page) {
       const r = e.getBoundingClientRect()
       return { x: r.left, y: r.top, w: r.width, h: r.height }
     }
-    // Every transform from the title up, as drawn this frame: the scale it
-    // is drawn at, across and down.
-    const drawnAt = (title) => {
-      const began = performance.now()
+    // Every transform from the title up: the scale it is drawn at, across
+    // and down.
+    const chain = (title) => {
       let sx = 1
       let sy = 1
       for (let e = title; e; e = e.parentElement) {
@@ -248,10 +247,37 @@ async function recordShapes(page) {
         sx *= Math.hypot(m.a, m.b)
         sy *= Math.hypot(m.c, m.d)
       }
-      // How long the reads took: an engine that draws a running animation at
-      // the moment it is read, not the frame's, can read a box and its
-      // content at two moments.
-      return { sx, sy, readMs: performance.now() - began }
+      return { sx, sy }
+    }
+    // As drawn this frame. WebKit can update running animations in the
+    // middle of a read of computed styles: the read that straddles the
+    // update takes the copy and its content at two moments and sees a title
+    // stretched that is not drawn so (#365: reads of one frame gave
+    // 1.0006×1.0009 over 0ms, then 1.012×0.987 over 1.0ms, then 1.0003×1.0004
+    // over 0ms). So the chain is read until two reads in a row agree, and the
+    // agreed read is the one judged; a title truly drawn stretched — two
+    // animations on two clocks — reads the same every time. A chain that
+    // never settles in `steadyReads` reads is judged on its last read, and
+    // marked `unsteady`, so it is never passed for being unreadable.
+    const steadyReads = 6
+    const agree = (a, b) =>
+      Math.abs(a.sx - b.sx) <= 0.002 && Math.abs(a.sy - b.sy) <= 0.002
+    const drawnAt = (title) => {
+      const reads = []
+      let began = performance.now()
+      let read = chain(title)
+      let readMs = performance.now() - began
+      reads.push([read.sx, read.sy, readMs])
+      while (reads.length < steadyReads) {
+        began = performance.now()
+        const next = chain(title)
+        readMs = performance.now() - began
+        reads.push([next.sx, next.sy, readMs])
+        const steady = agree(next, read)
+        read = next
+        if (steady) return { sx: read.sx, sy: read.sy, readMs, reads: reads.length }
+      }
+      return { sx: read.sx, sy: read.sy, readMs, reads: reads.length, unsteady: reads }
     }
     if (!window.__verifyPointerWatched) {
       window.__verifyPointerWatched = true
@@ -358,9 +384,9 @@ function stretched(frames, label) {
   const bad = []
   for (const f of frames)
     for (const title of f.titles)
-      if (Math.abs(title.sx - title.sy) > 0.02)
+      if (Math.abs(title.sx - title.sy) > 0.02 || title.unsteady)
         bad.push(
-          `${title.of} ${title.sx.toFixed(3)}×${title.sy.toFixed(3)} at ${Math.round(f.t)}ms (read over ${title.readMs.toFixed(1)}ms), zone "${f.zone}"`,
+          `${title.of} ${title.sx.toFixed(3)}×${title.sy.toFixed(3)} at ${Math.round(f.t)}ms (read over ${title.readMs.toFixed(1)}ms${title.unsteady ? `, never read steadily: ${JSON.stringify(title.unsteady)}` : ""}), zone "${f.zone}"`,
         )
   return bad.length
     ? [`${label}: titles drawn stretched in ${bad.length} title-frames, e.g. ${bad[0]}`]
