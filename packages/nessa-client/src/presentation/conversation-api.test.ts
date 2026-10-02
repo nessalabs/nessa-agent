@@ -266,6 +266,7 @@ it("rejects terminal executions that remain pending or actionable", async () => 
     title: "Review",
     toolName: "shell",
     argumentsJson: "{}",
+    origin: { kind: "harness" },
     options: [{ id: "deny", label: "Deny" }],
   }
   const request = vi.fn()
@@ -354,6 +355,7 @@ it("accepts bounded full replacement views and rejects mismatched identities or 
           title: "run",
           toolName: "shell",
           argumentsJson: "{}",
+          origin: { kind: "harness" },
           options: [
             { id: "same", label: "Allow" },
             { id: "same", label: "Deny" },
@@ -382,6 +384,7 @@ it("rejects duplicate identities and impossible steering order at the response b
     title: "Run",
     toolName: "shell",
     argumentsJson: "{}",
+    origin: { kind: "harness" },
     options: [{ id: "allow", label: "Allow" }],
   }
   const tool = {
@@ -522,6 +525,7 @@ it("accepts bounded omissions and the intentional pending-message overlap", asyn
         title: "Review",
         toolName: "shell",
         argumentsJson: "{}",
+        origin: { kind: "harness" },
         options: [{ id: "deny", label: "Deny" }],
       },
     ],

@@ -373,3 +373,25 @@ fn a_deleted_conversation_and_an_unfinished_deletion_have_their_own_codes() {
         );
     }
 }
+
+#[test]
+fn each_app_refusal_is_on_the_wire_by_the_code_audit_names_it_with() {
+    use crate::conversation::application::McpAppError;
+    for error in [
+        McpAppError::AppUnknown,
+        McpAppError::ServerMismatch,
+        McpAppError::ToolNotForApp,
+        McpAppError::RequestTooLarge,
+        McpAppError::SessionUnavailable,
+        McpAppError::ApprovalDenied,
+        McpAppError::ApprovalExpired,
+        McpAppError::Cancelled,
+        McpAppError::ResultTooLarge,
+        McpAppError::TimedOut,
+        McpAppError::Remote(None),
+        McpAppError::Remote(Some((-32602, "bad".into()))),
+    ] {
+        let code = error.code();
+        assert_eq!(error_code(&ConversationError::McpApp(error)).as_str(), code);
+    }
+}

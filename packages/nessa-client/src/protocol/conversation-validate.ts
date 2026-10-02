@@ -368,8 +368,20 @@ export function conversationView(value: unknown, expected: string): Conversation
       "options",
       "toolName",
       "argumentsJson",
+      "origin",
     ])
     for (const key of ["executionId", "permissionId", "toolId"]) identity(permission, key)
+    // Who asked: the agent, or an MCP App naming the tool it asked to call.
+    const origin = record(permission.origin)
+    exact(origin, ["kind", "server", "tool"])
+    const kind = text(origin, "kind", 16)
+    oneOf(kind, ["harness", "app"])
+    if (kind === "app") {
+      text(origin, "server", bounds.maxMcpNameBytes, false)
+      text(origin, "tool", bounds.maxMcpNameBytes, false)
+    } else if (origin.server !== undefined || origin.tool !== undefined) {
+      throw new Error("A review the agent asked for names no app tool")
+    }
     const permissionKey = JSON.stringify([
       permission.executionId,
       permission.permissionId,
@@ -377,7 +389,9 @@ export function conversationView(value: unknown, expected: string): Conversation
     if (permissionIds.has(permissionKey))
       throw new Error("Conversation response repeats a permission")
     const status = messageStatuses.get(permission.executionId as string)
-    if (status !== undefined && status !== "running")
+    // The agent asks while its execution runs. An app asks whenever it is
+    // shown, naming its own tool call, which has normally finished.
+    if (kind === "harness" && status !== undefined && status !== "running")
       throw new Error("Permission execution is not running")
     if (status === undefined && !item.truncated)
       throw new Error("Permission execution is missing its message")

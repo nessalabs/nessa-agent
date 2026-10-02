@@ -93,7 +93,7 @@ const rejectionCode = (cause: unknown): ConversationErrorCode | undefined =>
  * and attachment codes are all raised before `enqueue` returns a receipt, and
  * startup ends before anything reaches the provider.
  */
-function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
+export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
   switch (code) {
     case ConversationErrorCode.AgentNotConfigured:
     case ConversationErrorCode.AgentUnsupported:
@@ -141,6 +141,26 @@ function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.ConversationErasureIncomplete:
     case ConversationErrorCode.ApprovalModeNotApplied:
     case ConversationErrorCode.ApprovalModeUncertain:
+      return false
+    // An MCP App's call (mcp.callTool, mcp.readResource) refused before
+    // anything reached its server: the app, its server or its tool is not
+    // one it may call, its request is too large, or the review it needed was
+    // denied, expired, or withdrawn while it waited.
+    case ConversationErrorCode.McpAppUnknown:
+    case ConversationErrorCode.McpServerMismatch:
+    case ConversationErrorCode.McpToolNotForApp:
+    case ConversationErrorCode.McpRequestTooLarge:
+    case ConversationErrorCode.McpApprovalDenied:
+    case ConversationErrorCode.McpApprovalExpired:
+    case ConversationErrorCode.McpCancelled:
+      return true
+    // Possibly after the server was asked: its session ended, it did not
+    // answer in time, it answered with an error, or its answer was too large
+    // to hand back — so a tool with effects may have had them.
+    case ConversationErrorCode.McpSessionUnavailable:
+    case ConversationErrorCode.McpTimedOut:
+    case ConversationErrorCode.McpRemoteError:
+    case ConversationErrorCode.McpResultTooLarge:
       return false
   }
 }
