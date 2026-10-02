@@ -3842,7 +3842,7 @@ fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
 }
 
 mod app_calls;
-pub use app_calls::{McpAppCall, McpAppRead, McpAppResource};
+pub use app_calls::{McpAppCall, McpAppRead, McpAppResource, MAX_APP_CALLS};
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/close_release.rs"]

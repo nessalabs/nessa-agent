@@ -131,7 +131,7 @@ pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
     ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
     ConversationService, DeletionsLeft, McpAppCall, McpAppRead, McpAppResource,
-    QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode,
+    QuestionChoiceInput, RequestedAgent, RequestedConversation, SubmissionMode, MAX_APP_CALLS,
     MAX_LISTED_CONVERSATIONS,
 };
 pub use view::{
