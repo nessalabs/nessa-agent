@@ -29,7 +29,23 @@ import { readEnvelope, type Outgoing } from "../../model/json-rpc"
 import { readFromFrame } from "../../model/messages"
 import { uiResource } from "../../model/resource"
 import { fixtureCall } from "../../fixture/fixture-plugin"
-import { gatewayAppServer } from "./mcp-app-server"
+import { gatewayAppServer as serverOver, releaseRetryMs } from "./mcp-app-server"
+
+/** The waits a server's releases asked for; each runs at once. */
+let waited: number[] = []
+const immediately = (ms: number, run: () => void) => {
+  waited.push(ms)
+  run()
+  return () => {}
+}
+/**
+ * The adapter, on a clock that runs every wait at once and records it, minting
+ * request ids `release-1`, `release-2`, ... in order, one count per server.
+ */
+const gatewayAppServer = (apps: McpAppsApi) => {
+  let minted = 0
+  return serverOver(apps, immediately, () => `release-${++minted}`)
+}
 
 const conversationId = "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d"
 const app: McpAppReference = {
@@ -537,14 +553,16 @@ describe("the release", () => {
   it("M2: releases exactly this mount of this conversation's app", async () => {
     const apps = fakeApps()
     await gatewayAppServer(apps).release(address)
-    expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, app)
+    expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, app, {
+      requestId: "release-1",
+    })
   })
 
   it.each([
     ConversationErrorCode.ConversationNotFound,
     ConversationErrorCode.ConversationDeleted,
   ])(
-    "M5: a release refused %s — the conversation is gone — has nothing left to let go, and is no fault",
+    "M5b: a release refused %s — the conversation is gone — has nothing left to let go, and is no fault",
     async (code) => {
       const apps = fakeApps({
         releaseApp: vi.fn(() =>
@@ -580,11 +598,176 @@ describe("the release", () => {
     )
   })
 
-  it("M5: a release the gateway did not take rejects, for the bridge to log", async () => {
+  it("M5: a release that never lands is tried again after each wait, then rejects for the bridge to log", async () => {
+    waited = []
     const apps = fakeApps({
       releaseApp: vi.fn(() => Promise.reject(new Error("closed"))),
     })
     await expect(gatewayAppServer(apps).release(address)).rejects.toThrow("closed")
+    expect(apps.releaseApp).toHaveBeenCalledTimes(releaseRetryMs.length + 1)
+    expect(waited).toEqual([...releaseRetryMs])
+  })
+
+  it("M5: a release whose answer was lost is asked again, and lands", async () => {
+    waited = []
+    const lost = new NessaConversationControlError(
+      conversationId,
+      "r",
+      app.executionId,
+      new Error("socket closed"),
+    )
+    expect(lost.uncertain).toBe(true)
+    const releaseApp = vi
+      .fn<McpAppsApi["releaseApp"]>()
+      .mockRejectedValueOnce(lost)
+      .mockResolvedValue({ requestId: "r", applied: true })
+    const apps = fakeApps({ releaseApp })
+    await expect(gatewayAppServer(apps).release(address)).resolves.toBeUndefined()
+    expect(releaseApp).toHaveBeenCalledTimes(2)
+    expect(waited).toEqual([releaseRetryMs[0]])
+  })
+
+  it("M5: a release refused temporarily_unavailable is asked again, and lands", async () => {
+    waited = []
+    const busy = new NessaConversationControlError(
+      conversationId,
+      "r",
+      app.executionId,
+      new NessaRpcError(ConversationErrorCode.TemporarilyUnavailable, "busy"),
+    )
+    const releaseApp = vi
+      .fn<McpAppsApi["releaseApp"]>()
+      .mockRejectedValueOnce(busy)
+      .mockRejectedValueOnce(busy)
+      .mockResolvedValue({ requestId: "r", applied: true })
+    await expect(
+      gatewayAppServer(fakeApps({ releaseApp })).release(address),
+    ).resolves.toBeUndefined()
+    expect(releaseApp).toHaveBeenCalledTimes(3)
+    expect(waited).toEqual(releaseRetryMs.slice(0, 2))
+  })
+
+  it("M5b: a conversation gone on a later try ends the release, as on the first", async () => {
+    waited = []
+    const lost = new NessaConversationControlError(
+      conversationId,
+      "r",
+      app.executionId,
+      new Error("lost"),
+    )
+    const gone = new NessaConversationControlError(
+      conversationId,
+      "r",
+      app.executionId,
+      new NessaRpcError(ConversationErrorCode.ConversationDeleted, "gone"),
+    )
+    const releaseApp = vi
+      .fn<McpAppsApi["releaseApp"]>()
+      .mockRejectedValueOnce(lost)
+      .mockRejectedValueOnce(gone)
+    await expect(
+      gatewayAppServer(fakeApps({ releaseApp })).release(address),
+    ).resolves.toBeUndefined()
+    expect(releaseApp).toHaveBeenCalledTimes(2)
+  })
+
+  it("M5c: every try of one release carries the same request id", async () => {
+    const lost = new NessaConversationControlError(
+      conversationId,
+      "r",
+      app.executionId,
+      new Error("lost"),
+    )
+    const releaseApp = vi
+      .fn<McpAppsApi["releaseApp"]>()
+      .mockRejectedValueOnce(lost)
+      .mockResolvedValue({ requestId: "r", applied: true })
+    await gatewayAppServer(fakeApps({ releaseApp })).release(address)
+    const ids = releaseApp.mock.calls.map((call) => call[2]?.requestId)
+    expect(ids).toEqual(["release-1", "release-1"])
+  })
+
+  it("M5a: a release the client could not send is not asked again", async () => {
+    waited = []
+    const releaseApp = vi.fn(() => Promise.reject(new TypeError("not an app reference")))
+    await expect(
+      gatewayAppServer(fakeApps({ releaseApp })).release(address),
+    ).rejects.toBeInstanceOf(TypeError)
+    expect(releaseApp).toHaveBeenCalledTimes(1)
+    expect(waited).toEqual([])
+  })
+
+  it("M5c: a lost answer the gateway applied, then the next try also applied, withdraws each review once", async () => {
+    // An idempotent gateway, as `release_app` is: a release marks the mount
+    // released and withdraws only the reviews still open.
+    const open = new Set(["review-1", "review-2"])
+    const withdrawn: string[] = []
+    const apply = () => {
+      for (const review of open) withdrawn.push(review)
+      open.clear()
+    }
+    const lost = new NessaConversationControlError(
+      conversationId,
+      "r",
+      app.executionId,
+      new Error("lost"),
+    )
+    const releaseApp = vi
+      .fn<McpAppsApi["releaseApp"]>()
+      .mockImplementationOnce(async () => {
+        apply()
+        throw lost
+      })
+      .mockImplementation(async () => {
+        apply()
+        return { requestId: "r", applied: true }
+      })
+    await expect(
+      gatewayAppServer(fakeApps({ releaseApp })).release(address),
+    ).resolves.toBeUndefined()
+    expect(releaseApp).toHaveBeenCalledTimes(2)
+    expect(withdrawn).toEqual(["review-1", "review-2"])
+    const ids = releaseApp.mock.calls.map((call) => call[2]?.requestId)
+    expect(ids).toEqual(["release-1", "release-1"])
+  })
+
+  it("M5d: a remount while the old mount's release is retried leaves the new mount alone", async () => {
+    const remounted = { ...app, instanceId: crypto.randomUUID() }
+    const lost = new NessaConversationControlError(
+      conversationId,
+      "r",
+      app.executionId,
+      new Error("lost"),
+    )
+    const releaseApp = vi
+      .fn<McpAppsApi["releaseApp"]>()
+      .mockRejectedValueOnce(lost)
+      .mockRejectedValueOnce(lost)
+      .mockResolvedValue({ requestId: "r", applied: true })
+    await gatewayAppServer(fakeApps({ releaseApp })).release(address)
+    expect(releaseApp.mock.calls.map((call) => call[1])).toEqual([app, app, app])
+    expect(
+      releaseApp.mock.calls.some((call) => call[1].instanceId === remounted.instanceId),
+    ).toBe(false)
+  })
+
+  it("M5a: a release the gateway refused outright is not asked again", async () => {
+    waited = []
+    const releaseApp = vi.fn(() =>
+      Promise.reject(
+        new NessaConversationControlError(
+          conversationId,
+          "r",
+          app.executionId,
+          new NessaRpcError(ConversationErrorCode.InvalidRequest, "no"),
+        ),
+      ),
+    )
+    await expect(
+      gatewayAppServer(fakeApps({ releaseApp })).release(address),
+    ).rejects.toBeInstanceOf(NessaConversationControlError)
+    expect(releaseApp).toHaveBeenCalledTimes(1)
+    expect(waited).toEqual([])
   })
 })
 
@@ -717,7 +900,9 @@ describe("#349's L14 and L24, through the real bridge over this adapter", () => 
     view.bridge.remove()
     await flush()
     expect(apps.releaseApp).toHaveBeenCalledTimes(1)
-    expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, ownApp)
+    expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, ownApp, {
+      requestId: "release-1",
+    })
     // The gateway answers the withdrawn review's call; the view is gone.
     answer(refusal(ConversationErrorCode.McpCancelled))
     await flush()
@@ -736,7 +921,9 @@ describe("#349's L14 and L24, through the real bridge over this adapter", () => 
     view.bridge.remove()
     answer(described)
     await flush()
-    expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, ownApp)
+    expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, ownApp, {
+      requestId: "release-1",
+    })
     expect(apps.fetchResource).not.toHaveBeenCalled()
   })
 
@@ -755,7 +942,9 @@ describe("#349's L14 and L24, through the real bridge over this adapter", () => 
     await flush()
     expect(view.bridge.view().lifecycle).toEqual({ kind: "failed", reason: "load" })
     expect(apps.releaseApp).toHaveBeenCalledTimes(1)
-    expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, ownApp)
+    expect(apps.releaseApp).toHaveBeenCalledWith(conversationId, ownApp, {
+      requestId: "release-1",
+    })
     view.bridge.remove()
     await flush()
     expect(apps.releaseApp).toHaveBeenCalledTimes(1)

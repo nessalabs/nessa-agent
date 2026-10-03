@@ -11,6 +11,6 @@ impl McpToolUis for ListedToolUis {
     fn resource_uri(&self, session: &SessionId, call: &McpTool) -> Option<UiResourceUri> {
         self.0
             .tool_ui(session, call)
-            .map(|ui| ui.resource_uri().clone())
+            .and_then(|ui| ui.resource_uri().cloned())
     }
 }

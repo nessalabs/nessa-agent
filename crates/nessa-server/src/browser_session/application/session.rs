@@ -54,7 +54,10 @@ pub fn invalidation_reason(error: AccessError) -> Option<RemovalReason> {
         AccessError::InactiveMembership => Some(RemovalReason::InactiveMembership),
         AccessError::IdentityMismatch => Some(RemovalReason::IdentityMismatch),
         AccessError::InvalidCredential => Some(RemovalReason::InvalidCredential),
-        AccessError::StaleRevision | AccessError::Unavailable | AccessError::Unsupported => None,
+        AccessError::Denied
+        | AccessError::StaleRevision
+        | AccessError::Unavailable
+        | AccessError::Unsupported => None,
     }
 }
 

@@ -13,7 +13,7 @@ use super::{
 use crate::{
     application::agent_execution::{
         providers::ExecutionReport,
-        sessions::{ProviderContext, SessionChange, StorageError},
+        sessions::{ProviderContext, SessionChange, SessionSaveUnit, StorageError},
     },
     domain::agent_execution::{
         executions::ExecutionId,
@@ -251,10 +251,6 @@ impl TryFrom<WireChange> for SessionChange {
     }
 }
 
-pub(crate) fn encode_change(change: &SessionChange) -> Result<Vec<u8>, StorageError> {
-    serde_json::to_vec(&WireChange::from(change)).map_err(corrupt)
-}
-
 fn decode_wire_change(
     wire: WireChange,
     context: &mut ProviderContext,
@@ -283,45 +279,31 @@ fn decode_wire_change(
     }
 }
 
-pub(super) fn decode_change(
-    bytes: &[u8],
-    context: &ProviderContext,
-) -> Result<SessionChange, StorageError> {
-    super::decode::preflight_semantic(bytes)?;
-    let wire: WireChange = serde_json::from_slice(bytes).map_err(corrupt)?;
-    decode_wire_change(wire, &mut context.clone())
-}
-
 pub(crate) fn encode_batch(changes: &[SessionChange]) -> Result<Vec<u8>, StorageError> {
-    match changes {
-        [] => Err(corrupt("empty semantic batch")),
-        [only] => encode_change(only),
-        _ => serde_json::to_vec(&WireBatch {
-            changes: changes.iter().map(WireChange::from).collect(),
-        })
-        .map_err(corrupt),
-    }
+    SessionSaveUnit::check_changes(changes)?;
+    let bytes = serde_json::to_vec(&WireBatch {
+        changes: changes.iter().map(WireChange::from).collect(),
+    })
+    .map_err(corrupt)?;
+    super::super::save_group::validate_unit_payload(&bytes)?;
+    super::decode::preflight_semantic_batch(bytes.as_slice())?;
+    Ok(bytes)
 }
 
 pub(crate) fn decode_batch(
     bytes: &[u8],
-    grouped: bool,
     context: &ProviderContext,
 ) -> Result<Vec<SessionChange>, StorageError> {
-    if !grouped {
-        return decode_change(bytes, context).map(|change| vec![change]);
-    }
     super::decode::preflight_semantic_batch(bytes)?;
     let batch: WireBatch = serde_json::from_slice(bytes).map_err(corrupt)?;
-    if batch.changes.len() < 2 {
-        return Err(corrupt("atomic transition needs multiple changes"));
-    }
     let mut context = context.clone();
-    batch
+    let changes = batch
         .changes
         .into_iter()
         .map(|wire| decode_wire_change(wire, &mut context))
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    SessionSaveUnit::check_changes(&changes)?;
+    Ok(changes)
 }
 
 #[cfg(test)]
@@ -344,6 +326,19 @@ mod tests {
         },
         domain::common::value_objects::{ImageMediaType, Sha256Digest},
     };
+
+    fn encode_one(change: &SessionChange) -> Result<Vec<u8>, StorageError> {
+        encode_batch(std::slice::from_ref(change))
+    }
+    fn decode_one(bytes: &[u8], context: &ProviderContext) -> Result<SessionChange, StorageError> {
+        let mut changes = decode_batch(bytes, context)?;
+        assert_eq!(
+            changes.len(),
+            1,
+            "single-unit fixture must contain one change"
+        );
+        Ok(changes.remove(0))
+    }
 
     #[test]
     fn admission_round_trip_reuses_the_existing_metadata_mapping() {
@@ -368,8 +363,8 @@ mod tests {
             result: None,
         };
         let change = SessionChange::InputAccepted(Box::new(record.clone()));
-        let bytes = encode_change(&change).unwrap();
-        let decoded = decode_change(&bytes, &ProviderContext::Absent).unwrap();
+        let bytes = encode_one(&change).unwrap();
+        let decoded = decode_one(&bytes, &ProviderContext::Absent).unwrap();
         assert!(matches!(decoded, SessionChange::InputAccepted(next) if *next == record));
     }
 
@@ -377,14 +372,14 @@ mod tests {
     fn observation_requires_the_recorded_provider_context() {
         let id = ExecutionId::new("one").unwrap();
         let event = ExecutionEvent::new(id, ExecutionUpdate::Message(MessageChunk::text("chunk")));
-        let bytes = encode_change(&SessionChange::ProviderObservation(event.clone())).unwrap();
+        let bytes = encode_one(&SessionChange::ProviderObservation(event.clone())).unwrap();
         assert!(matches!(
-            decode_change(&bytes, &ProviderContext::Absent),
+            decode_one(&bytes, &ProviderContext::Absent),
             Err(StorageError::Corrupt(_))
         ));
         let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
         assert!(matches!(
-            decode_change(&bytes, &context).unwrap(),
+            decode_one(&bytes, &context).unwrap(),
             SessionChange::ProviderObservation(next) if next == event
         ));
     }
@@ -402,8 +397,8 @@ mod tests {
             )
         };
         let round_trip = |event: &ExecutionEvent| {
-            let bytes = encode_change(&SessionChange::ProviderObservation(event.clone())).unwrap();
-            let decoded = decode_change(&bytes, &context).unwrap();
+            let bytes = encode_one(&SessionChange::ProviderObservation(event.clone())).unwrap();
+            let decoded = decode_one(&bytes, &context).unwrap();
             assert!(matches!(decoded, SessionChange::ProviderObservation(next) if next == *event));
             String::from_utf8(bytes).unwrap()
         };
@@ -438,7 +433,7 @@ mod tests {
         ] {
             let corrupt = text.replacen(r#""server":"charts""#, &to, 1);
             assert_ne!(corrupt, text);
-            match decode_change(corrupt.as_bytes(), &context) {
+            match decode_one(corrupt.as_bytes(), &context) {
                 Err(StorageError::Corrupt(message)) => {
                     assert!(message.contains(refusal), "{to}: {message}")
                 }
@@ -449,7 +444,7 @@ mod tests {
         // the domain's constructor, not carried on as a structured value.
         let not_json = text.replacen(r#"{\"rows\":2}"#, "not json", 1);
         assert_ne!(not_json, text);
-        match decode_change(not_json.as_bytes(), &context) {
+        match decode_one(not_json.as_bytes(), &context) {
             Err(StorageError::Corrupt(message)) => {
                 assert!(message.contains("InvalidStructuredResult"), "{message}")
             }
@@ -462,7 +457,7 @@ mod tests {
         );
         assert_ne!(oversize, text);
         // Refused at its bound before it is decoded, not after.
-        match decode_change(oversize.as_bytes(), &context) {
+        match decode_one(oversize.as_bytes(), &context) {
             Err(StorageError::Corrupt(message)) => {
                 assert!(
                     message.contains("exceeds decoded string limit"),
@@ -482,11 +477,11 @@ mod tests {
                 MessageChunk::text("chunk").with_message_id(MessageId::new("valid").unwrap()),
             ),
         );
-        let bytes = encode_change(&SessionChange::ProviderObservation(event)).unwrap();
+        let bytes = encode_one(&SessionChange::ProviderObservation(event)).unwrap();
         let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        value["ProviderObservation"]["message_id"] = "".into();
+        value["changes"][0]["ProviderObservation"]["message_id"] = "".into();
         assert!(matches!(
-            decode_change(&serde_json::to_vec(&value).unwrap(), &context),
+            decode_one(&serde_json::to_vec(&value).unwrap(), &context),
             Err(StorageError::Corrupt(_))
         ));
     }
@@ -515,9 +510,9 @@ mod tests {
             local_outcome: None,
             result: None,
         };
-        let bytes = encode_change(&SessionChange::InputAccepted(Box::new(record.clone()))).unwrap();
+        let bytes = encode_one(&SessionChange::InputAccepted(Box::new(record.clone()))).unwrap();
         assert!(matches!(
-            decode_change(&bytes, &ProviderContext::Absent).unwrap(),
+            decode_one(&bytes, &ProviderContext::Absent).unwrap(),
             SessionChange::InputAccepted(next) if *next == record
         ));
         let valid: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -531,10 +526,11 @@ mod tests {
             ("size", serde_json::Value::from(0)),
         ] {
             let mut invalid = valid.clone();
-            invalid["InputAccepted"]["metadata"]["user_images"][0][field] = replacement;
+            invalid["changes"][0]["InputAccepted"]["metadata"]["user_images"][0][field] =
+                replacement;
             assert!(
                 matches!(
-                    decode_change(
+                    decode_one(
                         &serde_json::to_vec(&invalid).unwrap(),
                         &ProviderContext::Absent
                     ),
@@ -573,7 +569,7 @@ mod tests {
             .collect();
         let bytes = encode_batch(&changes).unwrap();
         let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
-        let restored = decode_batch(&bytes, true, &context).unwrap();
+        let restored = decode_batch(&bytes, &context).unwrap();
         let restored: Vec<_> = restored
             .into_iter()
             .map(|change| match change {
@@ -591,12 +587,12 @@ mod tests {
             provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
             context: ProviderContext::Absent,
         };
-        let bytes = encode_change(&change).unwrap();
+        let bytes = encode_one(&change).unwrap();
         let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        value["Opened"]["unrecognized"] = true.into();
+        value["changes"][0]["Opened"]["unrecognized"] = true.into();
         let changed = serde_json::to_vec(&value).unwrap();
         assert!(matches!(
-            decode_change(&changed, &ProviderContext::Absent),
+            decode_one(&changed, &ProviderContext::Absent),
             Err(StorageError::Corrupt(_))
         ));
     }
@@ -610,10 +606,10 @@ mod tests {
                 "update": {"Text": "x".repeat(crate::application::agent_execution::executions::ExecutionEvent::MAX_MESSAGE_CHUNK_BYTES + 1)}
             }
         });
-        let bytes = serde_json::to_vec(&body).unwrap();
+        let bytes = serde_json::to_vec(&serde_json::json!({"changes": [body]})).unwrap();
         let context = ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
         assert!(matches!(
-            decode_change(&bytes, &context),
+            decode_one(&bytes, &context),
             Err(StorageError::Corrupt(_))
         ));
     }
@@ -639,29 +635,14 @@ mod tests {
             SessionChange::ProviderObservation(event.clone()),
         ];
         let bytes = encode_batch(&changes).unwrap();
-        let decoded = decode_batch(&bytes, true, &ProviderContext::Absent).unwrap();
+        let decoded = decode_batch(&bytes, &ProviderContext::Absent).unwrap();
         assert!(matches!(
             &decoded[2],
             SessionChange::ProviderObservation(next) if next == &event
         ));
+        let bare = serde_json::to_vec(&WireChange::from(&changes[0])).unwrap();
         assert!(matches!(
-            decode_batch(&bytes, false, &ProviderContext::Absent),
-            Err(StorageError::Corrupt(_))
-        ));
-    }
-
-    #[test]
-    fn a_group_with_only_one_change_is_not_an_atomic_transition() {
-        let bytes = serde_json::to_vec(&serde_json::json!({
-            "changes": [{"Opened": {
-                "id": "conversation",
-                "provider": {"name": "fixture", "model_id": "model", "context": "workspace"},
-                "context": null
-            }}]
-        }))
-        .unwrap();
-        assert!(matches!(
-            decode_batch(&bytes, true, &ProviderContext::Absent),
+            decode_batch(&bare, &ProviderContext::Absent),
             Err(StorageError::Corrupt(_))
         ));
     }

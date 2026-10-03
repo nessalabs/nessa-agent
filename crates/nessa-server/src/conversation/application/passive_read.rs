@@ -36,6 +36,7 @@ pub enum ReadRefusal {
 impl From<AccessError> for ReadRefusal {
     fn from(error: AccessError) -> Self {
         match error {
+            AccessError::Denied => Self::Forbidden,
             AccessError::Unavailable | AccessError::StaleRevision | AccessError::Unsupported => {
                 Self::Unverifiable
             }
