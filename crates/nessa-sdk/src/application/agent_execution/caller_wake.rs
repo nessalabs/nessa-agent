@@ -38,6 +38,26 @@ pub(crate) enum CallerWaiter {
     ApprovalModeChange(SessionId),
     /// `SessionManager::snapshot` for this session.
     CommittedSnapshot(SessionId),
+    /// `Agent::invoke` of this input.
+    Invocation(ExecutionId),
+    /// `Agent::enqueue` or `Agent::enqueue_steering` of this input.
+    Admission(ExecutionId),
+    /// `Agent::steer` of this input.
+    Steering(ExecutionId),
+    /// `Agent::reorder_queued` on this session's Agent.
+    QueueReorder(SessionId),
+    /// `Agent::remove_queued` of this input.
+    QueueRemoval(ExecutionId),
+    /// `Agent::close` of this session's Agent.
+    Close(SessionId),
+    /// `Agent::set_effort_level` on this session's Agent.
+    EffortLevelChange(SessionId),
+    /// `Agent::answer_permission` on this session's Agent.
+    PermissionAnswer(SessionId),
+    /// `Agent::cancel_permission` on this session's Agent.
+    PermissionCancellation(SessionId),
+    /// `Agent::answer_question` on this session's Agent.
+    QuestionAnswer(SessionId),
 }
 
 impl fmt::Display for CallerWaiter {
@@ -80,6 +100,38 @@ impl fmt::Display for CallerWaiter {
                     "committed snapshot of session {}",
                     session.as_str()
                 )
+            }
+            Self::Invocation(id) => write!(formatter, "invocation {}", id.as_str()),
+            Self::Admission(id) => write!(formatter, "admission of {}", id.as_str()),
+            Self::Steering(id) => write!(formatter, "steering of {}", id.as_str()),
+            Self::QueueReorder(session) => {
+                write!(formatter, "queue reorder of session {}", session.as_str())
+            }
+            Self::QueueRemoval(id) => write!(formatter, "removal of queued {}", id.as_str()),
+            Self::Close(session) => write!(formatter, "close of session {}", session.as_str()),
+            Self::EffortLevelChange(session) => {
+                write!(
+                    formatter,
+                    "effort level change of session {}",
+                    session.as_str()
+                )
+            }
+            Self::PermissionAnswer(session) => {
+                write!(
+                    formatter,
+                    "permission answer in session {}",
+                    session.as_str()
+                )
+            }
+            Self::PermissionCancellation(session) => {
+                write!(
+                    formatter,
+                    "permission cancellation in session {}",
+                    session.as_str()
+                )
+            }
+            Self::QuestionAnswer(session) => {
+                write!(formatter, "question answer in session {}", session.as_str())
             }
         }
     }

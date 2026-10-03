@@ -433,18 +433,17 @@ async fn panicking_lock_waiter_does_not_fail_the_admission_that_released_it() {
     }
 }
 
-/// No containment at this site: the attachment task publishes its result as
-/// its last action, holding no lock, so a waker panic there ends nothing that
-/// remains to run.
+/// The attachment task publishes its result as its last action, holding no
+/// lock, so this journey also passes without containment. It anchors the row.
 #[tokio::test]
 async fn panicking_attachment_waiter_leaves_the_attachment_attached() {
-    for fault in [false, true] {
+    for fault in [Fault::None, Fault::Panic, Fault::PanicWithPanickingPayload] {
         let (agent, _backend, _storage) = probe(false).await;
         timeout(BOUND, agent.close(actor())).await.unwrap().unwrap();
         let authorization = agent
             .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
             .unwrap();
-        let (caller, notification) = caller_wake(panics(fault));
+        let (caller, notification) = caller_wake(fault);
         let mut attaching: Pin<Box<dyn Future<Output = _> + Send>> =
             Box::pin(agent.start_attachment(authorization).unwrap().wait());
         register(&mut attaching, Waker::from(caller.clone()));
@@ -462,9 +461,9 @@ async fn panicking_attachment_waiter_leaves_the_attachment_attached() {
     }
 }
 
-/// No containment at this site: close runs on its own task and Tokio wakes a
-/// task's `JoinHandle` waiter inside its own `catch_unwind`. Every public
-/// operation that spawns and joins its owner is in the same position.
+/// Close runs on its own task and Tokio wakes a `JoinHandle` waiter inside
+/// its own `catch_unwind`, so a plain panic passes without containment too.
+/// The double fault below is what needs it.
 #[tokio::test]
 async fn panicking_close_waiter_does_not_interrupt_close() {
     for fault in [false, true] {
@@ -487,4 +486,66 @@ async fn panicking_close_waiter_does_not_interrupt_close() {
         );
         timeout(BOUND, agent.close(actor())).await.unwrap().unwrap();
     }
+}
+
+const DOUBLE_FAULT_CHILD: &str = "NESSA_ISSUE431_DOUBLE_FAULT_CHILD";
+
+/// Tokio catches a panicking `JoinHandle` waker but drops the payload outside
+/// that catch. A payload whose drop panics then aborts a multi-thread
+/// runtime's worker, so the journey runs in a child process where an abort
+/// fails the parent test instead of ending this test binary.
+#[test]
+fn panicking_payload_close_waiter_does_not_abort_the_runtime() {
+    let name = format!(
+        "{}::double_fault_close_waiter_child",
+        module_path!().split_once("::").unwrap().1
+    );
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &name, "--ignored", "--test-threads=1"])
+        .env(DOUBLE_FAULT_CHILD, "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "a close waiter's double fault must not abort the runtime: {:?}\n{stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the child ran {name}: {stdout}"
+    );
+}
+
+#[test]
+#[ignore = "run in a child process by panicking_payload_close_waiter_does_not_abort_the_runtime"]
+fn double_fault_close_waiter_child() {
+    assert!(
+        std::env::var_os(DOUBLE_FAULT_CHILD).is_some(),
+        "run through panicking_payload_close_waiter_does_not_abort_the_runtime"
+    );
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (agent, _backend, _storage) = probe(false).await;
+        let (caller, notification) = caller_wake(Fault::PanicWithPanickingPayload);
+        let mut closing: Pin<Box<dyn Future<Output = _> + Send + '_>> =
+            Box::pin(agent.close(actor()));
+        register(&mut closing, Waker::from(caller.clone()));
+        timeout(BOUND, notification).await.unwrap().unwrap();
+        assert_eq!(caller.calls.load(Ordering::SeqCst), 1);
+        assert!(timeout(BOUND, closing).await.unwrap().is_ok());
+        reattach_after_explicit_close(&agent).await;
+        assert_eq!(
+            timeout(BOUND, agent.invoke(input("after"), actor()))
+                .await
+                .unwrap(),
+            Ok(ExecutionOutcome::Completed)
+        );
+        timeout(BOUND, agent.close(actor())).await.unwrap().unwrap();
+    });
 }

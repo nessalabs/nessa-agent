@@ -153,6 +153,11 @@ impl Agent {
     /// Whether this Agent currently has no running or queued work. This
     /// snapshot does not reserve admission; a host must serialize subsequent
     /// mode changes with its own turn-admission owner.
+    ///
+    /// Waiting for the scheduler lock registers the polling task's `Waker`
+    /// with it. A panic from that waker when another task releases the lock
+    /// is logged and does not fail that task. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md.
     pub async fn idle_for_approval_change(&self) -> bool {
         let waiter = CallerWaiter::IdleForApprovalChange(self.inner.manager.id().clone());
         contain_caller_wake(waiter, async {
@@ -171,6 +176,11 @@ impl Agent {
     /// until the response is checked. A failed application carries explicit
     /// session status; callers must retire an uncertain generation before
     /// admitting another turn.
+    ///
+    /// Waiting for the scheduler lock registers the polling task's `Waker`
+    /// with it. A panic from that waker when another task releases the lock
+    /// is logged and does not fail that task. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md.
     pub async fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationResult<()> {
         let waiter = CallerWaiter::ApprovalModeChange(self.inner.manager.id().clone());
         contain_caller_wake(waiter, self.apply_approval_mode(mode)).await
@@ -297,15 +307,19 @@ impl Agent {
         // recorded, its settlement is recorded and applied to this Agent and
         // its connection whether or not the caller still waits.
         let agent = self.clone();
-        tokio::spawn(async move { agent.change_effort_level(level, actor).await })
-            .await
-            .unwrap_or_else(|_| {
-                // Panicked or cancelled: whether it reached the agent is not known.
-                Err(ProviderOperationFailure::new(
-                    AgentError::SubmissionUnresolved,
-                    ProviderSessionState::CleanupRequired,
-                ))
-            })
+        let waiter = CallerWaiter::EffortLevelChange(self.inner.manager.id().clone());
+        contain_caller_wake(
+            waiter,
+            tokio::spawn(async move { agent.change_effort_level(level, actor).await }),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            // Panicked or cancelled: whether it reached the agent is not known.
+            Err(ProviderOperationFailure::new(
+                AgentError::SubmissionUnresolved,
+                ProviderSessionState::CleanupRequired,
+            ))
+        })
     }
     async fn change_effort_level(
         &self,
@@ -835,12 +849,16 @@ impl Agent {
             // Accepted work always reaches its owner, even if close overtakes
             // this handoff. The supervisor saves the input and its stop evidence.
             let agent = self.clone();
-            tokio::spawn(async move {
-                // The task, not its waiter, owns the slot and the attachment.
-                let _invocation = invocation;
-                let _work = work;
-                agent.supervise_invocation(input, actor, None, &_work).await
-            })
+            let waiter = CallerWaiter::Invocation(input.execution_id.clone());
+            contain_caller_wake(
+                waiter,
+                tokio::spawn(async move {
+                    // The task, not its waiter, owns the slot and the attachment.
+                    let _invocation = invocation;
+                    let _work = work;
+                    agent.supervise_invocation(input, actor, None, &_work).await
+                }),
+            )
             .await
             .map_err(|_| {
                 self.stop_control_admission();
@@ -1522,14 +1540,18 @@ impl Agent {
             let attached = agent.inner.lifecycle.attached_provider(&admission)?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
-            tokio::spawn(async move {
-                agent
-                    .run_control_observed(admission.clone(), async {
-                        attached.session.answer_question(answer).await
-                    })
-                    .await
-                    .map_err(ProviderOperationFailure::into_error)
-            })
+            let waiter = CallerWaiter::QuestionAnswer(agent.inner.manager.id().clone());
+            contain_caller_wake(
+                waiter,
+                tokio::spawn(async move {
+                    agent
+                        .run_control_observed(admission.clone(), async {
+                            attached.session.answer_question(answer).await
+                        })
+                        .await
+                        .map_err(ProviderOperationFailure::into_error)
+                }),
+            )
             .await
             .map_err(|_| {
                 supervisor.inner.lifecycle.block_control(control_origin);
@@ -1567,30 +1589,34 @@ impl Agent {
                 })?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
-            tokio::spawn(async move {
-                let resolution = agent
-                    .run_control_observed(admission.clone(), async {
-                        attached.session.answer_permission(answer).await
-                    })
-                    .await
-                    .map_err(|failure| {
-                        let selection = failure
-                            .permission_selection()
-                            .unwrap_or(PermissionSelectionState::Unknown);
-                        PermissionAnswerFailure::new(failure.into_error(), selection)
-                    })?;
-                agent
-                    .validate_permission_receipt(
-                        &admission,
-                        resolution.request(),
-                        resolution.input(),
-                    )
-                    .await
-                    .map_err(|error| {
-                        PermissionAnswerFailure::new(error, PermissionSelectionState::Consumed)
-                    })?;
-                Ok(resolution)
-            })
+            let waiter = CallerWaiter::PermissionAnswer(agent.inner.manager.id().clone());
+            contain_caller_wake(
+                waiter,
+                tokio::spawn(async move {
+                    let resolution = agent
+                        .run_control_observed(admission.clone(), async {
+                            attached.session.answer_permission(answer).await
+                        })
+                        .await
+                        .map_err(|failure| {
+                            let selection = failure
+                                .permission_selection()
+                                .unwrap_or(PermissionSelectionState::Unknown);
+                            PermissionAnswerFailure::new(failure.into_error(), selection)
+                        })?;
+                    agent
+                        .validate_permission_receipt(
+                            &admission,
+                            resolution.request(),
+                            resolution.input(),
+                        )
+                        .await
+                        .map_err(|error| {
+                            PermissionAnswerFailure::new(error, PermissionSelectionState::Consumed)
+                        })?;
+                    Ok(resolution)
+                }),
+            )
             .await
             .map_err(|_| {
                 supervisor.inner.lifecycle.block_control(control_origin);
@@ -1623,21 +1649,25 @@ impl Agent {
             let attached = agent.inner.lifecycle.attached_provider(&admission)?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
-            tokio::spawn(async move {
-                let cancellation = agent
-                    .run_control(admission.clone(), async {
-                        attached.session.cancel_permission(request).await
-                    })
-                    .await?;
-                agent
-                    .validate_permission_receipt(
-                        &admission,
-                        cancellation.request(),
-                        cancellation.input(),
-                    )
-                    .await?;
-                Ok(cancellation)
-            })
+            let waiter = CallerWaiter::PermissionCancellation(agent.inner.manager.id().clone());
+            contain_caller_wake(
+                waiter,
+                tokio::spawn(async move {
+                    let cancellation = agent
+                        .run_control(admission.clone(), async {
+                            attached.session.cancel_permission(request).await
+                        })
+                        .await?;
+                    agent
+                        .validate_permission_receipt(
+                            &admission,
+                            cancellation.request(),
+                            cancellation.input(),
+                        )
+                        .await?;
+                    Ok(cancellation)
+                }),
+            )
             .await
             .map_err(|_| {
                 supervisor.inner.lifecycle.block_control(control_origin);
