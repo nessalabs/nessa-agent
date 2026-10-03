@@ -6,6 +6,7 @@ use super::super::{
     sessions::{
         binding::{Command, Completion, DispatchedPrompt},
         cleanup::ProcessCleanup,
+        forwarded::attach_forwarded,
         thought_level, AcpConfig,
     },
 };
@@ -2090,7 +2091,10 @@ impl<P: AcpProfile> Worker<P> {
             if !self.config.tools_enabled {
                 return Err(json_rpc::protocol("tool event in a text-only binding"));
             }
-            let tool = self.profile.tool_call(update)?;
+            let tool = attach_forwarded(
+                self.profile.tool_call(update)?,
+                self.config.stand_ins.forwarded(),
+            );
             self.emit(execution.tool_event(&target, tool)?)
         }
     }

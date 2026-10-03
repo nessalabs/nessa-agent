@@ -577,6 +577,23 @@ async fn the_relay_command_copies_both_ways_until_the_gateway_closes() {
     assert_eq!(running.unwrap(), Ok(()));
 }
 
+/// #435: an open's grant holds the very results the stand-ins its token lets
+/// through keep — those of the owner the relay resolves that token to — and
+/// another open's grant, of the same conversation, holds others.
+#[test]
+fn an_opens_grant_holds_what_the_stand_ins_under_its_token_forward() {
+    let (_, _, grants) = relay_for(vec![fixture()]);
+    let (grant, token) = granted(&grants, "conversation");
+    let (other, other_token) = granted(&grants, "conversation");
+    let owner = grants.owner(&token).expect("a live grant");
+    assert_eq!(grant.forwarded(), Some(&owner.forwarded()));
+    assert_ne!(other.forwarded(), Some(&owner.forwarded()));
+    assert_eq!(
+        other.forwarded(),
+        Some(&grants.owner(&other_token).unwrap().forwarded())
+    );
+}
+
 /// A harness reaches the real server through `mcp-relay` and the relay
 /// socket, on a session of its own, and the view's lookup reads that
 /// session's list; the session ends with the stand-in.

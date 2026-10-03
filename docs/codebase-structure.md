@@ -640,13 +640,15 @@ Nessa is also an MCP client, holding the connection to each configured server
 for each harness session (ADR 344, [design](design/mcp-connections.md)). The
 SDK owns the client: `domain/mcp_apps/` (tool UI and UI resource values, their
 bounds) and `infrastructure/mcp/` (`connection` for ids, answers and
-cancellation, `stand_in` for what a harness sees, `servers` for the open
-sessions and their tool lists, `process` for a server's process group, `wire`
-for MCP's JSON), tested in
+cancellation, `stand_in` for what a harness sees, and for keeping a
+forwarded `tools/call` result's `structuredContent` for the ACP worker to
+attach, `servers` for the open sessions and their tool lists, `process` for a
+server's process group, `wire` for MCP's JSON), tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
 gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
 the resource ticket (`domain`), the relay socket, the `mcp-relay` command, the
-grants that tie each stand-in to its conversation, the store an MCP App's
+grants that tie each stand-in to its conversation (each the owner's own
+grant, carrying what its stand-ins forward), the store an MCP App's
 resources wait in behind their tickets, and the view's tool UI lookup
 (`infrastructure`), and `GET /mcp-resources`, where a ticket is redeemed
 (`entrypoint`); `composition/mcp_servers.rs` replaces each configured server
@@ -664,7 +666,8 @@ deadline clock, and how one request ends), and an app's calls are
 `presentation/mcp-apps-api.ts` over the `McpResourceTransport` port in
 `application/mcp-resource-fetch.ts` and its `fetch` adapter in `transport/`. The SDK's ACP binding holds a provider open's grant
 (`acp/sessions/stand_ins.rs`) and puts its environment in every MCP server
-entry. The desktop's
+entry; its worker attaches the grant's forwarded results to the completed
+calls they answer (`acp/sessions/forwarded.rs`). The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
 transcript's `widget` part.
 

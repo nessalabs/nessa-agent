@@ -15,7 +15,9 @@
 //! An MCP call is marked `_meta.is_mcp_tool_call`, names its server and tool
 //! exactly in `rawInput`, and reports its result only in `rawOutput`; both are
 //! carried — the identity as `McpTool`, the result as text and a bounded
-//! structured result — so a finished MCP call shows what it returned.
+//! structured result — so a finished MCP call shows what it returned. That
+//! bound, and the text past it, are MCP's (`infrastructure::mcp::structured_result`),
+//! shared with the stand-in that keeps Claude's forwarded results.
 //!
 //! These descriptions confer no access authority; shared ACP permission handling
 //! delivers the caller's domain-validated choice. Regressions live under
