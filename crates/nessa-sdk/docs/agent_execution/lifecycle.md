@@ -252,8 +252,10 @@ leaked rather than dropped. None of the publishers behind the waits in this
 table catches a notification panic itself, and nothing resets `running` or
 repairs lifecycle state after one.
 
-Every public Agent wait polls through `contain_caller_wake`. That includes the operations that spawn their owner and await
-its `JoinHandle`: `invoke`, `enqueue`, `enqueue_steering`, `steer`,
+Every public Agent wait polls through `contain_caller_wake`, including
+`AgentInitializationError::retry_cleanup` (whose cleanup handle is always empty
+today, so its wrapper cannot yet be exercised). That includes the operations
+that spawn their owner and await its `JoinHandle`: `invoke`, `enqueue`, `enqueue_steering`, `steer`,
 `reorder_queued`, `remove_queued`, `close`, `set_effort_level`,
 `answer_permission`, `cancel_permission` and `answer_question`. Tokio wakes a
 `JoinHandle` waiter inside its own `catch_unwind`, but it drops the caught
@@ -265,7 +267,13 @@ payload that panics twice when dropped escapes it.
 
 Tests are in the public `application` test binary, under
 `application::agent_execution::agents::review_regressions::caller_wakers`.
-Each one runs its journey first with a waker that does not panic.
+Each one runs its journey first with a waker that does not panic, except the
+two multi-thread child processes: their clean passes are the sibling tests
+named in their rows. The containment warning's wait identity is asserted in
+`joined_operation_child`, once per spawn-and-join operation; that assertion
+runs only in a child process because tracing caches callsite interest
+process-wide, so concurrent tests can hide an event from a thread-local
+subscriber.
 
 | Public wait | Published or released by | What each owner keeps when the caller's waker panics | Test |
 | --- | --- | --- | --- |
@@ -281,6 +289,7 @@ Each one runs its journey first with a waker that does not panic.
 | `AttachmentWait::wait`, plain panic | The attachment task, as its last action, holding no lock | The attachment is attached and runs work | `panicking_attachment_waiter_leaves_the_attachment_attached`, which also passes without the wrapper |
 | `AttachmentWait::wait`, panic whose payload panics twice when dropped, on a multi-thread runtime | The attachment task, whose `JoinHandle` the Agent does not keep | The runtime keeps running; the attachment is attached and runs work | `twice_panicking_payload_attachment_waiter_does_not_abort_the_runtime`, which runs `triple_fault_attachment_waiter_child` in a child process. Without the wrapper the child aborts with SIGABRT |
 | `close` and the other spawn-and-join operations, plain panic | Tokio's task completion, inside its own `catch_unwind` | Close completes; the Agent can attach and invoke again | `panicking_close_waiter_does_not_interrupt_close`, which also passes without the wrapper |
+| Each spawn-and-join operation, panic whose payload drop also panics | Tokio's task completion, which drops the payload outside its catch | The panic stays in the wrapper, which logs the operation's own wait identity, and the operation completes. No warning is logged on the clean pass | `panicking_payload_waiter_of_each_joined_operation_is_contained`, one child process per operation running `joined_operation_child` on a current-thread runtime, where the owner cannot run before the first poll. Without an operation's wrapper its case fails by name: the payload's drop panic unwinds out of `block_on` |
 | `close`, panic whose payload drop also panics, on a multi-thread runtime | Tokio's task completion, which drops the payload outside its catch | The runtime keeps running; close completes and the Agent can attach and invoke again | `panicking_payload_close_waiter_does_not_abort_the_runtime`, which runs `double_fault_close_waiter_child` in a child process so an abort fails the test. Without the wrapper the child aborts with SIGABRT |
 
 The panicking wait itself loses that one wake; the SDK does not retry it.

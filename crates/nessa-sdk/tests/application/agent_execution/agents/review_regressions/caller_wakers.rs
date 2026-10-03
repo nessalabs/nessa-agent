@@ -2,12 +2,26 @@
 //!
 //! Rows of "Caller wakers" in docs/agent_execution/lifecycle.md. Every test
 //! runs its journey once with a well-behaved waker as the positive
-//! counterpart, then with one that panics on its first wake.
+//! counterpart, then with one that panics on its first wake, except the two
+//! multi-thread child processes: their clean passes are the sibling tests
+//! `panicking_close_waiter_does_not_interrupt_close` and
+//! `panicking_attachment_waiter_leaves_the_attachment_attached`.
 use super::*;
+use nessa_sdk::application::agent_execution::permissions::{
+    ApprovalAttribution, ApprovalBasis, PermissionAnswer, PermissionCancellationRequest,
+    QuestionAnswer,
+};
 use nessa_sdk::application::agent_execution::providers::{
     ApprovalMode, ProviderOpenError, ProviderOpenRequest,
 };
+use nessa_sdk::domain::agent_execution::permissions::{
+    CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
+    PermissionOptionId,
+};
+use nessa_sdk::domain::agent_execution::questions::QuestionId;
+use nessa_sdk::domain::model_metadata::value_objects::EffortLevel;
 use std::{
+    io,
     pin::Pin,
     task::{Context, Wake, Waker},
 };
@@ -99,6 +113,53 @@ fn register<T>(wait: &mut Pin<Box<dyn Future<Output = T> + Send + '_>>, waker: W
 }
 
 const BOUND: Duration = Duration::from_secs(3);
+
+/// The warning `contain_caller_wake` logs, with the wait's identity.
+const CONTAINED: &str = "a caller's waker panicked; its wait keeps its result";
+
+#[derive(Clone, Default)]
+struct Warnings(Arc<Mutex<Vec<u8>>>);
+impl io::Write for Warnings {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+impl Warnings {
+    /// Captures warnings logged on this thread until the guard drops. Run
+    /// the journey on a current-thread runtime so the SDK's tasks log here,
+    /// and only in a child process running one test: tracing caches callsite
+    /// interest process-wide, so tests on other threads can hide an event.
+    fn capture() -> (Self, tracing::subscriber::DefaultGuard) {
+        let warnings = Self::default();
+        let writer = warnings.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || writer.clone())
+            .finish();
+        (warnings, tracing::subscriber::set_default(subscriber))
+    }
+    fn take(&self) -> String {
+        String::from_utf8(std::mem::take(&mut *self.0.lock().unwrap())).unwrap()
+    }
+}
+/// Asserts the containment warning names `waiter` exactly when `fault`
+/// panicked, and is absent otherwise.
+fn assert_contained(logged: &str, fault: Fault, waiter: &str) {
+    match fault {
+        Fault::None => assert!(
+            !logged.contains(CONTAINED),
+            "no panic, no warning: {logged}"
+        ),
+        _ => assert!(
+            logged.contains(CONTAINED) && logged.contains(&format!("waiter={waiter}")),
+            "the warning names {waiter}: {logged}"
+        ),
+    }
+}
 
 #[tokio::test]
 async fn panicking_receipt_consumer_preserves_independent_queued_work() {
@@ -502,17 +563,21 @@ const CHILD_ENV: &str = "NESSA_ISSUE431_CHILD";
 /// fails unless it passes. A process abort there fails this test instead of
 /// ending the test binary.
 fn run_in_child_process(child: &str) {
+    run_case_in_child_process(child, "");
+}
+/// As [`run_in_child_process`], passing `case` to the child in [`CHILD_ENV`].
+fn run_case_in_child_process(child: &str, case: &str) {
     let name = format!("{}::{child}", module_path!().split_once("::").unwrap().1);
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", &name, "--ignored", "--test-threads=1"])
-        .env(CHILD_ENV, "1")
+        .env(CHILD_ENV, case)
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "{child} must not abort the process: {:?}\n{stderr}",
+        "{child} {case} must not abort or fail: {:?}\n{stderr}",
         output.status
     );
     assert!(
@@ -596,5 +661,177 @@ fn triple_fault_attachment_waiter_child() {
             Ok(ExecutionOutcome::Completed)
         );
         timeout(BOUND, agent.close(actor())).await.unwrap().unwrap();
+    });
+}
+
+/// Public operations that spawn their owner and await its `JoinHandle`.
+#[derive(Clone, Copy, Debug)]
+enum JoinedOperation {
+    Invoke,
+    Enqueue,
+    EnqueueSteering,
+    Steer,
+    ReorderQueued,
+    RemoveQueued,
+    Close,
+    SetEffortLevel,
+    AnswerPermission,
+    CancelPermission,
+    AnswerQuestion,
+}
+const JOINED_OPERATIONS: [JoinedOperation; 11] = [
+    JoinedOperation::Invoke,
+    JoinedOperation::Enqueue,
+    JoinedOperation::EnqueueSteering,
+    JoinedOperation::Steer,
+    JoinedOperation::ReorderQueued,
+    JoinedOperation::RemoveQueued,
+    JoinedOperation::Close,
+    JoinedOperation::SetEffortLevel,
+    JoinedOperation::AnswerPermission,
+    JoinedOperation::CancelPermission,
+    JoinedOperation::AnswerQuestion,
+];
+type Joined<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+impl JoinedOperation {
+    /// Starts the operation and names the wait it logs on containment.
+    fn start<'a>(self, agent: &'a Agent) -> (Joined<'a>, String) {
+        let session = agent.session_manager().id().as_str().to_owned();
+        let execution = ExecutionId::new("joined").unwrap();
+        match self {
+            Self::Invoke => (
+                Box::pin(async {
+                    let _ = agent.invoke(input("joined"), actor()).await;
+                }),
+                "invocation joined".into(),
+            ),
+            Self::Enqueue => (
+                Box::pin(async {
+                    let _ = agent.enqueue(input("joined"), actor()).await;
+                }),
+                "admission of joined".into(),
+            ),
+            Self::EnqueueSteering => (
+                Box::pin(async {
+                    let _ = agent.enqueue_steering(input("joined"), actor()).await;
+                }),
+                "admission of joined".into(),
+            ),
+            Self::Steer => (
+                Box::pin(async {
+                    let _ = agent.steer(input("joined"), actor()).await;
+                }),
+                "steering of joined".into(),
+            ),
+            Self::ReorderQueued => (
+                Box::pin(async {
+                    let _ = agent.reorder_queued(Vec::new(), actor()).await;
+                }),
+                format!("queue reorder of session {session}"),
+            ),
+            Self::RemoveQueued => (
+                Box::pin(async move {
+                    let _ = agent.remove_queued(execution, actor()).await;
+                }),
+                "removal of queued joined".into(),
+            ),
+            Self::Close => (
+                Box::pin(async {
+                    let _ = agent.close(actor()).await;
+                }),
+                format!("close of session {session}"),
+            ),
+            Self::SetEffortLevel => (
+                Box::pin(async {
+                    let level = EffortLevel::new("high".into()).unwrap();
+                    let _ = agent.set_effort_level(level, actor()).await;
+                }),
+                format!("effort level change of session {session}"),
+            ),
+            Self::AnswerPermission => (
+                Box::pin(async move {
+                    let answer = PermissionAnswer {
+                        attribution: ApprovalAttribution::new(actor(), ApprovalBasis::Explicit),
+                        execution_id: execution,
+                        id: PermissionId::new("review").unwrap(),
+                        option_id: PermissionOptionId::new("allow").unwrap(),
+                    };
+                    let _ = agent.answer_permission(answer).await;
+                }),
+                format!("permission answer in session {session}"),
+            ),
+            Self::CancelPermission => (
+                Box::pin(async move {
+                    let request = PermissionCancellationRequest {
+                        execution_id: execution,
+                        id: PermissionId::new("review").unwrap(),
+                        reason: PermissionCancellationReason::custom(
+                            CustomPermissionCancellationReason::new("withdraw", "caller withdrew")
+                                .unwrap(),
+                        ),
+                        actor: actor(),
+                    };
+                    let _ = agent.cancel_permission(request).await;
+                }),
+                format!("permission cancellation in session {session}"),
+            ),
+            Self::AnswerQuestion => (
+                Box::pin(async move {
+                    let answer = QuestionAnswer {
+                        actor: actor(),
+                        execution_id: execution,
+                        id: QuestionId::new("ask").unwrap(),
+                        choices: None,
+                    };
+                    let _ = agent.answer_question(answer).await;
+                }),
+                format!("question answer in session {session}"),
+            ),
+        }
+    }
+}
+
+/// Every spawn-and-join operation, with a waker that panics with a payload
+/// whose drop panics. Tokio drops that payload outside its own catch, so
+/// each case runs in a child process: an escaping panic fails that case by
+/// name instead of ending this test binary.
+#[test]
+fn panicking_payload_waiter_of_each_joined_operation_is_contained() {
+    for operation in JOINED_OPERATIONS {
+        run_case_in_child_process("joined_operation_child", &format!("{operation:?}"));
+    }
+}
+
+/// One case of `panicking_payload_waiter_of_each_joined_operation_is_contained`,
+/// first with a waker that does not panic. A current-thread runtime cannot
+/// run the spawned owner before the operation's first poll, so the caller's
+/// waker is registered with the `JoinHandle` on every run; a panic escaping
+/// Tokio's completion unwinds out of `block_on` and fails this child.
+#[test]
+#[ignore = "run in a child process by panicking_payload_waiter_of_each_joined_operation_is_contained"]
+fn joined_operation_child() {
+    let case = std::env::var(CHILD_ENV).expect("run through run_case_in_child_process");
+    let operation = JOINED_OPERATIONS
+        .into_iter()
+        .find(|operation| format!("{operation:?}") == case)
+        .unwrap_or_else(|| panic!("unknown case {case}"));
+    let (warnings, _capture) = Warnings::capture();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        for fault in [Fault::None, Fault::PanicWithPanickingPayload] {
+            let (agent, _backend, _storage) = probe(false).await;
+            warnings.take();
+            let (caller, notification) = caller_wake(fault);
+            let (mut running, waiter) = operation.start(&agent);
+            register(&mut running, Waker::from(caller.clone()));
+            timeout(BOUND, notification).await.unwrap().unwrap();
+            timeout(BOUND, running).await.unwrap();
+            assert_eq!(caller.calls.load(Ordering::SeqCst), 1, "{operation:?}");
+            assert_contained(&warnings.take(), fault, &waiter);
+            timeout(BOUND, agent.close(actor())).await.unwrap().unwrap();
+        }
     });
 }

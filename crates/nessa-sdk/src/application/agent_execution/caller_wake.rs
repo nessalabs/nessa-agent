@@ -60,6 +60,8 @@ pub(crate) enum CallerWaiter {
     PermissionCancellation(SessionId),
     /// `Agent::answer_question` on this session's Agent.
     QuestionAnswer(SessionId),
+    /// `AgentInitializationError::retry_cleanup`.
+    InitializationCleanup,
 }
 
 impl fmt::Display for CallerWaiter {
@@ -135,6 +137,7 @@ impl fmt::Display for CallerWaiter {
                     session.as_str()
                 )
             }
+            Self::InitializationCleanup => formatter.write_str("initialization cleanup retry"),
             Self::QuestionAnswer(session) => {
                 write!(formatter, "question answer in session {}", session.as_str())
             }
