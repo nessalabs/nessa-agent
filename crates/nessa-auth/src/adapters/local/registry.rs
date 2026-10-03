@@ -718,9 +718,15 @@ impl LocalCredentialStore {
 
     /// Replace local owner credentials while holding the offline registry lock.
     /// Existing owner credentials are revoked in the same durable commit.
+    ///
+    /// The new credential carries exactly `actions` on this gateway, for the
+    /// same owner principal, membership and organization. The owner's grant set
+    /// is the caller's (composition's) to choose, so recovery also brings an
+    /// owner credential issued under an earlier set to the current one.
     pub fn recover_owner(
         &self,
         credential_id: String,
+        actions: &[&str],
         issued_at: u64,
         expires_at: Option<u64>,
     ) -> Result<BootstrapOutcome, LocalStoreError> {
@@ -736,22 +742,30 @@ impl LocalCredentialStore {
             .ok_or(LocalStoreError::Corrupt)?;
         // Recovery replaces the owner credential itself, not everything the
         // owner principal holds: only credentials in the owner's organization
-        // that carry `credential.manage`. The same scope selects the grants to
-        // carry forward and the credentials to end.
+        // that carry `credential.manage`. That scope selects the credentials to
+        // end; an initialized registry always has one.
         let replaces = Replaces {
             principal_id: &membership.principal_id,
             organization_id: &membership.organization_id,
             requiring_action: Some("credential.manage"),
         };
-        let grants = current
+        if !current
             .credentials
             .iter()
-            .rev()
-            .find(|entry| replaces.matches(&entry.metadata))
-            .ok_or(LocalStoreError::Corrupt)?
-            .metadata
-            .grants
-            .clone();
+            .any(|entry| replaces.matches(&entry.metadata))
+        {
+            return Err(LocalStoreError::Corrupt);
+        }
+        let grants = actions
+            .iter()
+            .map(|action| CredentialGrantDto {
+                action: (*action).to_owned(),
+                resource: ResourceDto {
+                    organization_id: membership.organization_id.clone(),
+                    id: current.gateway_id.clone(),
+                },
+            })
+            .collect();
         let metadata = CredentialMetadataDto {
             id: credential_id,
             principal_id: membership.principal_id.clone(),
@@ -2018,18 +2032,22 @@ mod tests {
         let store = open_store_with_config(&path, small).unwrap();
         store.bootstrap(bootstrap()).unwrap();
         assert!(matches!(
-            store.recover_owner("next".into(), 110, None),
+            store.recover_owner("next".into(), &["credential.manage"], 110, None),
             Err(LocalStoreError::Capacity)
         ));
         drop(store);
         let store = open_store_with_config(&path, larger).unwrap();
-        store.recover_owner("next".into(), 110, None).unwrap();
+        store
+            .recover_owner("next".into(), &["credential.manage"], 110, None)
+            .unwrap();
         drop(store);
         assert!(open_store_with_config(&path, small).is_err());
         assert!(open_store_with_config(&path, larger).is_ok());
         let independent = open_store(root.path().join("other/credentials.v1.json")).unwrap();
         independent.bootstrap(bootstrap()).unwrap();
-        independent.recover_owner("next".into(), 110, None).unwrap();
+        independent
+            .recover_owner("next".into(), &["credential.manage"], 110, None)
+            .unwrap();
         let tiny = LocalStoreConfig {
             max_registry_bytes: 16,
             ..LocalStoreConfig::default()
@@ -2273,7 +2291,12 @@ mod tests {
 
         let identity = store.identity().unwrap();
         let recovered = store
-            .recover_owner("replacement-owner".into(), 150, Some(250))
+            .recover_owner(
+                "replacement-owner".into(),
+                &["credential.manage"],
+                150,
+                Some(250),
+            )
             .unwrap();
         assert_eq!(recovered.metadata.principal_id, "owner");
         assert_eq!(store.identity().unwrap().gateway_id, identity.gateway_id);
@@ -2287,6 +2310,63 @@ mod tests {
             Err(AccessError::InvalidCredential)
         );
         assert!(ready(store.verify(&recovered.evidence, &audience)).is_ok());
+    }
+
+    /// Design row S18: recovery issues exactly the owner grants it is given, for
+    /// the same owner, and revokes the earlier owner credential, so an owner
+    /// credential from an earlier grant set is brought to the current one.
+    #[test]
+    fn recovery_issues_the_given_owner_grants_and_revokes_the_old_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open_store(root.path().join("owner/credentials.v1.json")).unwrap();
+        let mut earlier = bootstrap();
+        earlier.grants = ["server.read", "conversation.write", "credential.manage"]
+            .into_iter()
+            .map(|action| grant("org-1", action))
+            .collect();
+        earlier.expires_at = None;
+        let original = store.bootstrap(earlier).unwrap();
+        let identity = store.identity().unwrap();
+        let current = [
+            "server.read",
+            "conversation.read",
+            "conversation.write",
+            "credential.manage",
+        ];
+        let recovered = store
+            .recover_owner("owner-current".into(), &current, 150, None)
+            .unwrap();
+        assert_eq!(
+            recovered
+                .metadata
+                .grants
+                .iter()
+                .map(|grant| (
+                    grant.action.as_str(),
+                    grant.resource.organization_id.as_str(),
+                    grant.resource.id.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            current
+                .iter()
+                .map(|action| (*action, "org-1", "gateway-1"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(recovered.metadata.principal_id, "owner");
+        assert_eq!(recovered.metadata.organization_id, "org-1");
+        assert_eq!(store.identity().unwrap().gateway_id, identity.gateway_id);
+        let audience = AudienceId::new("gateway-1").unwrap();
+        assert_eq!(
+            ready(store.verify(&original.evidence, &audience)),
+            Err(AccessError::InvalidCredential)
+        );
+        assert!(ready(store.verify(&recovered.evidence, &audience)).is_ok());
+        // The earlier owner's revocation is recorded, not erased.
+        assert!(recovered
+            .transitions
+            .iter()
+            .any(|transition| transition.credential_id == "owner-credential"
+                && transition.after.revoked_at == Some(150)));
     }
 
     /// Give `principal_id` a `server.read` credential in a second organization.
@@ -2392,7 +2472,12 @@ mod tests {
         let elsewhere = seed_credential_in_second_organization(&store, "owner");
 
         let recovered = store
-            .recover_owner("replacement-owner".into(), 150, Some(250))
+            .recover_owner(
+                "replacement-owner".into(),
+                &["credential.manage"],
+                150,
+                Some(250),
+            )
             .unwrap();
 
         let audience = AudienceId::new("gateway-1").unwrap();
@@ -2894,7 +2979,9 @@ mod tests {
         let revoked = store
             .revoke_sync(revoke("revoke-reader", "reader-credential", 150))
             .unwrap();
-        let recovered = store.recover_owner("owner-2".into(), 160, None).unwrap();
+        let recovered = store
+            .recover_owner("owner-2".into(), &["credential.manage"], 160, None)
+            .unwrap();
 
         let all = transitions(&store);
         assert_eq!(

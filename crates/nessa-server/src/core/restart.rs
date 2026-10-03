@@ -82,7 +82,12 @@ pub(super) fn restart(error: &RunError) -> Restart {
                 GatewayIdentityError::PrivateState(
                     PrivateStateError::Corrupt | PrivateStateError::Conflict,
                 )
-                | GatewayIdentityError::Registry(PairingStoreError::GatewayKeyHistoryExists),
+                | GatewayIdentityError::Registry(
+                    PairingStoreError::GatewayKeyHistoryExists
+                    | PairingStoreError::PrivateState(
+                        PrivateStateError::Corrupt | PrivateStateError::Conflict,
+                    ),
+                ),
             ),
         ) => Restart::Pointless,
         // Everything below is either transient by nature or carries no typed
@@ -139,6 +144,13 @@ mod tests {
             ))),
             RunError::Native(NativeFailure::PrivateState(PrivateStateError::Corrupt)),
             RunError::Native(NativeFailure::PrivateState(PrivateStateError::Conflict)),
+            // The same private state, met by the first key publication.
+            RunError::Native(NativeFailure::Identity(GatewayIdentityError::Registry(
+                PairingStoreError::PrivateState(PrivateStateError::Corrupt),
+            ))),
+            RunError::Native(NativeFailure::Identity(GatewayIdentityError::Registry(
+                PairingStoreError::PrivateState(PrivateStateError::Conflict),
+            ))),
         ] {
             assert_eq!(restart(&error), Restart::Pointless, "{error}");
         }
@@ -178,6 +190,9 @@ mod tests {
             ))),
             RunError::Native(NativeFailure::Identity(GatewayIdentityError::Registry(
                 PairingStoreError::Unavailable,
+            ))),
+            RunError::Native(NativeFailure::Identity(GatewayIdentityError::Registry(
+                PairingStoreError::PrivateState(PrivateStateError::Locked),
             ))),
             RunError::Native(NativeFailure::Directory(Error::from(
                 ErrorKind::PermissionDenied,

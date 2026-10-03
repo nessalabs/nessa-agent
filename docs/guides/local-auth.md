@@ -120,8 +120,10 @@ this protocol and automatically loads its own credential through the native host
 `auth/surfaces/nessa-panel.token`, with all currently implemented permissions:
 `server.read`, `conversation.read`, `conversation.write`, and `credential.manage`.
 The owner credential `auth init` writes carries the same four; `conversation.read`
-is what lets it pair a device, whose consent is to read conversations. A credential
-issued before this keeps its grants; provision a new one to pair devices with it.
+is what lets it pair a device, whose consent is to read conversations. Credentials
+issued before keep the grants they were issued with: run `auth recover-owner` (below)
+to bring the owner credential to the current grants, and re-provision the panel with
+`auth provision-surface --local --surface-id nessa-panel`.
 Use `auth init --local --owner-token-file /absolute/new.token --chat-grants server.read,conversation.write`
 to restrict initial chat access. Client metadata never grants permissions.
 
@@ -192,8 +194,10 @@ target/debug/nessa auth recover-owner --local --owner-token-file "$HOME/nessa-ow
 target/debug/nessa server
 ```
 
-Recovery keeps the same gateway and organization and revokes previous
-owner credentials. Other surface credentials retain their separate grants. It needs exclusive access to the registry, so it
+Recovery keeps the same gateway, organization and owner, revokes previous
+owner credentials, and issues the new one with the current owner grants (an owner
+credential from an earlier release is brought up to date this way). Other surface
+credentials retain their separate grants. It needs exclusive access to the registry, so it
 fails while the server holds the lock. Never delete the registry to rotate a
 token: that would discard its identity and revocation history.
 

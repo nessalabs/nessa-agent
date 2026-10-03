@@ -6,7 +6,20 @@
 //! Unix only: the process is stopped with SIGTERM, as launchd stops it.
 use super::product_client::ProductClient;
 use super::support::{pending, WAIT};
-use nessa_auth::adapters::pairing::{ManualCode, OsEntropy};
+use nessa_auth::{
+    adapters::{
+        local::{BootstrapRequest, LocalCredentialStore},
+        pairing::{ManualCode, OsEntropy},
+    },
+    application::{
+        dto::{
+            CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
+            OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
+        },
+        ports::{AccessReader, CredentialEvidence, CredentialVerifier},
+    },
+    domain::AudienceId,
+};
 use nessa_server::{
     app::dependencies::RuntimeDependencies,
     device_pairing::infrastructure::{wire::NativePairingStatus, NativeEnrollmentClient},
@@ -249,4 +262,208 @@ async fn native_restart_ends_available_and_keeps_the_key() {
     });
     assert_eq!(gateway.key(), key, "the key is restored, not regenerated");
     assert!(tokio::task::block_in_place(|| server.stop()).success());
+}
+
+/// The actions a credential `token` carries, read from the registry at `data`.
+async fn grants(data: &Path, token: &str) -> Vec<String> {
+    let store = LocalCredentialStore::open(data.join("ci/auth"), "credentials.v1.json").unwrap();
+    let gateway = AudienceId::new(store.gateway_id().unwrap()).unwrap();
+    let evidence = CredentialEvidence::new(token.trim().as_bytes().to_vec()).unwrap();
+    let verified = store.verify(&evidence, &gateway).await.unwrap();
+    let mut actions = store
+        .read(&verified.credential_id)
+        .await
+        .unwrap()
+        .credential
+        .grants()
+        .iter()
+        .map(|grant| grant.action().as_str().to_owned())
+        .collect::<Vec<_>>();
+    actions.sort();
+    actions
+}
+
+const OWNER_GRANTS: [&str; 4] = [
+    "conversation.read",
+    "conversation.write",
+    "credential.manage",
+    "server.read",
+];
+
+/// Row S17 (panel): the default `nessa-panel` surface carries the owner set,
+/// whether `auth init` provisioned it or `provision-surface` without
+/// `--grants` provisioned it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn default_panel_surface_carries_the_owner_grants() {
+    let gateway = Gateway::new(false);
+    let data = gateway.root.path().join("data");
+    let panel = data.join("ci/auth/surfaces/nessa-panel.token");
+    assert_eq!(
+        grants(&data, &std::fs::read_to_string(&panel).unwrap()).await,
+        OWNER_GRANTS
+    );
+    assert_eq!(grants(&data, &gateway.token).await, OWNER_GRANTS);
+    std::fs::remove_file(&panel).unwrap();
+    let again = command(&data)
+        .args([
+            "auth",
+            "provision-surface",
+            "--local",
+            "--surface-id",
+            "nessa-panel",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        again.status.success(),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    assert_eq!(
+        grants(&data, &std::fs::read_to_string(&panel).unwrap()).await,
+        OWNER_GRANTS
+    );
+}
+
+/// Row S18: an owner credential issued under the earlier three-action set
+/// cannot create a code; `auth recover-owner` re-issues it for the same owner
+/// with the current set, revoking the old one, and the new one can.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recovered_old_owner_can_pair_devices() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data.join("ci/auth")).unwrap();
+    // A registry as `auth init` wrote it before row S17, built through the
+    // registry API rather than by editing files.
+    let old = {
+        let store =
+            LocalCredentialStore::open(data.join("ci/auth"), "credentials.v1.json").unwrap();
+        let grant = |action: &str| CredentialGrantDto {
+            action: action.into(),
+            resource: ResourceDto {
+                organization_id: "org".into(),
+                id: "gateway".into(),
+            },
+        };
+        let issued = store
+            .bootstrap(BootstrapRequest {
+                gateway_id: "gateway".into(),
+                organization: OrganizationInputDto { id: "org".into() },
+                principal: PrincipalInputDto {
+                    id: "owner".into(),
+                    kind: PrincipalKindDto::Human,
+                },
+                membership: MembershipInputDto {
+                    id: "owner-membership".into(),
+                    principal_id: "owner".into(),
+                    organization_id: "org".into(),
+                    role: MembershipRoleDto::Admin,
+                    state: MembershipStateDto::Active,
+                },
+                credential_id: "old-owner".into(),
+                issued_at: 1,
+                expires_at: None,
+                grants: ["server.read", "conversation.write", "credential.manage"]
+                    .into_iter()
+                    .map(grant)
+                    .collect(),
+            })
+            .unwrap();
+        String::from_utf8(issued.evidence.expose_bytes().to_vec()).unwrap()
+    };
+    let native = free_address();
+    let mut file = nessa_local_storage::open(
+        &data.join("ci/config.json"),
+        nessa_local_storage::OpenMode::CreateNew,
+    )
+    .unwrap();
+    file.write_all(
+        json!({"native": {"listenAddress": native.to_string()}})
+            .to_string()
+            .as_bytes(),
+    )
+    .unwrap();
+    file.sync_all().unwrap();
+    let gateway = Gateway {
+        root,
+        token: old.clone(),
+        product: free_address(),
+        native: Some(native),
+    };
+    let server = tokio::task::block_in_place(|| gateway.start());
+    let refused =
+        tokio::task::block_in_place(|| gateway.owner().refused("pairing.create", json!({})));
+    assert_eq!(
+        refused, "forbidden",
+        "the earlier owner set cannot propose a consent"
+    );
+    assert!(tokio::task::block_in_place(|| server.stop()).success());
+    let next_file = gateway.root.path().join("owner-next.token");
+    let recovered = command(&data)
+        .args(["auth", "recover-owner", "--local", "--owner-token-file"])
+        .arg(&next_file)
+        .output()
+        .unwrap();
+    assert!(
+        recovered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+    let next = std::fs::read_to_string(&next_file)
+        .unwrap()
+        .trim()
+        .to_owned();
+    assert_eq!(grants(&data, &next).await, OWNER_GRANTS);
+    let gateway = Gateway {
+        token: next,
+        ..gateway
+    };
+    let server = tokio::task::block_in_place(|| gateway.start());
+    tokio::task::block_in_place(|| {
+        let mut owner = gateway.owner();
+        let session = owner.ok("auth.session", json!({}));
+        assert_eq!(
+            session["principalId"], "owner",
+            "the owner identity is preserved"
+        );
+        assert_eq!(session["organizationId"], "org");
+        assert_eq!(session["gatewayId"], "gateway");
+        owner.ok("pairing.create", json!({}));
+    });
+    // The earlier owner credential is revoked.
+    let answer = tokio::task::block_in_place(|| refused_authentication(gateway.product, &old));
+    assert!(
+        answer.as_ref().is_none_or(|frame| frame["ok"] != true),
+        "the earlier owner credential no longer authenticates: {answer:?}"
+    );
+    assert!(tokio::task::block_in_place(|| server.stop()).success());
+}
+
+/// Authenticate `credential` on a fresh socket and return the answer, or
+/// `None` if the gateway closed the socket instead.
+fn refused_authentication(address: SocketAddr, credential: &str) -> Option<Value> {
+    let (mut socket, _) = tungstenite::connect(format!("ws://{address}/session")).unwrap();
+    let challenge: Value = loop {
+        if let tungstenite::Message::Text(text) = socket.read().unwrap() {
+            break serde_json::from_str(&text).unwrap();
+        }
+    };
+    socket
+        .send(tungstenite::Message::Text(
+            json!({"type": "req", "id": "1", "method": "session.authenticate", "params": {
+                "minVersion": 1, "maxVersion": 1, "nonce": challenge["payload"]["nonce"],
+                "credential": credential, "client": {"id": "nessa-cli"}}})
+            .to_string()
+            .into(),
+        ))
+        .unwrap();
+    loop {
+        match socket.read() {
+            Ok(tungstenite::Message::Text(text)) => {
+                return Some(serde_json::from_str::<Value>(&text).unwrap())
+            }
+            Ok(tungstenite::Message::Close(_)) | Err(_) => return None,
+            Ok(_) => continue,
+        }
+    }
 }

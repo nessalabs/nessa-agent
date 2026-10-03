@@ -56,7 +56,8 @@ pub(super) fn execute_with_context(
     let now = SystemClock.unix_seconds();
     let credential_id = Uuid::new_v4().to_string();
     let outcome = if recover {
-        store.recover_owner(credential_id, now, expires_at)
+        let owner = OWNER_GRANTS.split(',').collect::<Vec<_>>();
+        store.recover_owner(credential_id, &owner, now, expires_at)
     } else {
         let gateway_id = Uuid::new_v4().to_string();
         let organization_id = Uuid::new_v4().to_string();
