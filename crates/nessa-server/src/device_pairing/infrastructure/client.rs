@@ -270,7 +270,10 @@ impl NativeEnrollmentClient {
     }
 }
 fn client_endpoint(stream: &TcpStream) -> Result<Arc<WakeEndpoint>, NativeClientError> {
-    WakeEndpoint::new(stream).map_err(|error| NativeClientError::Io(error.kind()))
+    let target = stream
+        .peer_addr()
+        .map_err(|error| NativeClientError::Io(error.kind()))?;
+    Ok(WakeEndpoint::new(target))
 }
 struct ClientPermit {
     endpoints: Vec<Arc<WakeEndpoint>>,

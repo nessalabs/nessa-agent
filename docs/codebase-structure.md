@@ -379,7 +379,8 @@ connection workers and their shutdown wake-ups (`connection.rs`,
 `connection/wake.rs`), the listener, the device client and gateway identity
 restore. It is not mounted in the default gateway. Public tests are under
 `nessa-server/tests/device_pairing/infrastructure/`, registered by
-`tests/native_enrollment.rs`; codec tests are `tests/device_pairing/wire.rs`.
+`tests/native_enrollment.rs`; codec tests are `tests/device_pairing/wire.rs`, and
+the socket stream's unit tests are `tests/device_pairing/infrastructure/deadline_stream.rs`.
 Design: [device pairing](design/auth/device-pairing.md#native-enrollment-consumer-b1).
 
 `crates/nessa-auth` is a workspace library with pure domain models and

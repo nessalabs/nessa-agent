@@ -3,15 +3,15 @@
 //! A wake sets a per-socket stop flag. It makes no socket call from another
 //! thread: on Windows, `shutdown` from another thread does not interrupt a
 //! blocking receive, so the same flag is the mechanism on every OS. The
-//! worker's `DeadlineStream` caps each OS wait at [`WAKE_TICK`] and checks the
-//! flag between waits, so a woken worker's IO fails within one tick.
+//! worker's `DeadlineStream` caps each read wait at [`WAKE_TICK`] and checks the
+//! flag between waits, so a woken worker's read fails within one tick. A send
+//! in progress is not interrupted: it ends at its phase deadline.
 //!
 //! Registering an endpoint grants no admission: the caller must already hold a
 //! connection permit. A wake outcome does not say the worker has finished;
 //! drain is reported separately by each owner's `shutdown`.
 use std::{
-    io::Result as IoResult,
-    net::{SocketAddr, TcpStream},
+    net::SocketAddr,
     sync::{Arc, Mutex, PoisonError, Weak},
     time::Duration,
 };
@@ -70,13 +70,12 @@ pub(in crate::device_pairing::infrastructure) struct WakeEndpoint {
     state: Mutex<EndpointState>,
 }
 impl WakeEndpoint {
-    pub(in crate::device_pairing::infrastructure) fn new(
-        socket: &TcpStream,
-    ) -> IoResult<Arc<Self>> {
-        Ok(Arc::new(Self {
-            target: socket.peer_addr()?,
+    /// `target` is the peer address of the connection's socket.
+    pub(in crate::device_pairing::infrastructure) fn new(target: SocketAddr) -> Arc<Self> {
+        Arc::new(Self {
+            target,
             state: Mutex::new(EndpointState { wake: None }),
-        }))
+        })
     }
     /// Whether the owner has woken this socket; its IO must stop.
     pub(in crate::device_pairing::infrastructure) fn woken(&self) -> bool {
