@@ -854,7 +854,12 @@ provider adapters remain separate features. Existing design proposals do not rep
 **Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.
 Owns domain identities/memberships/credential metadata, boundary DTO validation,
 and injected session authentication contracts. Embedded Cedar evaluates product policies through the application port. The local credential backend and guarded `/session` gateway are implemented.
-The auth pairing producer owns exact consent/grant staging, invitation transitions and durable private-state acknowledgement through its injected ports. Its OPAQUE/TLS adapters expose raw cryptographic transport, with application framing left to consumers. Native listener and protected activation remain separate consumers. See [device pairing](design/auth/device-pairing.md).
+The auth pairing producer owns exact consent/grant staging, invitation transitions and durable private-state acknowledgement through its injected ports. Its OPAQUE/TLS adapters expose raw cryptographic transport, with application framing left to consumers. The server `device_pairing` consumer implements native enrollment on top of it: the
+JSON codec and framing, the gateway runtime and listener, and the device client —
+owner create, PAKE claim over TLS, exact-key approval and pinned status recovery.
+It ends at Approved and is not mounted in the default gateway; owner product
+methods, startup composition, receiver staging and Active publication are later
+slices. See [device pairing](design/auth/device-pairing.md).
 
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
 
