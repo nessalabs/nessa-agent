@@ -1,8 +1,8 @@
 use super::{
     attachment::AttachmentLease, InvocationCancellationEvent, InvocationRecord,
     InvocationSchedulingEvent, MessageCommitClock, ProviderContext, QueueHistoryRecord,
-    SessionChange, SessionSaveGeneration, SessionSaveUnit, SessionSnapshot, SessionStorage,
-    SessionStorageLease, StorageError, StorageFuture, SubmissionAcknowledgement,
+    SessionChange, SessionLoadState, SessionSaveGeneration, SessionSaveUnit, SessionSnapshot,
+    SessionStorage, SessionStorageLease, StorageError, StorageFuture, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -267,9 +267,14 @@ impl SessionManager {
             .await
             .map_err(StorageError::bounded)
             .map_err(AgentError::Storage)?;
-        let (saved, mut save_generation) = saved
-            .into_published(&self.id)
-            .map_err(AgentError::Storage)?;
+        // Initialization derives its plan only from the prior publication and
+        // the provider identity, so a plan this method left unfinished — its
+        // Unit durable, its completion refused or never written — is derived
+        // again here and retried exactly. Any other unfinished save does not
+        // match that plan and stays unresolved (design row O12).
+        let unfinished = saved.state() == SessionLoadState::Unfinished;
+        let (saved, mut save_generation) =
+            saved.into_checked(&self.id).map_err(AgentError::Storage)?;
         let compacted = saved.as_ref().cloned();
         drop(saved);
         let identity = provider.identity();
@@ -310,6 +315,9 @@ impl SessionManager {
                     .clone(),
             ));
         }
+        if unfinished && changes.is_empty() {
+            return Err(AgentError::Storage(StorageError::Unresolved));
+        }
         if !changes.is_empty() {
             let unit = SessionSaveUnit::new(changes).map_err(AgentError::Storage)?;
             let receipt = catch_storage_operation(|| {
@@ -321,6 +329,12 @@ impl SessionManager {
             })
             .await
             .map_err(StorageError::bounded)
+            .map_err(|error| match error {
+                // The storage refuses a plan that differs from the unfinished
+                // one before appending anything; that save is someone else's.
+                StorageError::Corrupt(_) if unfinished => StorageError::Unresolved,
+                error => error,
+            })
             .map_err(AgentError::Storage)?;
             save_generation = receipt
                 .next_for(&save_generation, 1)

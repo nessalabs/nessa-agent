@@ -39,7 +39,7 @@ piece slices and choose their own retained storage.
 
 `RecordStorage` owns a sixteen-entry process cache keyed by the exact stream key
 and incarnation. A cache entry contains monotonic forward framing/group progress,
-a fixed captured ceiling, a64-entry completion-proof ring, and at most one
+a fixed captured ceiling, a 64-entry completion-proof ring, and at most one
 separately allocated historical framing/group pass. An operation checks out that state
 before I/O, leaving an occupied entry. Its drop guard returns progress on normal
 completion or unwind. Occupied entries cannot be evicted or replaced by a second
@@ -83,8 +83,9 @@ reset forward progress, its captured ceiling, or its known later failure.
 | D6 | The source is dropped between bounded historical responses; an idle entry is evicted or cache/process restarts | Checkout/drop ownership returns actual progress. `historical_scan_survives_public_source_drop_and_recreation` drops the first actual source after a Preparing response and a replacement reaches the same historical publication and newer head. Exact16/16/8 returned work is historical/private evidence, not current public acceptance. In-flight historical answer cancellation has no existing public cancellation API and remains unverified. Existing abandoned-answer, eviction, occupied-owner and restarted-process fixtures cover their named boundaries. |
 | D7 | A retained proof is followed by actual Reset, prune, or same-incarnation shrink | Current physical evidence refuses IdentityChanged/Pruned before reusing proof. `shared_completion_proof_refuses_reset_and_same_incarnation_shrink` uses public lease.erase and an actual SQLite tail shrink; a new Reset incarnation validates independently. True policy-prune acceptance through a supported public SDK seam remains OPEN. |
 | D8 | An active historical query finishes while a different unproven query polls; alternatively a prior validated Complete is requested | Finish the original finite scan, retain its exact query/result until a new unknown query acquires, and return Preparing to the different nonproof query. A known Complete can answer immediately while the scan is active; Unit11 does not become such a proof. Stream replacement/pruning errors during the original physical read apply to both queries and propagate. D3 and `historical_scan_survives_public_source_drop_and_recreation` exercise completion/proof paths; deterministic replacement/prune during that read remains unverified. |
+| D9 | Forward validation has passed a fixed target that lies above its last publication — a repeated head on an unchanged partial tail, a second source's captured tail, or a non-completion page target — and the forward scan has not failed | Answer with that last publication: the forward scan validated the whole range and found no completion in it. No historical scan starts and no retained one is replaced. The sticky D5 refusal is checked first. `repeated_head_inside_validated_partial_tail_does_no_read_work` repeats head on an unchanged 2 MiB partial Unit tail and asserts zero additional returned discovery frames. |
 
-The completion-proof retention moves from the source's existing64-entry policy
+The completion-proof retention moves from the source's existing 64-entry policy
 to this one cache owner. A historical miss costs O(T) total returned validation
 frames over bounded calls. Repeated eviction/churn can repeat that cost; no global
 zero-replay or O(H) full-session claim follows. Counts exclude SQLite decoding,

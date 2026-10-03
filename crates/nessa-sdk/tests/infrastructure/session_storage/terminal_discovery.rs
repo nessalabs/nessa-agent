@@ -21,7 +21,10 @@ use event_stream::{
     AdvanceRetentionFloor, EnableRetryPolicy, EventSink, IncarnationId, LifecycleAction,
     LifecycleOperationId, LifecycleRequest, NewEvent, Payload, RetentionOperationId, StreamId,
 };
-use nessa_sync::replication::domain::{Id, PageRequest, Scope};
+use nessa_sync::replication::{
+    application::RecordSource,
+    domain::{Id, PageRequest, Scope},
+};
 use std::{env, panic, process::Command, sync::atomic::Ordering, thread};
 
 fn sid(value: &str) -> Id {
@@ -36,6 +39,22 @@ async fn head(storage: &RecordStorage, id: &SessionId) -> RecordReadStatus<u64> 
     let scope = source.scope(sid("receiver"), sid("epoch"));
     tokio::task::spawn_blocking(move || {
         thread::spawn(move || source.bounded_head(&scope).unwrap())
+            .join()
+            .unwrap()
+    })
+    .await
+    .unwrap()
+}
+// The blocking head captures the physical tail as its fixed ceiling.
+async fn captured_head(storage: &RecordStorage, id: &SessionId) -> u64 {
+    let mut source = storage
+        .record_source(id, sid("origin"))
+        .await
+        .unwrap()
+        .unwrap();
+    let scope = source.scope(sid("receiver"), sid("epoch"));
+    tokio::task::spawn_blocking(move || {
+        thread::spawn(move || source.head(&scope).unwrap())
             .join()
             .unwrap()
     })
@@ -364,6 +383,45 @@ async fn partial_tail_preserves_hash_until_seal_and_unknown_target_stays_invalid
             .returned_records
             .load(Ordering::SeqCst),
         before_completion + 1
+    );
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn repeated_head_inside_validated_partial_tail_does_no_read_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let id = SessionId::new("conversation").unwrap();
+    let runtime = storage.runtime().await.unwrap();
+    let stream = runtime
+        .create_stream(&StreamId::new(id.as_str()).unwrap())
+        .await
+        .unwrap();
+    let [unit, _] = save_facts(&stream, 0, 0, 2 * 1024 * 1024);
+    let frames = stream_fact::frame_fact(&unit, 1).unwrap();
+    assert!(
+        frames.len() > 16,
+        "the partial tail needs several bounded steps"
+    );
+    for frame in frames.iter().take(frames.len() - 1) {
+        runtime.append(&stream, frame.clone()).await.unwrap();
+    }
+    assert_eq!(captured_head(&storage, &id).await, 0);
+    let validated = storage
+        .terminal_cache
+        .returned_records
+        .load(Ordering::SeqCst);
+    // The unchanged tail lies inside the forward scan's validated range above
+    // its last publication; its answer is that publication, with no replay.
+    for _ in 0..3 {
+        assert_eq!(captured_head(&storage, &id).await, 0);
+    }
+    assert_eq!(
+        storage
+            .terminal_cache
+            .returned_records
+            .load(Ordering::SeqCst),
+        validated
     );
     storage.shutdown().await.unwrap();
 }

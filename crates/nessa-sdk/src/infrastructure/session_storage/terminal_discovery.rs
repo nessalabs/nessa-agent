@@ -22,7 +22,7 @@ use std::{
 };
 
 const CACHE_ENTRIES: usize = 16;
-// The prior source-local64-entry policy has this single shared owner.
+// The prior source-local 64-entry policy has this single shared owner.
 const PROVEN_COMPLETIONS: usize = 64;
 const STEP: PageLimits = PageLimits {
     max_records: 16,
@@ -284,6 +284,12 @@ impl TerminalCache {
             if target <= state.forward.validator.offset() {
                 if state.forward.failed && target > state.forward.groups.published() {
                     return Err(SourceError::Unavailable);
+                }
+                // The forward scan validated (published, validator] and found
+                // no completion there, so a target in that range is answered by
+                // the last publication without replaying history from zero.
+                if target > state.forward.groups.published() {
+                    return Ok(RecordReadStatus::Ready(state.forward.groups.published()));
                 }
                 let replace = state.historical.as_ref().is_none_or(|historical| {
                     historical.query != query
