@@ -135,6 +135,7 @@ pub(crate) async fn serve(
     initialized: Arc<Value>,
     visibility: Arc<Visibility>,
     forwarded: ForwardedResults,
+    server: &str,
     input: impl AsyncRead + Unpin,
     mut output: impl AsyncWrite + Unpin,
 ) {
@@ -166,7 +167,7 @@ pub(crate) async fn serve(
                     // report the call before its result is here to take
                     // (`s1_…_before_the_harness_is_answered`).
                     if let Some(call) = call {
-                        keep_structured(&forwarded, call, &answer);
+                        keep_structured(&forwarded, call, server, &answer);
                     }
                     if !send(&mut output, &answer).await {
                         return;
@@ -293,9 +294,10 @@ fn call_id(params: Option<&Value>) -> Option<ToolCallId> {
 }
 
 /// Keep the `structuredContent` of `answer` — the harness's answer, as it will
-/// be written — under `call`, when it is a result that has one. An error,
+/// be written — under `call`, as `server`'s answer, when it is a result that
+/// has one. An error,
 /// including a result too large for a frame ([`answer`]), keeps nothing.
-fn keep_structured(forwarded: &ForwardedResults, call: ToolCallId, answer: &Value) {
+fn keep_structured(forwarded: &ForwardedResults, call: ToolCallId, server: &str, answer: &Value) {
     let Some(structured) = answer
         .get("result")
         .and_then(|result| result.get("structuredContent"))
@@ -304,7 +306,7 @@ fn keep_structured(forwarded: &ForwardedResults, call: ToolCallId, answer: &Valu
         return;
     };
     if let Ok(result) = wire::structured_result(structured) {
-        forwarded.record(call, result);
+        forwarded.record(call, server, result);
     }
 }
 

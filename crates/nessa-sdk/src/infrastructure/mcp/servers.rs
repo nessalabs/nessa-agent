@@ -635,13 +635,15 @@ impl McpSession {
     /// not see are left out of its lists and refused if called; the server's
     /// `*/list_changed` notices are passed on. A `tools/call` result's
     /// `structuredContent` is kept in the grant's [`McpOwner::forwarded`]
-    /// under the harness's id for the call before the harness is answered.
+    /// under the harness's id for the call, with this server's name, before
+    /// the harness is answered.
     pub async fn serve(self, input: impl AsyncRead + Unpin, output: impl AsyncWrite + Unpin) {
         stand_in::serve(
             self.owner.0.connection.clone(),
             self.owner.0.initialized.clone(),
             self.owner.0.visibility.clone(),
             self.owner.0.owned_by.forwarded(),
+            &self.owner.0.server,
             input,
             output,
         )

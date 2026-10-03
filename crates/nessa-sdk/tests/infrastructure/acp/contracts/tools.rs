@@ -104,8 +104,8 @@ async fn a_forwarded_structured_result_reaches_the_completed_update_of_its_call(
     let structured = ToolContent::structured(rows["rawOutput"].as_str().unwrap()).unwrap();
     let refusal = ToolContent::structured(r#"{"reason":"on purpose"}"#).unwrap();
     let forwarded = ForwardedResults::new();
-    forwarded.record(id(&rows), structured.clone());
-    forwarded.record(id(&fails), refusal.clone());
+    forwarded.record(id(&rows), "mcptest", structured.clone());
+    forwarded.record(id(&fails), "mcptest", refusal.clone());
     config.stand_ins = StandInSessions::granted_by(Arc::new(ForwardingGrants(forwarded.clone())));
     let binding = ClaudeAcpProvider::new(
         config,
@@ -150,8 +150,8 @@ async fn a_forwarded_structured_result_reaches_the_completed_update_of_its_call(
     assert_eq!(completed, &Some(vec![said(&rows), structured]));
     assert_eq!(of(&fails).last().unwrap(), &Some(vec![said(&fails)]));
     // Taken once; the failed call's result is left to be dropped.
-    assert_eq!(forwarded.take(&id(&rows)), None);
-    assert_eq!(forwarded.take(&id(&fails)), Some(refusal));
+    assert_eq!(forwarded.take(&id(&rows), "mcptest"), None);
+    assert_eq!(forwarded.take(&id(&fails), "mcptest"), Some(refusal));
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))

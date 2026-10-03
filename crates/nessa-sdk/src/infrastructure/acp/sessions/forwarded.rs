@@ -18,7 +18,7 @@
 //! find nothing. The states and orderings are tabled in
 //! `docs/design/mcp-connections.md` ("Forwarded results"): the stand-in's
 //! rows (S1–S8, S11) are tested in `tests/infrastructure/mcp/forwarded.rs`,
-//! this store's (S9, S10) and W1–W7 in
+//! this store's (S9, S10) and W1–W8 in
 //! `tests/infrastructure/acp/sessions/forwarded.rs`.
 #![deny(missing_docs)]
 
@@ -37,12 +37,21 @@ use std::{
 pub const MAX_FORWARDED_RESULTS: usize = 32;
 
 /// One grant's forwarded results, by the harness's id for each call — a
-/// [`ToolCallId`], so only an id the binding can report a call under is kept. Clones
-/// share them, and two values are equal when they are the same store. Only
-/// the SDK writes and takes them; a host can only compare them.
+/// [`ToolCallId`], so only an id the binding can report a call under is kept —
+/// each with the configured server that answered it. Clones share them, and
+/// two values are equal when they are the same store. Only the SDK writes and
+/// takes them; a host can only compare them.
 #[derive(Clone)]
 pub struct ForwardedResults {
-    results: Arc<Mutex<VecDeque<(ToolCallId, ToolContent)>>>,
+    results: Arc<Mutex<VecDeque<Forwarded>>>,
+}
+
+/// One forwarded result: the call it answered, the server that answered it,
+/// and its structured content.
+struct Forwarded {
+    call: ToolCallId,
+    server: Box<str>,
+    result: ToolContent,
 }
 impl ForwardedResults {
     /// An empty store, for a new grant.
@@ -52,24 +61,32 @@ impl ForwardedResults {
         }
     }
 
-    /// Keep `result` for the call the harness names `call`, replacing one kept
-    /// under the same id, and dropping the oldest past
-    /// [`MAX_FORWARDED_RESULTS`].
-    pub(crate) fn record(&self, call: ToolCallId, result: ToolContent) {
+    /// Keep `result`, from the configured server `server`, for the call the
+    /// harness names `call`, replacing one kept under the same id, and
+    /// dropping the oldest past [`MAX_FORWARDED_RESULTS`].
+    pub(crate) fn record(&self, call: ToolCallId, server: &str, result: ToolContent) {
         let mut results = self.results.lock().expect("forwarded results");
-        results.retain(|(kept, _)| *kept != call);
+        results.retain(|kept| kept.call != call);
         if results.len() == MAX_FORWARDED_RESULTS {
             results.pop_front();
         }
-        results.push_back((call, result));
+        results.push_back(Forwarded {
+            call,
+            server: server.into(),
+            result,
+        });
     }
 
     /// The result forwarded for the tool call the harness reports as
-    /// `tool_call`, taken: a second take of the same id finds nothing.
-    pub(crate) fn take(&self, tool_call: &ToolCallId) -> Option<ToolContent> {
+    /// `tool_call` to `server`, taken: a second take of the same id finds
+    /// nothing, and one kept from another server is not this call's and
+    /// stays.
+    pub(crate) fn take(&self, tool_call: &ToolCallId, server: &str) -> Option<ToolContent> {
         let mut results = self.results.lock().expect("forwarded results");
-        let index = results.iter().position(|(call, _)| call == tool_call)?;
-        results.remove(index).map(|(_, result)| result)
+        let index = results
+            .iter()
+            .position(|kept| kept.call == *tool_call && *kept.server == *server)?;
+        results.remove(index).map(|kept| kept.result)
     }
 
     /// How many results are kept now.
@@ -96,7 +113,8 @@ impl std::fmt::Debug for ForwardedResults {
 
 /// `update`, with the result its stand-in forwarded for the call appended
 /// after its content, when it is the `completed` update of a call naming an
-/// MCP tool, carries content, and a result was forwarded under its id. The
+/// MCP tool, carries content, and a result was forwarded under its id by the
+/// server that tool names. The
 /// result is taken then, and only then. An update without content (Claude's
 /// PostToolUse frame) would replace the call's text with the result alone;
 /// one before the end has no result yet; and a `failed` one is an `isError`
@@ -107,15 +125,12 @@ pub(crate) fn attach_forwarded(
     forwarded: Option<&ForwardedResults>,
 ) -> ToolCallUpdate {
     let completed = matches!(update.status(), Some(ToolStatus::Completed));
-    let (Some(forwarded), Some(content), true, true) = (
-        forwarded,
-        update.content(),
-        completed,
-        update.mcp_tool().is_some(),
-    ) else {
+    let (Some(forwarded), Some(content), true, Some(tool)) =
+        (forwarded, update.content(), completed, update.mcp_tool())
+    else {
         return update;
     };
-    let Some(result) = forwarded.take(update.id()) else {
+    let Some(result) = forwarded.take(update.id(), tool.server()) else {
         return update;
     };
     let mut content = content.clone();

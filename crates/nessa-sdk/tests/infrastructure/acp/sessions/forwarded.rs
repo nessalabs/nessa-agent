@@ -1,5 +1,5 @@
 //! The store of forwarded results, and attaching one to the call it answers:
-//! rows S9, S10 and W1–W7 of the "Forwarded results" table in
+//! rows S9, S10 and W1–W8 of the "Forwarded results" table in
 //! `docs/design/mcp-connections.md`, each test named after its row.
 use super::*;
 use crate::domain::agent_execution::tools::{McpTool, ToolCallId};
@@ -21,7 +21,7 @@ fn call_update(
 /// Forwarded results holding one for `toolu_1`.
 fn forwarded_rows() -> ForwardedResults {
     let forwarded = ForwardedResults::new();
-    forwarded.record(id("toolu_1"), rows());
+    forwarded.record(id("toolu_1"), "mcptest", rows());
     forwarded
 }
 
@@ -85,7 +85,7 @@ fn w5_a_call_naming_no_mcp_tool_takes_nothing() {
         Some(&forwarded),
     );
     assert_eq!(update.content(), &Some(vec![]));
-    assert_eq!(forwarded.take(&id("toolu_1")), Some(rows()));
+    assert_eq!(forwarded.take(&id("toolu_1"), "mcptest"), Some(rows()));
 }
 
 #[test]
@@ -105,7 +105,26 @@ fn w7_a_failed_update_takes_nothing() {
         Some(&forwarded),
     );
     assert_eq!(update.content(), &Some(refused));
-    assert_eq!(forwarded.take(&id("toolu_1")), Some(rows()));
+    assert_eq!(forwarded.take(&id("toolu_1"), "mcptest"), Some(rows()));
+}
+
+#[test]
+fn w8_a_call_to_another_server_takes_nothing() {
+    // Kept for `toolu_1` as `mcptest`'s answer; a call of that id to another
+    // server is not the call it answered.
+    let forwarded = forwarded_rows();
+    let other = ToolCallUpdate::new(
+        id("toolu_1"),
+        None,
+        None,
+        Some(ToolStatus::Completed),
+        None,
+        Some(vec![]),
+    )
+    .with_mcp_tool(McpTool::new("other", "report_rows").unwrap());
+    let update = attach_forwarded(other, Some(&forwarded));
+    assert_eq!(update.content(), &Some(vec![]));
+    assert_eq!(forwarded.take(&id("toolu_1"), "mcptest"), Some(rows()));
 }
 
 fn structured(json: &str) -> ToolContent {
@@ -116,14 +135,21 @@ fn structured(json: &str) -> ToolContent {
 fn s9_past_the_bound_the_oldest_result_is_dropped() {
     let forwarded = ForwardedResults::new();
     for call in 0..=MAX_FORWARDED_RESULTS {
-        forwarded.record(id(&format!("toolu_{call}")), structured(&call.to_string()));
+        forwarded.record(
+            id(&format!("toolu_{call}")),
+            "mcptest",
+            structured(&call.to_string()),
+        );
     }
     assert_eq!(forwarded.len(), MAX_FORWARDED_RESULTS);
-    assert_eq!(forwarded.take(&id("toolu_0")), None);
-    assert_eq!(forwarded.take(&id("toolu_1")), Some(structured("1")));
+    assert_eq!(forwarded.take(&id("toolu_0"), "mcptest"), None);
+    assert_eq!(
+        forwarded.take(&id("toolu_1"), "mcptest"),
+        Some(structured("1"))
+    );
     let last = format!("toolu_{MAX_FORWARDED_RESULTS}");
     assert_eq!(
-        forwarded.take(&id(&last)),
+        forwarded.take(&id(&last), "mcptest"),
         Some(structured(&MAX_FORWARDED_RESULTS.to_string()))
     );
 }
@@ -131,9 +157,12 @@ fn s9_past_the_bound_the_oldest_result_is_dropped() {
 #[test]
 fn s10_an_id_kept_again_holds_the_later_result_once() {
     let forwarded = ForwardedResults::new();
-    forwarded.record(id("toolu_1"), structured("1"));
-    forwarded.record(id("toolu_1"), structured("2"));
+    forwarded.record(id("toolu_1"), "mcptest", structured("1"));
+    forwarded.record(id("toolu_1"), "mcptest", structured("2"));
     assert_eq!(forwarded.len(), 1);
-    assert_eq!(forwarded.take(&id("toolu_1")), Some(structured("2")));
-    assert_eq!(forwarded.take(&id("toolu_1")), None);
+    assert_eq!(
+        forwarded.take(&id("toolu_1"), "mcptest"),
+        Some(structured("2"))
+    );
+    assert_eq!(forwarded.take(&id("toolu_1"), "mcptest"), None);
 }

@@ -106,8 +106,10 @@ async fn s1_a_structured_result_is_kept_under_the_harness_call_id_before_the_har
         answer["result"]["structuredContent"],
         json!({ "rows": [1, 2] })
     );
+    // Kept as the answering server's: a call to another server takes nothing.
+    assert_eq!(owner.forwarded().take(&tool_call("toolu_1"), "other"), None);
     assert_eq!(
-        owner.forwarded().take(&tool_call("toolu_1")),
+        owner.forwarded().take(&tool_call("toolu_1"), "fixture"),
         Some(structured(r#"{"rows":[1,2]}"#))
     );
 }
@@ -129,7 +131,7 @@ async fn s2_a_structured_result_past_the_bound_is_kept_as_said_never_cut() {
     // The harness still has all of it.
     assert_eq!(answer["result"]["structuredContent"]["pad"], json!(past));
     assert_eq!(
-        owner.forwarded().take(&tool_call("toolu_big")),
+        owner.forwarded().take(&tool_call("toolu_big"), "fixture"),
         Some(ToolContent::text(STRUCTURED_RESULT_OMITTED))
     );
     // At the bound exactly, it is kept: `{"p":"…"}` is 8 bytes around the text.
@@ -145,7 +147,7 @@ async fn s2_a_structured_result_past_the_bound_is_kept_as_said_never_cut() {
         .await;
     harness.next().await.unwrap();
     assert_eq!(
-        owner.forwarded().take(&tool_call("toolu_fits")),
+        owner.forwarded().take(&tool_call("toolu_fits"), "fixture"),
         Some(structured(&json!({ "p": fits }).to_string()))
     );
 }
@@ -251,7 +253,7 @@ async fn s5_a_call_naming_no_usable_call_id_keeps_nothing() {
     assert_eq!(
         owner
             .forwarded()
-            .take(&tool_call(&"t".repeat(MAX_IDENTIFIER_BYTES))),
+            .take(&tool_call(&"t".repeat(MAX_IDENTIFIER_BYTES)), "fixture"),
         Some(structured(r#"{"rows":1}"#))
     );
 }
@@ -301,7 +303,7 @@ async fn s1_an_is_error_result_is_kept_like_any_result() {
         "isError": true, "content": [], "structuredContent": { "reason": "busy" } } }));
     assert_eq!(harness.next().await.unwrap()["result"]["isError"], true);
     assert_eq!(
-        owner.forwarded().take(&tool_call("toolu_error")),
+        owner.forwarded().take(&tool_call("toolu_error"), "fixture"),
         Some(structured(r#"{"reason":"busy"}"#))
     );
 }
@@ -405,7 +407,7 @@ async fn s6_a_call_finished_but_cancelled_before_its_answer_was_given_keeps_noth
                 break;
             }
         }
-        let kept = owner.forwarded().take(&tool_call(&call_id));
+        let kept = owner.forwarded().take(&tool_call(&call_id), "fixture");
         assert_eq!(kept.is_some(), answered, "run {run}");
         if answered {
             given += 1;
@@ -482,7 +484,7 @@ async fn s11_a_grant_keeps_only_its_own_stand_ins_results() {
     // The grant's clones share one store: the host's handle is the stand-in's.
     assert_eq!(owner.clone().forwarded().len(), 1);
     assert_eq!(
-        owner.forwarded().take(&tool_call("toolu_mine")),
+        owner.forwarded().take(&tool_call("toolu_mine"), "fixture"),
         Some(structured(r#"{"rows":1}"#))
     );
 }

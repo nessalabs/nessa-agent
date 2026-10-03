@@ -281,11 +281,13 @@ text is. A call the harness cancels keeps nothing in the first place (S6).
 | W5 | an update naming no MCP tool | nothing taken |
 | W6 | an open without a grant | the update as it was |
 | W7 | the call's `failed` update | nothing taken; the result waits to be dropped |
+| W8 | a `completed` update whose MCP tool names another server than the one that answered under its id | nothing taken: the result is kept with its server, and is not that call's |
 
 A result kept and never taken — a call its harness abandons or reports
 `failed` — waits until it is dropped (S9) or its grant is revoked. A process
 of the gateway's own user holding a live token (above) could keep a result
-under a call id it guesses. An MCP App's own `tools/call` does not pass
+under a call id it guesses — but only as the server its stand-in serves,
+so it attaches only to a call to that same server (W8). An MCP App's own `tools/call` does not pass
 through a stand-in and keeps nothing. Appending a result counts toward the
 execution's retained tool bytes like any other content, as Codex's
 structured results already do.
@@ -373,7 +375,7 @@ Each row above has at least one test, named after it:
   its environment, the stand-ins and digest in `session/new`, a relay process killed outright ending its server's
   process group, a relay exiting when its server ends with its stdin still
   open, the view's `resourceUri` and revision, the schema bound.
-- SDK, ACP: the store's S9 and S10, and W1–W7
+- SDK, ACP: the store's S9 and S10, and W1–W8
   (`tests/infrastructure/acp/sessions/forwarded.rs`), and
   Claude's recorded frames (`report_rows` completed, `always_fails` failed)
   replayed through the worker with a grant holding a result for each
