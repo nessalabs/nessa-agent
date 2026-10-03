@@ -21,3 +21,14 @@ export async function appFrame(page, place, timeout = 10_000) {
   }
   throw new CannotRun(`no app document in the ${place} frame`)
 }
+
+/**
+ * What is wrong with `count` inline frames drawn for one call, or null when
+ * there is exactly one. Each frame is a mount: a second one repeats the app's
+ * calls and the reviews they open (#418).
+ */
+export function oneMount(count) {
+  if (count === 1) return null
+  if (count === 0) return "the call has no inline app frame"
+  return `the call is drawn as ${count} inline app frames, not one (#418)`
+}

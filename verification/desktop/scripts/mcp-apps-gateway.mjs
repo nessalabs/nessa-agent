@@ -38,7 +38,7 @@ import {
   serverScript,
   startLocalGateway,
 } from "../../../scripts/mcp-test-server/local-gateway.mjs"
-import { appFrame } from "./lib/apps.mjs"
+import { appFrame, oneMount } from "./lib/apps.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, chosen, log } from "./lib/cli.mjs"
 import {
@@ -476,6 +476,15 @@ const checks = {
     await app
       .waitForSelector(css.reviewState("live"), { timeout: 20_000 })
       .catch(() => {})
+    // The session has one review_rows call: every inline frame is its
+    // mount, and only one may be, or a later step's review may be another's.
+    await settled(page)
+    const mounts = oneMount((await page.$$(css.appFrameIn("inline"))).length)
+    if (mounts) {
+      if (shot) await page.screenshot({ path: shot })
+      failures.push(mounts)
+      return { seen: { mounts }, failures }
+    }
     const seen = await app.evaluate(() => ({
       state: document.body.getAttribute("data-review-state"),
       mode: document.body.getAttribute("data-review-mode"),
