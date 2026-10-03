@@ -82,6 +82,8 @@ const runtime = (modelId: string) => ({
   reasoning: false,
 })
 
+const rpcCode = (code: string) => new NessaRpcError(code, "message text nobody parses")
+
 const kinds = (updates: readonly WorkspaceUpdate[]) =>
   updates.map((update) => update.kind)
 
@@ -1222,7 +1224,7 @@ describe("the structural change after round 3", () => {
     expect(gateway.count("answer")).toBe(1)
   })
 
-  it("S8: a read crossed by a removal twice answers unknown-session rather than asking forever", async () => {
+  it("S8: a read crossed by a removal twice, its session held again, answers unavailable rather than asking forever", async () => {
     const { gateway, source } = started()
     gateway.rows.set("a", row("a"))
     gateway.views.set("a", view("a"))
@@ -1242,7 +1244,7 @@ describe("the structural change after round 3", () => {
       return normal()
     })
     await expect(source.transcript("a")).rejects.toMatchObject({
-      reason: "unknown-session",
+      reason: "unavailable",
     })
     expect(gateway.count("read")).toBe(2)
   })
@@ -1293,6 +1295,75 @@ describe("the structural change after round 3", () => {
     created.resolve({ conversationId: "s" })
     await flush()
     expect(gateway.count("send")).toBe(0)
+  })
+})
+
+describe("round 5's rows", () => {
+  it("R3: a session whose first read fails is followed all the same, and the poller mends it", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set("a", view("a", { messages: [running()] }))
+    await source.index()
+    gateway.once("read", () => Promise.reject(rpcCode("temporarily_unavailable")))
+    await expect(source.transcript("a")).rejects.toMatchObject({ reason: "unavailable" })
+    follow()
+    await advance(timing.pollMs)
+    expect(updates).toContainEqual({
+      kind: "transcript",
+      transcript: expect.objectContaining({ sessionId: "a", revision: 1 }),
+    })
+  })
+
+  it("S5: the read after an answer finding the session gone is no gap", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    const asked = permission()
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set(
+      "a",
+      view("a", { revision: "1", messages: [running()], permissions: [asked] }),
+    )
+    await source.index()
+    await source.transcript("a")
+    follow()
+    gateway.once("read", async (normal) => normal())
+    const after = deferred<unknown>()
+    gateway.once("read", () => after.promise)
+    await source.approve("a", approvalId(asked), "once", "person")
+    await source.archive("a", "person")
+    after.resolve(view("a", { revision: "2", messages: [running()] }))
+    await flush()
+    // A gap would show as a resync on the next list.
+    await advance(timing.pollMs)
+    expect(kinds(updates)).not.toContain("resync")
+  })
+
+  it("R8, W6b: a session archived before any list named it is remembered as taken out", async () => {
+    const { gateway, source } = started()
+    const start = { channelId: "gateway-conversations", title: "Hi" }
+    await source.send({
+      sessionId: "s",
+      messageId: "m1",
+      text: "Hi",
+      model,
+      initiator: "person",
+      start,
+    })
+    await source.archive("s", "person")
+    await expect(source.archive("s", "person")).rejects.toMatchObject({
+      reason: "unknown-session",
+    })
+    await expect(
+      source.send({
+        sessionId: "s",
+        messageId: "m2",
+        text: "Hi",
+        model,
+        initiator: "person",
+        start,
+      }),
+    ).rejects.toMatchObject({ reason: "unknown-session" })
+    expect(gateway.count("archive")).toBe(1)
+    expect(gateway.count("create")).toBe(1)
   })
 })
 

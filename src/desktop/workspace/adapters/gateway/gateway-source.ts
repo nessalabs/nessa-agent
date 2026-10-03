@@ -132,12 +132,6 @@ interface Read {
   readonly against: ConversationSummary | undefined
 }
 
-/** A summary as held: what it said, at what count, and whether it was taken out. */
-interface Held {
-  readonly summary: SessionSummary
-  readonly removed: boolean
-}
-
 export function gatewaySource(options: {
   /** Connects a client: called again after a failed attempt, or once the last one closed. */
   readonly connect: () => Promise<GatewayClient>
@@ -151,7 +145,12 @@ export function gatewaySource(options: {
 
   // Each session's summary counter, kept after a removal so a later listing outranks it.
   const summaryCounts = new Map<string, number>()
-  const summaries = new Map<string, Held>()
+  const summaries = new Map<string, SessionSummary>()
+  // Sessions this source has taken out — archived here or elsewhere, or
+  // missing from a complete list — until a list names them again: the one
+  // fact `takenOut` reads (R8).
+  const removedIds = new Set<string>()
+  const takenOut = (sessionId: string) => removedIds.has(sessionId)
   const rows = new Map<string, ConversationSummary>()
   // Each conversation's counter, the opaque revision it was last moved on for, and the read.
   const transcriptCounts = new Map<string, number>()
@@ -321,21 +320,23 @@ export function gatewaySource(options: {
       waitingOnPerson: Boolean(reads.get(sessionId)?.transcript.approval),
     })
     const held = summaries.get(sessionId)
-    if (held && !held.removed && sameSummary(held.summary, said)) return
+    if (held && !takenOut(sessionId) && sameSummary(held, said)) return
     const revision = (summaryCounts.get(sessionId) ?? 0) + 1
     summaryCounts.set(sessionId, revision)
     const summary: SessionSummary = { ...said, revision }
-    summaries.set(sessionId, { summary, removed: false })
+    summaries.set(sessionId, summary)
+    removedIds.delete(sessionId)
     emit({ kind: "session", session: summary })
   }
 
   /** Takes a session out, at its summary's next count; one already out stays as it is. */
   const remove = (sessionId: string): void => {
-    const held = summaries.get(sessionId)
-    if (held?.removed) return
+    if (takenOut(sessionId)) return
     const revision = (summaryCounts.get(sessionId) ?? 0) + 1
     summaryCounts.set(sessionId, revision)
-    if (held) summaries.set(sessionId, { summary: held.summary, removed: true })
+    // Taken out whether or not a list had named it yet: an archive of a
+    // session just begun here is remembered too.
+    removedIds.add(sessionId)
     removals.set(sessionId, (removals.get(sessionId) ?? 0) + 1)
     rows.delete(sessionId)
     watched.delete(sessionId)
@@ -357,8 +358,8 @@ export function gatewaySource(options: {
       publish(row.conversationId)
     }
     if (result.complete)
-      for (const [sessionId, held] of summaries)
-        if (!held.removed && !listed.has(sessionId)) remove(sessionId)
+      for (const sessionId of summaries.keys())
+        if (!takenOut(sessionId) && !listed.has(sessionId)) remove(sessionId)
   }
 
   /** Lists in turn, applying the answer; the list's own failures are the caller's. */
@@ -414,16 +415,16 @@ export function gatewaySource(options: {
    * reads none and begins none under its id (`failure.ts`, R8).
    */
   const held = (sessionId: string) => {
-    if (summaries.get(sessionId)?.removed)
-      throw new WorkspaceSourceError("unknown-session")
+    if (takenOut(sessionId)) throw new WorkspaceSourceError("unknown-session")
   }
 
   /**
    * Reads one conversation in its turn; an answer after its call timed out
    * is let go. One that crossed a removal of its session speaks for a
    * listing no longer held, so it is not applied: a session held again is
-   * asked again, once, and one crossed again or still taken out answers
-   * `unknown-session` (S3c, S8) — let go is not gone, and not forever.
+   * asked again, once. One still taken out answers `unknown-session`; one
+   * held but crossed again answers `unavailable` — not done now, try again
+   * (S3c, S8) — let go is not gone, and not forever.
    */
   const read = (sessionId: string): Promise<Transcript> => {
     const { turn, settled } = inTurn(
@@ -439,7 +440,8 @@ export function gatewaySource(options: {
           if ((removals.get(sessionId) ?? 0) === removed)
             return applyRead(sessionId, view, against)
         }
-        throw new WorkspaceSourceError("unknown-session")
+        held(sessionId)
+        throw new WorkspaceSourceError("unavailable")
       },
     )
     reading.set(sessionId, settled)
@@ -478,8 +480,7 @@ export function gatewaySource(options: {
         } catch (error) {
           // A conversation the gateway no longer holds is not watched; any
           // other failure is a gap the next list resyncs.
-          if (error instanceof WorkspaceSourceError && error.reason === "unknown-session")
-            watched.delete(sessionId)
+          if (gone(error)) watched.delete(sessionId)
           else gap = true
         }
       }
@@ -534,9 +535,10 @@ export function gatewaySource(options: {
       // Taken: the call resolves now, and the conversation after the answer
       // follows as an update (`ports.ts`). Read once more for it, not awaited,
       // so a slow read cannot report a taken answer failed; if it fails, the
-      // answer still stands, and the next list resyncs (W3b, W3c).
-      read(sessionId).catch(() => {
-        gap = true
+      // answer still stands, and the next list resyncs (W3b, W3c) — unless
+      // the session is gone, which is no gap (S5).
+      read(sessionId).catch((error: unknown) => {
+        if (!gone(error)) gap = true
       })
     })
 
@@ -547,18 +549,22 @@ export function gatewaySource(options: {
         const index: WorkspaceIndex = {
           sections: [gatewaySection],
           channels: [gatewayChannel],
-          sessions: [...summaries.values()]
-            .filter((held) => !held.removed)
-            .map((held) => held.summary),
+          sessions: [...summaries.values()].filter((summary) => !takenOut(summary.id)),
         }
         return index
       }),
     transcript: (sessionId) =>
       within(async () => {
-        // A read sends no `create`; one of a session taken out is refused (R8).
-        const transcript = await read(sessionId)
-        watched.add(sessionId)
-        return transcript
+        // A read sends no `create`. The session is followed from now on —
+        // a read that fails is mended by the poller's next one — unless it is
+        // gone: one taken out is refused and not followed (R3, R8).
+        if (!takenOut(sessionId)) watched.add(sessionId)
+        try {
+          return await read(sessionId)
+        } catch (error) {
+          if (gone(error)) watched.delete(sessionId)
+          throw error
+        }
       }),
     subscribe(listener) {
       if (disposed) return noop
@@ -612,7 +618,7 @@ export function gatewaySource(options: {
           }
         })
         // Taken out while it was on its way: sent, but not followed (R8).
-        if (!summaries.get(message.sessionId)?.removed) watched.add(message.sessionId)
+        if (!takenOut(message.sessionId)) watched.add(message.sessionId)
         publish(message.sessionId)
       }),
     approve: (sessionId: string, approvalId: string, scope: ApprovalScope) =>
@@ -630,8 +636,7 @@ export function gatewaySource(options: {
         // In the list's turn, so no list asked before it can list the session again.
         const { turn, settled } = inTurn(listing, async () => {
           // Taken out already, by this window or a list: refused, and asked of nobody (W6b).
-          if (summaries.get(sessionId)?.removed)
-            throw new WorkspaceSourceError("unknown-session")
+          held(sessionId)
           // Its own timer, so one that never answers does not hold the lists
           // behind it (C5); and sent only while the archive's call is open (C6).
           await within(() =>
@@ -656,6 +661,11 @@ export function gatewaySource(options: {
 }
 
 function noop() {}
+
+/** Whether a failure says the session is gone: no such conversation, or one taken out. */
+function gone(error: unknown): boolean {
+  return error instanceof WorkspaceSourceError && error.reason === "unknown-session"
+}
 
 /**
  * The source's reason for a failed call, by the error's type. Whether a

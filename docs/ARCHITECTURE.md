@@ -284,8 +284,10 @@ not reading the session, which stays unread.
   answer, a pin, an archive and a message carry who asked — the person or an
   agent; the in-memory source records the first three and what became of
   each, and a message when it lets a waiting approval go, while the
-  gateway's records each as this window's authenticated caller, unable to
-  tell the person from an agent; each command returns its
+  gateway's source records nothing itself — what it sends the gateway
+  records as this window's authenticated caller, unable to tell the person
+  from an agent, and what it refuses without sending is on no record; each
+  command returns its
   outcome to its caller. Every
   call to the source settles; an adapter rejects on a timeout of its own.
 - `adapters/store/` is the Redux slice, which only names actions over those use

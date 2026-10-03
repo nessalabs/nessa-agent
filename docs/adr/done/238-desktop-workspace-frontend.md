@@ -898,10 +898,12 @@ session as it was, and a refused read mark stays cleared here; each is logged;
 anything a call throws but the source's typed refusal is logged as a fault.
 The consequential calls — an answer to an approval, a pin, an archive — carry
 who asked: the person at the window's controls or an agent dispatching the
-same command. The source records each the moment it is asked, then the session
-as it found it when it carried the call out, and what became of it — refused,
-or taken with the revision it produced (`WorkspaceSource.approve`, `deny`,
-`setPinned`, `archive`). A message carries who sent it too; the source records
+same command. The in-memory source records each the moment it is asked, then
+the session as it found it when it carried the call out, and what became of
+it — refused, or taken with the revision it produced (`WorkspaceSource.approve`,
+`deny`, `setPinned`, `archive`). The gateway's source records nothing itself:
+what it sends, the gateway records as this window's caller, and what it
+refuses without sending is on no record (#248). A message carries who sent it too; the source records
 it when, taken, it lets a waiting approval go — naming the message, the
 approval and the sender. The in-memory source keeps that record (`audit()`),
 and writes it before any subscriber hears of the change: one shown the

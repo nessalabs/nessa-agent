@@ -6,7 +6,7 @@
 import type { WorkspaceFailureReason } from "../model/failure"
 
 const copy: Record<WorkspaceFailureReason, string> = {
-  unavailable: "Nessa couldn’t do this just now.",
+  unavailable: "Nessa couldn’t confirm this just now.",
   "unknown-session": "This session is no longer there.",
   "not-waiting": "This was already answered.",
   "not-supported": "This isn’t available for this session.",

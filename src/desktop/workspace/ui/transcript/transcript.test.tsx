@@ -128,7 +128,7 @@ describe("a transcript", () => {
     expect(host.querySelectorAll(".workspace-list-items li")).toHaveLength(2)
     const failed = host.querySelector(".workspace-message-failed")
     expect(failed?.querySelector("span")?.textContent).toBe(
-      "Not sent. Nessa couldn’t do this just now.",
+      "Not sent. Nessa couldn’t confirm this just now.",
     )
     expect(
       [...(failed?.querySelectorAll("button") ?? [])].map((b) => b.textContent),
