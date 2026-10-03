@@ -436,7 +436,12 @@ export function gatewaySource(options: {
           const removed = removals.get(sessionId) ?? 0
           const view = await within(async () =>
             (await client()).conversation.read(sessionId),
-          )
+          ).catch((error: unknown) => {
+            // The gateway's own word that the conversation is gone takes the
+            // session out, even where no complete list would (R9).
+            if (gone(error)) remove(sessionId)
+            throw error
+          })
           if ((removals.get(sessionId) ?? 0) === removed)
             return applyRead(sessionId, view, against)
         }

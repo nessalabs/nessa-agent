@@ -23,9 +23,15 @@ import "./styles.css"
 // otherwise the window shows the sample (`model/workspace-backend.ts`).
 const environment = environmentFromVite()
 const browserGateway = host.kind === "browser" && gatewayRequested(window.location.search)
-// This origin's sign-in, as the panel's browser surface keeps it.
+// This origin's sign-in, as the panel's browser surface keeps it. Storage is
+// reached at each use, so storage the browser blocks is `createBrowserAuth`'s
+// to survive rather than a throw before the window renders.
 const auth = browserGateway
-  ? createBrowserAuth(window.fetch.bind(window), window.sessionStorage)
+  ? createBrowserAuth(window.fetch.bind(window), {
+      getItem: (key) => window.sessionStorage.getItem(key),
+      setItem: (key, value) => window.sessionStorage.setItem(key, value),
+      removeItem: (key) => window.sessionStorage.removeItem(key),
+    })
   : undefined
 const gateway = auth
   ? () =>

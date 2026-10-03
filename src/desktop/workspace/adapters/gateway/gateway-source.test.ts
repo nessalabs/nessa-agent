@@ -455,7 +455,8 @@ describe("the stream", () => {
     follow()
     await advance(timing.pollMs * 3)
     expect(gateway.calls.filter((call) => call.method === "read")).toHaveLength(2)
-    expect(updates).toEqual([])
+    // Its not-found takes it out (R9), and is no gap: nothing says resync.
+    expect(kinds(updates)).toEqual(["session-removed"])
   })
 
   it("S6: polling stops when the last listener leaves", async () => {
@@ -1364,6 +1365,29 @@ describe("round 5's rows", () => {
     ).rejects.toMatchObject({ reason: "unknown-session" })
     expect(gateway.count("archive")).toBe(1)
     expect(gateway.count("create")).toBe(1)
+  })
+})
+
+describe("Codex review", () => {
+  it("R9: a read the gateway answers as gone takes the session out, even past an incomplete list", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set("a", view("a", { messages: [running()] }))
+    await source.index()
+    await source.transcript("a")
+    follow()
+    // The list stops naming it, but says it is incomplete; the read says it is gone.
+    gateway.complete = false
+    gateway.rows.delete("a")
+    gateway.views.delete("a")
+    await advance(timing.pollMs)
+    expect(updates).toContainEqual({
+      kind: "session-removed",
+      sessionId: "a",
+      revision: 2,
+    })
+    expect((await source.index()).sessions).toEqual([])
+    expect(kinds(updates)).not.toContain("resync")
   })
 })
 
