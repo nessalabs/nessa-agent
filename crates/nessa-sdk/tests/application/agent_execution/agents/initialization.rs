@@ -654,6 +654,62 @@ async fn initialization_unit_left_unfinished_is_completed_by_the_next_prepare() 
 }
 
 #[tokio::test]
+async fn restoration_unit_left_unfinished_is_completed_by_the_next_prepare() {
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let storage = Arc::new(RecordStorage::new(&root).unwrap());
+    storage.initialize().await.unwrap();
+    let id = SessionId::new("restoration-completion-refused").unwrap();
+    let provider = TestProvider::new();
+    let agent = prepare_record_session(&storage, &id, provider.clone())
+        .await
+        .unwrap();
+    let queued = agent
+        .enqueue(request("queued-across-restart"), actor())
+        .await
+        .unwrap();
+    drop(queued);
+    drop(agent);
+    let lease = storage.open(id.clone()).await.unwrap();
+    let saved = lease.load().await.unwrap().snapshot().unwrap().clone();
+    drop(lease);
+
+    let rows = record_rows(&root);
+    refuse_record_appends_from(&root, rows + 1);
+    let failed = prepare_record_session(&storage, &id, provider.clone()).await;
+    assert!(matches!(
+        failed.as_ref().map_err(|failure| failure.cause()),
+        Err(AgentError::Storage(StorageError::Io(_)))
+    ));
+    drop(failed);
+    assert_eq!(
+        record_rows(&root),
+        rows + 1,
+        "the restoration Unit is durable"
+    );
+
+    allow_record_appends(&root);
+    let agent = prepare_record_session(&storage, &id, provider.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        record_rows(&root),
+        rows + 2,
+        "only the completion is appended"
+    );
+    let restored = agent.session_manager().snapshot().await.unwrap();
+    assert_eq!(restored.invocations, saved.invocations);
+    assert_eq!(restored.queue_history.len(), saved.queue_history.len() + 1);
+    assert_eq!(
+        restored.queue_history.last().unwrap().mutation,
+        QueueMutation::Restored
+    );
+    assert!(provider.calls.opens.lock().unwrap().is_empty());
+    drop(agent);
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn prepare_leaves_an_unfinished_save_it_did_not_plan_unresolved() {
     let directory = tempdir().unwrap();
     let root = directory.path().join("sessions");

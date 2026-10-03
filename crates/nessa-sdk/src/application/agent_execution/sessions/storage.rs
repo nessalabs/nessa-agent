@@ -629,9 +629,13 @@ pub trait SessionStorageLease: Send + Sync {
     /// plan and supplies the next backend binding. Empty plans are refused.
     /// An individually oversized unit returns `TooLarge` before any append.
     ///
+    /// A retry is compared with the units already durable: one that changes or
+    /// omits any of them is refused. Units that never became durable leave no
+    /// evidence, so only the plan's original owner may retry it.
+    ///
     /// # Errors
-    /// Refuses wrong incarnation/base/generation, changed or truncated prefix,
-    /// invalid unit/candidate and unavailable persistence. A failure is not proof
+    /// Refuses wrong incarnation/base/generation, a prefix that changes or omits
+    /// durable units, invalid unit/candidate and unavailable persistence. A failure is not proof
     /// of absence and cannot release a reserved command identity for redispatch.
     fn save_changes(
         &self,
