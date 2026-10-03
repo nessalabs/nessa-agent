@@ -10,6 +10,7 @@ const copy: Record<WorkspaceFailureReason, string> = {
   "unknown-session": "This session is no longer there.",
   "not-waiting": "This was already answered.",
   "not-supported": "This isn’t available for this session.",
+  "signed-out": "This window isn’t signed in to the local server.",
 }
 
 export function failureCopy(reason: WorkspaceFailureReason): string {

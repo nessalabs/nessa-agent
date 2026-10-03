@@ -1,4 +1,5 @@
-//! Native storage for bundled chat and setup surfaces. Renderer input never selects a file.
+//! Native storage for the bundled surfaces: the panel, setup, and the desktop
+//! window. Renderer input never selects a file.
 use crate::composition::HostDependencies;
 use crate::gateway::{application::Gateway, infrastructure::bundled_window};
 use std::{io::Read, path::PathBuf, sync::Arc};
@@ -197,10 +198,11 @@ impl SurfaceCredentials for SurfaceCredential {
 /// The order a credential load goes in, with its two outside things supplied.
 ///
 /// Split from [`load_surface_credential`] so the rules survive without a window
-/// server: only the bundled panel and setup may ask; a packaged build waits for the
-/// gateway to reconcile before handing anything over, and a build without one
-/// does not wait at all; and the refusal for the wrong window happens before
-/// either of those, so a stray webview cannot make the app register a service.
+/// server: only a bundled surface — the panel, setup, or the desktop window —
+/// may ask; a packaged build waits for the gateway to reconcile before handing
+/// anything over, and a build without one does not wait at all; and the refusal
+/// for the wrong window happens before either of those, so a stray webview
+/// cannot make the app register a service.
 async fn load_for(
     label: &str,
     gateway: Option<&Gateway>,
@@ -254,6 +256,7 @@ pub async fn load_surface_credential(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop_window::DESKTOP_WINDOW;
     use crate::gateway::application::{
         testing::system_login_shell, GatewayError, GatewayHost, GatewayReconciliationAttempt,
         GatewayReconciliationIntent, GatewayReconciliationJournalSession,
@@ -468,6 +471,39 @@ mod tests {
                 BundledSurface::Setup
             )]
         );
+    }
+
+    /// The desktop window reads the panel's conversations under the panel's
+    /// credential, by the same order, and the reconciliation it asks for is
+    /// on record as its own (#419).
+    #[test]
+    fn the_desktop_window_waits_for_the_gateway_and_gets_its_token() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, host) = gateway(Ok(reconciled()));
+        assert_eq!(
+            load(DESKTOP_WINDOW, Some(&gateway), &credential).unwrap(),
+            "fixture-only"
+        );
+        assert_eq!(*host.registrations.lock().unwrap(), 1);
+        assert_eq!(credential.reads(), 1);
+        assert_eq!(
+            *host.initiators.lock().unwrap(),
+            vec![ReconciliationInitiator::BundledSurface(
+                BundledSurface::Desktop
+            )]
+        );
+    }
+
+    #[test]
+    fn a_gateway_that_will_not_reconcile_stops_the_desktop_window_load() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, _host) = gateway(Err(GatewayError::Registration("not installed".into())));
+
+        assert_eq!(
+            load(DESKTOP_WINDOW, Some(&gateway), &credential).err(),
+            Some("not installed".to_string())
+        );
+        assert_eq!(credential.reads(), 0);
     }
 
     #[test]

@@ -230,7 +230,10 @@ writing the full defaults on first launch is buying.
   `ui/overview/` the Agents overview, with its rules in `model/overview/`),
   with `testing.ts` the fake source and store its tests share. The
   window has its own store (`src/desktop/store.ts`) and composition
-  (`src/desktop/dependencies.ts`). How the window's keys are matched and
+  (`src/desktop/dependencies.ts`). Where its workspace comes from is the
+  window's too: the host's gateway, a browser's, or the sample, by
+  `src/desktop/model/workspace-backend.ts`, with the desktop app's connection
+  in `src/desktop/adapters/host-gateway.ts`. How the window's keys are matched and
   written on this platform is the window's, not the workspace's:
   `src/desktop/model/keyboard.ts`, with the platform read once in
   `src/desktop/adapters/platform.ts`. So is the one id encoder

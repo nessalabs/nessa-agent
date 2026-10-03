@@ -1,15 +1,23 @@
+import type { HostKind } from "../../host/features"
+
 /**
- * Whether the window shows a gateway's conversations or the sample workspace,
- * from what the page was opened with. A browser preview shows the gateway's
- * when its address asks (`?gateway`), over the gateway session this origin
- * already signed in to; anything else shows the sample, which is what the
- * verification fixtures open. The preview does not sign in or renew the
- * session itself: sign in through the panel's browser surface on the same
- * origin, and when that session ends the window cannot reach the gateway
- * until it does again. The desktop host's own window does not ask yet: the
- * host hands its gateway credential to the panel and setup windows only
- * (#248).
+ * Where the window's workspace comes from, by the host it runs in and what
+ * the page was opened with:
+ *
+ * - `host`: the desktop app. The host hands the window the local gateway's
+ *   endpoint and its bundled surface credential, as it does the panel's
+ *   (`load_surface_credential`, #419).
+ * - `browser`: a browser preview opened with `?gateway`, over the gateway
+ *   session this origin already signed in to. The preview does not sign in
+ *   or renew the session itself: sign in through the panel's browser surface
+ *   on the same origin, and when that session ends the window cannot reach
+ *   the gateway until it does again.
+ * - `sample`: any other browser page — the in-memory sample, which is what
+ *   the verification fixtures open.
  */
-export function gatewayRequested(search: string): boolean {
-  return new URLSearchParams(search).has("gateway")
+export type WorkspaceBackend = "host" | "browser" | "sample"
+
+export function workspaceBackend(host: HostKind, search: string): WorkspaceBackend {
+  if (host !== "browser") return "host"
+  return new URLSearchParams(search).has("gateway") ? "browser" : "sample"
 }

@@ -5,6 +5,7 @@ use super::super::application::{
 };
 use crate::{
     composition::HostDependencies,
+    desktop_window::DESKTOP_WINDOW,
     gateway::domain::value_objects::BundledSurface,
     host::{self, GatewayStartup, GATEWAY_STARTUP},
     panel,
@@ -54,6 +55,7 @@ pub(crate) fn bundled_window(label: &str) -> Result<BundledSurface, String> {
     match label {
         panel::MAIN_WINDOW => Ok(BundledSurface::Main),
         panel::SETUP_WINDOW => Ok(BundledSurface::Setup),
+        DESKTOP_WINDOW => Ok(BundledSurface::Desktop),
         _ => Err("Only a bundled Nessa surface can access the gateway".into()),
     }
 }
@@ -91,6 +93,7 @@ pub async fn retry_gateway_startup(
 mod tests {
     use super::{bundled_window, payload};
     use crate::{
+        desktop_window::DESKTOP_WINDOW,
         gateway::{application::GatewayStartup, domain::value_objects::BundledSurface},
         host, panel,
     };
@@ -102,6 +105,7 @@ mod tests {
             bundled_window(panel::SETUP_WINDOW),
             Ok(BundledSurface::Setup)
         );
+        assert_eq!(bundled_window(DESKTOP_WINDOW), Ok(BundledSurface::Desktop));
         assert!(bundled_window("untrusted").is_err());
     }
 

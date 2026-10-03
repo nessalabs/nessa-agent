@@ -39,6 +39,9 @@ pub enum ReconciliationCause {
 pub enum BundledSurface {
     Main,
     Setup,
+    /// The desktop window (`desktop_window::DESKTOP_WINDOW`), which reads the
+    /// gateway's conversations under the panel's surface credential.
+    Desktop,
 }
 
 /// Who initiated a reconciliation request.

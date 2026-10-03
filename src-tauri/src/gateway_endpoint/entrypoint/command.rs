@@ -39,6 +39,7 @@ pub async fn load_gateway_endpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop_window::DESKTOP_WINDOW;
     use crate::panel;
     use nessa_gateway_endpoint::application::EndpointDiscovery;
     use nessa_gateway_endpoint::domain::{EndpointIdentity, GatewayEndpoint};
@@ -85,5 +86,19 @@ mod tests {
             );
             assert_eq!(discovery.calls.load(Ordering::SeqCst), 1);
         }
+    }
+
+    /// The desktop window finds the gateway the panel does (#419).
+    #[test]
+    fn the_desktop_window_can_discover_its_gateway() {
+        let discovery = Arc::new(Discovery {
+            calls: AtomicUsize::new(0),
+        });
+        let endpoint = Arc::new(GatewayEndpointAccess::new("ci".into(), discovery.clone()));
+        assert_eq!(
+            tauri::async_runtime::block_on(load_for(DESKTOP_WINDOW, None, endpoint, "ci")).unwrap(),
+            Some("ws://127.0.0.1:9137".into())
+        );
+        assert_eq!(discovery.calls.load(Ordering::SeqCst), 1);
     }
 }

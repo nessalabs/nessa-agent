@@ -6,12 +6,14 @@
  */
 import {
   NessaConnectionClosedError,
+  NessaCredentialUnavailableError,
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
   type ConversationPermission,
 } from "@nessa/client"
 import { describe, expect, it, vi } from "vitest"
+import { SessionHealthError } from "../../../../session/adapters/client/dev-session"
 import { WorkspaceSourceError, type WorkspaceUpdate } from "../../application/ports"
 import { composerModels } from "../../../model/composer-options"
 import { messageText } from "../../model/transcript"
@@ -295,6 +297,158 @@ describe("every call settles on its own timer (C4)", () => {
     await expect(source.index()).rejects.toMatchObject({ reason: "unavailable" })
     await expect(source.index()).resolves.toMatchObject({ sessions: [] })
     expect(attempts).toBe(2)
+    warn.mockRestore()
+  })
+})
+
+describe("a connection that could not be made says why (#419)", () => {
+  const quiet = () => vi.spyOn(console, "warn").mockImplementation(() => {})
+  const failing = (error: unknown) => started(fakeGateway(), () => Promise.reject(error))
+  const unauthorized = new NessaRpcError("unauthorized", "message text nobody parses")
+
+  it("S2: no credential to present is signed out", async () => {
+    const warn = quiet()
+    const { source } = failing(new NessaCredentialUnavailableError())
+    await expect(source.index()).rejects.toMatchObject({ reason: "signed-out" })
+    warn.mockRestore()
+  })
+
+  it("S3: a credential the gateway refused is signed out, at the handshake or the probe", async () => {
+    const warn = quiet()
+    for (const error of [
+      unauthorized,
+      new NessaConnectionClosedError(4001, ""),
+      new SessionHealthError("probe", unauthorized),
+    ])
+      await expect(failing(error).source.index()).rejects.toMatchObject({
+        reason: "signed-out",
+      })
+    warn.mockRestore()
+  })
+
+  it("S4: anything else — no answer, a host's sentence, a probe with no answer — is unavailable", async () => {
+    const warn = quiet()
+    for (const error of [
+      new NessaConnectionClosedError(1006, ""),
+      new Error("Only a bundled Nessa surface can access the gateway"),
+      new SessionHealthError("probe", new NessaConnectionClosedError(1006, "")),
+    ])
+      await expect(failing(error).source.index()).rejects.toMatchObject({
+        reason: "unavailable",
+      })
+    warn.mockRestore()
+  })
+
+  it("S5: a refusal that comes after the call budget changes nothing, and the next call asks again", async () => {
+    const warn = quiet()
+    const gateway = fakeGateway()
+    const late = deferred<FakeGateway["client"]>()
+    let attempts = 0
+    const { source, advance } = started(gateway, () =>
+      ++attempts === 1 ? late.promise : Promise.resolve(gateway.client),
+    )
+    const first = source.index().catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await first).toMatchObject({ reason: "unavailable" })
+    late.reject(unauthorized)
+    await flush()
+    await expect(source.index()).resolves.toMatchObject({ sessions: [] })
+    expect(attempts).toBe(2)
+    warn.mockRestore()
+  })
+
+  it("S6: every call sharing one attempt hears the same reason", async () => {
+    const warn = quiet()
+    const refusing = deferred<FakeGateway["client"]>()
+    let attempts = 0
+    const { source } = started(fakeGateway(), () => {
+      attempts++
+      return refusing.promise
+    })
+    const calls = [source.index(), source.transcript("a"), source.connected()].map(
+      (call) => call.catch((error: unknown) => error),
+    )
+    refusing.reject(unauthorized)
+    for (const settled of await Promise.all(calls))
+      expect(settled).toMatchObject({ reason: "signed-out" })
+    expect(attempts).toBe(1)
+    warn.mockRestore()
+  })
+
+  it("S7: a message whose connection is refused is not sent, is refused, and says signed out", async () => {
+    const warn = quiet()
+    const gateway = fakeGateway()
+    let attempts = 0
+    const { source } = started(gateway, () =>
+      ++attempts === 1 ? Promise.resolve(gateway.client) : Promise.reject(unauthorized),
+    )
+    gateway.rows.set("a", row("a"))
+    gateway.views.set("a", view("a"))
+    const store = testStore(source)
+    await store.dispatch(loadWorkspace())
+    await flush()
+    // Gone for good; the next call connects again, and is refused.
+    gateway.setState({
+      status: "closed",
+      error: new NessaConnectionClosedError(4001, ""),
+    })
+    const outcome = await store.dispatch(
+      sendMessage({ sessionId: "a", text: "Hello there", initiator: "person" }),
+    )
+    expect(outcome).toBe("refused")
+    expect(gateway.count("send")).toBe(0)
+    expect(store.getState().workspace.outbox.a?.[0]?.delivery).toEqual({
+      state: "failed",
+      reason: "signed-out",
+    })
+    warn.mockRestore()
+  })
+
+  it("S8: an index that cannot be read says signed out, and Try Again reads it again", async () => {
+    const warn = quiet()
+    const gateway = fakeGateway()
+    let refuse = true
+    const { source } = started(gateway, () =>
+      refuse ? Promise.reject(unauthorized) : Promise.resolve(gateway.client),
+    )
+    gateway.rows.set("a", row("a"))
+    const store = testStore(source)
+    await store.dispatch(loadWorkspace())
+    expect(store.getState().workspace).toMatchObject({
+      status: "failed",
+      failure: "signed-out",
+    })
+    refuse = false
+    await store.dispatch(loadWorkspace())
+    expect(store.getState().workspace.status).toBe("ready")
+    expect(Object.keys(store.getState().workspace.sessions)).toEqual(["a"])
+    warn.mockRestore()
+  })
+
+  it("S9: an index that failed is a gap: the first poll that answers after it opens the workspace", async () => {
+    const warn = quiet()
+    const gateway = fakeGateway()
+    let refuse = true
+    const { source, advance } = started(gateway, () =>
+      refuse
+        ? Promise.reject(new NessaConnectionClosedError(1006, ""))
+        : Promise.resolve(gateway.client),
+    )
+    gateway.rows.set("a", row("a"))
+    gateway.views.set("a", view("a"))
+    const store = testStore(source)
+    store.dispatch(followWorkspace())
+    await store.dispatch(loadWorkspace())
+    expect(store.getState().workspace).toMatchObject({
+      status: "failed",
+      failure: "unavailable",
+    })
+    // The gateway comes up before the first poll: no poll failed in between.
+    refuse = false
+    await advance(timing.pollMs)
+    await flush()
+    expect(store.getState().workspace.status).toBe("ready")
+    expect(Object.keys(store.getState().workspace.sessions)).toEqual(["a"])
     warn.mockRestore()
   })
 })

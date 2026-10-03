@@ -24,7 +24,8 @@
  *   is not running — so this source keeps nothing per connection.
  * - **Refusals are typed.** The gateway's codes become `WorkspaceSourceError`
  *   reasons (`refusalOf`); a fault that is no answer at all is passed on as
- *   it is, for `failureReason` to log.
+ *   it is, for `failureReason` to log. A connection that could not be made
+ *   is `signed-out` or `unavailable` by why (`connectFailure`, #419).
  * - **Resync.** `{ kind: "resync" }` goes out when a connection comes back
  *   (the client reconnected, or a new one was made after the last closed),
  *   and on the first list that answers after a poll failed.
@@ -69,6 +70,7 @@ import {
   type ConversationSummary,
   type ConversationView,
 } from "@nessa/client"
+import { isSignedOut } from "../../../../session"
 import { agentForProvider } from "../../../model/composer-options"
 import {
   WorkspaceSourceError,
@@ -204,7 +206,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     }
   }
 
-  // Polls failed since the last resync: the next list that answers says resync.
+  // Polls or index reads failed since the last resync: the next list that
+  // answers says resync. An index read the window did not get is a gap too:
+  // a poll that answers after it, the gateway having come up between them,
+  // would otherwise leave the window on its failure (S9, #419).
   let gap = false
   const resync = () => {
     gap = false
@@ -275,11 +280,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     if (connecting) return connecting
     const attempt = new Promise<C>((resolve, reject) => {
       let over = false
-      const giveUp = () => {
+      const giveUp = (reason: WorkspaceFailureReason = "unavailable") => {
         over = true
-        reject(new WorkspaceSourceError("unavailable"))
+        reject(new WorkspaceSourceError(reason))
       }
-      const cancel = clock.after(timing.callMs, giveUp)
+      const cancel = clock.after(timing.callMs, () => giveUp())
       options.connect().then(
         (connected) => {
           cancel()
@@ -297,7 +302,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           if (over) return
           // Not reaching the gateway is an answer the window can show; why is logged.
           console.warn("Could not connect to the gateway", error)
-          giveUp()
+          giveUp(connectFailure(error))
         },
       )
     })
@@ -617,7 +622,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   return {
     index: () =>
       within(async (live) => {
-        await list(live)
+        await list(live).catch((error: unknown) => {
+          gap = true
+          throw error
+        })
         const index: WorkspaceIndex = {
           sections: [gatewaySection],
           channels: [gatewayChannel],
@@ -755,6 +763,17 @@ function deletedConversation(error: unknown): boolean {
         ? conversationErrorCode(error.code)
         : undefined
   return code === ConversationErrorCode.ConversationDeleted
+}
+
+/**
+ * Why no client connected, by the error's type: `signed-out` when there was
+ * no credential to present or the gateway refused it (`isSignedOut`, the
+ * session's rule), so nothing was sent; `unavailable` for everything else —
+ * no answer, a gateway that is not running, or a host refusal, which crosses
+ * IPC as a sentence that cannot be told apart by type.
+ */
+function connectFailure(error: unknown): WorkspaceFailureReason {
+  return isSignedOut(error) ? "signed-out" : "unavailable"
 }
 
 /** Whether a failure is a refusal that asking again changes nothing of (`reasonFor`). */

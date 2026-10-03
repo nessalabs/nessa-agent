@@ -398,10 +398,16 @@ The right toggle exits this mode and closes the panel.
 
 The workspace layouts read the desktop store, a projection of one
 `WorkspaceSource`: the gateway's conversations (`adapters/gateway/`, #248)
-when the window is given a way to connect — today a browser preview opened
-with `?gateway` — and the in-memory sample otherwise, which is what the
-desktop app's own window still shows until its host hands it a gateway
-credential. The pane arrangement is not kept between launches (the chosen
+when the window is given a way to connect, and the in-memory sample
+otherwise (`model/workspace-backend.ts`). The desktop app's own window
+connects to the local gateway the way the panel does (#419): the host admits
+it as a bundled surface (`bundled_window`), waits for the gateway, and hands
+it the panel's surface credential over IPC (`adapters/host-gateway.ts`). A
+browser preview opened with `?gateway` connects over the session its origin
+signed in to. Only a browser page without `?gateway` — the verification
+fixtures — shows the sample. A window that cannot read the gateway says why
+(signed out, or no answer) rather than showing anything in its place. The
+pane arrangement is not kept between launches (the chosen
 layout is, as a stored preference).
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
 entries, and `pnpm app` runs both windows.
@@ -409,8 +415,8 @@ entries, and `pnpm app` runs both windows.
 Browser-only preview: `pnpm desktop:dev`, then open
 `http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
 it never terminates another worktree's server. `pnpm app:build` packages the
-window with the panel. The native minimum width is 800px. The workspace's content is the sample
-unless the page is opened with `?gateway` (above), and layout persistence is not
+window with the panel. The native minimum width is 800px. In a browser the workspace's content is the
+sample unless the page is opened with `?gateway` (above), and layout persistence is not
 implemented. Restart `pnpm app` after changing the Tauri
 overlay configuration: the CLI watcher can retain the previous merged config.
 
