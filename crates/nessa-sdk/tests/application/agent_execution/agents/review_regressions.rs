@@ -1,6 +1,7 @@
 //! Provider-substitution regressions for review-discovered lifecycle boundaries.
 mod admission_error_limits;
 mod bulk_cancellation_panics;
+mod caller_wakers;
 mod cleanup_audit;
 mod direct_supervision;
 mod native_queue_state;
@@ -8,6 +9,7 @@ mod native_stop;
 mod native_storage_panics;
 mod provider_restoration;
 mod ready_steering;
+mod receipt_readiness;
 mod rejection_observations;
 mod retained_error_limits;
 mod scheduled_panics;
@@ -27,6 +29,7 @@ use std::{
 use tokio::{sync::Notify, time::timeout};
 
 struct Probe {
+    open_error: Mutex<Option<AgentError>>,
     fail_close: AtomicBool,
     cleanup_report: Mutex<Option<CleanupReport>>,
     contradictory: bool,
@@ -69,6 +72,9 @@ impl AgentProvider for ProbeFactory {
     }
     fn open(&self, _request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async {
+            if let Some(error) = self.backend.open_error.lock().unwrap().take() {
+                return Err(ProviderOpenError::no_resources(error));
+            }
             let receiver = self.receiver.lock().unwrap().take().unwrap_or_else(|| {
                 let (sender, receiver) = mpsc::unbounded_channel();
                 *self.backend.sender.lock().unwrap() = sender;
@@ -281,9 +287,10 @@ async fn probe(contradictory: bool) -> (Agent, Arc<Probe>, MemoryStorage) {
     (agent, backend, storage)
 }
 
-async fn probe_with_manager(contradictory: bool, manager: SessionManager) -> (Agent, Arc<Probe>) {
+fn probe_factory(contradictory: bool) -> (ProbeFactory, Arc<Probe>) {
     let (sender, receiver) = mpsc::unbounded_channel();
     let backend = Arc::new(Probe {
+        open_error: Mutex::new(None),
         fail_close: AtomicBool::new(false),
         cleanup_report: Mutex::new(None),
         contradictory,
@@ -313,15 +320,15 @@ async fn probe_with_manager(contradictory: bool, manager: SessionManager) -> (Ag
         executions: AtomicUsize::new(0),
         steers: AtomicUsize::new(0),
     });
-    let agent = attached_agent(
-        Arc::new(ProbeFactory {
-            backend: backend.clone(),
-            receiver: Mutex::new(Some(receiver)),
-        }),
-        manager,
-    )
-    .await
-    .unwrap();
+    let factory = ProbeFactory {
+        backend: backend.clone(),
+        receiver: Mutex::new(Some(receiver)),
+    };
+    (factory, backend)
+}
+async fn probe_with_manager(contradictory: bool, manager: SessionManager) -> (Agent, Arc<Probe>) {
+    let (factory, backend) = probe_factory(contradictory);
+    let agent = attached_agent(Arc::new(factory), manager).await.unwrap();
     (agent, backend)
 }
 async fn reattach_after_explicit_close(agent: &Agent) {

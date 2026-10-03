@@ -5,7 +5,7 @@ use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
     application::agent_execution::{
         providers::ProviderIdentity,
-        sessions::{SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage},
+        sessions::{SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage},
     },
     domain::agent_execution::sessions::{ExecutionSessionId, ProviderContext, SessionId},
     infrastructure::session_storage::{
@@ -106,11 +106,10 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
         provider: provider.clone(),
         context: context.clone(),
     }];
-    let mut generation = SessionSaveGeneration::initial();
     if separate_open {
         lease
             .save_changes(
-                generation,
+                lease.load().await.unwrap().binding().clone(),
                 SessionSnapshot {
                     id: session.clone(),
                     provider: provider.clone(),
@@ -118,11 +117,10 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
                     invocations: vec![],
                     queue_history: vec![],
                 },
-                std::mem::take(&mut changes),
+                vec![SessionSaveUnit::new(std::mem::take(&mut changes)).unwrap()],
             )
             .await
             .unwrap();
-        generation = generation.checked_next().unwrap();
     }
     // One valid atomic decision group spans several physical pieces.
     for index in 0..count {
@@ -137,7 +135,7 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
     }
     lease
         .save_changes(
-            generation,
+            lease.load().await.unwrap().binding().clone(),
             SessionSnapshot {
                 id: session.clone(),
                 provider,
@@ -145,7 +143,7 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
                 invocations: vec![],
                 queue_history: vec![],
             },
-            changes,
+            vec![SessionSaveUnit::new(changes).unwrap()],
         )
         .await
         .unwrap();

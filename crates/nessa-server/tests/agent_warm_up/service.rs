@@ -17,8 +17,8 @@ use nessa_sdk::application::agent_execution::providers::{
     ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest, SessionCloseRequest,
 };
 use nessa_sdk::application::agent_execution::sessions::{
-    ProviderContext, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-    StorageFuture,
+    ProviderContext, SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };
 use nessa_sdk::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
@@ -208,16 +208,21 @@ impl SessionStorage for FailPublicationStorage {
     }
 }
 impl SessionStorageLease for FailPublicationLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.inner.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         if matches!(snapshot.provider_context, ProviderContext::Recorded(_))
             && !self.failed.swap(true, Ordering::SeqCst)
         {
             return Box::pin(async { Err(StorageError::Io("publication rejected".into())) });
         }
-        self.inner.save(snapshot)
+        self.inner.save_changes(binding, snapshot, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.inner.erase()

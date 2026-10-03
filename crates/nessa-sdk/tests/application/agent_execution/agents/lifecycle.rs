@@ -5,8 +5,8 @@ use crate::application::agent_execution::support::{attached_agent, close_action}
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     sessions::{
-        SessionManager, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-        StorageFuture,
+        SessionLoad, SessionManager, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+        SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
     },
 };
 use nessa_sdk::domain::agent_execution::{executions::ExecutionOutcome, sessions::SessionId};
@@ -74,20 +74,30 @@ impl SessionStorage for CommitThenPauseStorage {
     }
 }
 impl SessionStorageLease for CommitThenPauseLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         Box::pin(async move {
             if self.fail_load.swap(false, Ordering::SeqCst) {
                 return Err(StorageError::Io("reconciliation read failed".into()));
             }
+            let loaded = self.backing.load().await?;
             if let Some(snapshot) = self.loaded_snapshot.lock().unwrap().take() {
-                return Ok(Some(snapshot));
+                return Ok(SessionLoad::new(
+                    Some(snapshot),
+                    loaded.binding().clone(),
+                    loaded.state(),
+                ));
             }
-            self.backing.load().await
+            Ok(loaded)
         })
     }
-    fn save(&self, value: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        value: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
-            self.backing.save(value).await?;
+            let receipt = self.backing.save_changes(binding, value, units).await?;
             let pause = self.pause.lock().unwrap().take();
             if let Some(SavePause { committed, release }) = pause {
                 let _ = committed.send(());
@@ -95,7 +105,7 @@ impl SessionStorageLease for CommitThenPauseLease {
                     .await
                     .map_err(|_| StorageError::Io("commit acknowledgement failed".into()))?;
             }
-            Ok(())
+            Ok(receipt)
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
@@ -319,7 +329,10 @@ async fn abandoned_admission_retains_exclusive_lease_until_save_settles() {
     })
     .await
     .expect("supervised write released its lease");
-    let saved = lease.load().await.unwrap().unwrap();
+    let saved = SessionSnapshot::load_saved(lease.as_ref(), &id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(saved.invocations.len(), 1);
     assert_eq!(saved.invocations[0].request.execution_id.as_str(), "saving");
 }

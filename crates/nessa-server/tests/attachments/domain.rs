@@ -475,3 +475,19 @@ fn a_fingerprint_matches_only_itself_and_never_prints_itself() {
     assert!(!fingerprint(1).matches(&TicketFingerprint::from_bytes(nearly)));
     assert_eq!(format!("{:?}", fingerprint(0xab)), "TicketFingerprint(..)");
 }
+
+#[test]
+fn artifact_ids_preserve_one_minted_lifetime_without_name_or_content_attributes() {
+    let first = ArtifactId::from_generation("minted-first");
+    let second = ArtifactId::from_generation("minted-second");
+    assert_ne!(first, second);
+    assert_eq!(ArtifactId::from_generation("minted-first"), first);
+    assert_eq!(ArtifactId::parse(first.as_str()), Ok(first.clone()));
+    assert_eq!(
+        ArtifactId::parse(&first.as_str().to_uppercase()),
+        Err(InvalidArtifactId)
+    );
+    assert_eq!(ArtifactId::parse("../path"), Err(InvalidArtifactId));
+    assert_eq!(ArtifactId::parse(&"a".repeat(65)), Err(InvalidArtifactId));
+    assert_eq!(ArtifactId::parse(&"g".repeat(64)), Err(InvalidArtifactId));
+}

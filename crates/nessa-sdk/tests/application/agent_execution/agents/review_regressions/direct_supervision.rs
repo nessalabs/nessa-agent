@@ -1,5 +1,8 @@
 //! Direct invocation ownership survives loss or suspension of its waiting caller.
 use super::*;
+use nessa_sdk::application::agent_execution::sessions::{
+    SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+};
 
 #[tokio::test]
 async fn never_polled_direct_invocation_has_no_effects() {
@@ -179,10 +182,15 @@ impl SessionStorage for PanicOnSettlementStorage {
     }
 }
 impl SessionStorageLease for PanicOnSettlementLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.backing.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
             if snapshot
                 .invocations
@@ -192,7 +200,7 @@ impl SessionStorageLease for PanicOnSettlementLease {
             {
                 panic!("one-shot storage panic after result was observed");
             }
-            self.backing.save(snapshot).await
+            self.backing.save_changes(binding, snapshot, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

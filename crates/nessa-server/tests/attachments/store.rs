@@ -1,13 +1,23 @@
 //! The real store on a real filesystem: privacy, hostile names, restart, and
 //! uploads racing a release of the same bytes.
 use super::*;
-use crate::attachments::application::AttachmentStore;
-use crate::attachments::domain::{Caller, MediaType, TicketLifetime, UploadTicket};
+use crate::attachments::application::{
+    AttachmentStore, ReleaseCause, RemovedBlob, RetirementEvidence, RevertCause,
+};
+use crate::attachments::domain::{Caller, MediaType, RetiredFrom, TicketLifetime, UploadTicket};
 use crate::attachments_test_support::{
     attachment, conversation, digest_of, organization, principal, CONVERSATION, OTHER_CONVERSATION,
 };
 use std::sync::Arc;
 use tokio::sync::Barrier;
+
+fn release_evidence() -> ReleaseEvidence {
+    ReleaseEvidence {
+        cause: ReleaseCause::ConversationClosed,
+        caller: Caller::new(principal("owner"), "panel", "release-1").unwrap(),
+        requested_at_ms: 3_000,
+    }
+}
 
 const PDF: &str = "application/pdf";
 
@@ -396,27 +406,41 @@ async fn release_lets_go_of_one_conversation_and_bytes_go_with_their_last_hold()
     );
 
     let mut report = store
-        .release(&organization("org"), &conversation(OTHER_CONVERSATION))
+        .release(
+            &organization("org"),
+            &conversation(OTHER_CONVERSATION),
+            &release_evidence(),
+        )
         .await
         .unwrap();
     report
-        .released
-        .sort_by_key(|released| released.hold.stored().size());
+        .retired
+        .sort_by_key(|released| released.hold().stored().size());
     assert_eq!(
         report,
         ReleaseReport {
-            released: vec![
-                ReleasedHold {
-                    hold: alone.clone(),
-                    was: HoldState::Held
-                },
-                ReleasedHold {
-                    hold: second.clone(),
-                    was: HoldState::Held
-                },
+            retired: vec![
+                RetiredHold::new(
+                    alone.clone(),
+                    RetiredFrom::Held,
+                    RetirementEvidence::Release(release_evidence())
+                )
+                .expect("valid original retirement"),
+                RetiredHold::new(
+                    second.clone(),
+                    RetiredFrom::Held,
+                    RetirementEvidence::Release(release_evidence())
+                )
+                .expect("valid original retirement"),
             ],
             // `shared` is still held by the other conversation.
-            removed: vec![alone.clone()],
+            removed: vec![RemovedBlob::new(vec![RetiredHold::new(
+                alone.clone(),
+                RetiredFrom::Held,
+                RetirementEvidence::Release(release_evidence())
+            )
+            .expect("valid original retirement")])
+            .expect("nonempty same-digest retirements")],
             failures: 0,
         }
     );
@@ -428,10 +452,23 @@ async fn release_lets_go_of_one_conversation_and_bytes_go_with_their_last_hold()
     assert!(store.read(digest_of(b"alone"), 16).await.unwrap().is_none());
 
     let report = store
-        .release(&organization("org"), &conversation(CONVERSATION))
+        .release(
+            &organization("org"),
+            &conversation(CONVERSATION),
+            &release_evidence(),
+        )
         .await
         .unwrap();
-    assert_eq!(report.removed, std::slice::from_ref(&first));
+    assert_eq!(
+        report.removed,
+        vec![RemovedBlob::new(vec![RetiredHold::new(
+            first.clone(),
+            RetiredFrom::Held,
+            RetirementEvidence::Release(release_evidence())
+        )
+        .expect("valid original retirement")])
+        .expect("nonempty same-digest retirements")]
+    );
     assert!(store
         .read(digest_of(b"shared"), 16)
         .await
@@ -439,10 +476,23 @@ async fn release_lets_go_of_one_conversation_and_bytes_go_with_their_last_hold()
         .is_none());
     assert_eq!(
         store
-            .release(&organization("org"), &conversation(CONVERSATION))
+            .release(
+                &organization("org"),
+                &conversation(CONVERSATION),
+                &release_evidence()
+            )
             .await
             .unwrap(),
-        ReleaseReport::default()
+        ReleaseReport {
+            retired: vec![RetiredHold::new(
+                first.clone(),
+                RetiredFrom::Held,
+                RetirementEvidence::Release(release_evidence())
+            )
+            .expect("valid original retirement")],
+            removed: vec![],
+            failures: 0,
+        }
     );
     // A restart agrees with all of it.
     drop(store);
@@ -484,13 +534,26 @@ async fn a_record_that_cannot_be_read_is_reported_kept_and_never_costs_the_other
         .is_some());
 
     let report = store
-        .release(&organization("org"), &conversation(CONVERSATION))
+        .release(
+            &organization("org"),
+            &conversation(CONVERSATION),
+            &release_evidence(),
+        )
         .await
         .unwrap();
     assert_eq!(report.failures, 1);
-    assert_eq!(report.released.len(), 1);
-    assert_eq!(report.released[0].hold, good);
-    assert_eq!(report.removed, std::slice::from_ref(&good));
+    assert_eq!(report.retired.len(), 1);
+    assert_eq!(report.retired[0].hold(), &good);
+    assert_eq!(
+        report.removed,
+        vec![RemovedBlob::new(vec![RetiredHold::new(
+            good.clone(),
+            RetiredFrom::Held,
+            RetirementEvidence::Release(release_evidence())
+        )
+        .expect("valid original retirement")])
+        .expect("nonempty same-digest retirements")]
+    );
     // The unreadable record is exactly as it was, and its bytes are still protected.
     assert_eq!(fs::read(&record).unwrap(), forged);
     assert_eq!(
@@ -505,7 +568,11 @@ async fn a_record_that_cannot_be_read_is_reported_kept_and_never_costs_the_other
         fs::write(&record, garbage).unwrap();
         assert_eq!(
             store
-                .release(&organization("org"), &conversation(CONVERSATION))
+                .release(
+                    &organization("org"),
+                    &conversation(CONVERSATION),
+                    &release_evidence()
+                )
                 .await
                 .unwrap()
                 .failures,
@@ -573,7 +640,11 @@ async fn a_pending_hold_is_invisible_protects_its_bytes_and_answers_only_to_its_
     // of the same bytes does not take them.
     let other = upload(&store, OTHER_CONVERSATION, b"bytes").await;
     let report = store
-        .release(other.organization_id(), other.conversation_id())
+        .release(
+            other.organization_id(),
+            other.conversation_id(),
+            &release_evidence(),
+        )
         .await
         .unwrap();
     assert!(report.removed.is_empty());
@@ -584,13 +655,35 @@ async fn a_pending_hold_is_invisible_protects_its_bytes_and_answers_only_to_its_
 
     // A claim nobody was given changes nothing.
     let stranger = HoldClaim::new("not-the-generation");
-    assert_eq!(store.discard(&hold, &stranger).await, Ok(Discard::NotMine));
+    assert_eq!(
+        store
+            .discard(&hold, &stranger, RevertCause::ConfirmationFailed)
+            .await,
+        Ok(Discard::NotMine)
+    );
     // Its own claim takes it back, bytes and all, once.
-    assert_eq!(store.discard(&hold, &claimed).await, Ok(Discard::Discarded));
-    assert_eq!(store.discard(&hold, &claimed).await, Ok(Discard::NotMine));
+    assert_eq!(
+        store
+            .discard(&hold, &claimed, RevertCause::ConfirmationFailed)
+            .await,
+        Ok(Discard::Discarded {
+            was: RetiredFrom::Pending
+        })
+    );
+    assert_eq!(
+        store
+            .discard(&hold, &claimed, RevertCause::ConfirmationFailed)
+            .await,
+        Ok(Discard::NotMine)
+    );
     assert_eq!(store.confirm(&hold, &claimed).await, Ok(Confirmation::Gone));
     assert!(store.read(digest_of(b"bytes"), 16).await.unwrap().is_none());
-    assert!(files_beneath(&root.path().join("attachments/holds")).is_empty());
+    let records = files_beneath(&root.path().join("attachments/holds"));
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|path| matches!(
+        decode(&fs::read(path).unwrap()).unwrap().state,
+        RecordState::Retired { .. }
+    )));
 }
 
 #[tokio::test]
@@ -608,7 +701,12 @@ async fn taking_a_hold_back_undoes_that_upload_and_never_a_later_one_of_the_same
         Ok(Confirmation::Confirmed)
     );
     // The earlier one's evidence failed. Taking it back touches nothing.
-    assert_eq!(store.discard(&first, &earlier).await, Ok(Discard::NotMine));
+    assert_eq!(
+        store
+            .discard(&first, &earlier, RevertCause::ConfirmationFailed)
+            .await,
+        Ok(Discard::NotMine)
+    );
     assert!(holds(&store, &second).await);
     assert_eq!(
         store
@@ -627,7 +725,11 @@ async fn taking_a_hold_back_undoes_that_upload_and_never_a_later_one_of_the_same
         Ok(Confirmation::AlreadyKept)
     );
     store
-        .release(&organization("org"), &conversation(CONVERSATION))
+        .release(
+            &organization("org"),
+            &conversation(CONVERSATION),
+            &release_evidence(),
+        )
         .await
         .unwrap();
 
@@ -639,7 +741,12 @@ async fn taking_a_hold_back_undoes_that_upload_and_never_a_later_one_of_the_same
         store.confirm(&first, &earlier).await,
         Ok(Confirmation::Confirmed)
     );
-    assert_eq!(store.discard(&second, &later).await, Ok(Discard::NotMine));
+    assert_eq!(
+        store
+            .discard(&second, &later, RevertCause::ConfirmationFailed)
+            .await,
+        Ok(Discard::NotMine)
+    );
     assert_eq!(
         store
             .find_upload(
@@ -654,8 +761,12 @@ async fn taking_a_hold_back_undoes_that_upload_and_never_a_later_one_of_the_same
     // A hold confirmed under a claim is still that claim's to take back: what
     // an upload does when making it usable failed partway.
     assert_eq!(
-        store.discard(&first, &earlier).await,
-        Ok(Discard::Discarded)
+        store
+            .discard(&first, &earlier, RevertCause::ConfirmationFailed)
+            .await,
+        Ok(Discard::Discarded {
+            was: RetiredFrom::Held
+        })
     );
     assert!(!holds(&store, &first).await);
     assert!(store
@@ -674,23 +785,31 @@ async fn a_release_takes_pending_holds_too_and_a_late_claim_cannot_bring_one_bac
     let claimed = claim(&store, &waiting, b"waiting").await;
 
     let mut report = store
-        .release(&organization("org"), &conversation(CONVERSATION))
+        .release(
+            &organization("org"),
+            &conversation(CONVERSATION),
+            &release_evidence(),
+        )
         .await
         .unwrap();
     report
-        .released
-        .sort_by_key(|released| released.hold.stored().size());
+        .retired
+        .sort_by_key(|released| released.hold().stored().size());
     assert_eq!(
-        report.released,
+        report.retired,
         [
-            ReleasedHold {
-                hold: kept,
-                was: HoldState::Held
-            },
-            ReleasedHold {
-                hold: waiting.clone(),
-                was: HoldState::Pending
-            },
+            RetiredHold::new(
+                kept,
+                RetiredFrom::Held,
+                RetirementEvidence::Release(release_evidence())
+            )
+            .expect("valid original retirement"),
+            RetiredHold::new(
+                waiting.clone(),
+                RetiredFrom::Pending,
+                RetirementEvidence::Release(release_evidence())
+            )
+            .expect("valid original retirement"),
         ]
     );
     assert_eq!(report.removed.len(), 2);
@@ -702,10 +821,17 @@ async fn a_release_takes_pending_holds_too_and_a_late_claim_cannot_bring_one_bac
         Ok(Confirmation::Gone)
     );
     assert_eq!(
-        store.discard(&waiting, &claimed).await,
+        store
+            .discard(&waiting, &claimed, RevertCause::ConfirmationFailed)
+            .await,
         Ok(Discard::NotMine)
     );
-    assert!(files_beneath(&root.path().join("attachments/holds")).is_empty());
+    let records = files_beneath(&root.path().join("attachments/holds"));
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|path| matches!(
+        decode(&fs::read(path).unwrap()).unwrap().state,
+        RecordState::Retired { .. }
+    )));
     assert!(files_beneath(&root.path().join("attachments/blobs")).is_empty());
 }
 
@@ -745,10 +871,14 @@ async fn the_same_bytes_kept_as_two_types_are_two_holds_and_one_copy() {
     );
 
     let report = store
-        .release(&organization("org"), &conversation(CONVERSATION))
+        .release(
+            &organization("org"),
+            &conversation(CONVERSATION),
+            &release_evidence(),
+        )
         .await
         .unwrap();
-    assert_eq!(report.released.len(), 2);
+    assert_eq!(report.retired.len(), 2);
     // One copy of the bytes, so one removal.
     assert_eq!(report.removed.len(), 1);
     assert_eq!(report.failures, 0);
@@ -811,7 +941,11 @@ async fn bytes_are_never_lost_while_a_hold_on_them_exists() {
             tokio::spawn(async move {
                 barrier.wait().await;
                 store
-                    .release(&organization("org"), &conversation(CONVERSATION))
+                    .release(
+                        &organization("org"),
+                        &conversation(CONVERSATION),
+                        &release_evidence(),
+                    )
                     .await
                     .unwrap()
             })
@@ -837,9 +971,19 @@ async fn bytes_are_never_lost_while_a_hold_on_them_exists() {
             bytes
         );
         store
-            .release(&organization("org"), &conversation(OTHER_CONVERSATION))
+            .release(
+                &organization("org"),
+                &conversation(OTHER_CONVERSATION),
+                &release_evidence(),
+            )
             .await
             .unwrap();
         assert!(store.read(digest_of(&bytes), 64).await.unwrap().is_none());
     }
 }
+
+#[path = "artifacts.rs"]
+mod artifact_tests;
+
+#[path = "artifact_ranges.rs"]
+mod artifact_range_tests;

@@ -1,5 +1,8 @@
 //! A committed steering write whose acknowledgement panics remains one submission.
 use super::*;
+use nessa_sdk::application::agent_execution::sessions::{
+    SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+};
 
 struct PanicStorage {
     backing: MemoryStorage,
@@ -23,10 +26,15 @@ impl SessionStorage for PanicStorage {
     }
 }
 impl SessionStorageLease for PanicLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.backing.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
             let matches = snapshot.invocations.iter().any(|record| {
                 record.request.execution_id.as_str() == "steering"
@@ -35,11 +43,11 @@ impl SessionStorageLease for PanicLease {
                         .last()
                         .is_some_and(|event| event.stage == self.stage)
             });
-            self.backing.save(snapshot).await?;
+            let receipt = self.backing.save_changes(binding, snapshot, units).await?;
             if matches && !self.fired.swap(true, Ordering::SeqCst) {
                 panic!("committed steering acknowledgement panicked");
             }
-            Ok(())
+            Ok(receipt)
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
