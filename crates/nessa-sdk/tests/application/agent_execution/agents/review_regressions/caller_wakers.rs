@@ -25,12 +25,21 @@ enum Fault {
     Panic,
     /// Panics with a payload whose own drop panics.
     PanicWithPanickingPayload,
+    /// Panics with a payload whose drop panics with a payload whose drop
+    /// panics again.
+    PanicWithTwicePanickingPayload,
 }
 
 struct PanickingDrop;
 impl Drop for PanickingDrop {
     fn drop(&mut self) {
         panic!("issue431 panic payload drop");
+    }
+}
+struct TwicePanickingDrop;
+impl Drop for TwicePanickingDrop {
+    fn drop(&mut self) {
+        std::panic::panic_any(PanickingDrop);
     }
 }
 
@@ -53,6 +62,7 @@ impl Wake for CallerWake {
                 Fault::None => {}
                 Fault::Panic => panic!("issue431 caller waker"),
                 Fault::PanicWithPanickingPayload => std::panic::panic_any(PanickingDrop),
+                Fault::PanicWithTwicePanickingPayload => std::panic::panic_any(TwicePanickingDrop),
             }
         }
     }
@@ -433,8 +443,6 @@ async fn panicking_lock_waiter_does_not_fail_the_admission_that_released_it() {
     }
 }
 
-/// The attachment task publishes its result as its last action, holding no
-/// lock, so this journey also passes without containment. It anchors the row.
 #[tokio::test]
 async fn panicking_attachment_waiter_leaves_the_attachment_attached() {
     for fault in [Fault::None, Fault::Panic, Fault::PanicWithPanickingPayload] {
@@ -488,28 +496,23 @@ async fn panicking_close_waiter_does_not_interrupt_close() {
     }
 }
 
-const DOUBLE_FAULT_CHILD: &str = "NESSA_ISSUE431_DOUBLE_FAULT_CHILD";
+const CHILD_ENV: &str = "NESSA_ISSUE431_CHILD";
 
-/// Tokio catches a panicking `JoinHandle` waker but drops the payload outside
-/// that catch. A payload whose drop panics then aborts a multi-thread
-/// runtime's worker, so the journey runs in a child process where an abort
-/// fails the parent test instead of ending this test binary.
-#[test]
-fn panicking_payload_close_waiter_does_not_abort_the_runtime() {
-    let name = format!(
-        "{}::double_fault_close_waiter_child",
-        module_path!().split_once("::").unwrap().1
-    );
+/// Runs `child` (an ignored test in this module) in a separate process and
+/// fails unless it passes. A process abort there fails this test instead of
+/// ending the test binary.
+fn run_in_child_process(child: &str) {
+    let name = format!("{}::{child}", module_path!().split_once("::").unwrap().1);
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", &name, "--ignored", "--test-threads=1"])
-        .env(DOUBLE_FAULT_CHILD, "1")
+        .env(CHILD_ENV, "1")
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "a close waiter's double fault must not abort the runtime: {:?}\n{stderr}",
+        "{child} must not abort the process: {:?}\n{stderr}",
         output.status
     );
     assert!(
@@ -517,20 +520,30 @@ fn panicking_payload_close_waiter_does_not_abort_the_runtime() {
         "the child ran {name}: {stdout}"
     );
 }
+fn multi_thread_child_runtime() -> tokio::runtime::Runtime {
+    assert!(
+        std::env::var_os(CHILD_ENV).is_some(),
+        "run through run_in_child_process"
+    );
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap()
+}
+
+/// Tokio catches a panicking `JoinHandle` waker but drops the payload outside
+/// that catch. A payload whose drop panics then aborts the process on a
+/// multi-thread runtime.
+#[test]
+fn panicking_payload_close_waiter_does_not_abort_the_runtime() {
+    run_in_child_process("double_fault_close_waiter_child");
+}
 
 #[test]
 #[ignore = "run in a child process by panicking_payload_close_waiter_does_not_abort_the_runtime"]
 fn double_fault_close_waiter_child() {
-    assert!(
-        std::env::var_os(DOUBLE_FAULT_CHILD).is_some(),
-        "run through panicking_payload_close_waiter_does_not_abort_the_runtime"
-    );
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .unwrap();
-    runtime.block_on(async {
+    multi_thread_child_runtime().block_on(async {
         let (agent, _backend, _storage) = probe(false).await;
         let (caller, notification) = caller_wake(Fault::PanicWithPanickingPayload);
         let mut closing: Pin<Box<dyn Future<Output = _> + Send + '_>> =
@@ -540,6 +553,42 @@ fn double_fault_close_waiter_child() {
         assert_eq!(caller.calls.load(Ordering::SeqCst), 1);
         assert!(timeout(BOUND, closing).await.unwrap().is_ok());
         reattach_after_explicit_close(&agent).await;
+        assert_eq!(
+            timeout(BOUND, agent.invoke(input("after"), actor()))
+                .await
+                .unwrap(),
+            Ok(ExecutionOutcome::Completed)
+        );
+        timeout(BOUND, agent.close(actor())).await.unwrap().unwrap();
+    });
+}
+
+/// The attachment task's own panic is stored as its `JoinError` and dropped
+/// inside Tokio's catch at completion; a second panic from that drop is
+/// caught, and its payload dropped outside the catch. A third panic there
+/// aborts the process on a multi-thread runtime.
+#[test]
+fn twice_panicking_payload_attachment_waiter_does_not_abort_the_runtime() {
+    run_in_child_process("triple_fault_attachment_waiter_child");
+}
+
+#[test]
+#[ignore = "run in a child process by twice_panicking_payload_attachment_waiter_does_not_abort_the_runtime"]
+fn triple_fault_attachment_waiter_child() {
+    multi_thread_child_runtime().block_on(async {
+        let (agent, _backend, _storage) = probe(false).await;
+        timeout(BOUND, agent.close(actor())).await.unwrap().unwrap();
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        let (caller, notification) = caller_wake(Fault::PanicWithTwicePanickingPayload);
+        let mut attaching: Pin<Box<dyn Future<Output = _> + Send>> =
+            Box::pin(agent.start_attachment(authorization).unwrap().wait());
+        register(&mut attaching, Waker::from(caller.clone()));
+        timeout(BOUND, notification).await.unwrap().unwrap();
+        assert_eq!(caller.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(timeout(BOUND, attaching).await.unwrap(), Ok(()));
+        assert_eq!(agent.attachment_status().phase(), AttachmentPhase::Attached);
         assert_eq!(
             timeout(BOUND, agent.invoke(input("after"), actor()))
                 .await

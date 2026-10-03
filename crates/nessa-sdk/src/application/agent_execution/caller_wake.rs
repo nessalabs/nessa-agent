@@ -38,6 +38,8 @@ pub(crate) enum CallerWaiter {
     ApprovalModeChange(SessionId),
     /// `SessionManager::snapshot` for this session.
     CommittedSnapshot(SessionId),
+    /// `AttachmentWait::wait` for this attachment generation.
+    Attachment { generation: u64 },
     /// `Agent::invoke` of this input.
     Invocation(ExecutionId),
     /// `Agent::enqueue` or `Agent::enqueue_steering` of this input.
@@ -100,6 +102,9 @@ impl fmt::Display for CallerWaiter {
                     "committed snapshot of session {}",
                     session.as_str()
                 )
+            }
+            Self::Attachment { generation } => {
+                write!(formatter, "attachment generation {generation}")
             }
             Self::Invocation(id) => write!(formatter, "invocation {}", id.as_str()),
             Self::Admission(id) => write!(formatter, "admission of {}", id.as_str()),

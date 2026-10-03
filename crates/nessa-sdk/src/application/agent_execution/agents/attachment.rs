@@ -188,24 +188,32 @@ impl AttachmentCancellation {
 /// Join handle for one Agent-owned attachment attempt.
 #[must_use = "inspect attachment settlement or intentionally leave it Agent-owned"]
 pub struct AttachmentWait {
+    pub(super) generation: u64,
     pub(super) result: watch::Receiver<Option<Result<(), AgentError>>>,
 }
 impl AttachmentWait {
     /// Wait for attachment publication or its typed failure.
     ///
     /// Dropping this wait does not cancel provider startup or cleanup. The
-    /// result is published by the Agent's attachment task as its last action.
-    /// A panic raised by the polling task's `Waker` there ends only that
-    /// finished task and loses that one wake; the result stays retained for
-    /// the next poll. See "Caller wakers" in docs/agent_execution/lifecycle.md.
-    pub async fn wait(mut self) -> Result<(), AgentError> {
-        loop {
-            if let Some(result) = self.result.borrow().clone() {
-                return result;
+    /// result is published by the Agent's attachment task. A panic raised by
+    /// the polling task's `Waker` is logged and loses that one wake; the
+    /// result stays retained for the next poll. See "Caller wakers" in
+    /// docs/agent_execution/lifecycle.md.
+    pub async fn wait(self) -> Result<(), AgentError> {
+        let Self {
+            generation,
+            mut result,
+        } = self;
+        contain_caller_wake(CallerWaiter::Attachment { generation }, async move {
+            loop {
+                if let Some(settled) = result.borrow().clone() {
+                    return settled;
+                }
+                if result.changed().await.is_err() {
+                    return Err(AgentError::CleanupUncertain);
+                }
             }
-            if self.result.changed().await.is_err() {
-                return Err(AgentError::CleanupUncertain);
-            }
-        }
+        })
+        .await
     }
 }

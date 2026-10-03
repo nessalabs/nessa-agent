@@ -386,6 +386,10 @@ impl Agent {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn enqueue(
         &self,
         input: ExecutionRequest,
@@ -399,6 +403,10 @@ impl Agent {
     /// of ordinary queued inputs. Steering inputs preserve their own FIFO order.
     /// This explicit boundary operation does not interrupt or inject into a turn.
     /// WorkStatus and failure guarantees are the same as [`Self::enqueue`].
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn enqueue_steering(
         &self,
         input: ExecutionRequest,
@@ -466,6 +474,10 @@ impl Agent {
     /// }
     /// # Ok(()) }
     /// ```
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn reorder_queued(
         &self,
         order: Vec<ExecutionId>,
@@ -656,6 +668,10 @@ impl Agent {
     /// Already injected/dispatched inputs return NotPending and cannot be unsent.
     /// Storage failure still removes the input and reports the failed audit write.
     /// Once polled, removal is supervised even if the caller stops waiting.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn remove_queued(
         &self,
         id: ExecutionId,
@@ -1318,6 +1334,10 @@ impl Agent {
     /// Identical retries recover the original injection acknowledgement, queued
     /// receipt, or error; they never inject a second time. Conflicting retries return
     /// SubmissionConflict; unresolved restored delivery returns SubmissionUnresolved.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn steer(
         &self,
         input: ExecutionRequest,

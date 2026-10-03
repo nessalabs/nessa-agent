@@ -252,19 +252,16 @@ leaked rather than dropped. None of the publishers behind the waits in this
 table catches a notification panic itself, and nothing resets `running` or
 repairs lifecycle state after one.
 
-Every public Agent wait polls through `contain_caller_wake`, with one
-exception below. That includes the operations that spawn their owner and await
+Every public Agent wait polls through `contain_caller_wake`. That includes the operations that spawn their owner and await
 its `JoinHandle`: `invoke`, `enqueue`, `enqueue_steering`, `steer`,
 `reorder_queued`, `remove_queued`, `close`, `set_effort_level`,
 `answer_permission`, `cancel_permission` and `answer_question`. Tokio wakes a
 `JoinHandle` waiter inside its own `catch_unwind`, but it drops the caught
 payload outside it. A payload whose drop panics would then escape the task's
-completion and abort a multi-thread runtime's worker.
-
-The exception is `AttachmentWait::wait`. Its attachment task publishes as its
-last action, holding no lock, and Tokio contains a panic in a spawned task's
-own poll, payload drop included. A wrapper there would change nothing a test
-can observe, so there is none.
+completion and abort the process on a multi-thread runtime. A task whose
+`JoinHandle` was dropped, such as the attachment task, has the same exposure
+one level down: its own panic is stored and dropped inside that catch, so a
+payload that panics twice when dropped escapes it.
 
 Tests are in the public `application` test binary, under
 `application::agent_execution::agents::review_regressions::caller_wakers`.
@@ -281,7 +278,8 @@ Each one runs its journey first with a waker that does not panic.
 | `ProviderOpenControl::wait`, polled by a provider during open | `close`, while it holds the lifecycle lock | Close returns normally and the lifecycle lock is not poisoned | `panicking_provider_open_stop_waiter_does_not_interrupt_close` |
 | `Agent::queued_ids`, `Agent::idle_for_approval_change`, `Agent::set_approval_mode` | Any task releasing the scheduler lock; the test uses an admission | The admission returns its receipt and the input runs | `panicking_lock_waiter_does_not_fail_the_admission_that_released_it`, one case each |
 | `SessionManager::snapshot` | Any save releasing the evidence lock; the test uses an admission | As above | Same test, `CommittedSnapshot` case |
-| `AttachmentWait::wait` (not wrapped) | The attachment task, as its last action, holding no lock | The panic, or a panic whose payload drop also panics, ends only that finished task. The attachment is attached and runs work | `panicking_attachment_waiter_leaves_the_attachment_attached`, which passes with or without a wrapper |
+| `AttachmentWait::wait`, plain panic | The attachment task, as its last action, holding no lock | The attachment is attached and runs work | `panicking_attachment_waiter_leaves_the_attachment_attached`, which also passes without the wrapper |
+| `AttachmentWait::wait`, panic whose payload panics twice when dropped, on a multi-thread runtime | The attachment task, whose `JoinHandle` the Agent does not keep | The runtime keeps running; the attachment is attached and runs work | `twice_panicking_payload_attachment_waiter_does_not_abort_the_runtime`, which runs `triple_fault_attachment_waiter_child` in a child process. Without the wrapper the child aborts with SIGABRT |
 | `close` and the other spawn-and-join operations, plain panic | Tokio's task completion, inside its own `catch_unwind` | Close completes; the Agent can attach and invoke again | `panicking_close_waiter_does_not_interrupt_close`, which also passes without the wrapper |
 | `close`, panic whose payload drop also panics, on a multi-thread runtime | Tokio's task completion, which drops the payload outside its catch | The runtime keeps running; close completes and the Agent can attach and invoke again | `panicking_payload_close_waiter_does_not_abort_the_runtime`, which runs `double_fault_close_waiter_child` in a child process so an abort fails the test. Without the wrapper the child aborts with SIGABRT |
 
@@ -298,4 +296,7 @@ Not covered:
   [#442](https://github.com/nessalabs/nessa-agent/issues/442).
 - Public futures in `infrastructure` (MCP servers, the record storage adapter,
   process cleanup), which wait on their own adapters' worker tasks. Tracked in
+  [#442](https://github.com/nessalabs/nessa-agent/issues/442).
+- `Agent::prepare`, `SessionManager::open` and `SessionSnapshot::load_saved`,
+  which wait only on caller-supplied provider and storage ports. Tracked in
   [#442](https://github.com/nessalabs/nessa-agent/issues/442).

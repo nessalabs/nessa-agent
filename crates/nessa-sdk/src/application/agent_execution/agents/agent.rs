@@ -298,6 +298,10 @@ impl Agent {
     /// - The audit sink's error with [`ProviderSessionState::CleanupRequired`]
     ///   when the agent verified the change but it cannot be recorded: the
     ///   level is in force, and no turn may run under it unrecorded.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub async fn set_effort_level(
         &self,
         level: EffortLevel,
@@ -832,6 +836,10 @@ impl Agent {
     /// future has no effects. Keep the Tokio runtime alive until work or close
     /// finishes. Immediate calls have no recoverable receipt; use [`Self::enqueue`]
     /// when callers need to retrieve the result after losing their wait.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn invoke(
         &self,
         input: ExecutionRequest,
@@ -1530,6 +1538,10 @@ impl Agent {
     /// and continuing even if its caller stops waiting — the agent is holding a
     /// request open and must be told something. Success is that the answer was
     /// written, never that the agent acted on it.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn answer_question(
         &self,
         answer: QuestionAnswer,
@@ -1574,6 +1586,10 @@ impl Agent {
     /// Failure returns [`PermissionAnswerFailure`](crate::application::agent_execution::permissions::PermissionAnswerFailure),
     /// whose selection state distinguishes a still-pending review from a consumed
     /// decision and from an interrupted outcome that must be reloaded.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn answer_permission(&self, answer: PermissionAnswer) -> PermissionAnswerFuture<'_> {
         let agent = self.clone();
         Box::pin(async move {
@@ -1639,6 +1655,10 @@ impl Agent {
     /// interrupts pending response waits with `Closed`. A received receipt still
     /// completes local evidence validation. Admitted provider effects and mandatory
     /// audit remain owned by the adapter and settled by cleanup.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn cancel_permission(
         &self,
         request: PermissionCancellationRequest,
@@ -1688,6 +1708,10 @@ impl Agent {
     /// Once polled, close continues even if its caller stops waiting. Retries and
     /// final handle drop preserve the attachment's first shutdown cause and known
     /// initiator until cleanup is confirmed; a resumed attachment owns a new cause.
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn close(&self, actor: ActionContext) -> AgentFuture<'_, CloseOutcome> {
         Box::pin(async move { self.close_scheduled(actor).await })
     }
