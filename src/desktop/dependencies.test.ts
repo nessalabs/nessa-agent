@@ -120,7 +120,9 @@ describe("the window's widget plugins", () => {
     if (plugin?.kind !== "app") throw new Error("no app plugin")
     const app = { executionId: "run", toolId: "call-1", instanceId: "mount" }
     await plugin.ports.server.release({ sessionId: conversation, server: "mcptest", app })
-    expect(drawn.released).toEqual([[conversation, app]])
+    expect(drawn.released).toEqual([
+      [conversation, app, { requestId: expect.any(String) }],
+    ])
     // One connection: the app was asked on the client its conversation was read on.
     expect(drawn.connects()).toBe(1)
   })
