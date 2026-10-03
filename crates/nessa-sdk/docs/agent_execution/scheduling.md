@@ -98,15 +98,74 @@ the `application` test binary.
 | Start | Queued input, while a direct invocation holds the slot | Waits for the slot, then selects under the scheduler lock | The direct invocation already holds the slot | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops`, `scheduled_panics::dispatch_save_panic_does_not_inherit_previous_close_actor` |
 | An admission while no runner is running | `running` is false | Admission starts a new runner under the same lock | Unaffected | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops` |
 | Start | An owner left in `pending` with no queue entry, after a cancellation's settlement was cut short, not yet stopped | With nothing else queued, takes the slot, passes over the owner, then clears `running` and exits. The next `cancel_pending` collects owners whether or not they are queued | `Busy` until the runner exits | `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued`, second runner |
-| Start | The same owner, stopped | Takes the slot and settles it as stopped | `Busy` until the runner has settled it | `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued`, third runner |
-| The slot, after removal, close or a stop emptied the queue while it waited | Nothing queued | Takes the slot, settles stopped owners, then clears `running` and exits | `Busy` until the runner has been polled: it held the slot for work that existed when it began waiting | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops` (removal), `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued`, first runner |
+| Start | The same owner, stopped | Takes the slot, releases it before the stopped-owner drain, then retires each stopped permit before publication | The stopped receipt exposes its actual lifecycle refusal rather than the runner's obsolete `Busy` | `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued`, third runner; `receipt_readiness::stopped_waiting_receipt_exposes_cleanup_refusal_without_runner_busy` |
+| The slot, after removal, close or a stop emptied the queue while it waited | Nothing queued | Takes the slot; releases it before draining stopped owners, or exits when there is no stopped work; clears `running` on exit | The runner may hold the acquired slot before it is polled, but stopped receipt publication does not retain it | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops` (removal), `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued`, first runner; `receipt_readiness::stopped_waiting_receipt_exposes_cleanup_refusal_without_runner_busy` |
 
-The table lists orderings that have a test. One known ordering is not yet in
-it: after a queued item settles, the runner publishes the receipt's result
-before it releases the slot. A direct `invoke` sent just after that receipt
-resolves can therefore be `Busy`, and the pre-check on the runner's next loop
-sits inside the same window. This predates the table and is open in #405. It
-joins the table, with its test, when #405 changes it.
+### Original receipt and ownership retirement (#405)
+
+The queue runner releases the original selected invocation slot before publishing
+its receipt. `Pending::publish` consumes the original accepted-work permit before
+notification; failure drains remove that same owner from the scheduler first.
+Panic recovery finishes runner bookkeeping before publishing its selected result.
+Preselection stopped work and automatic attachment recovery release the runner's
+empty slot before their independently owned receipt settlement. A different live
+invocation retains its own slot and can still make a direct invocation `Busy`.
+
+The original main66 implementation reproduced stale `Busy` through the public
+normal-completion regression. The ownership contract and its public regression cases are listed below.
+Tests below are in the public `application` test binary, under
+`application::agent_execution::agents::review_regressions::receipt_readiness`.
+
+| Original receipt reaches | Required owner ordering before notification | Direct invocation at notification | Public regression |
+| --- | --- | --- | --- |
+| Normal selected completion, ordinary or boundary steering | Its existing persistence and recovery return, then its invocation slot and accepted-work permit retire | Admitted if no independent invocation owns the slot | `completed_queue_receipt_admits_immediate_invocation_without_stale_busy` |
+| Completed selected work whose provider required cleanup | Existing physical cleanup confirms; original accepted-work permit retires so the lifecycle can apply its recovery policy | `AttachmentUnavailable(Absent)` for the retired attachment; public automatic recovery admits subsequent work | `completed_queue_receipt_retires_work_after_confirmed_attachment_cleanup` |
+| Selection, dispatch-save or terminal-save panic | Existing recovery retains the panic error; terminal-save failure also retains `Completed` in `ExecutionObservation`. Runner bookkeeping finishes; original slot and work retire | `Closed` from the actual lifecycle fence; explicit recovery admits subsequent work | `panicked_queue_receipt_exposes_actual_refusal_after_original_retirement` |
+| Stopped waiting work before selection | The runner owns no selected invocation; its empty slot retires before the existing stopped-owner drain, and each original permit retires before its own notification | `Closed` from unconfirmed cleanup, without an obsolete runner `Busy` | `stopped_waiting_receipt_exposes_cleanup_refusal_without_runner_busy` |
+| Waiting work after failed automatic attachment | Runner releases its empty invocation slot before starting the independently owned attachment; each failed waiting permit retires before publication inside that producer | Exact `AttachmentUnavailable(Failed(Provider))`; no replacement execution | `failed_automatic_attachment_receipt_exposes_exact_attachment_refusal` |
+| Failed selected invocation cancels its waiting tail | Each tail receipt retires only its own permit; the selected original retains its terminal-persistence owner | `Busy` from that independent selected invocation | `failed_invocation_tail_receipt_preserves_independent_settlement_busy` |
+| Caller withdraws waiting work during a direct invocation | Original withdrawal evidence and permit retire; independent direct invocation retains its slot | `Busy` from the actual direct provider work; exact withdrawal caller retained | `withdrawn_receipt_preserves_busy_from_independent_active_invocation` |
+
+This chart describes existing owners and their implemented coordination. `Retired`
+means the original work permit is dropped, not a new runtime flag. The slot region
+names that original operation's ownership; a distinct invocation can own the
+shared mutex independently. Attachment startup, retained cleanup resources and
+`Open`/`Stopping`/`Blocked` admission remain owned by `SessionLifecycle`.
+
+```mermaid
+stateDiagram-v2
+    state "Original queued operation" as Original {
+        state "Accepted work" as Work {
+            [*] --> Waiting
+            Waiting --> Active: selected
+            Waiting --> Settling: stop / attachment failure
+            Active --> Executing: invocation entered
+            Executing --> Settling: result / Stop / panic
+            Settling --> Retired: original persistence and recovery finish
+        }
+        --
+        state "Original invocation slot" as Slot {
+            [*] --> Unheld
+            Unheld --> Held: runner acquires
+            Held --> Unheld: original invocation retires
+        }
+        --
+        state "Receipt observation" as Receipt {
+            [*] --> Pending
+            Pending --> Published: original work and slot retired
+        }
+    }
+```
+
+Receipt settlement does not confirm provider cleanup or universal Agent readiness.
+Tail cancellation, withdrawal, explicit close, admission failure and steering
+failure may still overlap an independently owned invocation, control or cleanup.
+Live submission retries join the same receipt notification; restored results have
+no live original worker. The public notification tests poll only a separately
+owned next invocation in the consumer's wake callback, never the original receipt
+while its watch publication might retain a lock. Each receipt poll keeps that
+consumer registered and forwards notifications to the actual waiting task;
+awaiting the raw receipt separately would replace the registered consumer.
 
 ## Idempotent submission retries
 
