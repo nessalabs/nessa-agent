@@ -1066,13 +1066,15 @@ describe("the structural change after round 3", () => {
     gateway.rows.set("a", row("a"))
     await source.index()
     // Two lists ahead of the archive: the second starts when the first times
-    // out, and ends after the archive's call has settled.
+    // out — its caller, a moment younger, still waiting (R10) — and ends after
+    // the archive's call has settled.
     gateway.once("list", () => new Promise(() => {}))
     const second = deferred<unknown>()
     gateway.once("list", () => second.promise)
     void source.index().catch(() => undefined)
+    await advance(1)
     void source.index().catch(() => undefined)
-    await advance(1_000)
+    await advance(999)
     const archiving = source.archive("a", "person").catch((error: unknown) => error)
     await advance(timing.callMs)
     expect(await archiving).toMatchObject({ reason: "unavailable" })
@@ -1368,7 +1370,7 @@ describe("round 5's rows", () => {
   })
 })
 
-describe("Codex review", () => {
+describe("review after ready", () => {
   it("R9: a read the gateway answers as gone takes the session out, even past an incomplete list", async () => {
     const { gateway, source, updates, follow, advance } = started()
     gateway.rows.set("a", row("a", { running: true }))
@@ -1387,6 +1389,78 @@ describe("Codex review", () => {
       revision: 2,
     })
     expect((await source.index()).sessions).toEqual([])
+    expect(kinds(updates)).not.toContain("resync")
+  })
+
+  it("R10: a read whose caller was answered while it waited its turn asks nothing", async () => {
+    const { gateway, source, advance } = started()
+    gateway.views.set("a", view("a"))
+    // Two reads that never answer: the second begins only when the first
+    // times out, so a third, asked meanwhile, outlives its caller in the queue.
+    gateway.once("read", () => new Promise(() => {}))
+    gateway.once("read", () => new Promise(() => {}))
+    const calls = [source.transcript("a")]
+    await advance(1)
+    calls.push(source.transcript("a"))
+    await advance(1)
+    calls.push(source.transcript("a"))
+    await advance(timing.callMs * 2)
+    for (const settled of await Promise.all(
+      calls.map((call) => call.catch((error: unknown) => error)),
+    ))
+      expect(settled).toMatchObject({ reason: "unavailable" })
+    expect(gateway.count("read")).toBe(2)
+  })
+
+  it("R10: a list whose caller was answered while it waited its turn asks nothing", async () => {
+    const { gateway, source, advance } = started()
+    gateway.once("list", () => new Promise(() => {}))
+    gateway.once("list", () => new Promise(() => {}))
+    const calls = [source.index()]
+    await advance(1)
+    calls.push(source.index())
+    await advance(1)
+    calls.push(source.index())
+    await advance(timing.callMs * 2)
+    for (const settled of await Promise.all(
+      calls.map((call) => call.catch((error: unknown) => error)),
+    ))
+      expect(settled).toMatchObject({ reason: "unavailable" })
+    expect(gateway.count("list")).toBe(2)
+  })
+
+  it("R11: a watched conversation refused for good stops being read, is no gap, and Try Again watches it again", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    // Live, so it would be read every round (S7) if it stayed watched.
+    gateway.views.set("a", view("a", { messages: [running()] }))
+    await source.transcript("a")
+    follow()
+    // Refused by the poller's read, then by the window's Try Again.
+    for (let i = 0; i < 2; i++)
+      gateway.once("read", () => Promise.reject(rpcCode("conversation_state_unreadable")))
+    await advance(timing.pollMs * 3)
+    expect(gateway.count("read")).toBe(2)
+    expect(kinds(updates)).not.toContain("resync")
+    // Try Again: the window reads it once more, and follows it again.
+    await expect(source.transcript("a")).rejects.toMatchObject({
+      reason: "not-supported",
+    })
+    await expect(source.transcript("a")).resolves.toMatchObject({ sessionId: "a" })
+    const reads = gateway.count("read")
+    await advance(timing.pollMs)
+    expect(gateway.count("read")).toBeGreaterThan(reads)
+  })
+
+  it("R11: a first read refused for good is not followed", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    gateway.views.set("a", view("a", { messages: [running()] }))
+    follow()
+    gateway.once("read", () => Promise.reject(rpcCode("conversation_state_unreadable")))
+    await expect(source.transcript("a")).rejects.toMatchObject({
+      reason: "not-supported",
+    })
+    await advance(timing.pollMs * 3)
+    expect(gateway.count("read")).toBe(1)
     expect(kinds(updates)).not.toContain("resync")
   })
 })

@@ -160,7 +160,8 @@ export function gatewaySource(options: {
   // How often each session was taken out: a read asked before its latest removal is let go (S3c).
   const removals = new Map<string, number>()
   // Conversations the window has read, and so wants kept current. Watching
-  // ends in two places only: `remove`, and the gateway saying it has none (S8).
+  // ends in two places only: `remove`, and a read the gateway answers with no
+  // such conversation (S8) or a refusal for good (R11) — until Try Again.
   const watched = new Set<string>()
 
   // Nothing is said after `dispose`, which lets every listener go and admits no new one.
@@ -362,11 +363,16 @@ export function gatewaySource(options: {
         if (!takenOut(sessionId) && !listed.has(sessionId)) remove(sessionId)
   }
 
-  /** Lists in turn, applying the answer; the list's own failures are the caller's. */
-  const list = (): Promise<void> => {
-    const { turn, settled } = inTurn(listing, () =>
-      within(async () => (await client()).conversation.list()).then(applyList),
-    )
+  /**
+   * Lists in turn, applying the answer; the list's own failures are the
+   * caller's. One whose caller was answered while it waited its turn asks
+   * nothing (R10).
+   */
+  const list = (caller: () => boolean = always): Promise<void> => {
+    const { turn, settled } = inTurn(listing, () => {
+      if (!caller()) throw new WorkspaceSourceError("unavailable")
+      return within(async () => (await client()).conversation.list()).then(applyList)
+    })
     listing = settled
     return turn
   }
@@ -424,14 +430,19 @@ export function gatewaySource(options: {
    * listing no longer held, so it is not applied: a session held again is
    * asked again, once. One still taken out answers `unknown-session`; one
    * held but crossed again answers `unavailable` — not done now, try again
-   * (S3c, S8) — let go is not gone, and not forever.
+   * (S3c, S8) — let go is not gone, and not forever. One whose caller was
+   * answered while it waited its turn asks nothing more (R10).
    */
-  const read = (sessionId: string): Promise<Transcript> => {
+  const read = (
+    sessionId: string,
+    caller: () => boolean = always,
+  ): Promise<Transcript> => {
     const { turn, settled } = inTurn(
       reading.get(sessionId) ?? Promise.resolve(),
       async () => {
         for (let asked = 0; asked < 2; asked++) {
           held(sessionId)
+          if (!caller()) throw new WorkspaceSourceError("unavailable")
           const against = rows.get(sessionId)
           const removed = removals.get(sessionId) ?? 0
           const view = await within(async () =>
@@ -483,9 +494,10 @@ export function gatewaySource(options: {
         try {
           await read(sessionId)
         } catch (error) {
-          // A conversation the gateway no longer holds is not watched; any
-          // other failure is a gap the next list resyncs.
-          if (gone(error)) watched.delete(sessionId)
+          // A conversation the gateway no longer holds, or will not read for
+          // this window, is not watched — Try Again watches it again; any
+          // other failure is a gap the next list resyncs (R11).
+          if (gone(error) || refusedForGood(error)) watched.delete(sessionId)
           else gap = true
         }
       }
@@ -508,10 +520,14 @@ export function gatewaySource(options: {
     cancelPoll = undefined
   }
 
-  const waitingReview = async (sessionId: string, approvalId: string) => {
+  const waitingReview = async (
+    sessionId: string,
+    approvalId: string,
+    live: () => boolean,
+  ) => {
     const review = reviewOf(approvalId)
     if (!review) throw new WorkspaceSourceError("not-waiting")
-    await read(sessionId)
+    await read(sessionId, live)
     const permission = reads
       .get(sessionId)
       ?.view.permissions.find(
@@ -526,7 +542,7 @@ export function gatewaySource(options: {
   /** Answers a review with the option of `effect` it offers; none offered is not supported. */
   const answer = (sessionId: string, approvalId: string, effect: "allow" | "deny") =>
     within(async (live) => {
-      const permission = await waitingReview(sessionId, approvalId)
+      const permission = await waitingReview(sessionId, approvalId, live)
       const option = permission.options.find((offered) => offered.effect === effect)
       if (!option) throw new WorkspaceSourceError("not-supported")
       await dispatch(live, (connected) =>
@@ -549,8 +565,8 @@ export function gatewaySource(options: {
 
   return {
     index: () =>
-      within(async () => {
-        await list()
+      within(async (live) => {
+        await list(live)
         const index: WorkspaceIndex = {
           sections: [gatewaySection],
           channels: [gatewayChannel],
@@ -559,15 +575,15 @@ export function gatewaySource(options: {
         return index
       }),
     transcript: (sessionId) =>
-      within(async () => {
+      within(async (live) => {
         // A read sends no `create`. The session is followed from now on —
         // a read that fails is mended by the poller's next one — unless it is
         // gone: one taken out is refused and not followed (R3, R8).
         if (!takenOut(sessionId)) watched.add(sessionId)
         try {
-          return await read(sessionId)
+          return await read(sessionId, live)
         } catch (error) {
-          if (gone(error)) watched.delete(sessionId)
+          if (gone(error) || refusedForGood(error)) watched.delete(sessionId)
           throw error
         }
       }),
@@ -667,9 +683,19 @@ export function gatewaySource(options: {
 
 function noop() {}
 
+/** The caller of a call no one waits on — the poller's own: always open. */
+function always() {
+  return true
+}
+
 /** Whether a failure says the session is gone: no such conversation, or one taken out. */
 function gone(error: unknown): boolean {
   return error instanceof WorkspaceSourceError && error.reason === "unknown-session"
+}
+
+/** Whether a failure is a refusal that asking again changes nothing of (`reasonFor`). */
+function refusedForGood(error: unknown): boolean {
+  return error instanceof WorkspaceSourceError && error.reason === "not-supported"
 }
 
 /**
