@@ -9,7 +9,7 @@
 import {
   ConversationErrorCode,
   MAX_MCP_ARGUMENTS_BYTES,
-  MCP_APP_CALL_DEADLINE_MS,
+  mcpAppDeadlines,
   mcpAppRequestProblem,
   NessaConversationControlError,
   NessaMcpAppError,
@@ -349,7 +349,7 @@ describe("tools/call", () => {
   })
 
   it("D1: a tools/call is waited for as long as the client waits for a review and the call", () => {
-    expect(gatewayAppServer(fakeApps()).callWithin).toBe(MCP_APP_CALL_DEADLINE_MS)
+    expect(gatewayAppServer(fakeApps()).callWithin).toBe(mcpAppDeadlines.callToolMs)
   })
 })
 

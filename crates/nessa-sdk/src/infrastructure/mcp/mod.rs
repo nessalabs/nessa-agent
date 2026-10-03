@@ -42,8 +42,8 @@ mod wire;
 
 pub use error::McpError;
 pub use servers::{
-    McpOwner, McpServerLaunch, McpServers, McpSession, APP_CALL_TIMEOUT, INITIALIZE_TIMEOUT,
-    MAX_TOOLS, MAX_TOOL_PAGES, REQUEST_TIMEOUT,
+    McpOwner, McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT, MAX_TOOLS,
+    MAX_TOOL_PAGES, REQUEST_TIMEOUT,
 };
 
 #[cfg(all(test, unix))]

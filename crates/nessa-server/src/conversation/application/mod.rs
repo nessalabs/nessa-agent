@@ -79,10 +79,11 @@
 //! issued past once a mount is released or the conversation ended — are
 //! `app_reviews.rs`, and the ports the calls go through `mcp_apps.rs`.
 mod app_reviews;
-// For the agreement test, which holds it to the published `x-mcpAppCallTiming`.
-#[cfg(test)]
-pub(crate) use app_reviews::APP_REVIEW_DEADLINE;
 mod catalogue;
+pub(crate) mod catalogue_watch;
+pub use catalogue_watch::{
+    CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue,
+};
 mod catalogue_read;
 mod error;
 mod locks;

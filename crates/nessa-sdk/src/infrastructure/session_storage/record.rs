@@ -6,15 +6,19 @@
 use super::record_source::CommittedReadGate;
 use super::{
     paths::SessionPaths,
+    record_changes::RecordChanges,
     record_lifecycle::{join, shutdown_result, StorageOwner},
     record_source::CachedCommittedRead,
     record_writer::RecordWriter,
     terminal_discovery::TerminalCache,
 };
 use crate::{
-    application::agent_execution::sessions::storage::{
-        CommittedSession, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
-        SessionStorageLease, StorageError, StorageFuture,
+    application::agent_execution::sessions::{
+        storage::{
+            CommittedSession, SessionChange, SessionSaveGeneration, SessionSnapshot,
+            SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+        },
+        ChangeWatchError, CommittedChangeWatch,
     },
     domain::agent_execution::sessions::SessionId,
 };
@@ -47,6 +51,7 @@ pub struct RecordStorage {
     options: SqliteOptions,
     runtime: Arc<OnceCell<Runtime<SqliteStore>>>,
     pub(super) owner: Arc<StorageOwner>,
+    changes: RecordChanges,
     pub(super) committed_views: Arc<Mutex<HashMap<Scope, Arc<CachedCommittedRead>>>>,
     pub(super) terminal_cache: Arc<TerminalCache>,
     #[cfg(test)]
@@ -68,6 +73,7 @@ impl RecordStorage {
             options,
             runtime: Arc::new(OnceCell::new()),
             owner: Arc::default(),
+            changes: RecordChanges::default(),
             committed_views: Arc::new(Mutex::new(HashMap::new())),
             terminal_cache: Arc::default(),
             #[cfg(test)]
@@ -75,6 +81,46 @@ impl RecordStorage {
             #[cfg(test)]
             committed_read_gate: Mutex::new(None),
         })
+    }
+
+    /// Register local payloadless interest in `id` without opening a writer,
+    /// initializing SQLite or authorizing a receiver. The caller must register
+    /// before its final authorized identity/head recheck and retain fallback
+    /// reads for incomplete tails and changes through another process/adapter.
+    ///
+    /// Each actual handle occupies one of [`super::MAX_RECORD_CHANGE_WATCHES`]
+    /// producer slots until drop. That local bound is distinct from the gateway's
+    /// shared watch-owner policy. Shutdown closes interest before physical work
+    /// joins; cancellation of a pending wait preserves its slot and dirty bit.
+    /// See the record change-watch tests for cancellation and retained ownership.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use nessa_sdk::{
+    ///     application::agent_execution::sessions::{ChangeWatchState, SessionStorage},
+    ///     domain::agent_execution::sessions::SessionId,
+    ///     infrastructure::session_storage::RecordStorage,
+    /// };
+    /// # async fn example(storage: &RecordStorage, id: SessionId) {
+    /// // The host first authorizes this owner; a watch is not permission.
+    /// let mut watch = storage.watch_committed(&id).expect("watch capacity");
+    /// let _initial = storage.read_committed(id.clone()).await.expect("head recheck");
+    /// if watch.changed().await == ChangeWatchState::Dirty {
+    ///     let _current = storage.read_committed(id).await.expect("current recheck");
+    ///     // Feed source records through the existing read/fold/checkpoint path.
+    /// }
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    /// Returns [`ChangeWatchError::Capacity`] for a full producer and
+    /// [`ChangeWatchError::Closed`] after watch admission closes.
+    pub fn watch_committed(
+        &self,
+        id: &SessionId,
+    ) -> Result<CommittedChangeWatch, ChangeWatchError> {
+        self.changes.watch(id.clone())
     }
 
     /// Opens and verifies the one SQLite runtime before the server listens.
@@ -121,14 +167,18 @@ impl RecordStorage {
                 .await
                 .map_err(store_error)?
         };
+        let changes = self.changes.clone();
         #[cfg(test)]
         let lose_reset_reply = self.lose_reset_reply.clone();
         tokio::spawn(async move {
-            let writer = RecordWriter::replay(&runtime, id, stream).await?;
+            let writer = RecordWriter::replay(&runtime, id, stream)
+                .await?
+                .with_changes(changes.clone());
             Ok(Some(Box::new(RecordLease {
                 inner: Arc::new(LeaseInner {
                     _reservation: reservation,
                     runtime,
+                    changes,
                     state: AsyncMutex::new(LeaseState {
                         writer,
                         reset_pending: None,
@@ -147,6 +197,9 @@ impl RecordStorage {
 impl SessionStorage for RecordStorage {
     fn shutdown(&self) -> StorageFuture<'_, ()> {
         Box::pin(async move {
+            // Close interest before storage admission closes; actual writers and
+            // reads retain their existing owners through physical completion.
+            self.changes.close();
             let (completion, work) = self.owner.close()?;
             if let Some(work) = work {
                 let runtime = self.runtime.clone();
@@ -247,6 +300,7 @@ struct LeaseInner {
     // Kept by every detached operation until its read, write or reset finishes.
     _reservation: Reservation,
     runtime: Runtime<SqliteStore>,
+    changes: RecordChanges,
     state: AsyncMutex<LeaseState>,
     #[cfg(test)]
     lose_reset_reply: Arc<AtomicBool>,
@@ -284,6 +338,9 @@ impl LeaseState {
             .change_lifecycle(request)
             .await
             .map_err(store_error)?;
+        // Publication follows the durable lifecycle receipt, before replay or
+        // cleanup can fail and before caller acknowledgement is observed.
+        inner.changes.publish(self.writer.id());
         #[cfg(test)]
         if inner.lose_reset_reply.swap(false, Ordering::SeqCst) {
             return Err(StorageError::Io("injected lost reset reply".into()));
@@ -291,8 +348,9 @@ impl LeaseState {
         let replacement = receipt
             .replacement
             .ok_or_else(|| StorageError::Corrupt("reset returned no replacement stream".into()))?;
-        self.writer =
-            RecordWriter::replay(&inner.runtime, self.writer.id().clone(), replacement).await?;
+        self.writer = RecordWriter::replay(&inner.runtime, self.writer.id().clone(), replacement)
+            .await?
+            .with_changes(inner.changes.clone());
         self.reset_pending = None;
         Ok(())
     }
@@ -389,7 +447,9 @@ pub(super) fn store_error(error: event_stream::Error) -> StorageError {
 
 #[cfg(test)]
 mod tests {
+    use super::super::MAX_RECORD_CHANGE_WATCHES;
     use super::*;
+    use crate::application::agent_execution::sessions::ChangeWatchState;
     use crate::{
         application::agent_execution::{
             agents::AgentError,
@@ -419,6 +479,10 @@ mod tests {
     };
     use event_stream::{infrastructure::SqliteFailureInjection, EventSink, StreamId};
     use rusqlite::Connection;
+    use std::{
+        future::Future,
+        task::{Context, Poll, Wake, Waker},
+    };
 
     fn sql(root: &std::path::Path, statement: &str) {
         Connection::open(root.join("records.sqlite3"))
@@ -523,6 +587,263 @@ mod tests {
             .unwrap()
     }
 
+    struct PanickingWatchWaker;
+    impl Wake for PanickingWatchWaker {
+        fn wake(self: Arc<Self>) {
+            panic!("test notification callback unwind");
+        }
+    }
+
+    fn watch_ready(watch: &mut CommittedChangeWatch) -> ChangeWatchState {
+        let mut wait = Box::pin(watch.changed());
+        match wait.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(state) => state,
+            Poll::Pending => panic!("expected a committed source notice"),
+        }
+    }
+
+    fn watch_pending(watch: &mut CommittedChangeWatch) {
+        let mut wait = Box::pin(watch.changed());
+        assert!(matches!(
+            wait.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Pending
+        ));
+    }
+
+    #[tokio::test]
+    async fn record_watch_callback_panic_cannot_replace_a_durable_save_result() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+        let id = SessionId::new("panic-watched").unwrap();
+        let mut faulty = storage.watch_committed(&id).unwrap();
+        let mut healthy = storage.watch_committed(&id).unwrap();
+        let waker = Waker::from(Arc::new(PanickingWatchWaker));
+        let mut wait = Box::pin(faulty.changed());
+        assert!(matches!(
+            wait.as_mut().poll(&mut Context::from_waker(&waker)),
+            Poll::Pending
+        ));
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        let result = lease
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                snapshot.clone(),
+                vec![change.clone()],
+            )
+            .await;
+        assert_eq!(
+            storage
+                .read_committed(id.clone())
+                .await
+                .unwrap()
+                .unwrap()
+                .snapshot(),
+            Some(&snapshot),
+            "the source fact really committed"
+        );
+        assert!(
+            result.is_ok(),
+            "watch callback changed the durable source result: {result:?}"
+        );
+        assert_eq!(watch_ready(&mut healthy), ChangeWatchState::Dirty);
+        drop(wait);
+        assert_eq!(
+            watch_ready(&mut faulty),
+            ChangeWatchState::NotificationFailed
+        );
+        // The exact completed retry observes intact committed-prefix bookkeeping.
+        lease
+            .save_changes(SessionSaveGeneration::initial(), snapshot, vec![change])
+            .await
+            .unwrap();
+        watch_pending(&mut healthy);
+        drop(healthy);
+        let registrations = (1..MAX_RECORD_CHANGE_WATCHES)
+            .map(|_| storage.watch_committed(&id).unwrap())
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            storage.watch_committed(&id),
+            Err(ChangeWatchError::Capacity)
+        ));
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        assert_eq!(
+            watch_ready(&mut faulty),
+            ChangeWatchState::NotificationFailed
+        );
+        drop(registrations);
+        drop(faulty);
+    }
+
+    #[tokio::test]
+    async fn record_watch_registration_opens_no_sqlite_or_writer_and_shutdown_is_terminal() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        let id = SessionId::new("watch-only").unwrap();
+        let mut watch = storage.watch_committed(&id).unwrap();
+        assert!(!root.join("records.sqlite3").exists());
+        // A watch occupies only its own producer slot, not the writer reservation.
+        let reservation = Reservation::acquire(storage.owner.clone(), id.as_str()).unwrap();
+        drop(reservation);
+        storage.shutdown().await.unwrap();
+        assert!(!root.join("records.sqlite3").exists());
+        assert_eq!(watch_ready(&mut watch), ChangeWatchState::Closed);
+        assert!(matches!(
+            storage.watch_committed(&id),
+            Err(ChangeWatchError::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn record_watch_recheck_finds_earlier_commit_and_later_reset_survives_lost_reply() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+        let id = SessionId::new("watched").unwrap();
+        let mut early = storage.watch_committed(&id).unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        lease
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                snapshot.clone(),
+                vec![change],
+            )
+            .await
+            .unwrap();
+        assert_eq!(watch_ready(&mut early), ChangeWatchState::Dirty);
+        let mut late = storage.watch_committed(&id).unwrap();
+        // Register after commit: the mandatory final recheck finds that fact.
+        assert_eq!(
+            storage
+                .read_committed(id.clone())
+                .await
+                .unwrap()
+                .unwrap()
+                .snapshot(),
+            Some(&snapshot)
+        );
+        watch_pending(&mut late);
+        storage.lose_reset_reply.store(true, Ordering::SeqCst);
+        assert!(matches!(lease.erase().await, Err(StorageError::Io(_))));
+        assert_eq!(watch_ready(&mut early), ChangeWatchState::Dirty);
+        assert_eq!(watch_ready(&mut late), ChangeWatchState::Dirty);
+        lease.load().await.unwrap(); // Reconcile physical cleanup through its owner.
+        drop(lease);
+        storage.shutdown().await.unwrap();
+        assert_eq!(watch_ready(&mut early), ChangeWatchState::Closed);
+        assert!(matches!(
+            storage.watch_committed(&id),
+            Err(ChangeWatchError::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancelled_save_receipt_still_publishes_from_the_retained_durable_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+        let id = SessionId::new("cancelled-watched").unwrap();
+        let mut watch = storage.watch_committed(&id).unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        let mut save = lease.save_changes(
+            SessionSaveGeneration::initial(),
+            snapshot.clone(),
+            vec![change],
+        );
+        assert!(matches!(
+            save.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Pending
+        ));
+        drop(save); // The first poll spawned the physical owner, no caller awaits it.
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(10), watch.changed())
+                .await
+                .unwrap(),
+            ChangeWatchState::Dirty
+        );
+        assert_eq!(
+            storage
+                .read_committed(id)
+                .await
+                .unwrap()
+                .unwrap()
+                .snapshot(),
+            Some(&snapshot)
+        );
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn record_watch_backend_lost_ack_is_reconciled_before_publication() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+        storage.options.failure_injection =
+            Some(SqliteFailureInjection::AfterCommitAcknowledgementLost);
+        let id = SessionId::new("lost-commit-watched").unwrap();
+        let mut watch = storage.watch_committed(&id).unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        // The pinned SQLite owner verifies its committed event ID and bytes
+        // after acknowledgement loss, before returning a real receipt.
+        lease
+            .save_changes(
+                SessionSaveGeneration::initial(),
+                snapshot.clone(),
+                vec![change.clone()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(watch_ready(&mut watch), ChangeWatchState::Dirty);
+        assert_eq!(
+            storage
+                .read_committed(id)
+                .await
+                .unwrap()
+                .unwrap()
+                .snapshot(),
+            Some(&snapshot)
+        );
+        lease
+            .save_changes(SessionSaveGeneration::initial(), snapshot, vec![change])
+            .await
+            .unwrap();
+        watch_pending(&mut watch); // Completed exact retry appended no new fact.
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rolled_back_record_write_leaves_watch_clean_until_actual_retry_commit() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
+        storage.options.failure_injection = Some(SqliteFailureInjection::BeforeCommit);
+        let id = SessionId::new("refused-watched").unwrap();
+        let mut watch = storage.watch_committed(&id).unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opening(&id);
+        assert!(matches!(
+            lease
+                .save_changes(
+                    SessionSaveGeneration::initial(),
+                    snapshot.clone(),
+                    vec![change.clone()]
+                )
+                .await,
+            Err(StorageError::Io(_))
+        ));
+        watch_pending(&mut watch);
+        lease
+            .save_changes(SessionSaveGeneration::initial(), snapshot, vec![change])
+            .await
+            .unwrap();
+        assert_eq!(watch_ready(&mut watch), ChangeWatchState::Dirty);
+        drop(lease);
+        storage.shutdown().await.unwrap();
+    }
+
     #[tokio::test]
     async fn erase_removes_retired_prompt_rows_and_retries_cleanup_after_restart() {
         let directory = tempfile::tempdir().unwrap();
@@ -530,6 +851,7 @@ mod tests {
         let mut storage = RecordStorage::new(&root).unwrap();
         storage.options.failure_injection = Some(SqliteFailureInjection::BeforeCleanupCommit);
         let id = SessionId::new("erase-private").unwrap();
+        let mut watch = storage.watch_committed(&id).unwrap();
         let lease = storage.open(id.clone()).await.unwrap();
         let (opened, mut snapshot) = opening(&id);
         lease
@@ -566,8 +888,10 @@ mod tests {
             .save_changes(generation(1), snapshot, vec![change])
             .await
             .unwrap();
+        assert_eq!(watch_ready(&mut watch), ChangeWatchState::Dirty);
         assert!(payload_rows(&root, secret) > 0);
         assert!(matches!(lease.erase().await, Err(StorageError::Io(_))));
+        assert_eq!(watch_ready(&mut watch), ChangeWatchState::Dirty);
         assert!(retired_rows(&root) > 0);
         drop(lease);
         storage.shutdown().await.unwrap();

@@ -3,21 +3,18 @@ import { describe, expect, it, vi } from "vitest"
 
 import { NessaConversationControlError } from "../application/conversation-mutation-error.js"
 import type { RequestTimer } from "../application/gateway-http.js"
-import {
-  MCP_APP_CALL_DEADLINE_MS,
-  NessaMcpAppError,
-} from "../application/mcp-app-call.js"
+import { NessaMcpAppError } from "../application/mcp-app-call.js"
 import {
   NessaMcpResourceError,
-  RESOURCE_DEADLINE_MS,
   type McpResourceReply,
   type McpResourceTransport,
 } from "../application/mcp-resource-fetch.js"
 import { NessaRequestTooLargeError } from "../application/request-too-large-error.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { conversationView } from "../protocol/conversation-validate.js"
+import { mcpAppCallTiming } from "../generated/product.js"
 import { mcpAppRequestProblem } from "../protocol/mcp-app-validate.js"
-import { createMcpAppsApi } from "./mcp-apps-api.js"
+import { createMcpAppsApi, mcpAppDeadlines } from "./mcp-apps-api.js"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
 const app = {
@@ -96,10 +93,15 @@ it("calls the app's tool with exactly its arguments, and waits as long as a revi
       tool: "delete_rows",
       argumentsJson: '{"rows":[1]}',
     },
-    { atLeastMs: MCP_APP_CALL_DEADLINE_MS },
+    { atLeastMs: mcpAppDeadlines.callToolMs },
   )
-  // Five minutes of review, a minute of call, and a margin.
-  expect(MCP_APP_CALL_DEADLINE_MS).toBe(370_000)
+  // The review, the call, and the client's allowance, as the protocol
+  // publishes them.
+  expect(mcpAppDeadlines.callToolMs).toBe(
+    mcpAppCallTiming.reviewDeadlineMs +
+      mcpAppCallTiming.callTimeoutMs +
+      mcpAppCallTiming.clientAllowanceMs,
+  )
 })
 
 it("leaves out arguments that were not given, rather than sending them as nothing", async () => {
@@ -441,8 +443,9 @@ it("reads a resource and returns what the gateway holds, ticket and all", async 
     },
     // The gateway may open the conversation first: no shorter wait than a
     // call's.
-    { atLeastMs: MCP_APP_CALL_DEADLINE_MS },
+    { atLeastMs: mcpAppDeadlines.readResourceMs },
   )
+  expect(mcpAppDeadlines.readResourceMs).toBe(mcpAppDeadlines.callToolMs)
   expect(answer).toEqual({ ...resource, domain: "app.example", prefersBorder: false })
   // Absent is absent: neither is invented when the app did not say.
   const plain = await api(async () => resource).readResource(
@@ -598,7 +601,9 @@ it("fetches the described bytes by ticket and hands them back once they match", 
     signal: expect.any(AbortSignal),
   })
   // An answered fetch leaves no deadline running behind it.
-  expect(clock.pending).toMatchObject([{ ms: RESOURCE_DEADLINE_MS, cancelled: true }])
+  expect(clock.pending).toMatchObject([
+    { ms: mcpAppDeadlines.fetchResourceMs, cancelled: true },
+  ])
   // An empty resource is still a resource.
   const empty = createHash("sha256").update(new Uint8Array()).digest("hex")
   expect(
@@ -681,7 +686,9 @@ it("gives up on a fetch that never answers when its deadline elapses, and aborts
   const pending = failure(
     fetches(get, clock).fetchResource(ticket, { size: html.byteLength, sha256 }),
   )
-  expect(clock.pending).toMatchObject([{ ms: RESOURCE_DEADLINE_MS, cancelled: false }])
+  expect(clock.pending).toMatchObject([
+    { ms: mcpAppDeadlines.fetchResourceMs, cancelled: false },
+  ])
   clock.pending[0]!.elapsed()
   expect(await pending).toMatchObject({ code: "timeout", status: undefined })
   expect(requestSignal?.aborted).toBe(true)

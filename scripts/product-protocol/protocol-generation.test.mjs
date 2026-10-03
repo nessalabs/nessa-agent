@@ -158,6 +158,63 @@ test("passive timing publishes changed phase values and their derived client flo
       assert.match(rust, new RegExp(`PASSIVE_${name}: u64 = ${value};`))
   }))
 
+test("MCP App call timing publishes its parts, the client's deadline, and the gateway's values", () =>
+  fixture((path) => {
+    edit(path, "protocol/product/v1.json", (schema) => {
+      schema["x-mcpAppCallTiming"] = {
+        reviewDeadlineMs: 307,
+        callTimeoutMs: 61,
+        readTimeoutMs: 13,
+        clientAllowanceMs: 11,
+      }
+    })
+    const result = generate(path, "generate-product-protocol")
+    assert.equal(result.status, 0, result.stderr)
+    const ts = readFileSync(join(path, productOutputs[0]), "utf8")
+    const contract = readFileSync(
+      join(path, "crates/nessa-server/src/product_contract/generated.rs"),
+      "utf8",
+    )
+    const published = ts.slice(ts.indexOf("export const mcpAppCallTiming"))
+    assert.match(published, /reviewDeadlineMs: 307/)
+    assert.match(published, /callTimeoutMs: 61/)
+    assert.match(published, /readTimeoutMs: 13/)
+    assert.match(published, /clientAllowanceMs: 11/)
+    assert.match(published, /callDeadlineMs: 379/)
+    assert.match(contract, /MCP_APP_REVIEW_DEADLINE_MS: u64 = 307;/)
+    assert.match(contract, /MCP_APP_CALL_TIMEOUT_MS: u64 = 61;/)
+    assert.match(contract, /MCP_APP_READ_TIMEOUT_MS: u64 = 13;/)
+    assert.match(contract, /MCP_RESOURCE_TICKET_MS: u64 = \d+;/)
+  }))
+
+for (const [name, value] of [
+  ["reviewDeadlineMs", undefined],
+  ["reviewDeadlineMs", 0],
+  ["callTimeoutMs", "60000"],
+  ["callTimeoutMs", 1.5],
+  ["readTimeoutMs", null],
+  ["readTimeoutMs", 0],
+  ["clientAllowanceMs", -1],
+  ["clientAllowanceMs", 2_147_483_647],
+  ["unknownMs", 1],
+  ["readTimeoutMs", 60_001],
+])
+  test(`invalid MCP App call timing ${name} ${value} preserves unpublished artifacts`, () =>
+    fixture((path) => {
+      edit(path, "protocol/product/v1.json", (schema) => {
+        schema["x-mcpAppCallTiming"][name] = value
+      })
+      const result = unchanged(
+        path,
+        ["protocol/product/v1.json", ...productOutputs],
+        () => generate(path, "generate-product-protocol"),
+      )
+      assert.match(
+        result.stderr,
+        /Invalid MCP App call timing|unknown fields|deadline exceeds|outlasts a call/,
+      )
+    }))
+
 for (const [name, value] of [
   ["readTimeoutMs", undefined],
   ["readTimeoutMs", 0],

@@ -30,7 +30,7 @@
  */
 import {
   ConversationErrorCode,
-  MCP_APP_CALL_DEADLINE_MS,
+  mcpAppDeadlines,
   mcpAppRequestProblem,
   NessaConversationControlError,
   NessaMcpAppError,
@@ -204,7 +204,7 @@ function readResult(described: McpReadResourceResult, text: string): JsonObject 
 export function gatewayAppServer(mcpApps: McpAppsApi): McpAppServer {
   return {
     // The longest the client waits for `mcp.callTool`: a review, then the call.
-    callWithin: MCP_APP_CALL_DEADLINE_MS,
+    callWithin: mcpAppDeadlines.callToolMs,
 
     async callTool(address: AppAddress, tool: string, args: JsonObject) {
       const argumentsJson = JSON.stringify(args)
