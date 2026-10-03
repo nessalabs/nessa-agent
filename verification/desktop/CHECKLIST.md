@@ -564,9 +564,9 @@ mounts, `index.html` shows the fallback on that stage.
 
 ## The window's gateway
 
-The desktop app's window reads the local gateway over the credential its host
-hands a bundled surface (#419). When it cannot, it says why where the
-conversations would be.
+The desktop app's window reads the local gateway over the panel's credential,
+which its host serves it once the gateway is ready (#419). When it cannot, it
+says why where the conversations would be.
 
 - [ ] **Signed out, the host refusing the credential, the gateway not ready
   yet, and no gateway listening each say why in the chat area, with Try
@@ -578,10 +578,10 @@ conversations would be.
   inside the chat area and the window, Try Again is at least 24px tall with
   nothing over it, and no session row or sample plugin is drawn. Try Again
   reads the index again (the status goes while it reads, which no poll does),
-  asks the host again, and says the same while nothing changed. While signed
-  out, and while the gateway is not ready, the window asks the host at most
-  twice in four seconds unprompted: after a failed connect it waits five poll
-  rounds rather than asking the host every second.
+  and says the same while nothing changed. While signed out, and while the
+  gateway is not ready, the window does not ask the host at all for four
+  seconds after its last ask: after a failed connect it waits five poll rounds
+  rather than asking the host every second.
   _[Degrade honestly](../../CODING_STANDARDS.md#gates)._ _Check:_
   `gateway-states.mjs` (runs the real frontend as the desktop app, against a
   fake host whose endpoint and credential commands answer per scenario, and a

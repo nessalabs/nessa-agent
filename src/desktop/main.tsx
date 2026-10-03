@@ -22,7 +22,7 @@ import "./styles.css"
 // store over them, then the tree. The store follows the workspace source for
 // the window's life. Where the workspace comes from is `workspaceBackend`'s
 // to say: the desktop app's own gateway, over the credential its host hands
-// a bundled surface (`adapters/host-gateway.ts`); a browser preview opened
+// the panel (`adapters/host-gateway.ts`); a browser preview opened
 // with `?gateway`, over the session this origin signed in to; otherwise the
 // sample (`model/workspace-backend.ts`).
 const environment = environmentFromVite()

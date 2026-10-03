@@ -21,7 +21,7 @@ pub(super) struct HostGatewayStartupEvents {
 impl GatewayStartupEvents for HostGatewayStartupEvents {
     fn publish(&self, startup: &ApplicationStartup) {
         let payload = payload(startup);
-        for label in [panel::MAIN_WINDOW, panel::SETUP_WINDOW] {
+        for (label, _) in BUNDLED_WINDOWS {
             if let Err(error) = self.app.emit_to(label, GATEWAY_STARTUP, &payload) {
                 eprintln!("[nessa] could not publish gateway startup to {label}: {error}");
             }
@@ -52,26 +52,35 @@ fn payload(startup: &ApplicationStartup) -> GatewayStartup {
     }
 }
 
+/// The bundled surfaces, by their windows' labels: the one list that both
+/// admits a window as one ([`bundled_window`]) and is published startup to
+/// ([`HostGatewayStartupEvents`]), so the two cannot disagree (#419).
+const BUNDLED_WINDOWS: [(&str, BundledSurface); 2] = [
+    (panel::MAIN_WINDOW, BundledSurface::Main),
+    (panel::SETUP_WINDOW, BundledSurface::Setup),
+];
+
 pub(crate) fn bundled_window(label: &str) -> Result<BundledSurface, String> {
-    match label {
-        panel::MAIN_WINDOW => Ok(BundledSurface::Main),
-        panel::SETUP_WINDOW => Ok(BundledSurface::Setup),
-        _ => Err("Only a bundled Nessa surface can access the gateway".into()),
-    }
+    BUNDLED_WINDOWS
+        .iter()
+        .find(|(bundled, _)| *bundled == label)
+        .map(|(_, surface)| *surface)
+        .ok_or_else(|| "Only a bundled Nessa surface can access the gateway".into())
 }
 
 /// Who may read the local gateway's endpoint and the surface credential, and
 /// how each waits for the gateway first (#419).
 ///
-/// The bundled surfaces bring the gateway up: each waits for reconciliation,
-/// which it may start, and is on record as its initiator. The desktop window
-/// only reads the gateway they brought up: it is served once startup is
-/// `Ready` and refused before that. Its arm of [`GatewayReader::ready`] reads
-/// the startup snapshot and calls nothing that reconciles, so a window
-/// polling while it cannot connect causes no reconciliation (the desktop-window
-/// tests in `surface_credential.rs` and `gateway_endpoint`). It is no bundled
-/// surface ([`bundled_window`]): it reads no startup snapshot and retries
-/// nothing.
+/// The host starts the gateway at launch (`Gateway::start`), and each
+/// bundled surface waits for it to reconcile, which its load may start again,
+/// on record as the initiator. The desktop window only reads the gateway that
+/// startup brought up: it is served once startup is `Ready` and refused
+/// before that. Its arm of [`GatewayReader::ready`] reads the startup state
+/// and calls nothing that reconciles, so a window polling while it cannot
+/// connect causes no reconciliation (the desktop-window tests in
+/// `surface_credential.rs` and `gateway_endpoint`). It is no bundled surface
+/// ([`bundled_window`]): the `gateway_startup` and `retry_gateway_startup`
+/// commands refuse it, and no startup event is published to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GatewayReader {
     /// The panel or setup, which waits for the gateway to reconcile.

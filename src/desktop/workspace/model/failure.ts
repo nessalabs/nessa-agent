@@ -13,7 +13,8 @@
  * approval was already answered, or never asked. `not-supported`: the source
  * has no such thing to do — a pin, or an answer it does not offer — so it
  * did nothing, and asking again changes nothing. `signed-out`: the window
- * could not connect because the gateway refused its credential, so the
+ * could not connect because the gateway refused its credential — or, in a
+ * browser preview, because this origin has no session to present — so the
  * request refused was not sent (a first message's conversation may already
  * have been created before the connection closed); asking again changes
  * nothing until it is signed in again.

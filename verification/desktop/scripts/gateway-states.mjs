@@ -46,8 +46,8 @@ const scenarios = [
     says: unread,
   },
   {
-    // The refusal a window meets at every launch, until the panel has
-    // brought the gateway up (`GatewayReader`, H2′/H4′): the endpoint is
+    // The refusal a window meets at every launch, until the host's startup
+    // of the gateway is ready (`GatewayReader`, H2′/H4′): the endpoint is
     // refused and the credential is never asked for.
     name: "the gateway is not ready yet",
     endpoint: null,
@@ -83,6 +83,7 @@ function fakeHost({ endpoint, credential }) {
     invoke(command) {
       if (command === "load_gateway_endpoint") {
         asked[command]++
+        window.__fakeHostLastAskAt = performance.now()
         return endpoint === null ? Promise.reject(notReady) : Promise.resolve(endpoint)
       }
       if (command === "load_surface_credential") {
@@ -237,37 +238,38 @@ await main(
             const first = await measure(page)
             const failures = check(scenario, first)
             if (!first.button) return { failures, measured: { first } }
-            // The poller waits after a failed connect (S10): over a quiet
-            // window it asks the host at most twice — 1 Hz would be four.
+            // The poller waits out a failed connect (S10): for `quietMs` after
+            // the last ask — inside the five-round wait — nothing asks the host.
             let quiet
             if (scenario.cadence) {
-              const start = first.asked.load_gateway_endpoint
-              await page.waitForTimeout(quietMs)
-              quiet = (await measure(page)).asked.load_gateway_endpoint - start
-              if (quiet > 2)
+              const { count, since } = await page.evaluate(() => ({
+                count: window.__fakeHostAsked.load_gateway_endpoint,
+                since: performance.now() - window.__fakeHostLastAskAt,
+              }))
+              await page.waitForTimeout(Math.max(0, quietMs - since))
+              quiet = (await measure(page)).asked.load_gateway_endpoint - count
+              if (quiet > 0)
                 failures.push(
-                  `the window asked the host ${quiet} times in ${quietMs}ms without being asked to`,
+                  `the window asked the host ${quiet} times within ${quietMs}ms of its last ask, unprompted`,
                 )
             }
             // Try Again reads the index again: the status goes while it reads,
-            // which no poll does, and the host is asked again. Then it says
-            // the same while nothing changed.
+            // which no poll does. Then it says the same while nothing changed.
             await page.evaluate((empty) => {
               window.__statusLeft = false
               new MutationObserver(() => {
                 if (!document.querySelector(empty)) window.__statusLeft = true
               }).observe(document.body, { childList: true, subtree: true })
             }, css.workspaceEmpty)
-            const before = (await measure(page)).asked.load_gateway_endpoint
             await page.click(css.workspaceEmptyRetry)
-            await page.waitForFunction(
-              (count) => window.__fakeHostAsked.load_gateway_endpoint > count,
-              before,
-              { timeout: 10_000 },
-            )
+            const read = await page
+              .waitForFunction(() => window.__statusLeft, null, { timeout: 5_000 })
+              .then(
+                () => true,
+                () => false,
+              )
+            if (!read) failures.push("Try Again did not read the index again")
             await page.waitForSelector(css.workspaceEmpty, { timeout: 10_000 })
-            if (!(await page.evaluate(() => window.__statusLeft)))
-              failures.push("Try Again did not read the index again")
             const again = await measure(page)
             failures.push(
               ...check(scenario, again).map((failure) => `after Try Again: ${failure}`),

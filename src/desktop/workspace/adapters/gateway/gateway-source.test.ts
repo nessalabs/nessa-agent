@@ -609,6 +609,77 @@ describe("a connection that could not be made says why (#419)", () => {
     warn.mockRestore()
   })
 
+  it("S15: a poller read queued behind a person's read does not connect once the client has closed", async () => {
+    const warn = quiet()
+    const gateway = fakeGateway()
+    const { source, follow, advance, state } = counted(gateway)
+    state.refuse = false
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set("a", view("a", { messages: [running()] }))
+    follow()
+    await source.index()
+    await source.transcript("a")
+    expect(state.attempts).toBe(1)
+    // The person's next read of "a" hangs on the gateway; a poll round lists,
+    // and its read of "a" queues behind it.
+    const hanging = deferred<unknown>()
+    gateway.once("read", () => hanging.promise)
+    const personRead = source.transcript("a").catch((error: unknown) => error)
+    await flush()
+    await advance(timing.pollMs)
+    state.refuse = true
+    gateway.setState({
+      status: "closed",
+      error: new NessaConnectionClosedError(4001, ""),
+    })
+    hanging.reject(new NessaConnectionClosedError(4001, ""))
+    await personRead
+    await flush()
+    // The poller's read ran on no client and connected nothing.
+    expect(state.attempts).toBe(1)
+    warn.mockRestore()
+  })
+
+  it("S17: a connect that outlasts the call budget starts the wait", async () => {
+    const state = { attempts: 0 }
+    const { source, follow, advance } = started(fakeGateway(), () => {
+      state.attempts++
+      return new Promise<FakeGateway["client"]>(() => {})
+    })
+    follow()
+    const first = source.index().catch((error: unknown) => error)
+    await advance(timing.callMs)
+    expect(await first).toMatchObject({ reason: "unavailable" })
+    // Every round in the budget joined the one attempt; then the wait.
+    expect(state.attempts).toBe(1)
+    expect(await connectRounds(advance, state, 6)).toEqual([6])
+  })
+
+  it("S18: while the source waits, apps and rounds join a person's connect on its way", async () => {
+    const warn = quiet()
+    const gateway = fakeGateway()
+    let attempts = 0
+    const pending = deferred<FakeGateway["client"]>()
+    const { source, follow, advance } = started(gateway, () => {
+      attempts++
+      return attempts === 1 ? Promise.reject(unauthorized) : pending.promise
+    })
+    follow()
+    await source.index().catch(() => undefined)
+    // A person's call connects at once, during the wait; an app and the
+    // rounds asking meanwhile join it.
+    const person = source.index()
+    await flush()
+    expect(attempts).toBe(2)
+    const app = source.connected()
+    await advance(timing.pollMs * 2)
+    pending.resolve(gateway.client)
+    await expect(app).resolves.toBe(gateway.client)
+    await expect(person).resolves.toMatchObject({ sessions: [] })
+    expect(attempts).toBe(2)
+    warn.mockRestore()
+  })
+
   it("S13: a connect refused after dispose is unavailable, and nothing is said of it", async () => {
     const warn = quiet()
     const refusing = deferred<FakeGateway["client"]>()

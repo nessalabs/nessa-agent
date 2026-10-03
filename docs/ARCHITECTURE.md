@@ -402,7 +402,7 @@ when the window is given a way to connect, and the in-memory sample
 otherwise (`model/workspace-backend.ts`). The desktop app's own window
 connects to the local gateway under the panel's surface credential (#419):
 the host serves it the endpoint and the credential over IPC once the gateway
-the panel brought up is ready, and refuses it before then — it reads the
+the host started at launch is ready, and refuses it before then — it reads the
 gateway, never starts one (`GatewayReader`, `adapters/host-gateway.ts`) — and
 after a failed connect it waits five poll rounds before it tries again, unless
 a person asks. A

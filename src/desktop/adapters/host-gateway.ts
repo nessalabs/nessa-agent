@@ -3,10 +3,10 @@
  * session (`connectDevSession`) over what the host serves this window as a
  * reader of the gateway — its endpoint and the panel's surface credential
  * (`nativeGatewayEndpointSource`, `nativeCredentialSource`), once the
- * gateway the panel brought up is ready (`GatewayReader` in `src-tauri`) —
+ * host's startup of the gateway is ready (`GatewayReader` in `src-tauri`) —
  * as the window it is (`surfaceKind: "desktop"`).
  *
- * The credential is the bundled surface's, which the session's client id
+ * The credential is the panel's, which the session's client id
  * names (`connectDevSession`'s `nessa-panel`), not the window; the window is
  * told apart by its surface kind and instance. This module never holds the
  * token: it hands the client the credential source, which the client asks at

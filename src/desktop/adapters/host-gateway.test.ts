@@ -12,7 +12,7 @@ function fakeConnect(health: () => Promise<unknown> = async () => ({ ok: true })
   return { connect, client, close }
 }
 
-it("connects as the desktop window under the bundled surface's credential, over the host's sources (C1)", async () => {
+it("connects as the desktop window under the panel's credential, over the host's sources (C1)", async () => {
   const { connect, client } = fakeConnect()
   const gateway = hostGateway(
     { stage: "alpha" },
