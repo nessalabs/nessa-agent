@@ -1300,15 +1300,15 @@ impl Agent {
                 _ = async {}, if stop_after_ready_settlement => break,
                 _ = self.inner.manager.await_admission_writes(), if message_deadline.is_none() => {},
                 () = async {
-                    if let Some(Some((_, deadline))) = message_deadline {
-                        self.inner.manager.wait_for_message_deadline(deadline).await;
+                    if let Some(Some((_, deadline))) = message_deadline.as_ref() {
+                        self.inner.manager.wait_for_message_deadline(*deadline).await;
                     } else {
                         std::future::pending::<()>().await;
                     }
                 }, if storage_failure.is_none() => {
-                    if let Some(Some((generation, _))) = message_deadline {
+                    if let Some(Some((generation, _))) = message_deadline.as_ref() {
                         if let Err(error) = await_supervised_save(
-                            self.inner.manager.flush_due_messages(generation),
+                            self.inner.manager.flush_due_messages(generation.clone()),
                             execution.as_mut(),
                             &mut stop_notice,
                             &mut stop_observed,

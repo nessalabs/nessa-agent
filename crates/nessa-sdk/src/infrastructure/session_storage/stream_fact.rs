@@ -77,8 +77,15 @@ pub(crate) enum FactDecode {
 pub(crate) enum FactRead {
     Absent,
     Partial,
-    Aborted { cursor: Cursor },
-    Complete { fact: FramedFact, cursor: Cursor },
+    Aborted {
+        cursor: Cursor,
+        key: FactKey,
+        digest: [u8; 32],
+    },
+    Complete {
+        fact: FramedFact,
+        cursor: Cursor,
+    },
 }
 
 fn key_bytes(key: &FactKey) -> Vec<u8> {
@@ -476,16 +483,6 @@ impl FrameValidator {
     }
 }
 
-/// Classifies a frame only after its enclosing immutable prefix was validated.
-/// This is not a substitute for `FrameValidator::push` on unvalidated data.
-pub(crate) fn terminal_in_validated_prefix(record: &NewEvent) -> Result<bool, FactFrameError> {
-    if record.schema == schema(START_SCHEMA) {
-        return Ok(parse_start(record)?.inline.is_some());
-    }
-    let tag = frame_tag(record)?;
-    Ok(tag == 3 || tag == 4)
-}
-
 pub(crate) fn decode_first(records: &[NewEvent]) -> Result<FactDecode, FactFrameError> {
     let Some(start) = records.first() else {
         return Ok(FactDecode::Partial);
@@ -643,6 +640,10 @@ pub(crate) async fn read_next_fact_through(
                     .map_err(FactCommitError::Frame)?;
                 return Ok(FactRead::Aborted {
                     cursor: record.cursor.clone(),
+                    key: parse_start(&events[0]).map_err(FactCommitError::Frame)?.key,
+                    digest: parse_start(&events[0])
+                        .map_err(FactCommitError::Frame)?
+                        .digest,
                 });
             }
             events.push(record.event.clone());
@@ -709,7 +710,9 @@ pub(crate) async fn abort_partial_fact<R: EventRuntime>(
         return Err(FactCommitError::InvalidStream);
     }
     match read_next_fact(runtime, stream, after).await? {
-        FactRead::Aborted { cursor: verified } if verified == receipt.record.cursor => Ok(verified),
+        FactRead::Aborted {
+            cursor: verified, ..
+        } if verified == receipt.record.cursor => Ok(verified),
         _ => Err(FactCommitError::InvalidStream),
     }
 }
@@ -795,18 +798,13 @@ mod tests {
     use std::time::Duration;
 
     fn key() -> FactKey {
-        FactKey::new(
-            FactKind::InputAccepted,
-            Some(ExecutionId::new("execution").unwrap()),
-            0,
-        )
-        .unwrap()
+        FactKey::new(FactKind::SaveUnit, None, 0).unwrap()
     }
 
     #[test]
     fn incremental_validator_refuses_header_inline_piece_seal_and_abort_without_changing_state() {
         let fact = FramedFact {
-            key: FactKey::new(FactKind::SessionOpen, None, 0).unwrap(),
+            key: FactKey::new(FactKind::SaveUnit, None, 0).unwrap(),
             body: vec![b'x'; 100_000],
         };
         let frames = frame_fact(&fact, 1).unwrap();
@@ -984,7 +982,7 @@ mod tests {
         assert_eq!(aborted.offset, 3);
         assert!(matches!(
             read_next_fact(&runtime, &stream, &start).await.unwrap(),
-            FactRead::Aborted { cursor } if cursor == aborted
+            FactRead::Aborted { cursor, .. } if cursor == aborted
         ));
         let replacement = FramedFact {
             key: key(),
@@ -1170,12 +1168,7 @@ mod tests {
             body: br#"{"input":"one"}"#.to_vec(),
         };
         let second = FramedFact {
-            key: FactKey::new(
-                FactKind::ProviderObservation,
-                Some(ExecutionId::new("execution").unwrap()),
-                0,
-            )
-            .unwrap(),
+            key: FactKey::new(FactKind::SaveUnit, None, 1).unwrap(),
             body: vec![b'x'; 2 * 1024 * 1024],
         };
         let first_end = commit_fact(&runtime, &stream, &start, &first)

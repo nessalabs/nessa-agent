@@ -1,5 +1,8 @@
 //! Rejected execution observations fence controls before storage can suspend.
 use super::*;
+use nessa_sdk::application::agent_execution::sessions::{
+    SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+};
 
 type ObservationGate = Arc<Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>>;
 
@@ -22,10 +25,15 @@ impl SessionStorage for PausedObservationStorage {
     }
 }
 impl SessionStorageLease for PausedObservationLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.backing.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
             if snapshot
                 .invocations
@@ -38,7 +46,7 @@ impl SessionStorageLease for PausedObservationLease {
                     release.await.unwrap();
                 }
             }
-            self.backing.save(snapshot).await
+            self.backing.save_changes(binding, snapshot, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

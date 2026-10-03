@@ -1,7 +1,7 @@
 //! Typed session snapshot persistence and exclusive access contracts.
 #![deny(missing_docs)]
 
-use super::{CommittedStatus, CommittedTranscript, CommittedViewState};
+use super::{CommittedStatus, CommittedViewState};
 use crate::application::agent_execution::agents::{AgentError, DiagnosticTreeLimits};
 use crate::application::agent_execution::executions::{
     ExecutionEvent, ExecutionRequest, SubmissionMode,
@@ -23,39 +23,11 @@ use std::{error::Error, fmt, future::Future, mem, pin::Pin, sync::Arc};
 /// Asynchronous storage result borrowing its adapter for `'a` and returning `T`.
 pub type StorageFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StorageError>> + Send + 'a>>;
 
-/// Identity of one ordered SDK save decision sequence within a stream incarnation.
-///
-/// A retry keeps the same generation, including when its decision sequence has
-/// gained a valid suffix. Advance only after the caller has acknowledged the
-/// save and cleared its pending decisions. A newly opened writer starts at
-/// [`Self::initial`], including after Reset installs a replacement writer on
-/// the same exclusive lease. Generations are not persisted across writers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SessionSaveGeneration(u64);
-
-impl Default for SessionSaveGeneration {
-    fn default() -> Self {
-        Self::initial()
-    }
-}
-
-impl SessionSaveGeneration {
-    /// First generation for a newly opened writer or post-Reset incarnation.
-    pub const fn initial() -> Self {
-        Self(0)
-    }
-
-    /// Next generation after an acknowledged save.
-    ///
-    /// Returns [`StorageError::Corrupt`] if the lease exhausts its generation
-    /// space rather than wrapping and reusing an earlier identity.
-    pub fn checked_next(self) -> Result<Self, StorageError> {
-        self.0
-            .checked_add(1)
-            .map(Self)
-            .ok_or_else(|| StorageError::Corrupt("session save generation exhausted".into()))
-    }
-}
+mod save;
+pub use save::{
+    SessionLoad, SessionLoadState, SessionSaveBackend, SessionSaveGeneration, SessionSaveReceipt,
+    SessionSaveUnit,
+};
 
 /// Failure to acquire access, read, validate, or persist a session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -228,21 +200,14 @@ impl CommittedSession {
         incarnation: Id,
         downloaded: u64,
         observed_head: u64,
-        transcript: &CommittedTranscript,
+        applied: u64,
+        snapshot: Option<Arc<SessionSnapshot>>,
         status: CommittedStatus,
     ) -> Result<Self, StorageError> {
-        if transcript
-            .snapshot()
-            .is_some_and(|snapshot| snapshot.id != id)
-        {
+        if snapshot.as_ref().is_some_and(|snapshot| snapshot.id != id) {
             return Err(StorageError::IdentityMismatch);
         }
-        if !status.validates(
-            transcript.applied(),
-            downloaded,
-            observed_head,
-            transcript.snapshot().is_some(),
-        ) {
+        if !status.validates(applied, downloaded, observed_head, snapshot.is_some()) {
             return Err(StorageError::Corrupt(
                 "committed read status disagrees with positions".into(),
             ));
@@ -250,10 +215,10 @@ impl CommittedSession {
         Ok(Self {
             id,
             incarnation,
-            position: transcript.applied(),
+            position: applied,
             downloaded,
             observed_head,
-            snapshot: transcript.snapshot_handle(),
+            snapshot,
             status,
         })
     }
@@ -320,7 +285,7 @@ pub struct SessionSnapshot {
 /// A record writer receives these in decision order. Existing snapshot adapters
 /// may use the accompanying snapshot alone. No variant authorizes replay to run
 /// a provider or tool effect.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionChange {
     /// The first empty state of a newly created conversation.
     Opened {
@@ -389,6 +354,10 @@ pub enum SessionChange {
     },
 }
 impl SessionSnapshot {
+    pub(crate) fn retained_bytes(&self) -> usize {
+        super::retained::snapshot(self)
+    }
+
     /// Pending input identities in committed dispatch order, reconstructed by
     /// the same queue authority used during restoration and semantic folding.
     /// This is a read of saved evidence and grants no dispatch authority.
@@ -644,44 +613,32 @@ pub trait SessionStorage: Send + Sync {
 /// scope and durability; the supplied record adapter's SQLite runtime excludes
 /// other local processes, while memory storage excludes owners sharing one instance.
 pub trait SessionStorageLease: Send + Sync {
-    /// Loads the saved snapshot, returning `None` for a session with no snapshot.
-    ///
-    /// Returns a backend or validation error for unreadable or invalid evidence;
-    /// invalid data must never be treated as an empty conversation.
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>>;
+    /// Read published state and the adapter's actual save binding, or typed
+    /// unfinished evidence. Unfinished state must not initialize a provider.
+    /// Cancellation retains the adapter's original physical I/O ownership.
+    fn load(&self) -> StorageFuture<'_, SessionLoad>;
 
-    /// Saves this session's complete logical state for snapshot adapters.
-    /// Record adapters return [`StorageError::ChangesRequired`]; callers using
-    /// them supply the exact decisions through [`Self::save_changes`].
+    /// Persist explicit indivisible semantic units and their final candidate.
+    /// Every unit checkpoint and the complete candidate validate before pending
+    /// reconciliation or append. Record adapters keep all units unpublished until
+    /// one durable completion terminal; snapshot adapters persist the candidate.
     ///
-    /// Returns [`StorageError::IdentityMismatch`] for a different session and a
-    /// validation or backend error if the write cannot be acknowledged. An error
-    /// does not imply that provider work was rolled back, or that no write reached
-    /// storage. Successful return must satisfy the adapter's durability contract.
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()>;
-
-    /// Saves a snapshot together with the exact SDK decisions that produced it.
-    /// Record adapters persist `changes` as one atomic logical transition and
-    /// validate that applying them to the last committed state yields `snapshot`.
-    /// Existing snapshot adapters use the complete snapshot as their authority.
-    /// A failed, uncertain, or cancelled wait keeps the same `generation` and
-    /// caller decision sequence pending. A record adapter retains its first
-    /// encoded bytes and physically committed prefix for that generation. An
-    /// exact retry finishes or acknowledges it without duplicating the prefix;
-    /// a validated suffix may extend it. Only an acknowledged save advances
-    /// to the next generation. Distinct generations may contain equal bytes.
-    /// Snapshot adapters ignore this stream-incarnation identity. Record
-    /// adapters refuse an encoded atomic group above 160 MiB with
-    /// [`StorageError::TooLarge`] before appending any part of that group; a
-    /// caller may retry a smaller valid group with the same generation.
+    /// Retain the original binding and exact ordered boundaries after failure,
+    /// cancellation or a lost reply. An exact retry can resume a confirmed prefix;
+    /// a valid extension retains that prefix. Success acknowledges this exact
+    /// plan and supplies the next backend binding. Empty plans are refused.
+    /// An individually oversized unit returns `TooLarge` before any append.
+    ///
+    /// # Errors
+    /// Refuses wrong incarnation/base/generation, changed or truncated prefix,
+    /// invalid unit/candidate and unavailable persistence. A failure is not proof
+    /// of absence and cannot release a reserved command identity for redispatch.
     fn save_changes(
         &self,
-        _generation: SessionSaveGeneration,
+        binding: SessionSaveGeneration,
         snapshot: SessionSnapshot,
-        _changes: Vec<SessionChange>,
-    ) -> StorageFuture<'_, ()> {
-        self.save(snapshot)
-    }
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt>;
 
     /// Erases this session's saved history, so that it has no snapshot.
     ///
@@ -694,7 +651,7 @@ pub trait SessionStorageLease: Send + Sync {
     /// until this lease is dropped; removing it while held would let that
     /// opener acquire a fresh one beside this lease, which is two writers.
     ///
-    /// Afterwards [`Self::load`] returns `None`. The identity is not retired:
+    /// Afterwards [`Self::load`] returns published empty evidence with a new binding. The identity is not retired:
     /// a later save through this lease or a later one starts a new history
     /// under it, using the adapter's supported save method. A caller erasing a session permanently must therefore
     /// stop using that identity itself. Erasing a session that has no saved
@@ -702,7 +659,7 @@ pub trait SessionStorageLease: Send + Sync {
     /// own record of the context named by [`SessionSnapshot::provider_context`]
     /// is the provider's to keep or erase.
     ///
-    /// Like [`Self::save`], an erase that has started retains the lease until
+    /// Like [`Self::save_changes`], an erase that has started retains the lease until
     /// it finishes, even if its caller stops waiting.
     ///
     /// # Errors
@@ -738,13 +695,11 @@ impl SessionSnapshot {
         lease: &dyn SessionStorageLease,
         id: &SessionId,
     ) -> Result<Option<Self>, StorageError> {
-        let saved = lease.load().await.map_err(StorageError::bounded)?;
-        if let Some(snapshot) = &saved {
-            if let Err(error) = snapshot.check_saved(id) {
-                saved.expect("checked snapshot").discard_rejected_errors();
-                return Err(error);
-            }
-        }
+        let (saved, _) = lease
+            .load()
+            .await
+            .map_err(StorageError::bounded)?
+            .into_published(id)?;
         Ok(saved)
     }
 

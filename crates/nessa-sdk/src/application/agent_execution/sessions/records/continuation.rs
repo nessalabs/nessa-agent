@@ -1,5 +1,5 @@
 //! Canonical owned semantic continuation and derived validated authorities.
-use super::{corrupt, key_for_changes_using, FactKey, ProviderEvidence};
+use super::ProviderEvidence;
 use crate::application::agent_execution::executions::ExecutionUpdate;
 use crate::application::agent_execution::sessions::{
     queue_validation::QueueReplay,
@@ -14,15 +14,24 @@ pub(crate) struct Continuation {
     pub(crate) snapshot: Option<SessionSnapshot>,
     pub(crate) positions: HashMap<ExecutionId, usize>,
     pub(crate) histories: HashMap<ExecutionId, InvocationHistory>,
-    pub(crate) invocations: Vec<InvocationContinuation>,
-    pub(crate) queue: QueueReplay,
-    pub(crate) evidence: ProviderEvidence,
+    pub(in crate::application::agent_execution::sessions) invocations: Vec<InvocationContinuation>,
+    pub(in crate::application::agent_execution::sessions) queue: QueueReplay,
+    pub(in crate::application::agent_execution::sessions) evidence: ProviderEvidence,
     pub(crate) context_witness: Option<(usize, usize)>,
     pub(crate) snapshot_bytes: usize,
     pub(crate) derived_bytes: usize,
     pub(crate) identity_bytes: usize,
 }
 impl Continuation {
+    /// Validate one complete caller-selected checkpoint without rebuilding prior history.
+    pub(crate) fn apply_unit(&mut self, changes: &[SessionChange]) -> Result<(), StorageError> {
+        let mut undo = Vec::new();
+        if let Err(error) = self.stage(changes, &mut undo) {
+            self.rollback(undo);
+            return Err(error);
+        }
+        Ok(())
+    }
     pub(crate) fn empty() -> Self {
         let mut value = Self {
             snapshot: None,
@@ -110,18 +119,6 @@ impl Continuation {
                     .fold(0usize, usize::saturating_add),
             );
         Ok(continuation)
-    }
-    pub(crate) fn key(
-        &self,
-        changes: &[SessionChange],
-        previous_offset: u64,
-    ) -> Result<FactKey, StorageError> {
-        key_for_changes_using(self.snapshot.as_ref(), changes, previous_offset, |id| {
-            self.positions
-                .get(id)
-                .and_then(|index| self.snapshot.as_ref()?.invocations.get(*index))
-                .ok_or_else(|| corrupt("semantic fact has no accepted input"))
-        })
     }
 }
 

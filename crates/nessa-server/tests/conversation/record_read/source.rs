@@ -7,7 +7,7 @@ use nessa_sdk::{
     application::agent_execution::{
         providers::ProviderIdentity,
         sessions::{
-            ProviderContext, SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+            ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
         },
     },
     infrastructure::session_storage::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
@@ -209,7 +209,7 @@ async fn exact_admitted_scope_reads_committed_frames_and_joins_before_shutdown()
     let provider = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
     writer
         .save_changes(
-            SessionSaveGeneration::initial(),
+            writer.load().await.unwrap().binding().clone(),
             SessionSnapshot {
                 id: session.clone(),
                 provider: provider.clone(),
@@ -217,11 +217,12 @@ async fn exact_admitted_scope_reads_committed_frames_and_joins_before_shutdown()
                 invocations: Vec::new(),
                 queue_history: Vec::new(),
             },
-            vec![SessionChange::Opened {
+            vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                 id: session.clone(),
                 provider,
                 context: ProviderContext::Absent,
-            }],
+            }])
+            .unwrap()],
         )
         .await
         .unwrap();
@@ -249,7 +250,7 @@ async fn exact_admitted_scope_reads_committed_frames_and_joins_before_shutdown()
                 RecordReadOperation::Page(PageRequest {
                     scope: alternate,
                     after: 0,
-                    target: 1,
+                    target: 2,
                     max_records: 1,
                     max_payload_bytes: MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
                     max_record_bytes: MAX_PHYSICAL_RECORD_PAYLOAD_BYTES
@@ -271,7 +272,7 @@ async fn exact_admitted_scope_reads_committed_frames_and_joins_before_shutdown()
     let RecordReadValue::Head(head) = response.value else {
         panic!("head expected")
     };
-    assert_eq!(head.head, 1);
+    assert_eq!(head.head, 2);
     assert_eq!(head.scope, scope);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     drop(response.lease);
@@ -294,8 +295,9 @@ async fn exact_admitted_scope_reads_committed_frames_and_joins_before_shutdown()
     let RecordReadValue::Page(page) = response.value else {
         panic!("page expected")
     };
-    assert_eq!(page.records.len(), 1);
+    assert_eq!(page.records.len(), 2);
     assert_eq!(page.records[0].position, 1);
+    assert_eq!(page.records[1].position, 2);
     source.shutdown().await.unwrap();
     assert!(source.workers.state.lock().unwrap().joins.is_empty());
     assert!(matches!(
