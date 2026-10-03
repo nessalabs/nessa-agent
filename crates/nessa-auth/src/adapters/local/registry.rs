@@ -730,6 +730,12 @@ impl LocalCredentialStore {
         issued_at: u64,
         expires_at: Option<u64>,
     ) -> Result<BootstrapOutcome, LocalStoreError> {
+        // The replacement must itself be an owner credential: one without
+        // `credential.manage` would leave no manager, and a later recovery,
+        // which selects by that action, could not replace it.
+        if !actions.contains(&"credential.manage") {
+            return Err(LocalStoreError::Conflict);
+        }
         let mut slot = self.slot()?;
         let current = slot.as_ref().ok_or(LocalStoreError::NotInitialized)?;
         if current.credentials.len() >= self.config.max_credentials {
@@ -2367,6 +2373,31 @@ mod tests {
             .iter()
             .any(|transition| transition.credential_id == "owner-credential"
                 && transition.after.revoked_at == Some(150)));
+    }
+
+    /// Design row S18: an owner set that cannot manage credentials is refused
+    /// before anything changes; the original owner still authenticates.
+    #[test]
+    fn recovery_refuses_an_owner_set_that_cannot_manage_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("owner/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        let mut request = bootstrap();
+        request.expires_at = None;
+        let original = store.bootstrap(request).unwrap();
+        let before = fs::read(&path).unwrap();
+        for actions in [
+            &["server.read", "conversation.read", "conversation.write"][..],
+            &[],
+        ] {
+            assert!(matches!(
+                store.recover_owner("owner-narrow".into(), actions, 150, None),
+                Err(LocalStoreError::Conflict)
+            ));
+            assert_eq!(fs::read(&path).unwrap(), before);
+        }
+        let audience = AudienceId::new("gateway-1").unwrap();
+        assert!(ready(store.verify(&original.evidence, &audience)).is_ok());
     }
 
     /// Give `principal_id` a `server.read` credential in a second organization.

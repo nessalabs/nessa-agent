@@ -431,17 +431,32 @@ async fn recovered_old_owner_can_pair_devices() {
         owner.ok("pairing.create", json!({}));
     });
     // The earlier owner credential is revoked.
-    let answer = tokio::task::block_in_place(|| refused_authentication(gateway.product, &old));
-    assert!(
-        answer.as_ref().is_none_or(|frame| frame["ok"] != true),
-        "the earlier owner credential no longer authenticates: {answer:?}"
+    let (answer, close) =
+        tokio::task::block_in_place(|| refused_authentication(gateway.product, &old));
+    assert_eq!(answer["id"], "1");
+    assert_eq!(answer["ok"], false);
+    assert_eq!(
+        answer["error"]["code"], "unauthorized",
+        "a revoked credential is refused as unauthorized: {answer}"
+    );
+    // Then the session closes with the published `authentication_failed` code.
+    let schema: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../protocol/product/v1.json"
+    )))
+    .unwrap();
+    let authentication_failed =
+        &schema["$defs"]["SessionCloseReason"]["x-close-policy"]["authentication_failed"];
+    assert_eq!(
+        Some(u64::from(close)),
+        authentication_failed["webSocketCode"].as_u64()
     );
     assert!(tokio::task::block_in_place(|| server.stop()).success());
 }
 
-/// Authenticate `credential` on a fresh socket and return the answer, or
-/// `None` if the gateway closed the socket instead.
-fn refused_authentication(address: SocketAddr, credential: &str) -> Option<Value> {
+/// Authenticate `credential` on a fresh socket; return the gateway's answer
+/// and the close code it ends the session with.
+fn refused_authentication(address: SocketAddr, credential: &str) -> (Value, u16) {
     let (mut socket, _) = tungstenite::connect(format!("ws://{address}/session")).unwrap();
     let challenge: Value = loop {
         if let tungstenite::Message::Text(text) = socket.read().unwrap() {
@@ -457,13 +472,16 @@ fn refused_authentication(address: SocketAddr, credential: &str) -> Option<Value
             .into(),
         ))
         .unwrap();
+    let answer: Value = loop {
+        if let tungstenite::Message::Text(text) = socket.read().unwrap() {
+            break serde_json::from_str(&text).unwrap();
+        }
+    };
     loop {
-        match socket.read() {
-            Ok(tungstenite::Message::Text(text)) => {
-                return Some(serde_json::from_str::<Value>(&text).unwrap())
-            }
-            Ok(tungstenite::Message::Close(_)) | Err(_) => return None,
-            Ok(_) => continue,
+        match socket.read().unwrap() {
+            tungstenite::Message::Close(Some(frame)) => return (answer, frame.code.into()),
+            tungstenite::Message::Close(None) => panic!("the session closed without a reason"),
+            _ => continue,
         }
     }
 }
