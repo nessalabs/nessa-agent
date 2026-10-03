@@ -3,8 +3,8 @@ use super::*;
 #[cfg(unix)]
 use crate::adapters::pairing::tests::io::{message_lengths, CryptoFixtureTransport};
 use crate::adapters::pairing::{
-    tests::Entropy, ClientAttempt, ManualCode, NativeIdentity, PairingContext, PairingCryptoError,
-    ServerInvitation,
+    tests::{io::native_channels, Entropy},
+    ClientAttempt, ManualCode, NativeIdentity, PairingCryptoError, ServerInvitation,
 };
 #[cfg(unix)]
 use crate::adapters::pairing::{GatewayTrust, NativeTransport};
@@ -23,24 +23,31 @@ use std::{thread, time::Duration};
 use tempfile::TempDir;
 
 struct Fixture {
-    root: TempDir,
+    _root: TempDir,
+    anchor: PathBuf,
     store: FilePairingState,
 }
 impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
+        #[cfg(windows)]
+        let path = root.path().join("root");
+        #[cfg(not(windows))]
         let path = root.path().canonicalize().unwrap().join("root");
         nessa_local_storage::create_directory(&path).unwrap();
         nessa_local_storage::create_directory_beneath(&path, Path::new("private")).unwrap();
         let store = FilePairingState::open(&path, Path::new("private")).unwrap();
-        Self { root, store }
+        Self {
+            _root: root,
+            anchor: path,
+            store,
+        }
+    }
+    fn anchor(&self) -> PathBuf {
+        self.anchor.clone()
     }
     fn path(&self) -> PathBuf {
-        self.root
-            .path()
-            .canonicalize()
-            .unwrap()
-            .join("root/private")
+        self.anchor.join("private")
     }
 }
 struct Time;
@@ -85,7 +92,7 @@ fn gateway_key_is_exclusive_and_reopens() {
         fixture.store.save_gateway_key(&key(43), &gateway(), &Time),
         Err(PrivateStateError::Conflict)
     );
-    let root = fixture.root.path().canonicalize().unwrap().join("root");
+    let root = fixture.anchor();
     drop(fixture.store);
     let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
     assert_eq!(
@@ -101,10 +108,7 @@ fn gateway_key_is_exclusive_and_reopens() {
 fn private_state_lock_excludes_second_handle() {
     let fixture = Fixture::new();
     assert!(matches!(
-        FilePairingState::open(
-            &fixture.root.path().canonicalize().unwrap().join("root"),
-            Path::new("private")
-        ),
+        FilePairingState::open(&fixture.anchor(), Path::new("private")),
         Err(PrivateStateError::Locked)
     ));
     #[cfg(unix)]
@@ -332,7 +336,7 @@ fn private_state_is_bounded_and_redacted() {
     assert_eq!(restored.gateway_pin(), &[5; 44]);
     assert_eq!(restored.intent(), intent(2));
     assert_eq!(format!("{restored:?}"), debug);
-    let root = fixture.root.path().canonicalize().unwrap().join("root");
+    let root = fixture.anchor();
     drop(fixture.store);
     let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
     let pending = reopened.load_pending().unwrap().unwrap();
@@ -356,25 +360,14 @@ fn pending_publication_failure_sends_no_ke3() {
         gateway.public_spki(),
     )
     .unwrap();
-    let context = PairingContext::from_transport(
-        intent(2),
-        gateway.public_spki(),
-        device.public_spki(),
-        [4; 32],
-    )
-    .unwrap();
+    let (server_channel, client_channel) = native_channels(&gateway, &device);
+    let context = client_channel.pairing_context(intent(2)).unwrap();
     let (attempt, request) = ClientAttempt::start(&mut Entropy, &code).unwrap();
     let (_, response) = invitation
         .start(
             &mut Entropy,
             &request,
-            PairingContext::from_transport(
-                intent(2),
-                gateway.public_spki(),
-                device.public_spki(),
-                [4; 32],
-            )
-            .unwrap(),
+            server_channel.pairing_context(intent(2)).unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -470,7 +463,7 @@ fn real_pending_save_precedes_ke3_and_survives_restart() {
     drop(transport);
     drop(device);
     server.join().unwrap();
-    let root = fixture.root.path().canonicalize().unwrap().join("root");
+    let root = fixture.anchor();
     drop(fixture.store);
     let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
     let (material, pin, public) = reopened.load_pending().unwrap().unwrap().into_parts();
@@ -544,7 +537,7 @@ fn gateway_audit_missing_key_refuses_save_before_effect() {
             .store
             .save_gateway_key(&key(42), &gateway(), &Time)
             .unwrap();
-        let root = fixture.root.path().canonicalize().unwrap().join("root");
+        let root = fixture.anchor();
         drop(fixture.store);
         let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
         assert_eq!(
@@ -630,7 +623,7 @@ fn pending_public_retry_and_reopen_preserve_original_fact() {
         .store
         .save_pending(&key(7), &[5; 44], intent(2), None)
         .unwrap();
-    let root = fixture.root.path().canonicalize().unwrap().join("root");
+    let root = fixture.anchor();
     drop(fixture.store);
     let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
     reopened
@@ -735,7 +728,7 @@ fn gateway_publication_failure_preserves_original_operation_and_effect() {
         assert_eq!(intent["cause"], "firstPublication");
         assert_eq!(intent["initiator"], "system");
         let original_outcome = fs::read(fixture.path().join(OUTCOME_FILE)).unwrap();
-        let root = fixture.root.path().canonicalize().unwrap().join("root");
+        let root = fixture.anchor();
         drop(fixture.store);
         let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
         assert_eq!(

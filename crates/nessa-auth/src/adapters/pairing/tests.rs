@@ -1,14 +1,15 @@
-#[cfg(unix)]
 pub(crate) mod io;
 use super::*;
 use crate::{
     application::pairing::PrivateKeyMaterial,
     domain::pairing::{AttemptId, ConsentIntentId, InvitationId, PublicIntent},
 };
+use io::native_channels;
 #[cfg(unix)]
 use io::{message_lengths, CryptoFixtureTransport};
 use opaque_ke::rand::{CryptoRng, Error, RngCore};
 use std::{
+    net::TcpStream,
     num::NonZeroU32,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -132,17 +133,22 @@ fn strict_pin_refuses_gateway_key_substitution() {
 }
 #[test]
 fn failed_binding_or_pending_save_never_releases_ke3() {
-    let gateway = NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([10; 32])))
-        .unwrap()
-        .public_spki();
-    let device = NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([11; 32])))
-        .unwrap()
-        .public_spki();
+    let gateway =
+        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([10; 32]))).unwrap();
+    let device =
+        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([11; 32]))).unwrap();
+    let (server_channel, client_channel) = native_channels(&gateway, &device);
+    let (_, other_client_channel) = native_channels(&gateway, &device);
     let code = ManualCode::parse(b"ABCD2345").unwrap();
-    let invitation =
-        ServerInvitation::register(&mut Entropy, &code, public().invitation(), gateway).unwrap();
-    let context = PairingContext::from_transport(public(), gateway, device, [4; 32]).unwrap();
-    let other_channel = PairingContext::from_transport(public(), gateway, device, [5; 32]).unwrap();
+    let invitation = ServerInvitation::register(
+        &mut Entropy,
+        &code,
+        public().invitation(),
+        gateway.public_spki(),
+    )
+    .unwrap();
+    let context = server_channel.pairing_context(public()).unwrap();
+    let other_channel = other_client_channel.pairing_context(public()).unwrap();
     let (client, request) = ClientAttempt::start(&mut Entropy, &code).unwrap();
     let (_, response) = invitation.start(&mut Entropy, &request, context).unwrap();
     let saved = AtomicBool::new(false);
@@ -156,13 +162,13 @@ fn failed_binding_or_pending_save_never_releases_ke3() {
         PairingCryptoError::InvalidProof
     );
     assert!(!saved.load(Ordering::SeqCst));
-    let context = PairingContext::from_transport(public(), gateway, device, [4; 32]).unwrap();
+    let context = client_channel.pairing_context(public()).unwrap();
     let (client, request) = ClientAttempt::start(&mut Entropy, &code).unwrap();
     let (_, response) = invitation
         .start(
             &mut Entropy,
             &request,
-            PairingContext::from_transport(public(), gateway, device, [4; 32]).unwrap(),
+            server_channel.pairing_context(public()).unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -176,22 +182,44 @@ fn failed_binding_or_pending_save_never_releases_ke3() {
 }
 
 #[test]
-fn canonical_context_matches_published_profile_fixture() {
-    // Structural public codec fixture only; these arbitrary key bytes are not
-    // a TLS possession proof. The file was assembled from the documented order.
-    let mut gateway = [10; 44];
-    let mut device = [11; 44];
-    gateway[..12].copy_from_slice(&[
-        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
-    ]);
-    device[..12].copy_from_slice(&gateway[..12]);
-    let context = PairingContext::from_transport(public(), gateway, device, [4; 32]).unwrap();
-    let actual: String = context
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    assert_eq!(actual, include_str!("fixtures/context.hex").trim_end());
+fn public_native_context_preserves_profile_and_same_channel_binding() {
+    let gateway =
+        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([10; 32]))).unwrap();
+    let device =
+        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([11; 32]))).unwrap();
+    let (server, client) = native_channels(&gateway, &device);
+    let context = server.pairing_context(public()).unwrap();
+    let client_context = client.pairing_context(public()).unwrap();
+    assert_eq!(context.as_bytes(), client_context.as_bytes());
+    assert_eq!(context.public(), public());
+    assert_eq!(context.gateway_spki(), gateway.public_spki());
+    assert_eq!(context.device_spki(), device.public_spki());
+    assert_eq!(context.as_bytes().len(), 335);
+    let mut bytes = context.as_bytes();
+    let mut parts = Vec::new();
+    while !bytes.is_empty() {
+        let (size, rest) = bytes.split_at(2);
+        let size = usize::from(u16::from_be_bytes(size.try_into().unwrap()));
+        let (part, rest) = rest.split_at(size);
+        parts.push(part);
+        bytes = rest;
+    }
+    assert_eq!(parts.len(), 12);
+    assert_eq!(parts[0], b"nessa-device-pairing-v1");
+    assert_eq!(
+        parts[1],
+        b"opaque-ke-4.0.1/ristretto255/tripledh/sha512/argon2id-19-m65536-t3-p4-o64"
+    );
+    assert_eq!(parts[2], b"manual");
+    assert_eq!(parts[3], gateway.public_spki());
+    assert_eq!(parts[4], device.public_spki());
+    assert_eq!(parts[5], public().invitation().bytes());
+    assert_eq!(parts[6], public().attempt().bytes());
+    assert_eq!(parts[7], public().expiry_ms().to_be_bytes());
+    assert_eq!(parts[8], public().consent().bytes());
+    assert_eq!(parts[9], public().generation().to_be_bytes());
+    assert_eq!(parts[10], public().class().as_bytes());
+    assert_eq!(parts[11].len(), 32);
 }
 
 struct CoherentLogin {
@@ -201,24 +229,29 @@ struct CoherentLogin {
     response: Vec<u8>,
     client: ClientAttempt,
     server: ServerAttempt,
+    channel: NativeTransport<TcpStream>,
 }
 fn coherent_login() -> CoherentLogin {
-    let gateway = NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([10; 32])))
-        .unwrap()
-        .public_spki();
-    let device = NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([11; 32])))
-        .unwrap()
-        .public_spki();
+    let gateway =
+        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([10; 32]))).unwrap();
+    let device =
+        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([11; 32]))).unwrap();
+    let (server_channel, channel) = native_channels(&gateway, &device);
     let code = ManualCode::parse(b"ABCD2345").unwrap();
-    let invitation =
-        ServerInvitation::register(&mut Entropy, &code, public().invitation(), gateway).unwrap();
-    let context = PairingContext::from_transport(public(), gateway, device, [4; 32]).unwrap();
+    let invitation = ServerInvitation::register(
+        &mut Entropy,
+        &code,
+        public().invitation(),
+        gateway.public_spki(),
+    )
+    .unwrap();
+    let context = channel.pairing_context(public()).unwrap();
     let (client, request) = ClientAttempt::start(&mut Entropy, &code).unwrap();
     let (server, response) = invitation
         .start(
             &mut Entropy,
             &request,
-            PairingContext::from_transport(public(), gateway, device, [4; 32]).unwrap(),
+            server_channel.pairing_context(public()).unwrap(),
         )
         .unwrap();
     CoherentLogin {
@@ -228,6 +261,7 @@ fn coherent_login() -> CoherentLogin {
         response,
         client,
         server,
+        channel,
     }
 }
 
@@ -339,6 +373,7 @@ fn server_start_uses_original_request_decoder_refusal() {
         code,
         context,
         request,
+        channel,
         ..
     } = coherent_login();
     let invitation = ServerInvitation::register(
@@ -350,13 +385,7 @@ fn server_start_uses_original_request_decoder_refusal() {
     .unwrap();
     let mut padded = request.clone();
     padded.resize(super::MAX_ENROLLMENT_MESSAGE_BYTES + 1, 0);
-    let same_context = PairingContext::from_transport(
-        public(),
-        context.gateway_spki(),
-        context.device_spki(),
-        [4; 32],
-    )
-    .unwrap();
+    let same_context = channel.pairing_context(public()).unwrap();
     assert!(matches!(
         invitation.start(&mut Entropy, &padded, same_context),
         Err(PairingCryptoError::InvalidProof)

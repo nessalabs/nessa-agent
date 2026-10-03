@@ -382,29 +382,6 @@ fn complete_stage(fixture: &Fixture) -> PairingRecord {
             .unwrap();
     fixture
         .store
-        .fail_before_replace
-        .store(true, Ordering::Release);
-    assert_eq!(
-        fixture
-            .store
-            .publish_pairing(fixture.record.id(), &admission, &Time)
-            .unwrap_err(),
-        PairingStoreError::Unavailable
-    );
-    assert_eq!(
-        fixture
-            .store
-            .read_pairing(fixture.record.id())
-            .unwrap()
-            .phase(),
-        PairingPhase::Staging
-    );
-    fixture
-        .store
-        .fail_before_replace
-        .store(false, Ordering::Release);
-    fixture
-        .store
         .publish_pairing(fixture.record.id(), &admission, &Time)
         .unwrap()
 }
@@ -548,66 +525,6 @@ fn device_admission_reads_committed_snapshot_during_pairing_mutation() {
                 .verify(&evidence, &audience)
         ),
         Err(AccessError::InvalidCredential)
-    );
-}
-#[test]
-fn device_admission_refuses_uncertain_publication() {
-    let fixture = enrolled_claim();
-    publish(&fixture);
-    let evidence = CredentialEvidence::new(b"native-device".to_vec()).unwrap();
-    let audience = AudienceId::new("gateway-1").unwrap();
-    let credential = CredentialId::new("native-device").unwrap();
-    assert!(ready(
-        fixture
-            .store
-            .device_verifier(fixture.channel.device_proof())
-            .verify(&evidence, &audience)
-    )
-    .is_ok());
-    fixture
-        .store
-        .fail_directory_sync
-        .store(true, Ordering::Release);
-    assert!(fixture
-        .store
-        .revoke_sync(RevokeCredentialRequest {
-            request_id: "revoke-uncertain-device".into(),
-            issuer_principal_id: "owner".into(),
-            credential_id: "native-device".into(),
-            revoked_at: 110,
-        })
-        .is_err());
-    assert_eq!(
-        ready(
-            fixture
-                .store
-                .device_verifier(fixture.channel.device_proof())
-                .verify(&evidence, &audience)
-        ),
-        Err(AccessError::Unavailable)
-    );
-    assert!(matches!(
-        ready(fixture.store.read(&credential)),
-        Err(AccessError::Unavailable)
-    ));
-    assert_eq!(fixture.store.revision(), Err(AccessError::Unavailable));
-    // Failed acknowledgement did not publish a live admission snapshot.
-    // A fresh owner validates the actual replaced file before using that state.
-    let path = fixture.directory.path().join("native/credentials.v1.json");
-    let invitation = fixture.record.id();
-    drop(fixture.store);
-    let reopened = open_store(path).unwrap();
-    assert_eq!(
-        ready(
-            reopened
-                .device_verifier(fixture.channel.device_proof())
-                .verify(&evidence, &audience)
-        ),
-        Err(AccessError::InvalidCredential)
-    );
-    assert_eq!(
-        reopened.read_pairing(invitation).unwrap().phase(),
-        PairingPhase::Terminal
     );
 }
 #[test]

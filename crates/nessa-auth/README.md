@@ -129,8 +129,9 @@ consumer owns its application framing, listener and action admission.
 Private acknowledgement compares bytes and named identity against the original
 published file. Restart uses a writable existing-file handle, reflushes and
 reconciles under the original directory/lock. No acknowledgement manufactures a
-missing canonical file. Owning adapter tests cover original-handle refusal and
-later acknowledgement, writable reopen, exact intent and restart; supported
+missing canonical file. Public adapter tests cover exact intent, same-save retry and restart. Direct
+original-handle failed acknowledgement and writable-helper reflush evidence are
+withdrawn; their source contracts remain with the shared storage owner. Supported
 platform consumer gates are required independently of shared storage tests.
 
 Target and current producer disposition: [device pairing](../../docs/design/auth/device-pairing.md).

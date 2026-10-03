@@ -1,5 +1,10 @@
 use super::*;
 #[cfg(unix)]
+use ring::{
+    rand::SystemRandom,
+    signature::{Ed25519KeyPair, KeyPair},
+};
+#[cfg(unix)]
 use rustls::{
     sign::{Signer, SigningKey},
     ProtocolVersion, SignatureAlgorithm,
@@ -58,17 +63,75 @@ impl Signer for PeerSigner {
     }
 }
 #[cfg(unix)]
+#[derive(Debug)]
+struct PeerServerVerifier {
+    expected: [u8; 44],
+}
+#[cfg(unix)]
+impl ServerCertVerifier for PeerServerVerifier {
+    fn verify_server_cert(
+        &self,
+        key: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        _: &ServerName<'_>,
+        _: &[u8],
+        _: UnixTime,
+    ) -> Result<ServerCertVerified, Error> {
+        if key.as_ref() != self.expected || !intermediates.is_empty() {
+            return Err(Error::General("unexpected fixture server key".into()));
+        }
+        Ok(ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        _: &[u8],
+        _: &CertificateDer<'_>,
+        _: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        Err(Error::General("fixture requires TLS 1.3".into()))
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        key: &CertificateDer<'_>,
+        signature: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        verify_tls13_signature_with_raw_key(
+            message,
+            &SubjectPublicKeyInfoDer::from(key.as_ref()),
+            signature,
+            &default_provider().signature_verification_algorithms,
+        )
+    }
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![SignatureScheme::ED25519]
+    }
+    fn requires_raw_public_keys(&self) -> bool {
+        true
+    }
+}
+#[cfg(unix)]
 fn native_peer(
-    identity: &NativeIdentity,
+    gateway: [u8; 44],
     corrupt: bool,
     alpn: bool,
     signatures: Arc<AtomicUsize>,
-) -> ClientConnection {
-    let original = identity.certified_key().unwrap();
+) -> (ClientConnection, [u8; 44]) {
+    // This external peer uses ring's public PKCS8 producer and rustls's public
+    // signing provider. It does not use Nessa's private identity/verifier setup.
+    let document = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+    let pair = Ed25519KeyPair::from_pkcs8(document.as_ref()).unwrap();
+    let mut spki = [0; 44];
+    spki[..12].copy_from_slice(&[
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+    ]);
+    spki[12..].copy_from_slice(pair.public_key().as_ref());
+    let private = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(document.as_ref().to_vec()));
+    let original = any_supported_type(&private).unwrap();
     let key = Arc::new(CertifiedKey::new(
-        original.cert.clone(),
+        vec![CertificateDer::from(spki.to_vec())],
         Arc::new(PeerSigningKey {
-            original: original.key.clone(),
+            original,
             corrupt,
             signatures,
         }),
@@ -77,18 +140,19 @@ fn native_peer(
         .with_protocol_versions(&[&rustls::version::TLS13])
         .unwrap()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(RawVerifier { pin: None }))
+        .with_custom_certificate_verifier(Arc::new(PeerServerVerifier { expected: gateway }))
         .with_client_cert_resolver(Arc::new(AlwaysResolvesClientRawPublicKeys::new(key)));
     if alpn {
         config.alpn_protocols = vec![ALPN.to_vec()];
     }
     config.resumption = Resumption::disabled();
     config.enable_early_data = false;
-    ClientConnection::new(
+    let connection = ClientConnection::new(
         Arc::new(config),
         ServerName::try_from("nessa.invalid").unwrap(),
     )
-    .unwrap()
+    .unwrap();
+    (connection, spki)
 }
 #[cfg(unix)]
 fn peer_streams() -> (UnixStream, UnixStream) {
@@ -120,10 +184,8 @@ fn native_tls_refuses_corrupted_peer_signature_and_accepts_original() {
     for corrupt in [true, false] {
         let gateway =
             NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([10; 32]))).unwrap();
-        let device =
-            NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([11; 32]))).unwrap();
         let signatures = Arc::new(AtomicUsize::new(0));
-        let peer = native_peer(&device, corrupt, true, signatures.clone());
+        let (peer, device) = native_peer(gateway.public_spki(), corrupt, true, signatures.clone());
         let (a, b) = peer_streams();
         let server = thread::spawn(move || NativeTransport::accept(a, &gateway));
         let peer_result = complete_peer(peer, b);
@@ -139,10 +201,7 @@ fn native_tls_refuses_corrupted_peer_signature_and_accepts_original() {
             assert_eq!(peer.protocol_version(), Some(ProtocolVersion::TLSv1_3));
             assert_eq!(peer.alpn_protocol(), Some(ALPN));
             let transport = server_result.unwrap();
-            assert_eq!(
-                transport.device_proof().key().bytes(),
-                &device.public_spki()[12..]
-            );
+            assert_eq!(transport.device_proof().key().bytes(), &device[12..]);
         }
     }
 }
@@ -153,23 +212,19 @@ fn native_tls_refuses_completed_peer_without_alpn_and_accepts_original() {
     for alpn in [false, true] {
         let gateway =
             NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([10; 32]))).unwrap();
-        let device =
-            NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([11; 32]))).unwrap();
         let signatures = Arc::new(AtomicUsize::new(0));
-        let peer = native_peer(&device, false, alpn, signatures.clone());
+        let (peer, device) = native_peer(gateway.public_spki(), false, alpn, signatures.clone());
         let (a, b) = peer_streams();
         let server = thread::spawn(move || NativeTransport::accept(a, &gateway));
-        let (peer, _stream) = complete_peer(peer, b).unwrap();
+        let peer_result = complete_peer(peer, b);
         let server_result = server.join().unwrap();
+        let (peer, _stream) = peer_result.unwrap();
         assert_eq!(signatures.load(Ordering::SeqCst), 1);
         assert_eq!(peer.protocol_version(), Some(ProtocolVersion::TLSv1_3));
         if alpn {
             assert_eq!(peer.alpn_protocol(), Some(ALPN));
             let transport = server_result.unwrap();
-            assert_eq!(
-                transport.device_proof().key().bytes(),
-                &device.public_spki()[12..]
-            );
+            assert_eq!(transport.device_proof().key().bytes(), &device[12..]);
         } else {
             assert_eq!(peer.alpn_protocol(), None);
             assert!(matches!(
