@@ -62,7 +62,8 @@ describe("an app's message", () => {
       "Plot May\n\nnext to April",
     )
     // As long as the client waits for it: a review, then the send.
-    expect(conversation.messageWithin).toBe(mcpAppDeadlines.sendMessageMs)
+    expect(conversation.within).toBe(mcpAppDeadlines.sendMessageMs)
+    expect(conversation.within).toBe(mcpAppDeadlines.updateModelContextMs)
   })
 
   it.each(["turn_running", "mcp_approval_denied", "mcp_cancelled", "invalid_request"])(

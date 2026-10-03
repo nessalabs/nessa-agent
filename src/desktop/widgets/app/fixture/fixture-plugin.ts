@@ -27,6 +27,7 @@ import type {
 } from "../application/ports"
 import type { PageContext } from "../model/host-context"
 import { deadlines } from "../application/bridge"
+import { contentText } from "../model/messages"
 import { appMimeType } from "../model/resource"
 import { appPlugin } from "../ui/app-plugin"
 import { fixtureAppHtml } from "./fixture-app"
@@ -83,14 +84,12 @@ export function fixtureConversation(
   ) => Promise<void>,
 ): McpAppConversation {
   return {
-    messageWithin: deadlines.request,
+    within: deadlines.request,
     sendMessage: (address, content) =>
       write(
         address.sessionId,
         { server: address.server, tool: fixtureCall(address.sessionId).tool },
-        content
-          .map((block) => (typeof block.text === "string" ? block.text : ""))
-          .join("\n\n"),
+        contentText(content),
       ).then(
         () => "done" as const,
         () => "refused" as const,

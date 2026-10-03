@@ -9,7 +9,7 @@ use crate::conversation::application::mcp_apps::{McpAppInitiator, McpAppRef, Mcp
 use nessa_auth::domain::PrincipalId;
 use nessa_sdk::domain::agent_execution::{
     executions::ExecutionId,
-    prompts::{AppContext, McpAppSource},
+    prompts::{AppModelContext, McpAppSource},
     tools::{McpTool, ToolCallId},
 };
 use std::sync::Arc;
@@ -510,14 +510,15 @@ async fn an_opening_never_carries_another_s_reviews() {
 
 // --- An app in its conversation (#390): consent and contexts -------------
 
-fn context(text: &str) -> AppContext {
-    AppContext::new(
+fn context(text: &str) -> AppModelContext {
+    AppModelContext::new(
         McpAppSource::new(
             ExecutionId::new("e1").unwrap(),
             ToolCallId::new("t1").unwrap(),
             McpTool::new("charts", "show").unwrap(),
         )
         .unwrap(),
+        "update-1",
         Some(text.into()),
         None,
     )
@@ -637,16 +638,124 @@ fn a_pending_update_holds_its_mounts_place_and_a_clear_lets_go_of_it() {
             .map(|_| ()),
         Err(ContextRefusal::Full)
     );
-    // The same mount may stage another beside its own.
+    // The same mount may stage another beside its own; a clear given after
+    // it lets go of both, and its place.
     let again = reviews
         .stage_context(EPOCH, &app("i0"), context("y"))
         .unwrap();
-    reviews.clear_context(EPOCH, &app("i0")).unwrap();
+    let clear = reviews.stage_clear(EPOCH, &app("i0")).unwrap();
+    reviews.recorded_clear(&app("i0"), clear);
     reviews.recorded_context(again);
     assert!(!held(&reviews).contains(&"y".to_owned()));
     reviews
         .stage_context(EPOCH, &app("other"), context("x"))
         .unwrap();
+}
+
+#[test]
+fn a_clear_lets_go_of_what_came_before_it_and_of_nothing_given_after_it() {
+    // Given before the clear, recorded after it: let go of.
+    let reviews = reviews();
+    let before = reviews
+        .stage_context(EPOCH, &app("i1"), context("before"))
+        .unwrap();
+    let clear = reviews.stage_clear(EPOCH, &app("i1")).unwrap();
+    reviews.recorded_clear(&app("i1"), clear);
+    reviews.recorded_context(before);
+    assert!(held(&reviews).is_empty());
+    // Given after the clear, recorded before it: it stands.
+    let clear = reviews.stage_clear(EPOCH, &app("i1")).unwrap();
+    let after = reviews
+        .stage_context(EPOCH, &app("i1"), context("after"))
+        .unwrap();
+    reviews.recorded_context(after);
+    reviews.recorded_clear(&app("i1"), clear);
+    assert_eq!(held(&reviews), ["after"]);
+    // Recorded after it: it stands, too.
+    let clear = reviews.stage_clear(EPOCH, &app("i1")).unwrap();
+    let later = reviews
+        .stage_context(EPOCH, &app("i1"), context("later"))
+        .unwrap();
+    reviews.recorded_clear(&app("i1"), clear);
+    assert!(held(&reviews).is_empty());
+    reviews.recorded_context(later);
+    assert_eq!(held(&reviews), ["later"]);
+    // Another mount's is nothing of its.
+    let other = reviews
+        .stage_context(EPOCH, &app("i2"), context("other"))
+        .unwrap();
+    reviews.recorded_context(other);
+    let clear = reviews.stage_clear(EPOCH, &app("i1")).unwrap();
+    reviews.recorded_clear(&app("i1"), clear);
+    assert_eq!(held(&reviews), ["other"]);
+    // Released or ended: nothing staged.
+    reviews.release_app(&app("i1"), &releaser(), || {});
+    assert_eq!(
+        reviews.stage_clear(EPOCH, &app("i1")),
+        Err(ReviewRefusal::Released)
+    );
+    reviews.end(EPOCH, &releaser(), || {});
+    assert_eq!(
+        reviews.stage_clear(EPOCH, &app("i2")),
+        Err(ReviewRefusal::Ended)
+    );
+    assert_eq!(
+        reviews
+            .stage_context(EPOCH, &app("i2"), context("x"))
+            .map(|_| ()),
+        Err(ContextRefusal::Gone(ReviewRefusal::Ended))
+    );
+}
+
+#[test]
+fn allowing_one_first_message_allows_the_mount_and_its_others_waiting() {
+    let reviews = reviews();
+    let ask = |mount: &str, text: &str| {
+        reviews
+            .open(
+                EPOCH,
+                new_review_id(),
+                ReviewAsk::SendMessage,
+                &app(mount),
+                "charts",
+                "show",
+                text,
+            )
+            .unwrap()
+    };
+    let first = ask("i1", "one");
+    let second = ask("i1", "two");
+    let other_mount = ask("i2", "three");
+    let tool_call = open(&reviews, "i1").unwrap();
+    let answered = reviews.reviews()[0].clone();
+    assert_eq!(
+        reviews.answer(
+            &answered.execution_id,
+            &answered.permission_id,
+            ALLOW,
+            person()
+        ),
+        ReviewAnswer::Ended
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        assert_eq!(
+            first.ended(Duration::from_secs(1)).await,
+            ReviewEnd::Allowed(person())
+        );
+        assert_eq!(
+            second.ended(Duration::from_secs(1)).await,
+            ReviewEnd::Allowed(person())
+        );
+    });
+    assert_eq!(reviews.consented(EPOCH, &app("i1")), Ok(true));
+    // Another mount's, and the same mount's tool call, still wait.
+    assert_eq!(reviews.reviews().len(), 2);
+    assert_eq!(reviews.consented(EPOCH, &app("i2")), Ok(false));
+    drop((other_mount, tool_call));
 }
 
 #[test]

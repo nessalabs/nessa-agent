@@ -134,7 +134,7 @@ fn an_apps_message_and_context_schemas_state_the_bounds_the_gateway_keeps() {
     use crate::conversation::application::ConversationLimits;
     use nessa_sdk::domain::agent_execution::{
         executions::ExecutionId,
-        prompts::{AppContext, McpAppSource, UserMessage},
+        prompts::{AppModelContext, McpAppSource, UserMessage},
         tools::MAX_MCP_NAME_BYTES,
     };
     let schema = schema();
@@ -148,15 +148,24 @@ fn an_apps_message_and_context_schemas_state_the_bounds_the_gateway_keeps() {
         bytes(&defs["ConversationSendParams"]["properties"]["text"])
     );
     let context = &defs["McpUpdateModelContextParams"];
-    assert_eq!(bytes(&context["properties"]["text"]), AppContext::MAX_BYTES);
+    assert_eq!(
+        bytes(&context["properties"]["text"]),
+        AppModelContext::MAX_BYTES
+    );
     assert_eq!(
         bytes(&context["properties"]["structuredContentJson"]),
-        AppContext::MAX_BYTES
+        AppModelContext::MAX_BYTES
     );
     let description = context["description"].as_str().unwrap();
-    assert!(description.contains(&format!("at most {} UTF-8 bytes", AppContext::MAX_BYTES)));
+    assert!(description.contains(&format!(
+        "at most {} UTF-8 bytes",
+        AppModelContext::MAX_BYTES
+    )));
     // As many as one message carries, which is as many as are held.
-    assert!(description.contains(&format!("at most {} mounts", UserMessage::MAX_APP_CONTEXTS)));
+    assert!(description.contains(&format!(
+        "at most {} mounts",
+        UserMessage::MAX_APP_MODEL_CONTEXTS
+    )));
     let app = &defs["ConversationMessageApp"]["properties"];
     assert_eq!(bytes(&app["executionId"]), ExecutionId::MAX_BYTES);
     assert_eq!(bytes(&app["toolId"]), McpAppSource::MAX_TOOL_ID_BYTES);

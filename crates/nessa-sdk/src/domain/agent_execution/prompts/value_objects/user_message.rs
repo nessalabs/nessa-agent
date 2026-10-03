@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use super::{AppContext, MessageSender, PromptText};
+use super::{AppModelContext, MessageSender, PromptText};
 use crate::domain::{
     agent_execution::ExecutionError,
     common::value_objects::{ImageMediaType, Sha256Digest},
@@ -211,7 +211,7 @@ pub struct UserMessage {
     images: Box<[ImageReference]>,
     files: Box<[LinkedFile]>,
     sender: MessageSender,
-    app_context: Box<[AppContext]>,
+    app_model_context: Box<[AppModelContext]>,
 }
 impl UserMessage {
     /// Most images in one message.
@@ -237,9 +237,9 @@ impl UserMessage {
     /// inside any frame an adapter carries.
     pub const MAX_FILES: usize = 10;
 
-    /// Most apps' contexts one message carries: with [`AppContext::MAX_BYTES`]
+    /// Most apps' contexts one message carries: with [`AppModelContext::MAX_BYTES`]
     /// each, at most 32 KiB of context goes with one turn.
-    pub const MAX_APP_CONTEXTS: usize = 4;
+    pub const MAX_APP_MODEL_CONTEXTS: usize = 4;
 
     /// Combine optional `text` with `images` and `files`, each in attachment
     /// order. All three empty is [`ExecutionError::EmptyValue`]; more than
@@ -279,7 +279,7 @@ impl UserMessage {
             images: images.into_boxed_slice(),
             files: files.into_boxed_slice(),
             sender: MessageSender::Person,
-            app_context: Box::default(),
+            app_model_context: Box::default(),
         })
     }
     /// A message of text alone, which cannot fail: the text is already nonblank.
@@ -289,7 +289,7 @@ impl UserMessage {
             images: Box::default(),
             files: Box::default(),
             sender: MessageSender::Person,
-            app_context: Box::default(),
+            app_model_context: Box::default(),
         }
     }
     /// This message, written by `sender`. A message is the person's until
@@ -303,16 +303,19 @@ impl UserMessage {
     ///
     /// # Errors
     ///
-    /// [`ExecutionError::TooManyValues`] past [`Self::MAX_APP_CONTEXTS`].
-    pub fn with_app_context(self, contexts: Vec<AppContext>) -> Result<Self, ExecutionError> {
-        if contexts.len() > Self::MAX_APP_CONTEXTS {
+    /// [`ExecutionError::TooManyValues`] past [`Self::MAX_APP_MODEL_CONTEXTS`].
+    pub fn with_app_model_context(
+        self,
+        contexts: Vec<AppModelContext>,
+    ) -> Result<Self, ExecutionError> {
+        if contexts.len() > Self::MAX_APP_MODEL_CONTEXTS {
             return Err(ExecutionError::TooManyValues {
                 field: "user message app contexts",
-                max: Self::MAX_APP_CONTEXTS,
+                max: Self::MAX_APP_MODEL_CONTEXTS,
             });
         }
         Ok(Self {
-            app_context: contexts.into_boxed_slice(),
+            app_model_context: contexts.into_boxed_slice(),
             ..self
         })
     }
@@ -339,7 +342,7 @@ impl UserMessage {
     }
     /// What apps gave the model to know, sent ahead of the message and not
     /// part of what it says; empty when none did.
-    pub fn app_context(&self) -> &[AppContext] {
-        &self.app_context
+    pub fn app_model_context(&self) -> &[AppModelContext] {
+        &self.app_model_context
     }
 }

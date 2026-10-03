@@ -122,10 +122,11 @@ export interface McpAppConversation {
    */
   sendMessage(address: AppAddress, content: readonly JsonObject[]): Promise<Delivered>
   /**
-   * How long, in milliseconds, a `ui/message` may take before the bridge
-   * gives up on it: the first of a mount's waits on the person's review.
+   * How long, in milliseconds, either request may take before the bridge
+   * gives up on it: the first of a mount's messages waits on the person's
+   * review, and either may wait for the conversation to open.
    */
-  readonly messageWithin: number
+  readonly within: number
   /** `ui/update-model-context`: replaces what this mount last gave the model. */
   updateModelContext(
     address: AppAddress,

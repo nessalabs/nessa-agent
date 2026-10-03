@@ -9,7 +9,7 @@ use crate::{
     },
     domain::agent_execution::{
         executions::{ExecutionId, ExecutionOutcome, QueueMutation},
-        prompts::{AppContext, MessageSender},
+        prompts::{AppModelContext, MessageSender},
     },
 };
 use std::{collections::HashMap, mem::size_of};
@@ -96,12 +96,12 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
             MessageSender::Person => 0,
             MessageSender::App(app) => app.payload_bytes(),
         })
-        .saturating_add(std::mem::size_of_val(message.app_context()))
+        .saturating_add(std::mem::size_of_val(message.app_model_context()))
         .saturating_add(
             message
-                .app_context()
+                .app_model_context()
                 .iter()
-                .map(AppContext::payload_bytes)
+                .map(AppModelContext::payload_bytes)
                 .fold(0usize, usize::saturating_add),
         );
     let events = record

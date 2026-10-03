@@ -84,7 +84,7 @@ export interface InMemorySource extends WorkspaceSource {
   /**
    * A message of the person's, written by the MCP App `app` (`ui/message`),
    * as the gateway takes one: refused (`not-waiting`) while the session's
-   * agent is at work, so it never waits behind the person's own.
+   * agent is at work, so it does not wait behind the person's own.
    */
   appMessage(sessionId: string, app: MessageApp, text: string): Promise<void>
   /** Every consequential call, in order — answers, pins, archives — refused ones included. */

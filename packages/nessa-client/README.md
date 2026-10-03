@@ -379,7 +379,7 @@ const { executionId } = await client.mcpApps.sendMessage(
 as the app's; the first from a mount waits on the person's review, so it waits
 as long as a call (`mcpAppDeadlines.sendMessageMs`), and one while a turn runs
 fails `turn_running`. `updateModelContext` holds the context until the next
-message takes it to the agent, once; neither part clears it. Their bounds are
+message takes it to the agent, once; an update with neither part clears it. Their bounds are
 `MAX_MCP_MESSAGE_BYTES` and `MAX_MCP_CONTEXT_BYTES` (each part; whether they
 fit together, as held, is the gateway's to say: `mcp_request_too_large`),
 asked of `mcpAppRequestProblem.message` and `.context`.

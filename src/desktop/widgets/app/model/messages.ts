@@ -134,6 +134,20 @@ export const contentModalities: JsonObject = Object.fromEntries(
   Object.keys(contentReaders).map((type) => [type, {}]),
 )
 
+/**
+ * What blocks this reads (`contentReaders`) say, as one text: each block's
+ * text, a blank line between each. The one statement of how a message or a
+ * context the host took is said further on.
+ */
+export function contentText(content: readonly JsonObject[]): string {
+  return content
+    .map((block) => {
+      const text = field(block, "text")
+      return typeof text === "string" ? text : ""
+    })
+    .join("\n\n")
+}
+
 function contentBlocks(value: Json | undefined): readonly JsonObject[] | undefined {
   if (!Array.isArray(value)) return undefined
   const out: JsonObject[] = []

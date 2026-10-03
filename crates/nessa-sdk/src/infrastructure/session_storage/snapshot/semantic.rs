@@ -341,7 +341,8 @@ mod tests {
                 ReviewDeclineStage,
             },
             prompts::{
-                AppContext, ImageReference, McpAppSource, MessageSender, PromptText, UserMessage,
+                AppModelContext, ImageReference, McpAppSource, MessageSender, PromptText,
+                UserMessage,
             },
             tools::{McpTool, ToolCallId},
         },
@@ -560,9 +561,16 @@ mod tests {
         };
         let message = UserMessage::text_only(PromptText::new("plot May").unwrap())
             .sent_by(MessageSender::App(app("call-1")))
-            .with_app_context(vec![
-                AppContext::new(app("call-1"), Some("zoomed".into()), None).unwrap(),
-                AppContext::new(app("call-2"), None, Some(r#"{"month":5}"#.into())).unwrap(),
+            .with_app_model_context(vec![
+                AppModelContext::new(app("call-1"), "update-1", Some("zoomed".into()), None)
+                    .unwrap(),
+                AppModelContext::new(
+                    app("call-2"),
+                    "update-1",
+                    None,
+                    Some(r#"{"month":5}"#.into()),
+                )
+                .unwrap(),
             ])
             .unwrap();
         let record = InvocationRecord {
@@ -600,16 +608,27 @@ mod tests {
             (&["user_app", "tool_id"][..], serde_json::Value::from(" ")),
             (&["user_app", "extra"][..], serde_json::Value::from("x")),
             (
-                &["user_app_context", "1", "structured_content"][..],
+                &["user_app_model_context", "1", "structured_content"][..],
                 "[5]".into(),
             ),
             (
-                &["user_app_context", "0", "text"][..],
+                &["user_app_model_context", "0", "text"][..],
                 serde_json::Value::Null,
             ),
+            // Saved only as none, never as empty: one empty was changed.
+            // On the one with structure too, where an empty text read as
+            // none would leave a context standing.
+            (&["user_app_model_context", "1", "text"][..], "".into()),
+            (&["user_app_model_context", "0", "update"][..], " ".into()),
+            // An app of the record's own turn: no earlier tool call drew it.
+            (&["user_app", "execution_id"][..], "one".into()),
             (
-                &["user_app_context", "0", "text"][..],
-                "x".repeat(AppContext::MAX_BYTES + 1).into(),
+                &["user_app_model_context", "1", "app", "execution_id"][..],
+                "one".into(),
+            ),
+            (
+                &["user_app_model_context", "0", "text"][..],
+                "x".repeat(AppModelContext::MAX_BYTES + 1).into(),
             ),
         ] {
             let mut invalid = valid.clone();
@@ -634,7 +653,7 @@ mod tests {
         }
         // Five contexts are refused before a fifth is built.
         let mut five = valid.clone();
-        let contexts = five["InputAccepted"]["metadata"]["user_app_context"]
+        let contexts = five["InputAccepted"]["metadata"]["user_app_model_context"]
             .as_array_mut()
             .unwrap();
         let first = contexts[0].clone();
@@ -651,7 +670,7 @@ mod tests {
         let mut older = valid;
         let metadata = older["InputAccepted"]["metadata"].as_object_mut().unwrap();
         metadata.remove("user_app");
-        metadata.remove("user_app_context");
+        metadata.remove("user_app_model_context");
         let SessionChange::InputAccepted(restored) = decode_change(
             &serde_json::to_vec(&older).unwrap(),
             &ProviderContext::Absent,
@@ -663,7 +682,7 @@ mod tests {
             restored.request.user_message.sender(),
             &MessageSender::Person
         );
-        assert!(restored.request.user_message.app_context().is_empty());
+        assert!(restored.request.user_message.app_model_context().is_empty());
     }
 
     #[test]

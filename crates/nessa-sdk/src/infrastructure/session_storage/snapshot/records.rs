@@ -21,7 +21,7 @@ use crate::domain::{
             ReviewDeclineReason, ReviewDeclineStage,
         },
         prompts::{
-            AppContext as DomainAppContext, ImageReference, LinkedFile, McpAppSource,
+            AppModelContext as DomainAppModelContext, ImageReference, LinkedFile, McpAppSource,
             MessageSender, PromptText, UserMessage,
         },
         questions::{AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId},
@@ -125,24 +125,37 @@ impl App {
 /// with, so a restored message sends exactly what was taken for it.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct AppContext {
+pub(super) struct AppModelContext {
     pub(super) app: App,
+    pub(super) update: String,
     pub(super) text: Option<String>,
     pub(super) structured_content: Option<String>,
 }
-impl From<&DomainAppContext> for AppContext {
-    fn from(value: &DomainAppContext) -> Self {
+impl From<&DomainAppModelContext> for AppModelContext {
+    fn from(value: &DomainAppModelContext) -> Self {
         Self {
             app: value.app().into(),
+            update: value.update().into(),
             text: value.text().map(str::to_owned),
             structured_content: value.structured_content().map(str::to_owned),
         }
     }
 }
-impl AppContext {
-    fn decode(self) -> Result<DomainAppContext, StorageError> {
-        DomainAppContext::new(self.app.decode()?, self.text, self.structured_content)
-            .map_err(corrupt)
+impl AppModelContext {
+    /// Rebuild the value object. An empty text is refused rather than read
+    /// as none: no context is saved with one, so a record holding one was
+    /// changed, and is not repaired.
+    fn decode(self) -> Result<DomainAppModelContext, StorageError> {
+        if self.text.as_deref() == Some("") {
+            return Err(corrupt("an app context saved with an empty text"));
+        }
+        DomainAppModelContext::new(
+            self.app.decode()?,
+            self.update,
+            self.text,
+            self.structured_content,
+        )
+        .map_err(corrupt)
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -167,7 +180,7 @@ pub(super) struct Metadata {
     /// nothing a record could have meant otherwise, which is why a context's
     /// own `app` has no default.
     #[serde(default)]
-    pub(super) user_app_context: Vec<AppContext>,
+    pub(super) user_app_model_context: Vec<AppModelContext>,
     pub(super) estimated_input_tokens: u64,
     pub(super) reserved_output_tokens: u32,
     pub(super) actor: Actor,
@@ -312,10 +325,10 @@ impl From<&InvocationRecord> for Metadata {
                 MessageSender::Person => None,
                 MessageSender::App(app) => Some(app.into()),
             },
-            user_app_context: value
+            user_app_model_context: value
                 .request
                 .user_message
-                .app_context()
+                .app_model_context()
                 .iter()
                 .map(Into::into)
                 .collect(),
@@ -418,6 +431,21 @@ impl Provider {
 }
 impl Metadata {
     pub(super) fn decode(self) -> Result<InvocationRecord, StorageError> {
+        // An app is the UI of a tool call an earlier turn made: no message
+        // is written by, or carries the context of, an app of its own turn.
+        let own = self.execution_id.as_str();
+        if self
+            .user_app
+            .iter()
+            .chain(
+                self.user_app_model_context
+                    .iter()
+                    .map(|context| &context.app),
+            )
+            .any(|app| app.execution_id == own)
+        {
+            return Err(corrupt("a message names an app of its own turn"));
+        }
         Ok(InvocationRecord {
             target_event_offset: self.target_event_offset,
             submission: self.submission.into(),
@@ -445,10 +473,10 @@ impl Metadata {
                     None => MessageSender::Person,
                     Some(app) => MessageSender::App(app.decode()?),
                 })
-                .with_app_context(
-                    self.user_app_context
+                .with_app_model_context(
+                    self.user_app_model_context
                         .into_iter()
-                        .map(AppContext::decode)
+                        .map(AppModelContext::decode)
                         .collect::<Result<_, _>>()?,
                 )
                 .map_err(corrupt)?,

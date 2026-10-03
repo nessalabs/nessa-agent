@@ -417,8 +417,9 @@ mod mcp_app_lane {
         assert_eq!(refused["id"], "ctx");
         assert_eq!(refused["error"]["code"], "temporarily_unavailable");
 
-        // Allowed, one is sent, answered with the turn it became; the other
-        // three, asking for the same mount, are let go by its release.
+        // Allowing one allows the mount: all four are answered, each with the
+        // turn it became, or `turn_running` behind another's — none waits on
+        // the person again.
         let reviews = fixture.app_reviews().await;
         send_command(
             &peer,
@@ -432,18 +433,45 @@ mod mcp_app_lane {
                 "optionId": "allow",
             }),
         );
-        let answered = responses(&mut peer, 2).await;
-        let sent: Vec<_> = answered.keys().filter(|id| id.starts_with('m')).collect();
-        assert_eq!(sent.len(), 1, "{answered:?}");
+        let answered = responses(&mut peer, 5).await;
+        assert_eq!(answered["answer"]["ok"], true);
+        let sent: Vec<_> = ["m1", "m2", "m3", "m4"]
+            .into_iter()
+            .filter(|id| {
+                let reply = &answered[*id];
+                assert!(
+                    reply["ok"] == true || reply["error"]["code"] == "turn_running",
+                    "{reply}"
+                );
+                reply["ok"] == true
+            })
+            .collect();
+        assert!(!sent.is_empty(), "{answered:?}");
+        assert!(fixture.app_reviews().await.is_empty());
         let execution = answered[sent[0]]["payload"]["executionId"]
             .as_str()
             .unwrap()
             .to_owned();
 
+        // A part past the schema's own bound is refused before anything
+        // parses it, and before the service: nothing is on record of it.
+        let records = fixture.audit.phases().len();
+        let mut long = context("long");
+        long["structuredContentJson"] = json!(format!("{{\"a\":{}1}}", " ".repeat(8192)));
+        send_command(&peer, "long", "mcp.updateModelContext", long);
+        let refused = loop {
+            let reply = response(&mut peer).await;
+            if reply["id"] == "long" {
+                break reply;
+            }
+        };
+        assert_eq!(refused["error"]["code"], "invalid_request");
+        assert_eq!(fixture.audit.phases().len(), records);
+
         // The context now has room, and is applied.
         send_command(&peer, "ctx2", "mcp.updateModelContext", context("ctx2"));
         let applied = response(&mut peer).await;
-        assert_eq!(applied["id"], "ctx2");
+        assert_eq!(applied["id"], "ctx2", "{applied}");
         assert_eq!(applied["payload"], json!({"requestId": "ctx2", "applied": true}));
 
         // The transcript says who wrote it, on the wire.

@@ -305,7 +305,7 @@ describe("the handshake", () => {
         conversation: {
           sendMessage: answered,
           updateModelContext: answered,
-          messageWithin: deadlines.request,
+          within: deadlines.request,
         },
       },
     })
@@ -818,15 +818,15 @@ describe("how long a tools/call is waited for", () => {
   })
 })
 
-describe("how long a ui/message is waited for", () => {
-  it("D2: ui/message waits the conversation's messageWithin, so its first review is not cut off", async () => {
+describe("how long the conversation's requests are waited for", () => {
+  it("D2: ui/message and ui/update-model-context wait the conversation's within, so a review or an opening is not cut off", async () => {
     const answer = deferred<"done">()
     const app = harness({
       ports: {
         conversation: {
           sendMessage: () => answer.promise,
           updateModelContext: async () => "done",
-          messageWithin: 370_000,
+          within: 370_000,
         },
       },
     })
@@ -839,8 +839,7 @@ describe("how long a ui/message is waited for", () => {
     })
     app.say({ jsonrpc: "2.0", id: 2, method: "ui/update-model-context", params: {} })
     expect(app.timers.filter((t) => !t.cancelled).map((t) => t.ms)).toEqual([
-      370_000,
-      deadlines.request,
+      370_000, 370_000,
     ])
     answer.resolve("done")
     await flush()
@@ -1118,7 +1117,7 @@ describe("a live app's other requests", () => {
         sent.push(["context", address.sessionId, update])
         return "refused" as const
       },
-      messageWithin: deadlines.request,
+      within: deadlines.request,
     }
     const app = harness({ ports: { conversation } })
     await live(app)

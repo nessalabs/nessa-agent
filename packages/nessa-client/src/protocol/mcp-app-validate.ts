@@ -81,7 +81,7 @@ export const mcpAppRequestProblem = {
    * re-encoded — and whether the structure is one JSON object are the
    * gateway's to judge (`mcp_request_too_large`, `invalid_request`).
    */
-  context: (context: McpModelContext): string | undefined => {
+  context: (context: McpAppModelContext): string | undefined => {
     const parts = [context.text, context.structuredContentJson].filter(
       (part): part is string => part !== undefined,
     )
@@ -93,7 +93,7 @@ export const mcpAppRequestProblem = {
 } as const
 
 /** What an app gives the model: either part, both, or neither, which clears it. */
-export interface McpModelContext {
+export interface McpAppModelContext {
   readonly text?: string
   /** One JSON object, encoded. */
   readonly structuredContentJson?: string

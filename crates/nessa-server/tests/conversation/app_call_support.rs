@@ -163,6 +163,25 @@ pub(crate) struct Audit {
     pub(crate) failing_after: Mutex<Option<usize>>,
     /// When set, every record takes this long to commit.
     pub(crate) slow: Mutex<Option<Duration>>,
+    /// When set, the next record waits for the test to let it commit,
+    /// saying first that it is waiting.
+    pub(crate) hold: Mutex<Option<Hold>>,
+}
+/// A record held mid-commit until the test lets it go.
+#[derive(Clone)]
+pub(crate) struct Hold {
+    /// Told when a record is waiting.
+    pub(crate) waiting: Arc<tokio::sync::Notify>,
+    /// One permit lets one waiting record commit.
+    pub(crate) go: Arc<tokio::sync::Semaphore>,
+}
+impl Default for Hold {
+    fn default() -> Self {
+        Self {
+            waiting: Arc::default(),
+            go: Arc::new(tokio::sync::Semaphore::new(0)),
+        }
+    }
 }
 impl Audit {
     pub(crate) fn phases(&self) -> Vec<McpAppAuditPhase> {
@@ -184,10 +203,15 @@ impl McpAppAudit for Audit {
                 .unwrap()
                 .is_some_and(|after| taken >= after);
         let slow = *self.slow.lock().unwrap();
+        let hold = self.hold.lock().unwrap().take();
         Box::pin(async move {
             // On record only once committed.
             if let Some(slow) = slow {
                 tokio::time::sleep(slow).await;
+            }
+            if let Some(hold) = hold {
+                hold.waiting.notify_one();
+                drop(hold.go.acquire().await.unwrap());
             }
             if failing {
                 Err(ConversationError::Audit)
@@ -399,10 +423,11 @@ impl Fixture {
         instance: &str,
         text: &str,
     ) -> Result<String, ConversationError> {
+        // Each its own request: the same request again is the same turn.
         self.service
             .send_app_message(
                 self.id.clone(),
-                self.caller("app-message"),
+                self.caller(&format!("app-message-{}", Uuid::new_v4())),
                 McpAppMessage {
                     app: self.app(instance),
                     server: SERVER.into(),
@@ -421,7 +446,7 @@ impl Fixture {
         structured: Option<&str>,
     ) -> Result<(), ConversationError> {
         self.service
-            .update_app_context(
+            .update_app_model_context(
                 self.id.clone(),
                 self.caller("app-context"),
                 McpAppModelContext {
@@ -482,7 +507,7 @@ impl Fixture {
         let before = self.app_reviews().await.len();
         let service = self.service.clone();
         let id = self.id.clone();
-        let caller = self.caller("held-message");
+        let caller = self.caller(&format!("held-message-{}", Uuid::new_v4()));
         let message = McpAppMessage {
             app: self.app(instance),
             server: SERVER.into(),

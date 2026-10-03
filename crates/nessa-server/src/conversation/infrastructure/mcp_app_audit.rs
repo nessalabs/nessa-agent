@@ -305,8 +305,12 @@ fn phase(phase: &McpAppAuditPhase) -> Value {
         McpAppAuditPhase::MessageNotSent { execution_id } => {
             json!({"kind": "message_not_sent", "executionId": execution_id})
         }
-        McpAppAuditPhase::ContextHeld { bytes } => json!({"kind": "context_held", "bytes": bytes}),
-        McpAppAuditPhase::ContextCleared => json!({"kind": "context_cleared"}),
+        McpAppAuditPhase::ContextHeld { bytes, sequence } => {
+            json!({"kind": "context_held", "bytes": bytes, "sequence": sequence})
+        }
+        McpAppAuditPhase::ContextCleared { sequence } => {
+            json!({"kind": "context_cleared", "sequence": sequence})
+        }
     }
 }
 

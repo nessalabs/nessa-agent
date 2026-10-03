@@ -25,16 +25,10 @@ import {
 } from "@nessa/client"
 import type { AppAddress, Delivered, McpAppConversation } from "../../application/ports"
 import type { JsonObject } from "../../model/json-rpc"
+import { contentText } from "../../model/messages"
 
 /** What the gateway is asked of an app's conversation. */
 export type AppConversationApi = Pick<McpAppsApi, "sendMessage" | "updateModelContext">
-
-/** The text of `content`'s blocks, a blank line between each. */
-function textOf(content: readonly JsonObject[]): string {
-  return content
-    .map((block) => (typeof block.text === "string" ? block.text : ""))
-    .join("\n\n")
-}
 
 /** What a call that threw comes to: a refusal the gateway answered, or a fault. */
 function refusedOr(error: unknown): Delivered {
@@ -45,11 +39,11 @@ function refusedOr(error: unknown): Delivered {
 /** The app's conversation, through the gateway's `client.mcpApps`. */
 export function gatewayAppConversation(mcpApps: AppConversationApi): McpAppConversation {
   return {
-    // The longest the client waits for `mcp.sendMessage`: a review, then the send.
-    messageWithin: mcpAppDeadlines.sendMessageMs,
+    // The longest the client waits for either: a review, an opening, the send.
+    within: Math.max(mcpAppDeadlines.sendMessageMs, mcpAppDeadlines.updateModelContextMs),
 
     async sendMessage(address: AppAddress, content: readonly JsonObject[]) {
-      const text = textOf(content)
+      const text = contentText(content)
       if (mcpAppRequestProblem.message(text)) return "refused"
       try {
         await mcpApps.sendMessage(address.sessionId, address.app, address.server, text)
@@ -60,7 +54,7 @@ export function gatewayAppConversation(mcpApps: AppConversationApi): McpAppConve
     },
 
     async updateModelContext(address, context) {
-      const text = context.content ? textOf(context.content) : ""
+      const text = context.content ? contentText(context.content) : ""
       const update = {
         ...(text ? { text } : {}),
         ...(context.structuredContent

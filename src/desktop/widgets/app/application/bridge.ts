@@ -359,7 +359,7 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
           id,
           conversation.sendMessage(address, message.content),
           (done) => (done === "done" ? ok(id) : declined(id)),
-          conversation.messageWithin,
+          conversation.within,
         )
       }
       case "ui/update-model-context": {
@@ -371,10 +371,14 @@ export function createAppBridge(options: BridgeOptions): AppBridge {
             ? { structuredContent: message.structuredContent }
             : {}),
         }
-        return settle(id, conversation.updateModelContext(address, update), (done) =>
-          done === "done"
-            ? ok(id)
-            : send(refuse(id, errorCodes.refused, "Context update denied")),
+        return settle(
+          id,
+          conversation.updateModelContext(address, update),
+          (done) =>
+            done === "done"
+              ? ok(id)
+              : send(refuse(id, errorCodes.refused, "Context update denied")),
+          conversation.within,
         )
       }
       case "ui/open-link": {

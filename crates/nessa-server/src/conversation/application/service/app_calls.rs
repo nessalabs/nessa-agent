@@ -26,6 +26,7 @@ use super::super::view::{ConversationPermission, ConversationTranscriptState, Co
 use super::super::SubmittedMessage;
 use super::{
     ConversationCaller, ConversationError, ConversationService, LiveConversation, SubmissionMode,
+    Writer,
 };
 use crate::conversation::domain::ConversationId;
 use crate::mcp_servers::domain::{
@@ -34,7 +35,7 @@ use crate::mcp_servers::domain::{
 };
 use nessa_sdk::domain::agent_execution::{
     executions::ExecutionId,
-    prompts::{AppContext, McpAppSource, MessageSender},
+    prompts::{AppModelContext, McpAppSource},
     sessions::SessionId,
     tools::{McpTool, ToolCallId},
     ExecutionError,
@@ -188,7 +189,7 @@ impl ConversationService {
     /// Hold what the app gives the model now, in place of what it gave
     /// before, until the conversation's next message carries it; or clear
     /// it.
-    pub async fn update_app_context(
+    pub async fn update_app_model_context(
         &self,
         id: ConversationId,
         caller: ConversationCaller,
@@ -198,7 +199,7 @@ impl ConversationService {
         let service = self.clone();
         tokio::spawn(async move {
             let _running = running;
-            service.app_context(id, caller, update).await
+            service.app_model_context(id, caller, update).await
         })
         .await
         .map_err(|_| ConversationError::Unavailable)?
@@ -552,12 +553,12 @@ impl ConversationService {
                 }
             }
         }
-        // Once more just before it is handed to the conversation: see
-        // `app_tool_call`.
-        if opening.admit(&message.app).is_err() {
-            return Err(step.refuse_by_system(McpAppError::Cancelled).await);
-        }
-        let execution_id = Uuid::new_v4().to_string();
+        // The same request again is the same turn: the agent settles a retry
+        // as it settles the person's.
+        let execution_id = message_execution(&id, &message.app, &caller.action_id);
+        // Checked once more under the conversation's submission lock, just
+        // before it is enqueued (`submit_as`): a close that took the lock
+        // first, a release, or another opening refuses it there.
         let submitted = self
             .submit_as(
                 id,
@@ -569,7 +570,12 @@ impl ConversationService {
                     files: Vec::new(),
                 },
                 SubmissionMode::Queue,
-                MessageSender::App(sender),
+                Writer::App {
+                    sender,
+                    apps: opening.apps.clone(),
+                    epoch: opening.epoch,
+                    mount: message.app.clone(),
+                },
             )
             .await;
         let sent = McpAppAuditPhase::MessageSent {
@@ -583,10 +589,26 @@ impl ConversationService {
             Err(ConversationError::TurnRunning) => Err(step
                 .refuse_as(McpAppCode::TurnRunning, ConversationError::TurnRunning)
                 .await),
+            // Released, ended or reopened while it waited for the lock: by
+            // that other command, so the system's.
+            Err(ConversationError::McpApp(McpAppError::Cancelled)) => {
+                Err(step.refuse_by_system(McpAppError::Cancelled).await)
+            }
             // The agent has it; what failed is its evidence, which the
-            // answer says.
+            // answer says — unless its own record cannot be written either,
+            // when the answer is that, and the evidence's failure is kept in
+            // the log rather than lost.
             Err(error @ ConversationError::AdmissionEvidence { .. }) => {
-                Err(step.ended(sent, None, error).await)
+                match step.record(sent, None).await {
+                    Ok(()) => Err(error),
+                    Err(audit) => {
+                        tracing::error!(
+                            ?error,
+                            "an app's message was taken without its evidence, and its own record could not be written"
+                        );
+                        Err(audit)
+                    }
+                }
             }
             Err(error) => Err(step
                 .ended(
@@ -598,7 +620,7 @@ impl ConversationService {
         }
     }
 
-    async fn app_context(
+    async fn app_model_context(
         &self,
         id: ConversationId,
         caller: ConversationCaller,
@@ -620,17 +642,17 @@ impl ConversationService {
         let Some((_, tool)) = seen else {
             return Err(step.refuse(McpAppError::AppUnknown).await);
         };
-        let text = update.text.filter(|text| !text.is_empty());
         // Sent as parsed: re-encoded, a duplicate key's last value kept, as
-        // a tool's arguments are.
+        // a tool's arguments are. What may be held — an object, within its
+        // bound, something at all — is the context's own to say.
         let structured = match update
             .structured_content_json
             .as_deref()
             .map(serde_json::from_str::<Value>)
         {
             None => None,
-            Some(Ok(value @ Value::Object(_))) => Some(value.to_string()),
-            Some(_) => {
+            Some(Ok(value)) => Some(value.to_string()),
+            Some(Err(_)) => {
                 return Err(step
                     .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
                     .await)
@@ -641,31 +663,28 @@ impl ConversationService {
                 .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
                 .await);
         };
-        let context = match (text, structured) {
-            (None, None) => None,
-            (text, structured) => {
-                match AppContext::new(source, text, structured) {
-                    Ok(context) => Some(context),
-                    // The bound is the context's own, on what is held and
-                    // sent: the structured content as re-encoded.
-                    Err(ExecutionError::ValueTooLong { .. }) => {
-                        return Err(step.refuse(McpAppError::RequestTooLarge).await)
-                    }
-                    Err(_) => {
-                        return Err(step
-                            .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
-                            .await)
-                    }
-                }
+        let context = match AppModelContext::new(source, step.call_id(), update.text, structured) {
+            Ok(context) => Some(context),
+            // Neither part: what the mount held is cleared.
+            Err(ExecutionError::EmptyValue("app context")) => None,
+            Err(ExecutionError::ValueTooLong { .. }) => {
+                return Err(step.refuse(McpAppError::RequestTooLarge).await)
+            }
+            Err(_) => {
+                return Err(step
+                    .refuse_as(McpAppCode::InvalidRequest, ConversationError::InvalidInput)
+                    .await)
             }
         };
         let Some(context) = context else {
-            if opening.admit(&update.app).is_err() {
+            // Numbered, so that it lets go of what came before it and of
+            // nothing given after it, whichever is recorded first.
+            let Ok(number) = opening.apps.stage_clear(opening.epoch, &update.app) else {
                 return Err(step.refuse_by_system(McpAppError::Cancelled).await);
-            }
-            step.record(McpAppAuditPhase::ContextCleared, None).await?;
-            // A release or an end since let go of it already.
-            let _ = opening.apps.clear_context(opening.epoch, &update.app);
+            };
+            step.record(McpAppAuditPhase::ContextCleared { sequence: number }, None)
+                .await?;
+            opening.apps.recorded_clear(&update.app, number);
             return Ok(());
         };
         let bytes =
@@ -691,14 +710,21 @@ impl ConversationService {
             }
         };
         if let Err(error) = step
-            .record(McpAppAuditPhase::ContextHeld { bytes }, None)
+            .record(
+                McpAppAuditPhase::ContextHeld {
+                    bytes,
+                    sequence: number,
+                },
+                None,
+            )
             .await
         {
             opening.apps.discard_context(number);
             return Err(error);
         }
-        // Held from here. A release or an end since let go of it: they came
-        // after it, as they would have a moment later.
+        // Held from here, unless a later update or clear of the mount stands
+        // over it. A release or an end since let go of it: they came after
+        // it, as they would have a moment later.
         opening.apps.recorded_context(number);
         Ok(())
     }
@@ -952,6 +978,25 @@ fn app_source(app: &McpAppRef, tool: McpTool) -> Result<McpAppSource, ExecutionE
     )
 }
 
+/// The turn an app's message from the mount `app` becomes, for its request
+/// `request_id` in conversation `id`: the same request again is the same
+/// turn, and no two mounts' or conversations' requests share one. A digest,
+/// length-prefixed, so no two inputs spell the same one.
+fn message_execution(id: &ConversationId, app: &McpAppRef, request_id: &str) -> String {
+    let mut digest = Sha256::new();
+    for part in [
+        id.to_string().as_str(),
+        app.execution_id.as_str(),
+        app.tool_id.as_str(),
+        app.instance_id.as_str(),
+        request_id,
+    ] {
+        digest.update((part.len() as u64).to_be_bytes());
+        digest.update(part.as_bytes());
+    }
+    format!("app-{}", &hex_of(digest)[..32])
+}
+
 /// The policy's answer for `call` as the session lists its tool now.
 fn admitted(
     ports: &McpAppPorts,
@@ -1011,6 +1056,11 @@ impl Step {
                 phase: McpAppAuditPhase::Admitted,
             },
         }
+    }
+
+    /// The gateway's identity for this one call, which its records carry.
+    fn call_id(&self) -> &str {
+        &self.record.call_id
     }
 
     /// The app, on behalf of its caller.

@@ -78,7 +78,8 @@ pub enum MessageSender {
     /// The person wrote it.
     #[default]
     Person,
-    /// An app sent it on the person's behalf, with their consent.
+    /// An app sent it on the person's behalf. Whether the person allowed it
+    /// is the host's to decide before it says so.
     App(McpAppSource),
 }
 
@@ -89,30 +90,49 @@ pub enum MessageSender {
 /// not part of what the person said: a transcript shows the message, not
 /// this.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AppContext {
+pub struct AppModelContext {
     app: McpAppSource,
+    update: Box<str>,
     text: Option<Box<str>>,
     structured_content: Option<Box<str>>,
 }
-impl AppContext {
+impl AppModelContext {
     /// Most UTF-8 bytes of one app's context, its text and its structured
     /// content's JSON together.
     pub const MAX_BYTES: usize = 8 * 1024;
+    /// Most UTF-8 bytes of the identity of the update that gave it.
+    pub const MAX_UPDATE_BYTES: usize = ExecutionId::MAX_BYTES;
 
-    /// `app`'s context: `text`, and `structured_content` as the JSON text of
-    /// one object. An empty text is none.
+    /// `app`'s context, as its update `update` gave it — the host's own
+    /// identity for that update, which its records of it carry, so the turn
+    /// that carried a context and the record of its update are one join —
+    /// with `text`, and `structured_content` as the JSON text of one object.
+    /// An empty text is none.
     ///
     /// # Errors
     ///
-    /// [`ExecutionError::EmptyValue`] when there is neither;
+    /// [`ExecutionError::EmptyValue`] for a blank `update`, or when there is
+    /// neither part; [`ExecutionError::ValueTooLong`] for an `update` past
+    /// [`Self::MAX_UPDATE_BYTES`];
     /// [`ExecutionError::ValueTooLong`] past [`Self::MAX_BYTES`] together;
     /// [`ExecutionError::InvalidStructuredContent`] for structured content
     /// that is not the JSON text of one object.
     pub fn new(
         app: McpAppSource,
+        update: impl Into<String>,
         text: Option<String>,
         structured_content: Option<String>,
     ) -> Result<Self, ExecutionError> {
+        let update = update.into();
+        if update.trim().is_empty() {
+            return Err(ExecutionError::EmptyValue("app context update"));
+        }
+        if update.len() > Self::MAX_UPDATE_BYTES {
+            return Err(ExecutionError::ValueTooLong {
+                field: "app context update",
+                max_bytes: Self::MAX_UPDATE_BYTES,
+            });
+        }
         let text = text.filter(|text| !text.is_empty());
         if text.is_none() && structured_content.is_none() {
             return Err(ExecutionError::EmptyValue("app context"));
@@ -136,6 +156,7 @@ impl AppContext {
         }
         Ok(Self {
             app,
+            update: update.into_boxed_str(),
             text: text.map(String::into_boxed_str),
             structured_content: structured_content.map(String::into_boxed_str),
         })
@@ -143,6 +164,10 @@ impl AppContext {
     /// The app that gave it.
     pub fn app(&self) -> &McpAppSource {
         &self.app
+    }
+    /// The identity of the update that gave it.
+    pub fn update(&self) -> &str {
+        &self.update
     }
     /// Its text, when it gave any.
     pub fn text(&self) -> Option<&str> {
@@ -156,6 +181,7 @@ impl AppContext {
     pub fn payload_bytes(&self) -> usize {
         self.app
             .payload_bytes()
+            .saturating_add(self.update.len())
             .saturating_add(self.text.as_deref().map_or(0, str::len))
             .saturating_add(self.structured_content.as_deref().map_or(0, str::len))
     }

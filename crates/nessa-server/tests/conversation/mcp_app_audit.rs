@@ -234,14 +234,17 @@ async fn every_phase_of_one_request_is_its_own_record() {
             json!({"kind": "message_not_sent", "executionId": "turn-9"}),
         ),
         (
-            McpAppAuditPhase::ContextHeld { bytes: 12 },
+            McpAppAuditPhase::ContextHeld {
+                bytes: 12,
+                sequence: 3,
+            },
             app_initiator(),
-            json!({"kind": "context_held", "bytes": 12}),
+            json!({"kind": "context_held", "bytes": 12, "sequence": 3}),
         ),
         (
-            McpAppAuditPhase::ContextCleared,
+            McpAppAuditPhase::ContextCleared { sequence: 4 },
             app_initiator(),
-            json!({"kind": "context_cleared"}),
+            json!({"kind": "context_cleared", "sequence": 4}),
         ),
     ];
     let count = cases.len();

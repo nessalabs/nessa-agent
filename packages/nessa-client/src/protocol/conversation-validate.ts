@@ -78,7 +78,6 @@ function identity(item: Record<string, unknown>, key: string) {
 function imagesKey(images: readonly ImageAttachment[]) {
   return JSON.stringify(images.map((image) => [image.digest, image.mimeType, image.size]))
 }
-/** The same, for the paths a turn points at: the paths, in order. */
 /**
  * The app that wrote a turn (`ConversationMessageApp`), checked against the
  * schema, as a key: absent is the person's own.
@@ -89,8 +88,8 @@ function messageAppKey(value: unknown, what: string): string {
     throw new Error(`Invalid ${what}`)
   const app = value as Record<string, unknown>
   exact(app, ["executionId", "toolId", "server", "tool"])
-  if (!boundedName(app.executionId, 256) || !boundedName(app.toolId, 256))
-    throw new Error(`Invalid ${what} identity`)
+  identity(app, "executionId")
+  identity(app, "toolId")
   if (
     !boundedName(app.server, bounds.maxMcpNameBytes) ||
     !boundedName(app.tool, bounds.maxMcpNameBytes)
@@ -99,6 +98,7 @@ function messageAppKey(value: unknown, what: string): string {
   return JSON.stringify([app.executionId, app.toolId, app.server, app.tool])
 }
 
+/** The same, for the paths a turn points at: the paths, in order. */
 function filesKey(files: readonly LinkedFile[]) {
   return JSON.stringify(files.map((file) => file.path))
 }

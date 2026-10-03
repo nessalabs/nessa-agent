@@ -72,6 +72,9 @@ pub(crate) struct MemoryRepository {
     /// While set, whether a conversation's mode needs verifying cannot be
     /// read: a submission is refused before the agent sees it.
     pub(crate) verification_unreadable: AtomicBool,
+    /// When set, the next such read says it began and waits until the test
+    /// lets it go: a submission held under its lock, past its resolve.
+    pub(crate) verification_gate: Mutex<Option<(Arc<Notify>, Receiver<()>)>>,
     pub(crate) mode_requests: Mutex<HashMap<(ConversationId, String), ConversationModeRequest>>,
     pub(crate) lose_mode_intent_ack: AtomicBool,
     pub(crate) lose_mode_commit_ack: AtomicBool,
@@ -214,7 +217,14 @@ impl ConversationRepository for MemoryRepository {
                 && request.state == ConversationModeRequestState::Applied
                 && request.application == Some(ConversationModeApplication::Deferred)
         });
-        Box::pin(async move { Ok(found) })
+        let gate = self.verification_gate.lock().unwrap().take();
+        Box::pin(async move {
+            if let Some((began, open)) = gate {
+                began.notify_one();
+                let _ = open.await;
+            }
+            Ok(found)
+        })
     }
     fn observe_mode_application(
         &self,

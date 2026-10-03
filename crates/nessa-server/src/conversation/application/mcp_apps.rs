@@ -246,10 +246,12 @@ pub enum McpAppAuditPhase {
     /// agent. Its code is the answer's.
     MessageNotSent { execution_id: String },
     /// The mount's context, `bytes` of it, is held for the next message, in
-    /// place of what it held.
-    ContextHeld { bytes: usize },
-    /// The mount holds no context now.
-    ContextCleared,
+    /// place of what it held. `sequence` orders the conversation's updates:
+    /// of a mount's, the highest recorded stands. A turn that carries it
+    /// names this call's id (`AppModelContext::update`).
+    ContextHeld { bytes: usize, sequence: u64 },
+    /// What the mount gave before `sequence` is let go of.
+    ContextCleared { sequence: u64 },
 }
 
 /// Immutable evidence of one step: its target (the conversation, the app,

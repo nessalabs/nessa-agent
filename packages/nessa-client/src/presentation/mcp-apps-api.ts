@@ -27,7 +27,7 @@ import {
   mcpCallToolResult,
   mcpReadResourceResult,
   mcpSendMessageResult,
-  type McpModelContext,
+  type McpAppModelContext,
   validResourceDigest,
   validResourceSize,
   validResourceTicket,
@@ -62,8 +62,8 @@ export const mcpAppDeadlines = Object.freeze({
    */
   sendMessageMs: mcpAppCallTiming.callDeadlineMs,
   /**
-   * `updateModelContext`: as long as a read. The gateway may open the
-   * conversation first, and records the step.
+   * `updateModelContext`: as long as a call, as `readResource` waits: the
+   * gateway may open the conversation first, and records the step.
    */
   updateModelContextMs: mcpAppCallTiming.callDeadlineMs,
   /**
@@ -179,14 +179,17 @@ export type McpAppsApi = {
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
    * @param app - The app sending it: its tool call and this mount of it.
    * @param server - The app's own server, by its configured name: 1-128 UTF-8 bytes.
-   * @param text - The message: 1-8192 UTF-8 bytes, what
+   * @param text - The message: 1 to `MAX_MCP_MESSAGE_BYTES` UTF-8 bytes, what
    * {@link mcpAppRequestProblem}`.message` says; not blank (`invalid_request`).
+   * A mount's first message must also fit its review: text heavy in quotes
+   * or control characters can be `mcp_request_too_large` until the mount is
+   * allowed.
    * @param options - Optional caller-managed action identity.
    * @returns The turn the message became.
    * @throws TypeError for arguments outside the schema's bounds, before
    * anything is sent; otherwise {@link NessaMcpAppError}: `turn_running`
-   * while a turn runs or input waits — an app's message never queues behind
-   * the person's own; the review's `mcp_approval_denied`,
+   * while a turn runs or input waits — so it is not queued behind the
+   * person's own; the review's `mcp_approval_denied`,
    * `mcp_approval_expired` and `mcp_cancelled`; `mcp_app_unknown`,
    * `mcp_server_mismatch`, `mcp_request_too_large`; and any other refusal of
    * the message, by its own conversation code.
@@ -200,25 +203,26 @@ export type McpAppsApi = {
   ) => Promise<McpSendMessageResult>
   /**
    * Give the model context from the app (MCP Apps `ui/update-model-context`),
-   * in place of what this mount gave before; neither part clears it. It is
-   * held until the next message into the conversation — the person's or an
+   * in place of what this mount gave before; an update with neither part
+   * clears it. It is held until the next message into the conversation — the person's or an
    * app's — takes it, and goes to the agent once, with that turn, ahead of
-   * what the message says. It is never shown in the transcript. A release of
+   * what the message says, and is not part of the transcript. A release of
    * the mount, or the end of the conversation's opening, lets go of it
    * unsent.
    * @param conversationId - Canonical lowercase UUID of the app's conversation.
    * @param app - The app giving it: its tool call and this mount of it.
    * @param server - The app's own server, by its configured name: 1-128 UTF-8 bytes.
    * @param context - Its text and its structured content (one JSON object,
-   * encoded), each at most 8192 UTF-8 bytes: what
+   * encoded), each at most `MAX_MCP_CONTEXT_BYTES` UTF-8 bytes: what
    * {@link mcpAppRequestProblem}`.context` says. Together, as the gateway
    * holds them, they take no more (`mcp_request_too_large`).
    * @param options - Optional caller-managed action identity.
    * @returns The gateway's acknowledgement: the context is held.
    * @throws TypeError for arguments outside the schema's bounds, before
    * anything is sent; otherwise {@link NessaMcpAppError}:
-   * `temporarily_unavailable` when four other mounts of the conversation
-   * hold a context, `invalid_request` for structured content that is no
+   * `temporarily_unavailable` when as many other mounts of the conversation
+   * hold a context as one message carries (the schema's
+   * `McpUpdateModelContextParams` says how many), `invalid_request` for structured content that is no
    * object, `mcp_request_too_large`, `mcp_app_unknown`,
    * `mcp_server_mismatch` and `mcp_cancelled`.
    */
@@ -226,7 +230,7 @@ export type McpAppsApi = {
     conversationId: string,
     app: McpAppReference,
     server: string,
-    context: McpModelContext,
+    context: McpAppModelContext,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
   /**

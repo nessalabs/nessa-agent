@@ -136,7 +136,7 @@ pub(in crate::infrastructure::acp) fn fits_one_frame(
                 + json_string_bytes(&markdown_label(file.name()))
         })
         .sum();
-    let context = app_context_text(message)?
+    let context = app_model_context_text(message)
         .map_or(0, |context| TEXT_BLOCK_BYTES + json_string_bytes(&context));
     let encoded_bytes = REQUEST_ALLOWANCE_BYTES + context + text + images + files;
     let max_bytes = max_frame_bytes as u64;
@@ -157,45 +157,42 @@ const APP_CONTEXT_PREAMBLE: &str =
 /// it carries none: [`APP_CONTEXT_PREAMBLE`], then the contexts as one JSON
 /// array of `{server, tool, toolCallId, text?, structuredContent?}`.
 ///
-/// Encoded as JSON so that nothing an app writes can close the block or
-/// pass for the preamble or another app's entry: every one of its strings is
-/// a JSON string, whatever it holds. A text block is the one kind every ACP
-/// agent takes, so Claude, Codex and OpenCode are all given it the same way.
-///
-/// # Errors
-///
-/// [`AgentError::Protocol`] for structured content that is not JSON, which
-/// [`AppContext`](crate::domain::agent_execution::prompts::AppContext)
-/// refuses to hold; nothing is sent in that case.
-fn app_context_text(message: &UserMessage) -> Result<Option<String>, AgentError> {
-    if message.app_context().is_empty() {
-        return Ok(None);
+/// Written as JSON: every string a JSON string, so nothing an app writes can
+/// close the block or pass for the preamble or another app's entry
+/// (`an_apps_context_cannot_close_its_block_or_pass_for_another`). The
+/// structured content goes in as the text
+/// [`AppModelContext`](crate::domain::agent_execution::prompts::AppModelContext)
+/// holds — one JSON value, which that value object checked and is the one
+/// judge of — and is not parsed again here. A text block is the one kind
+/// every ACP agent takes, which is why Claude, Codex and OpenCode, all
+/// spoken to through this adapter, are given it alike.
+fn app_model_context_text(message: &UserMessage) -> Option<String> {
+    if message.app_model_context().is_empty() {
+        return None;
     }
-    let contexts = message
-        .app_context()
+    let string = |text: &str| Value::from(text).to_string();
+    let entries: Vec<String> = message
+        .app_model_context()
         .iter()
         .map(|context| {
             let app = context.app();
-            let mut entry = serde_json::Map::new();
-            entry.insert("server".into(), app.tool().server().into());
-            entry.insert("tool".into(), app.tool().tool().into());
-            entry.insert("toolCallId".into(), app.tool_id().as_str().into());
+            let mut entry = format!(
+                "{{\"server\":{},\"tool\":{},\"toolCallId\":{}",
+                string(app.tool().server()),
+                string(app.tool().tool()),
+                string(app.tool_id().as_str()),
+            );
             if let Some(text) = context.text() {
-                entry.insert("text".into(), text.into());
+                entry.push_str(&format!(",\"text\":{}", string(text)));
             }
             if let Some(structured) = context.structured_content() {
-                let value = serde_json::from_str::<Value>(structured).map_err(|_| {
-                    AgentError::Protocol("an app's structured context is not JSON".into())
-                })?;
-                entry.insert("structuredContent".into(), value);
+                entry.push_str(&format!(",\"structuredContent\":{structured}"));
             }
-            Ok(Value::Object(entry))
+            entry.push('}');
+            entry
         })
-        .collect::<Result<Vec<_>, AgentError>>()?;
-    Ok(Some(format!(
-        "{APP_CONTEXT_PREAMBLE}{}",
-        Value::Array(contexts)
-    )))
+        .collect();
+    Some(format!("{APP_CONTEXT_PREAMBLE}[{}]", entries.join(",")))
 }
 
 /// Length of `text` as a JSON string, quotes included, as `serde_json` writes
@@ -388,7 +385,7 @@ fn markdown_label(name: &str) -> String {
 }
 
 /// The content blocks for `message`: what apps gave the model, when any did
-/// ([`app_context_text`]), then its text, then its images in attachment
+/// ([`app_model_context_text`]), then its text, then its images in attachment
 /// order, then a link to each of its files. `images` must be what
 /// [`read_images`] answered for this message.
 ///
@@ -411,7 +408,7 @@ pub(in crate::infrastructure::acp) fn content_blocks(
         ));
     }
     let mut blocks = Vec::with_capacity(2 + images.blocks.len() + message.files().len());
-    if let Some(context) = app_context_text(message)? {
+    if let Some(context) = app_model_context_text(message) {
         blocks.push(json!({"type":"text","text":context}));
     }
     if let Some(text) = message.text() {

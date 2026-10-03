@@ -18,7 +18,7 @@
 //!
 //! ```text
 //! McpAppSource --> MessageSender::App --> UserMessage (who wrote it)
-//!     `--------> AppContext ------------> UserMessage (what goes with it)
+//!     `--------> AppModelContext ------------> UserMessage (what goes with it)
 //! ```
 //!
 //! An MCP App can speak in the person's turn: write the message, on their
@@ -31,7 +31,7 @@ pub use prompt::{
 };
 
 mod app_message;
-pub use app_message::{AppContext, McpAppSource, MessageSender};
+pub use app_message::{AppModelContext, McpAppSource, MessageSender};
 
 mod user_message;
 pub use user_message::{ImageReference, LinkedFile, UserMessage};

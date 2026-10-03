@@ -167,6 +167,11 @@ function stepKind(kind: ConversationTool["kind"]): StepKind {
   }
 }
 
+/** The app that wrote a turn, as a message carries it; nothing for the person's own. */
+function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp } {
+  return app ? { app: { server: app.server, tool: app.tool } } : {}
+}
+
 /**
  * A conversation view as the session's transcript, at the revision the
  * adapter minted for it. `seen` answers when the adapter first saw a message
@@ -179,11 +184,6 @@ function stepKind(kind: ConversationTool["kind"]): StepKind {
  * (`gatewayToolWidget`). Thoughts are not shown. Inputs still waiting follow,
  * so a message the window sent is found as soon as the gateway holds it.
  */
-/** The app that wrote a turn, as a message carries it; nothing for the person's own. */
-function writtenBy(app: ConversationMessageApp | undefined): { app?: MessageApp } {
-  return app ? { app: { server: app.server, tool: app.tool } } : {}
-}
-
 export function transcriptFrom(
   view: ConversationView,
   revision: number,
