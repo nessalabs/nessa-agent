@@ -492,7 +492,7 @@ a gateway-owned review, independently of the conversation approval mode.
 | `mcp.readResource` | Same originating app/server and validated `ui://` URI; one upstream read, resource metadata, and a single-use bearer ticket for held HTML bytes. |
 | `GET /mcp-resources` | `x-nessa-resource-ticket` authorizes redemption without a second HTTP authentication step; trusted-origin check, one consumption, and redemption audit precede bytes. |
 | `mcp.sendMessage` | Text at most the conversation's input bound, submitted as the person's turn written by the app (`MessageSender::App`, persisted with the invocation). First message per mount per opening waits on an app review; refused `turn_running` while a turn runs or input waits. |
-| `mcp.updateModelContext` | Holds one context per mount (8 KiB, at most 4 mounts), recorded before it is held; the next admitted message carries all held contexts to the agent once, as one leading ACP text block. Released or ended mounts drop theirs unsent. |
+| `mcp.updateModelContext` | Holds one context per mount (8 KiB, at most 4 mounts), recorded before it is held; the next message admitted while nothing runs or waits carries the held contexts, as one leading ACP text block, and they are let go of once the agent answered for that turn (queued and steered messages carry none). Released or ended mounts drop theirs unsent. |
 | `mcp.releaseApp` | Idempotently withdraws current waiting reviews and releases current unredeemed tickets for the exact mount, its message consent and its held context; no permanent mount revocation or provider close. |
 
 ```mermaid

@@ -63,7 +63,8 @@ fn written_by(fixture: &Fixture) -> ConversationMessageApp {
 }
 
 impl Fixture {
-    /// Wait until every turn has finished and nothing waits.
+    /// Wait until every turn has finished, nothing waits, and what the
+    /// turns carried is settled.
     async fn idle(&self) {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
@@ -77,6 +78,7 @@ impl Fixture {
                         .messages
                         .iter()
                         .all(|message| message.status == ConversationMessageStatus::Completed)
+                    && !self.service.apps_of(&self.id).carrying()
                 {
                     break;
                 }
@@ -514,7 +516,7 @@ async fn m14_a_message_the_agent_took_without_its_evidence_is_on_record_as_sent(
 }
 
 #[tokio::test]
-async fn m15_a_message_whose_step_cannot_be_recorded_is_not_sent() {
+async fn m15a_a_message_whose_step_cannot_be_recorded_is_not_sent() {
     let fixture = Fixture::new().await;
     fixture.allowed(INSTANCE).await;
     let executions = fixture.provider.executions.lock().unwrap().len();
@@ -686,7 +688,7 @@ async fn c3_c4_a_context_past_its_bound_or_with_structure_that_is_no_object_is_r
 }
 
 #[tokio::test]
-async fn c5_c8_the_latest_context_goes_with_the_next_message_once() {
+async fn c5_c8_the_latest_context_goes_with_the_next_message_and_not_again_once_answered() {
     let fixture = Fixture::new().await;
     fixture
         .update_context(INSTANCE, Some("April"), None)
@@ -1502,7 +1504,7 @@ async fn reopened_while_attaching(fixture: &Fixture) -> oneshot::Sender<()> {
 }
 
 #[tokio::test]
-async fn c8d_a_context_carried_by_a_turn_that_never_ran_is_kept() {
+async fn c8d_a_context_carried_by_a_turn_removed_or_whose_agent_never_attached_is_kept() {
     // Removed before it ran.
     let fixture = Fixture::new().await;
     let open = reopened_while_attaching(&fixture).await;
@@ -1517,12 +1519,7 @@ async fn c8d_a_context_carried_by_a_turn_that_never_ran_is_kept() {
     // finished attaching, so not idle — leaves it held for the one after.
     fixture.person_sends("p2", "second").await;
     let carried = fixture.contexts_given("p2").await;
-    let held = fixture
-        .service
-        .apps_of(&fixture.id)
-        .held_contexts()
-        .contexts
-        .len();
+    let held = fixture.service.apps_of(&fixture.id).held_contexts().len();
     assert!(
         carried == [Some("ctx".to_owned())] || (carried.is_empty() && held == 1),
         "carried {carried:?}, held {held}"
@@ -1574,24 +1571,14 @@ async fn c8d_a_context_carried_by_a_turn_that_never_ran_is_kept() {
         .unwrap()
         .contains(&"p1".to_owned()));
     assert_eq!(
-        fixture
-            .service
-            .apps_of(&fixture.id)
-            .held_contexts()
-            .contexts
-            .len(),
+        fixture.service.apps_of(&fixture.id).held_contexts().len(),
         1
     );
 }
 
 /// The contexts held in `fixture`'s conversation, none a turn carries.
 fn held_count(fixture: &Fixture) -> usize {
-    fixture
-        .service
-        .apps_of(&fixture.id)
-        .held_contexts()
-        .contexts
-        .len()
+    fixture.service.apps_of(&fixture.id).held_contexts().len()
 }
 
 /// Until `execution`'s message settled, and what it carried with it.
@@ -1645,6 +1632,32 @@ async fn c8d_a_context_carried_by_a_turn_whose_prompt_never_reached_the_agent_is
         .lock()
         .unwrap()
         .contains(&"p1".to_owned()));
+    assert_eq!(held_count(&fixture), 1);
+}
+
+#[tokio::test]
+async fn c8d_a_context_carried_by_a_turn_the_adapter_failed_before_its_prompt_is_kept() {
+    let fixture = Fixture::new().await;
+    fixture
+        .update_context(INSTANCE, Some("ctx"), None)
+        .await
+        .unwrap();
+    // The adapter's own report, with no result from the provider: its
+    // process gone between turns, say, before the prompt was built.
+    *fixture.provider.execution_reply.lock().unwrap() = Some(ProviderExecutionReply::Finished(
+        ExecutionReport::new(None, Some(AgentError::Closed), ProviderSessionState::Usable),
+    ));
+    *fixture
+        .provider
+        .execution_observation_failure
+        .lock()
+        .unwrap() = Some(ObservationFailure::new(
+        AgentError::Closed,
+        ObservationFailureCause::ExecutionFailed,
+    ));
+    fixture.person_sends("p1", "first").await;
+    settled(&fixture, "p1").await;
+    // A report, and nothing from the agent: no answer, and kept.
     assert_eq!(held_count(&fixture), 1);
 }
 

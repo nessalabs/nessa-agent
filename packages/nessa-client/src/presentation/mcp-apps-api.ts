@@ -209,9 +209,9 @@ export type McpAppsApi = {
    * clears it. It is held until the next message admitted while nothing runs
    * or waits in the conversation — the person's or an app's; one queued
    * behind a turn carries none — carries it to the agent, ahead of what the
-   * message says, and is not part of the transcript. It is let go of once a
-   * turn that carried it ran; one removed or failed before it ran leaves it
-   * held for the next. A release of
+   * message says, and is not part of the transcript. It is let go of once the
+   * agent answered for a turn that carried it, and held for the next
+   * otherwise; while a turn carries it, no other message does. A release of
    * the mount, or the end of the conversation's opening, lets go of it
    * unsent.
    * @param conversationId - Canonical lowercase UUID of the app's conversation.

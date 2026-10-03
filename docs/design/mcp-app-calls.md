@@ -269,10 +269,13 @@ app's on behalf of the caller, on the app lane.
   under the submission lock, just before its enqueue, by the same check
   that refuses an app's message `turn_running` — and is in flight with that
   turn until its receipt settles: no other message carries it meanwhile.
-  Then it is let go of if the agent answered for that turn — a report of
-  it, or anything it observed, on the turn's own record — and kept for the
-  next otherwise: a turn removed, refused, or failed before its prompt
-  reached the agent. Kept is the safe side: at worst a context the agent
+  Then it is let go of if the agent answered for that turn — a result of
+  its own, or anything it observed, on the turn's own record — and kept for
+  the next otherwise: a turn removed, refused, or failed before its prompt
+  reached the agent. A report with no provider result (the adapter's own
+  failure before it sent the prompt, a local stop) is no answer. The
+  carried contexts are a guard (`Carried`) that settles them as kept on
+  every way out but an answer, a panic included. Kept is the safe side: at worst a context the agent
   did see goes once more. A message queued behind a turn, or steered into
   one, carries none. A retry carries what its first attempt carried. A
   carried context names its update's call id (`AppModelContext::update_id`),
@@ -292,7 +295,12 @@ app's on behalf of the caller, on the app lane.
 - **Bounds.** A message: the conversation's input bound. A context: 8 KiB of
   text and structured JSON together (`AppModelContext::MAX_BYTES`); at most 4
   mounts hold one (`UserMessage::MAX_APP_MODEL_CONTEXTS`), so a turn carries at
-  most 32 KiB of app context.
+  most 32 KiB of app context. Two mounts of one tool call (inline and in a
+  pane, say) each hold a place, and the agent sees each entry named by the
+  same server, tool and tool call: a recorded limit.
+- **Who sees the writer.** The desktop transcript labels an app's turn. The
+  panel's Messages tab does not read `ConversationMessage.app` yet and shows
+  it as the person's: a recorded limit, for a follow-up in the panel.
 
 ### A message
 
@@ -338,8 +346,8 @@ app's on behalf of the caller, on the app lane.
 | C7b | — | two updates of one mount at once | — | the second waits until the first is held: recorded in the order they reach it, the later stands; another mount's waits for neither |
 | C7c | — | an update of the next opening while one of the last is still being recorded | — | it waits for that one, as C7b |
 | C8 | held | a message admitted while nothing runs or waits | carried | read under the submission lock just before the enqueue; carried with it, in the order given, naming its update |
-| C8c | carried | its receipt settles, and the agent answered for its turn (a report, or an observation, on its record) | none | let go of, whether the turn completed or failed |
-| C8d | carried | its receipt settles, its turn removed, or failed before its prompt reached the agent | held | kept for the next |
+| C8c | carried | its receipt settles, and the agent answered for its turn (a provider result, or an observation, on its record) | none | let go of, whether the turn completed or failed |
+| C8d | carried | its receipt settles, its turn removed, or failed before its prompt reached the agent (no report, or one with no provider result) | held | kept for the next |
 | C8e | carried | another message admitted before its turn settles | carried | that message carries none of them |
 | C8b | held | a message queued behind a turn, or steered into one | held | carries none |
 | C9 | held or carried | a message refused, before or after it carried them | held | kept |

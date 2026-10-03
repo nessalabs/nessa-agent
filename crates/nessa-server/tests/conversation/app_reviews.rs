@@ -529,7 +529,6 @@ fn context(text: &str) -> AppModelContext {
 fn held(reviews: &AppReviews) -> Vec<String> {
     reviews
         .held_contexts()
-        .contexts
         .iter()
         .map(|context| context.text().unwrap().to_owned())
         .collect()
@@ -786,7 +785,7 @@ fn a_message_takes_what_it_read_and_never_a_replacement_given_since() {
     let read = reviews.carry();
     // Replaced after the message read it, before it was taken.
     give(&reviews, "i1", Some(context("newer")));
-    reviews.settle(&read, true);
+    read.reached();
     assert_eq!(held(&reviews), ["newer"]);
 }
 
@@ -795,15 +794,16 @@ fn contexts_a_turn_carries_go_with_no_other_until_it_settles() {
     let reviews = reviews();
     give(&reviews, "i1", Some(context("one")));
     let carried = reviews.carry();
-    assert_eq!(carried.contexts.len(), 1);
+    assert_eq!(carried.contexts().len(), 1);
     // A second message while the first turn carries it carries nothing.
-    assert!(reviews.carry().contexts.is_empty());
-    // That turn never reached the agent: held for the next.
-    reviews.settle(&carried, false);
+    assert!(reviews.carry().contexts().is_empty());
+    // That turn never reached the agent — refused, or dropped on its way:
+    // held for the next.
+    drop(carried);
     let again = reviews.carry();
-    assert_eq!(again.contexts.len(), 1);
+    assert_eq!(again.contexts().len(), 1);
     // This one reached it: let go of.
-    reviews.settle(&again, true);
+    again.reached();
     assert!(held(&reviews).is_empty());
 }
 

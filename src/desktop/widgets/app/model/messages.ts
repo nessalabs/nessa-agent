@@ -136,15 +136,14 @@ export const contentModalities: JsonObject = Object.fromEntries(
 
 /**
  * What blocks this reads (`contentReaders`) say, as one text: each block's
- * text, a blank line between each. The one statement of how a message or a
- * context the host took is said further on.
+ * text, a blank line between each, a block that says nothing left out — so
+ * empty blocks, however many, give no text. The one statement of how a
+ * message or a context the host took is said further on.
  */
 export function contentText(content: readonly JsonObject[]): string {
   return content
-    .map((block) => {
-      const text = field(block, "text")
-      return typeof text === "string" ? text : ""
-    })
+    .map((block) => field(block, "text"))
+    .filter((text): text is string => typeof text === "string" && text !== "")
     .join("\n\n")
 }
 

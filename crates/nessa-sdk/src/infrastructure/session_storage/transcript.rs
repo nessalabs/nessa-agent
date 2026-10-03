@@ -1748,6 +1748,61 @@ mod tests {
     }
 
     #[test]
+    fn an_app_written_message_counts_its_writer_and_every_context_it_carries() {
+        use crate::domain::agent_execution::{
+            executions::ExecutionId,
+            prompts::{AppModelContext, McpAppSource, MessageSender},
+            tools::{McpTool, ToolCallId},
+        };
+        let app = McpAppSource::new(
+            ExecutionId::new("turn-0").unwrap(),
+            ToolCallId::new("call-0").unwrap(),
+            McpTool::new("charts", "plot").unwrap(),
+        )
+        .unwrap();
+        let contexts: Vec<AppModelContext> = (0..4)
+            .map(|n| {
+                AppModelContext::new(
+                    app.clone(),
+                    &format!("update-{n}"),
+                    Some("x".repeat(100 + n)),
+                    Some(format!("{{\"n\":{n}}}")),
+                )
+                .unwrap()
+                .unwrap()
+            })
+            .collect();
+        let mut person = snapshot::checkpoint::history_fixture(1);
+        person.invocations[0].request.user_message =
+            UserMessage::text_only(PromptText::new("plot").unwrap());
+        let mut written = person.clone();
+        written.invocations[0].request.user_message =
+            UserMessage::text_only(PromptText::new("plot").unwrap())
+                .sent_by(MessageSender::App(app.clone()))
+                .with_app_model_context(contexts.clone())
+                .unwrap();
+        let bytes = |state: SessionSnapshot| {
+            let fold = TranscriptFold::from_test_snapshot(scope(), state, 2);
+            fold.assert_retained_accounting();
+            fold.retained_bytes()
+        };
+        // Counted apart from the accounting under test: the writer's
+        // identities, the context slots, and each context's own bytes.
+        let expected = app.payload_bytes()
+            + std::mem::size_of_val(contexts.as_slice())
+            + contexts
+                .iter()
+                .map(|context| {
+                    context.app().payload_bytes()
+                        + context.update_id().len()
+                        + context.text().map_or(0, str::len)
+                        + context.structured_content().map_or(0, str::len)
+                })
+                .sum::<usize>();
+        assert_eq!(bytes(written) - bytes(person), expected);
+    }
+
+    #[test]
     fn checkpoint_stream_reader_handles_physical_utf8_and_escape_splits() {
         let mut state = snapshot::checkpoint::history_fixture(1);
         state.invocations[0].request.user_message =

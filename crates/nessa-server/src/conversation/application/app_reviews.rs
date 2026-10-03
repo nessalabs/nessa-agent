@@ -12,7 +12,7 @@
 //!
 //! Under the same lock (#390): the mounts the person allowed to send
 //! messages in this opening, and the context each mount last gave the model,
-//! held until a message takes it. A release or an opening's end lets go of
+//! held until the agent answered for a turn that carried it. A release or an opening's end lets go of
 //! both with everything else (`docs/design/mcp-app-calls.md`, "An app in its
 //! conversation").
 use super::mcp_apps::{McpAppInitiator, McpAppRef, McpAppWithdrawal};
@@ -165,15 +165,17 @@ struct Reviews {
     /// longest allowed first, at most [`MAX_CONSENTED_MOUNTS`].
     consented: VecDeque<McpAppRef>,
     /// The context each mount last gave, in the order they were given, from
-    /// at most [`MAX_HELD_CONTEXTS`] mounts: held until a message takes it.
+    /// at most [`MAX_HELD_CONTEXTS`] mounts: held until the agent answered
+    /// for a turn that carried it.
     contexts: Vec<HeldContext>,
     /// The number of the last update given: the `sequence` its record
-    /// carries, and how a message takes a context only if it is still the
-    /// one it read.
+    /// carries, and how a turn lets go of a context only if it is still the
+    /// one it carried.
     next_context: u64,
     /// The updates between their number and their hold, by mount and
     /// number: each holds its mount's place, so two mounts never both take
-    /// the last; only that update's hold lets go of it.
+    /// the last. Freed by that update's hold or failed record, or with
+    /// everything else by a release of its mount or the opening's end.
     reserved: Vec<(McpAppRef, u64)>,
     /// The numbers of the contexts a turn carries now, until it settles: no
     /// other message carries them meanwhile.
@@ -188,13 +190,13 @@ struct HeldContext {
 
 /// One mount's turn at a context update. Dropped, it lets the next go, and
 /// lets go of the mount's lock when nothing else holds or waits for it.
-pub struct UpdateTurn {
+pub struct MountUpdateLock {
     reviews: Arc<AppReviews>,
     app: McpAppRef,
     lock: Arc<tokio::sync::Mutex<()>>,
     guard: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
-impl Drop for UpdateTurn {
+impl Drop for MountUpdateLock {
     fn drop(&mut self) {
         drop(self.guard.take());
         let mut updates = self.reviews.updates.lock().expect("context updates");
@@ -214,24 +216,44 @@ pub enum ContextRefusal {
     Gone(ReviewRefusal),
 }
 
-/// The contexts a turn carries, in the order given, and which they were:
-/// [`AppReviews::settle`] lets go of exactly these, and of none replaced
-/// since.
-pub struct HeldContexts {
-    pub contexts: Vec<AppModelContext>,
+/// The contexts a turn carries, in the order given, marked in flight with
+/// it. Dropped, they are settled: let go of if [`Self::reached`] said the
+/// agent answered for that turn — exactly these, none replaced since — and
+/// held for the next turn otherwise, so a turn refused, a branch that
+/// forgets them, or a panic on the way loses none.
+pub struct Carried {
+    reviews: Arc<AppReviews>,
+    contexts: Vec<AppModelContext>,
     taken: Vec<(McpAppRef, u64)>,
+    reached: bool,
+}
+impl Carried {
+    /// What the turn carries, in the order given.
+    pub fn contexts(&self) -> &[AppModelContext] {
+        &self.contexts
+    }
+    /// The agent answered for the turn that carried them: they are let go of.
+    pub fn reached(mut self) {
+        self.reached = true;
+    }
+}
+impl Drop for Carried {
+    fn drop(&mut self) {
+        self.reviews.settle(&self.taken, self.reached);
+    }
 }
 impl Reviews {
-    /// The contexts held, in the order they were given, none in flight.
-    fn held_now(&self) -> HeldContexts {
+    /// The contexts held, in the order they were given, none in flight, and
+    /// which they are.
+    fn held_now(&self) -> (Vec<AppModelContext>, Vec<(McpAppRef, u64)>) {
         let held = self
             .contexts
             .iter()
             .filter(|held| !self.in_flight.contains(&held.number));
-        HeldContexts {
-            contexts: held.clone().map(|held| held.context.clone()).collect(),
-            taken: held.map(|held| (held.app.clone(), held.number)).collect(),
-        }
+        (
+            held.clone().map(|held| held.context.clone()).collect(),
+            held.map(|held| (held.app.clone(), held.number)).collect(),
+        )
     }
     /// The person allowed `app` to send messages in the current opening.
     fn allow(&mut self, app: &McpAppRef) {
@@ -339,7 +361,7 @@ impl AppReviews {
 
     /// One context update of `app` at a time: held across its room check,
     /// its record and its hold.
-    pub async fn one_update(self: &Arc<Self>, app: &McpAppRef) -> UpdateTurn {
+    pub async fn one_update(self: &Arc<Self>, app: &McpAppRef) -> MountUpdateLock {
         let lock = self
             .updates
             .lock()
@@ -348,7 +370,7 @@ impl AppReviews {
             .or_default()
             .clone();
         let guard = lock.clone().lock_owned().await;
-        UpdateTurn {
+        MountUpdateLock {
             reviews: self.clone(),
             app: app.clone(),
             lock,
@@ -425,27 +447,32 @@ impl AppReviews {
     }
 
     /// The contexts held now, in the order they were given, none a turn
-    /// carries already; marked as carried, until [`Self::settle`].
-    pub fn carry(&self) -> HeldContexts {
+    /// carries already; in flight with the turn that carries them until
+    /// the returned [`Carried`] is settled.
+    pub fn carry(self: &Arc<Self>) -> Carried {
         let mut state = self.state.lock().expect("app reviews");
-        let carried = state.held_now();
+        let (contexts, taken) = state.held_now();
         state
             .in_flight
-            .extend(carried.taken.iter().map(|(_, number)| *number));
-        carried
+            .extend(taken.iter().map(|(_, number)| *number));
+        Carried {
+            reviews: self.clone(),
+            contexts,
+            taken,
+            reached: false,
+        }
     }
 
-    /// The turn that carried `carried` settled: they are let go of if it
+    /// The turn that carried `taken` settled: they are let go of if it
     /// `reached` the agent, and held for the next turn otherwise.
-    pub fn settle(&self, carried: &HeldContexts, reached: bool) {
+    fn settle(&self, taken: &[(McpAppRef, u64)], reached: bool) {
         let mut state = self.state.lock().expect("app reviews");
         state
             .in_flight
-            .retain(|number| !carried.taken.iter().any(|(_, taken)| taken == number));
+            .retain(|number| !taken.iter().any(|(_, carried)| carried == number));
         if reached {
             state.contexts.retain(|held| {
-                !carried
-                    .taken
+                !taken
                     .iter()
                     .any(|(app, number)| &held.app == app && held.number == *number)
             });
@@ -461,8 +488,8 @@ impl AppReviews {
     /// The contexts held now, in the order they were given, none a turn
     /// carries already.
     #[cfg(test)]
-    pub fn held_contexts(&self) -> HeldContexts {
-        self.state.lock().expect("app reviews").held_now()
+    pub fn held_contexts(&self) -> Vec<AppModelContext> {
+        self.state.lock().expect("app reviews").held_now().0
     }
 
     /// Whether `app` may be admitted in the opening `epoch` now.
