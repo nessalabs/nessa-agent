@@ -90,6 +90,7 @@ impl TryFrom<CredentialTransitionDto> for CredentialTransition {
             TransitionCauseDto::Issued { cause } => TransitionCause::Issued(match cause {
                 IssuanceCauseDto::Bootstrap => IssuanceCause::Bootstrap,
                 IssuanceCauseDto::AdminIssue => IssuanceCause::AdminIssue,
+                IssuanceCauseDto::DevicePairing => IssuanceCause::DevicePairing,
                 IssuanceCauseDto::SurfaceProvision => IssuanceCause::SurfaceProvision,
                 IssuanceCauseDto::OwnerRecovery => IssuanceCause::OwnerRecovery,
             }),
@@ -146,6 +147,7 @@ impl CredentialTransitionDto {
                     cause: match cause {
                         IssuanceCause::Bootstrap => IssuanceCauseDto::Bootstrap,
                         IssuanceCause::AdminIssue => IssuanceCauseDto::AdminIssue,
+                        IssuanceCause::DevicePairing => IssuanceCauseDto::DevicePairing,
                         IssuanceCause::SurfaceProvision => IssuanceCauseDto::SurfaceProvision,
                         IssuanceCause::OwnerRecovery => IssuanceCauseDto::OwnerRecovery,
                     },
@@ -179,6 +181,34 @@ impl CredentialTransitionDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn device_pairing_issuance_preserves_persisted_cause_and_domain_evidence() {
+        let credential = Credential::new(
+            CredentialId::new("paired-device").unwrap(),
+            PrincipalId::new("owner").unwrap(),
+            OrganizationId::new("organization").unwrap(),
+            AudienceId::new("gateway").unwrap(),
+            100,
+            None,
+            vec![],
+        )
+        .unwrap();
+        let transition = credential
+            .issued(
+                IssuanceCause::DevicePairing,
+                Initiator::Principal(PrincipalId::new("owner").unwrap()),
+            )
+            .unwrap();
+        let record =
+            CredentialTransitionDto::record(&transition, 1, 1, Some("pairing-attempt".into()));
+        let encoded = serde_json::to_string(&record).unwrap();
+        assert!(encoded.contains("device_pairing"));
+        let decoded: CredentialTransitionDto = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, record);
+        assert_eq!(CredentialTransition::try_from(decoded), Ok(transition));
+        assert!(serde_json::from_str::<IssuanceCauseDto>(r#""device_pairing_unknown""#).is_err());
+    }
+
     #[test]
     fn deserialization_does_not_bypass_domain_validation() {
         let dto: OrganizationInputDto = serde_json::from_str(r#"{"id":""}"#).unwrap();
