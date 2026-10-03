@@ -6,7 +6,7 @@
 //! correlation completes before a credential is released.
 //!
 //! ```text
-//! panel ──command──▶ application access ──port──▶ private file + /health
+//! panel, setup, desktop window ──command──▶ application access ──port──▶ private file + /health
 //! ```
 //! Arrows are calls; composition supplies the port implementation.
 

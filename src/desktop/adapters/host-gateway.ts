@@ -1,10 +1,10 @@
 /**
  * The desktop app's connection to the local gateway (#419): the panel's own
- * session (`connectDevSession`) over what the host hands a bundled surface —
- * the gateway's endpoint and its surface credential
- * (`nativeGatewayEndpointSource`, `nativeCredentialSource`), the host
- * admitting this window by its label (`bundled_window` in `src-tauri`) — as
- * the window it is (`surfaceKind: "desktop"`).
+ * session (`connectDevSession`) over what the host serves this window as a
+ * reader of the gateway — its endpoint and the panel's surface credential
+ * (`nativeGatewayEndpointSource`, `nativeCredentialSource`), once the
+ * gateway the panel brought up is ready (`GatewayReader` in `src-tauri`) —
+ * as the window it is (`surfaceKind: "desktop"`).
  *
  * The credential is the bundled surface's, which the session's client id
  * names (`connectDevSession`'s `nessa-panel`), not the window; the window is

@@ -66,8 +66,10 @@ pub(crate) fn bundled_window(label: &str) -> Result<BundledSurface, String> {
 /// The bundled surfaces bring the gateway up: each waits for reconciliation,
 /// which it may start, and is on record as its initiator. The desktop window
 /// only reads the gateway they brought up: it is served once startup is
-/// `Ready` and refused before that, so a window polling while it cannot
-/// connect never starts, joins or audits a reconciliation. It is no bundled
+/// `Ready` and refused before that. Its arm of [`GatewayReader::ready`] reads
+/// the startup snapshot and calls nothing that reconciles, so a window
+/// polling while it cannot connect causes no reconciliation (the desktop-window
+/// tests in `surface_credential.rs` and `gateway_endpoint`). It is no bundled
 /// surface ([`bundled_window`]): it reads no startup snapshot and retries
 /// nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,7 +86,9 @@ impl GatewayReader {
         if label == DESKTOP_WINDOW {
             return Ok(Self::DesktopWindow);
         }
-        bundled_window(label).map(Self::Surface)
+        bundled_window(label)
+            .map(Self::Surface)
+            .map_err(|_| "Only Nessa's own windows can read the gateway".into())
     }
 
     /// Waits for the gateway as this reader may: a bundled surface until it

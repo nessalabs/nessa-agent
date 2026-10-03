@@ -332,8 +332,12 @@ sequenceDiagram
 
 The owner exposes `starting`, `ready`, and `failed` snapshots; an unmanaged
 debug/browser path has no native service owner. `wait_ready` performs complete
-reconciliation on credential load, rather than trusting a cached initial
-success. Concurrent ordinary requests share one running receipt. The code also
+reconciliation on a bundled surface's credential load, rather than trusting a
+cached initial success. The desktop window is the one reader that does trust it
+(`GatewayReader`, #419): it is served once startup is `ready` and never
+reconciles, so a gateway that died after `ready` is found by its failed connect
+and brought back by launchd or the panel's next credential load, not by the
+window. Concurrent ordinary requests share one running receipt. The code also
 has one pending successor for configuration-change evidence, but its public
 `configuration_changed` method is currently test-only; do not read this as an
 implemented live settings subscription.
@@ -618,10 +622,12 @@ and [process smoke script](../../../scripts/smoke-auth.mjs).
 The regression fix keeps the existing trusted bundled-window authority owned by
 `gateway::infrastructure::commands::bundled_window`: main and setup run the
 bundled application. The desktop window (#419) is admitted by `GatewayReader` as
-a reader only: it is served once startup is ready and can never trigger a
-reconciliation. Other labels cannot trigger discovery, reconciliation, or
-credential reads. Both admitted labels still use the configured local namespace,
-stage and verified endpoint; setup is recorded as the reconciliation initiator.
+a reader only: it is served once startup is ready, and its arm of
+`GatewayReader::ready` reads the startup snapshot and calls no reconciliation
+(native desktop-window credential and endpoint tests). Other labels cannot trigger discovery, reconciliation, or
+credential reads. All three admitted labels use the configured local namespace,
+stage and verified endpoint; main and setup are recorded as reconciliation
+initiators, and the desktop window never is.
 
 The frontend readiness request has a ten-second transport deadline: the server's
 five-second probe budget plus five seconds for transport and body delivery,

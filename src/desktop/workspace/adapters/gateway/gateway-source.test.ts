@@ -23,7 +23,7 @@ import { approvalId } from "./gateway-views"
 import { deferred, fakeGateway, row, view, type FakeGateway } from "./fake-gateway"
 import { gatewaySource, refusalOf, type GatewayClock } from "./gateway-source"
 
-const timing = { callMs: 5_000, pollMs: 100, reconnectMaxMs: 1_600 }
+const timing = { callMs: 5_000, pollMs: 100, reconnectRounds: 5 }
 const model = { provider: "anthropic", modelId: "claude-opus-5" }
 
 /** A clock and timers the test moves by hand. */
@@ -443,9 +443,12 @@ describe("a connection that could not be made says why (#419)", () => {
       status: "failed",
       failure: "unavailable",
     })
-    // The gateway comes up before the poller's first connect: no poll failed in between.
+    // The gateway comes up before the poller's first connect: no poll failed
+    // in between. That connect is `reconnectRounds + 1` rounds away (S16).
     refuse = false
-    await advance(timing.pollMs * 2)
+    await advance(timing.pollMs * timing.reconnectRounds)
+    expect(store.getState().workspace.status).toBe("failed")
+    await advance(timing.pollMs)
     await flush()
     expect(store.getState().workspace.status).toBe("ready")
     expect(Object.keys(store.getState().workspace.sessions)).toEqual(["a"])
@@ -497,69 +500,112 @@ describe("a connection that could not be made says why (#419)", () => {
     warn.mockRestore()
   })
 
-  it("S10, S11: after a failed connect the poller waits, doubling, before it connects again", async () => {
-    const warn = quiet()
-    let attempts = 0
-    const { source, follow, advance } = started(fakeGateway(), () => {
-      attempts++
-      return Promise.reject(unauthorized)
+  /** Connect attempts, counted, refused while `refuse` says so. */
+  function counted(gateway = fakeGateway()) {
+    const state = { attempts: 0, refuse: true }
+    const started_ = started(gateway, () => {
+      state.attempts++
+      return state.refuse ? Promise.reject(unauthorized) : Promise.resolve(gateway.client)
     })
-    follow()
-    await source.index().catch(() => undefined)
-    expect(attempts).toBe(1)
-    // Waits of 2, 4, 8 and then 16 polls (the cap): connects only as each ends.
-    const connectsAt: number[] = []
-    for (let poll = 1; poll <= 40; poll++) {
-      const before = attempts
+    return { ...started_, state }
+  }
+
+  /** The rounds, from 1, in which the poller connected over `rounds` rounds. */
+  async function connectRounds(
+    advance: (ms: number) => Promise<void>,
+    state: { attempts: number },
+    rounds: number,
+  ) {
+    const at: number[] = []
+    for (let round = 1; round <= rounds; round++) {
+      const before = state.attempts
       await advance(timing.pollMs)
-      if (attempts > before) connectsAt.push(poll)
+      if (state.attempts > before) at.push(round)
     }
-    expect(connectsAt).toEqual([2, 6, 14, 30])
+    return at
+  }
+
+  it("S10: after a failed connect the poller connects again only every reconnectRounds + 1 rounds", async () => {
+    const warn = quiet()
+    const { source, follow, advance, state } = counted()
+    follow()
+    await source.index().catch(() => undefined)
+    expect(state.attempts).toBe(1)
+    expect(await connectRounds(advance, state, 18)).toEqual([6, 12, 18])
     warn.mockRestore()
   })
 
-  it("S12: a call somebody makes connects at once, whatever the poller waits for", async () => {
+  it("S12: a person's call connects at once while the poller waits, and its failure starts the wait again", async () => {
     const warn = quiet()
-    const gateway = fakeGateway()
-    let refuse = true
-    let attempts = 0
-    const { source, follow } = started(gateway, () => {
-      attempts++
-      return refuse ? Promise.reject(unauthorized) : Promise.resolve(gateway.client)
-    })
+    const { source, follow, advance, state } = counted()
     follow()
     await source.index().catch(() => undefined)
-    refuse = false
-    await expect(source.index()).resolves.toMatchObject({ sessions: [] })
-    expect(attempts).toBe(2)
+    await advance(timing.pollMs * 3)
+    await expect(source.index()).rejects.toMatchObject({ reason: "signed-out" })
+    expect(state.attempts).toBe(2)
+    // Five more rounds from the person's failure, not from the first.
+    expect(await connectRounds(advance, state, 6)).toEqual([6])
     warn.mockRestore()
   })
 
-  it("S11: a connect that succeeds ends the wait: a later failure waits the shortest again", async () => {
+  it("S12: a connect that succeeds ends the wait", async () => {
     const warn = quiet()
-    const gateway = fakeGateway()
-    let refuse = true
-    let attempts = 0
-    const { source, follow, advance } = started(gateway, () => {
-      attempts++
-      return refuse ? Promise.reject(unauthorized) : Promise.resolve(gateway.client)
-    })
+    const { gateway, source, follow, advance, state } = counted()
     follow()
     await source.index().catch(() => undefined)
-    await advance(timing.pollMs * 6) // two failed waits: the next would be 8 polls
-    refuse = false
+    state.refuse = false
     await source.index()
-    refuse = true
+    state.refuse = true
     gateway.setState({
       status: "closed",
       error: new NessaConnectionClosedError(1006, ""),
     })
-    await advance(timing.pollMs) // the poll after the close connects, and fails
-    const failedAt = attempts
+    // No wait is left over: the first round after the close connects.
+    expect(await connectRounds(advance, state, 1)).toEqual([1])
+    warn.mockRestore()
+  })
+
+  it("S14: an MCP App's call while waiting is refused without connecting, and the wait is unchanged", async () => {
+    const warn = quiet()
+    const { source, follow, advance, state } = counted()
+    follow()
+    await source.index().catch(() => undefined)
+    await advance(timing.pollMs * 2)
+    for (let call = 0; call < 3; call++)
+      await expect(source.connected()).rejects.toMatchObject({ reason: "unavailable" })
+    expect(state.attempts).toBe(1)
+    // Still the first failure's wait: round 6 from it, three rounds from here.
+    expect(await connectRounds(advance, state, 4)).toEqual([4])
+    warn.mockRestore()
+  })
+
+  it("S15: a client closed for good mid-round stops the round: no read connects in its place", async () => {
+    const warn = quiet()
+    const gateway = fakeGateway()
+    const { source, follow, advance, state } = counted(gateway)
+    state.refuse = false
+    const ids = ["a", "b", "c", "d", "e"]
+    for (const id of ids) {
+      gateway.rows.set(id, row(id, { running: true }))
+      gateway.views.set(id, view(id, { messages: [running()] }))
+    }
+    follow()
+    await source.index()
+    for (const id of ids) await source.transcript(id)
+    expect(state.attempts).toBe(1)
+    gateway.once("read", async (normal) => {
+      state.refuse = true
+      gateway.setState({
+        status: "closed",
+        error: new NessaConnectionClosedError(4001, ""),
+      })
+      return normal()
+    })
     await advance(timing.pollMs)
-    expect(attempts).toBe(failedAt)
+    // The round that saw the close connected nothing; the next connects once.
+    expect(state.attempts).toBe(1)
     await advance(timing.pollMs)
-    expect(attempts).toBe(failedAt + 1)
+    expect(state.attempts).toBe(2)
     warn.mockRestore()
   })
 

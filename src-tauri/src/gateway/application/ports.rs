@@ -1359,18 +1359,15 @@ pub trait GatewayHost: Send + Sync {
 pub(crate) mod testing {
     use super::super::Gateway;
     use super::{
-        AuditDeliveryReceipt, GatewayError, GatewayReconciliationAttempt,
+        AuditDeliveryReceipt, GatewayError, GatewayHost, GatewayReconciliationAttempt,
         GatewayReconciliationAudit, GatewayReconciliationIds, GatewayReconciliationIntent,
         GatewayReconciliationJournalSession, GatewayReconciliationOutcome,
-        GatewayReconciliationOutcomeError, GatewayReconciliationRequest, GatewayStartup,
-        GatewayStartupEvents, LifecycleCommandResult, LifecycleObservation,
-        LifecycleObservationSource, LifecyclePhysicalOutcome, LifecyclePlanStep, LoginShellError,
-        LoginShellPath, ReconciliationCleanupDecision, ReconciliationCorrelation,
-        ReconciliationIncarnation, ReconciliationTarget, SearchPath,
-    };
-    use super::{
-        GatewayHost, GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
-        ReconciliationHistoryFact,
+        GatewayReconciliationOutcomeError, GatewayReconciliationProgress,
+        GatewayReconciliationRequest, GatewayStartup, GatewayStartupEvents, GatewayStopSession,
+        LifecycleCommandResult, LifecycleObservation, LifecycleObservationSource,
+        LifecyclePhysicalOutcome, LifecyclePlanStep, LoginShellError, LoginShellPath,
+        ReconciledGateway, ReconciliationCleanupDecision, ReconciliationCorrelation,
+        ReconciliationHistoryFact, ReconciliationIncarnation, ReconciliationTarget, SearchPath,
     };
     use crate::gateway::domain::value_objects::ReconciliationInitiator;
     use std::{

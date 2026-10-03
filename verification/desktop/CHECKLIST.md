@@ -568,17 +568,20 @@ The desktop app's window reads the local gateway over the credential its host
 hands a bundled surface (#419). When it cannot, it says why where the
 conversations would be.
 
-- [ ] **Signed out, the host refusing the credential, and no gateway
-  listening each say why in the chat area, with Try Again; never the sample
-  in its place.** A gateway refusing the credential says "This window isn’t
-  signed in to the local server."; a host refusal and no gateway say "Nessa
-  couldn’t read the local server’s conversations just now." The status sits
+- [ ] **Signed out, the host refusing the credential, the gateway not ready
+  yet, and no gateway listening each say why in the chat area, with Try
+  Again; never the sample in its place.** A gateway refusing the credential
+  says "This window isn’t signed in to the local server."; the rest say "Nessa
+  couldn’t read the local server’s conversations just now." While the gateway
+  is not ready the host refuses the endpoint and the credential is never asked
+  for. The status sits
   inside the chat area and the window, Try Again is at least 24px tall with
   nothing over it, and no session row or sample plugin is drawn. Try Again
   reads the index again (the status goes while it reads, which no poll does),
   asks the host again, and says the same while nothing changed. While signed
-  out the window asks the host at most twice in four seconds unprompted: it
-  backs off after a failed connect rather than polling the host every second.
+  out, and while the gateway is not ready, the window asks the host at most
+  twice in four seconds unprompted: after a failed connect it waits five poll
+  rounds rather than asking the host every second.
   _[Degrade honestly](../../CODING_STANDARDS.md#gates)._ _Check:_
   `gateway-states.mjs` (runs the real frontend as the desktop app, against a
   fake host whose endpoint and credential commands answer per scenario, and a

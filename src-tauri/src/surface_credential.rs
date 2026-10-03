@@ -1,5 +1,5 @@
-//! Native storage for the bundled surfaces: the panel, setup, and the desktop
-//! window. Renderer input never selects a file.
+//! Native storage for the panel's surface credential, which the panel, setup and
+//! the desktop window read. Renderer input never selects a file.
 use crate::composition::HostDependencies;
 use crate::gateway::{application::Gateway, infrastructure::GatewayReader};
 use std::{io::Read, path::PathBuf, sync::Arc};
@@ -201,7 +201,8 @@ impl SurfaceCredentials for SurfaceCredential {
 /// server: only the panel, setup and the desktop window may ask
 /// ([`GatewayReader`]); in a packaged build the panel and setup wait for the
 /// gateway to reconcile before anything is handed over, and the desktop window
-/// is served only once it has — it never starts one; a build without a gateway
+/// is served only once it has, without reconciling (`GatewayReader::ready`,
+/// held by the desktop-window tests below); a build without a gateway
 /// does not wait at all; and the refusal for the wrong window happens before
 /// any of those, so a stray webview cannot make the app register a service.
 async fn load_for(
@@ -265,7 +266,11 @@ mod tests {
         application::EndpointDiscovery,
         domain::{EndpointIdentity, GatewayEndpoint},
     };
-    use std::{fs, io::Write, sync::Arc, sync::Mutex};
+    use std::{
+        fs,
+        io::Write,
+        sync::{Arc, Mutex},
+    };
 
     struct FixedEndpoint(Option<GatewayEndpoint>);
 
@@ -478,7 +483,7 @@ mod tests {
 
         assert_eq!(
             load("untrusted", Some(&gateway), &credential).err(),
-            Some("Only a bundled Nessa surface can access the gateway".to_string())
+            Some("Only Nessa's own windows can read the gateway".to_string())
         );
         assert_eq!(*host.registrations.lock().unwrap(), 0);
         assert_eq!(credential.reads(), 0);

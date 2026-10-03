@@ -46,6 +46,17 @@ const scenarios = [
     says: unread,
   },
   {
+    // The refusal a window meets at every launch, until the panel has
+    // brought the gateway up (`GatewayReader`, H2′/H4′): the endpoint is
+    // refused and the credential is never asked for.
+    name: "the gateway is not ready yet",
+    endpoint: null,
+    credential: "fixture-only",
+    says: unread,
+    credentialNeverAsked: true,
+    cadence: true,
+  },
+  {
     name: "no gateway listening",
     endpoint: noGateway,
     credential: "fixture-only",
@@ -59,6 +70,11 @@ const scenarios = [
  * counted; every other command waits forever, as an unanswered host does.
  */
 function fakeHost({ endpoint, credential }) {
+  // The host's own sentences (`GatewayReader::ready`, `CredentialRefusal::NotProvisioned`).
+  const notReady = "The local server isn't ready yet"
+  const notProvisioned =
+    "No chat credential has been provisioned yet. Start the local server " +
+    "(`just start`, or `just server`), which creates one on first run."
   let callbacks = 0
   const asked = { load_gateway_endpoint: 0, load_surface_credential: 0 }
   window.__fakeHostAsked = asked
@@ -67,12 +83,12 @@ function fakeHost({ endpoint, credential }) {
     invoke(command) {
       if (command === "load_gateway_endpoint") {
         asked[command]++
-        return Promise.resolve(endpoint)
+        return endpoint === null ? Promise.reject(notReady) : Promise.resolve(endpoint)
       }
       if (command === "load_surface_credential") {
         asked[command]++
         return credential === null
-          ? Promise.reject("Only a bundled Nessa surface can access the gateway")
+          ? Promise.reject(notProvisioned)
           : Promise.resolve(credential)
       }
       return new Promise(() => {})
@@ -190,6 +206,8 @@ function check(scenario, m) {
   if (m.sample !== 0) failures.push("the sample plugin is drawn")
   if (m.asked.load_gateway_endpoint < 1)
     failures.push("the host's endpoint was never asked")
+  if (scenario.credentialNeverAsked && m.asked.load_surface_credential > 0)
+    failures.push("the credential was asked for while the gateway was not ready")
   return failures
 }
 
