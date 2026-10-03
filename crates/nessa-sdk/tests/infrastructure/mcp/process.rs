@@ -119,6 +119,7 @@ async fn a_configured_server_runs_with_only_what_it_was_given() {
             .tool_ui(&super::conversation(), &chart)
             .unwrap()
             .resource_uri()
+            .unwrap()
             .as_str(),
         "ui://fixture/chart.html"
     );
