@@ -439,7 +439,7 @@ fn review(arguments: String) -> ExecutionEvent {
         .unwrap(),
     })
 }
-pub(super) fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
+fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
     SessionSnapshot {
         id: SessionId::new("conversation").unwrap(),
         provider: ProviderIdentity::new("fixture", "model", "configuration").unwrap(),

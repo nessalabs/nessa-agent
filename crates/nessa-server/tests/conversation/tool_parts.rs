@@ -10,10 +10,10 @@
 //! call's id); what reaches the projection from a frame, and all this tests
 //! needs, is that id and the status the frame states.
 use super::projection::{bound_view, Projection};
-use super::projection_tests::{committed_tool_view, event, projection, review_snapshot};
+use super::projection_tests::{committed_tool_view, completed_snapshot, event, projection};
 use super::ConversationView;
 use nessa_sdk::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
-use nessa_sdk::domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, MessageChunk};
+use nessa_sdk::domain::agent_execution::executions::{ExecutionId, MessageChunk};
 use nessa_sdk::domain::agent_execution::tools::{
     ToolCallId, ToolCallUpdate, ToolContent, ToolStatus,
 };
@@ -197,9 +197,7 @@ fn one_tool_id_in_two_turns_is_a_part_in_each() {
             })
             .collect::<Vec<_>>()
     };
-    let mut snapshot = review_snapshot(in_turn("first"));
-    snapshot.invocations[0].request.execution_id = ExecutionId::new("first").unwrap();
-    snapshot.invocations[0].result = Some(Ok(ExecutionOutcome::Completed));
+    let mut snapshot = completed_snapshot("first", in_turn("first"));
     let mut second = snapshot.invocations[0].clone();
     second.request.execution_id = ExecutionId::new("second").unwrap();
     second.events = in_turn("second");

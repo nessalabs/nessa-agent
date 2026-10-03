@@ -240,6 +240,21 @@ describe("conversation view agreement", () => {
     )
   })
 
+  it("accepts a tool call as one part and rejects a second part for it", () => {
+    const value = view()
+    expect(conversationView(value, "conversation").messages[1]!.parts).toHaveLength(1)
+    value.messages[1]!.parts.push({
+      offset: 1,
+      kind: "tool",
+      text: "",
+      toolId: "tool",
+      noticeId: "",
+    })
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "repeats a tool call part",
+    )
+  })
+
   it("rejects a local notice identity outside the SDK sequence range", () => {
     const value = view()
     value.messages[1]!.parts.push({
