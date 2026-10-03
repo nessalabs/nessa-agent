@@ -102,10 +102,13 @@ gave it for `mcptest`. It then reports that call in the frames the harness was
 recorded sending, says DONE, and ends the turn. The frames are the recorded
 `show_chart` call from the parser fixtures above, value for value, with only
 the call's id, its tool's name and the server's result put in where the
-recording has its own (`scripted-frames.mjs`). A recording that holds the
-result where that harness is not known to put it is refused rather than
-replayed. It does not ask permission for the call, as a harness does: the
-recordings hold no permission request.
+recording has its own (`scripted-frames.mjs`). It replays only what that
+call can stand for: a successful result with `structuredContent`, of a tool
+whose name no harness rewrites. A failure, a text-only result or a dotted
+name is refused, since the harnesses report those in frames of their own. So
+is a recording that holds the recorded result anywhere it should not. It
+does not ask permission for the call, as a harness does: the recordings hold
+no permission request.
 
 It reads no credential: `startLocalGateway({ signedOut: true })` starts the
 gateway from `PATH`, `TMPDIR` and `RUST_LOG` alone, with a home of its own and

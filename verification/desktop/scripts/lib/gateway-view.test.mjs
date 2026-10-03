@@ -186,8 +186,14 @@ describe("newReview", () => {
 })
 
 describe("setupTurnEnded", () => {
-  it("a turn running, queued or read as unresolved has not ended (#448)", () => {
-    for (const status of ["running", "queued", "unresolved"])
+  it("a turn running, queued, read as unresolved (#448), or in any other status has not ended", () => {
+    for (const status of [
+      "running",
+      "queued",
+      "unresolved",
+      "injected",
+      "a-future-status",
+    ])
       assert.equal(setupTurnEnded(status), false)
   })
   it("a completed, failed or cancelled turn has", () => {

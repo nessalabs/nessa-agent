@@ -6,9 +6,10 @@
  * (`verification/desktop/scripts/mcp-apps-gateway.mjs`) both start theirs
  * here.
  *
- * It uses whatever sign-in the agent already has on this machine and writes
- * no credential of its own beyond the gateway's owner token, which stays in
- * the temporary directory and is never printed.
+ * It uses whatever sign-in the agent already has on this machine, or, started
+ * `signedOut`, none at all (`signedOutEnvironment`). It writes no credential
+ * of its own beyond the gateway's owner token, which stays in the temporary
+ * directory and is never printed.
  */
 import { spawn, spawnSync } from "node:child_process"
 import {

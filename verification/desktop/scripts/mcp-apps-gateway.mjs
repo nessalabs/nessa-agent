@@ -248,6 +248,8 @@ async function agentTurn(client, conversationId, agent) {
   // The one call of the app tool allowed, and the permissions answered for it.
   let admitted = null
   const answered = new Set()
+  // The turn's status as last read, for a turn that never ends.
+  let lastStatus = "not yet listed"
   for (let i = 0; i < 300; i += 1) {
     await sleep(1000)
     const view = await client.conversation.read(conversationId)
@@ -267,6 +269,7 @@ async function agentTurn(client, conversationId, agent) {
       )
     }
     const last = view.messages.at(-1)
+    if (last) lastStatus = last.status
     if (last && setupTurnEnded(last.status)) {
       const outcome = setupOutcome(view, SERVER, APP_TOOL)
       if (outcome.kind === "repeated") throw once(outcome.calls.map(callKey).join(", "))
@@ -287,7 +290,7 @@ async function agentTurn(client, conversationId, agent) {
       return { view, tool }
     }
   }
-  throw new CannotRun(`${agent}'s turn did not end within 300 s`)
+  throw new CannotRun(`${agent}'s turn did not end within 300 s: last read ${lastStatus}`)
 }
 
 /** The app's pending reviews in the conversation, as the gateway's view says. */

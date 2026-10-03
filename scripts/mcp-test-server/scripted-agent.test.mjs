@@ -288,3 +288,58 @@ test("an agent not named, or with no tool to call, exits 2 saying how to run it"
     assert.match(run.stderr, /usage: scripted-agent\.mjs codex\|claude <tool>/)
   }
 })
+
+/**
+ * A stand-in that answers every request with `{}`, keeps running after its
+ * input closes (as `server.mjs` does not), and writes its pid: what is
+ * stopped is then the agent's doing. Returns its `session/new` entry and
+ * `pid()`; it is killed after the test whatever happened.
+ */
+function lingering(t) {
+  const pidFile = join(mkdtempSync(join(tmpdir(), "scripted-agent-")), "pid")
+  const script = `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const m = JSON.parse(line)
+  if (m.id !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: {} }) + "\\n")
+})
+setInterval(() => {}, 1000)`
+  const pid = () => (existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : null)
+  t.after(() => {
+    if (pid() !== null && alive(pid())) process.kill(pid(), "SIGKILL")
+  })
+  return { server: { ...mcptest, name: "lingering", args: ["-e", script] }, pid }
+}
+
+/** Waits up to 5 s for process `pid` to have gone; whether it has. */
+async function gone(pid) {
+  const end = Date.now() + 5000
+  while (alive(pid) && Date.now() < end) await sleep(100)
+  return !alive(pid)
+}
+
+test("a session/new that fails stops the stand-ins it had already started", async (t) => {
+  const first = lingering(t)
+  const agent = start("codex", codexEnv)
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [first.server, { ...mcptest, command: join(here, "no-such-command") }],
+  })
+  assert.match(opened.error.message, /stand-in/)
+  assert.equal(await gone(first.pid()), true, "the first stand-in is still running")
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+})
+
+test("an agent whose input closes stops its stand-ins", async (t) => {
+  const stand = lingering(t)
+  const agent = start("codex", codexEnv)
+  const opened = await agent.request("session/new", {
+    cwd: here,
+    mcpServers: [stand.server],
+  })
+  assert.ok(opened.result.sessionId)
+  assert.equal(alive(stand.pid()), true)
+  agent.child.stdin.end()
+  assert.equal(await exited(agent.child, 5000), true)
+  assert.equal(await gone(stand.pid()), true, "the stand-in outlived its agent")
+})

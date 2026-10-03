@@ -18,6 +18,7 @@ import {
   RECORDED_TOOL,
   recording,
   setOption,
+  unreplayable,
 } from "./scripted-frames.mjs"
 import { TOOLS } from "./server.mjs"
 
@@ -103,22 +104,82 @@ describe("callFrames", () => {
     ])
   })
 
-  it("claude: a result with no structured content is reported as its text", () => {
-    const frames = callFrames("claude", recording("claude"), {
-      id: "call-2",
-      tool: "always_fails",
-      result: {
-        content: [
-          { type: "text", text: "a" },
-          { type: "text", text: "b" },
-        ],
-      },
+  it("a call the recorded one cannot stand for is refused, not invented", () => {
+    const refused = (tool, result) =>
+      AGENTS.map((agent) => {
+        assert.throws(
+          () => callFrames(agent, recording(agent), { id: "x", tool, result }),
+          /cannot replay/,
+        )
+        return unreplayable(tool, result)
+      })[0]
+    // Claude reports these in frames of their own (its recordings of them).
+    assert.match(refused("always_fails", TOOLS.always_fails.call({})), /failed/)
+    assert.match(
+      refused("link_resources", TOOLS.link_resources.call({})),
+      /no structuredContent/,
+    )
+    assert.match(refused("rows.get", TOOLS["rows.get"].call({ id: 2 })), /rewrite/)
+    assert.equal(unreplayable("review_rows", result), null)
+  })
+
+  it("claude: a recording still holding the recorded result after the replacing is refused", () => {
+    // The completion's text wrapped, as Claude wraps a failure: the whole
+    // value no longer matches, but the recorded JSON is still within it.
+    const recorded = recording("claude")
+    const call = recordedCall("claude", recorded)
+    const name = Object.keys(recorded.calls).find((key) => recorded.calls[key] === call)
+    const frames = call.map((frame, index) =>
+      index === call.length - 1
+        ? {
+            ...frame,
+            content: [
+              {
+                type: "content",
+                content: {
+                  type: "text",
+                  text: "```\n" + frame.content[0].content.text + "\n```",
+                },
+              },
+            ],
+          }
+        : frame,
+    )
+    assert.throws(
+      () =>
+        callFrames(
+          "claude",
+          { ...recorded, calls: { ...recorded.calls, [name]: frames } },
+          {
+            id: "x",
+            tool: "review_rows",
+            result,
+          },
+        ),
+      /does not hold show_chart's result/,
+    )
+  })
+
+  it("ids and names are put in literally, whatever they hold", () => {
+    const frames = callFrames("codex", recording("codex"), {
+      id: "exec-$&-$$",
+      tool: "review_rows",
+      result,
     })
-    assert.equal(frames.at(-1).rawOutput, "a\nb")
+    for (const frame of frames) assert.equal(frame.toolCallId, "exec-$&-$$")
   })
 })
 
 describe("the handshake", () => {
+  for (const agent of AGENTS)
+    it(`${agent}: the pinned harness is the one the recording came from`, () => {
+      const { name, version } = harnessInfo(agent)
+      assert.ok(
+        recording(agent).recorded.includes(`${name} ${version}`),
+        `the ${agent} recording is not of ${name} ${version}: record it again`,
+      )
+    })
+
   it("initialize names the pinned harness, at protocol 1", () => {
     assert.deepEqual(initializeResult("codex").agentInfo, {
       name: "@agentclientprotocol/codex-acp",

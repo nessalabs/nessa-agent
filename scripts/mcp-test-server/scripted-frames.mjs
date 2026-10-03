@@ -46,7 +46,7 @@ export function recordedCall(agent, recorded) {
 /**
  * The harness `agent`'s gateway runs, as its package pins it: the name and
  * version the SDK requires of `initialize`'s `agentInfo`, and the version the
- * recording came from.
+ * recording came from (`scripted-frames.test.mjs` fails when they part).
  */
 export function harnessInfo(agent) {
   const file = join(repoRoot, `crates/nessa-sdk/harnesses/${agent}-acp/package.json`)
@@ -114,50 +114,76 @@ export function setOption(agent, values, configId, value) {
 }
 
 /**
- * Claude's rendering of a tool result, as its recording shows: the JSON of
- * its `structuredContent` (its text blocks, when it has none), which it sends
- * as `toolResponse`, `rawOutput` and the text of `content`.
+ * Why a call of `tool` that returned `result` cannot be replayed in the
+ * recorded call's frames, or `null` when it can. The recorded call is a
+ * successful one, whose result has `structuredContent`, of a tool whose name
+ * no harness rewrites. The harnesses report anything else in frames of its
+ * own (Claude a failure in three frames, a text result as blocks, a dotted
+ * name with `_`), which no replay of this call would match.
  */
-const claudeSays = (result) =>
-  result.structuredContent !== undefined
-    ? JSON.stringify(result.structuredContent)
-    : result.content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text)
-        .join("\n")
+export function unreplayable(tool, result) {
+  if (!/^[A-Za-z0-9_-]+$/.test(tool)) return `${tool}: a harness may rewrite this name`
+  if (result.isError) return `${tool} failed: the recorded call succeeded`
+  if (result.structuredContent === undefined)
+    return `${tool} has no structuredContent: the recorded call's result has`
+  return null
+}
 
 /**
  * Where each harness's recording holds a result, as `[recorded, replayed]`
  * pairs: a value in a frame equal to `recorded` is replaced, whole, by
  * `replayed`. Codex sends the MCP result's `content` and `structuredContent`
- * (`null` when it has none) in `rawOutput.result`.
+ * in `rawOutput.result`; Claude the JSON of its `structuredContent` as
+ * `toolResponse`, `rawOutput` and the text of `content`.
  */
 const resultValues = {
   codex: (recorded, result) => [
     [recorded.content, result.content],
-    [recorded.structuredContent ?? null, result.structuredContent ?? null],
+    [recorded.structuredContent, result.structuredContent],
   ],
-  claude: (recorded, result) => [[claudeSays(recorded), claudeSays(result)]],
+  claude: (recorded, result) => [
+    [
+      JSON.stringify(recorded.structuredContent),
+      JSON.stringify(result.structuredContent),
+    ],
+  ],
 }
 
+/** The recorded result's text and structured JSON: what a replay must not still hold, whole or within a string. */
+const marks = (recorded) => [
+  JSON.stringify(recorded.structuredContent),
+  ...recorded.content.filter((block) => block.type === "text").map((block) => block.text),
+]
+
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+
+/** Every string within `value`. */
+const strings = (value) =>
+  typeof value === "string"
+    ? [value]
+    : value && typeof value === "object"
+      ? Object.values(value).flatMap(strings)
+      : []
 
 /**
  * The frames reporting one call of `tool`, with id `id`, which returned
  * `result` (an MCP `CallToolResult`): the recorded call's frames, with the
  * recorded call's id and tool name replaced wherever a string holds them, and
  * its result wherever the harness put it (`resultValues`). The recorded
- * result is the test server's own answer for the recorded tool. Throws when
- * the recording does not hold that result where the harness is known to put
- * it: the replay would carry the recorded result.
+ * result is the test server's own answer for the recorded tool.
+ *
+ * Throws for a call this cannot replay (`unreplayable`), and for a recording
+ * that does not hold the recorded result where the harness is known to put
+ * it, or still holds any of it after the replacing (`marks`): the replay
+ * would carry the recorded result.
  */
 export function callFrames(agent, recorded, { id, tool, result }) {
+  const refused = unreplayable(tool, result)
+  if (refused) throw new Error(`cannot replay: ${refused}`)
   const frames = recordedCall(agent, recorded)
   const recordedId = frames[0].toolCallId
-  // A recorded value that is absent marks no place in the frames.
-  const pairs = resultValues[agent](TOOLS[RECORDED_TOOL].call({}), result).filter(
-    ([from]) => from !== null,
-  )
+  const recordedResult = TOOLS[RECORDED_TOOL].call({})
+  const pairs = resultValues[agent](recordedResult, result)
   const used = new Set()
   const put = (value) => {
     const pair = pairs.findIndex(([from]) => same(value, from))
@@ -166,7 +192,7 @@ export function callFrames(agent, recorded, { id, tool, result }) {
       return pairs[pair][1]
     }
     if (typeof value === "string")
-      return value.replaceAll(recordedId, id).replaceAll(RECORDED_TOOL, tool)
+      return value.replaceAll(recordedId, () => id).replaceAll(RECORDED_TOOL, () => tool)
     if (Array.isArray(value)) return value.map(put)
     if (value && typeof value === "object")
       return Object.fromEntries(
@@ -175,7 +201,13 @@ export function callFrames(agent, recorded, { id, tool, result }) {
     return value
   }
   const replayed = frames.map(put)
-  if (used.size !== pairs.length)
+  // The recorded result's marks the replayed one does not share.
+  const own = marks(result)
+  const recordedOnly = marks(recordedResult).filter((mark) => !own.includes(mark))
+  const left = strings(replayed).some((text) =>
+    recordedOnly.some((mark) => text.includes(mark)),
+  )
+  if (used.size !== pairs.length || left)
     throw new Error(
       `the ${agent} recording does not hold ${RECORDED_TOOL}'s result where ${agent} puts it`,
     )
