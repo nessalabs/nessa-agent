@@ -15,7 +15,6 @@
 import type { SessionSummary } from "../../model/workspace-index"
 import {
   emptyTranscript,
-  type ApprovalOrigin,
   type Message,
   type Part,
   type Transcript,
@@ -32,7 +31,6 @@ import {
 import type { WorkspaceFailureReason } from "../../model/failure"
 import { sampleWorkspace } from "./sample-workspace"
 import {
-  appAnswered,
   approvedReply,
   deniedReply,
   replyTo,
@@ -50,11 +48,7 @@ export interface Schedule {
 export interface AuditedState {
   readonly revision: number
   readonly pinned: boolean
-  readonly waitingOn: {
-    readonly approvalId: string
-    readonly command: string
-    readonly origin: ApprovalOrigin
-  } | null
+  readonly waitingOn: { readonly approvalId: string; readonly command: string } | null
 }
 
 /**
@@ -122,11 +116,7 @@ export function inMemorySource(
       revision: held.revision,
       pinned: held.pinned,
       waitingOn: approval
-        ? Object.freeze({
-            approvalId: approval.id,
-            command: approval.command,
-            origin: Object.freeze({ ...approval.origin }),
-          })
+        ? Object.freeze({ approvalId: approval.id, command: approval.command })
         : null,
     })
   }
@@ -235,23 +225,6 @@ export function inMemorySource(
       updatedAt: schedule.now(),
     })
     stopScript(sessionId)
-  }
-
-  /**
-   * An app's review, answered: the answer is the app's call's, not a turn of
-   * the agent's, so nothing runs and the agent says nothing (#436, O4).
-   * Whether `transcript` waited on an app.
-   */
-  const answeredApp = (
-    sessionId: string,
-    transcript: Transcript,
-    answer: "allowed" | "denied",
-  ) => {
-    const origin = transcript.approval?.origin
-    if (origin?.kind !== "app") return false
-    putTranscript({ ...transcript, approval: null, activity: null })
-    settle(sessionId, appAnswered(origin, answer))
-    return true
   }
 
   /** What is going on in a session now, said with its summary's next revision. */
@@ -443,8 +416,6 @@ export function inMemorySource(
         },
         () => {
           const transcript = waiting(sessionId, approvalId)
-          if (answeredApp(sessionId, transcript, "allowed"))
-            return known(sessionId).revision
           const command = transcript.approval?.command ?? ""
           putSession({
             ...known(sessionId),
@@ -476,7 +447,6 @@ export function inMemorySource(
     deny: (sessionId, approvalId, initiator) =>
       audited({ sessionId, approvalId, action: "deny", initiator }, () => {
         const transcript = waiting(sessionId, approvalId)
-        if (answeredApp(sessionId, transcript, "denied")) return known(sessionId).revision
         const reply = deniedReply(transcript.approval?.command ?? "")
         putTranscript({
           ...transcript,

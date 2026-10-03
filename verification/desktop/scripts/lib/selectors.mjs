@@ -299,17 +299,6 @@ export const names = {
   approvalSession: "Release build signing",
   /** Sample sessions (in-memory source) that each wait on one approval. */
   approvalSessions: ["Release build signing", "Notarize the macOS", "Reconnect storm"],
-  /** A sample session (in-memory source) whose approval an MCP App asked for (#436). */
-  appApprovalSession: "Clean up the fixture table",
-  /** The channel it is in. */
-  appApprovalChannel: "gateway",
-  /** Its id (data-overview-item). */
-  appApprovalSessionId: "app-review",
-  /** Its overview row's accessible name: the title, then the app asking, not the agent. */
-  appApprovalRow:
-    "Clean up the fixture table. The nessa-fixture app wants to run app_delete_row {}.",
-  /** What its card's head says: the fixture server's app and the tool it named. */
-  appApprovalAsks: "The nessa-fixture app wants to run app_delete_row",
   /** A sample session (in-memory source) waiting on an approval after a long turn, by its id (data-overview-item). */
   storySessionId: "retry-budget",
   denyOnce: "Deny",
@@ -407,4 +396,21 @@ export const readinessVerification = {
   retryButton: "Check again",
   readyObservation: "false:ready",
   buttons: "button",
+}
+
+/**
+ * The app-review fixture (`fixtures/app-review/`, #436): the window over a
+ * fake gateway whose one conversation waits on an MCP App's review.
+ */
+export const appReview = {
+  page: "verification/desktop/fixtures/app-review/index.html",
+  session: "Clean up the stale rows",
+  sessionId: "app-review",
+  /** The card's head: the app by its server, and the tool it named. */
+  head: (tool) => `The mcptest app wants to run ${tool}`,
+  /** The overview row's accessible name: the title, then the app asking. */
+  row: (tool) => `Clean up the stale rows. The mcptest app wants to run ${tool} {}.`,
+  tool: "app_delete_row",
+  /** A tool's name with no break in it, as long as a server may make one. */
+  longTool: "deleteEveryStaleRowFromTheFixtureTableAndItsHistoryWithoutAsking",
 }

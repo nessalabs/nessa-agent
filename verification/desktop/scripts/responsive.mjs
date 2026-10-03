@@ -6,11 +6,6 @@
  *                   approval card), at 280/340/420/600/900 px, with a short and a
  *                   very long command: no word of the command broken, no button
  *                   label wrapped, nothing overflowing the card
- *   approval-card-app an app's review (#436): the card names the app and the
- *                   tool it asked for, not the agent, and at the same widths,
- *                   with that tool's name short and very long, the head stays
- *                   inside the card; its Agents overview row's accessible
- *                   name names the app too
  *   composer-chips  four panes while the window narrows: no two composer
  *                   controls overlap
  *   column-title    each column's title inline in the titlebar row where it fits,
@@ -107,15 +102,12 @@ import {
 const longTail =
   " --config=/Users/nessa/Library/Application-Support/nessa/releases/very/deep/path/release-signing-configuration.json"
 
-// The card's selectors, as page.evaluate can carry them: `css` holds functions.
+// The card's selectors, as page.evaluate can carry them: `css` holds functions (#441).
 const cardSelectors = {
   approvalCard: css.approvalCard,
   approvalActions: css.approvalActions,
   approvalWord: css.approvalWord,
-  approvalHead: css.approvalHead,
 }
-
-const longTool = "deleteEveryStaleRowFromTheFixtureTableAndItsHistoryWithoutAsking"
 
 const shot = async (options, page, name, locator) => {
   if (!options.shots) return
@@ -199,90 +191,6 @@ const checks = {
         )
       }
     return { widths: seen, failures }
-  },
-
-  "approval-card-app": async ({ page, engine, options }) => {
-    await page.getByText(names.appApprovalChannel, { exact: true }).first().click()
-    const row = page
-      .locator(css.sessionRow, { hasText: names.appApprovalSession })
-      .first()
-    await row.waitFor({ timeout: 3000 }).catch(() => {})
-    if (!(await row.count()))
-      throw new CannotRun(`no session row "${names.appApprovalSession}" in the list`)
-    await row.click()
-    await need(page, css.approvalCard, "the app's approval card")
-    await settled(page)
-    const failures = []
-    const said = await page.evaluate((sel) => {
-      const card = document.querySelector(sel.approvalCard)
-      return {
-        origin: card.dataset.origin ?? null,
-        head: card.querySelector(sel.approvalHead)?.textContent.trim() ?? null,
-      }
-    }, cardSelectors)
-    if (said.origin !== "app")
-      failures.push(`the card's origin is ${said.origin}, not app`)
-    if (said.head !== names.appApprovalAsks)
-      failures.push(`the head says "${said.head}", not "${names.appApprovalAsks}"`)
-    const seen = []
-    for (const long of [false, true])
-      for (const width of [280, 340, 420, 600, 900]) {
-        await page.evaluate(
-          ([sel, width, long, tool]) => {
-            let style = document.getElementById("__verify_card")
-            if (!style) {
-              style = document.createElement("style")
-              style.id = "__verify_card"
-              document.head.append(style)
-            }
-            style.textContent = `${sel.approvalCard} { width: ${width}px; box-sizing: border-box; }`
-            // A tool's name is one word, as long as its server makes it.
-            const words = document.querySelector(`${sel.approvalHead} span`)
-            if (long && words && !words.dataset.verifyLong) {
-              words.dataset.verifyLong = "1"
-              words.textContent = words.textContent.replace(/\S+$/, tool)
-            }
-          },
-          [cardSelectors, width, long, longTool],
-        )
-        await frames(page, 2)
-        const r = await page.evaluate((sel) => {
-          const card = document.querySelector(sel.approvalCard)
-          const head = card.querySelector(sel.approvalHead)
-          const inner = card.getBoundingClientRect()
-          const padding = parseFloat(getComputedStyle(card).paddingRight) || 0
-          const words = head.querySelector("span").getBoundingClientRect()
-          return {
-            card: Math.round(inner.width),
-            headPastCard: Math.max(0, Math.round(words.right - (inner.right - padding))),
-            overflow: card.scrollWidth > card.clientWidth + 1,
-          }
-        }, cardSelectors)
-        const tag = `${width}px${long ? " long tool" : ""}`
-        seen.push({ width, long, ...r })
-        if (r.headPastCard)
-          failures.push(`${tag}: the head runs ${r.headPastCard}px past the card`)
-        if (r.overflow) failures.push(`${tag}: the card overflows`)
-        await shot(
-          options,
-          page,
-          `card-app-${engine}-${long ? "long-" : ""}${width}`,
-          page.locator(css.approvalCard).first(),
-        )
-      }
-    // The Agents overview's row names the app too.
-    await page.keyboard.press(keys.overview)
-    await need(page, css.overview, "the Agents overview")
-    const rowName = await page
-      .locator(`[data-overview-item="${names.appApprovalSessionId}"]`)
-      .first()
-      .getAttribute("aria-label", { timeout: 5000 })
-      .catch(() => null)
-    if (rowName !== names.appApprovalRow)
-      failures.push(
-        `the overview row is named "${rowName}", not "${names.appApprovalRow}"`,
-      )
-    return { measured: { ...said, rowName }, widths: seen, failures }
   },
 
   "composer-chips": async ({ page, engine, layout, options }) => {

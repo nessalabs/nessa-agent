@@ -26,6 +26,7 @@ verification/
     fixtures/
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
+      app-review/           real window over a fake gateway whose conversation waits on an MCP App's review
     scripts/
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
       onboarding-readiness.mjs readiness deadline and retry in both browser engines
@@ -39,6 +40,7 @@ verification/
       focus.mjs             where the caret lands after each pane and dialog change
       responsive.mjs        approval card, composer controls and thinking control, column titles, Settings widths, a pane's home
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
+      app-review.mjs        an MCP App's review: the card and the overview row name the app, at every card width (dev server)
       mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back (dev server: imports the host's own builder), teardown
       lib/
         selectors.mjs       every selector, key chord, storage key and known-harmless message

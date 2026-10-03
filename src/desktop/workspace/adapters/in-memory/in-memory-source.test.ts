@@ -210,40 +210,6 @@ describe("the in-memory source", () => {
     expect(a.messages[0]).toBe(b.messages[0])
   })
 
-  it.each(["allow", "deny"] as const)(
-    "O4 (#436): an app's review, answered (%s), runs nothing and puts nothing in the agent's mouth",
-    async (answer) => {
-      const { source, advance, pending } = started()
-      const before = await source.transcript("app-review")
-      const asked = before.approval!
-      expect(asked.origin).toEqual({
-        kind: "app",
-        server: "nessa-fixture",
-        tool: "app_delete_row",
-      })
-      if (answer === "allow")
-        await source.approve("app-review", asked.id, "once", "person")
-      else await source.deny("app-review", asked.id, "person")
-      advance(scriptTiming.commandMs * 2)
-      const after = await source.transcript("app-review")
-      expect(after.approval).toBeNull()
-      expect(after.activity).toBeNull()
-      expect(after.messages).toEqual(before.messages)
-      expect(pending()).toBe(0)
-      const session = (await source.index()).sessions.find((s) => s.id === "app-review")
-      expect(session).toMatchObject({
-        status: "idle",
-        preview: `You ${answer === "allow" ? "allowed" : "denied"} the nessa-fixture app's app_delete_row.`,
-      })
-      expect(source.audit()[0].before?.waitingOn).toEqual({
-        approvalId: asked.id,
-        command: asked.command,
-        origin: asked.origin,
-      })
-      expect(Object.isFrozen(source.audit()[0].before?.waitingOn?.origin)).toBe(true)
-    },
-  )
-
   it("runs an approved command, or lets it go when denied", async () => {
     const { source, updates, advance } = started()
     const before = await source.transcript("retry-budget")
@@ -263,7 +229,6 @@ describe("the in-memory source", () => {
     expect(source.audit()[0].before?.waitingOn).toEqual({
       approvalId: before.approval!.id,
       command: before.approval!.command,
-      origin: { kind: "agent" },
     })
     // Taken, each names the revision it produced: the session's summary after it.
     const [allowed, denied] = source.audit()
