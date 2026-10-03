@@ -1,6 +1,7 @@
 //! Owns this Agent’s live session, accepted work, and provider cleanup.
 //! Saved conversation history belongs to SessionManager.
-//! SDK tasks keep their work permits until recording and response delivery finish.
+//! SDK tasks keep their work permits through recording and physical recovery.
+//! Scheduling retires a queued receipt's original permit before publication.
 //! Cleanup alone does not allow a new execution while accepted work is finishing.
 pub(super) use super::attachment_evidence::CloseAttempt;
 use super::{
