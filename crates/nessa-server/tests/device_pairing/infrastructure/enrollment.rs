@@ -1886,6 +1886,12 @@ async fn native_owner_store_work_runs_off_the_async_thread() {
     })
     .await;
     let store = store.get().unwrap().clone();
+    // Only the current-thread runtime runs every async task on this thread;
+    // on a multi-thread runtime this count would stay zero and prove nothing.
+    assert_eq!(
+        tokio::runtime::Handle::current().runtime_flavor(),
+        tokio::runtime::RuntimeFlavor::CurrentThread
+    );
     store.count_calls_on(std::thread::current().id());
     for command in 0..4 {
         // Each command meets its own past-due invitation, so it settles an expiry.
