@@ -267,7 +267,7 @@ text is. A call the harness cancels keeps nothing in the first place (S6).
 | S2 | as S1, past 64 KiB | the "omitted: too large" text kept, never cut JSON; at 64 KiB exactly, kept |
 | S3 | a result without `structuredContent`, or `null` | nothing |
 | S4 | a JSON-RPC error answer, or an answer too large for a frame (the harness gets `-32603`) | nothing |
-| S5 | no call id (Codex sends none), or one the ACP binding would not accept as a tool call's id (`acp::fields::identifier`: a non-empty string of at most 256 bytes) | nothing |
+| S5 | no call id (Codex sends none), or one the ACP binding would not accept as a tool call's id (`acp::fields::identifier`, then `ToolCallId`: a string of at most 256 bytes, not empty or blank) | nothing |
 | S6 | the harness cancels the call while it waits, or after its answer is in but before the stand-in has answered it | nothing; whichever the stand-in reads first decides, so a result is kept exactly when the stand-in answers the call (an answer whose write then fails is kept, and waits to be dropped) |
 | S7 | a call to a hidden tool, refused and never forwarded | nothing |
 | S8 | an answer to any other method | nothing |

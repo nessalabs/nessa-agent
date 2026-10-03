@@ -10,14 +10,7 @@ fn call_update(
     content: Option<Vec<ToolContent>>,
     mcp: bool,
 ) -> ToolCallUpdate {
-    let update = ToolCallUpdate::new(
-        ToolCallId::new("toolu_1").unwrap(),
-        None,
-        None,
-        status,
-        None,
-        content,
-    );
+    let update = ToolCallUpdate::new(id("toolu_1"), None, None, status, None, content);
     if mcp {
         update.with_mcp_tool(McpTool::new("mcptest", "report_rows").unwrap())
     } else {
@@ -28,8 +21,12 @@ fn call_update(
 /// Forwarded results holding one for `toolu_1`.
 fn forwarded_rows() -> ForwardedResults {
     let forwarded = ForwardedResults::new();
-    forwarded.record("toolu_1".into(), rows());
+    forwarded.record(id("toolu_1"), rows());
     forwarded
+}
+
+fn id(id: &str) -> ToolCallId {
+    ToolCallId::new(id).unwrap()
 }
 
 fn rows() -> ToolContent {
@@ -88,7 +85,7 @@ fn w5_a_call_naming_no_mcp_tool_takes_nothing() {
         Some(&forwarded),
     );
     assert_eq!(update.content(), &Some(vec![]));
-    assert_eq!(forwarded.take("toolu_1"), Some(rows()));
+    assert_eq!(forwarded.take(&id("toolu_1")), Some(rows()));
 }
 
 #[test]
@@ -108,7 +105,7 @@ fn w7_a_failed_update_takes_nothing() {
         Some(&forwarded),
     );
     assert_eq!(update.content(), &Some(refused));
-    assert_eq!(forwarded.take("toolu_1"), Some(rows()));
+    assert_eq!(forwarded.take(&id("toolu_1")), Some(rows()));
 }
 
 fn structured(json: &str) -> ToolContent {
@@ -119,14 +116,14 @@ fn structured(json: &str) -> ToolContent {
 fn s9_past_the_bound_the_oldest_result_is_dropped() {
     let forwarded = ForwardedResults::new();
     for call in 0..=MAX_FORWARDED_RESULTS {
-        forwarded.record(format!("toolu_{call}"), structured(&call.to_string()));
+        forwarded.record(id(&format!("toolu_{call}")), structured(&call.to_string()));
     }
     assert_eq!(forwarded.len(), MAX_FORWARDED_RESULTS);
-    assert_eq!(forwarded.take("toolu_0"), None);
-    assert_eq!(forwarded.take("toolu_1"), Some(structured("1")));
+    assert_eq!(forwarded.take(&id("toolu_0")), None);
+    assert_eq!(forwarded.take(&id("toolu_1")), Some(structured("1")));
     let last = format!("toolu_{MAX_FORWARDED_RESULTS}");
     assert_eq!(
-        forwarded.take(&last),
+        forwarded.take(&id(&last)),
         Some(structured(&MAX_FORWARDED_RESULTS.to_string()))
     );
 }
@@ -134,9 +131,9 @@ fn s9_past_the_bound_the_oldest_result_is_dropped() {
 #[test]
 fn s10_an_id_kept_again_holds_the_later_result_once() {
     let forwarded = ForwardedResults::new();
-    forwarded.record("toolu_1".into(), structured("1"));
-    forwarded.record("toolu_1".into(), structured("2"));
+    forwarded.record(id("toolu_1"), structured("1"));
+    forwarded.record(id("toolu_1"), structured("2"));
     assert_eq!(forwarded.len(), 1);
-    assert_eq!(forwarded.take("toolu_1"), Some(structured("2")));
-    assert_eq!(forwarded.take("toolu_1"), None);
+    assert_eq!(forwarded.take(&id("toolu_1")), Some(structured("2")));
+    assert_eq!(forwarded.take(&id("toolu_1")), None);
 }

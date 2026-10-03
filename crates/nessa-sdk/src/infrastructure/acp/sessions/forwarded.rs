@@ -22,7 +22,7 @@
 //! `tests/infrastructure/acp/sessions/forwarded.rs`.
 #![deny(missing_docs)]
 
-use crate::domain::agent_execution::tools::{ToolCallUpdate, ToolContent, ToolStatus};
+use crate::domain::agent_execution::tools::{ToolCallId, ToolCallUpdate, ToolContent, ToolStatus};
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -36,12 +36,13 @@ use std::{
 /// shows its text alone.
 pub const MAX_FORWARDED_RESULTS: usize = 32;
 
-/// One grant's forwarded results, by the harness's id for each call. Clones
+/// One grant's forwarded results, by the harness's id for each call — a
+/// [`ToolCallId`], so only an id the binding can report a call under is kept. Clones
 /// share them, and two values are equal when they are the same store. Only
 /// the SDK writes and takes them; a host can only compare them.
 #[derive(Clone)]
 pub struct ForwardedResults {
-    results: Arc<Mutex<VecDeque<(String, ToolContent)>>>,
+    results: Arc<Mutex<VecDeque<(ToolCallId, ToolContent)>>>,
 }
 impl ForwardedResults {
     /// An empty store, for a new grant.
@@ -54,7 +55,7 @@ impl ForwardedResults {
     /// Keep `result` for the call the harness names `call`, replacing one kept
     /// under the same id, and dropping the oldest past
     /// [`MAX_FORWARDED_RESULTS`].
-    pub(crate) fn record(&self, call: String, result: ToolContent) {
+    pub(crate) fn record(&self, call: ToolCallId, result: ToolContent) {
         let mut results = self.results.lock().expect("forwarded results");
         results.retain(|(kept, _)| *kept != call);
         if results.len() == MAX_FORWARDED_RESULTS {
@@ -65,14 +66,14 @@ impl ForwardedResults {
 
     /// The result forwarded for the tool call the harness reports as
     /// `tool_call`, taken: a second take of the same id finds nothing.
-    pub(crate) fn take(&self, tool_call: &str) -> Option<ToolContent> {
+    pub(crate) fn take(&self, tool_call: &ToolCallId) -> Option<ToolContent> {
         let mut results = self.results.lock().expect("forwarded results");
         let index = results.iter().position(|(call, _)| call == tool_call)?;
         results.remove(index).map(|(_, result)| result)
     }
 
     /// How many results are kept now.
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.results.lock().expect("forwarded results").len()
     }
@@ -114,7 +115,7 @@ pub(crate) fn attach_forwarded(
     ) else {
         return update;
     };
-    let Some(result) = forwarded.take(update.id().as_str()) else {
+    let Some(result) = forwarded.take(update.id()) else {
         return update;
     };
     let mut content = content.clone();

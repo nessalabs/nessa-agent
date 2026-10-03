@@ -29,6 +29,8 @@
 //!
 //! mcp -> acp, one way: mcp reads acp's launch entries, its identifier rule,
 //! and keeps forwarded results in the store acp's sessions own.
+//! codex_acp -> mcp: Codex's adapter bounds an MCP structured result with
+//! mcp's `structured_result`.
 //! ```
 //! Arrows show calls and translation, not ownership shared between layers. The
 //! vendor `sessions` modules are alternatives, not a chain: a host reaches one

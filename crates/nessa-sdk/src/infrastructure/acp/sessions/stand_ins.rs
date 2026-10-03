@@ -53,7 +53,9 @@ impl StandInGrant {
             ..self
         }
     }
-    /// The results this grant's stand-ins forward, when the host gave them.
+    /// The results this grant's stand-ins forward, when it was built with
+    /// them: for a host to check that a grant carries its owner's
+    /// ([`McpOwner::forwarded`](crate::infrastructure::mcp::McpOwner::forwarded)).
     pub fn forwarded(&self) -> Option<&ForwardedResults> {
         self.forwarded.as_ref()
     }

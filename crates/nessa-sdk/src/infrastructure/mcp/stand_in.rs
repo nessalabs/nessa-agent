@@ -16,6 +16,7 @@
 use super::connection::{Connection, Reply};
 use super::framing::{self, Frames, MAX_FRAME_BYTES};
 use super::{wire, McpError};
+use crate::domain::agent_execution::tools::ToolCallId;
 use crate::infrastructure::acp::fields::identifier;
 use crate::infrastructure::acp::sessions::ForwardedResults;
 use serde_json::{json, Value};
@@ -41,7 +42,7 @@ type Finished = (
     Value,
     Result<Reply, McpError>,
     Option<(u64, Vec<(String, bool)>)>,
-    Option<String>,
+    Option<ToolCallId>,
 );
 
 /// What a stand-in sends a harness that fell too far behind the server's
@@ -284,18 +285,17 @@ pub(super) fn answered_by(waiting: &HashMap<String, AbortHandle>, key: &str, tas
 const CALL_ID: &str = "claudecode/toolUseId";
 
 /// The harness's id for a forwarded `tools/call`, from its `params`: one the
-/// ACP binding would accept as a tool call's id ([`identifier`]), or `None` —
-/// as for Codex and OpenCode, which name none.
-fn call_id(params: Option<&Value>) -> Option<String> {
-    identifier(params?.get("_meta")?, CALL_ID)
-        .ok()
-        .map(str::to_owned)
+/// ACP binding would accept as a tool call's id ([`identifier`], then
+/// [`ToolCallId`]), or `None` — as for Codex and OpenCode, which name none.
+fn call_id(params: Option<&Value>) -> Option<ToolCallId> {
+    let id = identifier(params?.get("_meta")?, CALL_ID).ok()?;
+    ToolCallId::new(id).ok()
 }
 
 /// Keep the `structuredContent` of `answer` — the harness's answer, as it will
 /// be written — under `call`, when it is a result that has one. An error,
 /// including a result too large for a frame ([`answer`]), keeps nothing.
-fn keep_structured(forwarded: &ForwardedResults, call: String, answer: &Value) {
+fn keep_structured(forwarded: &ForwardedResults, call: ToolCallId, answer: &Value) {
     let Some(structured) = answer
         .get("result")
         .and_then(|result| result.get("structuredContent"))

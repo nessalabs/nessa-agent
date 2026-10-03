@@ -1,7 +1,7 @@
 //! Claude tool observations retain supported content while bounding opaque variants.
 use super::support::*;
 use crate::domain::agent_execution::sessions::SessionId;
-use crate::domain::agent_execution::tools::ToolContent;
+use crate::domain::agent_execution::tools::{ToolCallId, ToolContent};
 use crate::infrastructure::acp::sessions::{
     ForwardedResults, StandInGrant, StandInGrants, StandInSessions, StdioMcpServer,
 };
@@ -92,7 +92,8 @@ async fn a_forwarded_structured_result_reaches_the_completed_update_of_its_call(
         last("mcp__mcptest__report_rows"),
         last("mcp__mcptest__always_fails"),
     );
-    let id = |frame: &serde_json::Value| frame["toolCallId"].as_str().unwrap().to_owned();
+    let id =
+        |frame: &serde_json::Value| ToolCallId::new(frame["toolCallId"].as_str().unwrap()).unwrap();
     let _process_slot = process_test_slot().await;
     let (_root, mut config, model) = test_acp_configuration("forwarded-result", 32);
     config.mcp_servers = vec![StdioMcpServer {
@@ -130,7 +131,7 @@ async fn a_forwarded_structured_result_reaches_the_completed_update_of_its_call(
     let of = |frame: &serde_json::Value| -> Vec<_> {
         updates
             .iter()
-            .filter(|update| update.id().as_str() == id(frame))
+            .filter(|update| *update.id() == id(frame))
             .map(|update| update.content().clone())
             .collect()
     };

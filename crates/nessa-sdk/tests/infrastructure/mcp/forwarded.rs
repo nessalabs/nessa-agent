@@ -5,7 +5,7 @@
 use super::super::{framing::MAX_FRAME_BYTES, McpOwner, McpSession};
 use super::fixture::{Behaviour, FixtureLauncher};
 use super::{conversation, servers, Harness};
-use crate::domain::agent_execution::tools::{ToolContent, MAX_STRUCTURED_RESULT_BYTES};
+use crate::domain::agent_execution::tools::{ToolCallId, ToolContent, MAX_STRUCTURED_RESULT_BYTES};
 use crate::infrastructure::acp::fields::MAX_IDENTIFIER_BYTES;
 use crate::infrastructure::mcp::STRUCTURED_RESULT_OMITTED;
 use serde_json::{json, Value};
@@ -42,6 +42,10 @@ fn call(id: Value, tool: &str, arguments: Value, call: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call",
             "params": { "name": tool, "arguments": arguments,
                         "_meta": { "claudecode/toolUseId": call, "progressToken": 3 } } })
+}
+
+fn tool_call(id: &str) -> ToolCallId {
+    ToolCallId::new(id).unwrap()
 }
 
 fn structured(json: &str) -> ToolContent {
@@ -103,7 +107,7 @@ async fn s1_a_structured_result_is_kept_under_the_harness_call_id_before_the_har
         json!({ "rows": [1, 2] })
     );
     assert_eq!(
-        owner.forwarded().take("toolu_1"),
+        owner.forwarded().take(&tool_call("toolu_1")),
         Some(structured(r#"{"rows":[1,2]}"#))
     );
 }
@@ -125,7 +129,7 @@ async fn s2_a_structured_result_past_the_bound_is_kept_as_said_never_cut() {
     // The harness still has all of it.
     assert_eq!(answer["result"]["structuredContent"]["pad"], json!(past));
     assert_eq!(
-        owner.forwarded().take("toolu_big"),
+        owner.forwarded().take(&tool_call("toolu_big")),
         Some(ToolContent::text(STRUCTURED_RESULT_OMITTED))
     );
     // At the bound exactly, it is kept: `{"p":"…"}` is 8 bytes around the text.
@@ -141,7 +145,7 @@ async fn s2_a_structured_result_past_the_bound_is_kept_as_said_never_cut() {
         .await;
     harness.next().await.unwrap();
     assert_eq!(
-        owner.forwarded().take("toolu_fits"),
+        owner.forwarded().take(&tool_call("toolu_fits")),
         Some(structured(&json!({ "p": fits }).to_string()))
     );
 }
@@ -223,6 +227,7 @@ async fn s5_a_call_naming_no_usable_call_id_keeps_nothing() {
     let unusable = [
         json!(7),
         json!(""),
+        json!("   "),
         json!(null),
         json!("t".repeat(MAX_IDENTIFIER_BYTES + 1)),
     ];
@@ -244,7 +249,9 @@ async fn s5_a_call_naming_no_usable_call_id_keeps_nothing() {
         .await;
     harness.next().await.unwrap();
     assert_eq!(
-        owner.forwarded().take(&"t".repeat(MAX_IDENTIFIER_BYTES)),
+        owner
+            .forwarded()
+            .take(&tool_call(&"t".repeat(MAX_IDENTIFIER_BYTES))),
         Some(structured(r#"{"rows":1}"#))
     );
 }
@@ -294,7 +301,7 @@ async fn s1_an_is_error_result_is_kept_like_any_result() {
         "isError": true, "content": [], "structuredContent": { "reason": "busy" } } }));
     assert_eq!(harness.next().await.unwrap()["result"]["isError"], true);
     assert_eq!(
-        owner.forwarded().take("toolu_error"),
+        owner.forwarded().take(&tool_call("toolu_error")),
         Some(structured(r#"{"reason":"busy"}"#))
     );
 }
@@ -398,7 +405,7 @@ async fn s6_a_call_finished_but_cancelled_before_its_answer_was_given_keeps_noth
                 break;
             }
         }
-        let kept = owner.forwarded().take(&call_id);
+        let kept = owner.forwarded().take(&tool_call(&call_id));
         assert_eq!(kept.is_some(), answered, "run {run}");
         if answered {
             given += 1;
@@ -475,7 +482,7 @@ async fn s11_a_grant_keeps_only_its_own_stand_ins_results() {
     // The grant's clones share one store: the host's handle is the stand-in's.
     assert_eq!(owner.clone().forwarded().len(), 1);
     assert_eq!(
-        owner.forwarded().take("toolu_mine"),
+        owner.forwarded().take(&tool_call("toolu_mine")),
         Some(structured(r#"{"rows":1}"#))
     );
 }
