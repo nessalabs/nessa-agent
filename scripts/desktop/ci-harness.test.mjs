@@ -56,6 +56,11 @@ test("local and CI aggregate the same named frontend and native checks", () => {
     workflow,
     /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk\r?\n\s+timeout-minutes: \d+\r?\n/,
   )
+  // The coverage gate runs the same SDK tests again, instrumented.
+  assert.match(
+    workflow,
+    /run: bash scripts\/check-sdk-domain-coverage\.sh\r?\n\s+timeout-minutes: \d+\r?\n/,
+  )
   assert.match(
     workflow,
     /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings/,

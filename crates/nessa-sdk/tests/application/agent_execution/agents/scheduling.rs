@@ -325,7 +325,7 @@ async fn explicit_close_precedes_unclaimed_automatic_failure_settlement() {
 
 // An attachment starts the runner whether or not anything is queued. Holding
 // the scheduler lock stops that runner at its first wait; on this
-// current-thread runtime one yield polls it that far. A runner that took the
+// current-thread runtime a few yields poll it that far. A runner that took the
 // invocation slot before finding the queue empty turned this direct invoke into
 // Busy, which is how `dispatch_save_panic_does_not_inherit_previous_close_actor`
 // hung (#366). Unattached, the invoke must instead reach the lifecycle's own
@@ -337,7 +337,9 @@ async fn an_idle_queue_runner_leaves_the_invocation_slot_to_a_direct_invoke() {
     let agent = prepared(Arc::new(InMemoryStorage::new()), audit).await;
     let mut scheduler = agent.inner.scheduler.lock().await;
     agent.start_runner(&mut scheduler);
-    tokio::task::yield_now().await;
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
 
     let invoked = tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -359,4 +361,69 @@ async fn an_idle_queue_runner_leaves_the_invocation_slot_to_a_direct_invoke() {
     .await
     .expect("idle runner did not exit");
     assert!(agent.inner.invocation.try_lock().is_ok());
+}
+
+// Rows two to four of the orderings table in docs/agent_execution/scheduling.md.
+// While a direct invocation holds the slot (this test's guard), an admission
+// after the runner exited starts a new one, and it waits for the slot. Removing
+// the input empties the queue under it. When the slot is released the runner
+// owns it until it is polled, so a direct `invoke` in that window is Busy;
+// once the runner has seen the empty queue it exits and releases the slot.
+#[tokio::test]
+async fn a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops() {
+    let audit = Arc::new(PausingSettlementAudit {
+        settlements: Mutex::new(Vec::new()),
+        gate: Mutex::new(None),
+    });
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit).await;
+    let bound = std::time::Duration::from_secs(5);
+    let direct = agent.inner.invocation.clone().lock_owned().await;
+    assert!(!agent.inner.scheduler.lock().await.running);
+
+    let removed_id = ExecutionId::new("removed-while-the-runner-waits").unwrap();
+    let removed = tokio::time::timeout(bound, agent.enqueue(request(removed_id.as_str()), actor()))
+        .await
+        .expect("admission stalled")
+        .unwrap();
+    assert!(
+        agent.inner.scheduler.lock().await.running,
+        "an admission after the runner exited did not start a new one"
+    );
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        tokio::time::timeout(bound, agent.remove_queued(removed_id, actor()))
+            .await
+            .expect("removal stalled"),
+        Ok(QueueRemoval::Removed)
+    );
+    assert_eq!(
+        tokio::time::timeout(bound, removed.wait())
+            .await
+            .expect("the removed receipt did not settle"),
+        Err(AgentError::Closed)
+    );
+
+    drop(direct);
+    assert_eq!(
+        agent
+            .invoke(request("direct-before-the-runner-exits"), actor())
+            .await,
+        Err(AgentError::Busy),
+        "the released slot went to the waiting runner"
+    );
+    tokio::time::timeout(bound, async {
+        while agent.inner.scheduler.lock().await.running {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the runner did not exit after its queue emptied");
+    assert!(matches!(
+        agent
+            .invoke(request("direct-after-the-runner-exits"), actor())
+            .await,
+        Err(AgentError::AttachmentUnavailable(_))
+    ));
 }

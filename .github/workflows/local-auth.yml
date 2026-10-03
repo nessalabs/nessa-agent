@@ -369,9 +369,13 @@ jobs:
           rustup component add llvm-tools-preview
           curl -fsSL "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${VERSION}/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz" \
             | tar -xz -C /usr/local/bin cargo-llvm-cov
+      # This runs every SDK test again, serially and instrumented, so a test
+      # that deadlocks can hang here as well as in `cargo test` above (#366).
+      # Over 36 green runs it took at most 11 minutes.
       - name: Require complete SDK domain coverage
         if: runner.os == 'Linux'
         run: bash scripts/check-sdk-domain-coverage.sh
+        timeout-minutes: 40
       - run: cargo build -p nessa-server
       # This is the one platform where Tauri has a native WebDriver for the
       # WebKit host. It drives the real embedded executable through a message
