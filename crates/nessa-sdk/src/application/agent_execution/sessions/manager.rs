@@ -336,8 +336,8 @@ impl SessionManager {
                 // The writer refuses a plan that differs from the unfinished
                 // one before appending anything. It has no separate variant for
                 // that refusal, so every corruption refusal of this retry is
-                // reported as unresolved; a fenced writer's next load still
-                // reports the corruption.
+                // reported as unresolved, including a physical conflict or a
+                // store error.
                 StorageError::Corrupt(_) if unfinished => StorageError::Unresolved,
                 error => error,
             })
