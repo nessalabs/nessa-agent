@@ -2,3 +2,6 @@
 
 pub mod cedar;
 pub mod local;
+
+/// Selected native TLS and PAKE enrollment profile.
+pub mod pairing;

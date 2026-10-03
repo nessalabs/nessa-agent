@@ -368,6 +368,8 @@ a live session's tool/permission consistency boundary into independent aggregate
 
 ## Identity and access library
 
+The auth pairing producer keeps invitation/consent values in `domain/pairing/`, orchestration and receiver/private-state ports in `application/pairing/`, and OPAQUE/TLS/private storage in `adapters/pairing/`; the local registry pairing module owns persistence and device proof verification. Its owning tests remain beside the adapters and domain fixtures under `tests/domain/pairing/`. Design: [device pairing](design/auth/device-pairing.md).
+
 `crates/nessa-auth` is a workspace library with pure domain models and
 application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).
 The local backend, embedded Cedar, and `/session` gateway are implemented.

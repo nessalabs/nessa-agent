@@ -775,11 +775,7 @@ async fn dispatch_passive_read(
 }
 
 fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse {
-    let code = if ReadRefusal::from(error) == ReadRefusal::Unverifiable {
-        RecordReadErrorCode::Unverifiable
-    } else {
-        RecordReadErrorCode::Unauthorized
-    };
+    let code = RecordReadErrorCode::from(ReadRefusal::from(error));
     WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
@@ -2000,6 +1996,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn passive_socket_preserves_retryable_authority_failures() {
         for (error, expected) in [
+            (AccessError::Denied, "forbidden"),
             (AccessError::Unavailable, "unverifiable"),
             (AccessError::StaleRevision, "unverifiable"),
             (AccessError::InvalidCredential, "unauthorized"),
