@@ -138,6 +138,9 @@ impl Warnings {
         let writer = warnings.clone();
         let subscriber = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::WARN)
+            // CI's package selection unifies tracing-subscriber's `ansi`
+            // feature in, which would colour field names in the capture.
+            .with_ansi(false)
             .with_writer(move || writer.clone())
             .finish();
         (warnings, tracing::subscriber::set_default(subscriber))
@@ -577,7 +580,7 @@ fn run_case_in_child_process(child: &str, case: &str) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "{child} {case} must not abort or fail: {:?}\n{stderr}",
+        "{child} {case} must not abort or fail: {:?}\n{stdout}\n{stderr}",
         output.status
     );
     assert!(
