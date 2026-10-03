@@ -10,6 +10,7 @@ pub mod composition;
 pub mod conversation;
 pub mod core;
 mod desktop_runtime;
+pub mod device_pairing;
 pub mod env;
 pub mod health;
 pub mod mcp_servers;
