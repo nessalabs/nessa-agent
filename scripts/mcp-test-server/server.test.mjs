@@ -3,7 +3,15 @@ import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
-import { APP_MIME_TYPE, CHART_URI, PROTOCOL_VERSION, TOOLS, answer } from "./server.mjs"
+import {
+  APP_CALLS,
+  APP_MIME_TYPE,
+  CHART_URI,
+  PROTOCOL_VERSION,
+  REVIEW_URI,
+  TOOLS,
+  answer,
+} from "./server.mjs"
 
 const call = (name, args) =>
   answer({
@@ -23,14 +31,61 @@ test("tools/list declares every tool without its implementation, and the app too
   const { tools } = answer({ jsonrpc: "2.0", id: 1, method: "tools/list" }).result
   assert.deepEqual(
     tools.map((tool) => tool.name),
-    ["report_rows", "link_resources", "rows.get", "always_fails", "show_chart"],
+    [
+      "report_rows",
+      "link_resources",
+      "rows.get",
+      "always_fails",
+      "show_chart",
+      "review_rows",
+      "app_delete_row",
+      "model_only_note",
+      "model_only_chart",
+    ],
   )
   assert.ok(
     tools.every((tool) => !("call" in tool) && tool.inputSchema.type === "object"),
   )
-  const chart = tools.find((tool) => tool.name === "show_chart")
-  assert.equal(chart._meta.ui.resourceUri, CHART_URI)
-  assert.equal(tools.filter((tool) => tool._meta).length, 1)
+  const named = (name) => tools.find((tool) => tool.name === name)
+  assert.equal(named("show_chart")._meta.ui.resourceUri, CHART_URI)
+  assert.equal(named("review_rows")._meta.ui.resourceUri, REVIEW_URI)
+  // The tools before the app's own declare nothing new.
+  assert.deepEqual(
+    tools.filter((tool) => tool._meta).map((tool) => tool.name),
+    [
+      "show_chart",
+      "review_rows",
+      "app_delete_row",
+      "model_only_note",
+      "model_only_chart",
+    ],
+  )
+})
+
+test("the review app's tools: one destructive for apps only, two hidden from apps", () => {
+  const { tools } = answer({ jsonrpc: "2.0", id: 1, method: "tools/list" }).result
+  const named = (name) => tools.find((tool) => tool.name === name)
+  const destructive = named(APP_CALLS.destructive)
+  assert.deepEqual(destructive._meta.ui, { visibility: ["app"] })
+  assert.deepEqual(destructive.annotations, {
+    readOnlyHint: false,
+    destructiveHint: true,
+  })
+  // No UI of its own: `visibility` alone hides it from apps.
+  assert.deepEqual(named(APP_CALLS.hiddenNoUi)._meta.ui, { visibility: ["model"] })
+  assert.deepEqual(named(APP_CALLS.hiddenWithUi)._meta.ui, {
+    resourceUri: CHART_URI,
+    visibility: ["model"],
+  })
+  for (const name of [APP_CALLS.hiddenNoUi, APP_CALLS.hiddenWithUi, "review_rows"])
+    assert.equal(named(name).annotations.readOnlyHint, true, name)
+
+  assert.equal(call(APP_CALLS.destructive, { id: 2 }).content[0].text, "Deleted row 2.")
+  assert.equal(call(APP_CALLS.destructive, { id: 9 }).isError, true)
+  assert.equal(call(APP_CALLS.destructive, {}).isError, true)
+  assert.equal(call(APP_CALLS.hiddenNoUi, {}).isError, undefined)
+  assert.equal(call(APP_CALLS.hiddenWithUi, {}).isError, undefined)
+  assert.deepEqual(call("review_rows", {}).structuredContent, { rows: [1, 2] })
 })
 
 test("each tool answers with the result shape it exists to exercise", () => {
@@ -74,15 +129,122 @@ test("the app tool's UI resource is listed and read with the MCP Apps MIME type"
   const { resources } = answer({ jsonrpc: "2.0", id: 1, method: "resources/list" }).result
   assert.deepEqual(resources, [
     { uri: CHART_URI, name: "chart", mimeType: APP_MIME_TYPE },
+    { uri: REVIEW_URI, name: "review", mimeType: APP_MIME_TYPE },
   ])
-  const { contents } = answer({
+  for (const uri of [CHART_URI, REVIEW_URI]) {
+    const { contents } = answer({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "resources/read",
+      params: { uri },
+    }).result
+    assert.equal(contents[0].uri, uri)
+    assert.equal(contents[0].mimeType, APP_MIME_TYPE)
+    assert.match(contents[0].text, /^<!doctype html>/)
+    assert.deepEqual(contents[0]._meta.ui.csp, {
+      connectDomains: [],
+      resourceDomains: [],
+    })
+  }
+})
+
+test("the review app speaks the ui/* bridge and calls each of its tools by name", () => {
+  const { text } = answer({
     jsonrpc: "2.0",
     id: 1,
     method: "resources/read",
-    params: { uri: CHART_URI },
-  }).result
-  assert.equal(contents[0].mimeType, APP_MIME_TYPE)
-  assert.match(contents[0].text, /^<!doctype html>/)
+    params: { uri: REVIEW_URI },
+  }).result.contents[0]
+  for (const said of [
+    '"ui/initialize"',
+    '"ui/notifications/initialized"',
+    '"ui/notifications/tool-result"',
+    '"ui/notifications/size-changed"',
+    '"ui/request-display-mode"',
+    '"tools/call"',
+    ...Object.values(APP_CALLS).map((name) => JSON.stringify(name)),
+  ])
+    assert.ok(text.includes(said), said)
+  // The names are written in by the server, never left as placeholders.
+  assert.ok(!text.includes("${"))
+})
+
+/**
+ * The review app's own script, run against a stub host: the frame's parent,
+ * whose posts are recorded, and a document with just what the app touches.
+ * The host answers the app's `ui/initialize` with `hostContext`, then sends
+ * the tool result. Returns the tools the app called and its body's attributes.
+ */
+async function runReviewApp(hostContext) {
+  const { text } = answer({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "resources/read",
+    params: { uri: REVIEW_URI },
+  }).result.contents[0]
+  const script = text.match(/<script>([\s\S]*)<\/script>/)[1]
+  const posted = []
+  const parent = { postMessage: (message) => posted.push(message) }
+  const listeners = []
+  const attributes = {}
+  const element = () => ({ textContent: "", addEventListener() {} })
+  const document = {
+    body: { setAttribute: (name, value) => (attributes[name] = value) },
+    documentElement: { scrollWidth: 0, scrollHeight: 0 },
+    getElementById: element,
+    querySelector: element,
+  }
+  const window = {
+    parent,
+    addEventListener: (type, listener) => type === "message" && listeners.push(listener),
+  }
+  const { runInNewContext } = await import("node:vm")
+  runInNewContext(script, {
+    window,
+    document,
+    Promise,
+    ResizeObserver: class {
+      observe() {}
+    },
+  })
+  const deliver = (data) =>
+    listeners.forEach((listener) => listener({ source: parent, data }))
+  const initialize = posted.find((message) => message.method === "ui/initialize")
+  deliver({ jsonrpc: "2.0", id: initialize.id, result: { hostContext } })
+  await new Promise((done) => setImmediate(done))
+  deliver({
+    jsonrpc: "2.0",
+    method: "ui/notifications/tool-result",
+    params: { structuredContent: { rows: [1, 2] } },
+  })
+  return {
+    calls: posted
+      .filter((message) => message.method === "tools/call")
+      .map((message) => message.params.name),
+    attributes,
+  }
+}
+
+test("the review app, inline, calls each of its tools once it has its tool result", async () => {
+  const want = [APP_CALLS.destructive, APP_CALLS.hiddenNoUi, APP_CALLS.hiddenWithUi]
+  const told = await runReviewApp({ displayMode: "inline" })
+  assert.deepEqual(told.calls, want)
+  assert.equal(told.attributes["data-review-mode"], "inline")
+  // A host context with no display mode is the spec's default: inline.
+  const untold = await runReviewApp({})
+  assert.deepEqual(untold.calls, want)
+  assert.equal(untold.attributes["data-review-mode"], "inline")
+  assert.equal(untold.attributes["data-review-state"], "live")
+  // Nor with no host context at all.
+  const none = await runReviewApp(undefined)
+  assert.deepEqual(none.calls, want)
+  assert.equal(none.attributes["data-review-mode"], "inline")
+})
+
+test("the review app, fullscreen, makes no calls of its own", async () => {
+  const { calls, attributes } = await runReviewApp({ displayMode: "fullscreen" })
+  assert.deepEqual(calls, [])
+  assert.equal(attributes["data-review-mode"], "fullscreen")
 })
 
 test("unknown tools, resources and methods are JSON-RPC errors; notifications get no answer", () => {
@@ -125,5 +287,5 @@ test("the stdio loop answers each line, including a parse error, in order", asyn
       [2, false],
     ],
   )
-  assert.equal(Object.keys(TOOLS).length, 5)
+  assert.equal(Object.keys(TOOLS).length, 9)
 })
