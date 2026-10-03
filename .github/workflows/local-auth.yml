@@ -305,7 +305,15 @@ jobs:
       # adapters, so each OS gives its own answer to them too.
       - run: cargo clippy -p nessa-local-database --all-targets -- -D warnings
       - run: cargo test -p nessa-local-database
+      # A test that deadlocks here held this job for six hours, until GitHub's
+      # job limit cancelled it (#366). Over 53 green runs this step took at most
+      # 7 minutes on Linux, 11 on macOS and 19 on Windows, compile included, so
+      # 45 minutes is a margin over a cold cache rather than a tight fit. The
+      # stuck test is still named: libtest prints "has been running for over 60
+      # seconds" for each test still running, and that line is in the log before
+      # the step is cancelled.
       - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk
+        timeout-minutes: 45
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs
       # Not on Linux: `gateway-contract` is an ubuntu-latest job and already
@@ -361,9 +369,13 @@ jobs:
           rustup component add llvm-tools-preview
           curl -fsSL "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${VERSION}/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz" \
             | tar -xz -C /usr/local/bin cargo-llvm-cov
+      # This runs every SDK test again, serially and instrumented, so a test
+      # that deadlocks can hang here as well as in `cargo test` above (#366).
+      # Over 36 green runs it took at most 11 minutes.
       - name: Require complete SDK domain coverage
         if: runner.os == 'Linux'
         run: bash scripts/check-sdk-domain-coverage.sh
+        timeout-minutes: 40
       - run: cargo build -p nessa-server
       # This is the one platform where Tauri has a native WebDriver for the
       # WebKit host. It drives the real embedded executable through a message

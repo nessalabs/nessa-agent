@@ -210,6 +210,17 @@ struct Pending {
     _work: WorkPermit,
 }
 impl Scheduler {
+    // Nothing for a runner to select or settle. Cancellation drains the queue
+    // before it settles each owner, so an owner whose settlement was cut short
+    // stays in `pending` with no queue entry. A runner then takes the slot:
+    // it settles that owner if it is stopped. Otherwise, with nothing else
+    // queued, it passes over it and exits, leaving it to the next
+    // `cancel_pending`, which collects owners whether or not they are queued.
+    // Both orderings are rows of the table in
+    // docs/agent_execution/scheduling.md, each with its test.
+    fn has_no_work(&self) -> bool {
+        self.queue.is_empty() && self.pending.is_empty()
+    }
     pub(super) fn is_idle(&self) -> bool {
         !self.running && self.queue.is_empty()
     }
@@ -886,6 +897,19 @@ impl Agent {
 
     async fn run_queue(&self) {
         loop {
+            // A runner with nothing to select or settle exits without the
+            // invocation slot: holding it would turn a direct `invoke` into
+            // Busy with nothing to overlap. This check, `running` and admission
+            // share the scheduler lock, so an admission after it starts a new
+            // runner. The orderings and their tests are in
+            // docs/agent_execution/scheduling.md (#366).
+            {
+                let mut scheduler = self.inner.scheduler.lock().await;
+                if scheduler.has_no_work() {
+                    scheduler.running = false;
+                    return;
+                }
+            }
             // Wait for a direct invocation without removing pending work: close
             // can still cancel every waiting item and prevent automatic restart.
             let _active = self.inner.invocation.lock().await;

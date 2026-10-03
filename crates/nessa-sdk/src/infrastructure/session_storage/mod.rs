@@ -12,6 +12,9 @@
 //! That cache retains no worker or semantic body.
 //! `record_changes` publishes payloadless interest only at durable save completion
 //! and Reset receipts. Closure preserves actual writer/read physical ownership.
+//! Public producer/source/discovery acceptance lives under the external storage
+//! integration tests; inherited private codec/allocation fixtures remain limited
+//! implementation observations, not public acceptance.
 //! TranscriptFold validates unit checkpoints through the one SDK session fold. A
 //! committed read cache advances from a fixed head and remains separate from
 //! the writer's observed state.
