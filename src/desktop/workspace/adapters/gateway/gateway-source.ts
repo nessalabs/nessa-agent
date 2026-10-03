@@ -445,14 +445,19 @@ export function gatewaySource(options: {
           if (!caller()) throw new WorkspaceSourceError("unavailable")
           const against = rows.get(sessionId)
           const removed = removals.get(sessionId) ?? 0
-          const view = await within(async () =>
-            (await client()).conversation.read(sessionId),
-          ).catch((error: unknown) => {
+          let view: ConversationView
+          try {
+            view = await within(async () => (await client()).conversation.read(sessionId))
+          } catch (error) {
+            if (!gone(error)) throw error
             // The gateway's own word that the conversation is gone takes the
-            // session out, even where no complete list would (R9).
-            if (gone(error)) remove(sessionId)
+            // session out, even where no complete list would (R9) — unless it
+            // crossed a removal, when it speaks for a listing no longer held:
+            // a session listed again is asked again (S3c).
+            if ((removals.get(sessionId) ?? 0) !== removed) continue
+            remove(sessionId)
             throw error
-          })
+          }
           if ((removals.get(sessionId) ?? 0) === removed)
             return applyRead(sessionId, view, against)
         }

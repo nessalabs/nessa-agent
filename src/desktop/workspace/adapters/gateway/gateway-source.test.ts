@@ -1392,6 +1392,33 @@ describe("review after ready", () => {
     expect(kinds(updates)).not.toContain("resync")
   })
 
+  it("R9: a read answered gone after its session was taken out and listed again is asked again, and takes nothing out", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set("a", view("a", { revision: "1", messages: [running()] }))
+    await source.index()
+    await source.transcript("a")
+    follow()
+    const held = deferred<unknown>()
+    gateway.once("read", () => held.promise)
+    await advance(timing.pollMs)
+    gateway.rows.delete("a")
+    await source.index()
+    gateway.rows.set("a", row("a", { running: true }))
+    await source.index()
+    const removedBefore = updates.filter((update) => update.kind === "session-removed")
+    held.reject(rpcCode("conversation_not_found"))
+    await flush()
+    expect(updates.filter((update) => update.kind === "session-removed")).toEqual(
+      removedBefore,
+    )
+    expect((await source.index()).sessions).toEqual([
+      expect.objectContaining({ id: "a" }),
+    ])
+    // Asked again for the session listed again, which answers.
+    expect(gateway.count("read")).toBe(3)
+  })
+
   it("R10: a read whose caller was answered while it waited its turn asks nothing", async () => {
     const { gateway, source, advance } = started()
     gateway.views.set("a", view("a"))
