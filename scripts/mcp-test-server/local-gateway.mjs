@@ -31,6 +31,13 @@ export const SERVER = "mcptest"
 /** The test MCP server itself. */
 export const serverScript = join(here, "server.mjs")
 
+/** The model each agent runs in a live check, by agent. */
+export const MODELS = {
+  claude: "claude-sonnet-5",
+  codex: "gpt-5.6-terra",
+  opencode: "opencode/nemotron-3-ultra-free",
+}
+
 /**
  * How to start `agent`'s harness: its argv, the model it runs, and a
  * directory to put first on its `PATH` (or `null`). `MCP_LIVE_HARNESSES`
@@ -51,7 +58,7 @@ export function agentCommand(agent) {
           process.execPath,
           entry("claude-acp", "@agentclientprotocol/claude-agent-acp/dist/index.js"),
         ],
-        model: "claude-sonnet-5",
+        model: MODELS.claude,
         path: null,
       }
     case "codex":
@@ -60,7 +67,7 @@ export function agentCommand(agent) {
           process.execPath,
           entry("codex-acp", "@agentclientprotocol/codex-acp/dist/index.js"),
         ],
-        model: "gpt-5.6-terra",
+        model: MODELS.codex,
         path: join(harnesses, "codex-acp", "node_modules", ".bin"),
       }
     case "opencode": {
@@ -69,7 +76,7 @@ export function agentCommand(agent) {
         throw new Error("set MCP_LIVE_OPENCODE to an Opencode 1.18.31 binary")
       return {
         argv: [binary, "acp"],
-        model: "opencode/nemotron-3-ultra-free",
+        model: MODELS.opencode,
         path: null,
       }
     }
@@ -100,6 +107,8 @@ export async function exited(child, ms) {
  * @param {string} o.model the agent's model
  * @param {string|null} [o.path] a directory to put first on the gateway's `PATH`
  * @param {{ command: string, args: string[] }} o.mcpServer how the gateway starts `mcptest`
+ * @param {Record<string, string|undefined>} [o.env] the gateway's environment
+ *   over this process's: a name set to `undefined` is left out
  * @returns the gateway: `{ directory, token, url, log, server, stop }`. `token`
  *   is the owner token file's path; `log()` the gateway's output so far; `stop()`
  *   stops it, waits for it and for the rest of its output (up to 2 s more), and
@@ -145,7 +154,10 @@ export async function startLocalGateway(o) {
       NESSA_DATA_DIR: directory,
       NESSA_INSTANCE: o.instance,
       ...(o.path ? { PATH: `${o.path}:${process.env.PATH}` } : {}),
+      ...o.env,
     }
+    for (const [name, value] of Object.entries(env))
+      if (value === undefined) delete env[name]
     const token = join(directory, "owner.token")
     const init = spawnSync(
       nessa,

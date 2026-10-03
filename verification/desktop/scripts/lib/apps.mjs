@@ -32,3 +32,14 @@ export function oneMount(count) {
   if (count === 0) return "the call has no inline app frame"
   return `the call is drawn as ${count} inline app frames, not one (#418)`
 }
+
+/**
+ * What is wrong with `count` transcript steps drawn for one call, or null
+ * when there is exactly one. A step is drawn per tool part of a turn, so a
+ * second one is the same call drawn again (#418).
+ */
+export function oneCard(count) {
+  if (count === 1) return null
+  if (count === 0) return "the call has no step in the transcript"
+  return `the call is drawn as ${count} transcript steps, not one (#418)`
+}
