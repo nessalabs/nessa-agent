@@ -1008,6 +1008,26 @@ async fn every_automatic_invalidation_retains_its_typed_cause_without_an_initiat
     }
     assert!(invalidation_reason(AccessError::Unavailable).is_none());
     assert!(invalidation_reason(AccessError::Unsupported).is_none());
+    // This is the public invalidation mapping, not an enrollment HTTP pipeline.
+    assert!(invalidation_reason(AccessError::Denied).is_none());
+    let path = dir.path().join("policy-denial.jsonl");
+    let store = reopen(&path).unwrap();
+    let id = "e".repeat(64);
+    let original = session(None).await;
+    store
+        .insert(id.clone(), original.clone(), None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        ReadBrowserSession { store: &store }
+            .execute(&id, 101)
+            .await
+            .unwrap(),
+        Some(original.clone())
+    );
+    drop(store);
+    let restored = reopen(&path).unwrap();
+    assert_eq!(restored.get(id).await.unwrap(), Some(original));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

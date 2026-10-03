@@ -452,7 +452,22 @@ impl Agent {
     /// `provider` supplies immutable identity and model capabilities;
     /// `session_manager` transfers its exclusive storage lease into this Agent;
     /// `audit` receives mandatory attachment and scheduling evidence. Identity and
-    /// storage failures return [`AgentInitializationError`]. Provider startup is a
+    /// storage failures return [`AgentInitializationError`].
+    ///
+    /// Opening a new conversation, or recording that a restart cleared its saved
+    /// queue, is saved before this returns. When an earlier `prepare` left that
+    /// save unfinished — its decision durable, its completion refused or never
+    /// written — this call derives the same decision from the same saved state
+    /// and completes it. Identity and storage failures are reported first. When
+    /// the storage refuses that decision because the unfinished save's durable
+    /// units differ from it, or when initialization has nothing to save, this
+    /// returns
+    /// [`StorageError::Unresolved`](crate::application::agent_execution::sessions::StorageError::Unresolved)
+    /// with nothing written. Storage compares only durable units, so a longer
+    /// plan written directly through
+    /// [`SessionStorageLease::save_changes`](crate::application::agent_execution::sessions::SessionStorageLease::save_changes)
+    /// whose durable prefix is exactly this decision is completed as this
+    /// decision. Provider startup is a
     /// separate, explicitly authorized operation through
     /// [`Self::authorize_attachment`] and [`Self::start_attachment`].
     ///
@@ -1339,15 +1354,15 @@ impl Agent {
                 _ = async {}, if stop_after_ready_settlement => break,
                 _ = self.inner.manager.await_admission_writes(), if message_deadline.is_none() => {},
                 () = async {
-                    if let Some(Some((_, deadline))) = message_deadline {
-                        self.inner.manager.wait_for_message_deadline(deadline).await;
+                    if let Some(Some((_, deadline))) = message_deadline.as_ref() {
+                        self.inner.manager.wait_for_message_deadline(*deadline).await;
                     } else {
                         std::future::pending::<()>().await;
                     }
                 }, if storage_failure.is_none() => {
-                    if let Some(Some((generation, _))) = message_deadline {
+                    if let Some(Some((generation, _))) = message_deadline.as_ref() {
                         if let Err(error) = await_supervised_save(
-                            self.inner.manager.flush_due_messages(generation),
+                            self.inner.manager.flush_due_messages(generation.clone()),
                             execution.as_mut(),
                             &mut stop_notice,
                             &mut stop_observed,

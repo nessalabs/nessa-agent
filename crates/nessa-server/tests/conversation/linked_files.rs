@@ -16,8 +16,8 @@ use crate::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
     application::agent_execution::sessions::{
-        CommittedSession, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-        StorageFuture,
+        CommittedSession, SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+        SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
     },
     domain::agent_execution::sessions::SessionId,
     infrastructure::session_storage::InMemoryStorage,
@@ -426,16 +426,21 @@ struct RefuseFirstInputLease {
     inner: Box<dyn SessionStorageLease>,
 }
 impl SessionStorageLease for RefuseFirstInputLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.inner.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         // Opening the session saves a snapshot with nothing in it; the first
         // one carrying an input is the admission to refuse.
         if !snapshot.invocations.is_empty() && !self.refused.swap(true, Ordering::SeqCst) {
             return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
         }
-        self.inner.save(snapshot)
+        self.inner.save_changes(binding, snapshot, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.inner.erase()

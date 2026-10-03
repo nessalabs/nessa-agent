@@ -2,7 +2,10 @@
 use super::*;
 use crate::application::agent_execution::{
     providers::{ProviderIdentity, ProviderSessionState},
-    sessions::{validation::VALIDATION_CALLS, MessageCommitSleep, StorageFuture},
+    sessions::{
+        validation::VALIDATION_CALLS, MessageCommitSleep, SessionLoad, SessionSaveReceipt,
+        StorageFuture,
+    },
 };
 use crate::domain::agent_execution::{
     executions::{InvocationKind, InvocationStage, MessageChunk},
@@ -33,20 +36,16 @@ struct PauseAfterSave {
 }
 
 impl SessionStorageLease for PauseAfterSave {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.inner.load()
-    }
-
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
-        self.inner.save(snapshot)
     }
 
     fn save_changes(
         &self,
         generation: SessionSaveGeneration,
         snapshot: SessionSnapshot,
-        changes: Vec<SessionChange>,
-    ) -> StorageFuture<'_, ()> {
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
             if self.pause_before.swap(false, Ordering::SeqCst) {
                 self.started.wait().await;
@@ -56,9 +55,7 @@ impl SessionStorageLease for PauseAfterSave {
                     .expect("test releases save")
                     .forget();
             }
-            self.inner
-                .save_changes(generation, snapshot, changes)
-                .await?;
+            let receipt = self.inner.save_changes(generation, snapshot, units).await?;
             if self.pause_after.swap(false, Ordering::SeqCst) {
                 self.started.wait().await;
                 self.release
@@ -67,7 +64,7 @@ impl SessionStorageLease for PauseAfterSave {
                     .expect("test releases save")
                     .forget();
             }
-            Ok(())
+            Ok(receipt)
         })
     }
 
@@ -90,9 +87,9 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
     let initial = super::super::records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
     inner
         .save_changes(
-            SessionSaveGeneration::initial(),
+            inner.load().await.unwrap().binding().clone(),
             initial.clone(),
-            vec![opened],
+            vec![SessionSaveUnit::new(vec![opened]).unwrap()],
         )
         .await
         .unwrap();
@@ -103,9 +100,9 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
         super::super::records::fold_changes(Some(&initial), std::slice::from_ref(&input)).unwrap();
     inner
         .save_changes(
-            SessionSaveGeneration::initial().checked_next().unwrap(),
+            inner.load().await.unwrap().binding().clone(),
             initial.clone(),
-            vec![input],
+            vec![SessionSaveUnit::new(vec![input]).unwrap()],
         )
         .await
         .unwrap();
@@ -119,11 +116,7 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
         started: Barrier::new(2),
         release: Semaphore::new(0),
     });
-    let pending_generation = SessionSaveGeneration::initial()
-        .checked_next()
-        .unwrap()
-        .checked_next()
-        .unwrap();
+    let pending_generation = lease.load().await.unwrap().binding().clone();
     let manager = Arc::new(SessionManager {
         id,
         message_commit_clock: Arc::new(
@@ -131,12 +124,12 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
         ),
         storage_lease: lease.clone(),
         evidence: Arc::new(Mutex::new(Evidence {
-            save_generation: pending_generation,
+            save_generation: Some(pending_generation.clone()),
             observed: Some(observed.clone()),
             committed: Some(initial),
-            pending: vec![first],
+            pending: vec![SessionSaveUnit::new(vec![first]).unwrap()],
             message_commit: Some(PendingMessageCommit {
-                generation: pending_generation,
+                generation: pending_generation.clone(),
                 deadline: std::time::Duration::ZERO,
                 bytes: 1,
                 retained_bytes: 1,
@@ -149,7 +142,8 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
     });
     manager.begin_dispatch(&active_id);
     let waiting = manager.clone();
-    let caller = tokio::spawn(async move { waiting.flush_due_messages(pending_generation).await });
+    let caller_generation = pending_generation.clone();
+    let caller = tokio::spawn(async move { waiting.flush_due_messages(caller_generation).await });
     lease.started.wait().await;
     let committed_rows: i64 =
         rusqlite::Connection::open(directory.path().join("sessions/records.sqlite3"))
@@ -157,7 +151,7 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
             .query_row("SELECT COUNT(*) FROM event_records", [], |row| row.get(0))
             .unwrap();
     assert_eq!(
-        committed_rows, 3,
+        committed_rows, 6,
         "record is visible before save acknowledgement"
     );
     caller.abort();
@@ -168,18 +162,21 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
     assert_eq!(evidence.pending.len(), 1);
     assert_ne!(evidence.committed.as_ref(), Some(&observed));
     assert_eq!(
-        evidence.message_commit.map(|pending| pending.generation),
-        Some(pending_generation)
+        evidence
+            .message_commit
+            .as_ref()
+            .map(|pending| pending.generation.clone()),
+        Some(pending_generation.clone())
     );
     drop(evidence);
     manager
         .flush_due_messages(pending_generation)
         .await
         .unwrap();
-    assert_eq!(lease.load().await.unwrap(), Some(observed));
+    assert_eq!(lease.load().await.unwrap().snapshot(), Some(&observed));
     manager.event(text(&active_id)).await.unwrap();
     manager.flush_observed().await.unwrap();
-    let latest = lease.load().await.unwrap().unwrap();
+    let latest = lease.load().await.unwrap().snapshot().cloned().unwrap();
     assert_eq!(latest.invocations[0].events.len(), 2);
     assert_eq!(
         latest.invocations[0].events[0],
@@ -190,7 +187,7 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
         .query_row("SELECT COUNT(*) FROM event_records", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        rows, 4,
+        rows, 8,
         "the retry acknowledged one decision and the new generation stored equal content"
     );
     drop(manager);
@@ -213,9 +210,9 @@ async fn measure_growing_history_message_commit_latency() {
     let initial = super::super::records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
     inner
         .save_changes(
-            SessionSaveGeneration::initial(),
+            inner.load().await.unwrap().binding().clone(),
             initial.clone(),
-            vec![opened],
+            vec![SessionSaveUnit::new(vec![opened]).unwrap()],
         )
         .await
         .unwrap();
@@ -226,23 +223,20 @@ async fn measure_growing_history_message_commit_latency() {
         super::super::records::fold_changes(Some(&initial), std::slice::from_ref(&input)).unwrap();
     inner
         .save_changes(
-            SessionSaveGeneration::initial().checked_next().unwrap(),
+            inner.load().await.unwrap().binding().clone(),
             initial.clone(),
-            vec![input],
+            vec![SessionSaveUnit::new(vec![input]).unwrap()],
         )
         .await
         .unwrap();
+    let current_binding = inner.load().await.unwrap().binding().clone();
     let clock = Arc::new(crate::infrastructure::session_storage::RuntimeMessageCommitClock::new());
     let manager = SessionManager {
         id,
         message_commit_clock: clock,
         storage_lease: Arc::from(inner),
         evidence: Arc::new(Mutex::new(Evidence {
-            save_generation: SessionSaveGeneration::initial()
-                .checked_next()
-                .unwrap()
-                .checked_next()
-                .unwrap(),
+            save_generation: Some(current_binding),
             observed: Some(initial.clone()),
             committed: Some(initial),
             ..Evidence::default()
@@ -307,9 +301,9 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
     let initial = super::super::records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
     inner
         .save_changes(
-            SessionSaveGeneration::initial(),
+            inner.load().await.unwrap().binding().clone(),
             initial.clone(),
-            vec![opened],
+            vec![SessionSaveUnit::new(vec![opened]).unwrap()],
         )
         .await
         .unwrap();
@@ -320,9 +314,9 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
         super::super::records::fold_changes(Some(&initial), std::slice::from_ref(&input)).unwrap();
     inner
         .save_changes(
-            SessionSaveGeneration::initial().checked_next().unwrap(),
+            inner.load().await.unwrap().binding().clone(),
             initial.clone(),
-            vec![input],
+            vec![SessionSaveUnit::new(vec![input]).unwrap()],
         )
         .await
         .unwrap();
@@ -339,18 +333,15 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
     assert_eq!(
         inner
             .save_changes(
-                SessionSaveGeneration::initial()
-                    .checked_next()
-                    .unwrap()
-                    .checked_next()
-                    .unwrap(),
+                inner.load().await.unwrap().binding().clone(),
                 candidate,
-                oversized,
+                vec![SessionSaveUnit::new(oversized).unwrap()],
             )
             .await,
         Err(StorageError::TooLarge)
     );
-    assert_eq!(inner.load().await.unwrap(), Some(initial.clone()));
+    assert_eq!(inner.load().await.unwrap().snapshot(), Some(&initial));
+    let current_binding = inner.load().await.unwrap().binding().clone();
     let lease: Arc<dyn SessionStorageLease> = Arc::from(inner);
     let manager = SessionManager {
         message_commit_clock: Arc::new(
@@ -359,11 +350,7 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
         id: id.clone(),
         storage_lease: lease.clone(),
         evidence: Arc::new(Mutex::new(Evidence {
-            save_generation: SessionSaveGeneration::initial()
-                .checked_next()
-                .unwrap()
-                .checked_next()
-                .unwrap(),
+            save_generation: Some(current_binding),
             observed: Some(initial.clone()),
             committed: Some(initial),
             ..Evidence::default()
@@ -382,7 +369,7 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
             .unwrap();
     }
     manager.flush_observed().await.unwrap();
-    let saved = lease.load().await.unwrap().unwrap();
+    let saved = lease.load().await.unwrap().snapshot().cloned().unwrap();
     assert_eq!(saved.invocations[0].events.len(), 7);
     drop(manager);
     drop(lease);
@@ -391,7 +378,7 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
 
     let reopened = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
     let lease = reopened.open_existing(id).await.unwrap().unwrap();
-    let saved = lease.load().await.unwrap().unwrap();
+    let saved = lease.load().await.unwrap().snapshot().cloned().unwrap();
     assert_eq!(saved.invocations[0].events.len(), 7);
     let ExecutionUpdate::Message(last) = saved.invocations[0].events[6].update() else {
         panic!("last output is a message");
@@ -425,7 +412,7 @@ async fn cancelled_wait_before_commit_extends_the_same_pending_generation() {
     let next = tokio::spawn(async move { next_manager.event(next_event).await });
     next.await.unwrap().unwrap();
     manager.flush_observed().await.unwrap();
-    let snapshot = lease.load().await.unwrap().unwrap();
+    let snapshot = lease.load().await.unwrap().snapshot().cloned().unwrap();
     assert_eq!(snapshot.invocations[0].events.len(), 2);
     let saves = lease.changes.lock().unwrap();
     assert_eq!(saves.len(), 1);
@@ -452,7 +439,7 @@ async fn settlement_failure_retains_the_storage_failure_wrapper() {
     drop(evidence);
     lease.fail_save.store(false, Ordering::SeqCst);
     manager.flush_observed().await.unwrap();
-    let saved = lease.load().await.unwrap().unwrap();
+    let saved = lease.load().await.unwrap().snapshot().cloned().unwrap();
     assert!(matches!(
         saved.invocations[0].result,
         Some(Err(AgentError::StorageAfterExecution { .. }))
@@ -465,33 +452,26 @@ struct FaultLease {
     changes: std::sync::Mutex<Vec<Vec<SessionChange>>>,
 }
 impl SessionStorageLease for FaultLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.inner.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
+        self.changes.lock().unwrap().push(
+            units
+                .iter()
+                .flat_map(|unit| unit.changes().iter().cloned())
+                .collect(),
+        );
         Box::pin(async move {
             if self.fail_save.load(Ordering::SeqCst) {
                 return Err(StorageError::Io("injected save failure".into()));
             }
-            self.inner.save(snapshot).await
-        })
-    }
-    fn save_changes(
-        &self,
-        _generation: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
-        changes: Vec<SessionChange>,
-    ) -> StorageFuture<'_, ()> {
-        self.changes.lock().unwrap().push(changes.clone());
-        Box::pin(async move {
-            let previous = self.inner.load().await?;
-            super::super::records::confirm_candidate(
-                &snapshot.id,
-                previous.as_ref(),
-                &changes,
-                &snapshot,
-            )?;
-            self.save(snapshot).await
+            self.inner.save_changes(binding, snapshot, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
@@ -522,7 +502,7 @@ fn invocation(id: &str, complete: bool) -> InvocationRecord {
         scheduling: Vec::new(),
         provider_report: None,
         local_cancellation: None,
-        local_outcome: None,
+        local_outcome: complete.then_some(ExecutionOutcome::Completed),
         cancellation: None,
         result: complete.then_some(Ok(ExecutionOutcome::Completed)),
     }
@@ -550,7 +530,44 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         ),
         invocations,
     };
-    lease.save(snapshot.clone()).await.unwrap();
+    // Explicit fixture decisions seed the real adapter rather than bypassing
+    // its current save contract with a snapshot-only write.
+    let mut setup = vec![SessionChange::Opened {
+        id: id.clone(),
+        provider: snapshot.provider.clone(),
+        context: snapshot.provider_context.clone(),
+    }];
+    for record in &snapshot.invocations {
+        let mut input = record.clone();
+        input.events.clear();
+        input.result = None;
+        input.local_outcome = None;
+        setup.push(SessionChange::InputAccepted(Box::new(input)));
+        setup.extend(
+            record
+                .events
+                .iter()
+                .cloned()
+                .map(SessionChange::ProviderObservation),
+        );
+        if let Some(result) = &record.result {
+            setup.push(SessionChange::LocalSettlement {
+                execution_id: record.request.execution_id.clone(),
+                before: None,
+                after: result.clone(),
+                local_outcome: record.local_outcome,
+            });
+        }
+    }
+    let receipt = lease
+        .inner
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            snapshot.clone(),
+            vec![SessionSaveUnit::new(setup).unwrap()],
+        )
+        .await
+        .unwrap();
     let manager = SessionManager {
         id,
         message_commit_clock: Arc::new(
@@ -558,6 +575,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         ),
         storage_lease: lease.clone(),
         evidence: Arc::new(Mutex::new(Evidence {
+            save_generation: Some(receipt.next().clone()),
             observed: Some(snapshot.clone()),
             committed: Some(snapshot),
             ..Evidence::default()
@@ -675,12 +693,15 @@ async fn queued_admission_resets_consumed_message_cadence() {
     assert_eq!(new_deadline, std::time::Duration::from_millis(140));
     {
         let evidence = manager.evidence.lock().await;
-        assert_eq!(evidence.message_commit.unwrap().count, 1);
+        assert_eq!(evidence.message_commit.as_ref().unwrap().count, 1);
         assert_eq!(evidence.pending.len(), 1);
     }
     *clock.0.lock().unwrap() = old_deadline;
     manager.flush_due_messages(old_generation).await.unwrap();
-    manager.flush_due_messages(new_generation).await.unwrap();
+    manager
+        .flush_due_messages(new_generation.clone())
+        .await
+        .unwrap();
     assert_eq!(lease.changes.lock().unwrap().len(), 1);
     *clock.0.lock().unwrap() = new_deadline;
     manager.flush_due_messages(new_generation).await.unwrap();
@@ -702,7 +723,7 @@ async fn failed_admission_retains_pending_message_cadence() {
     assert_eq!(manager.pending_message_deadline().await, Some(before));
     let evidence = manager.evidence.lock().await;
     assert_eq!(evidence.pending.len(), 1);
-    assert_eq!(evidence.message_commit.unwrap().count, 1);
+    assert_eq!(evidence.message_commit.as_ref().unwrap().count, 1);
 }
 
 #[tokio::test]
@@ -803,7 +824,7 @@ async fn streamed_chunks_do_not_rescan_prior_turns_and_terminal_invalidates_cach
             .finish(1001, Ok(ExecutionOutcome::Completed))
             .await
             .unwrap();
-        let saved = lease.load().await.unwrap().unwrap();
+        let saved = lease.load().await.unwrap().snapshot().cloned().unwrap();
         assert_eq!(saved.invocations[1001].events.len(), 129);
     }
 }
@@ -817,7 +838,7 @@ async fn local_failure_preserves_inferred_prior_success_before_save_and_after_re
             let mut evidence = manager.evidence.lock().await;
             evidence.observed.as_mut().unwrap().invocations[0].result =
                 Some(Ok(ExecutionOutcome::Completed));
-            evidence.pending.push(SessionChange::LocalSettlement {
+            evidence.push_change(SessionChange::LocalSettlement {
                 execution_id: active.clone(),
                 before: None,
                 after: Ok(ExecutionOutcome::Completed),
@@ -837,7 +858,7 @@ async fn local_failure_preserves_inferred_prior_success_before_save_and_after_re
                 .await
                 .unwrap();
         }
-        let saved = lease.load().await.unwrap().unwrap();
+        let saved = lease.load().await.unwrap().snapshot().cloned().unwrap();
         assert_eq!(
             saved.invocations[0].local_outcome,
             Some(ExecutionOutcome::Completed)
@@ -867,7 +888,7 @@ async fn local_failure_preserves_inferred_prior_success_before_save_and_after_re
             ))
             .await
             .is_err());
-        let after = lease.load().await.unwrap().unwrap();
+        let after = lease.load().await.unwrap().snapshot().cloned().unwrap();
         assert_eq!(
             after.invocations[0].local_outcome,
             saved.invocations[0].local_outcome

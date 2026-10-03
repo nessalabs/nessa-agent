@@ -33,7 +33,7 @@ use nessa_gateway_endpoint::infrastructure::FileEndpointPublication;
 use nessa_local_storage::OpenMode;
 use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 use nessa_sdk::application::agent_execution::sessions::{
-    SessionChange, SessionSaveGeneration, SessionSnapshot, SessionStorage,
+    SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
 };
 use nessa_sdk::domain::agent_execution::sessions::{
     ExecutionSessionId, ProviderContext, SessionId,
@@ -117,7 +117,14 @@ impl RecordReadSource for GatedRead {
                 }
                 if self.mode == "append" && count == 1 {
                     let lease = self.storage.open(self.conversation.clone()).await.unwrap();
-                    let mut snapshot = lease.load().await.unwrap().unwrap();
+                    let mut snapshot = lease
+                        .load()
+                        .await
+                        .unwrap()
+                        .into_published(&self.conversation)
+                        .unwrap()
+                        .0
+                        .unwrap();
                     let before = snapshot.provider_context.clone();
                     snapshot.provider_context = ProviderContext::Recorded(
                         ExecutionSessionId::new("later-source-context").unwrap(),
@@ -125,9 +132,13 @@ impl RecordReadSource for GatedRead {
                     let after = snapshot.provider_context.clone();
                     lease
                         .save_changes(
-                            SessionSaveGeneration::initial(),
+                            lease.load().await.unwrap().binding().clone(),
                             snapshot,
-                            vec![SessionChange::ProviderContext { before, after }],
+                            vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
+                                before,
+                                after,
+                            }])
+                            .unwrap()],
                         )
                         .await
                         .unwrap();
@@ -380,7 +391,7 @@ async fn gateway_child() {
                 }
                 lease
                     .save_changes(
-                        SessionSaveGeneration::initial(),
+                        lease.load().await.unwrap().binding().clone(),
                         SessionSnapshot {
                             id: session,
                             provider,
@@ -388,7 +399,7 @@ async fn gateway_child() {
                             invocations: vec![],
                             queue_history: vec![],
                         },
-                        changes,
+                        vec![SessionSaveUnit::new(changes).unwrap()],
                     )
                     .await
                     .unwrap();
