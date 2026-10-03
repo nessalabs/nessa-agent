@@ -1,0 +1,314 @@
+//! The app a message names, row by row of "The app a message names"
+//! (`docs/design/mcp-app-calls.md`): the rule as admission asks it of the
+//! turns saved before the message, as restoration asks it of a snapshot, and
+//! as a replayed record log asks it of each accepted input.
+use super::*;
+use crate::application::agent_execution::{
+    executions::{ExecutionEvent, ExecutionRequest},
+    permissions::ActionContext,
+    providers::ProviderIdentity,
+    sessions::{
+        records::fold_changes, validation, ProviderContext, SessionChange, SessionSnapshot,
+        StorageError, SubmissionAcknowledgement,
+    },
+};
+use crate::domain::agent_execution::{
+    executions::{ExecutionOutcome, SubmissionMode},
+    prompts::PromptText,
+    sessions::{ExecutionSessionId, SessionId},
+    tools::ToolCallUpdate,
+};
+
+/// The turn whose tool call `call-1` was to `charts/show`, beside a tool call
+/// `plain` that named no MCP server.
+const DRAWN: &str = "turn-1";
+
+fn mcp(server: &str, tool: &str) -> McpTool {
+    McpTool::new(server, tool).unwrap()
+}
+fn app(turn: &str, tool_id: &str, tool: McpTool) -> McpAppSource {
+    McpAppSource::new(
+        ExecutionId::new(turn).unwrap(),
+        ToolCallId::new(tool_id).unwrap(),
+        tool,
+    )
+    .unwrap()
+}
+fn drawn() -> McpAppSource {
+    app(DRAWN, "call-1", mcp("charts", "show"))
+}
+fn text() -> UserMessage {
+    UserMessage::text_only(PromptText::new("plot").unwrap())
+}
+fn from(app: McpAppSource) -> UserMessage {
+    text().sent_by(MessageSender::App(app))
+}
+fn carrying(apps: impl IntoIterator<Item = McpAppSource>) -> UserMessage {
+    text()
+        .with_app_model_context(
+            apps.into_iter()
+                .enumerate()
+                .map(|(index, app)| {
+                    AppModelContext::new(app, &format!("update-{index}"), Some("x".into()), None)
+                        .unwrap()
+                        .unwrap()
+                })
+                .collect(),
+        )
+        .unwrap()
+}
+/// A completed turn `id` whose message is `message` and whose tool calls
+/// are `tools`, observed in that order.
+fn turn(id: &str, message: UserMessage, tools: Vec<ToolCallUpdate>) -> InvocationRecord {
+    let id = ExecutionId::new(id).unwrap();
+    let mut events: Vec<_> = tools
+        .into_iter()
+        .map(|update| ExecutionEvent::new(id.clone(), ExecutionUpdate::Tool(update)))
+        .collect();
+    events.push(ExecutionEvent::new(
+        id.clone(),
+        ExecutionUpdate::Finished(ExecutionOutcome::Completed),
+    ));
+    InvocationRecord {
+        target_event_offset: None,
+        submission: SubmissionMode::Immediate,
+        request: ExecutionRequest {
+            execution_id: id,
+            user_message: message,
+            estimated_input_tokens: 1,
+            reserved_output_tokens: 1,
+        },
+        actor: ActionContext::new("user", "test", "invoke").unwrap(),
+        acknowledgement: SubmissionAcknowledgement::Pending,
+        events,
+        scheduling: Vec::new(),
+        provider_report: None,
+        local_cancellation: None,
+        local_outcome: Some(ExecutionOutcome::Completed),
+        cancellation: None,
+        result: Some(Ok(ExecutionOutcome::Completed)),
+    }
+}
+fn tool_call(id: &str) -> ToolCallUpdate {
+    ToolCallUpdate::new(ToolCallId::new(id).unwrap(), None, None, None, None, None)
+}
+/// The turn that drew the app: `call-1` named as `charts/show` on its second
+/// observation, not its first, and `plain` never named.
+fn drawing_turn() -> InvocationRecord {
+    turn(
+        DRAWN,
+        text(),
+        vec![
+            tool_call("call-1"),
+            tool_call("plain"),
+            tool_call("call-1").with_mcp_tool(mcp("charts", "show")),
+        ],
+    )
+}
+fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
+    SessionSnapshot {
+        id: SessionId::new("session").unwrap(),
+        provider: ProviderIdentity::new("provider", "model", "").unwrap(),
+        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap()),
+        invocations,
+        queue_history: Vec::new(),
+    }
+}
+/// The changes a record log keeps for `snapshot`, in its order.
+fn record_log(snapshot: &SessionSnapshot) -> Vec<SessionChange> {
+    let mut changes = vec![SessionChange::Opened {
+        id: snapshot.id.clone(),
+        provider: snapshot.provider.clone(),
+        context: snapshot.provider_context.clone(),
+    }];
+    for record in &snapshot.invocations {
+        let mut input = record.clone();
+        input.events.clear();
+        input.result = None;
+        input.local_outcome = None;
+        changes.push(SessionChange::InputAccepted(Box::new(input)));
+        changes.extend(
+            record
+                .events
+                .iter()
+                .cloned()
+                .map(SessionChange::ProviderObservation),
+        );
+        changes.push(SessionChange::LocalSettlement {
+            execution_id: record.request.execution_id.clone(),
+            before: None,
+            after: record.result.clone().unwrap(),
+            local_outcome: record.local_outcome,
+        });
+    }
+    changes
+}
+
+/// The rule three ways: as admission asks it of `earlier`, as restoration
+/// asks it of the snapshot `earlier` then the message, and as a replayed
+/// record log does. Each must agree with `expected`.
+fn judged(earlier: Vec<InvocationRecord>, message: UserMessage, expected: Result<(), UnknownApp>) {
+    let admitted = validate_against(&message, |execution| {
+        earlier
+            .iter()
+            .find(|record| &record.request.execution_id == execution)
+    });
+    assert_eq!(admitted, expected, "admission");
+    let mut invocations = earlier;
+    invocations.push(turn("turn-2", message, Vec::new()));
+    let snapshot = snapshot(invocations);
+    let corrupt = |result: Result<(), StorageError>| match (result, expected) {
+        (Ok(()), Ok(())) => {}
+        (Err(StorageError::Corrupt(message)), Err(refusal)) => {
+            assert_eq!(message, refusal.to_string())
+        }
+        (other, _) => panic!("expected {expected:?}, got {other:?}"),
+    };
+    corrupt(validation::validate(&snapshot));
+    corrupt(fold_changes(None, &record_log(&snapshot)).map(drop));
+}
+
+#[test]
+fn a1_an_app_an_earlier_mcp_tool_call_drew_is_taken_as_writer_and_as_giver() {
+    judged(vec![drawing_turn()], from(drawn()), Ok(()));
+    judged(vec![drawing_turn()], carrying([drawn(), drawn()]), Ok(()));
+    judged(
+        vec![drawing_turn()],
+        from(drawn()).with_app_model_context(Vec::new()).unwrap(),
+        Ok(()),
+    );
+}
+
+#[test]
+fn a2_an_app_of_a_turn_the_session_has_no_record_of_is_refused() {
+    let unknown = app("turn-0", "call-1", mcp("charts", "show"));
+    judged(
+        vec![drawing_turn()],
+        from(unknown.clone()),
+        Err(UnknownApp::NoMcpToolCall),
+    );
+    judged(
+        Vec::new(),
+        carrying([unknown]),
+        Err(UnknownApp::NoMcpToolCall),
+    );
+}
+
+#[test]
+fn a3_an_app_of_a_tool_call_its_turn_never_made_is_refused() {
+    let unmade = app(DRAWN, "call-2", mcp("charts", "show"));
+    judged(
+        vec![drawing_turn()],
+        from(unmade.clone()),
+        Err(UnknownApp::NoMcpToolCall),
+    );
+    judged(
+        vec![drawing_turn()],
+        carrying([unmade]),
+        Err(UnknownApp::NoMcpToolCall),
+    );
+}
+
+#[test]
+fn a4_an_app_of_a_tool_call_that_named_no_mcp_server_is_refused() {
+    let plain = app(DRAWN, "plain", mcp("charts", "show"));
+    judged(
+        vec![drawing_turn()],
+        from(plain.clone()),
+        Err(UnknownApp::NoMcpToolCall),
+    );
+    judged(
+        vec![drawing_turn()],
+        carrying([plain]),
+        Err(UnknownApp::NoMcpToolCall),
+    );
+}
+
+#[test]
+fn a5_an_app_naming_another_server_or_tool_than_its_call_was_to_is_refused() {
+    for other in [mcp("maps", "show"), mcp("charts", "hide")] {
+        let forged = app(DRAWN, "call-1", other);
+        judged(
+            vec![drawing_turn()],
+            from(forged.clone()),
+            Err(UnknownApp::DifferentMcpTool),
+        );
+        judged(
+            vec![drawing_turn()],
+            carrying([forged]),
+            Err(UnknownApp::DifferentMcpTool),
+        );
+    }
+}
+
+#[test]
+fn a6_an_app_of_the_messages_own_turn_is_refused_though_that_turn_made_the_call() {
+    // Admission: the turn is not yet among those saved.
+    let own = app("turn-2", "call-1", mcp("charts", "show"));
+    for message in [from(own.clone()), carrying([own.clone()])] {
+        assert_eq!(
+            validate_against(&message, |_| None),
+            Err(UnknownApp::NoMcpToolCall)
+        );
+        // Restoration: the turn did make that call, after its message.
+        let restored = snapshot(vec![
+            drawing_turn(),
+            turn(
+                "turn-2",
+                message,
+                vec![tool_call("call-1").with_mcp_tool(mcp("charts", "show"))],
+            ),
+        ]);
+        let refused = Err(StorageError::Corrupt(UnknownApp::NoMcpToolCall.to_string()));
+        assert_eq!(validation::validate(&restored), refused);
+        assert_eq!(
+            fold_changes(None, &record_log(&restored)).map(drop),
+            refused
+        );
+    }
+}
+
+#[test]
+fn a7_a_recorded_writer_does_not_carry_a_context_no_call_drew() {
+    for (stray, refusal) in [
+        (
+            app(DRAWN, "call-2", mcp("charts", "show")),
+            UnknownApp::NoMcpToolCall,
+        ),
+        (
+            app(DRAWN, "call-1", mcp("charts", "hide")),
+            UnknownApp::DifferentMcpTool,
+        ),
+    ] {
+        // Last of the contexts, behind a recorded writer and a recorded one.
+        let message = from(drawn())
+            .with_app_model_context(carrying([drawn(), stray]).app_model_context().to_vec())
+            .unwrap();
+        judged(vec![drawing_turn()], message, Err(refusal));
+    }
+}
+
+#[test]
+fn a8_a_restored_message_naming_a_later_turns_call_is_corrupt() {
+    // The drawing turn is saved after the message that names it.
+    let restored = snapshot(vec![
+        turn("turn-0", from(drawn()), Vec::new()),
+        drawing_turn(),
+    ]);
+    let refused = Err(StorageError::Corrupt(UnknownApp::NoMcpToolCall.to_string()));
+    assert_eq!(validation::validate(&restored), refused);
+    // And the same order replayed from a record log (A9).
+    assert_eq!(
+        fold_changes(None, &record_log(&restored)).map(drop),
+        refused
+    );
+}
+
+#[test]
+fn a10_a_persons_message_carrying_no_context_looks_nothing_up() {
+    assert_eq!(
+        validate_app_sources(&text(), |_, _| unreachable!("nothing to look up")),
+        Ok(())
+    );
+    judged(Vec::new(), text(), Ok(()));
+}

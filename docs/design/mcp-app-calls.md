@@ -361,6 +361,39 @@ app's on behalf of the caller, on the app lane.
 | C15 | — | released or ended after its number, before its hold | none | not held; answered `applied`: the release came after it |
 | C15b | — | an update of an ended opening, held or failed after a later update of its mount took a place | — | the later update's place stands |
 
+### The app a message names
+
+Every app a message names — its writer, and the giver of each context it
+carries — is an MCP tool call recorded earlier in the session: the tool call
+`toolId` of an earlier turn `executionId`, observed with an MCP identity
+whose server and tool are the app's. The SDK session owns the rule
+(`sessions::app_sources`): it is asked at admission, under the session's
+evidence lock, against the turns already saved, and of every restored
+snapshot and replayed record log, against the turns before the message. A
+turn's own tool calls come after its message, so an app of the message's own
+turn is this rule's case too. A per-record decode cannot see the history and
+does not ask it. Refused, it is `AgentError::UnknownApp`; the gateway answers
+`invalid_request`. The gateway's own messages name apps it resolved from the
+transcript, so only a direct SDK caller or a stored record meets it.
+
+| # | State | Event | Next | Effect |
+| --- | --- | --- | --- | --- |
+| A1 | an earlier turn's tool call observed as MCP `server/tool` | a message from that app, or carrying its context | admitted | as before |
+| A2 | — | an app naming a turn the session has no record of | — | `UnknownApp(NoMcpToolCall)`; nothing saved |
+| A3 | the turn recorded, no such tool call in it | as A2 | — | `UnknownApp(NoMcpToolCall)` |
+| A4 | the tool call recorded, with no MCP identity | as A2 | — | `UnknownApp(NoMcpToolCall)` |
+| A5 | the tool call recorded as MCP `server/tool` | an app naming another server, or another tool | — | `UnknownApp(DifferentMcpTool)` |
+| A6 | — | an app naming the message's own turn | — | `UnknownApp(NoMcpToolCall)` |
+| A7 | a recorded writer | one carried context's app not recorded | — | refused as A2–A5; not admitted |
+| A8 | a restored snapshot, built-in or custom storage | an invocation naming an app not recorded in an earlier one — none, another server or tool, its own, a later one's | — | `Corrupt`; not restored |
+| A9 | a replayed record log | an `InputAccepted` naming an app not recorded before it | — | `Corrupt` |
+| A10 | — | a person's message carrying no context | admitted | nothing looked up |
+
+Restoration checks the order of the turns, which is what a snapshot keeps:
+it cannot tell whether an earlier turn's tool call was observed before a
+later message was admitted when the two overlapped (a recorded limit).
+Admission checks that it was.
+
 ## Lanes
 
 App calls have 4 slots on each socket. A destructive call holds its slot while
@@ -389,6 +422,12 @@ Each row above has a test, named after it:
 - Bounds and codes the schema states again:
   `crates/nessa-server/tests/conversation/agreement.rs` and `wire_errors.rs`.
 - The client: `packages/nessa-client/src/presentation/mcp-apps-api.test.ts`.
+- The app a message names, each row of "The app a message names", asked
+  by admission, restoration and a replayed record log alike:
+  `crates/nessa-sdk/tests/application/agent_execution/sessions/app_sources.rs`;
+  admission against saved turns in `sessions/manager.rs`
+  (`admission_takes_only_an_app_an_observed_mcp_tool_call_drew`), and at
+  every entry in `agents/messages.rs`.
 - An app in its conversation, each row of "A message" and "A context":
   `crates/nessa-server/tests/conversation/app_messages.rs`, and the
   orderings of the state they share in `app_reviews.rs`, named for what

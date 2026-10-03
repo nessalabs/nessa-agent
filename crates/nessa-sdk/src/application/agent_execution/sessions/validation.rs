@@ -1,5 +1,6 @@
 //! Validate snapshot relationships at every storage port, including custom adapters.
 mod observations;
+use super::app_sources;
 use super::retention::{Witness, WitnessUndo};
 use super::{
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
@@ -53,7 +54,10 @@ impl InvocationContinuation {
         Ok(state)
     }
     pub(super) fn empty(invocation: &InvocationRecord) -> Result<Self, StorageError> {
-        invocation.request.validate_message().map_err(corrupt)?;
+        invocation
+            .request
+            .validate_message_size()
+            .map_err(corrupt)?;
         if invocation.events.capacity() > MAX_RETAINED_OUTPUT_EVENTS {
             return Err(corrupt(
                 "retained observation capacity exceeds per-invocation limit",
@@ -188,7 +192,19 @@ pub(super) fn continuation(
     let mut states = Vec::with_capacity(snapshot.invocations.len());
     let mut identities = HashMap::with_capacity(snapshot.invocations.len());
     let mut event_counts = HashMap::new();
+    // The MCP tool calls of the invocations already walked, so each message
+    // is asked against those before it in one lookup, not a scan per app.
+    let mut mcp_tool_calls = HashMap::new();
     for invocation in &snapshot.invocations {
+        app_sources::validate_app_sources(&invocation.request.user_message, |execution, tool| {
+            mcp_tool_calls.get(&(execution, tool)).copied()
+        })
+        .map_err(corrupt)?;
+        for (tool, mcp) in app_sources::mcp_tool_calls(invocation) {
+            mcp_tool_calls
+                .entry((&invocation.request.execution_id, tool))
+                .or_insert(mcp);
+        }
         if let Some(offset) = invocation.target_event_offset {
             let target = invocation
                 .scheduling

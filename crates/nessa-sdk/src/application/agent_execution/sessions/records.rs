@@ -386,6 +386,12 @@ impl continuation::Continuation {
                 if positions.contains_key(&record.request.execution_id) {
                     return Err(corrupt("execution identity was accepted twice"));
                 }
+                super::app_sources::validate_against(&record.request.user_message, |execution| {
+                    positions
+                        .get(execution)
+                        .map(|&index| &snapshot.invocations[index])
+                })
+                .map_err(corrupt)?;
                 if !record.events.is_empty()
                     || record.provider_report.is_some()
                     || record.local_cancellation.is_some()

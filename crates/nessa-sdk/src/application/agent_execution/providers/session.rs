@@ -242,7 +242,7 @@ pub(crate) fn validate_configured_input(
     capabilities: &EffectiveCapabilities,
     input: &ExecutionRequest,
 ) -> Result<(), AgentError> {
-    input.validate_message()?;
+    input.validate_message_size()?;
     let images = input.user_message.images();
     let mut requirements = Vec::with_capacity(2);
     if input.user_message.text().is_some() {

@@ -433,7 +433,11 @@ pub(super) fn error_code(error: &ConversationError) -> ConversationErrorCode {
             AgentError::SubmissionUnresolved => ConversationErrorCode::SubmissionUnresolved,
             AgentError::Closed => ConversationErrorCode::ConversationClosed,
             AgentError::StalePermission => ConversationErrorCode::StalePermission,
-            AgentError::InvalidInput(_) => ConversationErrorCode::InvalidRequest,
+            // A message naming an app no earlier MCP tool call drew is a
+            // request no conversation could take as it stands.
+            AgentError::InvalidInput(_) | AgentError::UnknownApp(_) => {
+                ConversationErrorCode::InvalidRequest
+            }
             // Refused before the message was accepted, so the caller still has it.
             // An agent that takes no images is the same fact whether this service
             // or the SDK's admission noticed it. An image outside the model's

@@ -5,7 +5,7 @@ use crate::application::agent_execution::agents::AttachmentPhase;
 use crate::application::agent_execution::hooks::HookFailure;
 use crate::application::agent_execution::{
     providers::{CloseOutcome, ImageInputRefusal, UserImageError},
-    sessions::StorageError,
+    sessions::{StorageError, UnknownApp},
 };
 use crate::domain::agent_execution::executions::{ExecutionOutcome, SchedulingError};
 use std::{error::Error, fmt, future::Future, pin::Pin};
@@ -250,6 +250,10 @@ pub enum AgentError {
     Unsupported(String),
     /// Input failed admission validation without dispatching this attempt.
     InvalidInput(String),
+    /// The message names an app — as its writer, or as the giver of a context
+    /// it carries — that is no MCP tool call this session recorded before it.
+    /// Admission answers this before anything is saved, queued or sent.
+    UnknownApp(UnknownApp),
     /// An image the message refers to could not be supplied intact, so the
     /// message was not dispatched. Nothing is sent without it.
     UserImage(UserImageError),

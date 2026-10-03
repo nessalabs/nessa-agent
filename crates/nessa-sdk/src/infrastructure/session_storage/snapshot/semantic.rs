@@ -618,12 +618,6 @@ mod tests {
             // none would leave a context standing.
             (&["user_app_model_context", "1", "text"][..], "".into()),
             (&["user_app_model_context", "0", "update"][..], " ".into()),
-            // An app of the record's own turn: no earlier tool call drew it.
-            (&["user_app", "execution_id"][..], "one".into()),
-            (
-                &["user_app_model_context", "1", "app", "execution_id"][..],
-                "one".into(),
-            ),
             (
                 &["user_app_model_context", "0", "text"][..],
                 "x".repeat(AppModelContext::MAX_BYTES + 1).into(),

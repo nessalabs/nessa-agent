@@ -523,3 +523,45 @@ async fn backend_refusal_is_retained_without_provider_execution() {
         .await;
     }
 }
+
+/// An app no earlier MCP tool call drew ("The app a message names", A2) is
+/// refused at every entry before anything is saved or the provider sees it.
+#[tokio::test]
+async fn an_app_no_earlier_mcp_tool_call_drew_is_refused_at_every_entry() {
+    use nessa_sdk::application::agent_execution::sessions::UnknownApp;
+    use nessa_sdk::domain::agent_execution::{
+        prompts::{McpAppSource, MessageSender},
+        tools::{McpTool, ToolCallId},
+    };
+    let input = ExecutionRequest {
+        user_message: UserMessage::text_only(PromptText::new("plot").unwrap()).sent_by(
+            MessageSender::App(
+                McpAppSource::new(
+                    ExecutionId::new("turn-0").unwrap(),
+                    ToolCallId::new("call-1").unwrap(),
+                    McpTool::new("charts", "show").unwrap(),
+                )
+                .unwrap(),
+            ),
+        ),
+        ..request("forged")
+    };
+    // Every entry, steering an idle agent included: nothing is saved.
+    for operation in 0..4 {
+        let storage = MemoryStorage::default();
+        let provider = ImageProvider::new(AGENT_TAKES_IMAGES, None);
+        let agent = attached_agent(provider.clone(), storage.manager().await)
+            .await
+            .unwrap();
+        let writes = storage.0.lock().unwrap().writes;
+        assert_eq!(
+            submit(&agent, input.clone(), operation).await,
+            Err(AgentError::UnknownApp(UnknownApp::NoMcpToolCall)),
+            "operation {operation}"
+        );
+        assert_eq!(provider.executions.load(Ordering::SeqCst), 0);
+        assert_eq!(storage.0.lock().unwrap().writes, writes);
+        assert!(storage.snapshot().invocations.is_empty());
+        agent.close(actor()).await.unwrap();
+    }
+}

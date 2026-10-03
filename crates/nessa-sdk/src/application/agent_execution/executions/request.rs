@@ -1,8 +1,5 @@
 use crate::application::agent_execution::agents::AgentError;
-use crate::domain::agent_execution::{
-    executions::ExecutionId,
-    prompts::{AppModelContext, MessageSender, UserMessage},
-};
+use crate::domain::agent_execution::{executions::ExecutionId, prompts::UserMessage};
 
 /// One new message with caller-estimated context use and a requested output budget.
 /// Provider usage measurements and configured ceilings remain separate values.
@@ -33,41 +30,12 @@ impl ExecutionRequest {
     /// Provider framing and model context limits may be lower.
     pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 
-    /// The message's rules that need its turn to judge: its text within
-    /// [`Self::MAX_MESSAGE_BYTES`], and no app it names — as its writer, or
-    /// as the giver of a context it carries — drawn by a tool call of this
-    /// same turn: an app is the UI of a tool call an earlier turn made. Asked
-    /// at admission and of every restored record, so nothing is admitted
-    /// that could not be read back.
-    pub(crate) fn validate_message(&self) -> Result<(), AgentError> {
+    pub(crate) fn validate_message_size(&self) -> Result<(), AgentError> {
         if self.user_message.text_str().len() > Self::MAX_MESSAGE_BYTES {
             return Err(AgentError::InvalidInput(
                 "user message exceeds the 4 MiB byte limit".into(),
             ));
         }
-        let own = &self.execution_id;
-        let writer = match self.user_message.sender() {
-            MessageSender::Person => None,
-            MessageSender::App(app) => Some(app),
-        };
-        if writer
-            .into_iter()
-            .chain(
-                self.user_message
-                    .app_model_context()
-                    .iter()
-                    .map(AppModelContext::app),
-            )
-            .any(|app| app.execution_id() == own)
-        {
-            return Err(AgentError::InvalidInput(
-                "a message names an app of its own turn".into(),
-            ));
-        }
         Ok(())
     }
 }
-
-#[cfg(test)]
-#[path = "../../../../tests/application/agent_execution/executions/request_validation.rs"]
-mod tests;

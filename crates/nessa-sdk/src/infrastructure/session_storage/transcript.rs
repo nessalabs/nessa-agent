@@ -1870,13 +1870,15 @@ mod tests {
 
     #[test]
     fn an_app_written_message_counts_its_writer_and_every_context_it_carries() {
+        use crate::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
         use crate::domain::agent_execution::{
-            executions::ExecutionId,
+            executions::{ExecutionId, ExecutionOutcome},
             prompts::{AppModelContext, McpAppSource, MessageSender},
-            tools::{McpTool, ToolCallId},
+            sessions::ExecutionSessionId,
+            tools::{McpTool, ToolCallId, ToolCallUpdate},
         };
         let app = McpAppSource::new(
-            ExecutionId::new("turn-0").unwrap(),
+            ExecutionId::new("input-0").unwrap(),
             ToolCallId::new("call-0").unwrap(),
             McpTool::new("charts", "plot").unwrap(),
         )
@@ -1893,11 +1895,26 @@ mod tests {
                 .unwrap()
             })
             .collect();
-        let mut person = snapshot::checkpoint::history_fixture(1);
-        person.invocations[0].request.user_message =
+        // The first turn draws the app; the second is the message.
+        let mut person = snapshot::checkpoint::history_fixture(2);
+        person.provider_context =
+            ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap());
+        let drawing = &mut person.invocations[0];
+        drawing.events = [
+            ExecutionUpdate::Tool(
+                ToolCallUpdate::new(app.tool_id().clone(), None, None, None, None, None)
+                    .with_mcp_tool(app.tool().clone()),
+            ),
+            ExecutionUpdate::Finished(ExecutionOutcome::Completed),
+        ]
+        .map(|update| ExecutionEvent::new(app.execution_id().clone(), update))
+        .into();
+        drawing.local_outcome = Some(ExecutionOutcome::Completed);
+        drawing.result = Some(Ok(ExecutionOutcome::Completed));
+        person.invocations[1].request.user_message =
             UserMessage::text_only(PromptText::new("plot").unwrap());
         let mut written = person.clone();
-        written.invocations[0].request.user_message =
+        written.invocations[1].request.user_message =
             UserMessage::text_only(PromptText::new("plot").unwrap())
                 .sent_by(MessageSender::App(app.clone()))
                 .with_app_model_context(contexts.clone())

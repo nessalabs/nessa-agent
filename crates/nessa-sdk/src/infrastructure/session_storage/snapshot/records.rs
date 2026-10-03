@@ -429,7 +429,7 @@ impl Provider {
 }
 impl Metadata {
     pub(super) fn decode(self) -> Result<InvocationRecord, StorageError> {
-        let record = InvocationRecord {
+        Ok(InvocationRecord {
             target_event_offset: self.target_event_offset,
             submission: self.submission.into(),
             request: ExecutionRequest {
@@ -484,11 +484,7 @@ impl Metadata {
                 .map(InvocationCancellation::decode)
                 .transpose()?,
             result: self.result.map(decode_result).transpose()?,
-        };
-        // The message's own rules, asked as at its admission: one restored
-        // that admission would refuse is corrupt.
-        record.request.validate_message().map_err(corrupt)?;
-        Ok(record)
+        })
     }
 }
 impl Event {
