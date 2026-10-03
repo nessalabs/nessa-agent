@@ -118,7 +118,7 @@ is opened again.
 | — | admitted, destructive, its mount released or its opening ended meanwhile | — | `Withdrawn(AppTornDown)` or `Withdrawn(ConversationEnded)`, by the system; `mcp_cancelled` |
 | Waiting | the person allows | Checking | `Approved`, by that person and their request |
 | Waiting | the person denies, or cancels the review | — | `Denied`, by that person; `mcp_approval_denied` |
-| Waiting | 5 minutes with no answer | — | `Expired`, by the system; `mcp_approval_expired` |
+| Waiting | `x-mcpAppCallTiming.reviewDeadlineMs` with no answer | — | `Expired`, by the system; `mcp_approval_expired` |
 | Waiting | the caller goes (its socket closes) | — | `Withdrawn(RequestCancelled)`, by the app; `mcp_cancelled` |
 | Waiting | `mcp.releaseApp` for its mount | — | `Withdrawn(AppTornDown)`, by the releaser; `mcp_cancelled` |
 | Waiting | the conversation is closed or deleted | — | `Withdrawn(ConversationEnded)`, by that person; `mcp_cancelled` |
@@ -134,7 +134,7 @@ is opened again.
 | Sending | past 56 KiB so measured | — | `Completed(Failed(mcp_result_too_large))` |
 | Sending | a JSON-RPC error | — | `Completed(Failed(mcp_remote_error))`; its code, if within ±(2^53−1), and message as details |
 | Sending | an answer that is no MCP answer | — | `Completed(Failed(mcp_remote_error))`, no details |
-| Sending | no answer in 60 s | — | `Completed(Failed(mcp_timed_out))` |
+| Sending | no answer within `x-mcpAppCallTiming.callTimeoutMs` | — | `Completed(Failed(mcp_timed_out))` |
 | Sending | the session ends | — | `Completed(Failed(mcp_session_unavailable))` |
 | Sending | the caller goes | Sending | the call finishes on its own task and is recorded; the answer goes nowhere |
 | any but Sending | a record cannot be written | — | `audit_unavailable`; the step it would have recorded is not taken |
@@ -176,6 +176,7 @@ any change in which are open or shown.
 | admitted, its mount released or its opening ended before its last check | `Refused(mcp_cancelled)`, by the system; nothing read |
 | no open session, or it ends | `Completed(Failed(mcp_session_unavailable))` |
 | read, and not an app's HTML | `Completed(Failed(mcp_app_unknown))` |
+| no answer within `x-mcpAppCallTiming.readTimeoutMs` | `Completed(Failed(mcp_timed_out))` |
 | the session cannot take another request now; nothing is sent | `Refused(temporarily_unavailable)` |
 | read, its mount released or its opening ended meanwhile | `Completed(Failed(mcp_cancelled))`, by the system; nothing held |
 | read, its URI, CSP and domain past 48 KiB encoded, more than a response carries beside them | `Completed(Failed(mcp_result_too_large))`; nothing held |
@@ -190,17 +191,17 @@ A ticket is pending from its issue until `TicketIssued` is on record: it
 cannot be redeemed, and if it is let go meanwhile its end is not reported by
 the store but by the read that issued it, after its issue — how and by whom
 it ended, kept until the read asks, however long its records took. So no
-ticket's end is ever on record before its issue. Its 60 s run from its issue,
-so the host has at most 60 s. An issuer that panics between holding its
+ticket's end is ever on record before its issue. Its lifetime (`expiresInMs`) runs from its issue,
+so the host has at most that long. An issuer that panics between holding its
 ticket and recording its issue leaves its pending end kept until the
 gateway stops; nothing reports it.
 
 | Event | Effect, and what is recorded |
 | --- | --- |
-| `GET /mcp-resources` with it, within 60 s of its issue | `TicketRedeemed`, by the app, recorded before the bytes are served |
+| `GET /mcp-resources` with it, within its lifetime (`expiresInMs`) of its issue | `TicketRedeemed`, by the app, recorded before the bytes are served |
 | redeemed, and that cannot be recorded | `503`, nothing served, the ticket spent |
 | redeemed again, expired, released, pending, never issued | the same empty `404` |
-| 60 s pass | `TicketEnded(Expired)`, by the system |
+| its lifetime passes | `TicketEnded(Expired)`, by the system |
 | its mount released | `TicketEnded(AppReleased)`, by the releaser |
 | its conversation closed or deleted | `TicketEnded(ConversationEnded)`, by that person |
 | its conversation's agent stopped otherwise, or the gateway stops | `TicketEnded(ConversationEnded)`, by the system |

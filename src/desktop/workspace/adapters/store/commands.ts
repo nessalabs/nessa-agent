@@ -506,8 +506,8 @@ export function resendMessage({
 /**
  * What became of an answer to an approval, so a caller — an agent above all —
  * can tell what it did: `sent` and taken; `refused` by the source (the pane
- * says why while it shows the session); `unknown` when no answer came and it
- * may have been taken (`outcomeOf`); `answering` already, a first answer on
+ * says why while it shows the session); `unknown` when it is not known to be
+ * taken (`outcomeOf`); `answering` already, a first answer on
  * its way; or `not-asked` — the window holds no such approval: the session is
  * not on screen (`onScreen`: in a pane, or in the open overview), or its
  * conversation has moved on. Nothing is sent
@@ -516,9 +516,9 @@ export function resendMessage({
 export type AnswerOutcome = "sent" | "refused" | "unknown" | "answering" | "not-asked"
 
 /**
- * A call that failed, as its caller hears it: `refused` when the source said
- * no, `unknown` when no answer came — `unavailable` — and it may have been done
- * all the same; the source's updates will say.
+ * A call that failed, as its caller hears it: `unknown` for `unavailable`
+ * (what that covers is `failure.ts`'s to say), `refused` for every other
+ * reason. The source's updates say what became of it.
  */
 function outcomeOf(reason: WorkspaceFailureReason): "refused" | "unknown" {
   return reason === "unavailable" ? "unknown" : "refused"
@@ -592,7 +592,7 @@ export function deny({
 
 /**
  * What became of a pin or an archive asked of the source: `sent` and taken;
- * `refused` (logged); `unknown` when no answer came (`outcomeOf`); or
+ * `refused` (logged); `unknown` when it is not known to be taken (`outcomeOf`); or
  * `not-asked` — nothing to change, or a session the source has not spoken
  * of. Each call answers for itself: of two archives of
  * one session asked at once, the second is `refused` as `unknown-session`

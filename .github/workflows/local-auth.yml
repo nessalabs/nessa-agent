@@ -171,6 +171,8 @@ jobs:
           # Generation/parity fixtures consume these canonical source inputs directly.
           for name in [
               'Cargo.lock',
+              'crates/nessa-auth/src/domain/pairing/value_objects/wire-values.json',
+              'crates/nessa-auth/src/domain/pairing/value_objects/wire_values.rs',
               'crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs',
               'crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs',
               'crates/nessa-server/src/product_contract/generated.rs',

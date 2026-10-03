@@ -4,47 +4,12 @@ use rustls::{
     sign::{Signer, SigningKey},
     ProtocolVersion, SignatureAlgorithm,
 };
-use std::io::Cursor;
-#[cfg(unix)]
 use std::{
-    os::unix::net::UnixStream,
+    io::Cursor,
     sync::atomic::{AtomicUsize, Ordering},
-    thread,
-    time::Duration,
 };
-
-#[test]
-fn cumulative_handshake_ingress_refuses_next_byte_before_underlying_read() {
-    let mut input = Cursor::new(vec![7; TLS_HANDSHAKE_BYTES + 1]);
-    let mut budget = HandshakeBudget {
-        stream: &mut input,
-        read: 0,
-        written: 0,
-    };
-    let mut chunk = [0; 1024];
-    for _ in 0..4 {
-        budget.read_exact(&mut chunk).unwrap();
-    }
-    assert_eq!(budget.read, 4096);
-    assert!(budget.read(&mut [0]).is_err());
-    assert_eq!(input.position(), 4096);
-}
-
-#[test]
-fn cumulative_handshake_egress_refuses_next_byte_before_underlying_write() {
-    let mut output = Vec::new();
-    let mut budget = HandshakeBudget {
-        stream: &mut output,
-        read: 0,
-        written: 0,
-    };
-    for _ in 0..4 {
-        budget.write_all(&[7; 1024]).unwrap();
-    }
-    assert_eq!(budget.written, 4096);
-    assert!(budget.write(&[7]).is_err());
-    assert_eq!(output.len(), 4096);
-}
+#[cfg(unix)]
+use std::{os::unix::net::UnixStream, thread, time::Duration};
 
 #[cfg(unix)]
 #[derive(Debug)]
@@ -213,4 +178,42 @@ fn native_tls_refuses_completed_peer_without_alpn_and_accepts_original() {
             ));
         }
     }
+}
+
+#[test]
+fn public_native_accept_bounds_actual_peer_ingress() {
+    struct Input {
+        bytes: Cursor<Vec<u8>>,
+        read: Arc<AtomicUsize>,
+    }
+    impl Read for Input {
+        fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
+            let count = self.bytes.read(target)?;
+            self.read.fetch_add(count, Ordering::SeqCst);
+            Ok(count)
+        }
+    }
+    impl Write for Input {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    // A real TLS record header declares a body beyond the native handshake bound.
+    let mut bytes = vec![22, 3, 3, 0x20, 0x00];
+    bytes.resize(8197, 0);
+    let read = Arc::new(AtomicUsize::new(0));
+    let input = Input {
+        bytes: Cursor::new(bytes),
+        read: read.clone(),
+    };
+    let identity =
+        NativeIdentity::restore(PrivateKeyMaterial::new(Zeroizing::new([9; 32]))).unwrap();
+    assert!(matches!(
+        NativeTransport::accept(input, &identity),
+        Err(PairingCryptoError::InvalidProof)
+    ));
+    assert_eq!(read.load(Ordering::SeqCst), 4096);
 }

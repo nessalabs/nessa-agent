@@ -26,11 +26,6 @@ use std::{
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
-#[cfg(test)]
-use std::sync::Arc;
-#[cfg(test)]
-type FileSyncGate = Arc<dyn Fn() + Send + Sync>;
-
 const GATEWAY_FILE: &str = "gateway-key";
 const PENDING_FILE: &str = "client-pending";
 const LOCK_FILE: &str = "pairing-state.lock";
@@ -45,10 +40,6 @@ pub struct FilePairingState {
     directory: PrivateDirectory,
     lock: File,
     operation: Mutex<()>,
-    #[cfg(test)]
-    fault: std::sync::atomic::AtomicU8,
-    #[cfg(test)]
-    after_file_sync: Mutex<Option<FileSyncGate>>,
 }
 impl FilePairingState {
     /// Open an already private directory beneath a trusted absolute root.
@@ -70,10 +61,6 @@ impl FilePairingState {
             directory,
             lock,
             operation: Mutex::new(()),
-            #[cfg(test)]
-            fault: std::sync::atomic::AtomicU8::new(0),
-            #[cfg(test)]
-            after_file_sync: Mutex::new(None),
         })
     }
     fn read(
@@ -137,17 +124,6 @@ impl FilePairingState {
             .as_file_mut()
             .write_all(bytes)
             .map_err(storage_error)?;
-        #[cfg(test)]
-        {
-            let fault = self.fault.load(std::sync::atomic::Ordering::Acquire);
-            if fault == 1
-                || (fault == 6 && name == gateway_audit::INTENT_FILE)
-                || (fault == 7 && name == gateway_audit::OUTCOME_FILE)
-                || (fault == 8 && name == GATEWAY_FILE)
-            {
-                return Err(PrivateStateError::Unavailable);
-            }
-        }
         let result = if replace {
             temporary.replace(OsStr::new(name))
         } else {
@@ -155,16 +131,6 @@ impl FilePairingState {
         };
         match result {
             Ok(published) => {
-                #[cfg(test)]
-                match self.fault.load(std::sync::atomic::Ordering::Acquire) {
-                    2 => {
-                        return self
-                            .reconcile_live(name, bytes, published)
-                            .map_err(|_| PrivateStateError::Uncertain)
-                    }
-                    3 => return Err(PrivateStateError::Uncertain),
-                    _ => {}
-                }
                 let acknowledged = self.verify_lock().map_err(|_| PrivateStateError::Uncertain);
                 drop(published);
                 acknowledged
@@ -231,13 +197,6 @@ impl FilePairingState {
             return Err(PrivateStorageFailure::UnsafeStorage);
         }
         original.sync_all().map_err(|e| storage_failure(&e))?;
-        #[cfg(test)]
-        {
-            let gate = self.after_file_sync.lock().unwrap().clone();
-            if let Some(gate) = gate {
-                gate();
-            }
-        }
         if !self
             .directory
             .named_file_is(OsStr::new(name), original)

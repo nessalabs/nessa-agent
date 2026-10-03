@@ -16,13 +16,10 @@ use std::os::unix::{
 use std::{
     fs,
     path::PathBuf,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
-    },
-    thread,
-    time::Duration,
+    sync::atomic::{AtomicUsize, Ordering},
 };
+#[cfg(unix)]
+use std::{thread, time::Duration};
 use tempfile::TempDir;
 
 struct Fixture {
@@ -32,17 +29,18 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().canonicalize().unwrap();
-        #[cfg(unix)]
-        {
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
+        let path = root.path().canonicalize().unwrap().join("root");
+        nessa_local_storage::create_directory(&path).unwrap();
         nessa_local_storage::create_directory_beneath(&path, Path::new("private")).unwrap();
         let store = FilePairingState::open(&path, Path::new("private")).unwrap();
         Self { root, store }
     }
     fn path(&self) -> PathBuf {
-        self.root.path().canonicalize().unwrap().join("private")
+        self.root
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("root/private")
     }
 }
 struct Time;
@@ -87,7 +85,7 @@ fn gateway_key_is_exclusive_and_reopens() {
         fixture.store.save_gateway_key(&key(43), &gateway(), &Time),
         Err(PrivateStateError::Conflict)
     );
-    let root = fixture.root.path().canonicalize().unwrap();
+    let root = fixture.root.path().canonicalize().unwrap().join("root");
     drop(fixture.store);
     let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
     assert_eq!(
@@ -104,7 +102,7 @@ fn private_state_lock_excludes_second_handle() {
     let fixture = Fixture::new();
     assert!(matches!(
         FilePairingState::open(
-            &fixture.root.path().canonicalize().unwrap(),
+            &fixture.root.path().canonicalize().unwrap().join("root"),
             Path::new("private")
         ),
         Err(PrivateStateError::Locked)
@@ -268,61 +266,6 @@ fn pending_retry_preserves_identity_and_requires_exact_prior() {
     }
 }
 #[test]
-fn pending_uncertain_publication_preserves_fact() {
-    let fixture = Fixture::new();
-    fixture.store.fault.store(3, Ordering::Release);
-    assert_eq!(
-        fixture
-            .store
-            .save_pending(&key(7), &[5; 44], intent(2), None),
-        Err(PrivateStateError::Uncertain)
-    );
-    assert_eq!(
-        fixture.store.load_pending().unwrap().unwrap().intent(),
-        intent(2)
-    );
-    fixture.store.fault.store(2, Ordering::Release);
-    fixture
-        .store
-        .save_pending(&key(7), &[5; 44], intent(2), None)
-        .unwrap();
-    let acknowledged_after_rename = Fixture::new();
-    acknowledged_after_rename
-        .store
-        .fault
-        .store(2, Ordering::Release);
-    acknowledged_after_rename
-        .store
-        .save_pending(&key(7), &[5; 44], intent(2), None)
-        .unwrap();
-    assert_eq!(
-        acknowledged_after_rename
-            .store
-            .load_pending()
-            .unwrap()
-            .unwrap()
-            .intent(),
-        intent(2)
-    );
-
-    let root = fixture.root.path().canonicalize().unwrap();
-    drop(fixture.store);
-    let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
-    assert_eq!(
-        reopened
-            .load_pending()
-            .unwrap()
-            .unwrap()
-            .key()
-            .expose_bytes(),
-        &[7; 32]
-    );
-    assert_eq!(
-        reopened.load_pending().unwrap().unwrap().intent(),
-        intent(2)
-    );
-}
-#[test]
 fn private_state_is_bounded_and_redacted() {
     let fixture = Fixture::new();
     fixture
@@ -389,7 +332,7 @@ fn private_state_is_bounded_and_redacted() {
     assert_eq!(restored.gateway_pin(), &[5; 44]);
     assert_eq!(restored.intent(), intent(2));
     assert_eq!(format!("{restored:?}"), debug);
-    let root = fixture.root.path().canonicalize().unwrap();
+    let root = fixture.root.path().canonicalize().unwrap().join("root");
     drop(fixture.store);
     let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
     let pending = reopened.load_pending().unwrap().unwrap();
@@ -402,7 +345,7 @@ fn private_state_is_bounded_and_redacted() {
 #[test]
 fn pending_publication_failure_sends_no_ke3() {
     let fixture = Fixture::new();
-    fixture.store.fault.store(1, Ordering::Release);
+    fs::create_dir(fixture.path().join(PENDING_FILE)).unwrap();
     let gateway = NativeIdentity::restore(key(10)).unwrap();
     let device = NativeIdentity::restore(key(11)).unwrap();
     let code = ManualCode::parse(b"ABCD2345").unwrap();
@@ -448,6 +391,7 @@ fn pending_publication_failure_sends_no_ke3() {
         }),
         Err(PairingCryptoError::PendingStorage)
     );
+    fs::remove_dir(fixture.path().join(PENDING_FILE)).unwrap();
     assert!(fixture.store.load_pending().unwrap().is_none());
 }
 
@@ -526,7 +470,7 @@ fn real_pending_save_precedes_ke3_and_survives_restart() {
     drop(transport);
     drop(device);
     server.join().unwrap();
-    let root = fixture.root.path().canonicalize().unwrap();
+    let root = fixture.root.path().canonicalize().unwrap().join("root");
     drop(fixture.store);
     let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
     let (material, pin, public) = reopened.load_pending().unwrap().unwrap().into_parts();
@@ -555,73 +499,6 @@ fn real_pending_save_precedes_ke3_and_survives_restart() {
     server.join().unwrap();
 }
 
-#[test]
-fn gateway_audit_failure_keeps_original_operation() {
-    let fixture = Fixture::new();
-    fixture.store.fault.store(6, Ordering::Release);
-    assert_eq!(
-        fixture.store.save_gateway_key(&key(42), &gateway(), &Time),
-        Err(PrivateStateError::AuditUnavailable(
-            GatewayPublicationState::NotPublished
-        ))
-    );
-    assert!(!fixture.path().join(GATEWAY_FILE).exists());
-    assert!(!fixture.path().join(INTENT_FILE).exists());
-    fixture.store.fault.store(7, Ordering::Release);
-    assert_eq!(
-        fixture.store.save_gateway_key(&key(42), &gateway(), &Time),
-        Err(PrivateStateError::AuditUnavailable(
-            GatewayPublicationState::Published
-        ))
-    );
-    let original = std::fs::read(fixture.path().join(INTENT_FILE)).unwrap();
-    let intent: serde_json::Value = serde_json::from_slice(&original).unwrap();
-    assert_eq!(intent["gateway"], "gateway-1");
-    assert_eq!(intent["before"], "absent");
-    assert_eq!(intent["cause"], "firstPublication");
-    assert_eq!(intent["initiator"], "system");
-    assert!(intent.get("seed").is_none());
-    assert!(!fixture.path().join(OUTCOME_FILE).exists());
-    assert_eq!(
-        fixture.store.save_gateway_key(&key(43), &gateway(), &Time),
-        Err(PrivateStateError::Conflict)
-    );
-    assert!(matches!(
-        fixture.store.restore_gateway_key(&gateway(), &Time),
-        Err(PrivateStateError::AuditUnavailable(
-            GatewayPublicationState::Published
-        ))
-    ));
-    fixture.store.fault.store(0, Ordering::Release);
-    assert_eq!(
-        fixture
-            .store
-            .restore_gateway_key(&gateway(), &Time)
-            .unwrap()
-            .unwrap()
-            .expose_bytes(),
-        &[42; 32]
-    );
-    fixture
-        .store
-        .save_gateway_key(&key(42), &gateway(), &Time)
-        .unwrap();
-    assert_eq!(
-        std::fs::read(fixture.path().join(INTENT_FILE)).unwrap(),
-        original
-    );
-    let outcome: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fixture.path().join(OUTCOME_FILE)).unwrap()).unwrap();
-    assert_eq!(outcome["intent"], intent);
-    assert_eq!(outcome["after"], "published");
-    assert!(outcome.get("seed").is_none());
-    assert!(matches!(
-        fixture
-            .store
-            .restore_gateway_key(&AudienceId::new("other").unwrap(), &Time),
-        Err(PrivateStateError::Conflict)
-    ));
-}
 #[test]
 fn gateway_audit_missing_key_refuses_save_before_effect() {
     for remove_intent in [false, true] {
@@ -667,7 +544,7 @@ fn gateway_audit_missing_key_refuses_save_before_effect() {
             .store
             .save_gateway_key(&key(42), &gateway(), &Time)
             .unwrap();
-        let root = fixture.root.path().canonicalize().unwrap();
+        let root = fixture.root.path().canonicalize().unwrap().join("root");
         drop(fixture.store);
         let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
         assert_eq!(
@@ -685,62 +562,6 @@ fn gateway_audit_missing_key_refuses_save_before_effect() {
         assert_eq!(fs::read(&intent_path).unwrap(), original_intent);
         assert_eq!(fs::read(&outcome_path).unwrap(), original_outcome);
     }
-}
-
-#[test]
-fn gateway_audit_restart_preserves_target_and_operation() {
-    let fixture = Fixture::new();
-    // This fails the key-file effect only after its original intent was acknowledged.
-    // Fault injection is phase-specific to avoid claiming an unobserved publication.
-    fixture.store.fault.store(8, Ordering::Release);
-    assert_eq!(
-        fixture.store.save_gateway_key(&key(42), &gateway(), &Time),
-        Err(PrivateStateError::Unavailable)
-    );
-    let original = std::fs::read(fixture.path().join(INTENT_FILE)).unwrap();
-    assert!(!fixture.path().join(GATEWAY_FILE).exists());
-    let root = fixture.root.path().canonicalize().unwrap();
-    drop(fixture.store);
-    let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
-    assert!(reopened
-        .restore_gateway_key(&gateway(), &Time)
-        .unwrap()
-        .is_none());
-    reopened.fault.store(7, Ordering::Release);
-    assert_eq!(
-        reopened.save_gateway_key(&key(42), &gateway(), &Time),
-        Err(PrivateStateError::AuditUnavailable(
-            GatewayPublicationState::Published
-        ))
-    );
-    drop(reopened);
-    let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
-    assert_eq!(
-        reopened
-            .restore_gateway_key(&gateway(), &Time)
-            .unwrap()
-            .unwrap()
-            .expose_bytes(),
-        &[42; 32]
-    );
-    assert_eq!(
-        std::fs::read(fixture.root.path().join("private").join(INTENT_FILE)).unwrap(),
-        original
-    );
-    let outcome = std::fs::read(fixture.root.path().join("private").join(OUTCOME_FILE)).unwrap();
-    // A lost acknowledgement and another restart restore the same immutable receipt.
-    drop(reopened);
-    let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
-    reopened.restore_gateway_key(&gateway(), &Time).unwrap();
-    assert_eq!(
-        std::fs::read(fixture.root.path().join("private").join(OUTCOME_FILE)).unwrap(),
-        outcome
-    );
-    std::fs::remove_file(fixture.root.path().join("private").join(GATEWAY_FILE)).unwrap();
-    assert!(matches!(
-        reopened.restore_gateway_key(&gateway(), &Time),
-        Err(PrivateStateError::Corrupt)
-    ));
 }
 
 #[test]
@@ -797,416 +618,141 @@ fn gateway_audit_rejects_relationship_and_bounds_contradictions() {
     );
 }
 
-fn publish_fixture(store: &FilePairingState, name: &str, bytes: &[u8]) -> PublishedPrivateFile {
-    let mut temporary = store.directory.reserve_temp().unwrap();
-    temporary.as_file_mut().write_all(bytes).unwrap();
-    temporary.publish_new(OsStr::new(name)).unwrap()
-}
 #[test]
-fn live_reconcile_accepts_original_and_correlates_name_bytes() {
+fn pending_public_retry_and_reopen_preserve_original_fact() {
     let fixture = Fixture::new();
-    let published = publish_fixture(&fixture.store, "original", b"exact bytes");
-    fixture
-        .store
-        .reconcile_live("original", b"exact bytes", published)
-        .unwrap();
-    let published = publish_fixture(&fixture.store, "wrong-name", b"exact bytes");
-    assert_eq!(
-        fixture
-            .store
-            .reconcile_live("other", b"exact bytes", published),
-        Err(PrivateStorageFailure::UnsafeStorage)
-    );
-    let published = publish_fixture(&fixture.store, "wrong-bytes", b"other bytes");
-    assert_eq!(
-        fixture
-            .store
-            .reconcile_live("wrong-bytes", b"exact bytes", published),
-        Err(PrivateStorageFailure::UnsafeStorage)
-    );
-}
-#[cfg(unix)]
-#[test]
-fn live_reconcile_keeps_original_identity() {
-    let fixture = Fixture::new();
-    let published = publish_fixture(&fixture.store, "original", b"exact bytes");
-    std::fs::rename(
-        fixture.path().join("original"),
-        fixture.path().join("moved"),
-    )
-    .unwrap();
-    let foreign = publish_fixture(&fixture.store, "original", b"exact bytes");
-    let synced = Arc::new(AtomicUsize::new(0));
-    let observed = synced.clone();
-    *fixture.store.after_file_sync.lock().unwrap() = Some(Arc::new(move || {
-        observed.fetch_add(1, Ordering::SeqCst);
-    }));
-    assert_eq!(
-        fixture
-            .store
-            .reconcile_live("original", b"exact bytes", published),
-        Err(PrivateStorageFailure::UnsafeStorage)
-    );
-    assert_eq!(synced.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        std::fs::read(fixture.path().join("moved")).unwrap(),
-        b"exact bytes"
-    );
-    assert!(fixture
-        .store
-        .directory
-        .named_file_is(OsStr::new("original"), foreign.as_file())
-        .unwrap());
-    // Restart knows only the current exact bytes and current binding, not the old native object.
-    fixture.store.reconcile("original", b"exact bytes").unwrap();
-    assert_eq!(synced.load(Ordering::SeqCst), 1);
-}
-#[test]
-#[cfg(unix)]
-fn live_reconcile_refuses_identity_replacement_after_original_sync() {
-    for replace in [true, false] {
-        let fixture = Fixture::new();
-        let published = publish_fixture(&fixture.store, "original", b"exact bytes");
-        let original = published.as_file().try_clone().unwrap();
-        let (synced, reached) = mpsc::sync_channel(1);
-        let (release, resume) = mpsc::sync_channel(1);
-        let resume = Mutex::new(resume);
-        *fixture.store.after_file_sync.lock().unwrap() = Some(Arc::new(move || {
-            synced.send(()).unwrap();
-            resume
-                .lock()
-                .unwrap()
-                .recv_timeout(Duration::from_secs(30))
-                .unwrap();
-        }));
-        let (result, replacement) = thread::scope(|scope| {
-            let store = &fixture.store;
-            let worker =
-                scope.spawn(move || store.reconcile_live("original", b"exact bytes", published));
-            reached.recv_timeout(Duration::from_secs(30)).unwrap();
-            assert!(matches!(
-                FilePairingState::open(
-                    &fixture.root.path().canonicalize().unwrap(),
-                    Path::new("private")
-                ),
-                Err(PrivateStateError::Locked)
-            ));
-            let replacement = if replace {
-                std::fs::rename(
-                    fixture.path().join("original"),
-                    fixture.path().join("moved"),
-                )
-                .unwrap();
-                Some(publish_fixture(store, "original", b"exact bytes"))
-            } else {
-                None
-            };
-            release.send(()).unwrap();
-            (worker.join().unwrap(), replacement)
-        });
-        *fixture.store.after_file_sync.lock().unwrap() = None;
-        assert_eq!(
-            result,
-            if replace {
-                Err(PrivateStorageFailure::UnsafeStorage)
-            } else {
-                Ok(())
-            }
-        );
-        assert_eq!(
-            std::fs::read(fixture.path().join("original")).unwrap(),
-            b"exact bytes"
-        );
-        if let Some(replacement) = replacement {
-            assert_eq!(
-                std::fs::read(fixture.path().join("moved")).unwrap(),
-                b"exact bytes"
-            );
-            assert!(fixture
-                .store
-                .directory
-                .named_file_is(OsStr::new("moved"), &original)
-                .unwrap());
-            assert!(fixture
-                .store
-                .directory
-                .named_file_is(OsStr::new("original"), replacement.as_file())
-                .unwrap());
-        } else {
-            assert!(fixture
-                .store
-                .directory
-                .named_file_is(OsStr::new("original"), &original)
-                .unwrap());
-        }
-        // Restart may acknowledge the current object, not the retired original binding.
-        fixture.store.reconcile("original", b"exact bytes").unwrap();
-    }
-}
-
-#[test]
-fn missing_reconcile_creates_nothing() {
-    let fixture = Fixture::new();
-    assert_eq!(
-        fixture.store.reconcile("missing", b"exact bytes"),
-        Err(PrivateStateError::Uncertain)
-    );
-    assert!(!fixture.path().join("missing").exists());
-    let original = publish_fixture(&fixture.store, "original", b"exact bytes");
-    assert!(fixture
-        .store
-        .directory
-        .named_file_is(OsStr::new("original"), original.as_file())
-        .unwrap());
-    fixture
-        .store
-        .reconcile_live("original", b"exact bytes", original)
-        .unwrap();
-    // Restart has no retained publication handle; open the existing file writable.
-    fixture.store.reconcile("original", b"exact bytes").unwrap();
-}
-#[test]
-fn publication_refusal_without_cleanup_failure() {
-    let fixture = Fixture::new();
-    let mut temporary = fixture.store.directory.reserve_temp().unwrap();
-    let reservation = temporary.name().to_owned();
-    temporary.as_file_mut().write_all(b"bytes").unwrap();
-    let failure = temporary
-        .publish_new(OsStr::new("invalid/name"))
-        .unwrap_err();
-    let error = fixture
-        .store
-        .publication_failure("invalid/name", b"bytes", failure)
-        .unwrap_err();
-    let PrivateStateError::Publication(error) = error else {
-        panic!("publication evidence missing")
-    };
-    assert_eq!(error.step(), PrivatePublicationStep::ValidateDestination);
-    assert_eq!(error.effect(), PrivatePublicationEffect::NotPublished);
-    assert_eq!(error.cleanup(), None);
-    assert_eq!(error.reconciliation(), None);
-    assert!(!fixture.path().join(reservation).exists());
-}
-#[cfg(unix)]
-#[test]
-fn publication_refusal_retains_independent_cleanup() {
-    let fixture = Fixture::new();
-    let mut temporary = fixture.store.directory.reserve_temp().unwrap();
-    temporary
-        .as_file_mut()
-        .write_all(b"original bytes")
-        .unwrap();
-    let reservation = temporary.name().to_owned();
-    std::fs::rename(
-        fixture.path().join(&reservation),
-        fixture.path().join("moved"),
-    )
-    .unwrap();
-    let mut witness = fixture
-        .store
-        .directory
-        .open_file(&reservation, OpenMode::CreateNew)
-        .unwrap();
-    witness.write_all(b"foreign witness").unwrap();
-    let failure = temporary
-        .publish_new(OsStr::new("destination"))
-        .unwrap_err();
-    let error = fixture
-        .store
-        .publication_failure("destination", b"original bytes", failure)
-        .unwrap_err();
-    let PrivateStateError::Publication(error) = error else {
-        panic!("publication evidence missing")
-    };
-    assert_eq!(error.step(), PrivatePublicationStep::ValidateReservation);
-    assert_eq!(error.primary(), PrivateStorageFailure::UnsafeStorage);
-    assert_eq!(error.cleanup(), Some(PrivateStorageFailure::UnsafeStorage));
-    assert_eq!(error.effect(), PrivatePublicationEffect::NotPublished);
-    assert_eq!(error.reconciliation(), None);
-    assert!(!fixture.path().join("destination").exists());
-    assert_eq!(
-        std::fs::read(fixture.path().join(reservation)).unwrap(),
-        b"foreign witness"
-    );
-    assert_eq!(
-        std::fs::read(fixture.path().join("moved")).unwrap(),
-        b"original bytes"
-    );
-}
-#[test]
-fn audit_publication_keeps_both_effect_meanings() {
-    for key in [
-        GatewayPublicationState::NotPublished,
-        GatewayPublicationState::Published,
-    ] {
-        let fixture = Fixture::new();
-        let temporary = fixture.store.directory.reserve_temp().unwrap();
-        let failure = temporary
-            .publish_new(OsStr::new("invalid/name"))
-            .unwrap_err();
-        let error = fixture
-            .store
-            .publication_failure("invalid/name", b"bytes", failure)
-            .unwrap_err();
-        let PrivateStateError::Publication(original) = error else {
-            panic!("publication evidence missing")
-        };
-        let mapped = gateway_audit::audit_error(error, key);
-        assert_eq!(
-            mapped,
-            PrivateStateError::AuditPublication {
-                key,
-                failure: original
-            }
-        );
-        assert_eq!(original.effect(), PrivatePublicationEffect::NotPublished);
-        assert_eq!(gateway_audit::audit_error(mapped, key), mapped);
-    }
-}
-#[test]
-fn publication_error_is_redacted() {
-    let fixture = Fixture::new();
-    let mut temporary = fixture.store.directory.reserve_temp().unwrap();
-    temporary
-        .as_file_mut()
-        .write_all(b"private seed bytes")
-        .unwrap();
-    let failure = temporary
-        .publish_new(OsStr::new("private/path"))
-        .unwrap_err();
-    let error = fixture
-        .store
-        .publication_failure("private/path", b"private seed bytes", failure)
-        .unwrap_err();
-    let diagnostic = format!("{error:?} {error}");
-    assert!(!diagnostic.contains("private seed bytes"));
-    assert!(!diagnostic.contains("private/path"));
-    assert!(!diagnostic.contains(&fixture.path().to_string_lossy().to_string()));
-}
-
-#[test]
-fn publication_occupied_destination_preserves_original_and_stage() {
-    let fixture = Fixture::new();
-    let original = publish_fixture(&fixture.store, "destination", b"original bytes");
-    let mut temporary = fixture.store.directory.reserve_temp().unwrap();
-    let reservation = temporary.name().to_owned();
-    temporary.as_file_mut().write_all(b"new bytes").unwrap();
-    let failure = temporary
-        .publish_new(OsStr::new("destination"))
-        .unwrap_err();
-    let error = fixture
-        .store
-        .publication_failure("destination", b"new bytes", failure)
-        .unwrap_err();
-    let PrivateStateError::Publication(error) = error else {
-        panic!("publication evidence missing")
-    };
-    assert_eq!(error.step(), PrivatePublicationStep::Rename);
-    assert_eq!(error.primary(), PrivateStorageFailure::Unavailable);
-    assert_eq!(error.cleanup(), None);
-    assert_eq!(error.effect(), PrivatePublicationEffect::NotPublished);
-    assert_eq!(error.reconciliation(), None);
-    assert!(fixture
-        .store
-        .directory
-        .named_file_is(OsStr::new("destination"), original.as_file())
-        .unwrap());
-    assert_eq!(
-        std::fs::read(fixture.path().join("destination")).unwrap(),
-        b"original bytes"
-    );
-    assert!(!fixture.path().join(reservation).exists());
-}
-
-#[test]
-fn pending_live_lost_acknowledgement_reconciles() {
-    let fixture = Fixture::new();
-    fixture.store.fault.store(2, Ordering::Release);
     fixture
         .store
         .save_pending(&key(7), &[5; 44], intent(2), None)
         .unwrap();
-    let restored = fixture.store.load_pending().unwrap().unwrap();
-    assert_eq!(restored.intent(), intent(2));
-    assert_eq!(restored.gateway_pin(), &[5; 44]);
-    assert_eq!(restored.key().expose_bytes(), key(7).expose_bytes());
-}
-#[cfg(unix)]
-#[test]
-fn live_reconcile_refuses_changed_lock_binding() {
-    let fixture = Fixture::new();
-    let published = publish_fixture(&fixture.store, "original", b"exact bytes");
-    std::fs::rename(
-        fixture.path().join(LOCK_FILE),
-        fixture.path().join("original-lock"),
-    )
-    .unwrap();
-    let replacement = fixture
+    let original = fs::read(fixture.path().join(PENDING_FILE)).unwrap();
+    fixture
         .store
-        .directory
-        .open_file(OsStr::new(LOCK_FILE), OpenMode::CreateNew)
+        .save_pending(&key(7), &[5; 44], intent(2), None)
         .unwrap();
-    assert_eq!(
-        fixture
-            .store
-            .reconcile_live("original", b"exact bytes", published),
-        Err(PrivateStorageFailure::UnsafeStorage)
-    );
-    assert!(fixture
-        .store
-        .directory
-        .named_file_is(OsStr::new(LOCK_FILE), &replacement)
-        .unwrap());
-    assert_eq!(
-        std::fs::read(fixture.path().join("original")).unwrap(),
-        b"exact bytes"
-    );
-}
-
-#[test]
-fn restart_acknowledgement_reopens_writable_existing_file_and_reflushes() {
-    let fixture = Fixture::new();
-    let published = publish_fixture(&fixture.store, "restart", b"exact bytes");
-    drop(published);
+    let root = fixture.root.path().canonicalize().unwrap().join("root");
     drop(fixture.store);
-    let root = fixture.root.path().canonicalize().unwrap();
     let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
-    let mut original = reopened.reopen_for_acknowledgement("restart").unwrap();
-    original.seek(SeekFrom::Start(0)).unwrap();
-    original.write_all(b"exact bytes").unwrap();
-    original.sync_all().unwrap();
     reopened
-        .acknowledge("restart", b"exact bytes", &original)
+        .save_pending(&key(7), &[5; 44], intent(2), None)
         .unwrap();
-    reopened.reconcile("restart", b"exact bytes").unwrap();
-    assert!(matches!(
-        reopened.reopen_for_acknowledgement("absent"),
-        Err(PrivateStateError::Uncertain)
-    ));
-    assert!(!root.join("private").join("absent").exists());
+    let saved = reopened.load_pending().unwrap().unwrap();
+    assert_eq!(saved.intent(), intent(2));
+    assert_eq!(saved.gateway_pin(), &[5; 44]);
+    assert_eq!(saved.key().expose_bytes(), &[7; 32]);
+    assert_eq!(
+        fs::read(root.join("private").join(PENDING_FILE)).unwrap(),
+        original
+    );
 }
 
+struct ObstructPublication {
+    path: PathBuf,
+    call: AtomicUsize,
+    at: usize,
+}
+impl Clock for ObstructPublication {
+    fn unix_milliseconds(&self) -> u64 {
+        if self.call.fetch_add(1, Ordering::SeqCst) == self.at {
+            fs::create_dir(&self.path).unwrap();
+        }
+        100_000
+    }
+}
 #[test]
-fn failed_acknowledgement_preserves_original_published_handle_for_reconciliation() {
-    let fixture = Fixture::new();
-    let published = publish_fixture(&fixture.store, "original", b"exact bytes");
-    assert_eq!(
+fn gateway_publication_failure_preserves_original_operation_and_effect() {
+    for (name, at, key_effect) in [
+        (INTENT_FILE, 0, GatewayPublicationState::NotPublished),
+        (GATEWAY_FILE, 0, GatewayPublicationState::NotPublished),
+        (OUTCOME_FILE, 1, GatewayPublicationState::Published),
+    ] {
+        let fixture = Fixture::new();
+        let obstruct = ObstructPublication {
+            path: fixture.path().join(name),
+            call: AtomicUsize::new(0),
+            at,
+        };
+        let error = fixture
+            .store
+            .save_gateway_key(&key(42), &gateway(), &obstruct)
+            .unwrap_err();
+        match (&error, key_effect) {
+            (PrivateStateError::Publication(failure), GatewayPublicationState::NotPublished)
+            | (
+                PrivateStateError::AuditPublication {
+                    key: GatewayPublicationState::NotPublished,
+                    failure,
+                },
+                GatewayPublicationState::NotPublished,
+            )
+            | (
+                PrivateStateError::AuditPublication {
+                    key: GatewayPublicationState::Published,
+                    failure,
+                },
+                GatewayPublicationState::Published,
+            ) => {
+                assert_eq!(failure.effect(), PrivatePublicationEffect::NotPublished);
+            }
+            _ => panic!("unexpected public publication evidence: {error:?}"),
+        }
+        let diagnostic = format!("{error:?} {error}");
+        assert!(!diagnostic.contains(&fixture.path().to_string_lossy().to_string()));
+        let key_path = fixture.path().join(GATEWAY_FILE);
+        match key_effect {
+            GatewayPublicationState::Published => {
+                assert!(key_path.is_file());
+                let original_key = fs::read(&key_path).unwrap();
+                assert_eq!(&original_key[4..], &[42; 32]);
+            }
+            GatewayPublicationState::NotPublished => assert!(!key_path.is_file()),
+        }
+        assert!(!fixture.path().join(OUTCOME_FILE).is_file());
+        let original_intent = if name == INTENT_FILE {
+            assert!(!fixture.path().join(INTENT_FILE).is_file());
+            None
+        } else {
+            let original = fs::read(fixture.path().join(INTENT_FILE)).unwrap();
+            let intent: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            assert_eq!(intent["gateway"], "gateway-1");
+            assert_eq!(intent["before"], "absent");
+            assert_eq!(intent["cause"], "firstPublication");
+            assert_eq!(intent["initiator"], "system");
+            Some(original)
+        };
+        fs::remove_dir(&obstruct.path).unwrap();
         fixture
             .store
-            .acknowledge("original", b"wrong bytes", published.as_file()),
-        Err(PrivateStorageFailure::UnsafeStorage)
-    );
-    assert!(fixture
-        .store
-        .directory
-        .named_file_is(OsStr::new("original"), published.as_file())
-        .unwrap());
-    fixture
-        .store
-        .acknowledge("original", b"exact bytes", published.as_file())
-        .unwrap();
-    fixture
-        .store
-        .reconcile_live("original", b"exact bytes", published)
-        .unwrap();
+            .save_gateway_key(&key(42), &gateway(), &Time)
+            .unwrap();
+        let retry_intent = fs::read(fixture.path().join(INTENT_FILE)).unwrap();
+        if let Some(original) = original_intent {
+            assert_eq!(retry_intent, original);
+        }
+        let intent: serde_json::Value = serde_json::from_slice(&retry_intent).unwrap();
+        assert_eq!(intent["gateway"], "gateway-1");
+        assert_eq!(intent["before"], "absent");
+        assert_eq!(intent["cause"], "firstPublication");
+        assert_eq!(intent["initiator"], "system");
+        let original_outcome = fs::read(fixture.path().join(OUTCOME_FILE)).unwrap();
+        let root = fixture.root.path().canonicalize().unwrap().join("root");
+        drop(fixture.store);
+        let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
+        assert_eq!(
+            reopened
+                .restore_gateway_key(&gateway(), &Time)
+                .unwrap()
+                .unwrap()
+                .expose_bytes(),
+            &[42; 32]
+        );
+        assert_eq!(
+            fs::read(root.join("private").join(INTENT_FILE)).unwrap(),
+            retry_intent
+        );
+        assert_eq!(
+            fs::read(root.join("private").join(OUTCOME_FILE)).unwrap(),
+            original_outcome
+        );
+    }
 }

@@ -2,8 +2,10 @@
  * A `WorkspaceSource` held in memory: the sample workspace, and agents that
  * answer from a script. A message sent is thought about, then read around,
  * then answered a couple of words at a time; an approval runs its command or
- * is let go. It stands in for the gateway until the gateway implements the
- * same port, and is the only place sample data and scripted replies exist.
+ * is let go. The gateway's source (`../gateway/`) implements the same port;
+ * this one is what the window shows without a gateway — the verification
+ * fixtures and previews — and the only place sample data and scripted
+ * replies exist.
  *
  * The timers are its own, taken from `schedule`, and `dispose` cancels every
  * one; a session sent to again while it is still answering drops the old

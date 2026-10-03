@@ -490,6 +490,21 @@ pub struct ConversationPending {
 pub struct ConversationPermissionOption {
     pub id: String,
     pub label: String,
+    pub effect: ConversationPermissionOptionEffect,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationPermissionOptionEffect {
+    Allow,
+    Deny,
+}
+impl ConversationPermissionOptionEffect {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        }
+    }
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

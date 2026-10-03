@@ -344,8 +344,11 @@ await client.mcpApps.releaseApp(conversationId, app)
 origin, as `upload` does, with the ticket in the `x-nessa-resource-ticket`
 header and never in the URL, and hands back the bytes only once their size and
 SHA-256 are the ones `readResource` described. A destructive tool waits for the
-person's answer to a review with `origin: {kind: "app", server, tool}`, for up
-to 5 minutes, and `callTool` waits that long for it. `argumentsJson` is at most
+person's answer to a review with `origin: {kind: "app", server, tool}`, and
+`callTool` waits for the review, the call and an allowance:
+`mcpAppDeadlines.callToolMs`. `mcpAppDeadlines` holds the longest each call can
+take the gateway, as the protocol publishes it (`x-mcpAppCallTiming`), for a host
+that bounds an app's requests. `argumentsJson` is at most
 32 KiB (`MAX_MCP_ARGUMENTS_BYTES`), the most a review shows; arguments past any
 bound throw `TypeError` before anything is sent.
 

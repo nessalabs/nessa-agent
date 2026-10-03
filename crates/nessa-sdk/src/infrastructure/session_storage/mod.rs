@@ -8,6 +8,8 @@
 //! product reads reuse terminal-discovery metadata/hash in a sixteen-entry cache
 //! and return [`RecordReadStatus::Preparing`] until a captured tail is validated.
 //! That cache retains no worker or semantic body.
+//! `record_changes` publishes payloadless interest after complete semantic facts
+//! and reset receipts. Watch closure does not retire physical writer/read leases.
 //! TranscriptFold validates complete facts through the one SDK session fold. A
 //! committed read cache advances from a fixed head and remains separate from
 //! the writer's observed state.
@@ -18,6 +20,7 @@
 //!                                      |-> semantic facts -> SQLite runtime
 //! RecordStorage -> identity metadata -> expected bounded read source -> sync engine
 //! RecordStorage -> transcript fold -> committed gateway view
+//! RecordStorage -> bounded committed-change watches (no read or permission)
 //! MessageCommitClock <--------------------- Tokio monotonic clock adapter
 //! ```
 //! Arrows show calls and representation mapping. A complete framed fact is
@@ -29,6 +32,8 @@ mod memory;
 mod message_commit_clock;
 mod paths;
 mod record;
+mod record_changes;
+pub use record_changes::MAX_RECORD_CHANGE_WATCHES;
 mod record_lifecycle;
 mod record_source;
 mod record_writer;

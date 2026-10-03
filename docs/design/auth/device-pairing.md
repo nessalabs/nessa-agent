@@ -202,8 +202,8 @@ The existing `verifier` member is one current proof sum: a bearer verifier strin
 
 | Registry input / order | Owner and result | Evidence |
 | --- | --- | --- |
-| External persisted history exceeds MAX_HISTORY_STEPS | Restore refuses Capacity before replay; append consumes that refusal from the same owner | `history_cannot_append_to_another_projection_or_overflow` retains actual raw33-step corruption and exact original append neighbors |
-| A valid privately minted transition follows restored current history | Restore and original before correlation govern append; omit the unreachable copied append>=32 predicate | The same fixture accepts original append and refuses stale before; the validated factory/state graph above supplies the private bound, without a fabricated legal32-step value |
+| External persisted history exceeds MAX_HISTORY_STEPS | Restore refuses Capacity before replay; append consumes that refusal from the same owner | `public_reopen_validates_original_consent_and_history_bound` edits acknowledged bytes to raw33-step history, observes public reopen refusal, and restores the original Approved record |
+| A valid privately minted transition follows restored current history | Restore and original before correlation govern append; omit the unreachable copied append>=32 predicate | Public domain `pairing_history_agrees` accepts each transition against its original before state and refuses stale before; the validated factory/state graph above supplies the private append bound. Public registry reopen separately restores original Approved history |
 
 ### Canonical credential revocation and enrollment agreement
 
@@ -378,7 +378,7 @@ until the exact seed/pin/attempt/intent has been durably acknowledged.
 | First local gateway key publication | Publish one private seed with exclusive destination creation before invitation/listener acknowledgement. Exact retry acknowledges that same seed; a different seed conflicts. Missing key with canonical enrollment history refuses implicit regeneration | `gateway_key_is_exclusive_and_reopens` plus composition history admission |
 | Valid KE2, no prior pending record | Publish seed, authenticated gateway pin and exact PublicIntent in one bounded private record. Only acknowledged file+directory persistence returns success to ClientAttempt.finish, allowing KE3 | `real_pending_save_precedes_ke3_and_survives_restart` |
 | Publication fails before rename | Preserve old/absent record; no KE3. Do not infer a claim or erase a prior pin | `pending_publication_failure_sends_no_ke3` |
-| Rename occurred but acknowledgement failed | Retain the published-file fact; reconcile exact bytes, retained directory binding, file sync and directory sync. If reconciliation cannot prove the same record, return typed Uncertain and send no KE3 | `pending_uncertain_publication_preserves_fact` |
+| Rename occurred but acknowledgement failed | Retain the published-file fact; reconcile exact bytes, retained directory binding, file sync and directory sync. If reconciliation cannot prove the same record, return typed Uncertain and send no KE3 | Exact failed live acknowledgement is unverified after removal of fault selectors/private rendezvous. Public exact-retry/reopen proves current-file acknowledgement, not this failure ordering |
 | Client restart after save, before KE3 or after lost claim reply | Restore the same seed/pin/PublicIntent, use fresh strict-pin key-proved status. Do not persist KE3/session state or invent completed enrollment | `real_pending_save_precedes_ke3_and_survives_restart` plus combined lost-answer acceptance |
 | Exact save retry or competing client handle | Lifetime private-store lock excludes another writer; exact record retry is idempotent, changed key/pin/intent refuses without replacement | `pending_exact_retry_and_conflicting_state` |
 | Correlated terminal not-claimed receipt, fresh charged attempt and valid KE2 | Application permits retry only from the exact pinned receipt. Atomic local CAS replaces expected prior PublicIntent while preserving seed/pin/invitation/consent/generation/expiry. Changed gateway, key, intent, stale expectation or unavailable replacement capability refuses | `pending_retry_preserves_identity_and_requires_exact_prior` plus application receipt admission |
@@ -399,10 +399,10 @@ claiming portability. This platform capability remains an acceptance boundary.
 | Gateway first-key audit ordering | Required result | Enforcing evidence |
 | --- | --- | --- |
 | No key; canonical registry has zero retained pairing records | Registry guard excludes concurrent create while the injected key owner publishes. A secret-free durable intent mints one operation ID for System first-publication to the canonical gateway target before the key file effect | `first_key_publication_holds_current_history_admission` |
-| Intent audit unavailable before key rename | Typed AuditUnavailable(NotPublished); no key file or listener acknowledgement. Existing intent, if already persisted, retains its original ID/target/cause on exact retry | `gateway_audit_failure_keeps_original_operation` |
-| Key file published; outcome audit unavailable or answer lost | Retain the exact seed. Typed AuditUnavailable(Published) or Uncertain is not an ordinary no-effect failure. Listener startup refuses until restore reconciles the same seed and original intent/outcome | `gateway_audit_failure_keeps_original_operation` |
-| Restart with intent but no key and no published outcome | The lifetime private lock proves old publisher drained. Coherent absence permits the original first-publication intent to continue; there was no published key to replace | `gateway_audit_restart_preserves_target_and_operation` |
-| Restart with key and missing outcome | Restore and sync exact material, derive its public key through the native key owner, and finish the original outcome. Outcome acknowledgement time is the observed confirmation time, not a reconstructed rename time | `gateway_audit_restart_preserves_target_and_operation` |
+| Intent audit unavailable before key rename | Typed AuditUnavailable(NotPublished); no key file or listener acknowledgement. Existing intent, if already persisted, retains its original ID/target/cause on exact retry | `gateway_publication_failure_preserves_original_operation_and_effect` |
+| Key file published; outcome audit unavailable or answer lost | Retain the exact seed. Typed AuditUnavailable(Published) or Uncertain is not an ordinary no-effect failure. Listener startup refuses until restore reconciles the same seed and original intent/outcome | `gateway_publication_failure_preserves_original_operation_and_effect` |
+| Restart with intent but no key and no published outcome | The lifetime private lock proves old publisher drained. Coherent absence permits the original first-publication intent to continue; there was no published key to replace | `gateway_publication_failure_preserves_original_operation_and_effect` |
+| Restart with key and missing outcome | Restore and sync exact material, derive its public key through the native key owner, and finish the original outcome. Outcome acknowledgement time is the observed confirmation time, not a reconstructed rename time | `gateway_publication_failure_preserves_original_operation_and_effect` |
 | Saved outcome but physical key absent; original intent present or absent | One private outcome/key-presence relation is checked by a fresh outcome read at restore absence, before save publishes a missing intent, and before its key-file effect. Refuse Corrupt without creating either missing file; preserve original audit bytes. Move original physical key and optional intent aside, then restore those exact file objects by same-directory rename; preserve bytes and private metadata while proving canonical names absent before the same save and writable reopen | `gateway_audit_missing_key_refuses_save_before_effect` |
 | Existing key and matching audit; canonical history nonempty | Restore existing evidence and key, without issuing a new first-publication operation. Missing key with any retained history refuses, including Terminal/cleaned histories excluded by pending_pairings | `missing_key_with_terminal_history_refuses` |
 | Competing first publishers / wrong target or different existing material | Exclusive private lock and registry guard serialize publication. Only the exact canonical gateway target and matching material reconcile; no key replacement and no new grant | `gateway_key_is_exclusive_and_reopens`; actual competing registry-owner test |
@@ -600,7 +600,7 @@ that disproves using the old wire ceiling as the proposed connection heap bound.
 
 | Row | Native fixed-profile TLS handshake budget | Required result | Enforcing evidence |
 | --- | --- | --- | --- |
-| P65 | Fixed TLS 1.3/RPK handshake ingress or egress reaches its cumulative 4096-byte ceiling | The existing stream budget owner refuses before reading/writing any further wire bytes. No custom TLS parser, dependency bump or alternate clock/proof owner. Actual selected native handshake and OPAQUE enrollment remain accepted. Malformed oversized ALPN/fragmented input refuses; near-boundary complete ALPN heap amplification is measured separately | actual accepted enrollment and external near-boundary/oversized allocator cases; actual budget-owner mutation probe |
+| P65 | Fixed TLS 1.3/RPK handshake ingress or egress reaches its cumulative 4096-byte ceiling | The existing stream budget owner refuses before reading/writing any further wire bytes. No custom TLS parser, dependency bump or alternate clock/proof owner. Actual selected native handshake and OPAQUE enrollment remain accepted. Malformed oversized ALPN/fragmented input refuses; near-boundary complete ALPN heap amplification is measured separately | actual accepted enrollment and external near-boundary/oversized allocator cases; public NativeTransport ingress refusal; egress-at-ceiling is not currently proved at the public boundary. Prior private budget probes remain historical implementation evidence |
 
 The engineering correction initially sets the cumulative handshake wire ceiling
 to 4 KiB in each direction; it leaves the 4-KiB application frame and separate
@@ -631,13 +631,13 @@ Approved owner plan: FilePairingState keeps the original published handle for li
 | Row | Ordering | Result and retained authority | Planned enforcing evidence |
 | --- | --- | --- | --- |
 | P69 | Valid same-enrollment retry after strict-pin terminal not-claimed receipt; expected prior pending CAS matches | Shared replacement works on supported Unix/Windows; original key/pin/consent/generation stay; only attempt changes. No exclusive fallback | existing pending_retry_preserves_identity_and_requires_exact_prior plus actual Windows counterpart and separate-process retry |
-| P70 | Live rename succeeds; acknowledgement fails; original handle/name/exact bytes still bound | Reconcile using original Published object under existing operation/OS lock; acknowledged once, no second namespace effect | live_reconcile_accepts_original_and_correlates_name_bytes / pending_live_lost_acknowledgement_reconciles, original-positive counterpart; mutate original-handle consumption rule |
-| P71 | Live rename succeeds; destination replaced by otherwise-valid exact-byte foreign file before reconcile (where OS permits) | Exact bytes do not establish original identity; refuse Uncertain, preserve published fact; never delete/replace foreign destination | live_reconcile_keeps_original_identity; Unix fixture; Windows actual name-pinning counterpart rather than impossible substitution assertion |
-| P72 | Live wrong destination name, altered/truncated bytes, changed lock or retained binding | Refuse before successful acknowledgement; no fabricated claim/product authority or second publication | live_reconcile_accepts_original_and_correlates_name_bytes / live_reconcile_refuses_changed_lock_binding; original valid handle and unchanged lock accepted |
+| P70 | Live rename succeeds; acknowledgement fails; original handle/name/exact bytes still bound | Reconcile using original Published object under existing operation/OS lock; acknowledged once, no second namespace effect | Original-handle ownership remains source-inspected; deterministic failed live acknowledgement is not publicly reproduced by Auth after removal of fault selectors. |
+| P71 | Live rename succeeds; destination replaced by otherwise-valid exact-byte foreign file before reconcile (where OS permits) | Exact bytes do not establish original identity; refuse Uncertain, preserve published fact; never delete/replace foreign destination | Actual public current-file retry/reopen is covered separately; exact foreign replacement during live acknowledgement is not reproduced without an IO-boundary seam. |
+| P72 | Live wrong destination name, altered/truncated bytes, changed lock or retained binding | Refuse before successful acknowledgement; no fabricated claim/product authority or second publication | Public corrupt pending/key and lock fixtures cover reachable refusal; arbitrary private name/handle calls are not acceptance evidence. |
 | P73 | Caller/result lost after pending save or acknowledged publication; process closes then restarts | Reopen ReadWrite existing canonical file; acknowledge exact saved bytes under current lock/binding; no reconstructed old native identity or KE3 fiction; strict-pin status determines claim | real_pending_save_precedes_ke3_and_survives_restart, reopen exact-retry, Windows writable flush runtime |
-| P74 | Restart missing/different/corrupt record or expected-prior/key/pin/intent mismatch | Conflict/Corrupt/Uncertain according to existing owner semantics; do not create via OPEN_EXISTING, overwrite evidence, regenerate key or release pending | missing_reconcile_creates_nothing; existing pending conflict/bound/redaction and gateway audit correlation tests |
-| P75 | Publication fails before rename, possibly independent reservation cleanup failure | No Published fact; storage alone owns original cleanup; no live post-effect reconcile; retain typed primary and independent cleanup meaning | existing pre-save-noKE3 plus consumer publication outcome/cleanup mapping fixture and valid cleanup counterpart |
-| P76 | Audit intent fails before key; key effect succeeds then audit answer/outcome fails; reopen exact operation | No key on first failure; retain exact published key and original audit operation/cause on latter failure; listener cannot claim startup success until reconciliation | gateway_audit_failure_keeps_original_operation / gateway_audit_restart_preserves_target_and_operation; writable Windows acknowledgement counterpart |
+| P74 | Restart missing/different/corrupt record or expected-prior/key/pin/intent mismatch | Conflict/Corrupt/Uncertain according to existing owner semantics; do not create via OPEN_EXISTING, overwrite evidence, regenerate key or release pending | Existing public pending conflict/bound/redaction and gateway audit correlation tests; private missing-name reconciliation assertion withdrawn. |
+| P75 | Publication fails before rename, possibly independent reservation cleanup failure | No Published fact; storage alone owns original cleanup; no live post-effect reconcile; retain typed primary and independent cleanup meaning | pending_publication_failure_sends_no_ke3 uses real canonical-name obstruction; shared storage retains its separately scoped cleanup evidence. |
+| P76 | Audit intent fails before key; key effect succeeds then audit answer/outcome fails; reopen exact operation | No key on first failure; retain exact published key and original audit operation/cause on latter failure; listener cannot claim startup success until reconciliation | gateway_publication_failure_preserves_original_operation_and_effect uses real key/outcome obstruction through the existing clock observation; public restore/retry preserves original audit. |
 | P77 | Save/reconcile physical worker retained while caller/composition lost or competing reopen attempted | Existing physical worker keeps Arc<FilePairingState>/OS lock through drain; repeated admission remains bounded; no new lock owner/cleanup flag | existing client cancellation/capacity plus blocked ordinary save/reconcile/reopen fixture, joined physical drain and valid later reopen |
 
 
@@ -645,11 +645,11 @@ Approved owner plan: FilePairingState keeps the original published handle for li
 
 | Row | Ordering | Required evidence / enforcing test |
 | --- | --- | --- |
-| P78 | Original reservation identity refusal plus independent original cleanup refusal | Native stage, redacted primary and cleanup retained independently; NotPublished and no reconciliation. `publication_refusal_retains_independent_cleanup` plus normal cleanup counterpart. |
-| P79 | Native publication failure with no cleanup failure | Preserve stage/primary and cleanup None, no invented cleanup or Published fact. `publication_refusal_without_cleanup_failure`. |
-| P80 | Published native effect followed by failed live reconciliation | Original Published handle retained during acknowledgement; original stage/primary/cleanup/Published plus independent reconciliation meaning on failure. `live_reconcile_keeps_original_identity` and accepted original counterpart; actual post-effect storage fixture evidence remains required. |
-| P81 | Audit-file failure before/after gateway key effect | Key publication fact differs from audit-file effect. Preserve original operation/target; `audit_publication_keeps_both_effect_meanings`. |
-| P82 | Error reaches client/startup caller | Finite typed redacted evidence survives wrappers; pre-KE3 failure sends no confirmation, startup cannot bind from failure. `publication_error_is_redacted` plus existing pre-save/startup fixtures. |
+| P78 | Original reservation identity refusal plus independent original cleanup refusal | Shared storage owns original reservation cleanup. Direct Auth publication_failure mapping test withdrawn; no public consumer proof of this exact compound failure is claimed. |
+| P79 | Native publication failure with no cleanup failure | Actual public gateway publication obstruction returns typed failure with original effect meaning; private mapping fixture withdrawn. |
+| P80 | Published native effect followed by failed live reconciliation | Production original Published handle is retained; former private-helper/rendezvous evidence withdrawn, exact failed post-effect reconciliation remains unsupported here. |
+| P81 | Audit-file failure before/after gateway key effect | gateway_publication_failure_preserves_original_operation_and_effect separates public key and audit-file effects and exact original operation. |
+| P82 | Error reaches client/startup caller | Actual public publication failure diagnostics are checked for redaction; existing public pre-KE3 refusal remains. Native startup consumer proof remains separate. |
 
 These typed error projections confer no cleanup or enrollment authority. Stage translation is exhaustive representation mapping at the storage adapter; primary unsafe storage differs from availability; original publication effect comes only from the storage-owned Published object. A successful live reconciliation settles the lost acknowledgement. An uncertain restart preserves current exact bytes under lock without recreating the historical Published object. Windows binding acknowledgement does not assert directory-entry power-loss durability.
 
@@ -1354,19 +1354,13 @@ load-bearing rule still needs its own meaningful removal/restore evidence.
 The calling-side entropy seam remains injected `RngCore`; no second public
 entropy constructor or worker interface is needed to test adapter conversion.
 The production adapter's actual `getrandom::fill` result maps through one pure
-`entropy_error` converter. The selected library publishes typed
-`getrandom::Error::UNSUPPORTED`; exercising that original converter establishes
-its `rand::Error` code, without claiming a physical OS outage or worker cleanup.
+`entropy_error` converter. Its former direct private test is not public evidence
+of OS refusal or physical worker cleanup.
 
-| Original order | Owning result | Detector / counterpart |
-| --- | --- | --- |
-| Original OS acquisition returns a typed error | `getrandom::fill(...).map_err(entropy_error)` preserves Err and the sole converter publishes the selected rand custom code | `os_entropy_error_conversion_retains_typed_refusal_and_successful_fill` passes the actual library's UNSUPPORTED value through the original converter and asserts its typed code; a real successful public OsEntropy try_fill_bytes call is its success counterpart |
-
-The converter's code mutation must fail that named typed-code assertion. The
-success call proves successful adapter acquisition only, not random quality.
-Existing injected entropy-fault worker fixtures separately own physical panic,
-caller loss and retained cleanup. No converter test is credited as an OS-failure
-acquisition or physical-worker test.
+Public `OsEntropy::try_fill_bytes` is exercised for successful acquisition.
+Deterministic OS-error conversion is not publicly reproduced here; previous
+private converter assertions remain historical implementation evidence only.
+Injected entropy-fault worker fixtures retain their separate public contract.
 
 ### Further private publication and cleanup provenance
 
@@ -1466,23 +1460,11 @@ Its original cause and actor survive receiver retention and fencing cleanup.
 
 ### Original file acknowledgement after synchronization
 
-The original `PublishedPrivateFile` is retained through real file synchronization
-and directory acknowledgement. Its name can be replaced between the two original
-identity checks even when the replacement holds the same bytes. A replacement
-before entry distinguishes only the first check; it does not prove the later one.
-
-| Physical order | Original owner and result | Actual fixture / counterpart |
-| --- | --- | --- |
-| Original canonical name is replaced before acknowledgement enters | First identity check refuses before syncing the retired original file; later identity refusal alone cannot establish that early ownership behavior | `live_reconcile_keeps_original_identity` observes zero successful original synchronization callbacks, then the actual current restart binding synchronizes once and succeeds |
-| Original handle passes first name/byte checks and `sync_all`, then another real name replaces it before the final identity check | Original acknowledgement refuses UnsafeStorage; the original object/lock stay retained, both physical files keep their exact bytes, and no acknowledgement is invented from matching bytes | `live_reconcile_refuses_identity_replacement_after_original_sync` uses a test-only rendezvous at this original boundary, real PrivateDirectory publication and original retained objects; the same original object with no replacement acknowledges normally |
-
-The rendezvous is a `cfg(test)`-only hook in the original owner immediately after
-successful `original.sync_all`; it supplies no storage result, replacement branch
-or public capability. Production fields and operations do not change. The fixture
-owns both waiters, moves the actual canonical name and publishes the replacement
-through the existing private directory before releasing the original worker.
-The named-file validator and actual synchronization remain production operations.
-
+The original `PublishedPrivateFile` remains owned through synchronization and
+final name validation. Auth public same-save/reopen tests observe current-file
+acknowledgement. They do not establish the exact interleaving between original
+sync and final identity validation. The former owner-local rendezvous and direct
+private-helper tests are withdrawn; no production test switch replaces them.
 
 ### Private transition minting and live previous-state correlation
 
@@ -1538,20 +1520,28 @@ rule. No malformed private transition fields are assembled.
 | Otherwise-valid Issued transition targets the active original credential at its canonical lower bound | Pairing bridge refuses Conflict because issuance is not revocation | `canonical_revocation_requires_original_active_credential_cause_and_time` uses issuance at second1 and the actual lower bound1000, alongside exact original revocation at2000 |
 
 
-### Raw credential binding asks the credential owner
+### Credential binding asks the credential owner
 
-| Ordering / input | Owner / decision | Evidence |
-| --- | --- | --- |
-| Borrowed raw metadata reaches binding before registry metadata validation | Existing domain_credential / Credential::try_from validates construction first; binding returns false on that typed refusal. The registry order is unchanged | Original issued credential accepted; inconsistent grant organization refused; domain-valid foreign organization refused |
-| Formerly Active Terminal metadata has a revocation before its issuance | Credential owns the lifetime refusal; raw binding no longer accepts merely Some(revoked_at) | Real explicit revocation then malformed borrowed timestamp refuses; original metadata still agrees. A persisted corrupt forward pairing now reports InvalidState(CredentialBinding) before later CredentialMetadata, with no effects |
-| Validated credential organization agrees with intent | Binding owns one intent-vs-credential organization comparison; Credential::new already owns each grant organization matching that credential | Both metadata and grant changed to a valid foreign organization refuse; mismatched grant-only raw DTO refuses through domain validation |
-| Two genuinely published DevicePairing credentials have matching owner/time/grant/generation | Original stored stage ID still owns credential identity; a canonical issuance for the other ID cannot replace it | Two actual public issuance paths; each own record agrees, cross-record metadata refuses |
-| Restored Active or formerly Active Terminal reaches binding | Private transition minting and replay preserve original claim: Claim alone writes it, Approve requires Claimed, Stage requires Approved, Activate requires Staging, later events never clear it | Remove the implied claim-presence copy; preserve all dynamic publication and credential relationships |
+The binding bridge consumes raw stored metadata through the existing Credential
+constructor before comparing it with the original intent. Credential owns grant
+organization/lifetime validity; the bridge retains the original credential ID,
+intent organization, cause, actor, time and generation relationships. Registry
+restoration ordering and typed refusal are unchanged.
 
-| Second real issuance approval advances registry revision before staging | Capture a fresh AuthorizePairing result after actual approval and before stage_pairing; retain original StaleRevision refusal | Initial fixture reused pre-approval admission and failed typed StaleRevision before the ID assertion; corrected fixture follows the existing public stage ordering |
+| Actual persisted input / ordering | Owner / public evidence |
+| --- | --- |
+| Acknowledged Active credential changes one original metadata relationship or generation | `public_reopen_refuses_conflicting_credential_metadata` edits actual stored bytes and observes public reopen InvalidRegistry; exact original bytes restore Active. This does not independently isolate every internal predicate. |
+| Original issuance acquires an invalid before/after/time shape | `public_reopen_refuses_malformed_original_issuance` observes public refusal and exact original restore. CredentialTransition remains the sole shape owner. |
+| Grant organization is invalid, or credential and grant form a valid foreign organization | `public_reopen_refuses_invalid_and_foreign_organization` refuses at public reopen; original Active credential reopens. |
+| Second genuine DevicePairing issuance is substituted for the original credential | `pairing_binding_requires_original_identity_even_with_another_real_issuance` observes public registry refusal and original restore; the second registry is untouched. The public detector does not claim that no other agreement owner participates. |
+| Formerly Active Terminal has an invalid revocation timestamp | `public_reopen_refuses_revocation_before_original_issuance` observes public refusal and exact original Terminal restore. |
+| Approval advances revision before staging a second genuine issuance | Capture a fresh AuthorizePairing result after approval, preserving original StaleRevision behavior. |
 
-| Domain construction bridge is removed while original organization comparison remains | Dedicated raw_pairing_binding_refuses_revocation_before_original_issuance exercises malformed Terminal timestamp before any other invalid query | Real canonical original Terminal remains accepted; otherwise-valid borrowed revoked_at0 refuses first, independently of malformed grant organization |
-
+Private transition minting/replay implies retained Claim presence through legal
+Approve, Stage, Activate and later Terminal events. Its removed copy remains a
+source-provenance disposition, not a fabricated malformed live state. Historical
+raw-query mutation pairs are implementation evidence; they are not relabeled as
+current public-boundary proof.
 
 ### Public approval replay and completed receipt capacity
 
@@ -1559,3 +1549,21 @@ rule. No malformed private transition fields are assembled.
 | --- | --- | --- |
 | Exact Claimed approval produces Approved, then another domain approval uses original key/owner/generation before expiry | PairingRecord permits the first transition and refuses the second Conflict; application exact approval retry returns the original receipt instead of appending | approve_exact_claim uses real Approved followed by otherwise-valid repeat; original Claimed success and exact claim remain |
 | MAX_LIVE_PAIRINGS+1 unique invitations reach Active through public claim/approval/stage/receiver/activation, then each is legally cancelled to Terminal | Collection retains completed receipts without charging unfinished enrollment capacity; unique identity and unfinished ceiling remain enforced | collection_completed_receipts_do_not_consume_unfinished_capacity asserts Active and Terminal cohorts Ok beside the existing live-ceiling case |
+
+
+### Renewed public-boundary evidence correction
+
+The prior ordinary and structural review results remain historical. The renewed
+human request authorizes correcting their remaining evidence defects; it does
+not reset those rounds or grant native consumer acceptance.
+
+| Actual input / ordering | Original owner and observation |
+| --- | --- |
+| Temporary fixture parent has inherited Windows permissions | Create a new private root through nessa-local-storage::create_directory, then create the pairing directory beneath it. Never repair an unsafe existing directory or weaken its ACL check. |
+| Acknowledged registry history or credential metadata is changed on disk | Drop the original store, reopen LocalCredentialStore, and observe typed refusal with unchanged altered bytes; exact original bytes reopen successfully. Private projection/helper results are not public acceptance. |
+| Real public pending save succeeds, caller repeats or process reopens | load_pending and exact save retry preserve original key, pin and intent. No fault selector supplies a lost acknowledgement. |
+| Real pending destination is obstructed | Public save/OPAQUE finish refuses before KE3; remove the actual obstruction and retry the same public operation. |
+| Gateway clock observation occurs before intent, key or outcome publication | A fixture may obstruct the actual filesystem name through this existing injected callback; public save reports the actual OS publication failure, retains original intent and key-effect meaning, and public restore/retry completes after obstruction removal. No result is fabricated inside FilePairingState. |
+| Original storage acknowledgement has a failure between sync and final identity validation | The production original-handle checks remain. Exact deterministic Auth reproduction is unsupported without an original IO-boundary seam; former cfg(test) rendezvous and private-helper pairs are withdrawn as acceptance evidence. Shared storage evidence is not relabeled as this consumer's proof. |
+| Public TLS accept receives too much real peer input | A counting external IO adapter records actual accepted bytes and refusal through NativeTransport, without constructing HandshakeBudget. Actual successful TLS peers remain the success counterpart. |
+| Public OS entropy acquisition succeeds / OS refuses entropy | Real successful OsEntropy acquisition is observed. Private error-converter assertions are removed; deterministic OS refusal remains untriggered here, while injected crypto entropy refusal has its separate public owner. |

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * Composition registers the sample widget plugin only beside the sample
  * workspace, whose session its widgets belong to, and the fixture MCP App
@@ -13,6 +14,7 @@ import {
   samplePluginId,
   WidgetRegistryError,
 } from "./widgets"
+import { fakeGateway } from "./workspace/adapters/gateway/fake-gateway"
 import { fakeSource } from "./workspace/testing"
 
 describe("the window's widget plugins", () => {
@@ -55,5 +57,34 @@ describe("the window's widget plugins", () => {
         apps: { sandbox: undefined, platform: "web" },
       }).widgets.plugin(fixtureApp),
     ).toBeUndefined()
+  })
+})
+
+describe("the window's workspace", () => {
+  it("is the gateway's when composition can connect to one, which it does on first need", async () => {
+    const gateway = fakeGateway()
+    let connects = 0
+    const { workspace, widgets } = createDesktopDependencies({
+      gateway: () => {
+        connects++
+        return Promise.resolve(gateway.client)
+      },
+    })
+    // Not the sample: none of its plugins.
+    expect(widgets.natives()).toEqual([])
+    expect(connects).toBe(0)
+    await workspace.index()
+    expect(connects).toBe(1)
+    expect(gateway.count("list")).toBe(1)
+  })
+
+  it("is the source composition names, ahead of a gateway", () => {
+    const named = fakeSource()
+    expect(
+      createDesktopDependencies({
+        workspace: named,
+        gateway: () => Promise.reject(new Error("never asked")),
+      }).workspace,
+    ).toBe(named)
   })
 })

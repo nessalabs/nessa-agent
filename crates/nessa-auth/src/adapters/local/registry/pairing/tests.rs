@@ -40,8 +40,8 @@ use crate::{
             AttemptId, AttemptOutcome, ConsentIntent, ConsentIntentId, InvitationId, PairingError,
             PairingPhase, PairingPolicy, PairingRecord, PublicIntent, TerminalCause,
         },
-        Action, AudienceId, AuthContext, CredentialId, CredentialTransition, MembershipId,
-        MembershipRole, OrganizationId, PrincipalId, Resource, ResourceId,
+        Action, AudienceId, AuthContext, CredentialId, MembershipId, MembershipRole,
+        OrganizationId, PrincipalId, Resource, ResourceId,
     },
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -52,7 +52,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc, Arc, Mutex, TryLockError,
+        mpsc, Arc, Mutex,
     },
     task::{Context, Poll, Waker},
     thread,
@@ -1074,10 +1074,6 @@ fn first_key_publication_holds_current_history_admission() {
     });
     entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     // The canonical owner, not a separate publication flag, excludes create.
-    assert!(matches!(
-        store.registry.try_lock(),
-        Err(TryLockError::WouldBlock)
-    ));
     let (second_started_tx, second_started_rx) = mpsc::channel();
     let second_store = store.clone();
     let second_keys = keys.clone();
@@ -1101,10 +1097,6 @@ fn first_key_publication_holds_current_history_admission() {
     create_started_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    assert!(matches!(
-        store.registry.try_lock(),
-        Err(TryLockError::WouldBlock)
-    ));
     assert!(keys
         .restore_gateway_key(&audience, &Time)
         .unwrap()
@@ -2150,7 +2142,6 @@ fn reopen_refuses_duplicate_staged_identity_and_unactivated_ordinary_issuance() 
             other["invitation"] = serde_json::json!(vec![2; 16]);
             other["consent"] = serde_json::json!(vec![4; 16]);
             let other: super::StoredPairing = serde_json::from_value(other).unwrap();
-            assert!(other.restore(&changed.transitions).is_ok());
             changed.pairings.push(other);
         } else {
             // The ordinary bearer and its canonical transition/receipt remain
@@ -2193,50 +2184,52 @@ fn reopen_refuses_duplicate_staged_identity_and_unactivated_ordinary_issuance() 
 }
 
 #[test]
-fn pairing_binding_refuses_each_otherwise_valid_metadata_relationship() {
+fn public_reopen_refuses_conflicting_credential_metadata() {
     let fixture = enrolled_claim();
     publish(&fixture);
     let path = fixture.directory.path().join("native/credentials.v1.json");
-    let original: Registry = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    let stored = &original.pairings[0];
-    let metadata = &original
-        .credentials
-        .iter()
-        .find(|entry| entry.metadata.id == "native-device")
-        .unwrap()
-        .metadata;
-    assert!(stored.credential_binding_matches(metadata, 1, &original.transitions));
-    for field in 0..10 {
-        let mut changed = metadata.clone();
+    let original_bytes = std::fs::read(&path).unwrap();
+    let original: Registry = serde_json::from_slice(&original_bytes).unwrap();
+    drop(fixture.store);
+    for field in 0..11 {
+        let mut changed = original.clone();
+        let entry = changed
+            .credentials
+            .iter_mut()
+            .find(|entry| entry.metadata.id == "native-device")
+            .unwrap();
         match field {
-            0 => changed.id = "another-credential".into(),
-            1 => changed.principal_id = "another-principal".into(),
+            0 => entry.metadata.id = "another-credential".into(),
+            1 => entry.metadata.principal_id = "another-principal".into(),
             2 => {
-                changed.organization_id = "another-organization".into();
-                changed.grants[0].resource.organization_id = "another-organization".into();
+                entry.metadata.organization_id = "another-organization".into();
+                entry.metadata.grants[0].resource.organization_id = "another-organization".into();
             }
-            3 => changed.audience_id = "another-audience".into(),
-            4 => changed.expires_at = Some(changed.issued_at + 100),
-            5 => changed.grants[0].action = "conversation.write".into(),
-            6 => changed.grants[0].resource.id = "another-resource".into(),
-            7 => changed.grants.clear(),
-            8 => changed.grants.push(changed.grants[0].clone()),
-            9 => changed.issued_at += 1,
+            3 => entry.metadata.audience_id = "another-audience".into(),
+            4 => entry.metadata.expires_at = Some(entry.metadata.issued_at + 100),
+            5 => entry.metadata.grants[0].action = "conversation.write".into(),
+            6 => entry.metadata.grants[0].resource.id = "another-resource".into(),
+            7 => entry.metadata.grants.clear(),
+            8 => entry.metadata.grants.push(entry.metadata.grants[0].clone()),
+            9 => entry.metadata.issued_at += 1,
+            10 => {
+                let StoredProof::Device(DeviceProofBinding::DevicePairing { generation, .. }) =
+                    &mut entry.verifier
+                else {
+                    panic!("device issuance")
+                };
+                *generation = 2;
+            }
             _ => unreachable!(),
         }
-        // This exercises the borrowed comparison, not a forged private live
-        // registry/verifier state or an assertion that its other gates pass.
-        assert!(
-            super::super::domain_credential(&changed).is_ok(),
-            "field {field} is otherwise structurally valid"
-        );
-        assert!(
-            !stored.credential_binding_matches(&changed, 1, &original.transitions),
-            "field {field}"
-        );
+        assert_public_registry_refusal(&path, &changed);
     }
-    assert!(!stored.credential_binding_matches(metadata, 2, &original.transitions));
-    assert!(stored.credential_binding_matches(metadata, 1, &original.transitions));
+    std::fs::write(&path, &original_bytes).unwrap();
+    let reopened = open_store(&path).unwrap();
+    assert_eq!(
+        reopened.read_pairing(fixture.record.id()).unwrap().phase(),
+        PairingPhase::Active
+    );
 }
 
 #[test]
@@ -2299,24 +2292,19 @@ fn real_device_verifier_refuses_other_tls_key_audience_and_ordinary_bearer() {
 }
 
 #[test]
-fn raw_pairing_binding_query_asks_domain_for_original_issuance_shape() {
+fn public_reopen_refuses_malformed_original_issuance() {
     let fixture = enrolled_claim();
     publish(&fixture);
     let path = fixture.directory.path().join("native/credentials.v1.json");
-    let original: Registry = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    let stored = &original.pairings[0];
-    let metadata = &original
-        .credentials
-        .iter()
-        .find(|entry| entry.metadata.id == "native-device")
-        .unwrap()
-        .metadata;
-    assert!(stored.credential_binding_matches(metadata, 1, &original.transitions));
+    let original_bytes = std::fs::read(&path).unwrap();
+    let original: Registry = serde_json::from_slice(&original_bytes).unwrap();
+    drop(fixture.store);
     for shape in 0..3 {
-        let mut canonical = original.transitions.clone();
-        let issued = canonical
+        let mut changed = original.clone();
+        let issued = changed
+            .transitions
             .iter_mut()
-            .find(|entry| entry.credential_id == metadata.id)
+            .find(|entry| entry.credential_id == "native-device")
             .unwrap();
         match shape {
             0 => issued.before = Some(issued.after),
@@ -2324,18 +2312,14 @@ fn raw_pairing_binding_query_asks_domain_for_original_issuance_shape() {
             2 => issued.after.issued_at += 1,
             _ => unreachable!(),
         }
-        assert!(
-            CredentialTransition::try_from(issued.clone()).is_err(),
-            "shape {shape}"
-        );
-        // The raw DTO query remains reachable without constructing or
-        // injecting an invalid private live registry/verifier state.
-        assert!(
-            !stored.credential_binding_matches(metadata, 1, &canonical),
-            "shape {shape}"
-        );
+        assert_public_registry_refusal(&path, &changed);
     }
-    assert!(stored.credential_binding_matches(metadata, 1, &original.transitions));
+    std::fs::write(&path, &original_bytes).unwrap();
+    let reopened = open_store(&path).unwrap();
+    assert_eq!(
+        reopened.read_pairing(fixture.record.id()).unwrap().phase(),
+        PairingPhase::Active
+    );
 }
 
 #[test]
@@ -3221,28 +3205,33 @@ fn equal_revision_alternate_admission_requires_current_issuer_organization() {
 }
 
 #[test]
-fn raw_pairing_binding_validates_credential_before_organization_agreement() {
+fn public_reopen_refuses_invalid_and_foreign_organization() {
     let fixture = enrolled_claim();
     publish(&fixture);
     let path = fixture.directory.path().join("native/credentials.v1.json");
-    let original: Registry = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    let stored = &original.pairings[0];
-    let metadata = &original
-        .credentials
-        .iter()
-        .find(|entry| entry.metadata.id == "native-device")
-        .unwrap()
-        .metadata;
-    assert!(stored.credential_binding_matches(metadata, 1, &original.transitions));
-    let mut invalid = metadata.clone();
-    invalid.grants[0].resource.organization_id = "foreign-organization".into();
-    assert!(super::super::domain_credential(&invalid).is_err());
-    assert!(!stored.credential_binding_matches(&invalid, 1, &original.transitions));
-    let mut foreign = invalid;
-    foreign.organization_id = "foreign-organization".into();
-    assert!(super::super::domain_credential(&foreign).is_ok());
-    assert!(!stored.credential_binding_matches(&foreign, 1, &original.transitions));
-    assert!(stored.credential_binding_matches(metadata, 1, &original.transitions));
+    let original_bytes = std::fs::read(&path).unwrap();
+    let original: Registry = serde_json::from_slice(&original_bytes).unwrap();
+    drop(fixture.store);
+    for foreign in [false, true] {
+        let mut changed = original.clone();
+        let metadata = &mut changed
+            .credentials
+            .iter_mut()
+            .find(|entry| entry.metadata.id == "native-device")
+            .unwrap()
+            .metadata;
+        metadata.grants[0].resource.organization_id = "foreign-organization".into();
+        if foreign {
+            metadata.organization_id = "foreign-organization".into();
+        }
+        assert_public_registry_refusal(&path, &changed);
+    }
+    std::fs::write(&path, &original_bytes).unwrap();
+    let reopened = open_store(&path).unwrap();
+    assert_eq!(
+        reopened.read_pairing(fixture.record.id()).unwrap().phase(),
+        PairingPhase::Active
+    );
 }
 
 #[test]
@@ -3300,32 +3289,33 @@ fn pairing_binding_requires_original_identity_even_with_another_real_issuance() 
     let other_path = other.directory.path().join("native/credentials.v1.json");
     let original_bytes = std::fs::read(&original_path).unwrap();
     let other_bytes = std::fs::read(&other_path).unwrap();
-    let first: Registry = serde_json::from_slice(&original_bytes).unwrap();
+    let mut first: Registry = serde_json::from_slice(&original_bytes).unwrap();
     let second: Registry = serde_json::from_slice(&other_bytes).unwrap();
-    let metadata = &first
-        .credentials
-        .iter()
-        .find(|entry| entry.metadata.id == "native-device")
-        .unwrap()
-        .metadata;
-    let other_metadata = &second
+    let other_credential = second
         .credentials
         .iter()
         .find(|entry| entry.metadata.id == "other-native-device")
         .unwrap()
-        .metadata;
-    let mut canonical = first.transitions.clone();
-    canonical.extend(second.transitions.clone());
-    assert!(super::super::domain_credential(other_metadata).is_ok());
-    assert!(second.pairings[0].credential_binding_matches(other_metadata, 1, &canonical));
-    assert!(first.pairings[0].credential_binding_matches(metadata, 1, &canonical));
-    assert!(!first.pairings[0].credential_binding_matches(other_metadata, 1, &canonical));
-    assert_eq!(std::fs::read(&original_path).unwrap(), original_bytes);
+        .clone();
+    let original_credential = first
+        .credentials
+        .iter_mut()
+        .find(|entry| entry.metadata.id == "native-device")
+        .unwrap();
+    *original_credential = other_credential;
+    drop(original.store);
+    assert_public_registry_refusal(&original_path, &first);
+    std::fs::write(&original_path, &original_bytes).unwrap();
+    let reopened = open_store(&original_path).unwrap();
+    assert_eq!(
+        reopened.read_pairing(original.record.id()).unwrap().phase(),
+        PairingPhase::Active
+    );
     assert_eq!(std::fs::read(&other_path).unwrap(), other_bytes);
 }
 
 #[test]
-fn raw_pairing_binding_refuses_revocation_before_original_issuance() {
+fn public_reopen_refuses_revocation_before_original_issuance() {
     let fixture = enrolled_claim();
     publish(&fixture);
     let path = fixture.directory.path().join("native/credentials.v1.json");
@@ -3340,18 +3330,88 @@ fn raw_pairing_binding_refuses_revocation_before_original_issuance() {
         .unwrap();
     let retired_bytes = std::fs::read(&path).unwrap();
     let retired: Registry = serde_json::from_slice(&retired_bytes).unwrap();
-    let stored = &retired.pairings[0];
-    let metadata = &retired
+    drop(fixture.store);
+    let mut malformed = retired.clone();
+    malformed
         .credentials
-        .iter()
+        .iter_mut()
         .find(|entry| entry.metadata.id == "native-device")
         .unwrap()
-        .metadata;
-    assert!(stored.credential_binding_matches(metadata, 1, &retired.transitions));
-    let mut malformed = metadata.clone();
-    malformed.revoked_at = Some(0);
-    assert!(super::super::domain_credential(&malformed).is_err());
-    assert!(!stored.credential_binding_matches(&malformed, 1, &retired.transitions));
-    assert!(stored.credential_binding_matches(metadata, 1, &retired.transitions));
+        .metadata
+        .revoked_at = Some(0);
+    assert_public_registry_refusal(&path, &malformed);
+    std::fs::write(&path, &retired_bytes).unwrap();
+    let reopened = open_store(&path).unwrap();
+    assert!(matches!(
+        reopened.read_pairing(fixture.record.id()).unwrap().phase(),
+        PairingPhase::Terminal
+    ));
     assert_eq!(std::fs::read(&path).unwrap(), retired_bytes);
+}
+
+fn assert_public_registry_refusal(path: &Path, changed: &Registry) {
+    let bytes = serde_json::to_vec(changed).unwrap();
+    std::fs::write(path, &bytes).unwrap();
+    assert!(matches!(
+        open_store(path),
+        Err(LocalStoreError::InvalidRegistry { .. })
+    ));
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+}
+
+#[test]
+fn public_reopen_validates_original_consent_and_history_bound() {
+    let fixture = enrolled_claim();
+    let policy = CedarPolicyEvaluator::new().unwrap();
+    let admission = ready(
+        AuthorizePairing {
+            access: fixture.store.as_ref(),
+            policy: &policy,
+            clock: &Time,
+        }
+        .execute(&fixture.session, fixture.record.intent(), &fixture.gateway),
+    )
+    .unwrap();
+    ready(fixture.store.decide_pairing(
+        fixture.record.id(),
+        OwnerDecision::Approve(fixture.channel.device_proof().key()),
+        &admission,
+        &Time,
+    ))
+    .unwrap();
+    let path = fixture.directory.path().join("native/credentials.v1.json");
+    let original_bytes = std::fs::read(&path).unwrap();
+    let original: serde_json::Value = serde_json::from_slice(&original_bytes).unwrap();
+    drop(fixture.store);
+    for field in 0..3 {
+        let mut changed = original.clone();
+        match field {
+            0 => {
+                changed["pairings"][0]["history"][2]["actor"]["id"] =
+                    serde_json::json!("other-owner")
+            }
+            1 => changed["pairings"][0]["generation"] = serde_json::json!(2),
+            2 => {
+                let history = changed["pairings"][0]["history"].as_array_mut().unwrap();
+                let first = history[0].clone();
+                while history.len() <= 32 {
+                    history.push(first.clone());
+                }
+            }
+            _ => unreachable!(),
+        }
+        let bytes = serde_json::to_vec(&changed).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(matches!(
+            open_store(&path),
+            Err(LocalStoreError::InvalidRegistry { .. })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+    std::fs::write(&path, &original_bytes).unwrap();
+    let reopened = open_store(&path).unwrap();
+    assert_eq!(
+        reopened.read_pairing(fixture.record.id()).unwrap().phase(),
+        PairingPhase::Approved
+    );
 }

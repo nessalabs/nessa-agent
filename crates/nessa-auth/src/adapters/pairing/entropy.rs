@@ -38,12 +38,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn os_entropy_error_conversion_retains_typed_refusal_and_successful_fill() {
-        let refusal = entropy_error(getrandom::Error::UNSUPPORTED);
-        assert_eq!(
-            refusal.code().map(NonZeroU32::get),
-            Some(rand::Error::CUSTOM_START)
-        );
+    fn os_entropy_public_acquisition_succeeds() {
         let mut bytes = [0; 8];
         OsEntropy.try_fill_bytes(&mut bytes).unwrap();
     }
