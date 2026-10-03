@@ -88,6 +88,10 @@ mcpAppCallTiming.callDeadlineMs =
   mcpAppCallTiming.clientAllowanceMs
 if (mcpAppCallTiming.callDeadlineMs > 2_147_483_647)
   throw new Error("MCP App call deadline exceeds the runtime timer range")
+// A client waits a call's deadline for a read too; a read longer than a call
+// would be abandoned while the gateway is still bound to answer it.
+if (mcpAppCallTiming.readTimeoutMs > mcpAppCallTiming.callTimeoutMs)
+  throw new Error("MCP App read timeout outlasts a call")
 
 const sdkFrames = readFileSync(
   resolve(root, "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"),

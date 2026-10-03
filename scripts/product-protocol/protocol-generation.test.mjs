@@ -197,6 +197,7 @@ for (const [name, value] of [
   ["clientAllowanceMs", -1],
   ["clientAllowanceMs", 2_147_483_647],
   ["unknownMs", 1],
+  ["readTimeoutMs", 60_001],
 ])
   test(`invalid MCP App call timing ${name} ${value} preserves unpublished artifacts`, () =>
     fixture((path) => {
@@ -210,7 +211,7 @@ for (const [name, value] of [
       )
       assert.match(
         result.stderr,
-        /Invalid MCP App call timing|unknown fields|deadline exceeds/,
+        /Invalid MCP App call timing|unknown fields|deadline exceeds|outlasts a call/,
       )
     }))
 
