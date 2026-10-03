@@ -73,10 +73,11 @@
 //! serialized per conversation (`ConversationLocks`), and a delete that waits
 //! behind another attempt answers from its tombstone without one of its own.
 //!
-//! An MCP App's calls (#348) are the service's too
-//! (`service/app_calls.rs`, `docs/design/mcp-app-calls.md`): each live
-//! conversation's apps — their reviews, and the lock nothing is opened or
-//! issued past once a mount is released or the conversation ended — are
+//! An MCP App's calls (#348), and its messages and model context (#390), are
+//! the service's too (`service/app_calls.rs`, `docs/design/mcp-app-calls.md`):
+//! each live conversation's apps — their reviews, the mounts allowed to send
+//! messages, the contexts they give the model, and the lock nothing is opened
+//! or issued past once a mount is released or the conversation ended — are
 //! `app_reviews.rs`, and the ports the calls go through `mcp_apps.rs`.
 mod app_reviews;
 /// The room an app's review takes of a view, which the schema states too.

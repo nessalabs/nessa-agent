@@ -19,6 +19,10 @@ use crate::conversation::application::ConversationLimits;
 use crate::conversation::application::{SubmissionMode, SubmittedImage, SubmittedMessage};
 use nessa_auth::domain::PrincipalId;
 use nessa_sdk::application::agent_execution::agents::AgentError;
+use nessa_sdk::application::agent_execution::providers::{
+    ExecutionReport, ObservationFailure, ObservationFailureCause, ProviderExecutionReply,
+    ProviderSessionState,
+};
 use nessa_sdk::domain::agent_execution::prompts::{AppModelContext, MessageSender, UserMessage};
 use std::sync::Arc;
 use std::time::Duration;
@@ -1236,14 +1240,13 @@ async fn a_person_resending_an_apps_turn_as_theirs_is_a_conflict() {
 }
 
 #[tokio::test]
-async fn c9_a_message_refused_after_it_read_the_contexts_takes_none() {
+async fn c9_a_message_refused_for_its_images_takes_none() {
     let fixture = Fixture::new().await;
     fixture
         .update_context(INSTANCE, Some("kept"), None)
         .await
         .unwrap();
-    // This gateway takes no images: refused after the contexts were read,
-    // before the agent had anything.
+    // This gateway takes no images: refused before it carried anything.
     let refused = fixture
         .service
         .submit(
@@ -1366,7 +1369,7 @@ async fn c7b_a_mounts_updates_are_recorded_in_the_order_they_reach_it_and_the_la
 }
 
 #[tokio::test]
-async fn c8_a_message_queued_behind_a_turn_carries_no_context_and_leaves_it_held() {
+async fn c8b_a_message_queued_behind_a_turn_carries_no_context_and_leaves_it_held() {
     let fixture = Fixture::new().await;
     // A turn runs, held.
     let (finish, gate) = oneshot::channel();
@@ -1462,7 +1465,7 @@ async fn c8_a_context_names_the_update_that_gave_it_as_its_record_does() {
     let call = fixture.audit.records.lock().unwrap()[0].call_id.clone();
     fixture.person_turn("next").await;
     let given = fixture.given("next").await;
-    assert_eq!(given.app_model_context()[0].update(), call);
+    assert_eq!(given.app_model_context()[0].update_id(), call);
 }
 
 #[tokio::test]
@@ -1499,7 +1502,7 @@ async fn reopened_while_attaching(fixture: &Fixture) -> oneshot::Sender<()> {
 }
 
 #[tokio::test]
-async fn c8_a_context_carried_by_a_turn_that_never_ran_is_kept() {
+async fn c8d_a_context_carried_by_a_turn_that_never_ran_is_kept() {
     // Removed before it ran.
     let fixture = Fixture::new().await;
     let open = reopened_while_attaching(&fixture).await;
@@ -1579,6 +1582,144 @@ async fn c8_a_context_carried_by_a_turn_that_never_ran_is_kept() {
             .len(),
         1
     );
+}
+
+/// The contexts held in `fixture`'s conversation, none a turn carries.
+fn held_count(fixture: &Fixture) -> usize {
+    fixture
+        .service
+        .apps_of(&fixture.id)
+        .held_contexts()
+        .contexts
+        .len()
+}
+
+/// Until `execution`'s message settled, and what it carried with it.
+async fn settled(fixture: &Fixture, execution: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let view = fixture
+                .service
+                .read(fixture.id.clone(), caller("read"))
+                .await;
+            if view.is_ok_and(|view| {
+                view.messages.iter().any(|message| {
+                    message.execution_id == execution
+                        && !matches!(
+                            message.status,
+                            ConversationMessageStatus::Queued | ConversationMessageStatus::Running
+                        )
+                })
+            }) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.service.apps_of(&fixture.id).carrying() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn c8d_a_context_carried_by_a_turn_whose_prompt_never_reached_the_agent_is_kept() {
+    let fixture = Fixture::new().await;
+    fixture
+        .update_context(INSTANCE, Some("ctx"), None)
+        .await
+        .unwrap();
+    // It ran — it was scheduled and selected — but failed as it was
+    // prepared, before its prompt went: the agent never saw the context.
+    *fixture.provider.prepare_failure.lock().unwrap() = Some(AgentError::Protocol("no".into()));
+    fixture.person_sends("p1", "first").await;
+    settled(&fixture, "p1").await;
+    assert!(!fixture
+        .provider
+        .executions
+        .lock()
+        .unwrap()
+        .contains(&"p1".to_owned()));
+    assert_eq!(held_count(&fixture), 1);
+}
+
+#[tokio::test]
+async fn c9_a_message_the_agent_refused_after_it_carried_the_contexts_leaves_them_held() {
+    let fixture = Fixture::new().await;
+    fixture
+        .update_context(INSTANCE, Some("ctx"), None)
+        .await
+        .unwrap();
+    // The agent refuses it as it is admitted: it cannot save it.
+    fixture
+        .storage_refuses
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let refused = fixture
+        .service
+        .submit(
+            fixture.id.clone(),
+            fixture.caller("refused"),
+            "refused".into(),
+            SubmittedMessage {
+                text: "hello".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await;
+    fixture
+        .storage_refuses
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        matches!(
+            refused,
+            Err(ConversationError::Agent(AgentError::Storage(_)))
+        ),
+        "{refused:?}"
+    );
+    // Nothing carries it: it is held, and goes with the next.
+    assert!(!fixture.service.apps_of(&fixture.id).carrying());
+    assert_eq!(held_count(&fixture), 1);
+    fixture.person_sends("next", "again").await;
+    assert_eq!(
+        fixture.contexts_given("next").await,
+        [Some("ctx".to_owned())]
+    );
+}
+
+#[tokio::test]
+async fn c8c_a_context_carried_by_a_turn_the_agent_answered_with_a_failure_is_let_go_of() {
+    let fixture = Fixture::new().await;
+    fixture
+        .update_context(INSTANCE, Some("ctx"), None)
+        .await
+        .unwrap();
+    *fixture.provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Err(AgentError::Protocol("failed".into()))),
+            None,
+            ProviderSessionState::Usable,
+        )));
+    // Its stream ends with it, as an ACP worker's does after a failed turn.
+    *fixture
+        .provider
+        .execution_observation_failure
+        .lock()
+        .unwrap() = Some(ObservationFailure::new(
+        AgentError::Protocol("failed".into()),
+        ObservationFailureCause::ExecutionFailed,
+    ));
+    fixture.person_sends("p1", "first").await;
+    assert_eq!(fixture.contexts_given("p1").await, [Some("ctx".to_owned())]);
+    settled(&fixture, "p1").await;
+    // The agent answered for the turn that held it: it saw it, and it goes
+    // no more.
+    assert_eq!(held_count(&fixture), 0);
 }
 
 #[tokio::test]

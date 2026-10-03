@@ -72,6 +72,9 @@ export function gatewayAppConversation(mcpApps: AppConversationApi): McpAppConve
 
     async updateModelContext(address, context) {
       const text = context.content ? contentText(context.content) : ""
+      // Content that gave no text — images alone, say — is not a clear: the
+      // gateway holds text and structure only, so it is refused.
+      if (context.content?.length && !text && !context.structuredContent) return "refused"
       const update = {
         ...(text ? { text } : {}),
         ...(context.structuredContent

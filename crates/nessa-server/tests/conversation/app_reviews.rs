@@ -669,11 +669,58 @@ fn a_mount_with_an_update_on_its_way_holds_its_place() {
         Err(ContextRefusal::Full)
     );
     // Its record failed: the place is free again.
-    reviews.forget(&app("racing"));
+    reviews.forget(&app("racing"), number);
     let other = reviews.number_update(EPOCH, &app("other"), true).unwrap();
     reviews.give(EPOCH, &app("other"), other, Some(context("y")));
-    let _ = number;
     assert_eq!(held(&reviews).len(), MAX_HELD_CONTEXTS);
+}
+
+#[test]
+fn an_earlier_update_letting_go_leaves_a_later_ones_place_held() {
+    let reviews = reviews();
+    for n in 0..MAX_HELD_CONTEXTS - 1 {
+        give(&reviews, &format!("i{n}"), Some(context("x")));
+    }
+    // An update numbered in the opening that ended, and one in the next.
+    let stale = reviews.number_update(EPOCH, &app("racing"), true).unwrap();
+    reviews.end(EPOCH, &releaser(), || {});
+    let next = reviews.begin();
+    for n in 0..MAX_HELD_CONTEXTS - 1 {
+        let number = reviews
+            .number_update(next, &app(&format!("i{n}")), true)
+            .unwrap();
+        reviews.give(next, &app(&format!("i{n}")), number, Some(context("x")));
+    }
+    let later = reviews.number_update(next, &app("racing"), true).unwrap();
+    // The stale one's record failed, or it arrived to be given: neither
+    // frees the place the later one holds.
+    reviews.forget(&app("racing"), stale);
+    reviews.give(EPOCH, &app("racing"), stale, Some(context("stale")));
+    assert_eq!(
+        reviews.number_update(next, &app("other"), true),
+        Err(ContextRefusal::Full)
+    );
+    reviews.give(next, &app("racing"), later, Some(context("later")));
+    assert_eq!(held(&reviews).len(), MAX_HELD_CONTEXTS);
+}
+
+#[tokio::test]
+async fn a_mounts_updates_stay_one_at_a_time_across_openings() {
+    let reviews = reviews();
+    let first = reviews.one_update(&app("i1")).await;
+    reviews.end(EPOCH, &releaser(), || {});
+    reviews.begin();
+    let waiting = tokio::spawn({
+        let reviews = reviews.clone();
+        async move { drop(reviews.one_update(&app("i1")).await) }
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(
+        !waiting.is_finished(),
+        "the next opening's update went first"
+    );
+    drop(first);
+    waiting.await.unwrap();
 }
 
 #[test]
@@ -736,11 +783,28 @@ fn a_message_takes_what_it_read_and_never_a_replacement_given_since() {
     let reviews = reviews();
     give(&reviews, "i1", Some(context("one")));
     give(&reviews, "i2", Some(context("two")));
-    let read = reviews.held_contexts();
+    let read = reviews.carry();
     // Replaced after the message read it, before it was taken.
     give(&reviews, "i1", Some(context("newer")));
-    reviews.took(&read);
+    reviews.settle(&read, true);
     assert_eq!(held(&reviews), ["newer"]);
+}
+
+#[test]
+fn contexts_a_turn_carries_go_with_no_other_until_it_settles() {
+    let reviews = reviews();
+    give(&reviews, "i1", Some(context("one")));
+    let carried = reviews.carry();
+    assert_eq!(carried.contexts.len(), 1);
+    // A second message while the first turn carries it carries nothing.
+    assert!(reviews.carry().contexts.is_empty());
+    // That turn never reached the agent: held for the next.
+    reviews.settle(&carried, false);
+    let again = reviews.carry();
+    assert_eq!(again.contexts.len(), 1);
+    // This one reached it: let go of.
+    reviews.settle(&again, true);
+    assert!(held(&reviews).is_empty());
 }
 
 #[test]

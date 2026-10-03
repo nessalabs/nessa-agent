@@ -612,6 +612,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) opening: Notify,
     pub(crate) open_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) executions: Mutex<Vec<String>>,
+    /// The next turn fails as it is prepared, before its prompt is sent.
+    pub(crate) prepare_failure: Mutex<Option<AgentError>>,
     pub(crate) execution_started: Notify,
     pub(crate) execution_gate: Mutex<Option<Receiver<()>>>,
     /// One explicit provider settlement used by failure-path projection tests.
@@ -1072,7 +1074,15 @@ impl ProviderSessionBackend for Backend {
         }
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
-        Box::pin(async { Ok(()) })
+        Box::pin(async move {
+            match self.factory.prepare_failure.lock().unwrap().take() {
+                Some(error) => Err(ProviderOperationFailure::new(
+                    error,
+                    ProviderSessionState::Usable,
+                )),
+                None => Ok(()),
+            }
+        })
     }
     fn execute(&self, request: ExecutionRequest) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {

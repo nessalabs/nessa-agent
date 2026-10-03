@@ -77,11 +77,22 @@ export const mcpAppRequestProblem = {
   /**
    * The context an app gives the model: its text and its structured content,
    * encoded, each at most `MAX_MCP_CONTEXT_BYTES` UTF-8 bytes of Unicode.
-   * Whether they fit together as the gateway holds them — the structure
-   * re-encoded — and whether the structure is one JSON object are the
-   * gateway's to judge (`mcp_request_too_large`, `invalid_request`).
+   * Whether they fit together, and whether the structure is one JSON
+   * object, are the gateway's to judge (`mcp_request_too_large`,
+   * `invalid_request`).
    */
   context: (context: McpAppModelContext): string | undefined => {
+    // One object of the two parts and nothing else: an array, or a stray
+    // field, would otherwise travel as an update with neither part — a clear.
+    if (
+      !context ||
+      typeof context !== "object" ||
+      Array.isArray(context) ||
+      Object.keys(context).some(
+        (key) => key !== "text" && key !== "structuredContentJson",
+      )
+    )
+      return "Context must be an object of text and structuredContentJson"
     const parts = [context.text, context.structuredContentJson].filter(
       (part): part is string => part !== undefined,
     )

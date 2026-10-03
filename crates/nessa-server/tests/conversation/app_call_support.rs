@@ -20,6 +20,10 @@ use crate::conversation_test_support::{
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
+use nessa_sdk::application::agent_execution::sessions::{
+    CommittedSession, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+    StorageFuture,
+};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::agent_execution::tools::{McpTool, ToolCallId, ToolCallUpdate};
 use nessa_sdk::domain::mcp_apps::{
@@ -34,6 +38,44 @@ use std::time::Duration;
 use uuid::Uuid;
 
 pub(crate) const SERVER: &str = "charts";
+
+/// Session storage that saves nothing while `refusing` is set, as a disk that
+/// went away would, and behaves otherwise.
+struct Refusing {
+    refusing: Arc<AtomicBool>,
+    inner: Arc<InMemoryStorage>,
+}
+impl SessionStorage for Refusing {
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        self.inner.read_committed(id)
+    }
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        let refusing = self.refusing.clone();
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            let inner = inner.open(id).await?;
+            Ok(Box::new(RefusingLease { refusing, inner }) as Box<dyn SessionStorageLease>)
+        })
+    }
+}
+struct RefusingLease {
+    refusing: Arc<AtomicBool>,
+    inner: Box<dyn SessionStorageLease>,
+}
+impl SessionStorageLease for RefusingLease {
+    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+        self.inner.load()
+    }
+    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+        if self.refusing.load(Ordering::SeqCst) {
+            return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
+        }
+        self.inner.save(snapshot)
+    }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.inner.erase()
+    }
+}
 pub(crate) const UI_TOOL: &str = "show";
 pub(crate) const URI: &str = "ui://charts/show.html";
 pub(crate) const INSTANCE: &str = "6f1d6c0e-8f8c-4a52-9b8e-1f6c3d2a4b5c";
@@ -277,6 +319,9 @@ pub(crate) struct Fixture {
     pub(crate) repository: Arc<MemoryRepository>,
     /// The agent's audit of what it was given.
     pub(crate) execution_audit: Arc<ExecutionRecords>,
+    /// While set, the agent's session storage saves nothing: it refuses
+    /// whatever it is asked to admit.
+    pub(crate) storage_refuses: Arc<AtomicBool>,
     /// The tool call whose UI the app is.
     pub(crate) execution_id: String,
     pub(crate) tool_id: String,
@@ -295,6 +340,7 @@ impl Fixture {
             ..owner.clone()
         };
         let provider = Arc::new(ProviderFactory::default());
+        let storage_refuses = Arc::new(AtomicBool::new(false));
         provider
             .execution_updates
             .lock()
@@ -331,7 +377,10 @@ impl Fixture {
                     AgentId::Claude,
                 )
                 .unwrap(),
-                storage: Arc::new(InMemoryStorage::new()),
+                storage: Arc::new(Refusing {
+                    refusing: storage_refuses.clone(),
+                    inner: Arc::new(InMemoryStorage::new()),
+                }),
                 metadata: repository.clone(),
                 mode_audit: Arc::new(RecordingModeAudit::default()),
                 creation_audit: Arc::new(AcceptingCreationAudit),
@@ -414,6 +463,7 @@ impl Fixture {
             provider,
             repository,
             execution_audit,
+            storage_refuses,
         }
     }
 

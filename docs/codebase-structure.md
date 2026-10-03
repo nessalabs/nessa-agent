@@ -261,8 +261,10 @@ writing the full defaults on first launch is buying.
   style variables, where the sandbox proxy is and its frame's sandbox flags
   (`app/adapters/dom/`); the server port over the gateway's
   `client.mcpApps` — the typed outcomes, the resource ticket redeemed once,
-  each mount's release — and the calls an app's widgets name, read from a
-  conversation view's MCP tools, with an app plugin registered per server
+  each mount's release — the conversation port over `client.mcpApps`'s
+  `sendMessage` and `updateModelContext`, each mount's updates in order
+  (#390), and the calls an app's widgets name, read from a conversation
+  view's MCP tools, with an app plugin registered per server
   (`app/adapters/gateway/`, #384); the proxy itself and the dev server's listener for
   it (`app/sandbox/`, served
   in the desktop app by `src-tauri/src/app_sandbox.rs`); the view the hosts

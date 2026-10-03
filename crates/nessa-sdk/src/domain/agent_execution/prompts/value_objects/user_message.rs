@@ -245,7 +245,8 @@ impl UserMessage {
     pub const MAX_APP_MODEL_CONTEXTS: usize = 4;
 
     /// Combine optional `text` with `images` and `files`, each in attachment
-    /// order: the person's message, carrying no app's context. All three empty is [`ExecutionError::EmptyValue`]; more than
+    /// order: the person's message, carrying no app's context. All three
+    /// empty is [`ExecutionError::EmptyValue`]; more than
     /// [`Self::MAX_IMAGES`] or [`Self::MAX_FILES`] is
     /// [`ExecutionError::TooManyValues`]; more than [`Self::MAX_IMAGE_BYTES`]
     /// in total is [`ExecutionError::ValueTooLong`]. The same image or file may
@@ -298,6 +299,27 @@ impl UserMessage {
     }
     /// This message, written by `sender`. A message is the person's until
     /// it is said otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use nessa_sdk::domain::agent_execution::executions::ExecutionId;
+    /// use nessa_sdk::domain::agent_execution::prompts::{
+    ///     McpAppSource, MessageSender, PromptText, UserMessage,
+    /// };
+    /// use nessa_sdk::domain::agent_execution::tools::{McpTool, ToolCallId};
+    ///
+    /// let message = UserMessage::text_only(PromptText::new("Plot May")?);
+    /// assert_eq!(message.sender(), &MessageSender::Person);
+    /// let app = McpAppSource::new(
+    ///     ExecutionId::new("turn-1")?,
+    ///     ToolCallId::new("call-1")?,
+    ///     McpTool::new("charts", "plot")?,
+    /// )?;
+    /// let message = message.sent_by(MessageSender::App(app.clone()));
+    /// assert_eq!(message.sender(), &MessageSender::App(app));
+    /// # Ok::<(), nessa_sdk::domain::agent_execution::ExecutionError>(())
+    /// ```
     #[must_use]
     pub fn sent_by(self, sender: MessageSender) -> Self {
         Self { sender, ..self }

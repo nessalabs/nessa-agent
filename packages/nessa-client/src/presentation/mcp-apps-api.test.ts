@@ -995,6 +995,24 @@ describe("an app speaking in its conversation (#390)", () => {
         ),
     ],
     [
+      // Sent, it would carry neither part: a clear.
+      "a context that is an array",
+      () =>
+        api(vi.fn()).updateModelContext(
+          conversationId,
+          app,
+          "charts",
+          [] as unknown as object,
+        ),
+    ],
+    [
+      "a context with a field it has no such part for",
+      () =>
+        api(vi.fn()).updateModelContext(conversationId, app, "charts", {
+          content: "Showing April",
+        } as unknown as object),
+    ],
+    [
       "another server's name past its bound",
       () => api(vi.fn()).sendMessage(conversationId, app, "x".repeat(129), "hi"),
     ],

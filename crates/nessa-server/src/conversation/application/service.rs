@@ -1961,23 +1961,33 @@ impl ConversationService {
                 return Err(ConversationError::TurnRunning);
             }
             // What apps gave the model goes with the next message admitted
-            // while nothing runs or waits, once: that turn starts now, so it
-            // is never removed or reordered with them in it. A message queued
-            // behind a turn, or steered into one, carries none, and leaves
-            // them for the next (`c8_a_message_queued_behind_a_turn_carries_no_context`).
+            // while nothing runs or waits: nothing is ahead of that turn to
+            // answer before it. A message queued behind a turn, or steered
+            // into one, carries none, and leaves them for the next
+            // (`c8b_a_message_queued_behind_a_turn_carries_no_context_and_leaves_it_held`).
             // A retry carries what its first attempt took — the agent
             // compares it with what it has — and takes nothing more.
-            let held = (idle && matches!(mode, SubmissionMode::Queue))
-                .then(|| live.app_reviews.held_contexts());
+            // Carried: in flight with this turn until it settles, so no other
+            // message carries them meanwhile.
+            let held =
+                (idle && matches!(mode, SubmissionMode::Queue)).then(|| live.app_reviews.carry());
             let carried = match (original, &held) {
                 (Some(original), _) => original,
                 (None, Some(held)) => held.contexts.clone(),
                 (None, None) => Vec::new(),
             };
-            let message = message
+            let message = match message
                 .sent_by(writer.sender())
                 .with_app_model_context(carried)
-                .map_err(|_| ConversationError::InvalidInput)?;
+            {
+                Ok(message) => message,
+                Err(_) => {
+                    if let Some(held) = &held {
+                        live.app_reviews.settle(held, false);
+                    }
+                    return Err(ConversationError::InvalidInput);
+                }
+            };
             let request = ExecutionRequest {
                 execution_id: execution,
                 user_message: message.clone(),
@@ -2010,7 +2020,16 @@ impl ConversationService {
                         })
                 }
             };
-            let delivery = delivery.map_err(ConversationError::Agent)?;
+            let delivery = match delivery {
+                Ok(delivery) => delivery,
+                Err(error) => {
+                    // Refused: nothing carried them, and they wait for the next.
+                    if let Some(held) = &held {
+                        live.app_reviews.settle(held, false);
+                    }
+                    return Err(ConversationError::Agent(error));
+                }
+            };
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A
             // retry of a message the agent already had says nothing new.
@@ -2025,9 +2044,10 @@ impl ConversationService {
                             Some(admission_evidence_error(failure))
                         }
                     };
-                    // What it carries is let go of once its turn is seen to
-                    // run, when its receipt settles: a turn removed, failed or
-                    // cancelled before it ran leaves them held for the next.
+                    // What it carries is let go of once its receipt settles,
+                    // if the agent answered for the turn: a turn removed,
+                    // failed or cancelled before its prompt reached the agent
+                    // leaves them held for the next.
                     let settled = service
                         .watch_receipt(&id, live, receipt, !known, held)
                         .await;
@@ -2061,9 +2081,9 @@ impl ConversationService {
     /// not recorded as if it had just been said.
     ///
     /// `carried` are the app contexts the turn carries: once it settles, they
-    /// are let go of if its record shows it selected to run — the prompt
-    /// that holds them was sent, or attempted — and kept for the next turn
-    /// if it never ran (`c8_a_context_carried_by_a_turn_that_never_ran_is_kept`).
+    /// are let go of if the provider answered for it, and kept for the next
+    /// turn otherwise ([`settle_carried`];
+    /// `c8d_a_context_carried_by_a_turn_whose_prompt_never_reached_the_agent_is_kept`).
     async fn watch_receipt(
         &self,
         conversation: &ConversationId,
@@ -2078,7 +2098,7 @@ impl ConversationService {
         // can already be settled; dropping this wait never cancels SDK work.
         if let Some(_result) = completion.as_mut().now_or_never() {
             let snapshot = live.agent.session_manager().snapshot().await;
-            let_go_if_it_ran(&live, snapshot.as_ref(), &id, carried.as_ref());
+            settle_carried(&live, snapshot.as_ref(), &id, carried.as_ref());
             let reply = completed_reply(snapshot.as_ref(), &id).filter(|_| new_submission);
             // Let go of the agent before waiting for the summary lock: a
             // summary is not a reason to keep a stopped agent's history
@@ -2099,7 +2119,7 @@ impl ConversationService {
         tokio::spawn(async move {
             let _result = completion.await;
             let snapshot = live.agent.session_manager().snapshot().await;
-            let_go_if_it_ran(&live, snapshot.as_ref(), &id, carried.as_ref());
+            settle_carried(&live, snapshot.as_ref(), &id, carried.as_ref());
             let reply = completed_reply(snapshot.as_ref(), &id);
             live.watched.lock().await.remove(&id);
             // As above: the agent is let go of before the summary lock is
@@ -3959,15 +3979,13 @@ fn turn_in_progress(snapshot: Option<SessionSnapshot>) -> bool {
     })
 }
 
-/// What a turn that completed said last, as the saved session records it.
-///
-/// A reply that calls tools is several runs of text with the tool calls
-/// between them, and a list previews the last run: what the agent said when it
-/// finished, not what it said it was about to do. Only text is read, never a
-/// thought, and no more of it than a preview could use.
-/// Let go of the app contexts `carried` by the turn `execution` when its
-/// record shows it selected to run.
-fn let_go_if_it_ran(
+/// Settle the app contexts `carried` by the turn `execution`, now its
+/// receipt has settled: let go of if the provider answered for that turn — a
+/// report of it, or anything it observed — so the prompt holding them reached
+/// it; kept for the next turn otherwise, a turn removed, failed or refused
+/// before its prompt included. Kept is the safe side: at worst a context the
+/// provider did see goes once more, and none is lost.
+fn settle_carried(
     live: &LiveConversation,
     snapshot: Option<&SessionSnapshot>,
     execution: &str,
@@ -3976,20 +3994,21 @@ fn let_go_if_it_ran(
     let Some(carried) = carried else {
         return;
     };
-    let ran = snapshot.is_some_and(|snapshot| {
+    let reached = snapshot.is_some_and(|snapshot| {
         snapshot.invocations.iter().any(|record| {
             record.request.execution_id.as_str() == execution
-                && record
-                    .scheduling
-                    .iter()
-                    .any(|event| event.stage == InvocationStage::Running)
+                && (record.provider_report.is_some() || !record.events.is_empty())
         })
     });
-    if ran {
-        live.app_reviews.took(carried);
-    }
+    live.app_reviews.settle(carried, reached);
 }
 
+/// What a turn that completed said last, as the saved session records it.
+///
+/// A reply that calls tools is several runs of text with the tool calls
+/// between them, and a list previews the last run: what the agent said when it
+/// finished, not what it said it was about to do. Only text is read, never a
+/// thought, and no more of it than a preview could use.
 fn completed_reply(snapshot: Option<&SessionSnapshot>, execution: &str) -> Option<String> {
     let record = snapshot?
         .invocations

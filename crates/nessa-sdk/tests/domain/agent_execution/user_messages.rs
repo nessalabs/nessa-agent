@@ -402,7 +402,7 @@ fn a_message_is_the_persons_until_said_otherwise_and_carries_at_most_four_contex
 #[test]
 fn an_apps_context_names_the_update_that_gave_it_by_a_bounded_identity() {
     let context =
-        |update: String| AppModelContext::new(app("call-1"), update, Some("ctx".into()), None);
+        |update: String| AppModelContext::new(app("call-1"), &update, Some("ctx".into()), None);
     assert_eq!(
         context(" ".into()),
         Err(ExecutionError::EmptyValue("app context update"))
@@ -415,7 +415,7 @@ fn an_apps_context_names_the_update_that_gave_it_by_a_bounded_identity() {
         })
     );
     let exact = "u".repeat(AppModelContext::MAX_UPDATE_BYTES);
-    assert_eq!(context(exact.clone()).unwrap().unwrap().update(), exact);
+    assert_eq!(context(exact.clone()).unwrap().unwrap().update_id(), exact);
     // Which update gave it is part of it: the same words from another update
     // are another context.
     assert_ne!(context("a".into()), context("b".into()));
@@ -443,6 +443,8 @@ fn an_app_and_its_context_count_every_byte_they_hold() {
     .unwrap()
     .unwrap();
     assert_eq!(context.app(), &source);
+    // What it says, the bound's measure; and all it holds, the retained one.
+    assert_eq!(context.content_bytes(), "May".len() + r#"{"m":5}"#.len());
     assert_eq!(
         context.payload_bytes(),
         source.payload_bytes() + "update-1".len() + "May".len() + r#"{"m":5}"#.len()

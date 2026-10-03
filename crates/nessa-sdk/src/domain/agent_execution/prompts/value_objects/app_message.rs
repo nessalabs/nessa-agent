@@ -119,13 +119,39 @@ impl AppModelContext {
     /// [`ExecutionError::ValueTooLong`] past [`Self::MAX_BYTES`] together;
     /// [`ExecutionError::InvalidStructuredContent`] for structured content
     /// that is not the JSON text of one object.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use nessa_sdk::domain::agent_execution::executions::ExecutionId;
+    /// use nessa_sdk::domain::agent_execution::prompts::{AppModelContext, McpAppSource};
+    /// use nessa_sdk::domain::agent_execution::tools::{McpTool, ToolCallId};
+    ///
+    /// let app = McpAppSource::new(
+    ///     ExecutionId::new("turn-1")?,
+    ///     ToolCallId::new("call-1")?,
+    ///     McpTool::new("charts", "plot")?,
+    /// )?;
+    /// let context = AppModelContext::new(
+    ///     app.clone(),
+    ///     "update-1",
+    ///     Some("Showing April".into()),
+    ///     Some(r#"{"month":4}"#.into()),
+    /// )?
+    /// .expect("it gave something");
+    /// assert_eq!(context.structured_content(), Some(r#"{"month":4}"#));
+    /// // Neither part: the app gives the model nothing.
+    /// assert!(AppModelContext::new(app.clone(), "update-2", None, None)?.is_none());
+    /// // Structure that is not one JSON object is refused.
+    /// assert!(AppModelContext::new(app, "update-3", None, Some("[1]".into())).is_err());
+    /// # Ok::<(), nessa_sdk::domain::agent_execution::ExecutionError>(())
+    /// ```
     pub fn new(
         app: McpAppSource,
-        update: impl Into<String>,
+        update: &str,
         text: Option<String>,
         structured_content: Option<String>,
     ) -> Result<Option<Self>, ExecutionError> {
-        let update = update.into();
         if update.trim().is_empty() {
             return Err(ExecutionError::EmptyValue("app context update"));
         }
@@ -158,7 +184,7 @@ impl AppModelContext {
         }
         Ok(Some(Self {
             app,
-            update: update.into_boxed_str(),
+            update: update.into(),
             text: text.map(String::into_boxed_str),
             structured_content: structured_content.map(String::into_boxed_str),
         }))
@@ -168,7 +194,7 @@ impl AppModelContext {
         &self.app
     }
     /// The identity of the update that gave it.
-    pub fn update(&self) -> &str {
+    pub fn update_id(&self) -> &str {
         &self.update
     }
     /// Its text, when it gave any.
@@ -192,7 +218,6 @@ impl AppModelContext {
         self.app
             .payload_bytes()
             .saturating_add(self.update.len())
-            .saturating_add(self.text.as_deref().map_or(0, str::len))
-            .saturating_add(self.structured_content.as_deref().map_or(0, str::len))
+            .saturating_add(self.content_bytes())
     }
 }

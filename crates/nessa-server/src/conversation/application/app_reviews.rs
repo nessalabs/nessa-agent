@@ -139,8 +139,9 @@ pub struct AppReviews {
     state: Mutex<Reviews>,
     /// One lock per mount, held across one of its context updates — room
     /// checked, recorded, held — so a mount's updates are recorded in the
-    /// order they reach it, and none is held out of turn. Per mount, so one
-    /// mount's slow record holds up no other's. Let go of with the mount.
+    /// order they reach it, and none is held out of turn, across openings
+    /// too. Per mount, so one mount's slow record holds up no other's. An
+    /// entry stays only while an update holds or waits for it.
     updates: Mutex<HashMap<McpAppRef, Arc<tokio::sync::Mutex<()>>>>,
 }
 #[derive(Default)]
@@ -170,15 +171,38 @@ struct Reviews {
     /// carries, and how a message takes a context only if it is still the
     /// one it read.
     next_context: u64,
-    /// The mounts with an update between its number and its hold: each
-    /// holds a place, so two mounts never both take the last.
-    reserved: Vec<McpAppRef>,
+    /// The updates between their number and their hold, by mount and
+    /// number: each holds its mount's place, so two mounts never both take
+    /// the last; only that update's hold lets go of it.
+    reserved: Vec<(McpAppRef, u64)>,
+    /// The numbers of the contexts a turn carries now, until it settles: no
+    /// other message carries them meanwhile.
+    in_flight: Vec<u64>,
 }
 /// One mount's context, as it gave it.
 struct HeldContext {
     app: McpAppRef,
     number: u64,
     context: AppModelContext,
+}
+
+/// One mount's turn at a context update. Dropped, it lets the next go, and
+/// lets go of the mount's lock when nothing else holds or waits for it.
+pub struct UpdateTurn {
+    reviews: Arc<AppReviews>,
+    app: McpAppRef,
+    lock: Arc<tokio::sync::Mutex<()>>,
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+impl Drop for UpdateTurn {
+    fn drop(&mut self) {
+        drop(self.guard.take());
+        let mut updates = self.reviews.updates.lock().expect("context updates");
+        // The map's and this one's: nobody else holds or waits for it.
+        if Arc::strong_count(&self.lock) <= 2 {
+            updates.remove(&self.app);
+        }
+    }
 }
 
 /// Why a context was not held.
@@ -190,14 +214,25 @@ pub enum ContextRefusal {
     Gone(ReviewRefusal),
 }
 
-/// The contexts held when a message read them, in the order given, and
-/// which they were: [`AppReviews::took`] lets go of exactly these, and of
-/// none replaced since.
+/// The contexts a turn carries, in the order given, and which they were:
+/// [`AppReviews::settle`] lets go of exactly these, and of none replaced
+/// since.
 pub struct HeldContexts {
     pub contexts: Vec<AppModelContext>,
     taken: Vec<(McpAppRef, u64)>,
 }
 impl Reviews {
+    /// The contexts held, in the order they were given, none in flight.
+    fn held_now(&self) -> HeldContexts {
+        let held = self
+            .contexts
+            .iter()
+            .filter(|held| !self.in_flight.contains(&held.number));
+        HeldContexts {
+            contexts: held.clone().map(|held| held.context.clone()).collect(),
+            taken: held.map(|held| (held.app.clone(), held.number)).collect(),
+        }
+    }
     /// The person allowed `app` to send messages in the current opening.
     fn allow(&mut self, app: &McpAppRef) {
         if !self.consented.contains(app) {
@@ -213,6 +248,7 @@ impl Reviews {
         self.consented.clear();
         self.contexts.clear();
         self.reserved.clear();
+        self.in_flight.clear();
     }
     fn key(&self, permission: &str) -> Option<u64> {
         self.pending
@@ -281,7 +317,6 @@ impl AppReviews {
             state.let_go_of_the_opening();
             std::mem::take(&mut state.pending)
         };
-        self.updates.lock().expect("context updates").clear();
         withdraw_ended(ended, &McpAppInitiator::System);
     }
 
@@ -304,7 +339,7 @@ impl AppReviews {
 
     /// One context update of `app` at a time: held across its room check,
     /// its record and its hold.
-    pub async fn one_update(&self, app: &McpAppRef) -> tokio::sync::OwnedMutexGuard<()> {
+    pub async fn one_update(self: &Arc<Self>, app: &McpAppRef) -> UpdateTurn {
         let lock = self
             .updates
             .lock()
@@ -312,7 +347,13 @@ impl AppReviews {
             .entry(app.clone())
             .or_default()
             .clone();
-        lock.lock_owned().await
+        let guard = lock.clone().lock_owned().await;
+        UpdateTurn {
+            reviews: self.clone(),
+            app: app.clone(),
+            lock,
+            guard: Some(guard),
+        }
     }
 
     /// The number of an update of `app` in the opening `epoch` — the
@@ -335,7 +376,7 @@ impl AppReviews {
             .contexts
             .iter()
             .map(|held| &held.app)
-            .chain(state.reserved.iter())
+            .chain(state.reserved.iter().map(|(mount, _)| mount))
         {
             if mount != app && !others.contains(&mount) {
                 others.push(mount);
@@ -344,21 +385,22 @@ impl AppReviews {
         if holds && others.len() >= MAX_HELD_CONTEXTS {
             return Err(ContextRefusal::Full);
         }
-        if holds && !state.reserved.contains(app) {
-            state.reserved.push(app.clone());
-        }
         state.next_context += 1;
-        Ok(state.next_context)
+        let number = state.next_context;
+        if holds {
+            state.reserved.push((app.clone(), number));
+        }
+        Ok(number)
     }
 
-    /// The update of `app` numbered last could not be recorded: it gives
-    /// nothing, and its place is free again.
-    pub fn forget(&self, app: &McpAppRef) {
+    /// The update `number` of `app` could not be recorded: it gives
+    /// nothing, and the place it held is free again.
+    pub fn forget(&self, app: &McpAppRef, number: u64) {
         self.state
             .lock()
             .expect("app reviews")
             .reserved
-            .retain(|mount| mount != app);
+            .retain(|(mount, held)| mount != app || *held != number);
     }
 
     /// The update `number` of `app`, on record, is what it gives the model
@@ -366,7 +408,9 @@ impl AppReviews {
     /// an end since its number was taken came after it, and it is not held.
     pub fn give(&self, epoch: u64, app: &McpAppRef, number: u64, context: Option<AppModelContext>) {
         let mut state = self.state.lock().expect("app reviews");
-        state.reserved.retain(|mount| mount != app);
+        state
+            .reserved
+            .retain(|(mount, held)| mount != app || *held != number);
         if state.live(epoch, app).is_err() {
             return;
         }
@@ -380,28 +424,45 @@ impl AppReviews {
         }
     }
 
-    /// The contexts held now, in the order they were given, for a message
-    /// to carry.
-    pub fn held_contexts(&self) -> HeldContexts {
-        let state = self.state.lock().expect("app reviews");
-        let held = state.contexts.iter();
-        HeldContexts {
-            contexts: held.clone().map(|held| held.context.clone()).collect(),
-            taken: held.map(|held| (held.app.clone(), held.number)).collect(),
+    /// The contexts held now, in the order they were given, none a turn
+    /// carries already; marked as carried, until [`Self::settle`].
+    pub fn carry(&self) -> HeldContexts {
+        let mut state = self.state.lock().expect("app reviews");
+        let carried = state.held_now();
+        state
+            .in_flight
+            .extend(carried.taken.iter().map(|(_, number)| *number));
+        carried
+    }
+
+    /// The turn that carried `carried` settled: they are let go of if it
+    /// `reached` the agent, and held for the next turn otherwise.
+    pub fn settle(&self, carried: &HeldContexts, reached: bool) {
+        let mut state = self.state.lock().expect("app reviews");
+        state
+            .in_flight
+            .retain(|number| !carried.taken.iter().any(|(_, taken)| taken == number));
+        if reached {
+            state.contexts.retain(|held| {
+                !carried
+                    .taken
+                    .iter()
+                    .any(|(app, number)| &held.app == app && held.number == *number)
+            });
         }
     }
 
-    /// A message carried `taken`: let go of each that is still held as it
-    /// was read. One replaced since is newer than what was sent, and is
-    /// kept for the next message.
-    pub fn took(&self, taken: &HeldContexts) {
-        let mut state = self.state.lock().expect("app reviews");
-        state.contexts.retain(|held| {
-            !taken
-                .taken
-                .iter()
-                .any(|(app, number)| &held.app == app && held.number == *number)
-        });
+    /// Whether a turn carries any context now.
+    #[cfg(test)]
+    pub fn carrying(&self) -> bool {
+        !self.state.lock().expect("app reviews").in_flight.is_empty()
+    }
+
+    /// The contexts held now, in the order they were given, none a turn
+    /// carries already.
+    #[cfg(test)]
+    pub fn held_contexts(&self) -> HeldContexts {
+        self.state.lock().expect("app reviews").held_now()
     }
 
     /// Whether `app` may be admitted in the opening `epoch` now.
@@ -578,13 +639,12 @@ impl AppReviews {
                 .collect();
             state.consented.retain(|consented| consented != app);
             state.contexts.retain(|held| &held.app != app);
-            state.reserved.retain(|mount| mount != app);
+            state.reserved.retain(|(mount, _)| mount != app);
             release();
             keys.into_iter()
                 .filter_map(|key| state.remove(key))
                 .collect()
         };
-        self.updates.lock().expect("context updates").remove(app);
         for open in ended {
             let _ = open.end.send(ReviewEnd::Withdrawn {
                 cause: McpAppWithdrawal::AppTornDown,
@@ -609,7 +669,6 @@ impl AppReviews {
             state.let_go_of_the_opening();
             std::mem::take(&mut state.pending)
         };
-        self.updates.lock().expect("context updates").clear();
         withdraw_ended(ended, by);
     }
 }

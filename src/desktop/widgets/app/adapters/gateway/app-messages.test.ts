@@ -133,6 +133,16 @@ describe("an app's context", () => {
     expect(apps.updateModelContext.mock.calls.map((call) => call[3])).toEqual([{}, {}])
   })
 
+  it("is refused, not cleared, by content that gives no text", async () => {
+    const apps = fakeApps()
+    expect(
+      await gatewayAppConversation(apps).updateModelContext(address, {
+        content: [{ type: "image", data: "AAAA", mimeType: "image/png" }],
+      }),
+    ).toBe("refused")
+    expect(apps.updateModelContext).not.toHaveBeenCalled()
+  })
+
   it("is refused, unsent, with a part past the wire's bound, and leaves together to the gateway", async () => {
     const apps = fakeApps()
     const conversation = gatewayAppConversation(apps)

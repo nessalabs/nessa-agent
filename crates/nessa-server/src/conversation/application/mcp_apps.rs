@@ -256,7 +256,7 @@ pub enum McpAppAuditPhase {
     /// The mount's context, `bytes` of it, is held for the next message, in
     /// place of what it held. `sequence` orders the conversation's updates:
     /// of a mount's, the highest recorded stands. A turn that carries it
-    /// names this call's id (`AppModelContext::update`).
+    /// names this call's id (`AppModelContext::update_id`).
     ContextHeld { bytes: usize, sequence: u64 },
     /// What the mount gave before `sequence` is let go of.
     ContextCleared { sequence: u64 },

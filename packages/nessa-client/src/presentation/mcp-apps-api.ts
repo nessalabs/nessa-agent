@@ -409,8 +409,6 @@ export function createMcpAppsApi(
     async updateModelContext(conversationId, app, server, context, options = {}) {
       const command = addressed(conversationId, app, options)
       serverName(server)
-      if (!context || typeof context !== "object")
-        throw new TypeError("Context must be an object")
       const problem = mcpAppRequestProblem.context(context)
       if (problem) throw new TypeError(problem)
       const { text, structuredContentJson } = context

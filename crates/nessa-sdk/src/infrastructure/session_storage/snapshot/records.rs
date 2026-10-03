@@ -137,7 +137,7 @@ impl From<&DomainAppModelContext> for AppModelContext {
     fn from(value: &DomainAppModelContext) -> Self {
         Self {
             app: value.app().into(),
-            update: value.update().into(),
+            update: value.update_id().into(),
             text: value.text().map(str::to_owned),
             structured_content: value.structured_content().map(str::to_owned),
         }
@@ -153,7 +153,7 @@ impl AppModelContext {
         }
         DomainAppModelContext::new(
             self.app.decode()?,
-            self.update,
+            &self.update,
             self.text,
             self.structured_content,
         )

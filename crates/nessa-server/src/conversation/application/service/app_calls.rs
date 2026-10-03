@@ -688,17 +688,6 @@ impl ConversationService {
         let Some((_, tool)) = seen else {
             return Err(step.refuse(McpAppError::AppUnknown).await);
         };
-        // Each part within the wire's own bound, before anything parses it:
-        // the context's bound, which no part alone may pass either.
-        if [&update.text, &update.structured_content_json]
-            .iter()
-            .any(|part| {
-                part.as_ref()
-                    .is_some_and(|part| part.len() > AppModelContext::MAX_BYTES)
-            })
-        {
-            return Err(step.refuse(McpAppError::RequestTooLarge).await);
-        }
         // Held as given: the context itself is the one judge of what may be
         // held — one JSON object, within its bound, something at all.
         let structured = update.structured_content_json;
@@ -751,7 +740,7 @@ impl ConversationService {
         // never reaches the model, and one that could not be recorded
         // changes nothing.
         if let Err(error) = step.record(phase, None).await {
-            opening.apps.forget(&update.app);
+            opening.apps.forget(&update.app, number);
             return Err(error);
         }
         // A release or an end since came after it, and it is not held.
