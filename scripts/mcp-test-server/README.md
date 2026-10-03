@@ -90,3 +90,18 @@ with their `node_modules` (default: `crates/nessa-sdk/harnesses` in this
 checkout); `MCP_LIVE_NESSA` the gateway binary (default: this checkout's
 `target/debug/nessa`); `MCP_LIVE_PORT` (default 7431) and `MCP_LIVE_POLLS` (seconds,
 default 300) adjust the run.
+
+## The scripted agent
+
+`scripted-agent.mjs codex|claude` is a stdio ACP agent with no model, which
+a gateway can run as that agent's runtime (an explicit `command`). It answers
+the handshake as the harness pinned in
+`crates/nessa-sdk/harnesses/<agent>-acp/package.json`, and to each prompt makes
+one real `review_rows` call through the stand-in the gateway gave it for
+`mcptest`, reports that call in the frames the harness was recorded sending,
+says DONE, and ends the turn. The frames are the recorded `show_chart` call
+from the parser fixtures above, frame for frame, with only the call's id,
+its tool and the server's result put in (`scripted-frames.mjs`), so a new
+recording changes what it replays. It reads no credential. The desktop's
+real-gateway check runs it with `--scripted`; its design table is on #418, and
+its tests are `scripted-frames.test.mjs` and `scripted-agent.test.mjs`.

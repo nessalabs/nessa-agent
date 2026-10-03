@@ -15,6 +15,7 @@ import {
   reviewKeys,
   setupOutcome,
   stillPending,
+  turnEnded,
 } from "./gateway-view.mjs"
 
 const allow = { id: "allow_once", effect: "allow" }
@@ -181,5 +182,16 @@ describe("newReview", () => {
     const opened = review("new")
     assert.equal(stillPending([stale, opened], opened), true)
     assert.equal(stillPending([stale], opened), false)
+  })
+})
+
+describe("turnEnded", () => {
+  it("a turn running, queued or read as unresolved has not ended (#448)", () => {
+    for (const status of ["running", "queued", "unresolved"])
+      assert.equal(turnEnded(status), false)
+  })
+  it("a completed, failed or cancelled turn has", () => {
+    for (const status of ["completed", "failed", "cancelled"])
+      assert.equal(turnEnded(status), true)
   })
 })

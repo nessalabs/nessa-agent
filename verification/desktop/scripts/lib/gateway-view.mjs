@@ -90,3 +90,10 @@ export const newReview = (reviews, baseline) =>
 /** Whether `review` is still among the pending `reviews`. */
 export const stillPending = (reviews, review) =>
   reviews.some((each) => permissionKey(each) === permissionKey(review))
+
+/**
+ * Whether a turn read as `status` has ended. `unresolved` has not: a read
+ * while a committed snapshot replaces the view can show a live turn as
+ * unresolved, and the next read shows it running or ended (#448).
+ */
+export const turnEnded = (status) => !["running", "queued", "unresolved"].includes(status)

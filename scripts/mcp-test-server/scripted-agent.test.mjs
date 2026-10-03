@@ -7,7 +7,7 @@ import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
 import { dirname, join } from "node:path"
 import { createInterface } from "node:readline"
-import { test } from "node:test"
+import { after, test } from "node:test"
 import { fileURLToPath } from "node:url"
 
 import { exited } from "./local-gateway.mjs"
@@ -20,12 +20,19 @@ const mcptest = {
   env: [],
 }
 
+const started = []
+after(() => {
+  for (const child of started) if (child.exitCode === null) child.kill("SIGKILL")
+})
+
 /** The agent as `agent`, with a `request` that resolves with the answer and the notifications before it. */
 function start(agent, env = {}) {
   const child = spawn(process.execPath, [join(here, "scripted-agent.mjs"), agent], {
     env: { ...process.env, ...env },
     stdio: ["pipe", "pipe", "inherit"],
   })
+  // A test that fails before closing its agent leaves nothing running.
+  started.push(child)
   const notes = []
   const waiting = new Map()
   createInterface({ input: child.stdout }).on("line", (line) => {
@@ -82,6 +89,20 @@ test("codex: handshake, options, one replayed call per prompt, and exit on close
     value: "red",
   })
   assert.match(unknown.error.message, /no config option colour/)
+  // The session keeps what was set: a later answer still reports it.
+  const effort = await agent.request("session/set_config_option", {
+    sessionId,
+    configId: "reasoning_effort",
+    value: "high",
+  })
+  assert.deepEqual(
+    effort.result.configOptions.map(({ id, currentValue }) => [id, currentValue]),
+    [
+      ["model", "gpt-test"],
+      ["mode", "agent"],
+      ["reasoning_effort", "high"],
+    ],
+  )
 
   const first = await agent.request("session/prompt", { sessionId, prompt: [] })
   assert.deepEqual(first.result, { stopReason: "end_turn" })

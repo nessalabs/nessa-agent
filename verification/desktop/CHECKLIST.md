@@ -421,6 +421,13 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   design, L14 and L24._ _Check:_ `mcp-apps-gateway.mjs` (needs the gateway
   built and the agent, `--agent claude|codex`, signed in on the machine). The
   refusal of the hidden tool that declares no UI depends on #412.
+- [ ] **One tool call is drawn once** (#418): a harness reports one call as an
+  announcement and then updates under its id (Codex three frames, Claude
+  four), and the window draws it as one transcript step and one inline app
+  frame, so the app mounts once. _#418 design._ _Check:_
+  `mcp-apps-gateway.mjs --agent codex --scripted` and `--agent claude
+  --scripted`, `renders` (no model, no sign-in: the scripted agent replays the
+  recorded frames under the real gateway).
 
 ## Composer and approval card
 

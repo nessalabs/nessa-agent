@@ -62,6 +62,18 @@ export const initializeResult = (agent) => ({
 })
 
 /**
+ * The config options a session has, by id, with the ACP category each is
+ * listed under (`null`: none). The SDK sets `model` and `mode`, and an effort
+ * level under Codex's or Claude's id when one is chosen.
+ */
+const OPTIONS = {
+  model: null,
+  mode: null,
+  effort: "thought_level",
+  reasoning_effort: "thought_level",
+}
+
+/**
  * The session's config options as ACP lists them, from `values` (option id →
  * current value). Each option offers only its current value: nothing here
  * chooses among models or modes, it reports what it was told.
@@ -71,9 +83,7 @@ export const configOptions = (values) =>
     id,
     name: id,
     type: "select",
-    ...(id === "effort" || id === "reasoning_effort"
-      ? { category: "thought_level" }
-      : {}),
+    ...(OPTIONS[id] ? { category: OPTIONS[id] } : {}),
     currentValue: value,
     options: [{ value, name: value }],
   }))
@@ -97,8 +107,7 @@ export function initialOptions(agent, env, params) {
 
 /** Options `values` with `configId` set to `value`; `null` for an option the session does not have. */
 export function setOption(values, configId, value) {
-  const known = ["model", "mode", "effort", "reasoning_effort"]
-  if (!known.includes(configId)) return null
+  if (!Object.hasOwn(OPTIONS, configId)) return null
   return { ...values, [configId]: value }
 }
 

@@ -57,6 +57,7 @@ import {
   reviewKeys,
   setupOutcome,
   stillPending,
+  turnEnded,
 } from "./lib/gateway-view.mjs"
 import { main } from "./lib/run.mjs"
 import { css, names } from "./lib/selectors.mjs"
@@ -270,7 +271,7 @@ async function agentTurn(client, conversationId, agent) {
       )
     }
     const last = view.messages.at(-1)
-    if (last && !["running", "queued"].includes(last.status)) {
+    if (last && turnEnded(last.status)) {
       const outcome = setupOutcome(view, SERVER, APP_TOOL)
       if (outcome.kind === "repeated") throw once(outcome.calls.map(callKey).join(", "))
       const tool = outcome.call
