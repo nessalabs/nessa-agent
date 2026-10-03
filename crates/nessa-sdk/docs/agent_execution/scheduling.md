@@ -86,6 +86,11 @@ item, whether or not anything is queued. A runner with nothing queued and no
 pending owner exits without taking the slot. That check, `running`,
 and admission share the scheduler lock.
 
+The unit tests drive `run_queue` on the test's own task and assert that one
+poll leaves it waiting, so none of them depends on the order in which the
+runtime polls tasks. Slot hand-over rests on Tokio's `Mutex` granting waiters
+in the order they called `lock`.
+
 Tests in the table are named from the crate's test roots. The unit tests are
 `application::agent_execution::agents::scheduling::tests` in the library. The
 integration test is
@@ -96,10 +101,10 @@ the `application` test binary.
 | --- | --- | --- | --- | --- |
 | Start | Nothing queued and no pending owner | Clears `running` and exits without the slot | Is not refused as `Busy` by the runner | `scheduling::tests::an_idle_queue_runner_leaves_the_invocation_slot_to_a_direct_invoke`, `scheduled_panics::dispatch_save_panic_does_not_inherit_previous_close_actor` |
 | Start | Queued input, while a direct invocation holds the slot | Waits for the slot, then selects under the scheduler lock | The direct invocation already holds the slot | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops`, `scheduled_panics::dispatch_save_panic_does_not_inherit_previous_close_actor` |
-| An admission while no runner is running | `running` is false | Admission starts a new runner under the same lock | Unaffected | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops` |
+| An admission while no runner is running | `running` is false | Admission starts a new runner under the same lock | Unaffected | `scheduling::tests::an_admission_while_no_runner_is_running_starts_one` |
 | Start | An owner left in `pending` with no queue entry, after a cancellation's settlement was cut short, not yet stopped | With nothing else queued, takes the slot, passes over the owner, then clears `running` and exits. The next `cancel_pending` collects owners whether or not they are queued | `Busy` until the runner exits | `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued`, second runner |
 | Start | The same owner, stopped | Takes the slot, releases it before the stopped-owner drain, then retires each stopped permit before publication | The stopped receipt exposes its actual lifecycle refusal rather than the runner's obsolete `Busy` | `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued`, third runner; `receipt_readiness::stopped_waiting_receipt_exposes_cleanup_refusal_without_runner_busy` |
-| The slot, after removal, close or a stop emptied the queue while it waited | Nothing queued | Takes the slot; releases it before draining stopped owners, or exits when there is no stopped work; clears `running` on exit | The runner may hold the acquired slot before it is polled, but stopped receipt publication does not retain it | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops` (removal), `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued`, first runner; `receipt_readiness::stopped_waiting_receipt_exposes_cleanup_refusal_without_runner_busy` |
+| The slot, after removal or close emptied the queue while it waited | Nothing queued | Takes the slot, then clears `running` and exits: after a close it releases the empty slot before its closed-lifecycle drain | `Busy` until the runner has been polled: it held the slot for work that existed when it began waiting | `scheduling::tests::a_runner_whose_queue_empties_while_it_waits_releases_the_slot_and_stops` (removal), `scheduling::tests::close_while_a_runner_waits_leaves_it_nothing_to_run_and_both_finish` (close), `scheduling::tests::a_runner_settles_a_stopped_owner_that_is_no_longer_queued`, first runner |
 
 ### Original receipt and ownership retirement (#405)
 
@@ -112,7 +117,8 @@ empty slot before their independently owned receipt settlement. A different live
 invocation retains its own slot and can still make a direct invocation `Busy`.
 
 The original main66 implementation reproduced stale `Busy` through the public
-normal-completion regression. The ownership contract and its public regression cases are listed below.
+normal-completion regression. The ownership contract and its public regression
+cases are listed below.
 Tests below are in the public `application` test binary, under
 `application::agent_execution::agents::review_regressions::receipt_readiness`.
 
