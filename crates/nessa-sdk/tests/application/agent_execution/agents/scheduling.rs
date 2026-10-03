@@ -363,7 +363,8 @@ async fn an_idle_queue_runner_leaves_the_invocation_slot_to_a_direct_invoke() {
     assert!(agent.inner.invocation.try_lock().is_ok());
 }
 
-// Rows two, three and six of the orderings table in docs/agent_execution/scheduling.md.
+// Rows three and six of the orderings table in docs/agent_execution/scheduling.md,
+// and the waiting half of row two (its selection is the integration test's).
 // While a direct invocation holds the slot (this test's guard), an admission
 // while no runner is running starts one, and it waits for the slot. Removing
 // the input empties the queue under it. When the slot is released the runner
@@ -516,7 +517,9 @@ async fn a_runner_settles_a_stopped_owner_that_is_no_longer_queued() {
         .pending
         .contains_key(&stranded_id));
 
+    // Row five: once stopped, a new runner takes the slot and settles it.
     let attempt = agent.start_shutdown(SessionCloseRequest::Explicit(actor()));
+    let direct = agent.inner.invocation.clone().lock_owned().await;
     {
         let mut scheduler = agent.inner.scheduler.lock().await;
         assert!(scheduler.pending[&stranded_id]
@@ -525,6 +528,17 @@ async fn a_runner_settles_a_stopped_owner_that_is_no_longer_queued() {
             .is_some());
         agent.start_runner(&mut scheduler);
     }
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    drop(direct);
+    assert_eq!(
+        agent
+            .invoke(request("direct-beside-a-stopped-owner"), actor())
+            .await,
+        Err(AgentError::Busy),
+        "a runner with a stopped owner to settle did not take the slot"
+    );
     assert!(tokio::time::timeout(bound, stranded.wait())
         .await
         .expect("the stopped owner was never settled")
