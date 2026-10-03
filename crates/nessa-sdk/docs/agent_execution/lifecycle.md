@@ -252,7 +252,9 @@ leaked rather than dropped. None of the publishers behind the waits in this
 table catches a notification panic itself, and nothing resets `running` or
 repairs lifecycle state after one.
 
-Every public Agent wait polls through `contain_caller_wake`, including
+Every public Agent wait whose caller waker an SDK task wakes polls through
+`contain_caller_wake`; the waits that only await caller-supplied provider and
+storage ports are listed under "Not covered" below. This includes
 `AgentInitializationError::retry_cleanup` (whose cleanup handle is always empty
 today, so its wrapper cannot yet be exercised). That includes the operations
 that spawn their owner and await its `JoinHandle`: `invoke`, `enqueue`, `enqueue_steering`, `steer`,
