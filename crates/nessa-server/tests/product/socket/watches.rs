@@ -355,6 +355,29 @@ struct HoldFirstReceiver {
     actual: RecordBinding,
     first: AtomicBool,
     work: Arc<HeldReceiverWork>,
+    // Every resolve started, held or not.
+    resolves: AtomicU64,
+    // An owner removed this receiver's binding: resolves return it inactive.
+    revoked: AtomicBool,
+    // A resolve is held now; and how many others began while one was.
+    holding: AtomicBool,
+    during_hold: AtomicU64,
+}
+impl HoldFirstReceiver {
+    async fn current(
+        &self,
+        credential: &CredentialId,
+    ) -> Result<Option<ReceiverBinding>, ReadRefusal> {
+        let revoked = self.revoked.load(Ordering::SeqCst);
+        Ok(self
+            .actual
+            .resolve(credential)
+            .await?
+            .map(|binding| ReceiverBinding {
+                active: !revoked,
+                ..binding
+            }))
+    }
 }
 impl ReceiverAuthority for HoldFirstReceiver {
     fn resolve<'a>(
@@ -362,9 +385,14 @@ impl ReceiverAuthority for HoldFirstReceiver {
         credential: &'a CredentialId,
     ) -> Pin<Box<dyn Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>> + Send + 'a>>
     {
-        if !self.first.swap(false, Ordering::SeqCst) {
-            return self.actual.resolve(credential);
+        self.resolves.fetch_add(1, Ordering::SeqCst);
+        if self.holding.load(Ordering::SeqCst) {
+            self.during_hold.fetch_add(1, Ordering::SeqCst);
         }
+        if !self.first.swap(false, Ordering::SeqCst) {
+            return Box::pin(self.current(credential));
+        }
+        self.holding.store(true, Ordering::SeqCst);
         let work = self.work.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
@@ -377,7 +405,8 @@ impl ReceiverAuthority for HoldFirstReceiver {
             })
             .await
             .map_err(|_| ReadRefusal::Unverifiable)?;
-            self.actual.resolve(credential).await
+            self.holding.store(false, Ordering::SeqCst);
+            self.current(credential).await
         })
     }
 }
@@ -399,6 +428,10 @@ async fn watch_admission_worker_loss_retains_original_owner_while_other_read_and
             actual: RecordBinding,
             first: AtomicBool::new(true),
             work: work.clone(),
+            resolves: AtomicU64::new(0),
+            revoked: AtomicBool::new(false),
+            holding: AtomicBool::new(false),
+            during_hold: AtomicU64::new(0),
         }),
         metadata,
     );
@@ -732,6 +765,10 @@ async fn lost_socket_observer_cannot_erase_fault_after_original_authority_worker
             actual: RecordBinding,
             first: AtomicBool::new(true),
             work: work.clone(),
+            resolves: AtomicU64::new(0),
+            revoked: AtomicBool::new(false),
+            holding: AtomicBool::new(false),
+            during_hold: AtomicU64::new(0),
         })),
         metadata,
     );
@@ -777,6 +814,10 @@ async fn unwatch_ack_retains_original_authority_target_until_actual_join() {
         actual: RecordBinding,
         first: AtomicBool::new(false),
         work: work.clone(),
+        resolves: AtomicU64::new(0),
+        revoked: AtomicBool::new(false),
+        holding: AtomicBool::new(false),
+        during_hold: AtomicU64::new(0),
     });
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
     fixture.state = fixture
@@ -858,6 +899,10 @@ async fn notice_authority_deadline_abandons_socket_but_retains_actual_worker_unt
         actual: RecordBinding,
         first: AtomicBool::new(false),
         work: work.clone(),
+        resolves: AtomicU64::new(0),
+        revoked: AtomicBool::new(false),
+        holding: AtomicBool::new(false),
+        during_hold: AtomicU64::new(0),
     });
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
     fixture.state = fixture
@@ -1280,6 +1325,10 @@ async fn actual_actor_replaces_unsent_dirty_after_observing_source_terminal_befo
         actual: RecordBinding,
         first: AtomicBool::new(false),
         work: work.clone(),
+        resolves: AtomicU64::new(0),
+        revoked: AtomicBool::new(false),
+        holding: AtomicBool::new(false),
+        during_hold: AtomicU64::new(0),
     });
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
     fixture.state = fixture
@@ -1525,6 +1574,10 @@ async fn held_receiver_fixture(
         actual: RecordBinding,
         first: AtomicBool::new(false),
         work: work.clone(),
+        resolves: AtomicU64::new(0),
+        revoked: AtomicBool::new(false),
+        holding: AtomicBool::new(false),
+        during_hold: AtomicU64::new(0),
     });
     let metadata = fixture.state.passive_read.as_ref().unwrap().1.clone();
     fixture.state = fixture
@@ -1562,9 +1615,11 @@ async fn written_unwatch_reply_stops_bounding_the_writer_while_a_notice_check_is
     assert_eq!(removed["ok"], true, "{removed}");
     tokio::time::pause();
     tokio::time::advance(RECORD_SEND_TIMEOUT + Duration::from_secs(1)).await;
+    // Wait on the real clock: paused time does not auto-advance while the
+    // held adapter's blocking worker runs.
+    tokio::time::resume();
     peer.request("after-deadline");
     assert_success(peer.message().await, "after-deadline");
-    tokio::time::resume();
     work.release();
     drop(peer);
     socket.await.unwrap();
@@ -1576,6 +1631,224 @@ async fn written_unwatch_reply_stops_bounding_the_writer_while_a_notice_check_is
     // The explicit clock advance above also expires the record storage's own
     // internal deadlines, so its shutdown result is not this test's evidence;
     // the other watch tests confirm storage cleanup on an unadvanced clock.
+    let _ = fixture.storage.shutdown().await;
+}
+
+/// Rows U1 and U4: with the watch's notice check still held, the same unwatch
+/// sent again after the first reply's deadline has passed is answered. A
+/// retired watch holds no deadline that a repeat could bring back.
+#[tokio::test]
+async fn repeated_unwatch_after_the_first_reply_deadline_is_still_answered() {
+    let (fixture, work, authority) = held_receiver_fixture(Duration::from_secs(3600)).await;
+    let _release = ReleaseHeld(work.clone());
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    fixture.watch(&peer, "install");
+    let acknowledged = text(peer.message().await);
+    let watch = acknowledged["payload"]["watchId"].as_str().unwrap().to_owned();
+    authority.first.store(true, Ordering::SeqCst); // Hold the notice's check.
+    fixture.commit().await;
+    tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
+        .await
+        .unwrap();
+    for (request, advance) in [
+        ("unwatch", Duration::ZERO),
+        ("unwatch-again", RECORD_SEND_TIMEOUT + Duration::from_secs(1)),
+    ] {
+        tokio::time::pause();
+        tokio::time::advance(advance).await;
+        tokio::time::resume(); // Wait on the real clock, as above.
+        fixture.send(&peer, request, "conversation.unwatch", json!({ "watchId": watch }));
+        let removed = text(peer.message().await);
+        assert_eq!(removed["id"], request);
+        assert_eq!(removed["ok"], true, "{removed}");
+        assert_eq!(removed["payload"], json!({ "watchId": watch }));
+    }
+    work.release();
+    drop(peer);
+    socket.await.unwrap();
+    assert_eq!(fixture.state.drain_watches().await, Ok(()));
+    assert_eq!(
+        fixture.state.change_watches.available_permits(),
+        MAX_GLOBAL_CHANGE_WATCHES
+    );
+    // As in the test above: the clock advance also expires the record
+    // storage's own internal deadlines, so its shutdown is not evidence here.
+    let _ = fixture.storage.shutdown().await;
+}
+
+/// Row A3b: a periodic check that does not return within the handshake
+/// timeout closes the connection as temporarily unavailable instead of
+/// silently suspending re-checks; its task keeps the watch's owner until the
+/// held adapter returns.
+#[tokio::test]
+async fn periodic_check_overdue_closes_the_connection_and_keeps_owners_until_it_returns() {
+    let (fixture, work, authority) = held_receiver_fixture(Duration::from_millis(50)).await;
+    let _release = ReleaseHeld(work.clone());
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    fixture.watch(&peer, "install");
+    assert_eq!(text(peer.message().await)["ok"], true);
+    authority.first.store(true, Ordering::SeqCst); // Hold the next periodic check.
+    tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
+        .await
+        .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(fixture.state.settings.handshake_timeout() + Duration::from_secs(1))
+        .await;
+    // Paused time does not auto-advance while the held adapter's blocking
+    // worker runs, so wait for the frame on the real clock.
+    tokio::time::resume();
+    let Message::Close(Some(close)) = peer.message().await else {
+        panic!("an overdue periodic check must close the connection");
+    };
+    assert_eq!(
+        close.code,
+        SessionCloseReason::TemporaryUnavailable.web_socket_code()
+    );
+    socket.await.unwrap();
+    assert_eq!(
+        fixture.state.change_watches.available_permits(),
+        MAX_GLOBAL_CHANGE_WATCHES - 1,
+        "the held check keeps its watch's owner"
+    );
+    work.release();
+    assert_eq!(fixture.state.drain_watches().await, Ok(()));
+    assert_eq!(
+        fixture.state.change_watches.available_permits(),
+        MAX_GLOBAL_CHANGE_WATCHES
+    );
+    // The clock advance also expires the record storage's own deadlines.
+    let _ = fixture.storage.shutdown().await;
+}
+
+/// Row A5: a refusal for a watch unwatched while its check ran is ignored, on
+/// the notice path and on the periodic path alike; the connection stays open.
+/// (A refusal for a live watch closes it on both paths: row A4.)
+#[tokio::test]
+async fn refusal_for_an_unwatched_target_is_ignored_on_both_paths() {
+    for through_notice in [true, false] {
+        let interval = if through_notice {
+            Duration::from_secs(3600)
+        } else {
+            Duration::from_millis(50)
+        };
+        let (fixture, work, authority) = held_receiver_fixture(interval).await;
+        let _release = ReleaseHeld(work.clone());
+        let (socket, mut peer) = test_socket(None);
+        let socket = tokio::spawn(run_authenticated(
+            socket,
+            fixture.state.clone(),
+            fixture.session.clone(),
+        ));
+        fixture.watch(&peer, "install");
+        let acknowledged = text(peer.message().await);
+        let watch = acknowledged["payload"]["watchId"].as_str().unwrap().to_owned();
+        authority.revoked.store(true, Ordering::SeqCst);
+        authority.first.store(true, Ordering::SeqCst); // Hold the next check.
+        if through_notice {
+            fixture.commit().await;
+        }
+        tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
+            .await
+            .unwrap();
+        fixture.send(&peer, "unwatch", "conversation.unwatch", json!({ "watchId": watch }));
+        assert_eq!(text(peer.message().await)["ok"], true);
+        work.release(); // The held check now returns its refusal.
+        // The watch's owner returns only once the refused check's task has
+        // ended and the connection has handled its result (or closed).
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fixture.state.change_watches.available_permits() != MAX_GLOBAL_CHANGE_WATCHES {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+        assert!(peer.output.try_recv().is_err(), "no close for a retired watch");
+        peer.request("after-refusal");
+        assert_success(peer.message().await, "after-refusal");
+        drop(peer);
+        socket.await.unwrap();
+        assert_eq!(fixture.state.drain_watches().await, Ok(()));
+        fixture.storage.shutdown().await.unwrap();
+    }
+}
+
+/// Row A3: one periodic check per connection. With two watches it asks the
+/// targets one after another in one task, so while the first is held the
+/// second is not asked; and ticks meanwhile (shown by the connection's own
+/// identity checks) start no further check.
+#[tokio::test]
+async fn one_periodic_check_per_connection_runs_targets_in_turn_and_skips_ticks_while_running() {
+    let (mut fixture, work, authority) = held_receiver_fixture(Duration::from_millis(50)).await;
+    let _release = ReleaseHeld(work.clone());
+    let access = Arc::new(CountingAccess {
+        actual: fixture.state.access.clone(),
+        reads: AtomicU64::new(0),
+    });
+    fixture.state.access = access.clone();
+    let (socket, mut peer) = test_socket(None);
+    let socket = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    fixture.watch(&peer, "records");
+    assert_eq!(text(peer.message().await)["ok"], true);
+    fixture.send(
+        &peer,
+        "catalogue",
+        "conversation.watchCatalogue",
+        json!({"receiverId": "receiver", "accessEpoch": "3"}),
+    );
+    assert_eq!(text(peer.message().await)["ok"], true);
+    authority.first.store(true, Ordering::SeqCst); // Hold the next check's first target.
+    tokio::time::timeout(Duration::from_secs(5), work.entered.notified())
+        .await
+        .unwrap();
+    let resolves = authority.resolves.load(Ordering::SeqCst);
+    let reads = access.reads.load(Ordering::SeqCst);
+    tokio::time::pause();
+    for _ in 0..5 {
+        tokio::time::advance(Duration::from_millis(50)).await;
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+    }
+    tokio::time::resume();
+    assert!(
+        access.reads.load(Ordering::SeqCst) > reads,
+        "ticks ran their identity checks"
+    );
+    assert_eq!(
+        authority.during_hold.load(Ordering::SeqCst),
+        0,
+        "no second target and no further check started while one is held"
+    );
+    work.release();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while authority.resolves.load(Ordering::SeqCst) == resolves {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap(); // The same check goes on to the second target.
+    drop(peer);
+    socket.await.unwrap();
+    assert_eq!(fixture.state.drain_watches().await, Ok(()));
+    // The paused window moved the clock only by a quarter second, but the
+    // record storage's deadlines are not this test's evidence either.
     let _ = fixture.storage.shutdown().await;
 }
 
@@ -1602,13 +1875,14 @@ async fn periodic_recheck_asks_admission_once_per_distinct_target_without_identi
     )
     .unwrap();
     let resolves = fixture.receiver.admitted.load(Ordering::SeqCst);
-    WatchSelector::recheck(
+    let results = WatchSelector::recheck(
         &[records.clone(), catalogue, records.clone()],
         &fixture.state,
         &fixture.session,
     )
-    .await
-    .unwrap();
+    .await;
+    assert!(results.iter().all(Result::is_ok));
+    assert_eq!(results.len(), 3);
     let periodic_resolves = fixture.receiver.admitted.load(Ordering::SeqCst) - resolves;
     let periodic_reads = access.reads.swap(0, Ordering::SeqCst);
     assert_eq!(periodic_resolves, 2, "one binding resolve per distinct target");
@@ -1780,6 +2054,10 @@ impl HostWatchFixture {
             actual: RecordBinding,
             first: AtomicBool::new(true),
             work: work.clone(),
+            resolves: AtomicU64::new(0),
+            revoked: AtomicBool::new(false),
+            holding: AtomicBool::new(false),
+            during_hold: AtomicU64::new(0),
         };
         let receiver: Arc<dyn ReceiverAuthority> = if panic_after_release {
             Arc::new(PanicAfterReceiver(receiver))

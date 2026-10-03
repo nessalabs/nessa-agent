@@ -202,19 +202,25 @@ impl WatchSelector {
     /// The connection's periodic re-check of its live watches (row A3). The
     /// connection's own refresh has just confirmed `current` (identity and
     /// browser presence) and passes it in, so this asks only passive-read
-    /// admission, once per distinct target.
+    /// admission, once per distinct target, one after another. Returns one
+    /// result per entry of `selectors`, in order.
     pub async fn recheck(
         selectors: &[Self],
         state: &ProductRouteState,
         current: &AuthenticatedSession,
-    ) -> Result<(), WatchRefusal> {
+    ) -> Vec<Result<(), WatchRefusal>> {
+        let mut results: Vec<Result<(), WatchRefusal>> = Vec::with_capacity(selectors.len());
         for (index, selector) in selectors.iter().enumerate() {
-            if selectors[..index].contains(selector) {
-                continue;
-            }
-            selector.admit_current(state, current).await?;
+            let earlier = selectors[..index]
+                .iter()
+                .position(|other| other == selector);
+            let result = match earlier {
+                Some(earlier) => results[earlier],
+                None => selector.admit_current(state, current).await.map(|_| ()),
+            };
+            results.push(result);
         }
-        Ok(())
+        results
     }
 
     pub async fn authorize(

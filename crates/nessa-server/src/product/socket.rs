@@ -1423,14 +1423,10 @@ async fn send_queued<S: Sink<Message> + Unpin>(
                 deadline,
                 completed,
                 owner: _original_owner,
-                retired,
             } = acknowledgement;
             within_deadline(deadline, send(write_timeout, socket, *message))
                 .await
                 .ok_or(())??;
-            if let Some((id, deliveries)) = retired {
-                deliveries.reply_written(&id);
-            }
             let _ = completed.send(());
             Ok(())
         }

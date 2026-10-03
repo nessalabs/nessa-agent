@@ -38,9 +38,6 @@ pub(in crate::product) struct WatchAcknowledgement {
     pub deadline: Instant,
     pub completed: oneshot::Sender<()>,
     pub owner: Arc<ProductWatchPermit>,
-    /// For an unwatch reply: the watch it retires, which the writer tells as
-    /// soon as the reply is physically written (row U4).
-    pub retired: Option<(String, Arc<WatchDeliveries>)>,
 }
 
 pub(in crate::product) struct WatchReply {
@@ -59,7 +56,8 @@ struct Target {
     source_pending: bool,
     authority_pending: bool,
     accepted: bool,
-    retirement_deadline: Option<Instant>,
+    // The registration request's own deadline, for its reply.
+    registration_deadline: Instant,
     retiring: bool,
     acknowledgements: usize,
 }
@@ -96,8 +94,14 @@ enum Progress {
         key: u64,
         result: Result<(), WatchRefusal>,
     },
-    /// The connection's one periodic re-check of all its live watches.
-    Rechecked { result: Result<(), WatchRefusal> },
+    /// The connection's one periodic re-check of all its live watches: one
+    /// result per watch, by key.
+    Rechecked {
+        results: Vec<(u64, Result<(), WatchRefusal>)>,
+    },
+    /// The periodic re-check's bound passed (`overdue`), or the check returned
+    /// first and the timer was cancelled.
+    RecheckBound { generation: u64, overdue: bool },
     Source {
         key: u64,
         result: Option<(OwnedSource, Option<ChangeWatchEndReason>)>,
@@ -126,6 +130,10 @@ pub(in crate::product) struct ConnectionWatches {
     // At most one periodic re-check runs per connection; a tick while it runs
     // is skipped rather than queued.
     recheck_pending: bool,
+    // Identifies the running periodic check, so its bound cannot fire for a
+    // later one; and cancels that bound when the check returns.
+    recheck_generation: u64,
+    recheck_bound: Option<AbortHandle>,
     pub deliveries: Arc<WatchDeliveries>,
 }
 
@@ -137,6 +145,8 @@ impl ConnectionWatches {
             tokens: WatchToken::new(state.watch_namespaces.mint()),
             sequence: 0,
             recheck_pending: false,
+            recheck_generation: 0,
+            recheck_bound: None,
             deliveries: Arc::new(WatchDeliveries::new()),
         }
     }
@@ -203,11 +213,10 @@ impl ConnectionWatches {
             if let Some(wait) = target.source_wait.take() {
                 wait.abort();
             }
-            let deadline = *target.retirement_deadline.get_or_insert(deadline);
-            self.deliveries.retire(&target.id, deadline);
+            self.deliveries.retire(&target.id);
             let key = target.key;
-            let retired = Some(target.id.clone());
-            return Some(self.reply(key, message, slot, deadline, false, retired));
+            // Bounded by this unwatch request's own deadline, like any reply.
+            return Some(self.reply(key, message, slot, deadline, false));
         }
         let selector = match WatchSelector::decode(&frame.method, frame.params.clone()) {
             Ok(selector) => selector,
@@ -249,7 +258,7 @@ impl ConnectionWatches {
         };
         let interest = Arc::new(AtomicBool::new(true));
         let id = format!("registration-{key}");
-        if !self.deliveries.reserve(id.clone(), owner.clone(), deadline) {
+        if !self.deliveries.reserve(id.clone(), owner.clone()) {
             return Some(refused(ChangeWatchErrorCode::WatchCapacity));
         }
         self.sequence = key;
@@ -263,7 +272,7 @@ impl ConnectionWatches {
             source_pending: false,
             authority_pending: true,
             accepted: false,
-            retirement_deadline: None,
+            registration_deadline: deadline,
             retiring: false,
             acknowledgements: 0,
         });
@@ -305,7 +314,6 @@ impl ConnectionWatches {
         slot: Arc<OwnedSemaphorePermit>,
         deadline: Instant,
         activation: bool,
-        retired: Option<String>,
     ) -> WatchReply {
         let target = self
             .targets
@@ -331,7 +339,6 @@ impl ConnectionWatches {
                 deadline,
                 completed,
                 owner,
-                retired: retired.map(|id| (id, self.deliveries.clone())),
             }),
         }
     }
@@ -369,7 +376,10 @@ impl ConnectionWatches {
     /// Re-ask the authority of every live watch on this connection, after the
     /// connection's own refresh confirmed `current` (row A3), so revoked access
     /// ends a watch without a commit. One task for the whole connection, holding
-    /// each watch's original owner until it returns.
+    /// each watch's original owner until it returns; a tick while it runs starts
+    /// nothing. If it has not returned within the handshake timeout the
+    /// connection closes (row A3b); the task still keeps those owners until its
+    /// adapter awaits return.
     pub fn recheck(&mut self, state: &ProductRouteState, current: &AuthenticatedSession) {
         if self.recheck_pending {
             return;
@@ -378,27 +388,61 @@ impl ConnectionWatches {
             .targets
             .iter()
             .filter(|target| target.accepted && !target.retiring)
-            .map(|target| (target.selector.clone(), target.owner.task()))
+            .map(|target| (target.key, target.selector.clone(), target.owner.task()))
             .collect();
         if live.is_empty() {
             return;
         }
         self.recheck_pending = true;
-        let state = state.clone();
+        self.recheck_generation += 1;
+        let generation = self.recheck_generation;
+        let keys: Vec<u64> = live.iter().map(|(key, _, _)| *key).collect();
+        let state_for_task = state.clone();
         let current = current.clone();
         let task = tokio::spawn(async move {
-            let (selectors, guards): (Vec<_>, Vec<_>) = live.into_iter().unzip();
-            let result = WatchSelector::recheck(&selectors, &state, &current).await;
+            let (selectors, guards): (Vec<_>, Vec<_>) = live
+                .into_iter()
+                .map(|(_, selector, guard)| (selector, guard))
+                .unzip();
+            let results = WatchSelector::recheck(&selectors, &state_for_task, &current).await;
             for guard in guards {
                 guard.completed();
             }
-            result
+            results
         });
         self.pending.push(Box::pin(async move {
-            Progress::Rechecked {
-                result: task.await.unwrap_or(Err(WatchRefusal::Unavailable)),
+            let results = match task.await {
+                Ok(results) => keys.into_iter().zip(results).collect(),
+                Err(_) => keys
+                    .into_iter()
+                    .map(|key| (key, Err(WatchRefusal::Unavailable)))
+                    .collect(),
+            };
+            Progress::Rechecked { results }
+        }));
+        let (abort, cancelled) = AbortHandle::new_pair();
+        self.recheck_bound = Some(abort);
+        let bound = state.settings.handshake_timeout();
+        self.pending.push(Box::pin(async move {
+            let overdue = Abortable::new(tokio::time::sleep(bound), cancelled)
+                .await
+                .is_ok();
+            Progress::RecheckBound {
+                generation,
+                overdue,
             }
         }));
+    }
+
+    /// The one decision for a refused authority check, from a notice or the
+    /// periodic check: it closes the connection only while its target is still
+    /// live; a target unwatched since the check began is ignored (row A5).
+    fn refusal_closes(&self, key: u64, refusal: WatchRefusal) -> Option<SessionCloseReason> {
+        self.targets
+            .iter()
+            .find(|target| target.key == key)
+            .filter(|target| !target.retiring)
+            .map(|_| refusal.close_reason())
     }
 
     fn authorize(&mut self, key: u64, state: &ProductRouteState, session: &AuthenticatedSession) {
@@ -448,10 +492,7 @@ impl ConnectionWatches {
                     return WatchOutcome::Progress;
                 };
                 target.authority_pending = false;
-                let deadline = self
-                    .deliveries
-                    .registration_deadline(&target.id)
-                    .expect("registration has original deadline");
+                let deadline = target.registration_deadline;
                 match result {
                     Ok(handle) if !target.retiring => {
                         let previous = target.id.clone();
@@ -466,7 +507,7 @@ impl ConnectionWatches {
                         self.source(key, handle);
                         let message = success(&request, &ConversationWatchResult { watch_id: id });
                         WatchOutcome::Reply(Box::new(
-                            self.reply(key, message, slot, deadline, true, None),
+                            self.reply(key, message, slot, deadline, true),
                         ))
                     }
                     result => {
@@ -482,15 +523,30 @@ impl ConnectionWatches {
                             slot,
                             deadline,
                             false,
-                            None,
                         )))
                     }
                 }
             }
-            Progress::Rechecked { result } => {
+            Progress::Rechecked { results } => {
                 self.recheck_pending = false;
-                if let Err(refusal) = result {
-                    return WatchOutcome::Close(refusal.close_reason());
+                if let Some(bound) = self.recheck_bound.take() {
+                    bound.abort();
+                }
+                for (key, result) in results {
+                    if let Err(refusal) = result {
+                        if let Some(reason) = self.refusal_closes(key, refusal) {
+                            return WatchOutcome::Close(reason);
+                        }
+                    }
+                }
+                WatchOutcome::Progress
+            }
+            Progress::RecheckBound {
+                generation,
+                overdue,
+            } => {
+                if overdue && self.recheck_pending && generation == self.recheck_generation {
+                    return WatchOutcome::Close(SessionCloseReason::TemporaryUnavailable);
                 }
                 WatchOutcome::Progress
             }
@@ -499,11 +555,14 @@ impl ConnectionWatches {
                     return WatchOutcome::Progress;
                 };
                 target.authority_pending = false;
-                if !target.retiring {
-                    if let Err(refusal) = result {
-                        return WatchOutcome::Close(refusal.close_reason());
+                match result {
+                    Err(refusal) => {
+                        if let Some(reason) = self.refusal_closes(key, refusal) {
+                            return WatchOutcome::Close(reason);
+                        }
                     }
-                    self.deliveries.authorize(&target.id);
+                    Ok(()) if !target.retiring => self.deliveries.authorize(&target.id),
+                    Ok(()) => {}
                 }
                 self.collect_retired();
                 WatchOutcome::Progress

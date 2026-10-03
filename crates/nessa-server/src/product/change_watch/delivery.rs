@@ -26,14 +26,15 @@ struct Pending {
 struct TargetDelivery {
     id: String,
     owner: Arc<ProductWatchPermit>,
-    acknowledgement: Option<Instant>,
+    // Set once the registration acknowledgement is physically written; no
+    // notice is sent before. This is ordering only: no reply deadline lives
+    // here, for a registration or a retirement.
+    activated: bool,
     pending: Option<Pending>,
     in_flight: Option<Instant>,
     terminal: bool,
     terminal_sent: bool,
     retiring: bool,
-    // Unwatch replies queued but not yet physically written.
-    replies: usize,
 }
 struct State {
     targets: Vec<TargetDelivery>,
@@ -69,7 +70,7 @@ impl WatchDeliveries {
         }
     }
 
-    pub fn reserve(&self, id: String, owner: Arc<ProductWatchPermit>, deadline: Instant) -> bool {
+    pub fn reserve(&self, id: String, owner: Arc<ProductWatchPermit>) -> bool {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.closed || state.targets.len() >= MAX_CONNECTION_CHANGE_WATCHES {
             return false;
@@ -77,13 +78,12 @@ impl WatchDeliveries {
         state.targets.push(TargetDelivery {
             id,
             owner,
-            acknowledgement: Some(deadline),
+            activated: false,
             pending: None,
             in_flight: None,
             terminal: false,
             terminal_sent: false,
             retiring: false,
-            replies: 0,
         });
         drop(state);
         self.ready.notify_one();
@@ -107,23 +107,7 @@ impl WatchDeliveries {
     pub fn activate(&self, id: &str) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(target) = state.targets.iter_mut().find(|target| target.id == id) {
-            target.acknowledgement = None;
-        }
-        drop(state);
-        self.ready.notify_one();
-    }
-
-    /// The writer has physically written one unwatch reply for this watch.
-    /// Once none is left queued, the retirement reply deadline no longer bounds
-    /// the writer (row U4). A retiring watch sends no notices, so this enables
-    /// none.
-    pub fn reply_written(&self, id: &str) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(target) = state.targets.iter_mut().find(|target| target.id == id) {
-            target.replies = target.replies.saturating_sub(1);
-            if target.retiring && target.replies == 0 {
-                target.acknowledgement = None;
-            }
+            target.activated = true;
         }
         drop(state);
         self.ready.notify_one();
@@ -173,16 +157,6 @@ impl WatchDeliveries {
         self.ready.notify_one();
     }
 
-    pub fn registration_deadline(&self, id: &str) -> Option<Instant> {
-        self.state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .targets
-            .iter()
-            .find(|target| target.id == id)
-            .and_then(|target| target.acknowledgement)
-    }
-
     pub fn terminal_sent(&self, id: &str) -> bool {
         self.state
             .lock()
@@ -215,7 +189,6 @@ impl WatchDeliveries {
             .iter()
             .flat_map(|target| {
                 [
-                    target.acknowledgement,
                     target.pending.as_ref().map(|pending| pending.deadline),
                     target.in_flight,
                 ]
@@ -233,7 +206,7 @@ impl WatchDeliveries {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let position = state.targets.iter().position(|target| {
             !target.retiring
-                && target.acknowledgement.is_none()
+                && target.activated
                 && target.in_flight.is_none()
                 && target
                     .pending
@@ -284,17 +257,14 @@ impl WatchDeliveries {
         self.ready.notify_one();
     }
 
-    pub fn retire(&self, id: &str, deadline: Instant) {
+    /// Stop this watch's notices: drop any unsent one and select none again.
+    /// The unwatch reply is an ordinary reply with its own deadline; nothing
+    /// here bounds the writer for a retired watch (rows U1, U4).
+    pub fn retire(&self, id: &str) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(target) = state.targets.iter_mut().find(|target| target.id == id) {
             target.retiring = true;
             target.pending = None;
-            target.replies += 1;
-            target.acknowledgement = Some(
-                target
-                    .acknowledgement
-                    .map_or(deadline, |original| original.min(deadline)),
-            );
         }
         drop(state);
         self.ready.notify_one();
@@ -330,7 +300,7 @@ mod tests {
                 .try_acquire(&super::super::owner::tests::principal("a"))
                 .unwrap(),
         );
-        assert!(deliveries.reserve("watch".into(), owner, Instant::now() + RECORD_SEND_TIMEOUT));
+        assert!(deliveries.reserve("watch".into(), owner));
     }
 
     #[test]
@@ -426,7 +396,7 @@ mod tests {
         let second = deliveries.take().unwrap();
         assert!(second.terminal);
         assert!(deliveries.take().is_none());
-        deliveries.retire("watch", Instant::now() + RECORD_SEND_TIMEOUT);
+        deliveries.retire("watch");
         assert_eq!(deliveries.deadline(), Some(second.deadline));
         deliveries.close();
         assert_eq!(slots.available_permits(), 0);

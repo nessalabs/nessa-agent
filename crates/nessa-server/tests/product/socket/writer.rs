@@ -1370,8 +1370,7 @@ async fn original_pending_watch_deadline_expires_during_another_physical_frame()
     let original = Arc::new(owners.try_acquire(&watch_principal("a")).unwrap());
     assert!(deliveries.reserve(
         "watch".into(),
-        original.clone(),
-        Instant::now() + RECORD_SEND_TIMEOUT
+        original.clone()
     ));
     drop(original);
     deliveries.activate("watch");
@@ -1437,8 +1436,7 @@ async fn pending_watch_deadline_survives_a_continuously_ready_lane(ordinary_lane
     let deliveries = Arc::new(WatchDeliveries::new());
     assert!(deliveries.reserve(
         "watch".into(),
-        Arc::new(owners.try_acquire(&watch_principal("a")).unwrap()),
-        Instant::now() + RECORD_SEND_TIMEOUT
+        Arc::new(owners.try_acquire(&watch_principal("a")).unwrap())
     ));
     deliveries.activate("watch");
     assert!(deliveries.notice("watch", Notice::Changed)); // No fabricated allowed authority snapshot.
@@ -1504,8 +1502,7 @@ async fn unwatch_before_writer_selection_sends_no_hint_after_the_acknowledgement
     let deliveries = Arc::new(WatchDeliveries::new());
     assert!(deliveries.reserve(
         "watch".into(),
-        Arc::new(owners.try_acquire(&watch_principal("a")).unwrap()),
-        Instant::now() + RECORD_SEND_TIMEOUT
+        Arc::new(owners.try_acquire(&watch_principal("a")).unwrap())
     ));
     deliveries.activate("watch");
     assert!(deliveries.notice("watch", Notice::Changed));
@@ -1536,7 +1533,7 @@ async fn unwatch_before_writer_selection_sends_no_hint_after_the_acknowledgement
     peer.writing.recv().await.unwrap(); // The ordinary frame is mid-flush.
     // What `ConnectionWatches::begin` does for an unwatch: retire, then queue
     // the acknowledgement on the ordinary lane.
-    deliveries.retire("watch", Instant::now() + RECORD_SEND_TIMEOUT);
+    deliveries.retire("watch");
     ordinary_send.send(response("unwatch")).await.unwrap();
     release.send(()).unwrap();
     for expected in ["ordinary", "unwatch"] {
