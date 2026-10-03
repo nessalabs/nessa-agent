@@ -418,14 +418,18 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   command broken, no button label wrapped, nothing overflowing.
   _ADR 238 › Decision_ (`ui/`, `approval-request.tsx`).
   _Check:_ `responsive.mjs --only approval-card --shots <dir>`, then look at the shots.
-- [ ] **An app's review names the app, not the agent**, drawn by the real
-  window from a gateway's view (`fixtures/app-review/`): the card's head says
-  "The <server> app wants to run <tool>" (`data-origin="app"`), and at the same
-  widths, with the tool's name short and as one very long word, the head stays
-  inside the card; its row in the Agents overview is named
-  "<title>. The <server> app wants to run <command>.". _#436_ (`approvalHead`
-  and `approvalAsker` in `approval-request.tsx`).
-  _Check:_ `app-review.mjs --shots <dir>`.
+- [ ] **An app's review is drawn, and names the app, not the agent**, in the
+  real window over a fake gateway (`fixtures/app-review/`, dev server only):
+  at rest, a conversation whose turn has ended is not read again; when its app
+  calls a destructive tool, the review the gateway opens — which moves nothing
+  in the list row — is drawn within 5 s, its head "The <server> app wants to
+  run <tool>" (`data-origin="app"`); Allow Once answers it once, the card goes,
+  the app's call is answered, and the reads stop. At the same widths as the
+  card above, with the tool's name short and as one 128-byte word, the head
+  stays inside the card; its row in the Agents overview is named "<title>. The
+  <server> app wants to run <command>.". _#436_ (`appCall` in
+  `gateway-source.ts`; `approvalHead` and `approvalAsker` in
+  `approval-request.tsx`). _Check:_ `app-review.mjs --shots <dir>`.
 - [ ] **The model is shown once, in the composer** — not in the pane header
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.

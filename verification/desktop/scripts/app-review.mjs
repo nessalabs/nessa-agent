@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 /**
- * An MCP App's review (#436), drawn by the real window over a fake gateway
- * (`fixtures/app-review/`): the card names the app and the tool it asked
- * for, not the agent, and its head stays inside the card at every width,
- * with the tool's name short and very long; the Agents overview's row is
- * named for the app too.
+ * An MCP App's review (#436), in the real window over a fake gateway
+ * (`fixtures/app-review/`), whose conversation's turn has ended: at rest it
+ * is not read again; when the app calls a destructive tool, the review the
+ * gateway opens for it — which moves nothing in the list row — is read and
+ * drawn, naming the app and the tool, not the agent; answered, it goes and
+ * the call is answered. The card's head stays inside the card at every
+ * width, with the tool's name short and as long as the gateway allows; the
+ * Agents overview's row is named for the app too.
  *
  * The fixture is a page of the dev server's, not of the production build:
- * this script runs in dev mode only.
+ * this script runs against the dev server only.
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { appReview, css, keys } from "./lib/selectors.mjs"
-import { frames, settled } from "./lib/workspace.mjs"
+import { appReview, css, keys, names } from "./lib/selectors.mjs"
+import { frames, settled, until } from "./lib/workspace.mjs"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 
@@ -26,21 +29,28 @@ const meta = {
 Usage: node verification/desktop/scripts/app-review.mjs [options] [--shots <dir>]
 
 Checks, per engine and layout (--only <names> to pick):
-  card       the head says "The mcptest app wants to run <tool>" and
-             data-origin is app; at 280/340/420/600/900 px, with the tool's
-             name short and as one very long word, the head stays inside the
-             card and the card does not overflow
+  review     at rest the conversation is not read again; the app's call makes
+             it read each round, and the review is drawn within 5 s, its head
+             "The mcptest app wants to run <tool>" and data-origin app; Allow
+             Once answers it: the card goes, the call is answered, and the
+             reads stop
+  card       at 280/340/420/600/900 px, with the tool's name short and as one
+             128-byte word, the head stays inside the card and the card does
+             not overflow
   overview   the overview row's accessible name names the app and its call`,
 }
 
 // What page.evaluate is handed: plain strings (\`css\` holds functions, #441).
 const card = { card: css.approvalCard, head: css.approvalHead }
 
-/** The fixture's page, with `tool` the name the app asked for, on the conversation. */
-async function onReview(browser, url, layout, tool) {
-  const page = new URL(appReview.page, url)
-  page.searchParams.set("tool", tool)
-  const opened = await openPage(browser, { url: page.href, layout })
+const snapshot = (page) => page.evaluate(() => window.__appReview.snapshot())
+
+/** The fixture's page, on the conversation, before the app has called anything. */
+async function onConversation(browser, url, layout) {
+  const opened = await openPage(browser, {
+    url: new URL(appReview.page, url).href,
+    layout,
+  })
   const row = opened.page.locator(css.sessionRow, { hasText: appReview.session }).first()
   await row.waitFor({ timeout: 10_000 }).catch(() => {})
   if (!(await row.count())) {
@@ -48,12 +58,106 @@ async function onReview(browser, url, layout, tool) {
     throw new CannotRun(`no session row "${appReview.session}" in the list`)
   }
   await row.click()
-  await need(opened.page, css.approvalCard, "the app's approval card", 10_000)
   await settled(opened.page)
   return opened
 }
 
+/** The app calls `tool`; the review it asks for is drawn, or this cannot run. */
+async function asked(page, tool) {
+  await page.evaluate((tool) => window.__appReview.call(tool), tool)
+  await need(page, css.approvalCard, "the app's approval card", 10_000)
+  await settled(page)
+}
+
+/** What the card says: who asked, by its origin and its head. */
+const cardSays = (page) =>
+  page.evaluate((sel) => {
+    const element = document.querySelector(sel.card)
+    return {
+      origin: element?.dataset.origin ?? null,
+      head: element?.querySelector(sel.head)?.textContent.trim() ?? null,
+    }
+  }, card)
+
 const checks = {
+  async review({ browser, url, layout }) {
+    const opened = await onConversation(browser, url, layout)
+    const { page } = opened
+    try {
+      const failures = []
+      const wait = (ms) => page.waitForTimeout(ms)
+      // P1: at rest, nothing waits and the conversation is not read again.
+      if (await page.locator(css.approvalCard).count())
+        failures.push("a card is drawn before the app asked for anything")
+      const rest = await snapshot(page)
+      await wait(2_500)
+      const rested = await snapshot(page)
+      if (rested.reads !== rest.reads)
+        failures.push(`read ${rested.reads - rest.reads} times at rest`)
+      // P2, P3: the app's call; its review is read and drawn as the app's.
+      const askedAt = Date.now()
+      await page.evaluate((tool) => window.__appReview.call(tool), appReview.tool)
+      const drawn = await until(
+        page,
+        (sel) => document.querySelector(sel) !== null,
+        css.approvalCard,
+        5_000,
+      )
+      const drawnMs = Date.now() - askedAt
+      if (!drawn) failures.push("no card within 5 s of the app's call")
+      const said = await cardSays(page)
+      if (drawn && said.origin !== "app")
+        failures.push(`the card's origin is ${said.origin}, not app`)
+      if (drawn && said.head !== appReview.head(appReview.tool))
+        failures.push(
+          `the head says "${said.head}", not "${appReview.head(appReview.tool)}"`,
+        )
+      const waiting = await snapshot(page)
+      // P4: Allow Once answers it; the card goes and the call is answered.
+      let gone = false
+      if (drawn) {
+        await page
+          .getByRole("button", { name: names.allowOnce, exact: true })
+          .first()
+          .click()
+        gone = await until(
+          page,
+          (sel) => document.querySelector(sel) === null,
+          css.approvalCard,
+          5_000,
+        )
+        if (!gone) failures.push("the card is still drawn 5 s after Allow Once")
+      }
+      const answered = await snapshot(page)
+      if (answered.answers !== 1)
+        failures.push(`the gateway was answered ${answered.answers} times, not once`)
+      if (answered.settled === "waiting")
+        failures.push("the app's call is still unanswered")
+      // P5: answered and read without the review, the reads stop.
+      await wait(1_500)
+      const after = await snapshot(page)
+      await wait(2_500)
+      const later = await snapshot(page)
+      if (later.reads !== after.reads)
+        failures.push(
+          `read ${later.reads - after.reads} times after the call was answered`,
+        )
+      return {
+        measured: {
+          drawnMs: drawn ? drawnMs : null,
+          readsAtRest: rested.reads - rest.reads,
+          readsWhileAsked: waiting.reads - rested.reads,
+          readsAfter: later.reads - after.reads,
+          settled: answered.settled,
+          ...said,
+        },
+        failures: [...failures, ...opened.errors],
+      }
+    } finally {
+      await opened.close()
+    }
+  },
+
   async card({ browser, url, layout, engine, options }) {
     const failures = []
     const seen = []
@@ -62,16 +166,11 @@ const checks = {
       [appReview.tool, false],
       [appReview.longTool, true],
     ]) {
-      const opened = await onReview(browser, url, layout, tool)
+      const opened = await onConversation(browser, url, layout)
       const { page } = opened
       try {
-        const now = await page.evaluate((sel) => {
-          const element = document.querySelector(sel.card)
-          return {
-            origin: element.dataset.origin ?? null,
-            head: element.querySelector(sel.head)?.textContent.trim() ?? null,
-          }
-        }, card)
+        await asked(page, tool)
+        const now = await cardSays(page)
         if (!long) said = now
         if (now.origin !== "app")
           failures.push(`${tool}: the card's origin is ${now.origin}, not app`)
@@ -133,10 +232,11 @@ const checks = {
   },
 
   async overview({ browser, url, layout }) {
-    const opened = await onReview(browser, url, layout, appReview.tool)
+    const opened = await onConversation(browser, url, layout)
     const { page } = opened
     try {
       const failures = []
+      await asked(page, appReview.tool)
       await page.keyboard.press(keys.overview)
       await need(page, css.overview, "the Agents overview")
       const name = await page
@@ -155,10 +255,16 @@ const checks = {
   },
 }
 
-await main(meta, async ({ options, rep, url, mode }) => {
-  if (mode === "prod")
+await main(meta, async ({ options, rep, url }) => {
+  // A production build has no such page and answers any path with its own:
+  // asked once, before any engine starts, whatever --mode or --url said.
+  const page = await fetch(new URL(appReview.page, url)).then(
+    (response) => (response.ok ? response.text() : ""),
+    () => "",
+  )
+  if (!page.includes("main.tsx"))
     throw new CannotRun(
-      "the app-review fixture is a dev server page: run with --mode dev",
+      `${appReview.page} is not served at ${url}: the fixture is the dev server's (--mode dev)`,
     )
   const only = options.only ? options.only.split(",") : null
   await withEngines(options, rep, async (engine, browser) => {

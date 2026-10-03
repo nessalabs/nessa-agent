@@ -400,17 +400,18 @@ export const readinessVerification = {
 
 /**
  * The app-review fixture (`fixtures/app-review/`, #436): the window over a
- * fake gateway whose one conversation waits on an MCP App's review.
+ * fake gateway whose one conversation holds an MCP App's call, which asks for
+ * a review when the page calls a tool (`__appReview.call`).
  */
 export const appReview = {
   page: "verification/desktop/fixtures/app-review/index.html",
   session: "Clean up the stale rows",
-  sessionId: "app-review",
+  sessionId: "0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d",
   /** The card's head: the app by its server, and the tool it named. */
   head: (tool) => `The mcptest app wants to run ${tool}`,
   /** The overview row's accessible name: the title, then the app asking. */
   row: (tool) => `Clean up the stale rows. The mcptest app wants to run ${tool} {}.`,
   tool: "app_delete_row",
-  /** A tool's name with no break in it, as long as a server may make one. */
-  longTool: "deleteEveryStaleRowFromTheFixtureTableAndItsHistoryWithoutAsking",
+  /** A tool's name with no break in it, as long as the gateway allows (128 bytes, `maxMcpNameBytes`). */
+  longTool: "deleteEveryStaleRow".repeat(7).slice(0, 128),
 }

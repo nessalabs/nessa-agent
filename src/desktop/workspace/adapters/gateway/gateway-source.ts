@@ -134,8 +134,9 @@ export interface GatewaySource<
    */
   connected(): Promise<C>
   /**
-   * Makes one of an app's calls in conversation `conversationId`, and reads
-   * that conversation each round until the call is answered. The call may
+   * Makes one of an app's calls in conversation `conversationId`, and,
+   * while the window follows that conversation, reads it each round until
+   * the call is answered (a conversation taken out is not read, P9). The call may
    * wait on a review the gateway opens for it, which changes nothing a list
    * row says: without this, a conversation whose turn has ended is not read
    * again, and its review is not drawn (#436). The call settles as `call`

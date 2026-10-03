@@ -8,7 +8,8 @@
  *
  * The workspace is the gateway's (`gatewaySource`) when the window is given
  * a way to connect to one (`gateway`), and the in-memory sample otherwise —
- * which is what the verification fixtures run on.
+ * which is what the verification checks run on, but for an app's review
+ * (`verification/desktop/fixtures/app-review/`), which the sample has none of.
  *
  * Beside a gateway's source, where apps are drawn, real servers' apps are
  * too: the source hands each view it reads to `gatewayApps`, which registers
