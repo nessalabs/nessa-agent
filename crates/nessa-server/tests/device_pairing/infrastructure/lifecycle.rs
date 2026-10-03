@@ -1,4 +1,4 @@
-use super::support::{pending, sockets, Fixture, WAIT};
+use super::support::{pending, sockets, FaultyStore, Fixture, WAIT};
 use nessa_auth::{
     adapters::{
         local::LocalCredentialStore,
@@ -257,9 +257,10 @@ async fn native_create_observer_loss_keeps_original_owner_until_drain() {
         release.open();
         tokio::time::timeout(WAIT, shutdown).await.unwrap();
     }
+    // After shutdown a create is refused as shutting down (design row S19).
     assert!(matches!(
         owner.create(session, OsEntropy).await,
-        Err(PairingRuntimeError::Busy)
+        Err(PairingRuntimeError::ShuttingDown)
     ));
     drop(owner);
     let reopened = FilePairingState::open(&private, Path::new("state")).unwrap();
@@ -536,4 +537,54 @@ async fn native_worker_faults_preserve_type_and_allow_new_work() {
         .unwrap();
     connections.shutdown().await;
     fixture.gateway.shutdown().await;
+}
+
+/// Design rows S12, S19: shutdown closes owner-command admission, refuses a
+/// command arriving after that before any store call, and waits for a command
+/// it already admitted, even one whose caller has stopped waiting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_shutdown_waits_for_an_admitted_owner_command() {
+    let store = std::sync::OnceLock::new();
+    let fixture = Fixture::with_store(|registry| {
+        let faulty = FaultyStore::new(registry);
+        store.set(faulty.clone()).ok();
+        faulty
+    })
+    .await;
+    let store = store.get().unwrap().clone();
+    let created = fixture
+        .gateway
+        .create(fixture.session.clone(), OsEntropy)
+        .await
+        .unwrap();
+    let id = created.record().id();
+    let (entered, release) = store.park_next_read();
+    let gateway = fixture.gateway.clone();
+    let session = fixture.session.clone();
+    let held = tokio::spawn(async move { gateway.owner_status(&session, id).await });
+    tokio::time::timeout(WAIT, entered).await.unwrap().unwrap();
+    // The caller stops waiting; the admitted command keeps its lease.
+    held.abort();
+    let gateway = fixture.gateway.clone();
+    let shutdown = tokio::spawn(async move { gateway.shutdown().await });
+    // A command arriving once admission is closed is refused before the store.
+    let refused = tokio::time::timeout(WAIT, async {
+        loop {
+            match fixture.gateway.pending(&fixture.session).await {
+                Err(PairingRuntimeError::ShuttingDown) => break,
+                _ => tokio::task::yield_now().await,
+            }
+        }
+    })
+    .await;
+    assert!(refused.is_ok(), "a late owner command is refused");
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(store.parked(), "the admitted command is still running");
+    assert!(
+        !shutdown.is_finished(),
+        "shutdown waits for the admitted owner command"
+    );
+    release.send(()).unwrap();
+    tokio::time::timeout(WAIT, shutdown).await.unwrap().unwrap();
+    assert!(!store.parked());
 }

@@ -40,7 +40,7 @@ static CODES: LazyLock<GatewayExitCodes> = LazyLock::new(|| {
 /// one, which is what keeps the table from falling behind the errors.
 pub(super) fn reason(error: &RunError) -> &'static str {
     match error {
-        RunError::Environment(_) => "configuration",
+        RunError::Environment(_) | RunError::RuntimeConfig(_) => "configuration",
         // The registry lock is held for the lifetime of the store, and the
         // registry is per stage and instance. So a registry another process
         // is already holding is not a registry problem at all: it is the
@@ -150,6 +150,7 @@ mod tests {
                 },
             ),
             RunError::Authentication("setup".into()),
+            RunError::RuntimeConfig("unknown field".into()),
             RunError::Agent("provider".into()),
             RunError::Runtime("missing bundled runtime file".into()),
             RunError::Bind {

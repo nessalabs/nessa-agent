@@ -42,6 +42,10 @@ pub enum RunError {
     Dataset(DatasetRefusal),
     /// Product authentication failed to initialize; contains no credential material.
     Authentication(String),
+    /// `config.json` was read and its contents refused (an unknown field, a
+    /// malformed native address, an unusable limit). The same file refuses the
+    /// same way next time.
+    RuntimeConfig(String),
     /// Invalid or unavailable configured agent provider.
     Agent(String),
     /// The prepared runtime this process was handed is missing, unreadable, or
@@ -285,6 +289,7 @@ impl fmt::Display for RunError {
             Self::Registry(error) => write!(f, "authentication setup failed: {error}"),
             Self::Dataset(refusal) => write!(f, "stored data refused: {refusal}"),
             Self::Authentication(message) => write!(f, "authentication setup failed: {message}"),
+            Self::RuntimeConfig(message) => write!(f, "invalid runtime config: {message}"),
             Self::Environment(error) => write!(f, "invalid configuration: {error}"),
             Self::Bind { addr, source } => match source.kind() {
                 ErrorKind::AddrInUse => write!(
@@ -311,7 +316,11 @@ impl std::error::Error for RunError {
             Self::Environment(error) => Some(error),
             Self::Registry(error) => Some(error),
             Self::Dataset(refusal) => Some(&*refusal.cause),
-            Self::Usage(_) | Self::Authentication(_) | Self::Agent(_) | Self::Runtime(_) => None,
+            Self::Usage(_)
+            | Self::Authentication(_)
+            | Self::RuntimeConfig(_)
+            | Self::Agent(_)
+            | Self::Runtime(_) => None,
             Self::Bind { source, .. } => Some(source),
             Self::Serve(source) => Some(source),
             Self::Shutdown(error) => error.as_ref().map(|error| error as _),

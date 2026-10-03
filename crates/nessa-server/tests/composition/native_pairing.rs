@@ -249,7 +249,7 @@ async fn native_shutdown_joins_a_held_peer() {
     // The runtime's create admission is closed by the join.
     assert!(matches!(
         commands.create(&session).await,
-        Err(PairingRuntimeError::Busy)
+        Err(PairingRuntimeError::ShuttingDown)
     ));
     assert!(
         failed.borrow().is_none(),

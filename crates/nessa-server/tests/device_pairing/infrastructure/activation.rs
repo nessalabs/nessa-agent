@@ -633,7 +633,7 @@ async fn shutdown_settles_ended_enrollments_after_the_drains() {
             .owner_status(&fixture.session, first.id)
             .await
             .unwrap_err(),
-        PairingRuntimeError::Busy,
+        PairingRuntimeError::ShuttingDown,
         "owner admission is closed while it drains"
     );
     release.send(()).unwrap();

@@ -380,8 +380,9 @@ codec (`wire/`), framing (`enrollment_channel.rs`), the gateway runtime
 connection workers and their shutdown wake-ups (`connection.rs`,
 `connection/wake.rs`), the listener, the device client, gateway identity
 restore, `receivers.rs` (the receiver port over the conversation context's
-`LocalReceiverAuthority`), and `owner_commands.rs`, the owner-only handle the
-product socket holds.
+`LocalReceiverAuthority`), `owner_commands.rs`, the owner-only handle the
+product socket holds, and `owner_admission.rs`, the lease every owner command
+holds until shutdown drains it.
 The owner product methods are `nessa-server/src/product/pairing.rs`; mounting is
 `nessa-server/src/composition/native_pairing.rs`, only when `config.json` names a
 native listen address. Public tests are under
