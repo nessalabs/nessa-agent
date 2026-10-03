@@ -16,10 +16,12 @@ use super::agent::{agent_search_path, AgentsConfig};
 use crate::core::RunError;
 use crate::mcp_servers::{
     domain::{configuration_digest, relay_arguments},
-    infrastructure::{bind, BoundRelay, Relay},
+    infrastructure::{
+        bind, BoundRelay, ConversationGrants, OsTokens, Relay, ResourceTicketStore, TicketEvent,
+    },
 };
 use nessa_sdk::infrastructure::{
-    acp::sessions::StdioMcpServer,
+    acp::sessions::{StandInSessions, StdioMcpServer},
     clock::RuntimeClock,
     mcp::{McpServerLaunch, McpServers},
 };
@@ -29,7 +31,14 @@ use std::{
     ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+
+/// How often the resource ticket store looks for tickets past their
+/// deadline between the calls it answers: an unredeemed ticket's bytes are
+/// let go of, and its expiry reported, at most this long after it.
+pub(super) const RESOURCE_TICKET_SWEEP: Duration = Duration::from_secs(5);
 
 /// What composition hands the server lifecycle: the servers to start once it
 /// is listening and stop once conversations have, and the relay to serve.
@@ -37,6 +46,41 @@ pub(super) struct McpComposition {
     pub(super) servers: McpServers,
     pub(super) relay: Arc<Relay>,
     pub(super) listener: BoundRelay,
+    /// The MCP App resources held behind tickets: the conversation service
+    /// issues and releases on it, `GET /mcp-resources` redeems on it
+    /// (`ProductRouteState::with_resource_tickets`), and the server lifecycle
+    /// sweeps it (`ResourceTicketStore::sweep_periodically`). One instance,
+    /// shared by `Arc`.
+    pub(super) resource_tickets: Arc<ResourceTicketStore>,
+    /// Each ticket's unredeemed end — expired, released, or dropped — as the
+    /// store reports it. Composition takes it once, for `audit_ticket_ends`,
+    /// beside the conversation service that audits an app's calls.
+    pub(super) ticket_events: Option<UnboundedReceiver<TicketEvent>>,
+    /// The task recording those ends, once started: the server lifecycle
+    /// stops it last, after the conversations whose ends it records.
+    pub(super) ticket_recorder: Option<TicketRecorder>,
+}
+
+/// The task recording each ticket's unredeemed end.
+pub(super) struct TicketRecorder {
+    pub(super) stop: tokio::sync::oneshot::Sender<()>,
+    pub(super) task: tokio::task::JoinHandle<()>,
+}
+impl TicketRecorder {
+    /// Record every end already reported, then stop: called once the
+    /// conversations, and their apps, have ended.
+    pub(super) async fn finish(self) {
+        let _ = self.stop.send(());
+        // Bounded, as the app calls' own records are: a record that hangs
+        // must not hold the gateway's exit.
+        match tokio::time::timeout(std::time::Duration::from_secs(10), self.task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!(%error, "the MCP App ticket recorder failed"),
+            Err(_) => tracing::warn!(
+                "MCP App ticket ends were still being recorded when the gateway stopped"
+            ),
+        }
+    }
 }
 
 /// Where the relay socket of the namespace at `namespace` is, for the user
@@ -102,7 +146,8 @@ pub(super) fn stand_ins(
 }
 
 /// Take over `agents`' MCP servers: start nothing yet, bind the relay socket
-/// at `socket` ([`relay_socket`]), and replace each server with its stand-in run by `gateway`.
+/// at `socket` ([`relay_socket`]), replace each server with its stand-in run by `gateway`,
+/// and give each provider open a grant whose token its stand-ins carry.
 /// `None` when no server is configured, or when the socket cannot be bound —
 /// then `agents` is left with no MCP servers, and why is logged.
 ///
@@ -150,11 +195,21 @@ pub(super) async fn compose(
             )
         })
         .collect();
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
     agents.mcp_servers = stand_ins;
+    agents.stand_ins = StandInSessions::granted_by(Arc::new(grants.clone()));
+    let (ticket_ends, ticket_events) = unbounded_channel();
     Ok(Some(McpComposition {
-        relay: Arc::new(Relay::new(servers.clone(), digests)),
+        relay: Arc::new(Relay::new(servers.clone(), digests, grants)),
         servers,
         listener,
+        resource_tickets: Arc::new(ResourceTicketStore::new(
+            Arc::new(super::local_auth::SystemClock),
+            Arc::new(OsTokens),
+            Arc::new(ticket_ends),
+        )),
+        ticket_events: Some(ticket_events),
+        ticket_recorder: None,
     }))
 }
 

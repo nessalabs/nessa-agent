@@ -3,8 +3,8 @@
 use super::McpError;
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{
-    ListedTool, McpAppError, ToolUi, UiCsp, UiPermissions, UiResource, UiResourceUri, UiVisibility,
-    APP_MIME_TYPE, EXTENSION,
+    ListedTool, McpAppError, ToolHints, ToolUi, UiCsp, UiPermissions, UiResource, UiResourceUri,
+    UiVisibility, APP_MIME_TYPE, EXTENSION,
 };
 use base64::Engine;
 use serde_json::{json, Value};
@@ -43,7 +43,8 @@ pub(crate) fn initialized(result: &Value) -> Result<(), McpError> {
 /// One `tools/list` page from `server`.
 pub(crate) struct ToolsPage {
     /// Its tools. A tool whose name cannot be an [`McpTool`] is left out; one
-    /// whose `_meta.ui` cannot be read is kept without a UI.
+    /// whose `_meta.ui.resourceUri` cannot be read is kept without a UI, and
+    /// its `visibility` is read all the same ([`tool_ui`]).
     pub(crate) tools: Vec<ListedTool>,
     /// Each named tool on it, with whether the model may not see it
     /// ([`model_may_see`]).
@@ -71,10 +72,10 @@ pub(crate) fn tools_page(server: &str, result: &Value) -> Result<ToolsPage, McpE
         .filter_map(|tool| {
             let name = tool.get("name")?.as_str()?;
             let identity = McpTool::new(server, name).ok()?;
-            Some(ListedTool::new(
-                identity,
-                tool_ui(tool.pointer("/_meta/ui")),
-            ))
+            Some(
+                ListedTool::new(identity, tool_ui(tool.pointer("/_meta/ui")))
+                    .with_hints(tool_hints(tool.get("annotations"))),
+            )
         })
         .collect();
     let hidden = tools
@@ -89,29 +90,49 @@ pub(crate) fn tools_page(server: &str, result: &Value) -> Result<ToolsPage, McpE
 }
 
 /// Whether the model may see and call `tool`, a tool as `tools/list` gives it:
-/// when its `_meta.ui.visibility` says so, or says nothing. One that cannot be
-/// read leaves the model out: an app's own tool is never shown by mistake.
+/// when its `_meta.ui.visibility` says so, or says nothing ([`visibility`]).
 pub(crate) fn model_may_see(tool: &Value) -> bool {
-    visibility(tool.pointer("/_meta/ui/visibility")).is_some_and(UiVisibility::model)
+    visibility(tool.pointer("/_meta/ui/visibility")).model()
 }
 
-/// `_meta.ui.visibility`: absent is both; an array of strings names who;
-/// anything else cannot be read.
-fn visibility(declared: Option<&Value>) -> Option<UiVisibility> {
+/// `_meta.ui.visibility`: absent is both; an array of strings names who.
+/// Anything else cannot be read, and is no one's: it cannot be read to
+/// include `model` or `app`, so the model is not shown the tool and an app's
+/// call to it is refused (#412).
+fn visibility(declared: Option<&Value>) -> UiVisibility {
     match declared {
-        None => Some(UiVisibility::BOTH),
+        None => UiVisibility::BOTH,
         Some(Value::Array(who)) if who.iter().all(Value::is_string) => {
             let says = |name: &str| who.iter().any(|each| each.as_str() == Some(name));
-            Some(UiVisibility::new(says("model"), says("app")))
+            UiVisibility::new(says("model"), says("app"))
         }
-        Some(_) => None,
+        Some(_) => UiVisibility::new(false, false),
     }
 }
 
-fn tool_ui(declared: Option<&Value>) -> Option<ToolUi> {
-    let declared = declared?;
-    let uri = UiResourceUri::new(declared.get("resourceUri")?.as_str()?).ok()?;
-    Some(ToolUi::new(uri, visibility(declared.get("visibility"))?))
+/// A tool's `annotations`: each hint only when it is a boolean; anything else
+/// is as if unsaid, which the rule reads as the riskier answer.
+fn tool_hints(annotations: Option<&Value>) -> ToolHints {
+    let hint = |name: &str| {
+        annotations
+            .and_then(|each| each.get(name))
+            .and_then(Value::as_bool)
+    };
+    ToolHints::new(hint("readOnlyHint"), hint("destructiveHint"))
+}
+
+/// A tool's `_meta.ui`, each part read on its own: a `resourceUri` that is
+/// absent or cannot be read is no UI, and does not take the tool's
+/// `visibility` with it.
+fn tool_ui(declared: Option<&Value>) -> ToolUi {
+    let uri = declared
+        .and_then(|ui| ui.get("resourceUri"))
+        .and_then(Value::as_str)
+        .and_then(|uri| UiResourceUri::new(uri).ok());
+    ToolUi::new(
+        uri,
+        visibility(declared.and_then(|ui| ui.get("visibility"))),
+    )
 }
 
 /// The MCP App at `requested`, from a `resources/read` answer: the one content

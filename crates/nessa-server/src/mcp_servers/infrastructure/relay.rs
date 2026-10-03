@@ -10,8 +10,9 @@
 //! One line each way, then the stand-in's bytes. A hello that is not one
 //! JSON line of at most [`MAX_HELLO_BYTES`] within [`HELLO_TIMEOUT`] is closed
 //! without an answer.
+use super::grants::ConversationGrants;
 use crate::mcp_servers::domain::{admit, StandInRefusal};
-use nessa_sdk::infrastructure::mcp::{McpServers, INITIALIZE_TIMEOUT};
+use nessa_sdk::infrastructure::mcp::{McpError, McpServers, INITIALIZE_TIMEOUT};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io, time::Duration};
 use tokio::io::{
@@ -24,13 +25,30 @@ pub const MAX_HELLO_BYTES: usize = 4096;
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a stand-in waits for its answer: the server may be starting.
 pub const ANSWER_TIMEOUT: Duration = INITIALIZE_TIMEOUT.saturating_add(HELLO_TIMEOUT);
+/// What a stand-in whose token no live grant holds is told.
+const NO_CONVERSATION: &str =
+    "this MCP stand-in belongs to no open conversation; start a new session";
 
 /// What a stand-in says first.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Hello {
     pub server: String,
     pub configuration: String,
+    /// The session token from the stand-in's environment; empty when it has
+    /// none.
+    pub session: String,
+}
+
+impl std::fmt::Debug for Hello {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The session token is a bearer secret: never printed.
+        f.debug_struct("Hello")
+            .field("server", &self.server)
+            .field("configuration", &self.configuration)
+            .field("session", &"..")
+            .finish()
+    }
 }
 
 /// What the gateway answers.
@@ -45,6 +63,7 @@ pub enum Answer {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Refusal {
+    UnknownSession,
     UnknownServer,
     ConfigurationChanged,
     Unavailable,
@@ -52,6 +71,7 @@ pub enum Refusal {
 impl From<StandInRefusal> for Refusal {
     fn from(refusal: StandInRefusal) -> Self {
         match refusal {
+            StandInRefusal::UnknownSession => Self::UnknownSession,
             StandInRefusal::UnknownServer => Self::UnknownServer,
             StandInRefusal::ConfigurationChanged => Self::ConfigurationChanged,
             StandInRefusal::Unavailable => Self::Unavailable,
@@ -86,17 +106,36 @@ pub async fn write_line(
     output.flush().await
 }
 
+/// Why, and with what message, a stand-in whose session could not open is
+/// refused. An opening refused [`McpError::Closed`] had its grant revoked
+/// while it opened — the only reason `open` gives it — so it is as stale as a
+/// token refused at the door; anything else, its server could not be made
+/// ready.
+pub(crate) fn opening_refused(error: McpError) -> (StandInRefusal, String) {
+    match error {
+        McpError::Closed => (StandInRefusal::UnknownSession, NO_CONVERSATION.into()),
+        error => (StandInRefusal::Unavailable, said(&error.to_string())),
+    }
+}
+
 /// The gateway's side of the relay socket.
 pub struct Relay {
     servers: McpServers,
     /// Each configured server's configuration digest, by name.
     configured: BTreeMap<String, String>,
+    /// The tokens issued to open conversations' harnesses.
+    grants: ConversationGrants,
 }
 impl Relay {
-    pub fn new(servers: McpServers, configured: BTreeMap<String, String>) -> Self {
+    pub fn new(
+        servers: McpServers,
+        configured: BTreeMap<String, String>,
+        grants: ConversationGrants,
+    ) -> Self {
         Self {
             servers,
             configured,
+            grants,
         }
     }
 
@@ -115,6 +154,13 @@ impl Relay {
             reason: reason.into(),
             message,
         };
+        // Whose it is, before anything about the server is said.
+        let Some(owner) = self.grants.owner(&hello.session) else {
+            let message = NO_CONVERSATION;
+            let answer = refused(StandInRefusal::UnknownSession, message.into());
+            let _ = write_line(&mut output, &answer).await;
+            return;
+        };
         if let Err(reason) = admit(&hello.server, &hello.configuration, &self.configured) {
             let message = match reason {
                 StandInRefusal::UnknownServer => "no MCP server is configured under that name",
@@ -124,12 +170,12 @@ impl Relay {
             return;
         }
         // One session, and one server process, for this stand-in alone: its
-        // harness session's, ended with it.
-        let session = match self.servers.open(&hello.server).await {
+        // harness session's, ended with it or with its grant.
+        let session = match self.servers.open(&hello.server, owner).await {
             Ok(session) => session,
             Err(error) => {
-                let answer = refused(StandInRefusal::Unavailable, said(&error.to_string()));
-                let _ = write_line(&mut output, &answer).await;
+                let (reason, message) = opening_refused(error);
+                let _ = write_line(&mut output, &refused(reason, message)).await;
                 return;
             }
         };

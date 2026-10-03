@@ -296,6 +296,98 @@ describe("conversation view agreement", () => {
     expect(() => conversationView(value, "conversation")).not.toThrow()
   })
 
+  it("reads who asked for a review: the agent, or an app naming the tool it asked for", () => {
+    const withOrigin = (origin: unknown) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "Review",
+            toolName: "delete_rows",
+            argumentsJson: "{}",
+            origin,
+            options: [{ id: "allow", label: "Allow", effect: "allow" }],
+          },
+        ],
+      })
+      return value
+    }
+    for (const origin of [
+      { kind: "harness" },
+      { kind: "app", server: "charts", tool: "delete_rows" },
+    ])
+      expect(() => conversationView(withOrigin(origin), "conversation")).not.toThrow()
+    // An app asks from a tool call that has finished; the agent only while
+    // its execution runs.
+    const finished = (origin: unknown) => {
+      const value = withOrigin(origin)
+      const message = value.messages.find((each) => each.executionId === "running")!
+      message.status = "completed"
+      return value
+    }
+    expect(() =>
+      conversationView(
+        finished({ kind: "app", server: "charts", tool: "delete_rows" }),
+        "conversation",
+      ),
+    ).not.toThrow()
+    expect(() => conversationView(finished({ kind: "harness" }), "conversation")).toThrow(
+      "not running",
+    )
+    for (const origin of [
+      undefined,
+      {},
+      { kind: "plugin" },
+      { kind: "app" },
+      { kind: "app", server: "charts" },
+      { kind: "harness", tool: "delete_rows" },
+      { kind: "app", server: "charts", tool: "delete_rows", extra: true },
+    ])
+      expect(() => conversationView(withOrigin(origin), "conversation")).toThrow()
+  })
+
+  it("reads what each permission option decides, and refuses an option that does not say", () => {
+    const withOptions = (options: unknown[]) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "Review",
+            toolName: "write_file",
+            argumentsJson: "{}",
+            origin: { kind: "harness" },
+            options,
+          },
+        ],
+      })
+      return value
+    }
+    const read = conversationView(
+      withOptions([
+        { id: "a", label: "Allow", effect: "allow" },
+        { id: "d", label: "Deny", effect: "deny" },
+      ]),
+      "conversation",
+    )
+    expect(read.permissions[0]!.options.map((option) => option.effect)).toEqual([
+      "allow",
+      "deny",
+    ])
+    for (const option of [
+      { id: "a", label: "Allow" },
+      { id: "a", label: "Allow", effect: "always" },
+      { id: "a", label: "Allow", effect: "" },
+      { id: "a", label: "Allow", effect: true },
+    ])
+      expect(() => conversationView(withOptions([option]), "conversation")).toThrow()
+  })
+
   it("rejects unknown fields at the view and nested schema boundaries", () => {
     const mutations: Array<(value: ReturnType<typeof view>) => void> = [
       (value) => Object.assign(value, { extra: true }),
@@ -321,7 +413,8 @@ describe("conversation view agreement", () => {
           title: "Review",
           toolName: "write_file",
           argumentsJson: "{}",
-          options: [{ id: "allow", label: "Allow", extra: true }],
+          origin: { kind: "harness" },
+          options: [{ id: "allow", label: "Allow", effect: "allow", extra: true }],
         },
       ],
     })

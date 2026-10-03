@@ -1,6 +1,9 @@
 //! Close attribution survives cancellation before immediate provider dispatch.
 mod first_stop;
 use super::*;
+use nessa_sdk::application::agent_execution::sessions::{
+    SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+};
 
 struct CancellationPanicStorage(MemoryStorage);
 struct CancellationPanicLease {
@@ -18,10 +21,15 @@ impl SessionStorage for CancellationPanicStorage {
     }
 }
 impl SessionStorageLease for CancellationPanicLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.backing.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
             if snapshot
                 .invocations
@@ -31,7 +39,7 @@ impl SessionStorageLease for CancellationPanicLease {
             {
                 panic!("cancellation persistence panicked");
             }
-            self.backing.save(snapshot).await
+            self.backing.save_changes(binding, snapshot, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

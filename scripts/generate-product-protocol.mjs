@@ -8,10 +8,15 @@ import {
   coreWireContract,
   applyCoreWireBounds,
 } from "./product-protocol/core-contract.mjs"
+import { pairingValueSchema } from "./product-protocol/pairing-values.mjs"
 import { rustWireShapes } from "./product-protocol/rust-wire-shapes.mjs"
 import { validateExternalRustTypes } from "./product-protocol/rust-types.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const pairingDirectory = "crates/nessa-auth/src/domain/pairing/value_objects"
+const pairing = pairingValueSchema(
+  JSON.parse(readFileSync(resolve(root, `${pairingDirectory}/wire-values.json`), "utf8")),
+)
 const schema = JSON.parse(readFileSync(resolve(root, "protocol/product/v1.json"), "utf8"))
 const manifest = JSON.parse(
   readFileSync(resolve(root, "protocol/product/manifest.json"), "utf8"),
@@ -57,6 +62,41 @@ passiveReadTiming.minRequestTimeoutMs =
   passiveReadTiming.clientAllowanceMs
 if (passiveReadTiming.minRequestTimeoutMs > 2_147_483_647)
   throw new Error("Passive request deadline exceeds the runtime timer range")
+
+// How long an MCP App's calls can take the gateway, with one owner: a review
+// waiting for the person, the server's budgets for a call and a read, and the
+// client's allowance. The client waits their sum for `mcp.callTool` and, since
+// the gateway may open the conversation first, for `mcp.readResource` too;
+// every layer reads these generated values and spells none of them.
+const appTiming = schema["x-mcpAppCallTiming"]
+const mcpAppCallTiming = {}
+for (const name of [
+  "reviewDeadlineMs",
+  "callTimeoutMs",
+  "readTimeoutMs",
+  "clientAllowanceMs",
+]) {
+  if (
+    !appTiming ||
+    !Object.hasOwn(appTiming, name) ||
+    !Number.isSafeInteger(appTiming[name]) ||
+    appTiming[name] <= 0
+  )
+    throw new Error(`Invalid MCP App call timing: ${name}`)
+  mcpAppCallTiming[name] = appTiming[name]
+}
+if (Object.keys(appTiming).length !== Object.keys(mcpAppCallTiming).length)
+  throw new Error("MCP App call timing has unknown fields")
+mcpAppCallTiming.callDeadlineMs =
+  mcpAppCallTiming.reviewDeadlineMs +
+  mcpAppCallTiming.callTimeoutMs +
+  mcpAppCallTiming.clientAllowanceMs
+if (mcpAppCallTiming.callDeadlineMs > 2_147_483_647)
+  throw new Error("MCP App call deadline exceeds the runtime timer range")
+// A client waits a call's deadline for a read too; a read longer than a call
+// would be abandoned while the gateway is still bound to answer it.
+if (mcpAppCallTiming.readTimeoutMs > mcpAppCallTiming.callTimeoutMs)
+  throw new Error("MCP App read timeout outlasts a call")
 
 const sdkFrames = readFileSync(
   resolve(root, "crates/nessa-sdk/src/infrastructure/session_storage/stream_fact.rs"),
@@ -112,7 +152,9 @@ function type(node, rust) {
       .join(" | ")
   if (node.const !== undefined && !rust) return JSON.stringify(node.const)
   if (node.type === "string") return rust ? "String" : "string"
-  if (node.type === "integer") return rust ? "u64" : "number"
+  // Signed only where the schema admits a negative value, such as a
+  // JSON-RPC error code.
+  if (node.type === "integer") return rust ? (node.minimum < 0 ? "i64" : "u64") : "number"
   if (node.type === "boolean") return rust ? "bool" : "boolean"
   if (node.type === "array")
     return rust ? `Vec<${type(node.items, true)}>` : `${type(node.items, false)}[]`
@@ -205,6 +247,9 @@ function agreeing(name, values) {
   return first
 }
 const image = schema.$defs.ImageAttachment.properties
+const mcpCall = schema.$defs.McpCallToolParams.properties
+const mcpRead = schema.$defs.McpReadResourceParams.properties
+const mcpResource = schema.$defs.McpReadResourceResult.properties
 const linked = schema.$defs.LinkedFile.properties
 // Named for what a reader of the client says, not for the schema's field paths.
 const catalogueDecimalFields = [
@@ -217,6 +262,10 @@ const catalogueDecimalFields = [
 ]
 const bounds = {
   maxOrdinaryResponseBytes,
+  // The same gateway limit, read where it bites a client: the gateway takes no
+  // WebSocket message longer (`max_message_size`), and its read loop closes the
+  // socket on one rather than answering it, so a client must not send one.
+  maxRequestFrameBytes: maxOrdinaryResponseBytes,
   maxReadyMethods: schema.$defs.ProductSessionReady.properties.methods.maxItems,
   maxAuthCredentialCharacters:
     schema.$defs.SessionAuthenticateParams.properties.credential.maxLength,
@@ -294,9 +343,42 @@ const bounds = {
   maxMcpNameBytes: agreeing("MCP server and tool name bytes", [
     schema.$defs.ConversationMcpTool.properties.server["x-utf8MaxBytes"],
     schema.$defs.ConversationMcpTool.properties.tool["x-utf8MaxBytes"],
+    mcpCall.server["x-utf8MaxBytes"],
+    mcpCall.tool["x-utf8MaxBytes"],
+    mcpRead.server["x-utf8MaxBytes"],
   ]),
   maxUiResourceUriBytes:
     schema.$defs.ConversationMcpTool.properties.resourceUri["x-utf8MaxBytes"],
+  mcpAppInstanceIdPattern: schema.$defs.McpAppReference.properties.instanceId.pattern,
+  // What an app may send is what its review can show: one bound, stated twice.
+  maxMcpArgumentsBytes: agreeing("app arguments and review bytes", [
+    mcpCall.argumentsJson["x-utf8MaxBytes"],
+    schema.$defs.ConversationPermission.properties.argumentsJson["x-utf8MaxBytes"],
+  ]),
+  maxMcpResultBytes:
+    schema.$defs.McpCallToolResult.properties.resultJson["x-utf8MaxBytes"],
+  maxMcpResourceUriBytes: agreeing("app resource URI bytes", [
+    mcpRead.uri["x-utf8MaxBytes"],
+    mcpResource.uri["x-utf8MaxBytes"],
+  ]),
+  mcpAppMimeType: mcpResource.mimeType.const,
+  maxMcpResourceBytes: mcpResource.size.maximum,
+  mcpResourceDigestPattern: mcpResource.sha256.pattern,
+  mcpResourceTicketPattern: mcpResource.ticket.pattern,
+  mcpResourceTicketMs: mcpResource.expiresInMs.const,
+  maxMcpCspDomains: agreeing(
+    "app CSP list lengths",
+    Object.values(schema.$defs.McpUiCsp.properties).map((list) => list.maxItems),
+  ),
+  maxMcpCspDomainBytes: agreeing(
+    "app CSP origin bytes",
+    Object.values(schema.$defs.McpUiCsp.properties).map(
+      (list) => list.items["x-utf8MaxBytes"],
+    ),
+  ),
+  maxMcpDomainBytes: mcpResource.domain["x-utf8MaxBytes"],
+  maxMcpRemoteMessageCharacters:
+    schema.$defs.McpRemoteErrorDetails.properties.message.maxLength,
 }
 for (const name of [
   "maxAuthCredentialCharacters",
@@ -313,9 +395,19 @@ for (const name of [
 for (const [name, value] of Object.entries(passiveReadTiming)) {
   rs += `/// Published passive read timing from the product schema, in milliseconds.\npub const PASSIVE_${snake(name).toUpperCase()}: u64 = ${value};\n`
 }
+// Pure values the gateway's own layers read (the review, the call, the read,
+// the ticket), so they sit with the product contract, not the wire. The
+// client's allowance and deadlines are the client's alone.
+for (const name of ["reviewDeadlineMs", "callTimeoutMs", "readTimeoutMs"]) {
+  contractRs += `/// Published MCP App call timing from the product schema, in milliseconds.\npub const MCP_APP_${snake(name).toUpperCase()}: u64 = ${mcpAppCallTiming[name]};\n`
+}
+contractRs += `/// Published lifetime of an MCP App's resource ticket from the product schema, in milliseconds.\npub const MCP_RESOURCE_TICKET_MS: u64 = ${bounds.mcpResourceTicketMs};\n`
 ts += `${doc(
   "Passive source and delivery deadlines, plus the client allowance. The minimum request deadline is their sum; clients raise shorter configured timeouts to this floor.",
 )}export const passiveReadTiming = ${JSON.stringify(passiveReadTiming)} as const\n`
+ts += `${doc(
+  "How long an MCP App's calls can take the gateway: a destructive tool's review waits up to reviewDeadlineMs for the person, then the call itself up to callTimeoutMs; a resource read up to readTimeoutMs; clientAllowanceMs covers audit writes, the response and scheduling. The client waits callDeadlineMs for mcp.callTool, and for mcp.readResource too, since the gateway may open the conversation first.",
+)}export const mcpAppCallTiming = ${JSON.stringify(mcpAppCallTiming)} as const\n`
 ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",
 )}export const bounds = ${JSON.stringify(bounds)} as const\n`
@@ -408,6 +500,14 @@ const formattedContract = spawnSync("rustfmt", ["--edition", "2021"], {
 })
 if (formattedContract.status !== 0) throw new Error(formattedContract.stderr)
 const outputs = [
+  [`${pairingDirectory}/wire_values.rs`, pairing.rust],
+  [
+    "protocol/product/pairing-values.generated.json",
+    await format(JSON.stringify(pairing.schema), {
+      ...(await resolveConfig(resolve(root, "prettier.config.js"))),
+      parser: "json",
+    }),
+  ],
   ...(schemaOutput === undefined ? [] : [["protocol/product/v1.json", schemaOutput]]),
   ["packages/nessa-client/src/generated/product.ts", ts],
   ["crates/nessa-server/src/product/generated.rs", formatted.stdout],

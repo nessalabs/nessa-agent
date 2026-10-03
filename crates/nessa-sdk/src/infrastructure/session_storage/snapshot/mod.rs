@@ -24,5 +24,4 @@ mod tools;
 pub(super) use crate::application::agent_execution::sessions::validation::validate;
 pub(super) use semantic::{
     decode_batch as decode_semantic_batch, encode_batch as encode_semantic_batch,
-    encode_change as encode_semantic_change,
 };

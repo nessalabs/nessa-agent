@@ -2,11 +2,16 @@
 use super::*;
 use crate::application::agent_execution::{
     providers::ResourceCleanup,
-    sessions::{SessionSnapshot, SessionStorage, SessionStorageLease, StorageFuture},
+    sessions::{
+        SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionSnapshot,
+        SessionStorage, SessionStorageLease, StorageFuture,
+    },
 };
 use crate::domain::agent_execution::sessions::SessionId;
+use crate::infrastructure::session_storage::RuntimeMessageCommitClock;
 use std::{
     future::{poll_fn, Future},
+    sync::Arc,
     task::Poll,
 };
 
@@ -36,11 +41,16 @@ impl SessionStorage for TrackedStorage {
     }
 }
 impl SessionStorageLease for TrackedLease {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.backing.load()
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
-        self.backing.save(snapshot)
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
+        self.backing.save_changes(binding, snapshot, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.backing.erase()
@@ -69,9 +79,7 @@ async fn confirmed_control_then_last_agent_drop_releases_lease_without_closing_a
         let manager = SessionManager::open(
             Some(id.clone()),
             storage.clone(),
-            std::sync::Arc::new(
-                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
-            ),
+            Arc::new(RuntimeMessageCommitClock::new()),
         )
         .await
         .unwrap();
@@ -117,10 +125,7 @@ async fn late_confirmation_updates_only_the_current_physical_attempt() {
                 let manager = SessionManager::open(
                     None,
                     Arc::new(InMemoryStorage::new()),
-                    std::sync::Arc::new(
-                        nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(
-                        ),
-                    ),
+                    Arc::new(RuntimeMessageCommitClock::new()),
                 )
                 .await
                 .unwrap();
@@ -245,9 +250,7 @@ async fn delayed_old_finalizer_cannot_publish_over_a_physical_retry() {
     let manager = SessionManager::open(
         None,
         Arc::new(InMemoryStorage::new()),
-        std::sync::Arc::new(
-            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
-        ),
+        Arc::new(RuntimeMessageCommitClock::new()),
     )
     .await
     .unwrap();

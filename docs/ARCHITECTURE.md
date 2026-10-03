@@ -282,8 +282,12 @@ not reading the session, which stays unread.
   approval and a model chosen for the next turn wait beside the source's data
   the same way. Pin and archive show when the source's update says so. An
   answer, a pin, an archive and a message carry who asked — the person or an
-  agent; the source records the first three and what became of each, and a
-  message when it lets a waiting approval go; each command returns its
+  agent; the in-memory source records the first three and what became of
+  each, and a message when it lets a waiting approval go, while the
+  gateway's source records nothing itself — what it sends the gateway
+  records as this window's authenticated caller, unable to tell the person
+  from an agent, and what it refuses without sending is on no record; each
+  command returns its
   outcome to its caller. Every
   call to the source settles; an adapter rejects on a timeout of its own.
 - `adapters/store/` is the Redux slice, which only names actions over those use
@@ -295,7 +299,10 @@ not reading the session, which stays unread.
   Try Again rather than being retried on every update, and is forgotten once
   nothing shows the session, and a read of the index again reads every
   conversation on screen again, setting aside a read asked before it; `hooks.ts`,
-  the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/in-memory/` is the
+  the typed hooks; and `selectors.ts`, narrow per pane and per row. `adapters/gateway/` is the
+  port over the gateway's conversations: a serial poller of `conversation.list`
+  and `conversation.read`, with revisions it mints and the views read into the
+  workspace's types (`gateway-views.ts`). `adapters/in-memory/` is the
   only home of the sample index and the scripted, streamed replies,
   on timers it owns and cancels. `adapters/store/split-panes-source.ts` is
   the workspace as the split panes' source (below). `adapters/dom/` holds what
@@ -389,18 +396,22 @@ underneath; restore (or Escape) reveals the previous widths and open states.
 Hidden workspace/navigation panels are inert and resize separators are hidden.
 The right toggle exits this mode and closes the panel.
 
-The workspace layouts read the desktop store, a projection of the in-memory
-`WorkspaceSource` described above; the window has no backend connection yet,
-and the pane arrangement is not kept between launches (the chosen layout is,
-as a stored preference).
+The workspace layouts read the desktop store, a projection of one
+`WorkspaceSource`: the gateway's conversations (`adapters/gateway/`, #248)
+when the window is given a way to connect — today a browser preview opened
+with `?gateway` — and the in-memory sample otherwise, which is what the
+desktop app's own window still shows until its host hands it a gateway
+credential. The pane arrangement is not kept between launches (the chosen
+layout is, as a stored preference).
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
 entries, and `pnpm app` runs both windows.
 
 Browser-only preview: `pnpm desktop:dev`, then open
 `http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
 it never terminates another worktree's server. `pnpm app:build` packages the
-window with the panel. The native minimum width is 800px. The workspace's content is sample data until the gateway implements its port, and no layout
-persistence are implemented. Restart `pnpm app` after changing the Tauri
+window with the panel. The native minimum width is 800px. The workspace's content is the sample
+unless the page is opened with `?gateway` (above), and layout persistence is not
+implemented. Restart `pnpm app` after changing the Tauri
 overlay configuration: the CLI watcher can retain the previous merged config.
 
 This follows Tauri's [window customization guide](https://v2.tauri.app/learn/window-customization/)
@@ -426,7 +437,8 @@ opinion rather than the product's.
 | `local_data.rs` | The stage-scoped data root this process reads, mirroring the server's own path rules. |
 | `stage_port.rs` | The loopback port the gateway registers for a stage, from `protocol/defaults/gateway-ports.json`. macOS-only, like the registration that reads it. |
 | `gateway/domain/`, `gateway/application/`, `gateway/infrastructure/` | One retryable background-service startup owner and its native launchd and systemd-user adapters, injected from `main.rs`. The application publishes revisioned starting, ready, and failed snapshots to bundled surfaces; independent credential loads reconcile the complete service again while concurrent callers share one attempt. Domain evidence validates each request cause and initiator, attempt correlation, target, before/after incarnation, and the ordered lifecycle journal from intent through plans, native systemd job attempts, command results, observations, and outcome. One acquisition transaction retains rollback authority across private-root creation, journal-child creation, and retained-directory open. One stage-locked journal session validates live and restored records and acknowledges delivery only after retained-directory synchronization, binding and file-identity checks, and strict read-back. Recovery settles an unfinished attempt without replaying its commands: the journal lists the steps still to settle, and each native adapter records fresh state, adopts only an exact planned target, and closes anything else as failed, keeping unresolved a namespace it does not own or an effect it cannot recognise, and, until a later attempt, one whose launchd state or journal delivery is unavailable. Automatic quit uses the same journal and one absolute deadline with application-owned proof-to-dispatch and outcome-start transitions before every terminal audit attempt. Linux binds the claim to a held pidfd immediately before signaling. The outcome owner catches adapter panic and reports the first delivery failure, retry denial or second failure, and settled physical result as one error. Physical service results and audit delivery remain separate facts. Each adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. The domain also holds `SearchPath`, the validated `PATH` value; `LoginShellPath` is the port behind which the account's own login shell is read once per host process for the path the agent will be given. |
-| `links.rs` | Where a clicked link goes. A pure `decide` allows the app's own origins (`tauri://localhost`, `http://tauri.localhost`, and the dev server in a `tauri dev` build alone), hands `http`, `https` and `mailto` to the OS, and refuses everything else — the panel has no address bar to come back from, and its webview is the one the host's commands are granted to. Applied by a Tauri plugin, because the panel window is declared in `tauri.conf.json`. The module header lists which ways out of a page the navigation policy does not see. |
+| `links.rs` | Where a clicked link goes. A pure `decide` allows the app's own origins (`tauri://localhost`, `http://tauri.localhost`, and the dev server in a `tauri dev` build alone), hands `http`, `https` and `mailto` to the OS, and refuses everything else — the panel has no address bar to come back from, and its webview is the one the host's commands are granted to. Applied by a Tauri plugin, because the panel window is declared in `tauri.conf.json`. The module header lists which ways out of a page the navigation policy does not see. Beside the app's origins it allows the frame an MCP App is drawn in — the sandbox proxy's scheme and its `about:srcdoc` — and says what that route opens. |
+| `app_sandbox.rs` | The MCP Apps sandbox proxy (ADR 344, #349) on the `nessa-sandbox` scheme (`http://nessa-sandbox.localhost` on Windows): an origin that is never the window's, serving `GET /proxy.html` and nothing else. The window's CSP names it in `frame-src`; `links.rs` lets it load in a frame. |
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
 | `desktop_window.rs` | The desktop window, Nessa's main app window: opens it (at launch after setup, from the tray, from the Dock) and dismisses it on close, giving and taking the Dock icon through `Host::set_dock_presence`. |
@@ -849,6 +861,8 @@ provider adapters remain separate features. Existing design proposals do not rep
 **Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.
 Owns domain identities/memberships/credential metadata, boundary DTO validation,
 and injected session authentication contracts. Embedded Cedar evaluates product policies through the application port. The local credential backend and guarded `/session` gateway are implemented.
+The auth pairing producer owns exact consent/grant staging, invitation transitions and durable private-state acknowledgement through its injected ports. Its OPAQUE/TLS adapters expose raw cryptographic transport, with application framing left to consumers. Native listener and protected activation remain separate consumers. See [device pairing](design/auth/device-pairing.md).
+
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
 
 **Local agent credential values** (`crates/nessa-agent-credentials`) — pure
@@ -900,8 +914,10 @@ session of its own — the server process and the one connection to it — lists
 its tools with their MCP Apps `_meta.ui`, reads `ui://` resources, and
 forwards the harness's calls over that connection until the stand-in ends, so
 an agent and its app share one upstream session and no two conversations
-share one. The conversation view fills `ConversationTool.mcp.resourceUri` from
-the open sessions' lists when they agree. Design and state tables:
+share one. Each session belongs to the conversation its harness was opened
+for, by a token the gateway issues for that open and revokes when it ends,
+carried in the stand-in's environment. The conversation view fills
+`ConversationTool.mcp.resourceUri` from the conversation's own session's list. Design and state tables:
 [mcp-connections](design/mcp-connections.md).
 The shell tool coordinates an injected Shepherd runner and private process audit
 through its application ports. See the [MCP server](../crates/nessa-mcp/README.md).

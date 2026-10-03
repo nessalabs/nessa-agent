@@ -3,10 +3,9 @@ import {
   NessaAttachmentError,
   UPLOAD_DEADLINE_MS,
   uploadRefusal,
-  type AttachmentUploadReply,
   type AttachmentUploadTransport,
-  type UploadTimer,
 } from "../application/attachment-upload.js"
+import { requestWithin, type RequestTimer } from "../application/gateway-http.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import type { RpcRequester } from "../application/session-port.js"
 import { ProductMethod } from "../generated/product.js"
@@ -115,58 +114,11 @@ export type AttachmentApi = {
 const ticketPattern = /^[0-9a-f]{64}$/
 const utf8 = new TextEncoder()
 
-/**
- * One PUT that ends for exactly one reason: an answer, the caller's signal, or
- * the deadline. The request is aborted for the last two, and the wait ends even
- * if the transport ignores the abort — a request that never answers is the case
- * the deadline exists for, and it may not answer an abort either.
- */
-function putWithin(
-  transport: AttachmentUploadTransport,
-  upload: { ticket: string; mimeType: string; bytes: Blob },
-  caller: AbortSignal | undefined,
-  timer: UploadTimer,
-): Promise<AttachmentUploadReply> {
-  return new Promise((resolve, reject) => {
-    const request = new AbortController()
-    let settled = false
-    // Replaced the moment the timer is armed. A timer may spend its whole budget
-    // before returning a handle, and then the deadline settles this while there
-    // is still nothing to stop; the handle is used below instead.
-    let stopTimer = () => {}
-    const finish = (settle: () => void) => {
-      if (settled) return
-      settled = true
-      stopTimer()
-      caller?.removeEventListener("abort", onCallerAbort)
-      settle()
-    }
-    const stop = (error: NessaAttachmentError) =>
-      finish(() => {
-        request.abort()
-        reject(error)
-      })
-    const onCallerAbort = () => stop(new NessaAttachmentError("aborted"))
-    stopTimer = timer(UPLOAD_DEADLINE_MS, () =>
-      stop(new NessaAttachmentError("upload_timeout")),
-    )
-    // Already out of time before the request was made: nothing to send.
-    if (settled) return stopTimer()
-    if (caller?.aborted) return onCallerAbort()
-    caller?.addEventListener("abort", onCallerAbort, { once: true })
-    transport.put({ ...upload, signal: request.signal }).then(
-      (reply) => finish(() => resolve(reply)),
-      (cause: unknown) =>
-        finish(() => reject(new NessaAttachmentError("unreachable", undefined, cause))),
-    )
-  })
-}
-
 export function createAttachmentApi(
   session: RpcRequester,
   transport: AttachmentUploadTransport,
   newId: () => string,
-  timer: UploadTimer,
+  timer: RequestTimer,
 ): AttachmentApi {
   return {
     async begin(conversationId, file, options = {}) {
@@ -216,11 +168,18 @@ export function createAttachmentApi(
         throw new TypeError("Media type must be lowercase, without parameters")
       if (!validSize(file.bytes.size, MAX_UPLOAD_BYTES))
         throw new TypeError(`Upload must contain 1-${MAX_UPLOAD_BYTES} bytes`)
-      const reply = await putWithin(
-        transport,
-        { ticket, mimeType: file.mimeType, bytes: file.bytes },
+      const reply = await requestWithin(
+        (signal) =>
+          transport.put({ ticket, mimeType: file.mimeType, bytes: file.bytes, signal }),
         options.signal,
         timer,
+        UPLOAD_DEADLINE_MS,
+        {
+          aborted: () => new NessaAttachmentError("aborted"),
+          timeout: () => new NessaAttachmentError("upload_timeout"),
+          unreachable: (cause) =>
+            new NessaAttachmentError("unreachable", undefined, cause),
+        },
       )
       if (reply.status !== 200)
         throw new NessaAttachmentError(uploadRefusal(reply.body), reply.status)

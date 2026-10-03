@@ -59,6 +59,8 @@ impl fmt::Debug for CredentialEvidence {
 pub enum AccessError {
     /// Proof is invalid, expired, revoked, or not yet valid.
     InvalidCredential,
+    /// Current policy refused the requested operation after session validation.
+    Denied,
     /// A previously authenticated credential has been revoked.
     CredentialRevoked,
     /// A previously authenticated session or credential has expired.

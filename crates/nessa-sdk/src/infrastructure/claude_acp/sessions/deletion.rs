@@ -72,6 +72,7 @@ mod tests {
             workspace: root.path().to_owned(),
             tools_enabled: false,
             mcp_servers: Vec::new(),
+            stand_ins: crate::infrastructure::acp::sessions::StandInSessions::none(),
             permissions: PermissionOfferPolicy::once_only(),
             launch_timeout: Duration::from_secs(1),
             startup_timeout: Duration::from_secs(1),

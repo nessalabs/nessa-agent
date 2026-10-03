@@ -51,7 +51,7 @@ async fn closes(harness: &mut Harness, waiting: u64) {
 /// A session on the fixture whose tools have been listed, as a harness lists
 /// before it calls.
 async fn listed(servers: &McpServers) -> crate::infrastructure::mcp::McpSession {
-    let session = servers.open("fixture").await.unwrap();
+    let session = servers.open("fixture", super::owner()).await.unwrap();
     session.list_tools().await.unwrap();
     session
 }
@@ -85,6 +85,17 @@ fn alive(pid: i64) -> bool {
     !state.trim().is_empty() && !state.trim_start().starts_with('Z')
 }
 
+/// Until a close has taken `session`'s server process to stop it.
+async fn taken(session: &crate::infrastructure::mcp::McpSession) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while session.process_id().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("a close took the process");
+}
+
 /// Until `pid` is no longer running, within five seconds.
 async fn gone(pid: i64) {
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -99,12 +110,17 @@ async fn gone(pid: i64) {
 #[tokio::test]
 async fn a_configured_server_runs_with_only_what_it_was_given() {
     let (servers, directory) = process(&[]);
-    let session = servers.open("fixture").await.unwrap();
+    let session = servers.open("fixture", super::owner()).await.unwrap();
     let tools = session.list_tools().await.unwrap();
     assert_eq!(tools.len(), 5);
     let chart = McpTool::new("fixture", "show_chart").unwrap();
     assert_eq!(
-        servers.tool_ui(&chart).unwrap().resource_uri().as_str(),
+        servers
+            .tool_ui(&super::conversation(), &chart)
+            .unwrap()
+            .resource_uri()
+            .unwrap()
+            .as_str(),
         "ui://fixture/chart.html"
     );
     let mut harness = Harness::attach(session);
@@ -180,7 +196,7 @@ async fn the_agents_handle_resolves_in_its_own_session_and_dies_with_it() {
         format!("<p>{handle}</p>")
     );
     // Another conversation's session never gave it out.
-    let other = servers.open("fixture").await.unwrap();
+    let other = servers.open("fixture", super::owner()).await.unwrap();
     assert!(matches!(
         other.read_ui_resource(&uri).await,
         Err(McpError::Remote { code: -32002, .. })
@@ -210,7 +226,7 @@ async fn a_server_that_cannot_be_launched_is_a_start_failure() {
     )
     .unwrap();
     assert!(matches!(
-        servers.open("missing").await,
+        servers.open("missing", super::owner()).await,
         Err(McpError::Start(_))
     ));
 }
@@ -261,7 +277,7 @@ async fn every_close_returns_only_once_the_server_is_stopped() {
         let session = session.clone();
         async move { session.close().await }
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    taken(&session).await;
     let started = std::time::Instant::now();
     session.close().await;
     assert!(!exists(pid), "process {pid} is left after the second close");
@@ -278,16 +294,79 @@ async fn every_close_returns_only_once_the_server_is_stopped() {
         let session = session.clone();
         async move { session.close().await }
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    taken(&session).await;
     servers.stop().await;
     assert!(!exists(pid), "process {pid} is left after stop returned");
     closing.await.unwrap();
 }
 
 #[tokio::test]
+async fn a_grant_revoked_while_its_session_closes_leaves_every_close_waiting_for_the_stop() {
+    let (servers, _) = process(&["--ignore-eof"]);
+    let owner = super::owner();
+    let session = servers.open("fixture", owner.clone()).await.unwrap();
+    session.list_tools().await.unwrap();
+    let pid = i64::from(session.process_id().unwrap());
+    // One close holds the server through its grace; revoking the grant then
+    // must not say it is stopped before it is.
+    let first = tokio::spawn({
+        let session = session.clone();
+        async move { session.close().await }
+    });
+    taken(&session).await;
+    servers.revoke(&owner);
+    session.close().await;
+    assert!(!exists(pid), "process {pid} is left after close returned");
+    first.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_session_dropped_while_a_close_holds_its_server_leaves_stop_waiting_for_it() {
+    let (servers, _) = process(&["--ignore-eof"]);
+    let owner = super::owner();
+    let session = servers.open("fixture", owner.clone()).await.unwrap();
+    session.list_tools().await.unwrap();
+    let pid = i64::from(session.process_id().unwrap());
+    // Revoking starts a close that holds the server through its grace; the
+    // last handle then goes, which must not say it is stopped before it is.
+    servers.revoke(&owner);
+    taken(&session).await;
+    drop(session);
+    servers.stop().await;
+    assert!(!exists(pid), "process {pid} is left after stop returned");
+}
+
+#[tokio::test]
+async fn a_grant_revoked_off_any_runtime_kills_its_sessions_at_once() {
+    let (servers, _) = process(&["--ignore-eof"]);
+    let owner = super::owner();
+    let session = servers.open("fixture", owner.clone()).await.unwrap();
+    session.list_tools().await.unwrap();
+    let pid = i64::from(session.process_id().unwrap());
+    // Revoked from a thread with no runtime: nothing can wait out a grace
+    // there, so the process group is killed at once.
+    let revoking = servers.clone();
+    std::thread::spawn(move || revoking.revoke(&owner))
+        .join()
+        .unwrap();
+    assert_eq!(
+        session.list_tools().await,
+        Err(crate::infrastructure::mcp::McpError::Closed)
+    );
+    // Closing returns once it is stopped, which it already is.
+    let started = std::time::Instant::now();
+    session.close().await;
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "no grace waited"
+    );
+    gone(pid).await;
+}
+
+#[tokio::test]
 async fn a_session_dropped_without_closing_kills_its_process_group() {
     let (servers, _) = process(&["--ignore-eof", "--child"]);
-    let session = servers.open("fixture").await.unwrap();
+    let session = servers.open("fixture", super::owner()).await.unwrap();
     let pid = i64::from(session.process_id().unwrap());
     // Its child, found as the one process whose parent it is.
     let children = std::process::Command::new("pgrep")

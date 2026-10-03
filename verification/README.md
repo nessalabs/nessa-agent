@@ -23,7 +23,12 @@ verification/
     fixture.tsx             typed current gateway view cases
   desktop/
     CHECKLIST.md            what we always test and reproduce, with the contract each item holds
+    fixtures/
+      attachments-races/    real panel with controlled attachment host and scenario gateway effects
+      onboarding-readiness/ real setup with stalled HTTP response and retry cases
     scripts/
+      attachments-races.mjs pending image admission and concurrent URL-drop refusals
+      onboarding-readiness.mjs readiness deadline and retry in both browser engines
       run-all.mjs           every check, summarised
       committed-transcript.mjs history notices, permission controls, re-enable
       smoke.mjs             loads, sends, splits, Settings, overview; console errors
@@ -34,6 +39,7 @@ verification/
       focus.mjs             where the caret lands after each pane and dialog change
       responsive.mjs        approval card, composer controls and thinking control, column titles, Settings widths, a pane's home
       widgets.mjs           widget hosts: a card, its pane, the window, Escape's order, focus, drag over the window
+      mcp-apps.mjs          MCP Apps: each place, tools/call allowed and refused, CSP, isolation, escapes, forgery, departures and departures-back (dev server: imports the host's own builder), teardown
       lib/
         selectors.mjs       every selector, key chord, storage key and known-harmless message
         cli.mjs             options, stderr diagnostics, JSON result, exit status
@@ -77,7 +83,15 @@ pnpm verify:desktop:responsive --shots /tmp/desktop-shots
 node verification/desktop/scripts/<check>.mjs --help
 ```
 
-Every check takes `--url`, `--mode dev|prod`, `--engine chromium,webkit`,
+The stand-alone `attachments-races.mjs` and `onboarding-readiness.mjs` checks
+start and stop their own controlled Vite fixtures and run both bundled Chromium
+and WebKit. Run them directly with `node`; they do not use the app URL or the
+`run-all` options. See their contracts in [the checklist](desktop/CHECKLIST.md).
+When WebKit libraries live outside the system search path, set
+`NESSA_VERIFICATION_WEBKIT_LIBRARY_PATH` to their directory; only WebKit receives
+that library-path override, so Chromium keeps its normal runtime environment.
+
+The shared desktop checks take `--url`, `--mode dev|prod`, `--engine chromium,webkit`,
 `--layout columns,sidebar`, `--quick`, `--headed`, `--out <file>`,
 `--shots <dir>` and `--verbose`; `--help` lists its own options.
 

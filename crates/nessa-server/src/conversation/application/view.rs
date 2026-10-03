@@ -11,7 +11,10 @@ use nessa_sdk::{
         },
         sessions::CommittedViewState,
     },
-    domain::agent_execution::prompts::{ImageReference, LinkedFile},
+    domain::agent_execution::{
+        permissions::PermissionEffect,
+        prompts::{ImageReference, LinkedFile},
+    },
 };
 use serde::Serialize;
 
@@ -210,11 +213,43 @@ pub struct ConversationPermission {
     pub tool_name: String,
     pub arguments_json: String,
     pub options: Vec<ConversationPermissionOption>,
+    /// Who asked for the review: the agent, or an MCP App.
+    pub origin: ConversationPermissionOrigin,
+}
+/// Who asked for a review. For [`ConversationPermissionOrigin::Harness`],
+/// the review's execution and tool are the agent's call being reviewed; for
+/// [`ConversationPermissionOrigin::App`], they are the app — the tool call
+/// whose UI it is — and `server` and `tool` the tool it asked to call.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConversationPermissionOrigin {
+    Harness,
+    App { server: String, tool: String },
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ConversationPermissionOption {
     pub id: String,
     pub label: String,
+    /// What choosing it decides, as the domain classified the offer: a surface
+    /// picks an option by this, never by its label or identifier.
+    pub effect: ConversationPermissionOptionEffect,
+}
+/// Whether an option allows or denies the reviewed request. Only an option
+/// deciding that one request is published: the projection offers no review
+/// with another (`projection.rs`, "a review reaching beyond its request").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationPermissionOptionEffect {
+    Allow,
+    Deny,
+}
+impl From<PermissionEffect> for ConversationPermissionOptionEffect {
+    fn from(effect: PermissionEffect) -> Self {
+        match effect {
+            PermissionEffect::Allow => Self::Allow,
+            PermissionEffect::Deny => Self::Deny,
+        }
+    }
 }
 /// One question an agent is waiting on an answer to.
 #[derive(Clone, Debug, Serialize)]

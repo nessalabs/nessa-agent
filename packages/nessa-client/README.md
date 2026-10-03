@@ -165,6 +165,7 @@ requests, and releases subscriptions. It is safe to call repeatedly.
 - `client.conversation.create({ conversationId? })` creates or reopens an agent conversation.
 - `client.conversation.send(id, text, attachments)` queues a message of text, images, or both; `steer(id, text, attachments)` uses supported steering. Pass `[]` for text alone.
 - `client.attachments.begin(id, file)` and `client.attachments.upload(ticket, file)` stage bytes so a message can refer to them by digest.
+- `client.mcpApps.callTool`, `readResource`, `fetchResource`, and `releaseApp` make an MCP App's calls to its own server, fetch its HTML, and release a mount of it.
 - `client.conversation.read(id)` returns a bounded replacement view of live output, waiting input, tools, and permissions.
 - `client.conversation.list({ archived? })` lists the caller's conversations, closed ones included, newest first: title, last line said, when, whether it is running, and whether it is archived. Archived conversations are listed only when asked for. It opens no provider.
 - `archive(id)` and `unarchive(id)` hide and restore a conversation in that list, answering `applied: false` when it was already in that state, or — for `archive` — when the gateway has no summary for it (nothing was said in it, or its summary was never written), since such a conversation is never listed; `delete(id)` deletes it permanently — history, uploads and summary are erased, audit evidence is kept, and later commands on it by its owner reject with `conversation_deleted` — except deleting it again — while anyone else is told `conversation_not_found`. The request that decided a deletion answers `applied: true`, and so does a repeat of it (same caller, surface and `requestId`); any other later delete answers `false`. `conversation_erasure_incomplete` means it was deleted but some stored data remains, and `audit_unavailable` from `delete` means it was deleted but its record — the deletion record, or the uploads' own evidence — did not finish; any other code from `delete` means only that whether it was deleted is not known — list it, or delete again. For the first two, deleting again, and each gateway start, tries the erasure again (and may answer the same), while an agent that keeps refusing to delete its own session, or a damaged history, needs the operator.
@@ -317,6 +318,62 @@ gateway proved that no selection occurred.
 `client.conversation.close(id)` closes the live provider context and retains saved
 conversation history. `client.close()` only disconnects this surface; the gateway
 continues owning accepted work.
+
+### MCP Apps
+
+An MCP App is the UI of one MCP tool call, named by an `McpAppReference`: the
+call's `executionId` and `toolId`, and the host's own `instanceId` (a UUID) for
+this mount of it. The host makes the app's calls for it:
+
+```ts
+const app = { executionId, toolId, instanceId: crypto.randomUUID() }
+const read = await client.mcpApps.readResource(conversationId, app, "charts", uri)
+const html = await client.mcpApps.fetchResource(read.ticket, read)
+// …render `html` in a sandbox under read.csp and read.permissions…
+const { resultJson } = await client.mcpApps.callTool(
+  conversationId,
+  app,
+  "charts",
+  "delete_rows",
+  JSON.stringify({ rows: [1] }),
+)
+await client.mcpApps.releaseApp(conversationId, app)
+```
+
+`fetchResource` sends one `GET /mcp-resources` to the gateway's own HTTP
+origin, as `upload` does, with the ticket in the `x-nessa-resource-ticket`
+header and never in the URL, and hands back the bytes only once their size and
+SHA-256 are the ones `readResource` described. A destructive tool waits for the
+person's answer to a review with `origin: {kind: "app", server, tool}`, and
+`callTool` waits for the review, the call and an allowance:
+`mcpAppDeadlines.callToolMs`. `mcpAppDeadlines` holds the longest each call can
+take the gateway, as the protocol publishes it (`x-mcpAppCallTiming`), for a host
+that bounds an app's requests. `argumentsJson` is at most
+32 KiB (`MAX_MCP_ARGUMENTS_BYTES`), the most a review shows; arguments past any
+bound throw `TypeError` before anything is sent. What an app sends — a tool's
+name, a resource's URI, the arguments' text — is held to its bounds, and to
+being Unicode text, by `mcpAppRequestProblem`, which `callTool` and
+`readResource` ask and a host may ask first, to refuse the app's request
+itself. What the arguments decode to is the gateway's to judge
+(`invalid_request`). Any request whose frame is longer than the gateway takes
+(`bounds.maxRequestFrameBytes`) is refused before it is sent, as
+`NessaRequestTooLargeError` — inside `NessaMcpAppError`, with `uncertain`
+false: the gateway would close the socket on it rather than answer.
+
+`callTool` and `readResource` fail with `NessaMcpAppError`. Its `uncertain` is
+`false` when nothing reached the app's server — `mcp_app_unknown`,
+`mcp_server_mismatch`, `mcp_tool_not_for_app`, `mcp_request_too_large`,
+`mcp_approval_denied`, `mcp_approval_expired`, `mcp_cancelled` — and `true`
+when it may have: `mcp_session_unavailable`, `mcp_timed_out`,
+`mcp_remote_error`, `mcp_result_too_large`, or no trustworthy answer. With
+`mcp_remote_error`, `remoteError` is the server's own JSON-RPC error
+`{code, message}` when it sent one. `releaseApp` is a control and fails with
+`NessaConversationControlError`. `fetchResource` fails with
+`NessaMcpResourceError`: `not_found` (the route's one refusal), `unavailable`
+(the redemption could not be audited), `integrity` (not the bytes described),
+`aborted`, `timeout`, `unreachable`, or `unexpected_response`. Nothing is
+retried for you; after a failed fetch, read the resource again for a new
+ticket.
 
 ## Export API documentation
 

@@ -5,17 +5,21 @@
 //! upstream session and no two harness sessions share one.
 //!
 //! ```text
-//! McpServers ──open──▶ McpSession: server process ─ Connection
-//!     │                    ├── list_tools / read_ui_resource
-//!     │                    └── serve(harness pipes) ──▶ stand_in
-//!     └── tool_ui (the open sessions' lists, agreed or none)
+//! McpServers ──open(server, McpOwner)──▶ McpSession: server process ─ Connection
+//!     │                                    ├── list_tools / read_ui_resource
+//!     │                                    └── serve(harness pipes) ──▶ stand_in
+//!     ├── tool_ui (an SDK session's own newest session of the server)
+//!     ├── listed_tool / call_tool / read_app_resource (an MCP App's calls, on that session)
+//!     └── revoke (a grant's sessions closed, none opened under it after)
 //!
 //! Connection: framing (bounded newline JSON-RPC) ─ wire (MCP JSON → domain)
 //! ```
 //!
 //! Arrows are calls. `McpServers` owns the open sessions and refuses new ones
-//! once stopped; an `McpSession` owns one process (its process group) and its
-//! connection, closed when its harness session ends; `Connection` owns
+//! once stopped; each is owned by an SDK session (a conversation's) and the
+//! host's grant for that open ([`McpOwner`]); an `McpSession` owns one
+//! process (its process group) and its connection, closed when its harness
+//! session ends or its grant is revoked; `Connection` owns
 //! request ids, answers, cancellation and the end of a connection; `stand_in`
 //! owns what a harness sees; `process` launching and stopping; `wire` the
 //! shapes, and the domain (`domain::mcp_apps`) the values and their bounds.
@@ -38,8 +42,8 @@ mod wire;
 
 pub use error::McpError;
 pub use servers::{
-    McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT, MAX_TOOLS, MAX_TOOL_PAGES,
-    REQUEST_TIMEOUT,
+    McpOwner, McpServerLaunch, McpServers, McpSession, INITIALIZE_TIMEOUT, MAX_TOOLS,
+    MAX_TOOL_PAGES, REQUEST_TIMEOUT,
 };
 
 #[cfg(all(test, unix))]

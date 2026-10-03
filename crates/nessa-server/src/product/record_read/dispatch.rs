@@ -117,15 +117,7 @@ pub(crate) async fn dispatch(
 
 fn error_code(error: RecordReadError) -> RecordReadErrorCode {
     match error {
-        RecordReadError::Admission(refusal) => match refusal {
-            ReadRefusal::InvalidRequest => RecordReadErrorCode::InvalidRequest,
-            ReadRefusal::Unauthorized => RecordReadErrorCode::Unauthorized,
-            ReadRefusal::Forbidden => RecordReadErrorCode::Forbidden,
-            ReadRefusal::WrongOwner => RecordReadErrorCode::WrongOwner,
-            ReadRefusal::WrongReceiver => RecordReadErrorCode::WrongReceiver,
-            ReadRefusal::StaleEpoch => RecordReadErrorCode::StaleEpoch,
-            ReadRefusal::Unverifiable => RecordReadErrorCode::Unverifiable,
-        },
+        RecordReadError::Admission(refusal) => refusal.into(),
         RecordReadError::InvalidRequest => RecordReadErrorCode::InvalidRequest,
         RecordReadError::IdentityChanged => RecordReadErrorCode::IdentityChanged,
         RecordReadError::HistoryPruned => RecordReadErrorCode::HistoryPruned,
@@ -135,6 +127,20 @@ fn error_code(error: RecordReadError) -> RecordReadErrorCode {
         }
         RecordReadError::SourcePreparing => RecordReadErrorCode::SourcePreparing,
         RecordReadError::ReadTimeout => RecordReadErrorCode::ReadTimeout,
+    }
+}
+
+impl From<ReadRefusal> for RecordReadErrorCode {
+    fn from(refusal: ReadRefusal) -> Self {
+        match refusal {
+            ReadRefusal::InvalidRequest => Self::InvalidRequest,
+            ReadRefusal::Unauthorized => Self::Unauthorized,
+            ReadRefusal::Forbidden => Self::Forbidden,
+            ReadRefusal::WrongOwner => Self::WrongOwner,
+            ReadRefusal::WrongReceiver => Self::WrongReceiver,
+            ReadRefusal::StaleEpoch => Self::StaleEpoch,
+            ReadRefusal::Unverifiable => Self::Unverifiable,
+        }
     }
 }
 

@@ -266,7 +266,8 @@ it("rejects terminal executions that remain pending or actionable", async () => 
     title: "Review",
     toolName: "shell",
     argumentsJson: "{}",
-    options: [{ id: "deny", label: "Deny" }],
+    origin: { kind: "harness" },
+    options: [{ id: "deny", label: "Deny", effect: "deny" }],
   }
   const request = vi.fn()
   const api = createConversationApi({ request }, () => "id")
@@ -354,9 +355,10 @@ it("accepts bounded full replacement views and rejects mismatched identities or 
           title: "run",
           toolName: "shell",
           argumentsJson: "{}",
+          origin: { kind: "harness" },
           options: [
-            { id: "same", label: "Allow" },
-            { id: "same", label: "Deny" },
+            { id: "same", label: "Allow", effect: "allow" },
+            { id: "same", label: "Deny", effect: "deny" },
           ],
         },
       ],
@@ -382,7 +384,8 @@ it("rejects duplicate identities and impossible steering order at the response b
     title: "Run",
     toolName: "shell",
     argumentsJson: "{}",
-    options: [{ id: "allow", label: "Allow" }],
+    origin: { kind: "harness" },
+    options: [{ id: "allow", label: "Allow", effect: "allow" }],
   }
   const tool = {
     executionId: "first",
@@ -522,7 +525,8 @@ it("accepts bounded omissions and the intentional pending-message overlap", asyn
         title: "Review",
         toolName: "shell",
         argumentsJson: "{}",
-        options: [{ id: "deny", label: "Deny" }],
+        origin: { kind: "harness" },
+        options: [{ id: "deny", label: "Deny", effect: "deny" }],
       },
     ],
     tools: [
@@ -574,6 +578,124 @@ it("never offers a replay for controls whose acknowledgement was lost", async ()
     expect(error).not.toHaveProperty("retry")
   }
   expect(request).toHaveBeenCalledTimes(4)
+})
+
+it("correlates a question answer acknowledgement with its action", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValue({ requestId: "question-action", applied: true })
+  const api = createConversationApi({ request }, () => "question-action")
+  await expect(
+    api.answerQuestion(conversationId, "execution", "ask", null),
+  ).resolves.toEqual({ requestId: "question-action", applied: true })
+  expect(request).toHaveBeenCalledWith("conversation.answerQuestion", {
+    conversationId,
+    executionId: "execution",
+    questionId: "ask",
+    requestId: "question-action",
+    choices: null,
+  })
+})
+
+it.each([false, true])(
+  "reconciles a lost question answer without replay when consumed is %s",
+  async (consumed) => {
+    const ask = {
+      executionId: "execution",
+      questionId: "ask",
+      message: "Choose an environment",
+      questions: [
+        {
+          key: "environment",
+          prompt: "Where?",
+          multiSelect: false,
+          freeText: false,
+          required: true,
+          options: [{ value: "staging", label: "Staging" }],
+        },
+      ],
+    }
+    let waiting = true
+    let answers = 0
+    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "conversation.read")
+        return {
+          ...view,
+          messages: [
+            {
+              executionId: "execution",
+              userText: "Deploy",
+              attachments: [],
+              files: [],
+              parts: [],
+              status: "running",
+            },
+          ],
+          questions: waiting ? [ask] : [],
+        }
+      expect(method).toBe("conversation.answerQuestion")
+      expect(waiting).toBe(true)
+      answers += 1
+      if (answers === 1) {
+        if (consumed) waiting = false
+        // The client cannot distinguish loss before consumption from loss of
+        // an acknowledgement after consumption. The current read can.
+        throw new Error("acknowledgement lost")
+      }
+      waiting = false
+      return { requestId: params.requestId, applied: true }
+    })
+    const api = createConversationApi({ request }, () => "generated")
+    const choices = [{ key: "environment", values: ["staging"] }]
+    const error = await api
+      .answerQuestion(conversationId, "execution", "ask", choices, {
+        requestId: "lost-answer",
+      })
+      .catch((error: unknown) => error)
+    expect(error).toBeInstanceOf(NessaConversationControlError)
+    expect(error).toMatchObject({
+      uncertain: true,
+      conversationId,
+      executionId: "execution",
+      requestId: "lost-answer",
+      permissionSelection: undefined,
+    })
+    expect(error).not.toHaveProperty("retry")
+    const current = await api.read(conversationId)
+    expect(current.questions).toEqual(consumed ? [] : [ask])
+    expect(answers).toBe(1)
+    if (current.questions.length) {
+      // A fresh read may justify a new deliberate action, not replay of the
+      // failed action. The provider remains the owner of ask consumption.
+      await expect(
+        api.answerQuestion(conversationId, "execution", "ask", choices, {
+          requestId: "deliberate-answer",
+        }),
+      ).resolves.toEqual({ requestId: "deliberate-answer", applied: true })
+      expect(answers).toBe(2)
+      expect(request.mock.calls.at(-1)?.[1].requestId).toBe("deliberate-answer")
+    }
+  },
+)
+
+it("keeps question refusal and mismatched acknowledgement in the shared control contract", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValueOnce(new NessaRpcError("invalid_request", "invalid_request"))
+    .mockResolvedValueOnce({ requestId: "another-action", applied: true })
+  const api = createConversationApi({ request }, () => "question-action")
+  const refused = await api
+    .answerQuestion(conversationId, "execution", "ask", null)
+    .catch((error: unknown) => error)
+  expect(refused).toBeInstanceOf(NessaConversationControlError)
+  expect(refused).toMatchObject({ uncertain: false, requestId: "question-action" })
+  expect(refused).not.toHaveProperty("retry")
+  const mismatched = await api
+    .answerQuestion(conversationId, "execution", "ask", null)
+    .catch((error: unknown) => error)
+  expect(mismatched).toBeInstanceOf(NessaConversationControlError)
+  expect(mismatched).toMatchObject({ uncertain: true, requestId: "question-action" })
+  expect(mismatched).not.toHaveProperty("retry")
 })
 
 it("preserves every typed permission selection state independently of its diagnostic", async () => {

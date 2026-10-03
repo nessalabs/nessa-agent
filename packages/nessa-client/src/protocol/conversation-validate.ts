@@ -13,6 +13,7 @@ import type {
 import {
   bounds,
   CompactionReportingSupport,
+  ConversationPermissionOptionEffect,
   ElicitationForwardingSupport,
   IncomingElicitationSupport,
   ModelSwitchReportingSupport,
@@ -368,8 +369,20 @@ export function conversationView(value: unknown, expected: string): Conversation
       "options",
       "toolName",
       "argumentsJson",
+      "origin",
     ])
     for (const key of ["executionId", "permissionId", "toolId"]) identity(permission, key)
+    // Who asked: the agent, or an MCP App naming the tool it asked to call.
+    const origin = record(permission.origin)
+    exact(origin, ["kind", "server", "tool"])
+    const kind = text(origin, "kind", 16)
+    oneOf(kind, ["harness", "app"])
+    if (kind === "app") {
+      text(origin, "server", bounds.maxMcpNameBytes, false)
+      text(origin, "tool", bounds.maxMcpNameBytes, false)
+    } else if (origin.server !== undefined || origin.tool !== undefined) {
+      throw new Error("A review the agent asked for names no app tool")
+    }
     const permissionKey = JSON.stringify([
       permission.executionId,
       permission.permissionId,
@@ -377,7 +390,9 @@ export function conversationView(value: unknown, expected: string): Conversation
     if (permissionIds.has(permissionKey))
       throw new Error("Conversation response repeats a permission")
     const status = messageStatuses.get(permission.executionId as string)
-    if (status !== undefined && status !== "running")
+    // The agent asks while its execution runs. An app asks whenever it is
+    // shown, naming its own tool call, which has normally finished.
+    if (kind === "harness" && status !== undefined && status !== "running")
       throw new Error("Permission execution is not running")
     if (status === undefined && !item.truncated)
       throw new Error("Permission execution is missing its message")
@@ -389,11 +404,12 @@ export function conversationView(value: unknown, expected: string): Conversation
     if (!options.length) throw new Error("Permission response has no choices")
     const ids = new Set<string>()
     for (const option of options) {
-      exact(option, ["id", "label"])
+      exact(option, ["id", "label", "effect"])
       const id = identity(option, "id")
       if (ids.has(id)) throw new Error("Permission response repeats an option")
       ids.add(id)
       text(option, "label", 2048, false)
+      oneOf(text(option, "effect"), Object.values(ConversationPermissionOptionEffect))
     }
   }
   const toolIds = new Set<string>()

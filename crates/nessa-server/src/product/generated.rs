@@ -490,6 +490,21 @@ pub struct ConversationPending {
 pub struct ConversationPermissionOption {
     pub id: String,
     pub label: String,
+    pub effect: ConversationPermissionOptionEffect,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationPermissionOptionEffect {
+    Allow,
+    Deny,
+}
+impl ConversationPermissionOptionEffect {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        }
+    }
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -500,6 +515,7 @@ pub struct ConversationPermission {
     pub title: String,
     pub options: Vec<ConversationPermissionOption>,
     pub tool_name: String,
+    pub origin: ConversationPermissionOrigin,
     pub arguments_json: String,
 }
 #[derive(Deserialize, Serialize)]
@@ -736,6 +752,106 @@ pub struct ConversationPart {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ConversationPermissionOriginKind {
+    Harness,
+    App,
+}
+impl ConversationPermissionOriginKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Harness => "harness",
+            Self::App => "app",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPermissionOrigin {
+    pub kind: ConversationPermissionOriginKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpAppReference {
+    pub execution_id: String,
+    pub tool_id: String,
+    pub instance_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpReleaseAppParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub app: McpAppReference,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpCallToolParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub app: McpAppReference,
+    pub server: String,
+    pub tool: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments_json: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpCallToolResult {
+    pub result_json: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpReadResourceParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub app: McpAppReference,
+    pub server: String,
+    pub uri: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpUiCsp {
+    pub connect_domains: Vec<String>,
+    pub resource_domains: Vec<String>,
+    pub frame_domains: Vec<String>,
+    pub base_uri_domains: Vec<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpUiPermissions {
+    pub camera: bool,
+    pub microphone: bool,
+    pub geolocation: bool,
+    pub clipboard_write: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpReadResourceResult {
+    pub uri: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub sha256: String,
+    pub ticket: String,
+    pub expires_in_ms: u64,
+    pub csp: McpUiCsp,
+    pub permissions: McpUiPermissions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefers_border: Option<bool>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpRemoteErrorDetails {
+    pub code: i64,
+    pub message: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ConversationErrorCode {
     AgentNotConfigured,
     AgentUnsupported,
@@ -769,6 +885,17 @@ pub enum ConversationErrorCode {
     AttachmentCleanupUnavailable,
     ConversationDeleted,
     ConversationErasureIncomplete,
+    McpAppUnknown,
+    McpServerMismatch,
+    McpToolNotForApp,
+    McpSessionUnavailable,
+    McpApprovalDenied,
+    McpApprovalExpired,
+    McpCancelled,
+    McpRequestTooLarge,
+    McpResultTooLarge,
+    McpTimedOut,
+    McpRemoteError,
 }
 impl ConversationErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -805,6 +932,17 @@ impl ConversationErrorCode {
             Self::AttachmentCleanupUnavailable => "attachment_cleanup_unavailable",
             Self::ConversationDeleted => "conversation_deleted",
             Self::ConversationErasureIncomplete => "conversation_erasure_incomplete",
+            Self::McpAppUnknown => "mcp_app_unknown",
+            Self::McpServerMismatch => "mcp_server_mismatch",
+            Self::McpToolNotForApp => "mcp_tool_not_for_app",
+            Self::McpSessionUnavailable => "mcp_session_unavailable",
+            Self::McpApprovalDenied => "mcp_approval_denied",
+            Self::McpApprovalExpired => "mcp_approval_expired",
+            Self::McpCancelled => "mcp_cancelled",
+            Self::McpRequestTooLarge => "mcp_request_too_large",
+            Self::McpResultTooLarge => "mcp_result_too_large",
+            Self::McpTimedOut => "mcp_timed_out",
+            Self::McpRemoteError => "mcp_remote_error",
         }
     }
 }
@@ -1140,6 +1278,9 @@ pub mod product_method {
     pub const CONVERSATION_CATALOGUE_HEAD: &str = "conversation.catalogueHead";
     pub const CONVERSATION_CATALOGUE_MANIFEST: &str = "conversation.catalogueManifest";
     pub const CONVERSATION_CATALOGUE_RESOLVE: &str = "conversation.catalogueResolve";
+    pub const MCP_CALL_TOOL: &str = "mcp.callTool";
+    pub const MCP_READ_RESOURCE: &str = "mcp.readResource";
+    pub const MCP_RELEASE_APP: &str = "mcp.releaseApp";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -1292,7 +1433,7 @@ pub(crate) fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 29
+                items.len() <= 32
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -1346,6 +1487,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.catalogueHead",
     "conversation.catalogueManifest",
     "conversation.catalogueResolve",
+    "mcp.callTool",
+    "mcp.readResource",
+    "mcp.releaseApp",
 ];
 pub const PRODUCT_VERSION: u64 = 1;
 pub const PRODUCT_SESSION_PATH: &str = "/session";

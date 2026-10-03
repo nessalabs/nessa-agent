@@ -38,8 +38,9 @@ header and SHA-256 state, with no semantic body. Body consumers receive validate
 piece slices and choose their own retained storage.
 
 `RecordStorage` owns a sixteen-entry process cache keyed by the exact stream key
-and incarnation. A cache entry contains a validated offset, last terminal head,
-fixed captured tail and partial validator. An operation checks out that state
+and incarnation. A cache entry contains monotonic forward framing/group progress,
+a fixed captured ceiling, a 64-entry completion-proof ring, and at most one
+separately allocated historical framing/group pass. An operation checks out that state
 before I/O, leaving an occupied entry. Its drop guard returns progress on normal
 completion or unwind. Occupied entries cannot be evicted or replaced by a second
 owner; capacity exhaustion returns Preparing. Cache eviction and process restart
@@ -51,17 +52,53 @@ without advancing its offset/hash; valid earlier frames in that step may retain
 their validated prefix. The cache contains no source worker. Source drop
 and physical operation ownership follow the existing SDK source contract.
 
-After prefix validation reaches a requested page target, classification of the
-single target frame (a separate one-record read) determines whether it is a terminal within that already
-validated immutable prefix. This avoids rescanning the prefix for each page.
-A ready page then uses the existing sync page count/payload limits. That read
-returns at most one runtime record-cap of accounted bytes and may decode one
-additional capped lookahead. Discovery, target classification and page retrieval
-are separate finite reads; the two-MiB ceiling above describes discovery, not
-the sum of all reads in a ready `bounded_page` call. A ready call decodes at
-most five runtime record caps of accounted bytes (two discovery, one target,
-two page).
+Successful GroupProgress Complete validation supplies the exact publication
+proof. Unit seals do not. Retained proof reuses that publication after current
+physical bounds are checked under checkout; an evicted proof requires a historical
+scan through its fixed query. A ready page then uses the existing sync page
+count/payload limits. That read returns at most one runtime record-cap of
+accounted bytes and may decode one additional capped lookahead. Discovery and
+page retrieval are separate finite reads; the two-MiB ceiling above describes
+discovery, not their sum. A ready `bounded_page` call decodes at most four runtime
+record caps of accounted bytes (two discovery and two page).
 Stream replacement and pruning remain typed refusals from the event runtime.
+
+## Shared discovery correction orderings
+
+PR401's correction has three root-verified original-production failures; the
+corrected candidate still requires final checks. The cache owner observes physical incarnation, floor and tail
+under its exclusive checkout. A captured head ceiling and an exact requested
+publication are separate queries; neither supplies physical-tail evidence.
+The same owner retains monotonic forward framing/group progress, one bounded
+completion-proof ring, and at most one historical pass. Older queries do not
+reset forward progress, its captured ceiling, or its known later failure.
+
+| Row | State and ordering | Required result and regression boundary |
+| --- | --- | --- |
+| D1 | One actual source proves head32; a fresh actual source pages completed20, then Unit19 | Page20 succeeds under the unchanged physical stream; Unit19 refuses InvalidRequest; head32 remains available. `fresh_reader_pages_older_publication_after_another_reader_proves_newer_head` uses real lease saves and two public sources. |
+| D2 | A completed20 proof survives newer head32; another source requests several bounded pages20 | Ready20 reuses the shared proof with zero additional returned discovery frames; head32 remains warm. `proven_historical_pages_remain_ready_after_newer_head` checks public Ready pages and preserved newer head. Exact zero-extra-discovery accounting remains OPEN. |
+| D3 | Forward head192 is proven and older40 proof has been evicted; historical40 starts, then Unit11 arrives while it is active | The competing call boundedly advances original40 and returns Preparing. Original40 finishes before11 acquires a separate scan and refuses InvalidRequest; head192 retains its proof. `competing_historical_query_advances_original_scan_and_preserves_forward_head` checks public Preparing/Ready progression, original completion and competing Unit refusal. Exact16/16/8/11 counts and zero forward replay remain historical/private observations, not current public acceptance. |
+| D4 | Head captures X; another source validates or retains Xprime>X before the first obtains the cache owner | Read current physical bounds after checkout, preserve the first captured X and return the last completed publication at or below X. Deterministic public scheduling evidence is still required; the concrete SQLite runtime has no existing public pause between capture and checkout. |
+| D5 | A newer physical suffix is corrupt; an earlier known or evicted publication is requested, then head is retried | Earlier permitted proof/read may succeed without clearing the known forward failure; repeated head refuses Unavailable with zero extra discovery reads. `historical_miss_preserves_known_forward_failure_and_clean_head` corrupts only a newly appended physical row after public saves and includes the clean counterpart. It observes the sticky typed result; exact no-extra-read accounting remains OPEN. |
+| D6 | The source is dropped between bounded historical responses; an idle entry is evicted or cache/process restarts | Checkout/drop ownership returns actual progress. `historical_scan_survives_public_source_drop_and_recreation` drops the first actual source after a Preparing response and a replacement reaches the same historical publication and newer head. Exact16/16/8 returned work is historical/private evidence, not current public acceptance. In-flight historical answer cancellation has no existing public cancellation API and remains unverified. Existing abandoned-answer, eviction, occupied-owner and restarted-process fixtures cover their named boundaries. |
+| D7 | A retained proof is followed by actual Reset, prune, or same-incarnation shrink | Current physical evidence refuses IdentityChanged/Pruned before reusing proof. `shared_completion_proof_refuses_reset_and_same_incarnation_shrink` uses public lease.erase and an actual SQLite tail shrink; a new Reset incarnation validates independently. True policy-prune acceptance through a supported public SDK seam remains OPEN. |
+| D8 | An active historical query finishes while a different unproven query polls; alternatively a prior validated Complete is requested | Finish the original finite scan, retain its exact query/result until a new unknown query acquires, and return Preparing to the different nonproof query. A known Complete can answer immediately while the scan is active; Unit11 does not become such a proof. Stream replacement/pruning errors during the original physical read apply to both queries and propagate. D3 and `historical_scan_survives_public_source_drop_and_recreation` exercise completion/proof paths; deterministic replacement/prune during that read remains unverified. |
+| D9 | Forward validation has passed a fixed target that lies above its last publication — a repeated head on an unchanged partial tail, a second source's captured tail, or a non-completion page target — and the forward scan has not failed | Discovery answers with that last publication: the forward scan validated the whole range and found no completion in it. No historical scan starts and no retained one is replaced. A public page or terminal check for a non-completion target still refuses `InvalidRequest`, because that answer differs from the requested target. The sticky D5 refusal is checked first. `repeated_head_inside_validated_partial_tail_does_no_read_work` repeats head on an unchanged 2 MiB partial Unit tail and asserts zero additional returned discovery frames. |
+
+The completion-proof retention moves from the source's existing 64-entry policy
+to this one cache owner. A historical miss costs O(T) total returned validation
+frames over bounded calls. Repeated eviction/churn can repeat that cost; no global
+zero-replay or O(H) full-session claim follows. Counts exclude SQLite decoding,
+lookahead, disk I/O, allocator overhead and whole-process memory. Exact private proof-ring capacity and inline/dynamic cache allocation measurements
+are withdrawn as current public acceptance evidence. Earlier frozen-source
+metadata logs remain historical; the competing-query regression retains public
+Preparing/Ready/InvalidRequest outcomes. Exact private read counts, cache release and heap accounting remain OPEN.
+No public test accessor or private state-layout assertion substitutes for them.
+The drop guard moves original allocations back into
+the idle cache instead of cloning both scans. A cache slot's inline storage and
+an active Owner's inline storage coexist during checkout; the transferred dynamic
+proof and framing/group allocations have one owner. Key text, cache spare
+capacity and an active owner's key copy are separate retained costs.
 
 | Ordering | Transition | Enforcing test |
 | --- | --- | --- |

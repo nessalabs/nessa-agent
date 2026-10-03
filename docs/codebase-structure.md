@@ -219,7 +219,8 @@ writing the full defaults on first launch is buying.
   opaque key), `application/` (the
   `WorkspaceSource` port and pure use cases over the workspace's state),
   `adapters/` (the Redux slice, commands, effects, typed hooks, selectors and
-  the split panes' source in `store/`; the in-memory source in `in-memory/`;
+  the split panes' source in `store/`; the gateway's source and its mapping
+  of conversation views in `gateway/`; the in-memory source in `in-memory/`;
   focus, Escape for the widget in front (`widget-escape.ts`), the panes'
   room, what the workspace adds to a drag, keys and the clock in `dom/`; the
   host callbacks each place gives a widget's view in
@@ -251,9 +252,27 @@ writing the full defaults on first launch is buying.
   host context read from the page (`adapters/`); the plugin contract and the
   hosts — the card in a message, a widget's body in a pane or the window
   (`ui/`); and the sample plugin composition registers while the sample
-  workspace is in use (`fixture/`). It knows no plugin and imports no other
-  vertical. The workspace draws the chrome around the hosts and carries out
-  their callbacks with its own commands. The desktop's verticals depend one
+  workspace is in use (`fixture/`). The `app` kind's renderer is its own
+  responsibility under `app/` (#349): reading a frame's messages into typed
+  copies, the CSP built from `_meta.ui.csp`, display modes onto places, the
+  host context and one view's lifecycle (`app/model/`); the `ui/*` bridge
+  and its ports — the server, the tool calls, the conversation, links,
+  downloads, the timers (`app/application/`); the frame transport, the page's
+  style variables, where the sandbox proxy is and its frame's sandbox flags
+  (`app/adapters/dom/`); the server port over the gateway's
+  `client.mcpApps` — the typed outcomes, the resource ticket redeemed once,
+  each mount's release — and the calls an app's widgets name, read from a
+  conversation view's MCP tools, with an app plugin registered per server
+  (`app/adapters/gateway/`, #384); the proxy itself and the dev server's listener for
+  it (`app/sandbox/`, served
+  in the desktop app by `src-tauri/src/app_sandbox.rs`); the view the hosts
+  draw (`app/ui/`); and a fixture server's app (`app/fixture/`). How an app's
+  widgets are named — `mcp:` and the server, and the call's session, execution
+  and tool ids —
+  is stated once, in `app/model/app-ref.ts`, which the transcript uses. It
+  knows no plugin and imports no other vertical. The workspace draws the
+  chrome around the hosts and carries out their callbacks with its own
+  commands. The desktop's verticals depend one
   way, widgets ← workspace ← subagents ← experiments, each importing only
   those before it; `scripts/architecture/desktop-verticals.mjs` refuses an
   import against that direction, in every form of import it reads, and the
@@ -333,13 +352,13 @@ own current lifecycle and API contracts.
 | `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, and prompts; DDD roles beneath each feature. |
 | `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. |
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
-| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, retained attachment resources, snapshot evidence mapped through domain history rules, the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
+| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, backend-issued load/save bindings and immutable semantic units in `storage/save.rs`, retained attachment resources, snapshot evidence mapped through domain history rules, the validated committed transcript state/fold and retained allocation accounting, and the injected streaming commit clock port. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, weak permission authority carriers, attributed decisions, and observation/review projections. |
 | `infrastructure/acp/`, `claude_acp/`, `codex_acp/`, `opencode_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. Verification shared by more than one provider moves up into `acp/`, as ordered session configuration did once Codex and Opencode both needed it. |
-| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, and the Tokio streaming commit clock adapter. |
+| `infrastructure/session_storage/` | Memory snapshots, SQLite semantic record persistence, shared unpublished-unit/completion lineage codec in `save_group.rs`, explicit evidence serialization, physical source identity/construction, shared framing validation and bounded terminal-discovery progress for sync-engine, chunked semantic checkpoints, shared read/write admission and shutdown ownership, and the Tokio streaming commit clock adapter. |
 | `infrastructure/json_rpc/`, `process.rs`, `model_metadata_json.rs` | Framing, process supervision, and model catalog parsing. |
 | `infrastructure/clock.rs` | The clock every ACP protocol deadline is measured on: `RuntimeClock` from composition, and `tests/infrastructure/manual_clock.rs` in tests, which moves only when the test moves it. |
-| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
+| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. Public memory binding/retry/reset observations live in `tests/infrastructure/session_storage/memory.rs`; `record.rs` owns public writer/watch/interruption/retry cases, `record_source.rs` owns publication/restored-extension cases, `discovery.rs` owns bounded query ordering/physical faults, and `save_group.rs` owns emitted checkpoint contradictions. Their boundary fixture module constructs exported immutable data and obtains actual producer receipts. All are rooted from the external public storage integration module; the inherited internal discovery fixture remains separate. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
 
 Composition chooses models, provider configuration, storage, and the required
 permission audit sink. Agent owns admitted work; UI adapters and gateway code call
@@ -348,6 +367,8 @@ and processes out of the domain. Do not create empty counterpart modules or spli
 a live session's tool/permission consistency boundary into independent aggregates.
 
 ## Identity and access library
+
+The auth pairing producer keeps invitation/consent values in `domain/pairing/`, orchestration and receiver/private-state ports in `application/pairing/`, and OPAQUE/TLS/private storage in `adapters/pairing/`; the local registry pairing module owns persistence and device proof verification. Its owning tests remain beside the adapters and domain fixtures under `tests/domain/pairing/`. Design: [device pairing](design/auth/device-pairing.md).
 
 `crates/nessa-auth` is a workspace library with pure domain models and
 application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).
@@ -541,6 +562,14 @@ The same store implements `ConversationCatalogue` for owner-scoped current
 metadata reads. Its per-owner head and per-conversation creation/change revisions
 are committed with the visible write; a retained tombstone is a catalogue deletion
 marker. The finite pass order is in [conversation catalogue](design/conversation-catalogue.md).
+`application/catalogue_watch.rs` owns payloadless owner-scoped watch interest;
+`infrastructure/catalogue_changes.rs` bounds and coalesces actual registrations.
+`LocalConversationStore` publishes after visible metadata transaction commits,
+inside the retained blocking owner. SDK `sessions/committed_changes.rs` and
+`session_storage/record_changes.rs` separately own record interest and publish
+outer save completions and reset receipts. Neither producer starts
+a read or changes receiver progress. [Committed change watches](design/committed-change-watches.md)
+owns their registration/recheck and accounting contract; wire activation remains #298.
 `infrastructure/catalogue_source.rs` adapts that port to sync-engine's
 `CatalogueSource` through a bounded blocking worker bound to one authenticated
 caller and exact scope. The worker owns a Tokio runtime so metadata reads can
@@ -615,10 +644,27 @@ cancellation, `stand_in` for what a harness sees, `servers` for the open
 sessions and their tool lists, `process` for a server's process group, `wire`
 for MCP's JSON), tested in
 `tests/infrastructure/mcp/` against in-process and process fixtures. The
-gateway's `src/mcp_servers/` owns the stand-in rules (`domain`), the relay
-socket and the `mcp-relay` command, and the view's tool UI lookup
-(`infrastructure`); `composition/mcp_servers.rs` replaces each configured
-server with its stand-in before any agent is built. The desktop's
+gateway's `src/mcp_servers/` owns the stand-in rules, the session token and
+the resource ticket (`domain`), the relay socket, the `mcp-relay` command, the
+grants that tie each stand-in to its conversation, the store an MCP App's
+resources wait in behind their tickets, and the view's tool UI lookup
+(`infrastructure`), and `GET /mcp-resources`, where a ticket is redeemed
+(`entrypoint`); `composition/mcp_servers.rs` replaces each configured server
+with its stand-in, gives the agents the grants, and builds the ticket store,
+before any agent is built. The policy an MCP App's calls are held to is
+`mcp_servers/domain/app_call.rs`, its session port's adapter
+`mcp_servers/infrastructure/apps.rs`; the calls' flow is the conversation
+service's (`conversation/application/service/app_calls.rs`, with the reviews
+in `app_reviews.rs` and the ports in `mcp_apps.rs`), their audit
+`conversation/infrastructure/mcp_app_audit.rs`, and their wire methods
+`product/mcp_apps.rs` ([design](design/mcp-app-calls.md)). `PUT /attachments` and `GET /mcp-resources` share
+one origin rule, CORS and preflight (`server/entrypoint/origin.rs`); in
+`@nessa/client` they share `application/gateway-http.ts` (the origin, the
+deadline clock, and how one request ends), and an app's calls are
+`presentation/mcp-apps-api.ts` over the `McpResourceTransport` port in
+`application/mcp-resource-fetch.ts` and its `fetch` adapter in `transport/`. The SDK's ACP binding holds a provider open's grant
+(`acp/sessions/stand_ins.rs`) and puts its environment in every MCP server
+entry. The desktop's
 `workspace/adapters/gateway/tool-widget.ts` reads a gateway tool into the
 transcript's `widget` part.
 

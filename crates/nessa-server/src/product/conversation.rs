@@ -21,9 +21,9 @@ use crate::{
     conversation::{
         application::{
             ConversationCaller, ConversationError, ConversationList,
-            ConversationView as ApplicationConversationView, DeletionFailures, QuestionChoiceInput,
-            RequestedAgent, RequestedConversation, SubmissionMode, SubmittedFile, SubmittedImage,
-            SubmittedMessage,
+            ConversationView as ApplicationConversationView, DeletionFailures, McpAppCode,
+            McpAppError, QuestionChoiceInput, RequestedAgent, RequestedConversation,
+            SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
         },
         domain::{ConversationApprovalMode, ConversationId},
     },
@@ -64,15 +64,7 @@ pub(super) async fn dispatch(
             }
         };
     }
-    let context = session.context();
-    // Credential identity is a verified surface association. The caller's optional
-    // client metadata is deliberately not used to attribute SDK commands.
-    let caller = |request_id: String| ConversationCaller {
-        organization_id: context.organization_id().clone(),
-        principal_id: context.principal_id().clone(),
-        surface_id: context.credential_id().as_str().to_owned(),
-        action_id: request_id,
-    };
+    let caller = |request_id: String| caller(session, request_id);
     let result: Result<OutgoingMessage, ConversationError> = async {
         match frame.method.as_str() {
             "conversation.create" => {
@@ -337,6 +329,19 @@ pub(super) async fn dispatch(
     }
 }
 
+/// Who sends a conversation command: the credential's verified identity.
+/// The caller's optional client metadata is deliberately not used to
+/// attribute SDK commands.
+pub(super) fn caller(session: &AuthenticatedSession, request_id: String) -> ConversationCaller {
+    let context = session.context();
+    ConversationCaller {
+        organization_id: context.organization_id().clone(),
+        principal_id: context.principal_id().clone(),
+        surface_id: context.credential_id().as_str().to_owned(),
+        action_id: request_id,
+    }
+}
+
 fn permission_answer_failure(
     request_id: &str,
     error: AgentError,
@@ -354,7 +359,7 @@ fn permission_answer_failure(
         serde_json::to_value(details).expect("generated error details serialize"),
     )
 }
-fn error_code(error: &ConversationError) -> ConversationErrorCode {
+pub(super) fn error_code(error: &ConversationError) -> ConversationErrorCode {
     match error {
         ConversationError::InvalidInput | ConversationError::CatalogueInvalidRequest => {
             ConversationErrorCode::InvalidRequest
@@ -464,6 +469,32 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::PermissionAnswer { error, .. } => {
             error_code(&ConversationError::Agent(error.clone()))
         }
+        ConversationError::McpApp(error) => mcp_app_code(error),
+    }
+}
+
+/// The protocol code of an MCP App's refusal: the code audit names it with
+/// (`McpAppCode`), as the wire's own enum; `tests/conversation/agreement.rs`
+/// holds the two sets together.
+fn mcp_app_code(error: &McpAppError) -> ConversationErrorCode {
+    wire_code(error.code())
+}
+
+pub(super) fn wire_code(code: McpAppCode) -> ConversationErrorCode {
+    match code {
+        McpAppCode::AppUnknown => ConversationErrorCode::McpAppUnknown,
+        McpAppCode::ServerMismatch => ConversationErrorCode::McpServerMismatch,
+        McpAppCode::ToolNotForApp => ConversationErrorCode::McpToolNotForApp,
+        McpAppCode::RequestTooLarge => ConversationErrorCode::McpRequestTooLarge,
+        McpAppCode::SessionUnavailable => ConversationErrorCode::McpSessionUnavailable,
+        McpAppCode::ApprovalDenied => ConversationErrorCode::McpApprovalDenied,
+        McpAppCode::ApprovalExpired => ConversationErrorCode::McpApprovalExpired,
+        McpAppCode::Cancelled => ConversationErrorCode::McpCancelled,
+        McpAppCode::ResultTooLarge => ConversationErrorCode::McpResultTooLarge,
+        McpAppCode::TimedOut => ConversationErrorCode::McpTimedOut,
+        McpAppCode::RemoteError => ConversationErrorCode::McpRemoteError,
+        McpAppCode::InvalidRequest => ConversationErrorCode::InvalidRequest,
+        McpAppCode::TemporarilyUnavailable => ConversationErrorCode::TemporarilyUnavailable,
     }
 }
 
@@ -511,7 +542,7 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
     }
 }
 
-fn conversation_id(value: &str) -> Result<ConversationId, ConversationError> {
+pub(super) fn conversation_id(value: &str) -> Result<ConversationId, ConversationError> {
     ConversationId::new(value).map_err(|_| ConversationError::InvalidInput)
 }
 

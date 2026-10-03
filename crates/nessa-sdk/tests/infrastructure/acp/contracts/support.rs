@@ -225,6 +225,7 @@ pub(super) fn test_acp_configuration(
         workspace: root.path().to_path_buf(),
         tools_enabled: true,
         mcp_servers: Vec::new(),
+        stand_ins: crate::infrastructure::acp::sessions::StandInSessions::none(),
         permissions: PermissionOfferPolicy::once_only(),
         launch_timeout: Duration::from_secs(10),
         startup_timeout: Duration::from_secs(10),

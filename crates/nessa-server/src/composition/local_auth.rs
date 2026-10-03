@@ -22,12 +22,13 @@ use crate::{
     agents::{domain::AgentId, infrastructure::AgentLaunchFiles},
     attachments::infrastructure::ModelImageNormalizer,
     conversation::application::{
-        ConversationAgents, ConversationDependencies, ConversationLimits, McpToolUis, NoMcpToolUis,
+        ConversationAgents, ConversationDependencies, ConversationLimits, McpAppPorts, McpToolUis,
+        NoMcpToolUis,
     },
     conversation::infrastructure::{
         DurableConversationCreationAudit, DurableConversationDeletionAudit,
-        DurableConversationFileLinkAudit, DurableConversationModeAudit, LocalConversationStore,
-        LocalReceiverAuthority,
+        DurableConversationFileLinkAudit, DurableConversationModeAudit, DurableMcpAppAudit,
+        LocalConversationStore, LocalReceiverAuthority,
     },
 };
 use crate::{
@@ -38,10 +39,13 @@ use crate::{
     app::ports::Clock as ServerClock,
     attachments::application::AttachmentService,
     browser_session::adapters::PersistentSessions,
-    conversation::application::{ConversationRepository, ConversationService, ReceiverAuthority},
+    conversation::application::{
+        ConversationRepository, ConversationService, McpAppAudit, ReceiverAuthority,
+    },
     conversation::infrastructure::{NessaCatalogueReadSource, NessaRecordReadSource},
     core::RunError,
     env::Environment,
+    mcp_servers::infrastructure::ResourceTicketStore,
     product::{ProductDependencies, ProductRouteState},
 };
 use nessa_agent_credentials::CredentialNamespace;
@@ -217,6 +221,7 @@ pub(super) async fn product_state(
                     built.metadata,
                     built.record_reader,
                     built.catalogue_reader,
+                    built.resource_route,
                 )),
                 built.agent_probe,
                 built.warm_ups,
@@ -269,8 +274,16 @@ pub(super) async fn product_state(
     product.browser_http_allowed = config.browser_http_allowed();
     let mut record_reader = None;
     let mut catalogue_reader = None;
-    if let Some((service, attachments, agents_catalog, receivers, metadata, reader, catalogue)) =
-        conversations
+    if let Some((
+        service,
+        attachments,
+        agents_catalog,
+        receivers,
+        metadata,
+        reader,
+        catalogue,
+        resource_route,
+    )) = conversations
     {
         record_reader = Some(reader.clone());
         catalogue_reader = Some(catalogue.clone());
@@ -281,6 +294,10 @@ pub(super) async fn product_state(
             .with_catalogue_source(catalogue)
             .with_attachments(attachments)
             .with_agents_catalog(agents_catalog);
+        // The route redeems on the store the conversation service issues on.
+        if let Some((tickets, audit)) = resource_route {
+            product = product.with_resource_tickets(tickets, audit);
+        }
     }
     Ok(LocalProduct {
         routes: product,
@@ -357,6 +374,10 @@ struct BuiltConversations {
     warm_ups: Vec<StartupWarmUp>,
     /// The MCP servers this run holds, when any are configured.
     mcp: McpParts,
+    /// What `GET /mcp-resources` redeems on, and records each redemption
+    /// in: the store the conversation service issues on, and the audit it
+    /// records an app's calls in. `None` without MCP servers.
+    resource_route: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
 }
 
 #[cfg(not(unix))]
@@ -396,7 +417,7 @@ async fn conversations(
         .parent()
         .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?;
     let mut agents = agents.clone();
-    let mcp = match std::env::current_exe() {
+    let mut mcp = match std::env::current_exe() {
         Ok(gateway) => {
             super::mcp_servers::compose(
                 &mut agents,
@@ -578,6 +599,12 @@ async fn conversations(
         DurableConversationModeAudit::new(root.join("audit").join("approval-mode"), clock.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
+    // Every step of an MCP App's call (#348), for the conversation service's
+    // app calls.
+    let mcp_app_audit: Arc<dyn McpAppAudit> = Arc::new(
+        DurableMcpAppAudit::new(root.join("audit").join("mcp-apps"), clock.clone())
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
     let file_link_audit = Arc::new(
         DurableConversationFileLinkAudit::new(root.join("audit").join("file-links"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -633,31 +660,69 @@ async fn conversations(
         )),
         None => Arc::new(NoMcpToolUis),
     };
-    let service = ConversationService::with_tool_uis(
-        ConversationDependencies {
-            agents: ConversationAgents::from_source(configured, selected, resolver.clone())
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-            storage,
-            metadata: metadata.clone(),
-            creation_audit,
-            mode_audit,
-            file_link_audit,
-            deletion_audit,
-            attachments: Some(attachments.conversations),
-            summaries: metadata.clone(),
-            listing: metadata.clone(),
-            provider_sessions: erasers,
-            deletion_budgets: super::agent_budgets::deletion(),
-            message_commit_clock: Arc::new(
-                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+    let dependencies = ConversationDependencies {
+        agents: ConversationAgents::from_source(configured, selected, resolver.clone())
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+        storage,
+        metadata: metadata.clone(),
+        creation_audit,
+        mode_audit,
+        file_link_audit,
+        deletion_audit,
+        attachments: Some(attachments.conversations),
+        summaries: metadata.clone(),
+        listing: metadata.clone(),
+        provider_sessions: erasers,
+        deletion_budgets: super::agent_budgets::deletion(),
+        message_commit_clock: Arc::new(
+            nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+        ),
+        clock,
+    };
+    let workspace = Some(agents.workspace.to_string_lossy().into_owned());
+    // With MCP servers, an app's calls go through the conversation's own
+    // sessions of them, every step on record in `mcp_app_audit`: the issue
+    // by the service, the redemption by the route, and every other end of a
+    // ticket by `audit_ticket_ends`, which takes the store's events.
+    let (service, resource_route) = match mcp.as_mut() {
+        Some(mcp) => {
+            if let Some(events) = mcp.ticket_events.take() {
+                let (stop, stopping) = tokio::sync::oneshot::channel();
+                mcp.ticket_recorder = Some(super::mcp_servers::TicketRecorder {
+                    stop,
+                    task: tokio::spawn(crate::mcp_servers::infrastructure::audit_ticket_ends(
+                        events,
+                        mcp_app_audit.clone(),
+                        stopping,
+                    )),
+                });
+            }
+            let service = ConversationService::with_mcp_apps(
+                dependencies,
+                ConversationLimits::default(),
+                workspace,
+                tool_uis,
+                McpAppPorts {
+                    apps: Arc::new(crate::mcp_servers::infrastructure::SessionApps(
+                        mcp.servers.clone(),
+                    )),
+                    audit: mcp_app_audit.clone(),
+                    tickets: mcp.resource_tickets.clone(),
+                },
+            );
+            (service, Some((mcp.resource_tickets.clone(), mcp_app_audit)))
+        }
+        None => (
+            ConversationService::with_tool_uis(
+                dependencies,
+                ConversationLimits::default(),
+                workspace,
+                tool_uis,
             ),
-            clock,
-        },
-        ConversationLimits::default(),
-        Some(agents.workspace.to_string_lossy().into_owned()),
-        tool_uis,
-    )
-    .map_err(|error| RunError::Agent(error.to_string()))?;
+            None,
+        ),
+    };
+    let service = service.map_err(|error| RunError::Agent(error.to_string()))?;
     if warm_current_opencode {
         warm_ups.push(StartupWarmUp::Current(resolver.clone()));
     }
@@ -672,6 +737,7 @@ async fn conversations(
         agent_probe: resolver,
         warm_ups,
         mcp,
+        resource_route,
     })
 }
 

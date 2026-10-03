@@ -41,7 +41,7 @@ export type ConversationListOptions = {
 
 /** Optional caller-managed action identity. The client generates it when omitted. */
 export type ConversationActionOptions = {
-  /** Stable action attribution. Only creation and message admission support same-ID retries; controls require a fresh read and a new deliberate action. */
+  /** Stable action attribution. Creation, message admission and the idempotent `releaseApp` control support same-ID retries; other controls require a fresh read and a new deliberate action. */
   requestId?: string
 }
 /** Optional identities for optimistic display or explicit serializable retry state. */
@@ -148,6 +148,8 @@ export type ConversationApi = {
    * `choices` of null declines: the agent is told it was asked and answered
    * with nothing, which is an answer rather than silence. A question left out
    * of `choices` is skipped, which every ask permits.
+   * A failed acknowledgement is a control error without replay; read the
+   * current question before making a new deliberate answer.
    */
   answerQuestion: (
     conversationId: string,
@@ -413,6 +415,7 @@ export function createConversationApi(
           choices: choices === null ? null : choices.map((choice) => ({ ...choice })),
         },
         (value) => conversationMutation(value, requestId),
+        false,
       )
     },
     answer: (id, executionId, permissionId, optionId, options) =>

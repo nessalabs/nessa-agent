@@ -17,12 +17,15 @@
 //! supervisor, including when an opening caller disappears. `deletion` opens a
 //! connection of its own, never resuming the session it asks the agent to
 //! delete. `thought_level` reads the reasoning effort option an agent
-//! advertises, whatever it calls it.
+//! advertises, whatever it calls it. `stand_ins` holds the host's grant for
+//! one open, whose environment every MCP server process of that open gets.
 pub(crate) mod binding;
 pub(crate) mod cleanup;
 mod config;
 pub(crate) mod configuration;
 pub(crate) mod deletion;
 pub(crate) mod identity;
+mod stand_ins;
 pub(crate) mod thought_level;
 pub use config::{AcpConfig, StdioMcpServer};
+pub use stand_ins::{StandInGrant, StandInGrants, StandInSessions};

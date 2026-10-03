@@ -18,12 +18,15 @@ use nessa_sdk::application::agent_execution::{
     providers::{ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest},
 };
 use nessa_sdk::domain::agent_execution::executions::QueueMutation;
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
+use uuid::Uuid;
 
 #[derive(Default)]
 struct SavedState {
     leased: bool,
+    save: SnapshotSaveState,
     pause_save: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
     pause_queue: Option<(QueueMutation, oneshot::Sender<()>, oneshot::Receiver<()>)>,
     snapshot: Option<SessionSnapshot>,
@@ -36,32 +39,146 @@ struct SavedState {
     fail_settlement: Option<String>,
     panic_provider_settlement: Option<bool>,
 }
+// Snapshot-only fixture capability. Raw restored snapshots are intentional
+// test inputs; this owner makes no physical record or disk-durability claim.
+struct SnapshotSaveState {
+    incarnation: [u8; 16],
+    revision: u64,
+    receipt: Option<SessionSaveReceipt>,
+    original: Option<SessionSnapshot>,
+    units: Vec<SessionSaveUnit>,
+}
+impl Default for SnapshotSaveState {
+    fn default() -> Self {
+        Self {
+            incarnation: *Uuid::new_v4().as_bytes(),
+            revision: 0,
+            receipt: None,
+            original: None,
+            units: Vec::new(),
+        }
+    }
+}
+impl SnapshotSaveState {
+    fn binding(&self) -> SessionSaveGeneration {
+        SessionSaveGeneration::new(
+            SessionSaveBackend::Snapshot {
+                incarnation: self.incarnation,
+            },
+            self.revision,
+            self.revision,
+        )
+    }
+}
+impl SavedState {
+    fn publish(
+        &mut self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+        digest: [u8; 32],
+    ) -> Result<SessionSaveReceipt, StorageError> {
+        let retry = self
+            .save
+            .receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.binding() == &binding);
+        if retry && self.save.units == units {
+            return Ok(self.save.receipt.clone().unwrap());
+        }
+        let revision =
+            self.save.revision.checked_add(1).ok_or_else(|| {
+                StorageError::Corrupt("fixture snapshot revision exhausted".into())
+            })?;
+        let next = SessionSaveGeneration::new(
+            SessionSaveBackend::Snapshot {
+                incarnation: self.save.incarnation,
+            },
+            revision,
+            revision,
+        );
+        let count = u64::try_from(units.len())
+            .map_err(|_| StorageError::Corrupt("fixture unit count exhausted".into()))?;
+        let receipt = SessionSaveReceipt::new(binding, next, count, digest)?;
+        if !retry {
+            self.save.original = self.snapshot.clone();
+        }
+        self.snapshot = Some(snapshot);
+        self.save.revision = revision;
+        self.save.units = units;
+        self.save.receipt = Some(receipt.clone());
+        Ok(receipt)
+    }
+}
 #[derive(Clone, Default)]
 pub(super) struct MemoryStorage(Arc<Mutex<SavedState>>);
-struct MemoryStore(Arc<Mutex<SavedState>>);
+struct MemoryStore(Arc<Mutex<SavedState>>, SessionId);
 impl Drop for MemoryStore {
     fn drop(&mut self) {
         self.0.lock().unwrap().leased = false;
     }
 }
 impl SessionStorage for MemoryStorage {
-    fn open(&self, _: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
         Box::pin(async move {
             let mut state = self.0.lock().unwrap();
             if state.leased {
                 return Err(StorageError::Busy);
             }
             state.leased = true;
-            Ok(Box::new(MemoryStore(self.0.clone())) as Box<dyn SessionStorageLease>)
+            Ok(Box::new(MemoryStore(self.0.clone(), id)) as Box<dyn SessionStorageLease>)
         })
     }
 }
 impl SessionStorageLease for MemoryStore {
-    fn load(&self) -> StorageFuture<'_, Option<SessionSnapshot>> {
-        Box::pin(async { Ok(self.0.lock().unwrap().snapshot.clone()) })
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
+        Box::pin(async {
+            let state = self.0.lock().unwrap();
+            Ok(SessionLoad::new(
+                state.snapshot.clone(),
+                state.save.binding(),
+                SessionLoadState::Published,
+            ))
+        })
     }
-    fn save(&self, snapshot: SessionSnapshot) -> StorageFuture<'_, ()> {
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
+            {
+                let state = self.0.lock().unwrap();
+                let retry = state
+                    .save
+                    .receipt
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.binding() == &binding);
+                if snapshot.id != self.1 || (!retry && binding != state.save.binding()) {
+                    return Err(StorageError::IdentityMismatch);
+                }
+                let base = if retry {
+                    state.save.original.as_ref()
+                } else {
+                    state.snapshot.as_ref()
+                };
+                SessionSaveUnit::validate_plan(base, &units, &snapshot)?;
+                if retry && !units.starts_with(&state.save.units) {
+                    return Err(StorageError::Corrupt(
+                        "fixture snapshot retry prefix changed".into(),
+                    ));
+                }
+            }
+            // This private fixture fingerprint is not a wire encoding. Exact
+            // typed equality above owns retry refusal, not digest-only matching.
+            let mut hash = Sha256::new();
+            for unit in &units {
+                let value = format!("{unit:?}");
+                hash.update((value.len() as u64).to_be_bytes());
+                hash.update(value.as_bytes());
+            }
+            let digest = hash.finalize().into();
             let pause = self.0.lock().unwrap().pause_save.take();
             if let Some((started, release)) = pause {
                 let _ = started.send(());
@@ -149,23 +266,115 @@ impl SessionStorageLease for MemoryStore {
             if provider_settlement_checkpoint {
                 if let Some(commit_first) = state.panic_provider_settlement.take() {
                     if commit_first {
-                        state.snapshot = Some(snapshot);
+                        state.publish(binding, snapshot, units, digest)?;
                     }
                     drop(state);
                     panic!("provider settlement save panic, committed={commit_first}");
                 }
             }
-            state.snapshot = Some(snapshot);
-            Ok(())
+            state.publish(binding, snapshot, units, digest)
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         Box::pin(async {
-            self.0.lock().unwrap().snapshot = None;
+            let mut state = self.0.lock().unwrap();
+            state.snapshot = None;
+            state.save = SnapshotSaveState::default();
             Ok(())
         })
     }
 }
+#[tokio::test]
+async fn snapshot_fixture_keeps_exact_receipt_prefix_and_reset_capability() {
+    let storage = MemoryStorage::default();
+    let id = SessionId::new("snapshot-fixture").unwrap();
+    let lease = storage.open(id.clone()).await.unwrap();
+    let original = lease.load().await.unwrap().binding().clone();
+    let provider = TestProvider::new().identity();
+    let opened = SessionChange::Opened {
+        id: id.clone(),
+        provider: provider.clone(),
+        context: ProviderContext::Absent,
+    };
+    let snapshot = SessionSnapshot {
+        id,
+        provider,
+        provider_context: ProviderContext::Absent,
+        invocations: Vec::new(),
+        queue_history: Vec::new(),
+    };
+    let first = SessionSaveUnit::new(vec![opened.clone()]).unwrap();
+    let receipt = lease
+        .save_changes(original.clone(), snapshot.clone(), vec![first.clone()])
+        .await
+        .unwrap();
+    assert_eq!(
+        lease
+            .save_changes(original.clone(), snapshot.clone(), vec![first.clone()])
+            .await
+            .unwrap(),
+        receipt
+    );
+    let context = ProviderContext::Recorded(ExecutionSessionId::new("extended-context").unwrap());
+    let changed_context = SessionChange::ProviderContext {
+        before: ProviderContext::Absent,
+        after: context.clone(),
+    };
+    let extended_snapshot = SessionSnapshot {
+        provider_context: context,
+        ..snapshot.clone()
+    };
+    let repartitioned = SessionSaveUnit::new(vec![opened, changed_context.clone()]).unwrap();
+    assert!(matches!(
+        lease
+            .save_changes(
+                original.clone(),
+                extended_snapshot.clone(),
+                vec![repartitioned]
+            )
+            .await,
+        Err(StorageError::Corrupt(_))
+    ));
+    assert_eq!(lease.load().await.unwrap().binding(), receipt.next());
+    let extension = lease
+        .save_changes(
+            original.clone(),
+            extended_snapshot,
+            vec![
+                first.clone(),
+                SessionSaveUnit::new(vec![changed_context]).unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(extension.units(), 2);
+    assert_ne!(extension.next(), receipt.next());
+    assert_eq!(
+        lease
+            .save_changes(
+                receipt.next().clone(),
+                snapshot.clone(),
+                vec![first.clone()]
+            )
+            .await,
+        Err(StorageError::IdentityMismatch)
+    );
+    lease.erase().await.unwrap();
+    let reset = lease.load().await.unwrap();
+    assert!(reset.snapshot().is_none());
+    assert_ne!(reset.binding().backend(), original.backend());
+    assert_eq!(
+        lease
+            .save_changes(original, snapshot.clone(), vec![first.clone()])
+            .await,
+        Err(StorageError::IdentityMismatch)
+    );
+    lease
+        .save_changes(reset.binding().clone(), snapshot, vec![first])
+        .await
+        .unwrap();
+}
+
 impl MemoryStorage {
     pub(super) fn pause_next_save(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
         let (started, observing) = oneshot::channel();
@@ -200,6 +409,8 @@ impl MemoryStorage {
 #[derive(Default)]
 struct ProviderCalls {
     opens: Mutex<Vec<Option<ExecutionSessionId>>>,
+    /// The SDK session each open named.
+    sessions: Mutex<Vec<Option<nessa_sdk::domain::agent_execution::sessions::SessionId>>>,
     executions: AtomicUsize,
     closes: Mutex<Vec<SessionCloseRequest>>,
     order: Mutex<Vec<String>>,
@@ -244,9 +455,10 @@ impl AgentProvider for TestProvider {
         capabilities_ref()
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
-        let (restore, _control) = request.into_parts();
+        let (session, restore, _control) = request.into_parts();
         Box::pin(async move {
             self.calls.opens.lock().unwrap().push(restore.clone());
+            self.calls.sessions.lock().unwrap().push(session);
             let id =
                 restore.unwrap_or_else(|| ExecutionSessionId::new("provider-context").unwrap());
             let (sender, receiver) = mpsc::unbounded_channel();
@@ -425,6 +637,11 @@ async fn invocation_drains_and_persists_without_any_subscriber() {
         ));
     }
     assert_eq!(provider.calls.opens.lock().unwrap().as_slice(), &[None]);
+    // The open names the SDK session it is for: what a host keys its grant to.
+    assert_eq!(
+        provider.calls.sessions.lock().unwrap().as_slice(),
+        &[Some(agent.session_manager().id().clone())]
+    );
     assert_eq!(
         agent
             .session_manager()
