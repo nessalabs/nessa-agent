@@ -9,7 +9,8 @@
  *   approval-card-app an app's review (#436): the card names the app and the
  *                   tool it asked for, not the agent, and at the same widths,
  *                   with that tool's name short and very long, the head stays
- *                   inside the card
+ *                   inside the card; its Agents overview row's accessible
+ *                   name names the app too
  *   composer-chips  four panes while the window narrows: no two composer
  *                   controls overlap
  *   column-title    each column's title inline in the titlebar row where it fits,
@@ -269,7 +270,19 @@ const checks = {
           page.locator(css.approvalCard).first(),
         )
       }
-    return { measured: said, widths: seen, failures }
+    // The Agents overview's row names the app too.
+    await page.keyboard.press(keys.overview)
+    await need(page, css.overview, "the Agents overview")
+    const rowName = await page
+      .locator(`[data-overview-item="${names.appApprovalSessionId}"]`)
+      .first()
+      .getAttribute("aria-label", { timeout: 5000 })
+      .catch(() => null)
+    if (rowName !== names.appApprovalRow)
+      failures.push(
+        `the overview row is named "${rowName}", not "${names.appApprovalRow}"`,
+      )
+    return { measured: { ...said, rowName }, widths: seen, failures }
   },
 
   "composer-chips": async ({ page, engine, layout, options }) => {

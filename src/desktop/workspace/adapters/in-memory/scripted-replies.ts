@@ -80,6 +80,14 @@ export function approvedReply(
   }
 }
 
+/** A session's preview once the person has answered an app's review (#436). */
+export function appAnswered(
+  origin: { readonly server: string; readonly tool: string },
+  answer: "allowed" | "denied",
+): string {
+  return `You ${answer} the ${origin.server} app's ${origin.tool}.`
+}
+
 export function deniedReply(command: string): {
   parts: readonly Part[]
   preview: string

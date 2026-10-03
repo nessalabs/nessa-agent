@@ -303,6 +303,11 @@ export const names = {
   appApprovalSession: "Clean up the fixture table",
   /** The channel it is in. */
   appApprovalChannel: "gateway",
+  /** Its id (data-overview-item). */
+  appApprovalSessionId: "app-review",
+  /** Its overview row's accessible name: the title, then the app asking, not the agent. */
+  appApprovalRow:
+    "Clean up the fixture table. The nessa-fixture app wants to run app_delete_row {}.",
   /** What its card's head says: the fixture server's app and the tool it named. */
   appApprovalAsks: "The nessa-fixture app wants to run app_delete_row",
   /** A sample session (in-memory source) waiting on an approval after a long turn, by its id (data-overview-item). */

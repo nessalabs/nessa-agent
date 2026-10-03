@@ -7,11 +7,11 @@ import { answering } from "../../application/workspace-state"
 import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
 import type { Approval } from "../../model/transcript"
 import { failureCopy } from "../failure-copy"
-import { ApprovalActions, ApprovalCommand, approvalAsks } from "./approval-request"
+import { ApprovalActions, ApprovalCommand, approvalHead } from "./approval-request"
 
 /**
  * The one warm thing on the page: a command the agent — or one of its apps,
- * which the head then names (`approvalAsks`) — waits to run, and its
+ * which the head then names (`approvalHead`) — waits to run, and its
  * answers, arranged for the card's width (`approval-request.tsx`). While an
  * answer is on its way the buttons rest; a failed answer says why.
  */
@@ -38,7 +38,7 @@ export const ApprovalCard = memo(function ApprovalCard({
     >
       <div className="workspace-approval-head">
         <DesktopIcon name="needsYou" />
-        <span>{approvalAsks(approval.origin, agentName(agentOf(model)))}</span>
+        <span>{approvalHead(approval.origin, agentName(agentOf(model)))}</span>
       </div>
       <ApprovalCommand command={approval.command} />
       <p className="workspace-approval-reason">{approval.reason}</p>

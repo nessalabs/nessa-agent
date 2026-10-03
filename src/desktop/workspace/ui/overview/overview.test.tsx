@@ -96,7 +96,11 @@ async function mount({
         ...held,
         approval: {
           id: `${sessionId}-ask`,
-          command,
+          // An app's review runs the tool it named, as the gateway says it.
+          command:
+            sessionId === "second" && secondAsker.kind === "app"
+              ? `${secondAsker.tool} {}`
+              : command,
           reason: `Why ${sessionId}.`,
           origin: sessionId === "second" ? secondAsker : { kind: "agent" },
         },
@@ -266,7 +270,7 @@ describe("the agents overview", () => {
     )?.[1]
     expect(agent).toBeTruthy()
     expect(label("second")).toMatch(
-      /\. The mcptest app wants to run xcrun notarytool submit build\.dmg\.$/,
+      /\. The mcptest app wants to run app_delete_row \{\}\.$/,
     )
     expect(label("second")).not.toContain(`${agent} wants`)
   })

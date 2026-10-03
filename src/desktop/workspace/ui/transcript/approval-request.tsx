@@ -33,7 +33,8 @@ import "./approval-card.css"
  * Who asks, as the person is told: the agent by its name, or an app by its
  * server, so that a review an app opened is not put in the agent's mouth
  * (`transcript.test.tsx` O1/O2, `overview.test.tsx` O3, on #436). The one
- * place this is worded: the pane's card and the overview's row both read it.
+ * place the asker is worded: the card's head (`approvalHead`) and the
+ * overview's row both read it; each says what is asked in its own way.
  */
 export function approvalAsker(origin: ApprovalOrigin, agent: string): string {
   switch (origin.kind) {
@@ -44,8 +45,8 @@ export function approvalAsker(origin: ApprovalOrigin, agent: string): string {
   }
 }
 
-/** What the asker wants: to run a command, or, for an app, the tool it named. */
-export function approvalAsks(origin: ApprovalOrigin, agent: string): string {
+/** The card's head: who asks, and to run what — a command, or the tool an app named. */
+export function approvalHead(origin: ApprovalOrigin, agent: string): string {
   const asker = approvalAsker(origin, agent)
   switch (origin.kind) {
     case "agent":

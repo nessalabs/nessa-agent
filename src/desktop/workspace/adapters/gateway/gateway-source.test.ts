@@ -1993,4 +1993,45 @@ describe("an app's review is read after its turn ended (#436)", () => {
     expect(readsOf("a")).toBe(1)
     hanging.resolve("done")
   })
+
+  it.each(["conversation_state_unreadable", "conversation_deleted"])(
+    "P9: a conversation the gateway will not show again (%s) is not read for an app's call, before or after it",
+    async (code) => {
+      const { gateway, source, readsOf, advance } = await idle()
+      const first = deferred<string>()
+      const one = source.appCall("a", () => first.promise)
+      gateway.once("read", async () => {
+        throw rpcCode(code)
+      })
+      await advance(timing.pollMs)
+      const refused = readsOf("a")
+      expect(refused).toBe(2)
+      await advance(timing.pollMs * 3)
+      expect(readsOf("a")).toBe(refused)
+      first.resolve("one")
+      await one
+      // A later call does not bring it back into the rounds.
+      const second = deferred<string>()
+      void source.appCall("a", () => second.promise)
+      await advance(timing.pollMs * 3)
+      expect(readsOf("a")).toBe(refused)
+      second.resolve("two")
+    },
+  )
+
+  it("P2: a call begun while a round's list is still on its way is read in that round", async () => {
+    const { gateway, source, readsOf, advance } = await idle()
+    const list = deferred<void>()
+    gateway.once("list", async (normal) => {
+      await list.promise
+      return normal()
+    })
+    await advance(timing.pollMs)
+    const answer = deferred<string>()
+    void source.appCall("a", () => answer.promise)
+    list.resolve()
+    await flush()
+    expect(readsOf("a")).toBe(2)
+    answer.resolve("done")
+  })
 })
